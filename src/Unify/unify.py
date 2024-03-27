@@ -31,14 +31,13 @@ class Unify:
         except openai.OpenAIError as e:
             raise UnifyError(f"Failed to initialize Unify client: {str(e)}")
 
-    def generate(self, role: Union[str, List[str]], content: Union[str, List[str]], model: str = "llama-2-13b-chat", provider: str = "lowest-cost", stream: bool = False) -> Union[Generator[str, None, None], str]:
+    def generate(self, messages: Union[str, List[dict]], model: str = "llama-2-13b-chat", provider: str = "anyscale", stream: bool = False) -> Union[Generator[str, None, None], str]:
         """Generate content using the Unify API.
 
         Args:
-            role (Union[str, List[str]]): The role(s) for the content.
-            content (Union[str, List[str]]): The content(s) to generate.
+            messages (Union[str, List[dict]]): A single prompt as a string or a dictionary containing the conversation history.
             model (str): The name of the model. Defaults to "llama-2-13b-chat".
-            provider (str): The provider of the model. Defaults to "lowest-cost".
+            provider (str): The provider of the model. Defaults to "anyscale".
             stream (bool): If True, generates content as a stream. If False, generates content as a single response. Defaults to False.
 
         Returns:
@@ -47,30 +46,20 @@ class Unify:
         Raises:
             UnifyError: If an error occurs during content generation.
         """
-        if isinstance(role, str):
-            roles = [role]
-        else:
-            roles = role
-        
-        if isinstance(content, str):
-            contents = [content]
-        else:
-            contents = content
-            
-        if len(roles) != len(contents):
-            raise UnifyError("Number of roles must match number of contents.")
+        if isinstance(messages, str):
+            contents = [{"role": "user", "content": messages}]
+        else: 
+            contents = messages
         
         if stream:
-            return self._generate_stream(roles, contents, model, provider)
+            return self._generate_stream(contents, model, provider)
         else:
-            return self._generate_non_stream(roles, contents, model, provider)
+            return self._generate_non_stream(contents, model, provider)
 
-    def _generate_stream(self, roles: List[str], contents: List[str], model: str, provider: str) -> Generator[str, None, None]:
+    def _generate_stream(self, messages: List[dict], model: str, provider: str) -> Generator[str, None, None]:
         """Generate content as a stream using the Unify API.
-
         Args:
-            roles (List[str]): The role(s) for the content.
-            contents (List[str]): The content(s) to generate.
+            messages (List[dict]): A list of dictonaries containing the conversation history.
             model (str): The name of the model.
             provider (str): The provider of the model.
 
@@ -80,22 +69,20 @@ class Unify:
         Raises:
             UnifyError: If an error occurs during content generation.
         """
-        for role, content in zip(roles, contents):
-            chat_completion = self.client.chat.completions.create(
-                model='@'.join([model, provider]),
-                messages=[{'role': role, "content": content}],
-                stream=True
-            )
-            for chunk in chat_completion:
-                if chunk.choices[0].delta.content is not None:
-                    yield chunk.choices[0].delta.content
+        chat_completion = self.client.chat.completions.create(
+            model='@'.join([model, provider]),
+            messages=messages,
+            stream=True
+        )
+        for chunk in chat_completion:
+            if chunk.choices[0].delta.content is not None:
+                yield chunk.choices[0].delta.content
 
-    def _generate_non_stream(self, roles: List[str], contents: List[str], model: str, provider: str) -> str:
+    def _generate_non_stream(self, messages: List[dict], model: str, provider: str) -> str:
         """Generate content as a single response using the Unify API.
 
         Args:
-            roles (List[str]): The role(s) for the content.
-            contents (List[str]): The content(s) to generate.
+            messages (List[dict]): A list of dictonaries containing the conversation history.
             model (str): The name of the model.
             provider (str): The provider of the model.
 
@@ -105,15 +92,12 @@ class Unify:
         Raises:
             UnifyError: If an error occurs during content generation.
         """
-        responses = []
-        for role, content in zip(roles, contents):
-            chat_completion = self.client.chat.completions.create(
-                model='@'.join([model, provider]),
-                messages=[{'role': role, "content": content}],
-                stream=False
-            )
-            responses.append(chat_completion.choices[0].message.content.strip(" "))
-        return responses
+        chat_completion = self.client.chat.completions.create(
+            model='@'.join([model, provider]),
+            messages=messages,
+            stream=False
+        )
+        return chat_completion.choices[0].message.content.strip(" ")
 
 class AsyncUnify:
     """Class for interacting asynchronously with the Unify API."""
@@ -140,14 +124,13 @@ class AsyncUnify:
         except openai.OpenAIError as e:
             raise UnifyError(f"Failed to initialize AsyncUnify client: {str(e)}")
 
-    async def generate(self, roles: Union[str, List[str]], contents: Union[str, List[str]], model: str = "llama-2-13b-chat", provider: str = "lowest-cost", stream: bool = False) -> Union[AsyncGenerator[str, None], List[str]]:
+    async def generate(self, messages: Union[str, List[dict]], model: str = "llama-2-13b-chat", provider: str = "anyscale", stream: bool = False) -> Union[AsyncGenerator[str, None], List[str]]:
         """Generate content asynchronously using the Unify API.
 
         Args:
-            roles (Union[str, List[str]]): The role(s) for the content.
-            contents (Union[str, List[str]]): The content(s) to generate.
-            model (str): The name of the model. Defaults to "llama-2-13b-chat".
-            provider (str): The provider of the model. Defaults to "lowest-cost".
+            messages (Union[str, List[dict]]): A single prompt as a string or a dictionary containing the conversation history.
+            model (str): The name of the model.
+            provider (str): The provider of the model.
             stream (bool): If True, generates content as a stream. If False, generates content as a single response. Defaults to False.
 
         Returns:
@@ -157,26 +140,23 @@ class AsyncUnify:
         Raises:
             UnifyError: If an error occurs during content generation.
         """
-        if isinstance(roles, str):
-            roles = [roles]
-        if isinstance(contents, str):
-            contents = [contents]
-
-        if len(roles) != len(contents):
-            raise UnifyError("Number of roles must match number of contents.")
+        if isinstance(messages, str):
+            contents = [{"role": "user", "content": messages}]
+        else: 
+            contents = messages
 
         if stream:
-            return self._generate_stream(roles, contents, model, provider)
+            return self._generate_stream(contents, model, provider)
         else:
-            return await self._generate_non_stream(roles, contents, model, provider)
+            return await self._generate_non_stream(contents, model, provider)
 
-    async def _generate_stream(self, roles: List[str], contents: List[str], model: str,  provider:str) -> AsyncGenerator[str, None]:
+    async def _generate_stream(self, messages: List[dict], model: str,  provider:str) -> AsyncGenerator[str, None]:
         """Generate content as a stream asynchronously using the Unify API.
 
         Args:
-            roles (List[str]): The role(s) for the content.
-            contents (List[str]): The content(s) to generate.
+            messages (List[dict]): A list of dictonaries containing the conversation history.
             model (str): The name of the model.
+            provider (str): The provider of the model.
 
         Yields:
             AsyncGenerator[str, None]: An asynchronous generator yielding chunks of generated content.
@@ -185,22 +165,21 @@ class AsyncUnify:
             UnifyError: If an error occurs during content generation.
         """
         async with self.client as async_client:
-            for role, content in zip(roles, contents):
-                async_stream = await async_client.chat.completions.create(
-                    model='@'.join([model, provider]),
-                    messages=[{"role": role, "content": content}],
-                    stream=True,
-                )
-                async for chunk in async_stream:
-                    yield chunk.choices[0].delta.content or ""
+            async_stream = await async_client.chat.completions.create(
+                model='@'.join([model, provider]),
+                messages=messages,
+                stream=True,
+            )
+            async for chunk in async_stream:
+                yield chunk.choices[0].delta.content or ""
 
-    async def _generate_non_stream(self, roles: List[str], contents: List[str], model: str, provider: str) -> List[str]:
+    async def _generate_non_stream(self, messages: List[dict], model: str, provider: str) -> List[str]:
         """Generate content as a single response asynchronously using the Unify API.
 
         Args:
-            roles (List[str]): The role(s) for the content.
-            contents (List[str]): The content(s) to generate.
+            messages (List[dict]): A list of dictonaries containing the conversation history.
             model (str): The name of the model.
+            provider (str): The provider of the model.
 
         Returns:
             List[str]: The generated content as a list of string responses.
@@ -208,13 +187,10 @@ class AsyncUnify:
         Raises:
             UnifyError: If an error occurs during content generation.
         """
-        responses = []
         async with self.client as async_client:
-            for role, content in zip(roles, contents):
-                async_response = await async_client.chat.completions.create(
-                    model='@'.join([model, provider]),
-                    messages=[{"role": role, "content": content}],
-                    stream=False,
-                )
-                responses.append(async_response.choices[0].message.content.strip(" "))
-        return responses
+            async_response = await async_client.chat.completions.create(
+                model='@'.join([model, provider]),
+                messages=messages,
+                stream=False,
+            )
+        return async_response.choices[0].message.content.strip(" ")
