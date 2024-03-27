@@ -31,15 +31,15 @@ class Unify:
         except openai.OpenAIError as e:
             raise UnifyError(f"Failed to initialize Unify client: {str(e)}")
 
-    def generate(self, role: Union[str, List[str]], content: Union[str, List[str]], model: str, provider: str, stream: bool) -> Union[Generator[str, None, None], str]:
+    def generate(self, role: Union[str, List[str]], content: Union[str, List[str]], model: str = "llama-2-13b-chat", provider: str = "lowest-cost", stream: bool = False) -> Union[Generator[str, None, None], str]:
         """Generate content using the Unify API.
 
         Args:
             role (Union[str, List[str]]): The role(s) for the content.
             content (Union[str, List[str]]): The content(s) to generate.
-            model (str): The name of the model.
-            provider (str): The provider of the model.
-            stream (bool): If True, generates content as a stream. If False, generates content as a single response.
+            model (str): The name of the model. Defaults to "llama-2-13b-chat".
+            provider (str): The provider of the model. Defaults to "lowest-cost".
+            stream (bool): If True, generates content as a stream. If False, generates content as a single response. Defaults to False.
 
         Returns:
             Union[Generator[str, None, None], str]: If stream is True, returns a generator yielding chunks of content. If stream is False, returns a single string response.
@@ -115,7 +115,6 @@ class Unify:
             responses.append(chat_completion.choices[0].message.content.strip(" "))
         return responses
 
-
 class AsyncUnify:
     """Class for interacting asynchronously with the Unify API."""
 
@@ -130,7 +129,7 @@ class AsyncUnify:
               Defaults to None.
 
         Raises:
-            AsyncUnifyError: If the API key is missing.
+            UnifyError: If the API key is missing.
         """
         if api_key is None:
             api_key = os.environ.get("UNIFY_API_KEY")
@@ -141,21 +140,22 @@ class AsyncUnify:
         except openai.OpenAIError as e:
             raise UnifyError(f"Failed to initialize AsyncUnify client: {str(e)}")
 
-    async def generate(self, roles: Union[str, List[str]], contents: Union[str, List[str]], model: str, provider: str, stream: bool) -> Union[AsyncGenerator[str, None], List[str]]:
+    async def generate(self, roles: Union[str, List[str]], contents: Union[str, List[str]], model: str = "llama-2-13b-chat", provider: str = "lowest-cost", stream: bool = False) -> Union[AsyncGenerator[str, None], List[str]]:
         """Generate content asynchronously using the Unify API.
 
         Args:
             roles (Union[str, List[str]]): The role(s) for the content.
             contents (Union[str, List[str]]): The content(s) to generate.
-            model (str): The name of the model.
-            stream (bool): If True, generates content as a stream. If False, generates content as a single response.
+            model (str): The name of the model. Defaults to "llama-2-13b-chat".
+            provider (str): The provider of the model. Defaults to "lowest-cost".
+            stream (bool): If True, generates content as a stream. If False, generates content as a single response. Defaults to False.
 
         Returns:
             Union[AsyncGenerator[str, None], List[str]]: If stream is True, returns an asynchronous generator yielding chunks of content.
               If stream is False, returns a list of string responses.
 
         Raises:
-            AsyncUnifyError: If an error occurs during content generation.
+            UnifyError: If an error occurs during content generation.
         """
         if isinstance(roles, str):
             roles = [roles]
@@ -182,7 +182,7 @@ class AsyncUnify:
             AsyncGenerator[str, None]: An asynchronous generator yielding chunks of generated content.
 
         Raises:
-            AsyncUnifyError: If an error occurs during content generation.
+            UnifyError: If an error occurs during content generation.
         """
         async with self.client as async_client:
             for role, content in zip(roles, contents):
@@ -206,7 +206,7 @@ class AsyncUnify:
             List[str]: The generated content as a list of string responses.
 
         Raises:
-            AsyncUnifyError: If an error occurs during content generation.
+            UnifyError: If an error occurs during content generation.
         """
         responses = []
         async with self.client as async_client:
