@@ -6,6 +6,13 @@ class UnifyError(Exception):
     """Exception raised for errors related to Unify."""
     pass
 
+def validate_api_key(api_key):
+        if api_key is None:
+            api_key = os.environ.get("UNIFY_API_KEY")
+        if api_key is None:
+            raise UnifyError("UNIFY_API_KEY is missing. Please make sure it is set correctly!")
+        return api_key
+
 class Unify:
     """Class for interacting with the Unify API."""
     
@@ -22,12 +29,9 @@ class Unify:
         Raises:
             UnifyError: If the API key is missing.
         """
-        if api_key is None:
-            api_key = os.environ.get("UNIFY_API_KEY")
-        if api_key is None:
-            raise UnifyError("UNIFY_API_KEY is missing. Please make sure it is set correctly!")
+        self.api_key = validate_api_key(api_key)
         try:
-            self.client = openai.OpenAI(base_url="https://api.unify.ai/v0/", api_key=api_key)
+            self.client = openai.OpenAI(base_url="https://api.unify.ai/v0/", api_key=self.api_key)
         except openai.OpenAIError as e:
             raise UnifyError(f"Failed to initialize Unify client: {str(e)}")
 
@@ -115,14 +119,11 @@ class AsyncUnify:
         Raises:
             UnifyError: If the API key is missing.
         """
-        if api_key is None:
-            api_key = os.environ.get("UNIFY_API_KEY")
-        if api_key is None:
-            raise UnifyError("UNIFY_API_KEY is missing. Please make sure it is set correctly!")
+        self.api_key = validate_api_key(api_key)
         try:
-            self.client = openai.AsyncOpenAI(base_url="https://api.unify.ai/v0/", api_key=api_key)
+            self.client = openai.AsyncOpenAI(base_url="https://api.unify.ai/v0/", api_key=self.api_key)
         except openai.OpenAIError as e:
-            raise UnifyError(f"Failed to initialize AsyncUnify client: {str(e)}")
+            raise UnifyError(f"Failed to initialize Unify client: {str(e)}")
 
     async def generate(self, messages: Union[str, List[dict]], model: str = "llama-2-13b-chat", provider: str = "anyscale", stream: bool = False) -> Union[AsyncGenerator[str, None], List[str]]:
         """Generate content asynchronously using the Unify API.
