@@ -268,5 +268,3 @@ class AsyncUnify:
             return async_response.choices[0].message.content.strip(" ")
         except openai.APIStatusError as e:
             raise status_error_map[e.status_code](e.message) from None
-        except Exception as e:
-            print(f"An unknown error occured: {e}")
