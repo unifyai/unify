@@ -1,9 +1,12 @@
 # Unify Python API LIBRARY
-The Unify Python Package provides convenient acceess to the Unify REST API from any Python 3.7+ application.
+The Unify Python Package provides convenient acceess to the Unify REST API from any Python 3.7.1+ application.
 It includes both Synchronous and Asynchronous clients as well as support for Streaming.
 
-## Installation 
-TODO
+## Installation
+This project uses poetry. It's a modern dependency management tool. To run the project use this set of commands:
+```bash
+poetry install
+```
 
 ## Basic Usage
 ```python
@@ -22,8 +25,8 @@ NOTE: While you can provide an `api_key` keyword argument,
 we recommend using [python-dotenv](https://pypi.org/project/python-dotenv/)
 to add `UNIFY_KEY="My API Key"` to your `.env` file
 so that your API Key is not stored in source control.
- 
- 
+
+
  When a string is passed to the `messages` argument, it is assumed to be the user prompt. However, you can also pass a list of dictonaries containing the message history between
  the `user` as the `assistant`, as shown below:
 
