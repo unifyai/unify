@@ -3,9 +3,9 @@ The Unify Python Package provides convenient access to the Unify REST API from a
 It includes both Synchronous and Asynchronous clients as well as support for Streaming.
 
 ## Installation
-This project uses poetry. It's a modern dependency management tool. To run the project use this set of commands:
+You can use pip to install the package
 ```bash
-poetry install
+pip install .
 ```
 
 ## Basic Usage
@@ -44,6 +44,7 @@ res = unify.generate(messages=messages, model="llama-2-7b-chat", provider="anysc
 
  ```python
 from unify import AsyncUnify
+import os
 async_unify = AsyncUnify(
 # This is the default and can be omitted
 api_key=os.environ.get("UNIFY_KEY")
@@ -77,6 +78,7 @@ for chunk in stream:
 The async client uses the exact same interface.
  ```python
 from unify import AsyncUnify
+import os
 async_unify = AsyncUnify(
 # This is the default and can be omitted
 api_key=os.environ.get("UNIFY_KEY")
