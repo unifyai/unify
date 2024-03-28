@@ -3,8 +3,8 @@ import unittest
 from types import AsyncGeneratorType, GeneratorType
 from unittest.mock import patch
 
-from clients import AsyncUnify, Unify
-from Exceptions import AuthenticationError, InternalServerError
+from unify.clients import AsyncUnify, Unify
+from unify.Exceptions import AuthenticationError, InternalServerError
 
 
 class TestUnify(unittest.TestCase):

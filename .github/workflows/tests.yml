@@ -43,5 +43,5 @@ jobs:
       uses: knowsuchagency/poetry-install@v1
       env:
         POETRY_VIRTUALENVS_CREATE: false
-   # - name: Run mypy check
-      #run: poetry run mypy --install-types --non-interactive .
+    - name: Run mypy check
+      run: poetry run mypy --install-types --non-interactive .

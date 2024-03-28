@@ -2,7 +2,8 @@ import os
 from typing import Any, AsyncGenerator, Generator, List, Optional, Union
 
 import openai
-from Exceptions import UnifyError, status_error_map
+
+from unify.Exceptions import UnifyError, status_error_map
 
 
 def validate_api_key(api_key):
@@ -80,24 +81,10 @@ class Unify:
 
     def _generate_stream(
         self,
-        messages: List[dict],
-        model: str,
-        provider: str,
+        messages,
+        model,
+        provider,
     ) -> Generator[str, None, None]:
-        """Generate content as a stream using the Unify API.
-        Args:
-            messages (List[dict]): A list of dictonaries
-            containing the conversation history.
-            model (str): The name of the model.
-            provider (str): The provider of the model.
-
-        Yields:
-            Generator[str, None, None]: A generator yielding
-            chunks of generated content.
-
-        Raises:
-            UnifyError: If an error occurs during content generation.
-        """
         try:
             chat_completion = self.client.chat.completions.create(
                 model="@".join([model, provider]),
@@ -112,31 +99,17 @@ class Unify:
 
     def _generate_non_stream(
         self,
-        messages: List[dict],
-        model: str,
-        provider: str,
+        messages,
+        model,
+        provider,
     ) -> str:
-        """Generate content as a single response using the Unify API.
-
-        Args:
-            messages (List[dict]): A list of dictonaries
-            containing the conversation history.
-            model (str): The name of the model.
-            provider (str): The provider of the model.
-
-        Returns:
-            str: The generated content as a single response.
-
-        Raises:
-            UnifyError: If an error occurs during content generation.
-        """
         try:
             chat_completion = self.client.chat.completions.create(
                 model="@".join([model, provider]),
                 messages=messages,
                 stream=False,
             )
-            return chat_completion.choices[0].message.content.strip(" ")
+            return chat_completion.choices[0].message.content.strip(" ")  # type: ignore # noqa: E501
         except openai.APIStatusError as e:
             raise status_error_map[e.status_code](e.message) from None
 
@@ -174,7 +147,7 @@ class AsyncUnify:
         model: str = "llama-2-13b-chat",
         provider: str = "anyscale",
         stream: bool = False,
-    ) -> Union[AsyncGenerator[str, None], List[str]]:
+    ) -> Union[AsyncGenerator[str, None], str]:
         """Generate content asynchronously using the Unify API.
 
         Args:
@@ -206,25 +179,10 @@ class AsyncUnify:
 
     async def _generate_stream(
         self,
-        messages: List[dict],
-        model: str,
-        provider: str,
+        messages,
+        model,
+        provider,
     ) -> AsyncGenerator[str, None]:
-        """Generate content as a stream asynchronously using the Unify API.
-
-        Args:
-            messages (List[dict]): A list of dictonaries
-            containing the conversation history.
-            model (str): The name of the model.
-            provider (str): The provider of the model.
-
-        Yields:
-            AsyncGenerator[str, None]: An asynchronous generator
-            yielding chunks of generated content.
-
-        Raises:
-            UnifyError: If an error occurs during content generation.
-        """
         try:
             async with self.client as async_client:
                 async_stream = await async_client.chat.completions.create(
@@ -239,25 +197,10 @@ class AsyncUnify:
 
     async def _generate_non_stream(
         self,
-        messages: List[dict],
-        model: str,
-        provider: str,
+        messages,
+        model,
+        provider,
     ) -> str | Any:
-        """Generate content as a single response
-        asynchronously using the Unify API.
-
-        Args:
-            messages (List[dict]): A list of dictonaries
-            containing the conversation history.
-            model (str): The name of the model.
-            provider (str): The provider of the model.
-
-        Returns:
-            Str | Any: The generated content as string responses.
-
-        Raises:
-            UnifyError: If an error occurs during content generation.
-        """
         try:
             async with self.client as async_client:
                 async_response = await async_client.chat.completions.create(
@@ -265,6 +208,6 @@ class AsyncUnify:
                     messages=messages,
                     stream=False,
                 )
-            return async_response.choices[0].message.content.strip(" ")
+            return async_response.choices[0].message.content.strip(" ")  # type: ignore # noqa: E501
         except openai.APIStatusError as e:
             raise status_error_map[e.status_code](e.message) from None
