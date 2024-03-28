@@ -1,8 +1,8 @@
-from unify import Unify, AsyncUnify
+from Unify import Unify, AsyncUnify
 import asyncio
 
 print("SYNC")
-unify = Unify()
+unify = Unify("sdfgsdfg")
 
 # Example usage:
 print(unify.generate("hello", "llama-2-13b-chat", "anyscale", False))

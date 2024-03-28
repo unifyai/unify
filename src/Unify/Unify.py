@@ -1,21 +1,17 @@
 import openai
 import os
 from typing import Generator, AsyncGenerator, Union, Optional, List 
-
-class UnifyError(Exception):
-    """Exception raised for errors related to Unify."""
-    pass
+from Exceptions import *
 
 def validate_api_key(api_key):
         if api_key is None:
             api_key = os.environ.get("UNIFY_API_KEY")
         if api_key is None:
-            raise UnifyError("UNIFY_API_KEY is missing. Please make sure it is set correctly!")
+            raise KeyError("UNIFY_API_KEY is missing. Please make sure it is set correctly!")
         return api_key
 
 class Unify:
     """Class for interacting with the Unify API."""
-    
     def __init__(
             self,
             api_key: Optional[str] = None,
@@ -73,14 +69,18 @@ class Unify:
         Raises:
             UnifyError: If an error occurs during content generation.
         """
-        chat_completion = self.client.chat.completions.create(
-            model='@'.join([model, provider]),
-            messages=messages,
-            stream=True
-        )
-        for chunk in chat_completion:
-            if chunk.choices[0].delta.content is not None:
-                yield chunk.choices[0].delta.content
+        try:
+            chat_completion = self.client.chat.completions.create(
+                model='@'.join([model, provider]),
+                messages=messages,
+                stream=True
+            )
+            for chunk in chat_completion:
+                if chunk.choices[0].delta.content is not None:
+                    yield chunk.choices[0].delta.content
+        except openai.OpenAIError as e:
+            raise status_error_map[e.status_code](e.message) from None
+
 
     def _generate_non_stream(self, messages: List[dict], model: str, provider: str) -> str:
         """Generate content as a single response using the Unify API.
@@ -96,12 +96,15 @@ class Unify:
         Raises:
             UnifyError: If an error occurs during content generation.
         """
-        chat_completion = self.client.chat.completions.create(
-            model='@'.join([model, provider]),
-            messages=messages,
-            stream=False
-        )
-        return chat_completion.choices[0].message.content.strip(" ")
+        try:
+            chat_completion = self.client.chat.completions.create(
+                model='@'.join([model, provider]),
+                messages=messages,
+                stream=False
+            )
+            return chat_completion.choices[0].message.content.strip(" ")
+        except openai.OpenAIError as e:
+            raise status_error_map[e.status_code](e.message) from None
 
 class AsyncUnify:
     """Class for interacting asynchronously with the Unify API."""
@@ -165,14 +168,17 @@ class AsyncUnify:
         Raises:
             UnifyError: If an error occurs during content generation.
         """
-        async with self.client as async_client:
-            async_stream = await async_client.chat.completions.create(
-                model='@'.join([model, provider]),
-                messages=messages,
-                stream=True,
-            )
-            async for chunk in async_stream:
-                yield chunk.choices[0].delta.content or ""
+        try:
+            async with self.client as async_client:
+                async_stream = await async_client.chat.completions.create(
+                    model='@'.join([model, provider]),
+                    messages=messages,
+                    stream=True,
+                )
+                async for chunk in async_stream:
+                    yield chunk.choices[0].delta.content or ""
+        except openai.OpenAIError as e:
+            raise status_error_map[e.status_code](e.message) from None
 
     async def _generate_non_stream(self, messages: List[dict], model: str, provider: str) -> List[str]:
         """Generate content as a single response asynchronously using the Unify API.
@@ -188,10 +194,13 @@ class AsyncUnify:
         Raises:
             UnifyError: If an error occurs during content generation.
         """
-        async with self.client as async_client:
-            async_response = await async_client.chat.completions.create(
-                model='@'.join([model, provider]),
-                messages=messages,
-                stream=False,
-            )
-        return async_response.choices[0].message.content.strip(" ")
+        try:
+            async with self.client as async_client:
+                async_response = await async_client.chat.completions.create(
+                    model='@'.join([model, provider]),
+                    messages=messages,
+                    stream=False,
+                )
+            return async_response.choices[0].message.content.strip(" ")
+        except openai.OpenAIError as e:
+            raise status_error_map[e.status_code](e.message) from None
