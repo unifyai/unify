@@ -1,29 +1,34 @@
 class UnifyError(Exception):
     pass
 
-class KeyError(UnifyError):
-    pass
 
 class BadRequestError(UnifyError):
     pass
 
+
 class AuthenticationError(UnifyError):
     pass
+
 
 class PermissionDeniedError(UnifyError):
     pass
 
+
 class NotFoundError(UnifyError):
     pass
+
 
 class ConflictError(UnifyError):
     pass
 
+
 class UnprocessableEntityError(UnifyError):
     pass
 
+
 class RateLimitError(UnifyError):
     pass
+
 
 class InternalServerError(UnifyError):
     pass

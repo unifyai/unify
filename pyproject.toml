@@ -1,0 +1,47 @@
+[tool.poetry]
+name = "unify"
+version = "0.1.0"
+description = "A Python package for interacting with the Unify API"
+authors = ["Unify <hello@unify.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.7.1"
+openai = "1.12.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 88
+target-version = ["py37"]
+
+[tool.flake8]
+max-line-length = 88
+extend-ignore = "E203, W503"
+
+[tool.isort]
+profile = "black"
+
+[tool.autoflake]
+remove-all-unused-imports = true
+ignore-init-module-imports = true
+
+[tool.poetry.dev-dependencies]
+# Add pre-commit as a dev dependency to ensure it is installed in the virtual environment
+pre-commit = "^2.15.0"
+
+[tool.pre-commit]
+# Specify the hooks to run
+hooks = [
+    "check-ast",
+    "trailing-whitespace",
+    "end-of-file-fixer",
+    "add-trailing-comma",
+    "pretty-format-yaml",
+    { id = "autoflake", args = ["--in-place", "--remove-all-unused-imports", "--remove-duplicate-keys"] },
+    "black",
+    "isort",
+    "flake8",
+    { id = "mypy", args = ["."] }
+]

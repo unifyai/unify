@@ -1,9 +1,11 @@
-import unittest
-from unittest.mock import patch
-from clients import Unify, AsyncUnify
 import os
-from Exceptions import AuthenticationError, KeyError, InternalServerError
-from types import GeneratorType, AsyncGeneratorType
+import unittest
+from types import AsyncGeneratorType, GeneratorType
+from unittest.mock import patch
+
+from clients import AsyncUnify, Unify
+from Exceptions import AuthenticationError, InternalServerError
+
 
 class TestUnify(unittest.TestCase):
     def setUp(self):
@@ -16,14 +18,14 @@ class TestUnify(unittest.TestCase):
             unify = Unify(api_key="invalid_api_key")
             unify.generate("hello")
 
-    @patch('os.environ.get', return_value=None)
+    @patch("os.environ.get", return_value=None)
     def test_missing_api_key_raises_key_error(self, mock_get):
         # Initializing Unify without providing API key should raise KeyError
         with self.assertRaises(KeyError):
-            unify = Unify()
-    
+            _ = Unify()
+
     def test_incorrect_model_name_raises_internal_server_error(self):
-    # Instantiate Unify with a valid API key
+        # Instantiate Unify with a valid API key
         unify = Unify(self.valid_api_key)
         # Provide incorrect model name to generate function
         with self.assertRaises(InternalServerError):
@@ -44,7 +46,7 @@ class TestUnify(unittest.TestCase):
         result = unify.generate("hello", stream=True)
         # Assert that the result is a generator
         self.assertIsInstance(result, GeneratorType)
-    
+
 
 class TestAsyncUnify(unittest.IsolatedAsyncioTestCase):
 
@@ -58,9 +60,10 @@ class TestAsyncUnify(unittest.IsolatedAsyncioTestCase):
             async_unify = AsyncUnify(api_key="invalid_api_key")
             await async_unify.generate("hello")
 
-    @patch('os.environ.get', return_value=None)
+    @patch("os.environ.get", return_value=None)
     async def test_missing_api_key_raises_key_error(self, mock_get):
-        # Initializing AsyncUnify without providing API key should raise KeyError
+        # Initializing AsyncUnify without providing
+        # API key should raise KeyError
         with self.assertRaises(KeyError):
             async_unify = AsyncUnify()
             await async_unify.generate("hello")
@@ -88,5 +91,6 @@ class TestAsyncUnify(unittest.IsolatedAsyncioTestCase):
         # Assert that the result is a generator
         self.assertIsInstance(result, AsyncGeneratorType)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()
