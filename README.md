@@ -45,6 +45,7 @@ res = unify.generate(messages=messages, model="llama-2-7b-chat", provider="anysc
  ```python
 from unify import AsyncUnify
 import os
+import asyncio
 async_unify = AsyncUnify(
 # This is the default and can be omitted
 api_key=os.environ.get("UNIFY_KEY")
@@ -79,6 +80,7 @@ The async client uses the exact same interface.
  ```python
 from unify import AsyncUnify
 import os
+import asyncio
 async_unify = AsyncUnify(
 # This is the default and can be omitted
 api_key=os.environ.get("UNIFY_KEY")
