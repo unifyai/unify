@@ -1,5 +1,5 @@
 # Unify Python API LIBRARY
-The Unify Python Package provides convenient acceess to the Unify REST API from any Python 3.7.1+ application.
+The Unify Python Package provides convenient access to the Unify REST API from any Python 3.7.1+ application.
 It includes both Synchronous and Asynchronous clients as well as support for Streaming.
 
 ## Installation
