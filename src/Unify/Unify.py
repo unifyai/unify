@@ -5,9 +5,9 @@ from Exceptions import *
 
 def validate_api_key(api_key):
         if api_key is None:
-            api_key = os.environ.get("UNIFY_API_KEY")
+            api_key = os.environ.get("UNIFY_KEY")
         if api_key is None:
-            raise KeyError("UNIFY_API_KEY is missing. Please make sure it is set correctly!")
+            raise KeyError("UNIFY_KEY is missing. Please make sure it is set correctly!")
         return api_key
 
 class Unify:
@@ -19,7 +19,7 @@ class Unify:
         """Initialize the Unify client.
 
         Args:
-            api_key (str, optional): API key for accessing the Unify API. If None, it attempts to retrieve the API key from the environment variable UNIFY_API_KEY.
+            api_key (str, optional): API key for accessing the Unify API. If None, it attempts to retrieve the API key from the environment variable UNIFY_KEY.
               Defaults to None.
 
         Raises:
@@ -116,7 +116,7 @@ class AsyncUnify:
         """Initialize the AsyncUnify client.
 
         Args:
-            api_key (str, optional): API key for accessing the Unify API. If None, it attempts to retrieve the API key from the environment variable UNIFY_API_KEY.
+            api_key (str, optional): API key for accessing the Unify API. If None, it attempts to retrieve the API key from the environment variable UNIFY_KEY.
               Defaults to None.
 
         Raises:

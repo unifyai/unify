@@ -8,7 +8,7 @@ from types import GeneratorType, AsyncGeneratorType
 class TestUnify(unittest.TestCase):
     def setUp(self):
         # Set up a valid API key for testing
-        self.valid_api_key = os.environ.get("UNIFY_API_KEY")
+        self.valid_api_key = os.environ.get("UNIFY_KEY")
 
     def test_invalid_api_key_raises_authentication_error(self):
         # Instantiate Unify with an invalid API key
@@ -50,7 +50,7 @@ class TestAsyncUnify(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         # Set up a valid API key for testing
-        self.valid_api_key = os.environ.get("UNIFY_API_KEY")
+        self.valid_api_key = os.environ.get("UNIFY_KEY")
 
     async def test_invalid_api_key_raises_authentication_error(self):
         # Instantiate AsyncUnify with an invalid API key

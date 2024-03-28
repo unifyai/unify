@@ -4,7 +4,7 @@ setup(
     name='unify',
     version='0.1.0',
     author='Unify',
-    author_email='your.email@example.com',
+    author_email='hello@unify.com',
     description='A Python package for interacting with the Unify API',
     long_description=open('README.md').read(),
     long_description_content_type='text/markdown',
@@ -16,7 +16,7 @@ setup(
     #not sure about license
     classifiers=[
         'Programming Language :: Python :: 3',
-        'License :: OSI Approved :: MIT License',
+        'License :: OSI Approved :: Apache-2 License',
         'Operating System :: OS Independent',
     ],
 )
