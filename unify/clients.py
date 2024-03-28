@@ -1,5 +1,5 @@
 import os
-from typing import Any, AsyncGenerator, Generator, List, Optional, Union
+from typing import AsyncGenerator, Generator, List, Optional, Union
 
 import openai
 
@@ -200,7 +200,7 @@ class AsyncUnify:
         messages,
         model,
         provider,
-    ) -> str | Any:
+    ) -> str:
         try:
             async with self.client as async_client:
                 async_response = await async_client.chat.completions.create(
