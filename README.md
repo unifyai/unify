@@ -16,7 +16,7 @@ unify = Unify(
     # This is the default and can be omitted
     api_key=os.environ.get("UNIFY_KEY")
 )
-response = Unify.generate(messages="Hello Llama! Who was Isaac Newton?", model="llama-2-13b-chat", provider="anyscale")
+response = unify.generate(messages="Hello Llama! Who was Isaac Newton?", model="llama-2-13b-chat", provider="anyscale")
 ```
 `response` is a string containing the model's output. You can explore our list of supported models and providers through the [benchmarks interface](https://unify.ai/hub).
 
@@ -68,7 +68,7 @@ unify = Unify(
     # This is the default and can be omitted
     api_key=os.environ.get("UNIFY_KEY")
 )
-stream = Unify.generate(messages="Hello Llama! Who was Isaac Newton?", model="llama-2-13b-chat", provider="anyscale", stream=True)
+stream = unify.generate(messages="Hello Llama! Who was Isaac Newton?", model="llama-2-13b-chat", provider="anyscale", stream=True)
 for chunk in stream:
     print(x, end="")
 ```
