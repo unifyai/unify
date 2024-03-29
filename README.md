@@ -7,7 +7,7 @@ Just like the REST API, you can:
 
 - 🔑 **Use any endpoint with one key**: Access all LLMs at any provider with just one Unify API Key.
 
-  
+
 - 🚀 **Route to the best endpoint**: Each prompt is sent to the endpoint that will yield the best
   performance for your target metric, including high-throughput, low cost or low latency. See
   [the routing section](#dynamic-routing) to learn more about this!
@@ -23,15 +23,15 @@ pip install .
 import os
 from unify import Unify
 unify = Unify(
-    # This is the default and can be omitted
+    # This is the default and optional to include.
     api_key=os.environ.get("UNIFY_KEY")
 )
 response = unify.generate(messages="Hello Llama! Who was Isaac Newton?", model="llama-2-13b-chat", provider="anyscale")
 ```
 
-Here, `response` is a string containing the model's output. 
+Here, `response` is a string containing the model's output.
 
-### Supported models
+### Supported Models
 The list of supported models and providers is available in [the platform](https://unify.ai/hub).
 
 ### API Key
@@ -57,18 +57,18 @@ You can get an API Key from [the Unify console](https://console.unify.ai/)
 res = unify.generate(messages=messages, model="llama-2-7b-chat", provider="anyscale")
  ```
 
-## Dynamic Routing
-TODO
 
-## Async Usage
- Simply import `AsyncUnify` instead of `Unify` and use `await` with the `.generate` function.
+## Asynchronous Usage
+For optimal performance in handling multiple user requests simultaneously, such as in a chatbot application, processing them asynchronously is recommended.
+To use the AsyncUnify client, simply import `AsyncUnify` instead
+ of `Unify` and use `await` with the `.generate` function.
 
  ```python
 from unify import AsyncUnify
 import os
 import asyncio
 async_unify = AsyncUnify(
-    # This is the default and can be omitted
+    # This is the default and optional to include.
     api_key=os.environ.get("UNIFY_KEY")
 )
 
@@ -78,17 +78,17 @@ async def main():
 asyncio.run(main())
 ```
 
-Functionality between the synchronous and asynchronous clients is otherwise identical.
+Functionality wise, the Async and Sync clients are identical.
 
 ## Streaming Responses
 
-We provide support for streaming responses using Server Side Events (SSE).
+To enhance application responsiveness, enable streaming by setting the `stream` parameter to `True` in the `.generate` function. This will produce output in chunks instead of the full output at once.
 
 ```python
 import os
 from unify import Unify
 unify = Unify(
-    # This is the default and can be omitted
+    # This is the default and optional to include.
     api_key=os.environ.get("UNIFY_KEY")
 )
 stream = unify.generate(messages="Hello Llama! Who was Isaac Newton?", model="llama-2-13b-chat", provider="anyscale", stream=True)
@@ -96,14 +96,14 @@ for chunk in stream:
     print(x, end="")
 ```
 
+It works in exactly the same way with Async clients.
 
-The async client uses the exact same interface.
  ```python
 from unify import AsyncUnify
 import os
 import asyncio
 async_unify = AsyncUnify(
-    # This is the default and can be omitted
+    # This is the default and optional to include.
     api_key=os.environ.get("UNIFY_KEY")
 )
 
@@ -114,3 +114,17 @@ async def main():
 
 asyncio.run(main())
 ```
+
+## Dynamic Routing
+As evidenced by our [benchmarks](https://unify.ai/hub), the optimal provider for each model varies by geographic location and time of day due to fluctuating API performances. With our dynamic routing, we automatically direct your requests to the "top-performing provider" at that moment. To enable this feature, simply replace your query's provider with one of the [available routing modes](https://unify.ai/docs/hub/concepts/runtime_routing.html#available-modes). As an example, you can query the `llama-2-7b-chat` endpoint to get the provider with the lowest input-cost as follows:
+
+```python
+import os
+from unify import Unify
+unify = Unify(
+    # This is the default and optional to include.
+    api_key=os.environ.get("UNIFY_KEY")
+)
+response = unify.generate(messages="Hello Llama! Who was Isaac Newton?", model="llama-2-13b-chat", provider="lowest-input-cost")
+```
+Dynamic routing works with both Synchronous and Asynchronous clients. For more information on Dynamic Routing, checkout the [documentation](https://unify.ai/docs/hub/concepts/runtime_routing.html#dynamic-routing)
