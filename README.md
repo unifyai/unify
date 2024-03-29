@@ -87,8 +87,7 @@ asyncio.run(main())
 Functionality wise, the Async and Sync clients are identical.
 
 ## Streaming Responses
-
-To enhance application responsiveness, enable streaming by setting the `stream` parameter to `True` in the `.generate` function. This will produce output in chunks instead of the full output at once.
+You can enable streaming responses by setting `stream=True` in the `.generate` function.
 
 ```python
 import os

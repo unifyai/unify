@@ -71,20 +71,14 @@ class Unify:
         Raises:
             UnifyError: If an error occurs during content generation.
         """
+        contents = []
+        if system_prompt:
+            contents.append({"role": "system", "content": system_prompt})
+
         if isinstance(messages, str):
-            if system_prompt is None:
-                contents = [{"role": "user", "content": messages}]
-            else:
-                contents = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": messages},
-                ]
+            contents.append({"role": "user", "content": messages})
         else:
-            if system_prompt is None:
-                contents = messages
-            else:
-                contents = [{"role": "system", "content": system_prompt}]
-                contents.extend(messages)
+            contents.extend(messages)
 
         if stream:
             return self._generate_stream(contents, model, provider)
@@ -164,13 +158,12 @@ class AsyncUnify:
         """Generate content asynchronously using the Unify API.
 
         Args:
-            messages (Union[str, List[Dict[str, str]]]): A single prompt as a string
-            or a dictionary containing the conversation history.
+            messages (Union[str, List[Dict[str, str]]]): A single prompt as a
+            string or a dictionary containing the conversation history.
             system_prompt (Optinal[str]): An optional string containing the
             system prompt.
-            when messages is a string.
-            model (str): The name of the model.
-            provider (str): The provider of the model.
+            model (str): The name of the model. Defaults to "llama-2-13b-chat".
+            provider (str): The provider of the model. Defaults to "anyscale".
             stream (bool): If True, generates content as a stream.
             If False, generates content as a single response.
             Defaults to False.
@@ -183,20 +176,15 @@ class AsyncUnify:
         Raises:
             UnifyError: If an error occurs during content generation.
         """
+        contents = []
+        if system_prompt:
+            contents.append({"role": "system", "content": system_prompt})
+
         if isinstance(messages, str):
-            if system_prompt is None:
-                contents = [{"role": "user", "content": messages}]
-            else:
-                contents = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": messages},
-                ]
+            contents.append({"role": "user", "content": messages})
         else:
-            if system_prompt is None:
-                contents = messages
-            else:
-                contents = [{"role": "system", "content": system_prompt}]
-                contents.extend(messages)
+            contents.extend(messages)
+
         if stream:
             return self._generate_stream(contents, model, provider)
         return await self._generate_non_stream(contents, model, provider)
