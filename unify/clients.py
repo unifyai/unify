@@ -1,12 +1,11 @@
 import os
-from typing import AsyncGenerator, Generator, List, Optional, Union
+from typing import AsyncGenerator, Dict, Generator, List, Optional, Union
 
 import openai
+from unify.exceptions import UnifyError, status_error_map
 
-from unify.Exceptions import UnifyError, status_error_map
 
-
-def validate_api_key(api_key):
+def validate_api_key(api_key: Optional[str]) -> str:
     if api_key is None:
         api_key = os.environ.get("UNIFY_KEY")
     if api_key is None:
@@ -45,7 +44,7 @@ class Unify:
 
     def generate(
         self,
-        messages: Union[str, List[dict]],
+        messages: Union[str, List[Dict[str, str]]],
         model: str = "llama-2-13b-chat",
         provider: str = "anyscale",
         stream: bool = False,
@@ -53,8 +52,8 @@ class Unify:
         """Generate content using the Unify API.
 
         Args:
-            messages (Union[str, List[dict]]): A single prompt as a string or a
-              dictionary containing the conversation history.
+            messages (Union[str, List[Dict[str, str]]]): A single prompt as a
+              string or a dictionary containing the conversation history.
             model (str): The name of the model. Defaults to "llama-2-13b-chat".
             provider (str): The provider of the model. Defaults to "anyscale".
             stream (bool): If True, generates content as a stream.
@@ -76,37 +75,37 @@ class Unify:
 
         if stream:
             return self._generate_stream(contents, model, provider)
-        else:
-            return self._generate_non_stream(contents, model, provider)
+        return self._generate_non_stream(contents, model, provider)
 
     def _generate_stream(
         self,
-        messages,
-        model,
-        provider,
+        messages: List[Dict[str, str]],
+        model: str,
+        provider: str,
     ) -> Generator[str, None, None]:
         try:
             chat_completion = self.client.chat.completions.create(
                 model="@".join([model, provider]),
-                messages=messages,
+                messages=messages,  # type: ignore[arg-type]
                 stream=True,
             )
             for chunk in chat_completion:
-                if chunk.choices[0].delta.content is not None:
-                    yield chunk.choices[0].delta.content
+                content = chunk.choices[0].delta.content  # type: ignore[union-attr]
+                if content is not None:
+                    yield content
         except openai.APIStatusError as e:
             raise status_error_map[e.status_code](e.message) from None
 
     def _generate_non_stream(
         self,
-        messages,
-        model,
-        provider,
+        messages: List[Dict[str, str]],
+        model: str,
+        provider: str,
     ) -> str:
         try:
             chat_completion = self.client.chat.completions.create(
                 model="@".join([model, provider]),
-                messages=messages,
+                messages=messages,  # type: ignore[arg-type]
                 stream=False,
             )
             return chat_completion.choices[0].message.content.strip(" ")  # type: ignore # noqa: E501
@@ -143,7 +142,7 @@ class AsyncUnify:
 
     async def generate(
         self,
-        messages: Union[str, List[dict]],
+        messages: Union[str, List[Dict[str, str]]],
         model: str = "llama-2-13b-chat",
         provider: str = "anyscale",
         stream: bool = False,
@@ -151,7 +150,7 @@ class AsyncUnify:
         """Generate content asynchronously using the Unify API.
 
         Args:
-            messages (Union[str, List[dict]]): A single prompt as a string
+            messages (Union[str, List[Dict[str, str]]]): A single prompt as a string
               or a dictionary containing the conversation history.
             model (str): The name of the model.
             provider (str): The provider of the model.
@@ -174,38 +173,37 @@ class AsyncUnify:
 
         if stream:
             return self._generate_stream(contents, model, provider)
-        else:
-            return await self._generate_non_stream(contents, model, provider)
+        return await self._generate_non_stream(contents, model, provider)
 
     async def _generate_stream(
         self,
-        messages,
-        model,
-        provider,
+        messages: List[Dict[str, str]],
+        model: str,
+        provider: str,
     ) -> AsyncGenerator[str, None]:
         try:
             async with self.client as async_client:
                 async_stream = await async_client.chat.completions.create(
                     model="@".join([model, provider]),
-                    messages=messages,
+                    messages=messages,  # type: ignore[arg-type]
                     stream=True,
                 )
-                async for chunk in async_stream:
+                async for chunk in async_stream:  # type: ignore[union-attr]
                     yield chunk.choices[0].delta.content or ""
         except openai.APIStatusError as e:
             raise status_error_map[e.status_code](e.message) from None
 
     async def _generate_non_stream(
         self,
-        messages,
-        model,
-        provider,
+        messages: List[Dict[str, str]],
+        model: str,
+        provider: str,
     ) -> str:
         try:
             async with self.client as async_client:
                 async_response = await async_client.chat.completions.create(
                     model="@".join([model, provider]),
-                    messages=messages,
+                    messages=messages,  # type: ignore[arg-type]
                     stream=False,
                 )
             return async_response.choices[0].message.content.strip(" ")  # type: ignore # noqa: E501
