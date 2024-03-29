@@ -31,6 +31,12 @@ response = unify.generate(messages="Hello Llama! Who was Isaac Newton?", model="
 
 Here, `response` is a string containing the model's output.
 
+You can influence the model's persona using the `system_prompt` argument in the `.generate` function.
+
+```python
+response = unify.generate(messages="Hello Llama! Who was Isaac Newton?", system_prompt="You should always talk in rhymes", model="llama-2-13b-chat", provider="anyscale")
+```
+
 ### Supported Models
 The list of supported models and providers is available in [the platform](https://unify.ai/hub).
 

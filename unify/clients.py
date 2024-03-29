@@ -42,9 +42,10 @@ class Unify:
         except openai.OpenAIError as e:
             raise UnifyError(f"Failed to initialize Unify client: {str(e)}")
 
-    def generate(  # noqa: WPS234
+    def generate(  # noqa: WPS234, WPS211
         self,
         messages: Union[str, List[Dict[str, str]]],
+        system_prompt: Optional[str] = None,
         model: str = "llama-2-13b-chat",
         provider: str = "anyscale",
         stream: bool = False,
@@ -54,6 +55,8 @@ class Unify:
         Args:
             messages (Union[str, List[Dict[str, str]]]): A single prompt as a
             string or a dictionary containing the conversation history.
+            system_prompt (Optinal[str]): An optional string containing the
+            system prompt.
             model (str): The name of the model. Defaults to "llama-2-13b-chat".
             provider (str): The provider of the model. Defaults to "anyscale".
             stream (bool): If True, generates content as a stream.
@@ -69,9 +72,19 @@ class Unify:
             UnifyError: If an error occurs during content generation.
         """
         if isinstance(messages, str):
-            contents = [{"role": "user", "content": messages}]
+            if system_prompt is None:
+                contents = [{"role": "user", "content": messages}]
+            else:
+                contents = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": messages},
+                ]
         else:
-            contents = messages
+            if system_prompt is None:
+                contents = messages
+            else:
+                contents = [{"role": "system", "content": system_prompt}]
+                contents.extend(messages)
 
         if stream:
             return self._generate_stream(contents, model, provider)
@@ -140,9 +153,10 @@ class AsyncUnify:
         except openai.APIStatusError as e:
             raise UnifyError(f"Failed to initialize Unify client: {str(e)}")
 
-    async def generate(  # noqa: WPS234
+    async def generate(  # noqa: WPS234, WPS211
         self,
         messages: Union[str, List[Dict[str, str]]],
+        system_prompt: Optional[str] = None,
         model: str = "llama-2-13b-chat",
         provider: str = "anyscale",
         stream: bool = False,
@@ -152,6 +166,9 @@ class AsyncUnify:
         Args:
             messages (Union[str, List[Dict[str, str]]]): A single prompt as a string
             or a dictionary containing the conversation history.
+            system_prompt (Optinal[str]): An optional string containing the
+            system prompt.
+            when messages is a string.
             model (str): The name of the model.
             provider (str): The provider of the model.
             stream (bool): If True, generates content as a stream.
@@ -167,10 +184,19 @@ class AsyncUnify:
             UnifyError: If an error occurs during content generation.
         """
         if isinstance(messages, str):
-            contents = [{"role": "user", "content": messages}]
+            if system_prompt is None:
+                contents = [{"role": "user", "content": messages}]
+            else:
+                contents = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": messages},
+                ]
         else:
-            contents = messages
-
+            if system_prompt is None:
+                contents = messages
+            else:
+                contents = [{"role": "system", "content": system_prompt}]
+                contents.extend(messages)
         if stream:
             return self._generate_stream(contents, model, provider)
         return await self._generate_non_stream(contents, model, provider)
