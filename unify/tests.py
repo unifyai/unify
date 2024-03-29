@@ -29,7 +29,7 @@ class TestUnify(unittest.TestCase):
         unify = Unify(self.valid_api_key)
         # Provide incorrect model name to generate function
         with self.assertRaises(InternalServerError):
-            unify.generate("hello", "llama-chat")
+            unify.generate(messages="hello", model="llama-chat")
 
     def test_generate_returns_string_when_stream_false(self) -> None:
         # Instantiate Unify with a valid API key
@@ -72,7 +72,7 @@ class TestAsyncUnify(unittest.IsolatedAsyncioTestCase):
         async_unify = AsyncUnify(api_key=self.valid_api_key)
         # Provide incorrect model name to generate function
         with self.assertRaises(InternalServerError):
-            await async_unify.generate("hello", "llama-chat")
+            await async_unify.generate(messages="hello", model="llama-chat")
 
     async def test_generate_returns_string_when_stream_false(self) -> None:
         # Instantiate AsyncUnify with a valid API key
