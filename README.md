@@ -15,7 +15,7 @@ Just like the REST API, you can:
 ## Installation
 You can use pip to install the package as follows:
 ```bash
-pip install .
+pip install unifyai
 ```
 
 ## Basic Usage
