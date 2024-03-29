@@ -127,4 +127,4 @@ unify = Unify(
 )
 response = unify.generate(messages="Hello Llama! Who was Isaac Newton?", model="llama-2-13b-chat", provider="lowest-input-cost")
 ```
-Dynamic routing works with both Synchronous and Asynchronous clients. For more information on Dynamic Routing, checkout the [documentation](https://unify.ai/docs/hub/concepts/runtime_routing.html#dynamic-routing)
+Dynamic routing works with both Synchronous and Asynchronous clients. For more information on Dynamic Routing, check our [documentation](https://unify.ai/docs/hub/concepts/runtime_routing.html#dynamic-routing).
