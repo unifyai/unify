@@ -63,3 +63,5 @@ jobs:
         poetry install --with dev
     - name: Run unit tests
       run: poetry run python -m unittest discover
+      env:
+        UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
