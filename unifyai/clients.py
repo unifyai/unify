@@ -2,7 +2,7 @@ import os
 from typing import AsyncGenerator, Dict, Generator, List, Optional, Union
 
 import openai
-from unify.exceptions import UnifyError, status_error_map
+from unifyai.exceptions import UnifyError, status_error_map
 
 
 def _validate_api_key(api_key: Optional[str]) -> str:
