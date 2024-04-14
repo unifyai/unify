@@ -44,7 +44,7 @@ class ChatBot:  # noqa: WPS338
         Yields:
             str: Generated AI response chunks.
         """
-        self._update_message_history(inp)
+        self._update_message_history(role = "user", content = inp)
         initial_credit_balance = self._get_credits()
         stream = self._client.generate(
             messages=self._message_history,
@@ -55,11 +55,9 @@ class ChatBot:  # noqa: WPS338
             words += chunk
             yield chunk
 
-        self._message_history.append(
-            {
-                "role": "assistant",
-                "content": words,
-            },
+        self._update_message_history(
+                role = "assistant",
+                content = words,
         )
         final_credit_balance = self._get_credits()
         if show_credits:
@@ -71,17 +69,18 @@ class ChatBot:  # noqa: WPS338
         if show_provider:
             sys.stdout.write("\n(provider: {})".format(self._client.provider))
 
-    def _update_message_history(self, inp):
+    def _update_message_history(self, role: str, content: str):
         """
         Updates message history with user input.
 
         Args:
-            inp (str): User input message.
+            role (str): Either "assistant" or "user".
+            content (str): User input message.
         """
         self._message_history.append(
             {
-                "role": "user",
-                "content": inp,
+                "role": role,
+                "content": content,
             },
         )
 
