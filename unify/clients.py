@@ -2,8 +2,8 @@ from typing import AsyncGenerator, Dict, Generator, List, Optional, Union
 
 import openai
 import requests
-from unifyai.exceptions import BadRequestError, UnifyError, status_error_map
-from unifyai.utils import (  # noqa:WPS450
+from unify.exceptions import BadRequestError, UnifyError, status_error_map
+from unify.utils import (  # noqa:WPS450
     _available_dynamic_modes,
     _validate_api_key,
     _validate_endpoint,
@@ -205,7 +205,7 @@ class Unify:
             )
             for chunk in chat_completion:
                 content = chunk.choices[0].delta.content  # type: ignore[union-attr]
-                self._provider = chunk.model.split("@")[-1]  # type: ignore[union-attr]
+                self.set_provider(chunk.model.split("@")[-1])  # type: ignore[union-attr]
                 if content is not None:
                     yield content
         except openai.APIStatusError as e:
@@ -222,9 +222,9 @@ class Unify:
                 messages=messages,  # type: ignore[arg-type]
                 stream=False,
             )
-            self._provider = chat_completion.model.split(  # type: ignore[union-attr]
+            self.set_provider(chat_completion.model.split(  # type: ignore[union-attr]
                 "@",
-            )[-1]
+            )[-1])
 
             return chat_completion.choices[0].message.content.strip(" ")  # type: ignore # noqa: E501, WPS219
         except openai.APIStatusError as e:

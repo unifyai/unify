@@ -1,28 +1,136 @@
 import sys
 
 from typing import Optional
-from unifyai.clients import Unify
+from unify.clients import Unify
 
 
 class ChatBot:  # noqa: WPS338
     """Agent class represents an LLM chat agent."""
 
-    def __init__(self, api_key: Optional[str] = None, endpoint: Optional[str] = "llama-2-7b-chat@anyscale") -> None:
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        model: Optional[str] = None,
+        provider: Optional[str] = None,
+        ) -> None:
         """
         Initializes the ChatBot object.
 
         Args:
-            api_key (optional, str): Your UNIFY key.
-            endpoint (optional, str): The endpoint for the chatbot.
+            api_key (str, optional): API key for accessing the Unify API.
+                If None, it attempts to retrieve the API key from the
+                environment variable UNIFY_KEY.
+                Defaults to None.
+
+            endpoint (str, optional): Endpoint name in OpenAI API format:
+                <uploaded_by>/<model_name>@<provider_name>
+                Defaults to None.
+
+            model (str, optional): Name of the model. If None,
+            endpoint must be provided.
+
+            provider (str, optional): Name of the provider. If None,
+            endpoint must be provided.
+        Raises:
+            UnifyError: If the API key is missing.
         """
         self._message_history = []
-        self._endpoint = endpoint
-        self._api_key = api_key
         self._paused = False
         self._client = Unify(
-            api_key=self._api_key,
-            endpoint=self._endpoint,
+            api_key=api_key,
+            endpoint=endpoint,
+            model=model,
+            provider=provider,
         )
+
+    @property
+    def client(self) -> str:
+        """
+        Get the client object.  # noqa: DAR201.
+
+        Returns:
+            str: The model name.
+        """
+        return self._client
+
+    def set_client(self, value: Unify) -> None:
+        """
+        Set the model name.  # noqa: DAR101.
+
+        Args:
+            value: The unify client.
+        """
+        if isinstance(value, Unify):
+            self._client = value
+        else:
+            raise UnifyError("Invalid client!")
+
+
+    @property
+    def model(self) -> str:
+        """
+        Get the model name.  # noqa: DAR201.
+
+        Returns:
+            str: The model name.
+        """
+        return self._client.model
+
+    def set_model(self, value: str) -> None:
+        """
+        Set the model name.  # noqa: DAR101.
+
+        Args:
+            value (str): The model name.
+        """
+        self._client.set_model(value)
+        if self._client.provider:
+            self._client.set_endpoint("@".join([value, self._client.provider]))
+        else:
+            mode = self._client.endpoint.split("@")[1]
+            self._client.set_endpoint("@".join([value, mode]))
+
+    @property
+    def provider(self) -> Optional[str]:
+        """
+        Get the provider name.  # noqa :DAR201.
+
+        Returns:
+            str: The provider name.
+        """
+        return self._client.provider
+
+    def set_provider(self, value: str) -> None:
+        """
+        Set the provider name.  # noqa: DAR101.
+
+        Args:
+            value (str): The provider name.
+        """
+        self._client.set_provider(value)
+        self._client.set_endpoint("@".join([self._model, value]))
+
+    @property
+    def endpoint(self) -> str:
+        """
+        Get the endpoint name.  # noqa: DAR201.
+
+        Returns:
+            str: The endpoint name.
+        """
+        return self._client.endpoint
+
+    def set_endpoint(self, value: str) -> None:
+        """
+        Set the model name.  # noqa: DAR101.
+
+        Args:
+            value (str): The endpoint name.
+        """
+        self._client.set_endpoint(value)
+        self._client.set_model(value.split("@")[0])
+        self._client.set_provider(value.split("@")[1])
 
     def _get_credits(self):
         """
@@ -40,6 +148,7 @@ class ChatBot:  # noqa: WPS338
         Args:
             inp (str): User input message.
             show_credits (bool): Whether to show credit consumption.
+            show_credits (bool): Whether to show provider used.
 
         Yields:
             str: Generated AI response chunks.
@@ -84,15 +193,6 @@ class ChatBot:  # noqa: WPS338
             },
         )
 
-    @property
-    def endpoint(self):
-        return self._endpoint
-
-    @endpoint.setter
-    def endpoint(self, value):
-        self._endpoint = value
-        self._client.set_endpoint(self._endpoint)
-
     def clear_chat_history(self):
         """Clears the chat history."""
         self._message_history.clear()
@@ -102,7 +202,10 @@ class ChatBot:  # noqa: WPS338
         Starts the chat interaction loop.
 
         Args:
-            show_credits (bool, optional): Whether to show credit consumption. Defaults to False.
+            show_credits (bool, optional): Whether to show credit consumption.
+            Defaults to False.
+            show_provider (bool, optional): Whether to show the provider used.
+            Defaults to False.
         """
         if not self._paused:
             sys.stdout.write(
