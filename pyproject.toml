@@ -1,5 +1,6 @@
 [tool.poetry]
-name = "unify"
+name = "unifyai"
+packages = [{include = "unify"}]
 version = "0.8.0"
 readme = "README.md"
 description = "A Python package for interacting with the Unify API"
