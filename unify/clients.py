@@ -126,6 +126,7 @@ class Unify:
         user_prompt: Optional[str] = None,
         system_prompt: Optional[str] = None,
         messages: Optional[List[Dict[str, str]]] = None,
+        max_tokens: Optional[int] = None,
         stream: bool = False,
     ) -> Union[Generator[str, None, None], str]:  # noqa: DAR101, DAR201, DAR401
         """Generate content using the Unify API.
@@ -139,6 +140,9 @@ class Unify:
 
             messages (List[Dict[str, str]]): A list of dictionaries containing the
             conversation history. If provided, user_prompt must be None.
+
+            max_tokens (Optional[int]): The max number of output tokens, defaults
+            to the provider's default max_tokens when the value is None.
 
             stream (bool): If True, generates content as a stream.
             If False, generates content as a single response.
@@ -164,8 +168,8 @@ class Unify:
             raise UnifyError("You must provider either the user_prompt or messages!")
 
         if stream:
-            return self._generate_stream(contents, self._endpoint)
-        return self._generate_non_stream(contents, self._endpoint)
+            return self._generate_stream(contents, self._endpoint, max_tokens=max_tokens)
+        return self._generate_non_stream(contents, self._endpoint, max_tokens=max_tokens)
 
     def get_credit_balance(self) -> float:
         # noqa: DAR201, DAR401
@@ -197,11 +201,13 @@ class Unify:
         self,
         messages: List[Dict[str, str]],
         endpoint: str,
+        max_tokens: Optional[int] = None
     ) -> Generator[str, None, None]:
         try:
             chat_completion = self.client.chat.completions.create(
                 model=endpoint,
                 messages=messages,  # type: ignore[arg-type]
+                max_tokens=max_tokens,
                 stream=True,
             )
             for chunk in chat_completion:
@@ -216,11 +222,13 @@ class Unify:
         self,
         messages: List[Dict[str, str]],
         endpoint: str,
+        max_tokens: Optional[int] = None
     ) -> str:
         try:
             chat_completion = self.client.chat.completions.create(
                 model=endpoint,
                 messages=messages,  # type: ignore[arg-type]
+                max_tokens=max_tokens,
                 stream=False,
             )
             self.set_provider(
