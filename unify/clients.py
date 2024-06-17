@@ -130,7 +130,7 @@ class Unify:
         temperature: Optional[float] = 1.0,
         stop: Optional[List[str]] = None,
         stream: bool = False,
-        format= Optional[str] = "text",
+        format: Optional[str] = "text",
     ) -> Union[Generator[str, None, None], str]:  # noqa: DAR101, DAR201, DAR401
         """Generate content using the Unify API.
 
@@ -222,7 +222,7 @@ class Unify:
         max_tokens: Optional[int] = 1024,
         temperature: Optional[float] = 1.0,
         stop: Optional[List[str]] = None,
-        format= Optional[str] = "text",
+        format: Optional[str] = "text",
     ) -> Generator[str, None, None]:
         try:
             chat_completion = self.client.chat.completions.create(
@@ -249,7 +249,7 @@ class Unify:
         max_tokens: Optional[int] = 1024,
         temperature: Optional[float] = 1.0,
         stop: Optional[List[str]] = None,
-        format= Optional[str] = "text",
+        format: Optional[str] = "text",
     ) -> str:
         try:
             chat_completion = self.client.chat.completions.create(
@@ -421,7 +421,7 @@ class AsyncUnify:
         temperature: Optional[float] = 1.0,
         stop: Optional[List[str]] = None,
         stream: bool = False,
-        format= Optional[str] = "text",
+        format: Optional[str] = "text",
     ) -> Union[AsyncGenerator[str, None], str]:  # noqa: DAR101, DAR201, DAR401
         """Generate content asynchronously using the Unify API.
 
@@ -483,7 +483,7 @@ class AsyncUnify:
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = 1.0,
         stop: Optional[List[str]] = None,
-        format= Optional[str] = "text",
+        format: Optional[str] = "text",
     ) -> AsyncGenerator[str, None]:
         try:
             async_stream = await self.client.chat.completions.create(
@@ -508,7 +508,7 @@ class AsyncUnify:
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = 1.0,
         stop: Optional[List[str]] = None,
-        format= Optional[str] = "text"
+        format: Optional[str] = "text"
     ) -> str:
         try:
             async_response = await self.client.chat.completions.create(
