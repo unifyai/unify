@@ -473,8 +473,8 @@ class AsyncUnify:
             raise UnifyError("You must provide either the user_prompt or messages!")
 
         if stream:
-            return self._generate_stream(contents, self._endpoint, max_tokens=max_tokens, stop=stop, temperature=temperature,format=format})
-        return await self._generate_non_stream(contents, self._endpoint, max_tokens=max_tokens, stop=stop, temperature=temperature,format=format})
+            return self._generate_stream(contents, self._endpoint, max_tokens=max_tokens, stop=stop, temperature=temperature,format=format)
+        return await self._generate_non_stream(contents, self._endpoint, max_tokens=max_tokens, stop=stop, temperature=temperature,format=format)
 
     async def _generate_stream(
         self,
