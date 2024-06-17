@@ -258,7 +258,7 @@ class Unify:
                 temperature=temperature,
                 stop=stop,
                 stream=False,
-                response_format= format)
+                response_format= {"type": format},)
             self.set_provider(
                 chat_completion.model.split(  # type: ignore[union-attr]
                     "@",
@@ -491,7 +491,7 @@ class AsyncUnify:
                 temperature=temperature,
                 stop=stop,
                 stream=True,
-                response_format= format,
+                response_format= {"type": format},
             )
             async for chunk in async_stream:  # type: ignore[union-attr]
                 self.set_provider(chunk.model.split("@")[-1])
@@ -516,7 +516,7 @@ class AsyncUnify:
                 temperature=temperature,
                 stop=stop,
                 stream=False,
-                response_format = format
+                response_format = {"type": format},
             )
             self.set_provider(async_response.model.split("@")[-1])  # type: ignore
             return async_response.choices[0].message.content.strip(" ")  # type: ignore # noqa: E501, WPS219
