@@ -258,7 +258,7 @@ class Unify:
                 temperature=temperature,
                 stop=stop,
                 stream=False,
-                response_format= format,
+                response_format= format)
             self.set_provider(
                 chat_completion.model.split(  # type: ignore[union-attr]
                     "@",
