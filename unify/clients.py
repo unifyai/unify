@@ -1,5 +1,4 @@
 from typing import AsyncGenerator, Dict, Generator, List, Optional, Union
-import json
 import openai
 import requests
 from unify.exceptions import BadRequestError, UnifyError, status_error_map
@@ -511,7 +510,6 @@ class AsyncUnify:
         format: Optional[str] = "text"
     ) -> str:
         try:
-            response_format = json.dumps({"type": format})
             async_response = await self.client.chat.completions.create(
                 model=endpoint,
                 messages=messages,  # type: ignore[arg-type]
