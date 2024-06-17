@@ -517,7 +517,7 @@ class AsyncUnify:
                 temperature=temperature,
                 stop=stop,
                 stream=False,
-                response_format = response_format,
+                response_format = {"type": format}
             )
             self.set_provider(async_response.model.split("@")[-1])  # type: ignore
             return async_response.choices[0].message.content.strip(" ")  # type: ignore # noqa: E501, WPS219
