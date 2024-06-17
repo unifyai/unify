@@ -449,6 +449,10 @@ class AsyncUnify:
             If False, generates content as a single response.
             Defaults to False.
 
+            format (Optional[str]): The format of the response that will be used for openai models
+            Will be sent as a parameter inside response_format= {type : format} in the request body
+            format can be either "json_object" or "text". User has to also explicitly ask for JSON in the prompt!
+
         Returns:
             Union[AsyncGenerator[str, None], List[str]]: If stream is True,
             returns an asynchronous generator yielding chunks of content.
@@ -469,8 +473,8 @@ class AsyncUnify:
             raise UnifyError("You must provide either the user_prompt or messages!")
 
         if stream:
-            return self._generate_stream(contents, self._endpoint, max_tokens=max_tokens, stop=stop, temperature=temperature)
-        return await self._generate_non_stream(contents, self._endpoint, max_tokens=max_tokens, stop=stop, temperature=temperature)
+            return self._generate_stream(contents, self._endpoint, max_tokens=max_tokens, stop=stop, temperature=temperature,response_format={"type": format})
+        return await self._generate_non_stream(contents, self._endpoint, max_tokens=max_tokens, stop=stop, temperature=temperature,response_format={"type": format})
 
     async def _generate_stream(
         self,
