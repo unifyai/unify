@@ -34,7 +34,9 @@ class TestUnify(unittest.TestCase):
 
     def test_generate_returns_string_when_stream_false(self) -> None:
         # Instantiate Unify with a valid API key
-        unify = Unify(api_key=self.valid_api_key, endpoint="llama-3-8b-chat@together-ai")
+        unify = Unify(
+            api_key=self.valid_api_key, endpoint="llama-3-8b-chat@together-ai"
+        )
         # Call generate with stream=False
         result = unify.generate(user_prompt="hello", stream=False)
         # Assert that the result is a string
@@ -42,7 +44,9 @@ class TestUnify(unittest.TestCase):
 
     def test_generate_returns_generator_when_stream_true(self) -> None:
         # Instantiate Unify with a valid API key
-        unify = Unify(api_key=self.valid_api_key, endpoint="llama-3-8b-chat@together-ai")
+        unify = Unify(
+            api_key=self.valid_api_key, endpoint="llama-3-8b-chat@together-ai"
+        )
         # Call generate with stream=True
         result = unify.generate(user_prompt="hello", stream=True)
         # Assert that the result is a generator

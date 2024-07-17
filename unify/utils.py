@@ -72,6 +72,7 @@ def _validate_endpoint(  # noqa: WPS231
         provider = None
     return endpoint, model, provider
 
+
 def list_models() -> List[str]:
     """
     Get a list of available models.
@@ -122,7 +123,9 @@ def list_providers(model: str) -> List[str]:
     return _res_to_list(requests.get(url, params={"model": model}))
 
 
-def upload_dataset_from_file(name: str, path: str, api_key: Optional[str]=None) -> str:
+def upload_dataset_from_file(
+    name: str, path: str, api_key: Optional[str] = None
+) -> str:
     """
     Uploads a local file as a dataset to the platform.
 
@@ -147,12 +150,17 @@ def upload_dataset_from_file(name: str, path: str, api_key: Optional[str]=None) 
     files = {"file": ("dataset", file_content, "application/x-jsonlines")}
     data = {"name": name}
     # Send POST request to the /dataset endpoint
-    response = requests.post(_base_url + "/dataset", headers=headers, data=data, files=files)
+    response = requests.post(
+        _base_url + "/dataset", headers=headers, data=data, files=files
+    )
     if response.status_code != 200:
         raise ValueError(response.text)
     return json.loads(response.text)["info"]
 
-def upload_dataset_from_dictionary(name: str, content: List[Dict[str, str]], api_key: Optional[str] = None) -> str:
+
+def upload_dataset_from_dictionary(
+    name: str, content: List[Dict[str, str]], api_key: Optional[str] = None
+) -> str:
     """
     Uploads a list of dictionaries as a dataset to the platform.
     Each dictionary in the list must contain a `prompt` key.
@@ -177,10 +185,13 @@ def upload_dataset_from_dictionary(name: str, content: List[Dict[str, str]], api
     files = {"file": ("dataset", content_str, "application/x-jsonlines")}
     data = {"name": name}
     # Send POST request to the /dataset endpoint
-    response = requests.post(_base_url + "/dataset", headers=headers, data=data, files=files)
+    response = requests.post(
+        _base_url + "/dataset", headers=headers, data=data, files=files
+    )
     if response.status_code != 200:
         raise ValueError(response.text)
     return json.loads(response.text)["info"]
+
 
 def delete_dataset(name: str, api_key: Optional[str] = None) -> str:
     """
@@ -210,7 +221,9 @@ def delete_dataset(name: str, api_key: Optional[str] = None) -> str:
     return json.loads(response.text)["info"]
 
 
-def download_dataset(name: str, path: Optional[str] = None, api_key: Optional[str] = None) -> Optional[str]:
+def download_dataset(
+    name: str, path: Optional[str] = None, api_key: Optional[str] = None
+) -> Optional[str]:
     """
     Downloads a dataset from the platform.
 
@@ -237,7 +250,7 @@ def download_dataset(name: str, path: Optional[str] = None, api_key: Optional[st
     if response.status_code != 200:
         raise ValueError(response.text)
     if path:
-        with open(path, 'w+') as f:
+        with open(path, "w+") as f:
             f.write("\n".join([json.dumps(d) for d in json.loads(response.text)]))
             return None
     return json.loads(response.text)
@@ -291,7 +304,9 @@ def evaluate(dataset: str, endpoints: List[str], api_key: Optional[str] = None) 
     for endpoint in endpoints:
         data = {"dataset": dataset, "endpoint": endpoint}
         # Send POST request to the /evaluation endpoint
-        response = requests.post(_base_url + "/evaluation", headers=headers, params=data)
+        response = requests.post(
+            _base_url + "/evaluation", headers=headers, params=data
+        )
         if response.status_code != 200:
             raise ValueError(f"Error in endpoint {endpoint}: {response.text}")
     return json.loads(response.text)["info"]
@@ -319,18 +334,22 @@ def delete_evaluation(name: str, endpoint: str, api_key: Optional[str] = None) -
     }
     params = {"dataset": name, "endpoint": endpoint}
     # Send DELETE request to the /evaluation endpoint
-    response = requests.delete(_base_url + "/evaluation", headers=headers, params=params)
+    response = requests.delete(
+        _base_url + "/evaluation", headers=headers, params=params
+    )
     if response.status_code != 200:
         raise ValueError(response.text)
     return json.loads(response.text)["info"]
 
 
-def list_evaluations(dataset: Optional[str] = None, api_key: Optional[str] = None) -> List[str]:
+def list_evaluations(
+    dataset: Optional[str] = None, api_key: Optional[str] = None
+) -> List[str]:
     """
     Fetches a list of all evaluations.
 
     Args:
-        dataset (str): Name of the dataset to fetch evaluation from. 
+        dataset (str): Name of the dataset to fetch evaluation from.
         If not specified, all evaluations will be returned.
         api_key (str): If specified, unify API key to be used. Defaults
         to the value in the `UNIFY_KEY` environment variable.
