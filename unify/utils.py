@@ -122,7 +122,7 @@ def list_providers(model: str) -> List[str]:
     return _res_to_list(requests.get(url, params={"model": model}))
 
 
-def upload_dataset_from_file(name, path, api_key=None):
+def upload_dataset_from_file(name: str, path: str, api_key: Optional[str]=None) -> str:
     """
     Uploads a local file as a dataset to the platform.
 
@@ -152,7 +152,7 @@ def upload_dataset_from_file(name, path, api_key=None):
         raise ValueError(response.text)
     return json.loads(response.text)["info"]
 
-def upload_dataset_from_dictionary(name: str, content: List[Dict[str, str]], api_key=None):
+def upload_dataset_from_dictionary(name: str, content: List[Dict[str, str]], api_key: Optional[str] = None) -> str:
     """
     Uploads a list of dictionaries as a dataset to the platform.
     Each dictionary in the list must contain a `prompt` key.
@@ -182,7 +182,7 @@ def upload_dataset_from_dictionary(name: str, content: List[Dict[str, str]], api
         raise ValueError(response.text)
     return json.loads(response.text)["info"]
 
-def delete_dataset(name, api_key=None):
+def delete_dataset(name: str, api_key: Optional[str] = None) -> str:
     """
     Deletes a dataset from the platform.
 
@@ -210,7 +210,7 @@ def delete_dataset(name, api_key=None):
     return json.loads(response.text)["info"]
 
 
-def download_dataset(name, path=None, api_key=None):
+def download_dataset(name: str, path: Optional[str] = None, api_key: Optional[str] = None) -> Optional[str]:
     """
     Downloads a dataset from the platform.
 
@@ -239,11 +239,11 @@ def download_dataset(name, path=None, api_key=None):
     if path:
         with open(path, 'w+') as f:
             f.write("\n".join([json.dumps(d) for d in json.loads(response.text)]))
-            return
+            return None
     return json.loads(response.text)
 
 
-def list_datasets(api_key=None):
+def list_datasets(api_key: Optional[str] = None) -> List[str]:
     """
     Fetches a list of all uploaded datasets.
 
@@ -268,7 +268,7 @@ def list_datasets(api_key=None):
     return _res_to_list(response)
 
 
-def evaluate(dataset, endpoints, api_key=None):
+def evaluate(dataset: str, endpoints: List[str], api_key: Optional[str] = None) -> str:
     """
     Evaluates a list of endpoints on a given dataset.
 
@@ -297,7 +297,7 @@ def evaluate(dataset, endpoints, api_key=None):
     return json.loads(response.text)["info"]
 
 
-def delete_evaluation(name, endpoint, api_key=None):
+def delete_evaluation(name: str, endpoint: str, api_key: Optional[str] = None) -> str:
     """
     Deletes an evaluation from the platform.
 
@@ -325,7 +325,7 @@ def delete_evaluation(name, endpoint, api_key=None):
     return json.loads(response.text)["info"]
 
 
-def list_evaluations(dataset=None, api_key=None):
+def list_evaluations(dataset: Optional[str] = None, api_key: Optional[str] = None) -> List[str]:
     """
     Fetches a list of all evaluations.
 
