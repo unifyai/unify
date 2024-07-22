@@ -5,6 +5,7 @@ import requests
 from unify.exceptions import BadRequestError, UnifyError, status_error_map
 from unify.utils import (  # noqa:WPS450
     _available_dynamic_modes,
+    _available_extra_headers,
     _validate_api_key,
     _validate_endpoint,
 )
@@ -178,6 +179,7 @@ class Unify:
         else:
             raise UnifyError("You must provider either the user_prompt or messages!")
 
+        extra_headers = {key: extra_headers[key] for key in _available_extra_headers}
         if stream:
             return self._generate_stream(
                 contents,
@@ -480,6 +482,7 @@ class AsyncUnify:
         else:
             raise UnifyError("You must provide either the user_prompt or messages!")
 
+        extra_headers = {key: extra_headers[key] for key in _available_extra_headers}
         if stream:
             return self._generate_stream(
                 contents,

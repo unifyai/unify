@@ -18,6 +18,10 @@ _available_dynamic_modes = [
     "tks-per-sec",
 ]
 
+_available_extra_headers = [
+    "anthropic-beta"
+]
+
 _base_url = "https://api.unify.ai/v0"
 
 
