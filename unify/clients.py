@@ -5,6 +5,7 @@ import requests
 from unify.exceptions import BadRequestError, UnifyError, status_error_map
 from unify.utils import (  # noqa:WPS450
     _available_dynamic_modes,
+    _available_extra_headers,
     _validate_api_key,
     _validate_endpoint,
 )
@@ -130,6 +131,7 @@ class Unify:
         temperature: Optional[float] = 1.0,
         stop: Optional[List[str]] = None,
         stream: bool = False,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> Union[Generator[str, None, None], str]:  # noqa: DAR101, DAR201, DAR401
         """Generate content using the Unify API.
 
@@ -157,6 +159,8 @@ class Unify:
             If False, generates content as a single response.
             Defaults to False.
 
+            extra_headers: Send extra headers
+
         Returns:
             Union[Generator[str, None, None], str]: If stream is True,
              returns a generator yielding chunks of content.
@@ -175,6 +179,7 @@ class Unify:
         else:
             raise UnifyError("You must provider either the user_prompt or messages!")
 
+        extra_headers = {key: extra_headers[key] for key in _available_extra_headers}
         if stream:
             return self._generate_stream(
                 contents,
@@ -182,6 +187,7 @@ class Unify:
                 max_tokens=max_tokens,
                 temperature=temperature,
                 stop=stop,
+                extra_headers=extra_headers,
             )
         return self._generate_non_stream(
             contents,
@@ -189,6 +195,7 @@ class Unify:
             max_tokens=max_tokens,
             temperature=temperature,
             stop=stop,
+            extra_headers=extra_headers,
         )
 
     def get_credit_balance(self) -> float:
@@ -224,6 +231,7 @@ class Unify:
         max_tokens: Optional[int] = 1024,
         temperature: Optional[float] = 1.0,
         stop: Optional[List[str]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> Generator[str, None, None]:
         try:
             chat_completion = self.client.chat.completions.create(
@@ -233,6 +241,7 @@ class Unify:
                 temperature=temperature,
                 stop=stop,
                 stream=True,
+                extra_headers=extra_headers,
                 extra_body={"signature": "package"},
             )
             for chunk in chat_completion:
@@ -250,6 +259,7 @@ class Unify:
         max_tokens: Optional[int] = 1024,
         temperature: Optional[float] = 1.0,
         stop: Optional[List[str]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> str:
         try:
             chat_completion = self.client.chat.completions.create(
@@ -259,6 +269,7 @@ class Unify:
                 temperature=temperature,
                 stop=stop,
                 stream=False,
+                extra_headers=extra_headers,
                 extra_body={"signature": "package"},
             )
             if "router" not in endpoint:
@@ -422,6 +433,7 @@ class AsyncUnify:
         temperature: Optional[float] = 1.0,
         stop: Optional[List[str]] = None,
         stream: bool = False,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> Union[AsyncGenerator[str, None], str]:  # noqa: DAR101, DAR201, DAR401
         """Generate content asynchronously using the Unify API.
 
@@ -449,6 +461,8 @@ class AsyncUnify:
             If False, generates content as a single response.
             Defaults to False.
 
+            extra_headers: Send extra headers
+
         Returns:
             Union[AsyncGenerator[str, None], List[str]]: If stream is True,
             returns an asynchronous generator yielding chunks of content.
@@ -468,6 +482,7 @@ class AsyncUnify:
         else:
             raise UnifyError("You must provide either the user_prompt or messages!")
 
+        extra_headers = {key: extra_headers[key] for key in _available_extra_headers}
         if stream:
             return self._generate_stream(
                 contents,
@@ -475,6 +490,7 @@ class AsyncUnify:
                 max_tokens=max_tokens,
                 stop=stop,
                 temperature=temperature,
+                extra_headers=extra_headers,
             )
         return await self._generate_non_stream(
             contents,
@@ -482,6 +498,7 @@ class AsyncUnify:
             max_tokens=max_tokens,
             stop=stop,
             temperature=temperature,
+            extra_headers=extra_headers,
         )
 
     async def _generate_stream(
@@ -491,6 +508,7 @@ class AsyncUnify:
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = 1.0,
         stop: Optional[List[str]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> AsyncGenerator[str, None]:
         try:
             async_stream = await self.client.chat.completions.create(
@@ -500,6 +518,7 @@ class AsyncUnify:
                 temperature=temperature,
                 stop=stop,
                 stream=True,
+                extra_headers=extra_headers,
                 extra_body={"signature": "package"},
             )
             async for chunk in async_stream:  # type: ignore[union-attr]
@@ -515,6 +534,7 @@ class AsyncUnify:
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = 1.0,
         stop: Optional[List[str]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> str:
         try:
             async_response = await self.client.chat.completions.create(
@@ -524,6 +544,7 @@ class AsyncUnify:
                 temperature=temperature,
                 stop=stop,
                 stream=False,
+                extra_headers=extra_headers,
                 extra_body={"signature": "package"},
             )
             self.set_provider(async_response.model.split("@")[-1])  # type: ignore
