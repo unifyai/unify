@@ -33,7 +33,9 @@ def _validate_api_key(api_key: Optional[str]) -> str:
     return api_key
 
 
-def list_models(provider: Optional[str] = None, api_key: Optional[str] = None) -> List[str]:
+def list_models(
+    provider: Optional[str] = None, api_key: Optional[str] = None
+) -> List[str]:
     """
     Get a list of available models, either in total or for a specific provider.
 
@@ -55,11 +57,15 @@ def list_models(provider: Optional[str] = None, api_key: Optional[str] = None) -
     }
     url = f"{_base_url}/models"
     if provider:
-        return _res_to_list(requests.get(url, headers=headers, params={"provider": provider}))
+        return _res_to_list(
+            requests.get(url, headers=headers, params={"provider": provider})
+        )
     return _res_to_list(requests.get(url, headers=headers))
 
 
-def list_providers(model: Optional[str] = None, api_key: Optional[str] = None) -> List[str]:
+def list_providers(
+    model: Optional[str] = None, api_key: Optional[str] = None
+) -> List[str]:
     """
     Get a list of available providers, either in total or for a specific model.
 
@@ -86,7 +92,11 @@ def list_providers(model: Optional[str] = None, api_key: Optional[str] = None) -
     return _res_to_list(requests.get(url, headers=headers))
 
 
-def list_endpoints(model: Optional[str] = None, provider: Optional[str] = None, api_key: Optional[str] = None) -> List[str]:
+def list_endpoints(
+    model: Optional[str] = None,
+    provider: Optional[str] = None,
+    api_key: Optional[str] = None,
+) -> List[str]:
     """
     Get a list of available endpoint, either in total or for a specific model or provider.
 
@@ -113,7 +123,9 @@ def list_endpoints(model: Optional[str] = None, provider: Optional[str] = None, 
     elif model:
         return _res_to_list(requests.get(url, headers=headers, params={"model": model}))
     elif provider:
-        return _res_to_list(requests.get(url, headers=headers, params={"provider": provider}))
+        return _res_to_list(
+            requests.get(url, headers=headers, params={"provider": provider})
+        )
     return _res_to_list(requests.get(url, headers=headers))
 
 
