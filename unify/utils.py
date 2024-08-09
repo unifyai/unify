@@ -366,9 +366,7 @@ def list_evaluations(
     return _res_to_list(response)
 
 
-def get_credits(
-    api_key: Optional[str] = None
-) -> float:
+def get_credits(api_key: Optional[str] = None) -> float:
     """
     Returns the credits remaining in the user account, in USD.
 
