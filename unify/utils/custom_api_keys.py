@@ -1,4 +1,3 @@
-
 import requests
 from typing import Optional, List, Any, Dict, Union
 
@@ -7,9 +6,7 @@ from .helpers import _validate_api_key, _res_to_list
 
 
 def create_custom_api_key(
-    name: str,
-    value: str,
-    api_key: Optional[str] = None
+    name: str, value: str, api_key: Optional[str] = None
 ) -> Dict[str, str]:
     """
     Create a custom API key.
@@ -30,17 +27,13 @@ def create_custom_api_key(
         "Authorization": f"Bearer {api_key}",
     }
     url = f"{base_url()}/custom_api_key"
-    
-    params = {
-        "name": name,
-        "value": value
-    }
-    
+
+    params = {"name": name, "value": value}
+
     response = requests.post(url, headers=headers, params=params)
     response.raise_for_status()
-    
-    return response.json()
 
+    return response.json()
 
 
 def get_custom_api_key(name: str, api_key: Optional[str] = None) -> Dict[str, Any]:
@@ -65,12 +58,11 @@ def get_custom_api_key(name: str, api_key: Optional[str] = None) -> Dict[str, An
     }
     url = f"{base_url()}/custom_api_key"
     params = {"name": name}
-    
+
     response = requests.get(url, headers=headers, params=params)
     response.raise_for_status()
-    
-    return response.json()
 
+    return response.json()
 
 
 def delete_custom_api_key(name: str, api_key: Optional[str] = None) -> Dict[str, str]:
@@ -95,11 +87,11 @@ def delete_custom_api_key(name: str, api_key: Optional[str] = None) -> Dict[str,
         "Authorization": f"Bearer {api_key}",
     }
     url = f"{base_url()}/custom_api_key"
-    
+
     params = {"name": name}
-    
+
     response = requests.delete(url, headers=headers, params=params)
-    
+
     if response.status_code == 200:
         return response.json()
     elif response.status_code == 404:
@@ -108,11 +100,8 @@ def delete_custom_api_key(name: str, api_key: Optional[str] = None) -> Dict[str,
         response.raise_for_status()
 
 
-
 def rename_custom_api_key(
-    name: str,
-    new_name: str,
-    api_key: Optional[str] = None
+    name: str, new_name: str, api_key: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Rename a custom API key.
@@ -136,17 +125,13 @@ def rename_custom_api_key(
         "Authorization": f"Bearer {api_key}",
     }
     url = f"{base_url()}/custom_api_key/rename"
-    
-    params = {
-        "name": name,
-        "new_name": new_name
-    }
-    
+
+    params = {"name": name, "new_name": new_name}
+
     response = requests.post(url, headers=headers, params=params)
     response.raise_for_status()
-    
-    return response.json()
 
+    return response.json()
 
 
 def list_custom_api_keys(api_key: Optional[str] = None) -> List[Dict[str, str]]:
@@ -168,11 +153,10 @@ def list_custom_api_keys(api_key: Optional[str] = None) -> List[Dict[str, str]]:
         "Authorization": f"Bearer {api_key}",
     }
     url = f"{base_url()}/custom_api_key/list"
-    
+
     response = requests.get(url, headers=headers)
-    
+
     if response.status_code == 200:
         return response.json()
     else:
         response.raise_for_status()
-

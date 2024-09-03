@@ -6,13 +6,12 @@ from unify import base_url
 from .helpers import _validate_api_key, _res_to_list
 
 
-
 def trigger_evaluation(
     evaluator: str,
     dataset: str,
     endpoint: str,
     client_side_scores: Optional[str] = None,
-    api_key: Optional[str] = None
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Trigger an evaluation for a specific dataset using a given evaluator and endpoint.
@@ -48,8 +47,14 @@ def trigger_evaluation(
     files = {}
     if client_side_scores:
         if not os.path.exists(client_side_scores):
-            raise FileNotFoundError(f"Client-side scores file not found: {client_side_scores}")
-        files['client_side_scores'] = ('client_scores.jsonl', open(client_side_scores, 'rb'), 'application/json')
+            raise FileNotFoundError(
+                f"Client-side scores file not found: {client_side_scores}"
+            )
+        files["client_side_scores"] = (
+            "client_scores.jsonl",
+            open(client_side_scores, "rb"),
+            "application/json",
+        )
 
     response = requests.post(url, headers=headers, params=params, files=files)
     response.raise_for_status()
@@ -57,13 +62,8 @@ def trigger_evaluation(
     return response.json()
 
 
-
 def admin_trigger_eval(
-    user_id: str,
-    name: str,
-    dataset: str,
-    endpoint: str,
-    api_key: Optional[str] = None
+    user_id: str, name: str, dataset: str, endpoint: str, api_key: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Trigger an evaluation as an admin for a specific user.
@@ -87,19 +87,18 @@ def admin_trigger_eval(
         "Authorization": f"Bearer {api_key}",
     }
     url = f"{base_url()}/evals/admin_trigger"
-    
+
     params = {
         "user_id": user_id,
         "name": name,
         "dataset": dataset,
         "endpoint": endpoint,
     }
-    
+
     response = requests.post(url, headers=headers, params=params)
     response.raise_for_status()
-    
-    return response.json()
 
+    return response.json()
 
 
 def get_evaluations(
@@ -107,7 +106,7 @@ def get_evaluations(
     endpoint: Optional[str] = None,
     evaluator: Optional[str] = None,
     per_prompt: bool = False,
-    api_key: Optional[str] = None
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Get evaluations for a specific dataset, optionally filtered by endpoint and evaluator.
@@ -128,33 +127,29 @@ def get_evaluations(
         "accept": "application/json",
         "Authorization": f"Bearer {api_key}",
     }
-    
+
     url = f"{base_url()}/evaluation"
-    
-    params = {
-        "dataset": dataset,
-        "per_prompt": per_prompt
-    }
-    
+
+    params = {"dataset": dataset, "per_prompt": per_prompt}
+
     if endpoint:
         params["endpoint"] = endpoint
     if evaluator:
         params["evaluator"] = evaluator
 
     response = requests.get(url, headers=headers, params=params)
-    
+
     if response.status_code == 200:
         return response.json()
     else:
         response.raise_for_status()
 
 
-
 def delete_evaluations(
     dataset: str,
     endpoint: Optional[str] = None,
     evaluator: Optional[str] = None,
-    api_key: Optional[str] = None
+    api_key: Optional[str] = None,
 ) -> Dict[str, str]:
     """
     Delete evaluations for a specific dataset, optionally filtered by endpoint and evaluator.
@@ -176,30 +171,26 @@ def delete_evaluations(
         "accept": "application/json",
         "Authorization": f"Bearer {api_key}",
     }
-    
+
     url = f"{base_url()}/evaluation"
-    
+
     params = {
         "dataset": dataset,
     }
-    
+
     if endpoint:
         params["endpoint"] = endpoint
     if evaluator:
         params["evaluator"] = evaluator
-    
+
     response = requests.delete(url, headers=headers, params=params)
     response.raise_for_status()
-    
+
     return response.json()
 
 
-
 def get_evaluation_status(
-    dataset: str,
-    endpoint: str,
-    evaluator: str,
-    api_key: Optional[str] = None
+    dataset: str, endpoint: str, evaluator: str, api_key: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Get the evaluation status for a specific dataset, endpoint, and evaluator.
@@ -226,9 +217,8 @@ def get_evaluation_status(
         "evaluator": evaluator,
     }
     url = f"{base_url()}/evaluation/status"
-    
+
     response = requests.get(url, headers=headers, params=params)
     response.raise_for_status()
-    
-    return response.json()
 
+    return response.json()
