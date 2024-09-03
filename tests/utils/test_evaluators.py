@@ -29,6 +29,7 @@ class TestCreateEvaluator(unittest.TestCase):
         except:
             pass
 
+
 class TestGetEvaluator(unittest.TestCase):
     def setUp(self):
         self.test_evaluator_name = "test_evaluator"
@@ -159,6 +160,3 @@ class TestListEvaluators(unittest.TestCase):
             evaluators,
             f"Test evaluator not found in the list: {evaluators}",
         )
-
-
-
