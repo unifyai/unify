@@ -24,8 +24,10 @@ class TestCreateEvaluator(unittest.TestCase):
         self.assertEqual(result["info"], "Evaluator created successfully!")
 
     def tearDown(self):
-        delete_evaluator(self.evaluator_config["name"])
-
+        try:
+            delete_evaluator(self.evaluator_config["name"])
+        except:
+            pass
 
 class TestGetEvaluator(unittest.TestCase):
     def setUp(self):
