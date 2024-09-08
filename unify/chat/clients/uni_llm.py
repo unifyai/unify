@@ -225,7 +225,7 @@ class UniLLMClient(Client, abc.ABC):
         )
         if endpoint and (model or provider):
             raise Exception(
-                "if the model or provider are passed, then the endpoint must not be"
+                "if the model or provider is passed, then the endpoint must not be"
                 "passed."
             )
         self._client = self._get_client()
@@ -500,7 +500,7 @@ class Unify(UniLLMClient):
         if user_message:
             contents.append({"role": "user", "content": user_message})
         else:
-            raise Exception("You must provider either the user_message or messages!")
+            raise Exception("You must provide either the user_message or messages!")
 
         if tools:
             message_content_only = False
