@@ -38,7 +38,7 @@ def trigger_evaluation(
     }
     url = f"{BASE_URL}/evaluation"
 
-    params = {
+    body = {
         "evaluator": evaluator,
         "dataset": dataset,
         "endpoint": endpoint,
@@ -56,46 +56,7 @@ def trigger_evaluation(
             "application/json",
         )
 
-    response = requests.post(url, headers=headers, params=params, files=files)
-    response.raise_for_status()
-
-    return response.json()
-
-
-def admin_trigger_eval(
-    user_id: str, name: str, dataset: str, endpoint: str, api_key: Optional[str] = None
-) -> Dict[str, Any]:
-    """
-    Trigger an evaluation as an admin for a specific user.
-
-    Args:
-        user_id: ID of the user that will own the triggered eval.
-        name: Name of the eval to use.
-        dataset: Name of the uploaded dataset to evaluate.
-        endpoint: Name of the endpoint to evaluate. Must be specified using the `model@provider` format.
-        api_key: If specified, unify API key to be used. Defaults to the value in the `UNIFY_KEY` environment variable.
-
-    Returns:
-        A dictionary containing the response from the API.
-
-    Raises:
-        requests.HTTPError: If the API request fails.
-    """
-    api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
-    url = f"{BASE_URL}/evals/admin_trigger"
-
-    params = {
-        "user_id": user_id,
-        "name": name,
-        "dataset": dataset,
-        "endpoint": endpoint,
-    }
-
-    response = requests.post(url, headers=headers, params=params)
+    response = requests.post(url, headers=headers, json=body, files=files)
     response.raise_for_status()
 
     return response.json()
