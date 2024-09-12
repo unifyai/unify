@@ -57,6 +57,7 @@ def trigger_evaluation(
         )
 
     response = requests.post(url, headers=headers, json=body, files=files)
+    print(response.text)
     response.raise_for_status()
 
     return response.json()
@@ -99,6 +100,7 @@ def get_evaluations(
         params["evaluator"] = evaluator
 
     response = requests.get(url, headers=headers, params=params)
+    print(response.text)
     response.raise_for_status()
 
     return response.json()

@@ -48,6 +48,8 @@ class TestTriggerEvaluation(unittest.TestCase):
             dataset="TestTrigger",
             endpoint="llama-3-8b-chat@aws-bedrock",
         )
+        ret = get_evaluations(dataset="TestTrigger")
+        print(ret)
 
     def tearDown(self):
         pass
