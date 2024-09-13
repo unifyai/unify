@@ -12,8 +12,7 @@ class TestDefaultPrompts(unittest.TestCase):
         list_defaults = unify.utils.default_prompts.list_default_prompts()
         self.assertIn(name, list_defaults)
         get_prompt = unify.utils.default_prompts.get_default_prompt(name)
-        # ToDo: fix api to return dict
-        # self.assertEqual(get_prompt["prompt"]["temperature"], 0.41)
+        self.assertEqual(get_prompt["prompt"]["temperature"], 0.41)
 
         unify.utils.default_prompts.rename_default_prompt(name, "NewDefaultPrompt")
         list_defaults = unify.utils.default_prompts.list_default_prompts()

@@ -54,7 +54,7 @@ class TestLogQuery(unittest.TestCase):
         self.assertIsInstance(result, dict)
         self.assertIn("info", result)
         self.assertEqual(result["info"], "Query logged successfully")
-        history = get_query_history(
+        history = get_queries(
             endpoints="local_model_test@external", start_time=str(self.start_time)
         )
         # check non-empty
