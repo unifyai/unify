@@ -99,3 +99,8 @@ class TestDatasets(unittest.TestCase):
         unify.datasets.delete_prompt(dataset_name, _id,)
         data = unify.datasets.download_dataset(dataset_name)
         self.assertTrue(len(data)==3)
+
+        unify.datasets.rename_dataset("TestAtomic", "RenamedTestAtomic")
+        self.assertIn("RenamedTestAtomic", unify.datasets.list_datasets())
+        unify.delete_dataset("RenamedTestAtomic")
+
