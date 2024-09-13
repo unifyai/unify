@@ -1,7 +1,8 @@
 import unittest
 
 import unify
-from unify.utils import create_evaluator, trigger_evaluation, get_evaluations
+from unify.utils import create_evaluator, trigger_evaluation, get_evaluations, delete_evaluator, delete_evaluations
+from unify.utils.datasets import delete_dataset
 
 
 class TestTriggerEvaluation(unittest.TestCase):
@@ -43,13 +44,21 @@ class TestTriggerEvaluation(unittest.TestCase):
             pass
 
     def test_trigger_evaluation(self):
-        trigger_evaluation(
+        response = trigger_evaluation(
             evaluator="test_trigger_evaluator",
             dataset="TestTrigger",
             endpoint="llama-3-8b-chat@aws-bedrock",
         )
-        ret = get_evaluations(dataset="TestTrigger")
-        print(ret)
+        self.assertIn("info", response)
+        self.assertEqual(
+            response["info"],
+            "Dataset evaluation started! You will receive an email soon!",
+        )
 
     def tearDown(self):
-        pass
+        try:
+            delete_evaluations(dataset="TestTrigger")
+            delete_evaluator("test_trigger_evaluator")
+            delete_dataset("TestTrigger")
+        except:
+            pass

@@ -38,7 +38,7 @@ def trigger_evaluation(
     }
     url = f"{BASE_URL}/evaluation"
 
-    body = {
+    params = {
         "evaluator": evaluator,
         "dataset": dataset,
         "endpoint": endpoint,
@@ -56,8 +56,7 @@ def trigger_evaluation(
             "application/json",
         )
 
-    response = requests.post(url, headers=headers, json=body, files=files)
-    print(response.text)
+    response = requests.post(url, headers=headers, params=params, files=files)
     response.raise_for_status()
 
     return response.json()
@@ -100,7 +99,6 @@ def get_evaluations(
         params["evaluator"] = evaluator
 
     response = requests.get(url, headers=headers, params=params)
-    print(response.text)
     response.raise_for_status()
 
     return response.json()
@@ -149,37 +147,3 @@ def delete_evaluations(
 
     return response.json()
 
-
-def get_evaluation_status(
-    dataset: str, endpoint: str, evaluator: str, api_key: Optional[str] = None
-) -> Dict[str, Any]:
-    """
-    Get the evaluation status for a specific dataset, endpoint, and evaluator.
-
-    Args:
-        dataset: Name of the dataset to get evaluation status of.
-        endpoint: Endpoint to get evaluation status of.
-        evaluator: Name of the evaluator to get status of.
-        api_key: If specified, unify API key to be used. Defaults
-                 to the value in the `UNIFY_KEY` environment variable.
-
-    Returns:
-        A dictionary containing the evaluation status information.
-
-    """
-    api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
-    params = {
-        "dataset": dataset,
-        "endpoint": endpoint,
-        "evaluator": evaluator,
-    }
-    url = f"{BASE_URL}/evaluation/status"
-
-    response = requests.get(url, headers=headers, params=params)
-    response.raise_for_status()
-
-    return response.json()
