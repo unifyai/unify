@@ -128,8 +128,20 @@ def delete_dataset(name: str, api_key: Optional[str] = None) -> str:
     return json.loads(response.text)["info"]
 
 
-def rename_dataset():
-    raise NotImplementedError
+def rename_dataset(name: str, new_name: str, api_key: Optional[str] = None):
+    """
+    Renames a dataset.
+    """
+    api_key = _validate_api_key(api_key)
+    headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    params = {"name": name, "new_name": new_name}
+    response = requests.post(
+        BASE_URL + "/dataset/rename", headers=headers, params=params
+    )
+    return response.json()
 
 
 def list_datasets(api_key: Optional[str] = None) -> List[str]:
