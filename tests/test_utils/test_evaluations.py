@@ -1,4 +1,5 @@
 import unittest
+import time
 
 import unify
 from unify.utils import create_evaluator, trigger_evaluation, get_evaluations, delete_evaluator, delete_evaluations
@@ -7,16 +8,6 @@ from unify.utils.datasets import delete_dataset
 
 class TestTriggerEvaluation(unittest.TestCase):
     def setUp(self):
-        self.evaluator_config = {
-            "name": "test_trigger_evaluator",
-            "judge_models": "llama-3-8b-chat@aws-bedrock",
-            "client_side": False,
-        }
-        try:
-            create_evaluator(self.evaluator_config)
-        except:
-            pass
-
         entries = [
             {
                 "prompt": {
@@ -45,7 +36,7 @@ class TestTriggerEvaluation(unittest.TestCase):
 
     def test_trigger_evaluation(self):
         response = trigger_evaluation(
-            evaluator="test_trigger_evaluator",
+            evaluator="default_evaluator",
             dataset="TestTrigger",
             endpoint="llama-3-8b-chat@aws-bedrock",
         )
@@ -55,10 +46,21 @@ class TestTriggerEvaluation(unittest.TestCase):
             "Dataset evaluation started! You will receive an email soon!",
         )
 
+        time.sleep(10)
+        output = get_evaluations(dataset="TestTrigger", evaluator="default_evaluator")
+        self.assertIn('default_evaluator', output)
+        self.assertIn('llama-3-8b-chat@aws-bedrock', output['default_evaluator'])
+        self.assertIn('score', output['default_evaluator']['llama-3-8b-chat@aws-bedrock'])
+        self.assertIn('progress', output['default_evaluator']['llama-3-8b-chat@aws-bedrock'])
+
+
+        delete_evaluations(dataset="TestTrigger")
+        output = get_evaluations(dataset="TestTrigger", evaluator="default_evaluator")
+        self.assertEqual(len(output), 0)
+
     def tearDown(self):
         try:
             delete_evaluations(dataset="TestTrigger")
-            delete_evaluator("test_trigger_evaluator")
             delete_dataset("TestTrigger")
         except:
             pass
