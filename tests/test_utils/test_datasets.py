@@ -85,11 +85,17 @@ class TestDatasets(unittest.TestCase):
         unify.upload_dataset_from_dictionary(dataset_name, entries)
 
         new_prompt_data = {
-            "messages": [
-                {"role": "user", "content": "What is the powerhouse of the cell?"}
-            ]
+            "prompt": {
+                "messages": [
+                    {"role": "user", "content": "What is the powerhouse of the cell?"}
+                ]
+            }
         }
         unify.datasets.add_prompt(dataset_name, new_prompt_data)
+        data = unify.datasets.download_dataset(dataset_name)
+        self.assertTrue(len(data)==4)
 
-        unify.datasets.download_dataset(dataset_name)
-        unify.datasets.delete_prompt(dataset_name)
+        _id = data[0]["id"]
+        unify.datasets.delete_prompt(dataset_name, _id,)
+        data = unify.datasets.download_dataset(dataset_name)
+        self.assertTrue(len(data)==3)

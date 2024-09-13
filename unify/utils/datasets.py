@@ -180,7 +180,7 @@ def add_prompt(name: str, prompt_data: dict, api_key: Optional[str] = None):
     }
     body = {"name": name, "prompt_data": prompt_data}
     response = requests.post(
-        BASE_URL + "/dataset/add_prompt", headers=headers, json=params
+        BASE_URL + "/dataset/add_prompt", headers=headers, json=body
     )
     return response.json()
 
