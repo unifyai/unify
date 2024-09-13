@@ -79,8 +79,7 @@ class TestDeleteEvaluator(unittest.TestCase):
         self.assertIn("info", response, "Response does not contain an 'info' key")
         self.assertEqual(
             response["info"],
-            "Evaluator deleted successfully!",
-            "Unexpected response message",
+            "Evaluator deleted successfully",
         )
 
         updated_evaluators = list_evaluators()
