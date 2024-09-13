@@ -128,8 +128,17 @@ def delete_dataset(name: str, api_key: Optional[str] = None) -> str:
     return json.loads(response.text)["info"]
 
 
-def rename_dataset():
-    raise NotImplementedError
+def rename_dataset(old_name: str, new_name: str, api_key: Optional[str] = None) -> str:
+
+    # implemented a work around to rename dataset by downloading_dataset -> delete_dataset -> upload_dataset (with new name), basically a work around as endpoints for renaming aren't available. 
+
+    content = download_dataset(old_name, api_key=api_key)  
+    if content is not None:
+        delete_dataset(old_name, api_key=api_key)  
+        _upload_dataset_from_str(new_name, content, api_key=api_key)  
+        return f"Dataset renamed from '{old_name}' to '{new_name}'"
+    else:
+        return f"Dataset '{old_name}' not found or unable to download."
 
 
 def list_datasets(api_key: Optional[str] = None) -> List[str]:
