@@ -166,3 +166,37 @@ def list_datasets(api_key: Optional[str] = None) -> List[str]:
     response = requests.get(BASE_URL + "/dataset/list", headers=headers)
     response.raise_for_status()
     return _res_to_list(response)
+
+
+
+def add_prompt(name: str, prompt_data: dict, api_key: Optional[str] = None):
+    """
+    Adds a prompt to a dataset.
+    """
+    api_key = _validate_api_key(api_key)
+    headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    body = {"name": name, "prompt_data": prompt_data}
+    response = requests.post(
+        BASE_URL + "/dataset/add_prompt", headers=headers, json=params
+    )
+    return response.json()
+
+
+def delete_prompt(name: str, prompt_id: int, api_key: Optional[str] = None):
+    """
+    Delete a prompt from a dataset
+    """
+    api_key = _validate_api_key(api_key)
+    headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    params = {"name": name, "prompt_id": prompt_id}
+    response = requests.delete(
+        BASE_URL + "/dataset/delete_prompt", headers=headers, params=params
+    )
+    return response.json()
+

@@ -21,31 +21,25 @@ class TestDatasets(unittest.TestCase):
         entries = [
             {
                 "prompt": {
-                    "messages":
-                        [{
-                            "role": "user",
-                            "content": "This is the first user message"
-                        }]
+                    "messages": [
+                        {"role": "user", "content": "This is the first user message"}
+                    ]
                 },
                 "ref_answer": "First reference answer",
             },
             {
                 "prompt": {
-                    "messages":
-                        [{
-                            "role": "user",
-                            "content": "This is the second user message"
-                        }]
+                    "messages": [
+                        {"role": "user", "content": "This is the second user message"}
+                    ]
                 },
                 "ref_answer": "Second reference answer",
             },
             {
                 "prompt": {
-                    "messages":
-                        [{
-                            "role": "user",
-                            "content": "This is the third user message"
-                        }]
+                    "messages": [
+                        {"role": "user", "content": "This is the third user message"}
+                    ]
                 },
                 "ref_answer": "Third reference answer",
             },
@@ -56,3 +50,46 @@ class TestDatasets(unittest.TestCase):
         assert "TestFromDict" in unify.list_datasets()
         unify.delete_dataset("TestFromDict")
         assert "TestFromDict" not in unify.list_datasets()
+
+    def test_atomic_functions(self):
+        entries = [
+            {
+                "prompt": {
+                    "messages": [
+                        {"role": "user", "content": "This is the first user message"}
+                    ]
+                },
+                "ref_answer": "First reference answer",
+            },
+            {
+                "prompt": {
+                    "messages": [
+                        {"role": "user", "content": "This is the second user message"}
+                    ]
+                },
+                "ref_answer": "Second reference answer",
+            },
+            {
+                "prompt": {
+                    "messages": [
+                        {"role": "user", "content": "This is the third user message"}
+                    ]
+                },
+                "ref_answer": "Third reference answer",
+            },
+        ]
+
+        dataset_name = "TestAtomic"
+        if dataset_name in unify.list_datasets():
+            unify.delete_dataset(dataset_name)
+        unify.upload_dataset_from_dictionary(dataset_name, entries)
+
+        new_prompt_data = {
+            "messages": [
+                {"role": "user", "content": "What is the powerhouse of the cell?"}
+            ]
+        }
+        unify.datasets.add_prompt(dataset_name, new_prompt_data)
+
+        unify.datasets.download_dataset(dataset_name)
+        unify.datasets.delete_prompt(dataset_name)
