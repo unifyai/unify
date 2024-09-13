@@ -3,7 +3,7 @@ import unittest
 
 from unify.utils import (
     get_query_tags,
-    get_query_history,
+    get_queries,
     log_query,
 )
 
