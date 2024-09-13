@@ -46,7 +46,7 @@ class TestLogQuery(unittest.TestCase):
                 ],
             },
             "timestamp": str(query_time),
-            "tags": self.tag,
+            "tags": [self.tag],
         }
 
     def test_log_query(self):
@@ -61,6 +61,7 @@ class TestLogQuery(unittest.TestCase):
         self.assertTrue(history)
 
     def test_get_tags(self):
+        result = log_query(**self.data)
         tags = get_query_tags()
         self.assertTrue(isinstance(tags, list))
         self.assertTrue(self.tag in tags)
