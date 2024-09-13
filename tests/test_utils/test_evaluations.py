@@ -2,7 +2,13 @@ import unittest
 import time
 
 import unify
-from unify.utils import create_evaluator, trigger_evaluation, get_evaluations, delete_evaluator, delete_evaluations
+from unify.utils import (
+    create_evaluator,
+    trigger_evaluation,
+    get_evaluations,
+    delete_evaluator,
+    delete_evaluations,
+)
 from unify.utils.datasets import delete_dataset
 
 
@@ -48,11 +54,14 @@ class TestTriggerEvaluation(unittest.TestCase):
 
         time.sleep(10)
         output = get_evaluations(dataset="TestTrigger", evaluator="default_evaluator")
-        self.assertIn('default_evaluator', output)
-        self.assertIn('llama-3-8b-chat@aws-bedrock', output['default_evaluator'])
-        self.assertIn('score', output['default_evaluator']['llama-3-8b-chat@aws-bedrock'])
-        self.assertIn('progress', output['default_evaluator']['llama-3-8b-chat@aws-bedrock'])
-
+        self.assertIn("default_evaluator", output)
+        self.assertIn("llama-3-8b-chat@aws-bedrock", output["default_evaluator"])
+        self.assertIn(
+            "score", output["default_evaluator"]["llama-3-8b-chat@aws-bedrock"]
+        )
+        self.assertIn(
+            "progress", output["default_evaluator"]["llama-3-8b-chat@aws-bedrock"]
+        )
 
         delete_evaluations(dataset="TestTrigger")
         output = get_evaluations(dataset="TestTrigger", evaluator="default_evaluator")

@@ -146,4 +146,3 @@ def delete_evaluations(
     response.raise_for_status()
 
     return response.json()
-

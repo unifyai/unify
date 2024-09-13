@@ -1,11 +1,12 @@
 import unify
 import unittest
 
+
 class TestDefaultPrompts(unittest.TestCase):
 
     def test_default_prompt(self):
         name = "TestDefaultPrompt"
-        default_prompt = {"temperature": 0.41} 
+        default_prompt = {"temperature": 0.41}
         unify.utils.default_prompts.create_default_prompt(name, default_prompt)
 
         list_defaults = unify.utils.default_prompts.list_default_prompts()
