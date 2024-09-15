@@ -94,7 +94,7 @@ res = client.generate(messages=messages)
 When querying LLMs, you often want to keep many aspects of your prompt fixed,
 and only change a small subset of the prompt on each subsequent call.
 
-For example, you might want to fix the temperate, the system prompt,
+For example, you might want to fix the temperature, the system prompt,
 and the tools available, whilst passing different user messages coming from a downstream
 application. All of the clients in unify make this very simple via default arguments,
 which can be specified in the constructor,
