@@ -3,7 +3,7 @@ import inspect
 import rich.repr
 from io import StringIO
 from rich.console import Console
-from pydantic import BaseModel, Extra
+from pydantic import BaseModel, Extra, ConfigDict
 from typing import Optional, Union, Tuple, List, Dict, Mapping
 from openai.types.chat import (
     ChatCompletionToolParam,
