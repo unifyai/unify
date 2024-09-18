@@ -3,7 +3,7 @@ import unify
 import unittest
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
-
+from pydantic import ValidationError
 
 class TestPrompt(unittest.TestCase):
 
@@ -43,6 +43,13 @@ class TestPrompt(unittest.TestCase):
         )
         client = unify.Unify(**prompt.dict())
         self.assertEqual(client.temperature, 0.5)
+
+    def test_create_prompt_invalid_schema(self) -> None:
+        with self.assertRaises(ValidationError):
+            prompt = unify.Prompt(
+                messages=[{"role": "user", "content": "Hello"}],
+                fake_kw="123"
+            )
 
 
 class TestDatum(unittest.TestCase):

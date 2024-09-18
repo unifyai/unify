@@ -123,6 +123,7 @@ class Prompt(_FormattedBaseModel):
     extra_headers: Optional[Mapping[str, str]] = None
     extra_query: Optional[Query] = None
     extra_body: Optional[Body] = None
+    
 
     def __init__(
             self,
