@@ -102,6 +102,7 @@ class _FormattedBaseModel(_Formatted, BaseModel):
 
 
 class Prompt(_FormattedBaseModel):
+    model_config = ConfigDict(extra="forbid")
     messages: Optional[List[ChatCompletionMessageParam]] = None
     frequency_penalty: Optional[float] = None
     logit_bias: Optional[Dict[str, int]] = None
@@ -122,6 +123,7 @@ class Prompt(_FormattedBaseModel):
     extra_headers: Optional[Mapping[str, str]] = None
     extra_query: Optional[Query] = None
     extra_body: Optional[Body] = None
+    
 
     def __init__(
             self,
