@@ -489,7 +489,7 @@ class MultiLLM(_MultiLLMClient):
                 responses[endpoint] = await client.generate(**these_kw)
             return responses
         # return asyncio.run(gen(kw))
-        return await gen(kw)
+        return gen(kw)
 
 
 class MultiLLMAsync(_MultiLLMClient):
