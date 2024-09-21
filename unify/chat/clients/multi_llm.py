@@ -1,6 +1,6 @@
 # global
 import abc
-import asyncio
+# import asyncio
 import requests
 from typing_extensions import Self
 from typing import Optional, Union, List, Tuple, Dict, Iterable
@@ -488,7 +488,8 @@ class MultiLLM(_MultiLLMClient):
                     these_kw["messages"] = these_kw["messages"][endpoint]
                 responses[endpoint] = await client.generate(**these_kw)
             return responses
-        return asyncio.run(gen(kw))
+        # return asyncio.run(gen(kw))
+        return await gen(kw)
 
 
 class MultiLLMAsync(_MultiLLMClient):
