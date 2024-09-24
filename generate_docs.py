@@ -19,6 +19,7 @@ replace = {
 
 class Visitor(ast.NodeVisitor):
     """Check for function and class definitions."""
+
     def __init__(self):
         self.class_stack = []
         self.function_stack = []
@@ -119,7 +120,7 @@ def get_formatted_docstring(func):
     # get the docstring and split into lines
     docstring = "\n".join(line.lstrip(" ") for line in func.__doc__.split("\n"))
     sections = docstring.strip().split("\n\n")
-    
+
     # in case there's additional newlines, collect all the sections together
     final_sections = []
     count = 0
@@ -138,7 +139,7 @@ def get_formatted_docstring(func):
                 final_sections.append(section)
             else:
                 final_sections[-1] += "\n" + section
-    
+
     description = ""
     args_str = []
     returns_str = []
@@ -276,7 +277,6 @@ def write_function_and_class_jsons(details, private_modules):
 
             classes[class_name] = {"members": members, "docstring": class_docstring}
 
-
         # write all the functions to separate files
         for function_name in functions:
             with open(f"json_files/{module_name}.{function_name}.json", "w") as f:
@@ -333,7 +333,7 @@ def write_docs():
                     escaped_member_name = member_name.replace("_", "\_")
                     signature = member["signature"]
                     docstring = member["docstring"]
-                    
+
                     # add escape characters to the docstring
                     for key, value in replace.items():
                         docstring = docstring.replace(key, value)
@@ -366,10 +366,12 @@ def write_docs():
 def get_mint_format(python_path, root=""):
     results = []
     for key in python_path:
-        results.append({
-            "group": key,
-            "pages": get_mint_format(python_path[key], os.path.join(root, key))
-        })
+        results.append(
+            {
+                "group": key,
+                "pages": get_mint_format(python_path[key], os.path.join(root, key)),
+            }
+        )
         if len(results[-1]["pages"]) == 0:
             results[-1] = os.path.join(root, key)
     return results
@@ -381,10 +383,10 @@ def update_mint():
 
     with open("python_path.json") as f:
         python_path = json.load(f)
-    
+
     mint["navigation"][1] = {
         "group": "",
-        "pages": get_mint_format(python_path["unify"], root="python")
+        "pages": get_mint_format(python_path["unify"], root="python"),
     }
 
     with open("mint.json", "w") as f:
