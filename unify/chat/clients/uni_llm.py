@@ -486,6 +486,7 @@ class Unify(_UniLLMClient):
             if endpoint in LOCAL_MODELS:
                 kw.pop("extra_body")
                 kw.pop("model")
+                kw.pop("max_completion_tokens")
                 chat_completion = LOCAL_MODELS[endpoint](**kw)
             else:
                 chat_completion = self._client.chat.completions.create(**kw)
@@ -539,6 +540,7 @@ class Unify(_UniLLMClient):
                 if endpoint in LOCAL_MODELS:
                     kw.pop("extra_body")
                     kw.pop("model")
+                    kw.pop("max_completion_tokens")
                     chat_completion = LOCAL_MODELS[endpoint](**kw).json()
                 else:
                     chat_completion = self._client.chat.completions.create(**kw).model_dump()
@@ -715,6 +717,7 @@ class AsyncUnify(_UniLLMClient):
             if endpoint in LOCAL_MODELS:
                 kw.pop("extra_body")
                 kw.pop("model")
+                kw.pop("max_completion_tokens")
                 async_stream = await LOCAL_MODELS[endpoint](**kw)
             else:
                 async_stream = await self._client.chat.completions.create(**kw)
@@ -766,6 +769,7 @@ class AsyncUnify(_UniLLMClient):
                 if endpoint in LOCAL_MODELS:
                     kw.pop("extra_body")
                     kw.pop("model")
+                    kw.pop("max_completion_tokens")
                     async_response = await LOCAL_MODELS[endpoint](**kw).json()
                 else:
                     async_response = await self._client.chat.completions.create(**kw).model_dump()
