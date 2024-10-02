@@ -720,7 +720,7 @@ class AsyncUnify(_UniLLMClient):
             async for chunk in async_stream:  # type: ignore[union-attr]
                 self.set_provider(chunk.model.split("@")[-1])
                 if return_full_completion:
-                    yield ChatCompletion(**(chunk.model_dump()))
+                    yield ChatCompletion(**chunk.model_dump())
                 else:
                     yield chunk.choices[0].delta.content or ""
         except openai.APIStatusError as e:
