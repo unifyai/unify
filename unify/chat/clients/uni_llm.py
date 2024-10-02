@@ -492,11 +492,7 @@ class Unify(_UniLLMClient):
                 chat_completion = self._client.chat.completions.create(**kw)
             for chunk in chat_completion:
                 if return_full_completion:
-                    content = ChatCompletion(**(
-                        chunk.model_dump()
-                        if endpoint not in LOCAL_MODELS
-                        else chunk.json()
-                    ))
+                    content = ChatCompletion(**chunk.model_dump())
                 else:
                     content = chunk.choices[0].delta.content  # type: ignore[union-attr]    # noqa: E501
                 self.set_provider(chunk.model.split("@")[-1])  # type: ignore[union-attr]   # noqa: E501
@@ -541,10 +537,10 @@ class Unify(_UniLLMClient):
                     kw.pop("extra_body")
                     kw.pop("model")
                     kw.pop("max_completion_tokens")
-                    chat_completion = LOCAL_MODELS[endpoint](**kw).json()
+                    chat_completion = LOCAL_MODELS[endpoint](**kw)
                 else:
-                    chat_completion = self._client.chat.completions.create(**kw).model_dump()
-                chat_completion = ChatCompletion(**chat_completion)
+                    chat_completion = self._client.chat.completions.create(**kw)
+                chat_completion = ChatCompletion(**chat_completion.model_dump())
             except openai.APIStatusError as e:
                 raise Exception(e.message)
             if cache:
@@ -724,11 +720,7 @@ class AsyncUnify(_UniLLMClient):
             async for chunk in async_stream:  # type: ignore[union-attr]
                 self.set_provider(chunk.model.split("@")[-1])
                 if return_full_completion:
-                    yield ChatCompletion(**(
-                        chunk.model_dump()
-                        if endpoint in LOCAL_MODELS
-                        else chunk.json()
-                    ))
+                    yield ChatCompletion(**(chunk.model_dump()))
                 else:
                     yield chunk.choices[0].delta.content or ""
         except openai.APIStatusError as e:
@@ -770,10 +762,10 @@ class AsyncUnify(_UniLLMClient):
                     kw.pop("extra_body")
                     kw.pop("model")
                     kw.pop("max_completion_tokens")
-                    async_response = await LOCAL_MODELS[endpoint](**kw).json()
+                    async_response = await LOCAL_MODELS[endpoint](**kw)
                 else:
-                    async_response = await self._client.chat.completions.create(**kw).model_dump()
-                async_response = ChatCompletion(**async_response)
+                    async_response = await self._client.chat.completions.create(**kw)
+                async_response = ChatCompletion(**async_response.model_dump())
             except openai.APIStatusError as e:
                 raise Exception(e.message)
             if cache:
