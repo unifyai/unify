@@ -4,19 +4,17 @@ import asyncio
 import requests
 from typing_extensions import Self
 from typing import Optional, Union, List, Tuple, Dict, Iterable
-
 # noinspection PyProtectedMember
 from openai._types import Headers, Query
 from openai.types.chat import (
     ChatCompletionToolParam,
     ChatCompletionToolChoiceOptionParam,
-    ChatCompletionMessageParam,
+    ChatCompletionMessageParam
 )
 from openai.types.chat.completion_create_params import ResponseFormat
 
 # local
 from unify import BASE_URL
-
 # noinspection PyProtectedMember
 from unify.utils.helpers import _validate_api_key
 from unify.chat.clients import _Client, _UniLLMClient, AsyncUnify
@@ -30,11 +28,8 @@ class _MultiLLMClient(_Client, abc.ABC):
         *,
         system_message: Optional[str] = None,
         messages: Optional[
-            Union[
-                List[ChatCompletionMessageParam],
-                Dict[str, List[ChatCompletionMessageParam]],
-            ]
-        ] = None,
+            Union[List[ChatCompletionMessageParam],
+                  Dict[str, List[ChatCompletionMessageParam]]]] = None,
         frequency_penalty: Optional[float] = None,
         logit_bias: Optional[Dict[str, int]] = None,
         logprobs: Optional[bool] = None,
@@ -235,7 +230,7 @@ class _MultiLLMClient(_Client, abc.ABC):
             # passthrough arguments
             extra_headers=extra_headers,
             extra_query=extra_query,
-            **kwargs,
+            **kwargs
         )
         super().__init__(**self._constructor_args)
         endpoints = list(endpoints)
@@ -244,7 +239,9 @@ class _MultiLLMClient(_Client, abc.ABC):
         self._client_class = AsyncUnify
         self._clients = self._create_clients(endpoints)
 
-    def _create_clients(self, endpoints: List[str]) -> Dict[str, AsyncUnify]:
+    def _create_clients(
+        self, endpoints: List[str]
+    ) -> Dict[str, AsyncUnify]:
         return {
             endpoint: self._client_class(
                 endpoint,
@@ -279,7 +276,7 @@ class _MultiLLMClient(_Client, abc.ABC):
                 # passthrough arguments
                 extra_headers=self.extra_headers,
                 extra_query=self.extra_query,
-                **self.extra_body,
+                **self.extra_body
             )
             for endpoint in endpoints
         }
@@ -418,11 +415,8 @@ class MultiLLM(_MultiLLMClient):
         user_message: Optional[str] = None,
         system_message: Optional[str] = None,
         messages: Optional[
-            Union[
-                List[ChatCompletionMessageParam],
-                Dict[str, List[ChatCompletionMessageParam]],
-            ]
-        ] = None,
+            Union[List[ChatCompletionMessageParam],
+                  Dict[str, List[ChatCompletionMessageParam]]]] = None,
         *,
         frequency_penalty: Optional[float] = None,
         logit_bias: Optional[Dict[str, int]] = None,
@@ -495,7 +489,6 @@ class MultiLLM(_MultiLLMClient):
                     these_kw["messages"] = these_kw["messages"][endpoint]
                 responses[endpoint] = await client.generate(**these_kw)
             return responses
-
         return asyncio.run(gen(kw))
 
     def to_async_client(self):
@@ -517,11 +510,8 @@ class AsyncMultiLLM(_MultiLLMClient):
         user_message: Optional[str] = None,
         system_message: Optional[str] = None,
         messages: Optional[
-            Union[
-                List[ChatCompletionMessageParam],
-                Dict[str, List[ChatCompletionMessageParam]],
-            ]
-        ] = None,
+            Union[List[ChatCompletionMessageParam],
+                  Dict[str, List[ChatCompletionMessageParam]]]] = None,
         *,
         frequency_penalty: Optional[float] = None,
         logit_bias: Optional[Dict[str, int]] = None,
