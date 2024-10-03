@@ -10,6 +10,20 @@ import unify
 
 class _Formatted(abc.ABC):
 
+    def _repr(self, item) -> str:
+        class_ = item.__class__
+        item = class_(**self._truncate_model(item))
+        console = Console()
+        with console.capture() as capture:
+            console.print(item)
+        return capture.get().strip("\n")
+
+    def __repr__(self):
+        return self._repr(self)
+
+    def __str__(self):
+        return self._repr(self)
+
     def _prune_dict(self, val, prune_policy):
 
         def keep(v, k=None, prune_pol=None):
@@ -122,20 +136,6 @@ class _Formatted(abc.ABC):
         prune_policy = unify.key_repr(item)
         dct = self._prune_dict(item.model_dump(), prune_policy)
         return self._create_pydantic_model(item, dct)
-
-    def _repr(self, item) -> str:
-        class_ = item.__class__
-        item = class_(**self._truncate_model(item))
-        console = Console()
-        with console.capture() as capture:
-            console.print(item)
-        return capture.get().strip("\n")
-
-    def __repr__(self):
-        return self._repr(self)
-
-    def __str__(self):
-        return self._repr(self)
 
 
 class _FormattedBaseModel(_Formatted, BaseModel):
