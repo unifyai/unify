@@ -18,10 +18,10 @@ class _Formatted(abc.ABC):
             console.print(item)
         return capture.get().strip("\n")
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self._repr(self)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self._repr(self)
 
     def _prune_dict(self, val, prune_policy):
