@@ -123,7 +123,7 @@ class _Formatted(abc.ABC):
             if len(item) > cutoff:
                 new_items.append("...")
             return new_items
-        if isinstance(item, _FormattedBaseModel):
+        if isinstance(item, BaseModel):
             item = item.model_dump()
         if isinstance(item, dict):
             return {
