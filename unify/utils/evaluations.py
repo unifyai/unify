@@ -346,7 +346,9 @@ def log(
 
 
 def add_log_entries(
-    id: Optional[int] = None, api_key: Optional[str] = None, **kwargs,
+    id: Optional[int] = None,
+    api_key: Optional[str] = None,
+    **kwargs,
 ) -> Dict[str, str]:
     """
     Returns the data (id and values) by querying the data based on their values.
