@@ -126,7 +126,7 @@ class TestEvaluations(unittest.TestCase):
         def fn1(data1, data2, st):
             unify.add_log_entries(d1=data1)
             inner_fn(data2, st)
-        
+
         thread1 = threading.Thread(target=fn1, args=("Thread-1", "data1", 1))
         thread2 = threading.Thread(target=fn1, args=("Thread-2", "data2", 2))
 
@@ -143,9 +143,11 @@ class TestEvaluations(unittest.TestCase):
         list2 = [{"d1": "Thread-1", "d2": "data1"}, {"d1": "Thread-2", "d2": "data2"}]
 
         # Sort each dictionary by keys and then sort the list
-        assert sorted([sorted(d.items()) for d in list1]) == sorted([sorted(d.items()) for d in list2])
-        
-            
+        assert sorted([sorted(d.items()) for d in list1]) == sorted(
+            [sorted(d.items()) for d in list2],
+        )
+
+
 class TestAsyncEvaluations(unittest.IsolatedAsyncioTestCase):
     async def test_contextual_logging_async(self):
         project = "my_project"
@@ -162,7 +164,7 @@ class TestAsyncEvaluations(unittest.IsolatedAsyncioTestCase):
         async def fn1(data1, data2, st):
             unify.add_log_entries(d1=data1)
             await inner_fn(data2, st)
-        
+
         await asyncio.gather(fn1("Task-1", "data1", 1), fn1("Task-2", "data2", 2))
 
         logs = unify.get_logs("my_project")
@@ -170,5 +172,6 @@ class TestAsyncEvaluations(unittest.IsolatedAsyncioTestCase):
         list2 = [{"d1": "Task-1", "d2": "data1"}, {"d1": "Task-2", "d2": "data2"}]
 
         # Sort each dictionary by keys and then sort the list
-        assert sorted([sorted(d.items()) for d in list1]) == sorted([sorted(d.items()) for d in list2])
-    
+        assert sorted([sorted(d.items()) for d in list1]) == sorted(
+            [sorted(d.items()) for d in list2],
+        )

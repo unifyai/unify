@@ -345,7 +345,9 @@ def log(
     return Log(response.json(), api_key, **kwargs)
 
 
-def add_log_entries(id: Optional[int]=None, api_key: Optional[str] = None, **kwargs) -> Dict[str, str]:
+def add_log_entries(
+    id: Optional[int] = None, api_key: Optional[str] = None, **kwargs,
+) -> Dict[str, str]:
     """
     Returns the data (id and values) by querying the data based on their values.
 
@@ -361,14 +363,21 @@ def add_log_entries(id: Optional[int]=None, api_key: Optional[str] = None, **kwa
         A message indicating whether the log was successfully updated.
     """
     current_active_log: Log = current_global_active_log.get()
-    if current_active_log is None and id is None: raise ValueError("`id` must be set if no current log is active within the context.")
+    if current_active_log is None and id is None:
+        raise ValueError(
+            "`id` must be set if no current log is active within the context.",
+        )
     api_key = _validate_api_key(api_key)
     headers = {
         "accept": "application/json",
         "Authorization": f"Bearer {api_key}",
     }
     body = {"entries": kwargs}
-    response = requests.put(BASE_URL + f"/log/{id if id else current_active_log.id}", headers=headers, json=body)
+    response = requests.put(
+        BASE_URL + f"/log/{id if id else current_active_log.id}",
+        headers=headers,
+        json=body,
+    )
     response.raise_for_status()
     return response.json()
 
@@ -603,7 +612,7 @@ class trace:
         else:
             self.token = current_global_active_log.set(log())
             # print(current_global_active_log.get().id)
-    
+
     def __exit__(self, *args, **kwargs):
         if not self.current_global_active_log_already_set:
             current_global_active_log.reset(self.token)
@@ -614,9 +623,11 @@ class trace:
             with trace():
                 result = await fn(*args, **kwargs)
                 return result
+
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             with trace():
                 result = fn(*args, **kwargs)
                 return result
+
         return async_wrapper if inspect.iscoroutinefunction(fn) else wrapper
