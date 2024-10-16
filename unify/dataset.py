@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List, Optional, Union
 
 import unify
@@ -15,7 +16,7 @@ class Dataset(_Formatted):
 
     def __init__(
         self,
-        data: Union[str, Dict, Prompt, List[Union[str, Dict, Prompt]]],
+        data: Union[Any, List[Any]],
         *,
         name: str = None,
         shared_data: Dict = None,
@@ -95,7 +96,9 @@ class Dataset(_Formatted):
             UnifyError: If the API key is missing.
         """
         data = unify.download_dataset(name, api_key=api_key)
-        return Dataset(data, name=name, api_key=api_key)
+        ret = Dataset(data, name=name, api_key=api_key)
+        breakpoint()
+        return ret
 
     def _assert_name_exists(self) -> None:
         assert self._name is not None, (
@@ -118,29 +121,35 @@ class Dataset(_Formatted):
         Returns:
             This dataset, useful for chaining methods.
         """
+
+        def _dump(item):
+            if isinstance(item, BaseModel):
+                return item.model_dump()
+            return item
+
         self._assert_name_exists()
         dataset_exists_upstream = self._name in unify.list_datasets(self._api_key)
-        raw_data = [d.model_dump() for d in self._data]
+        raw_data = [_dump(d) for d in self._data]
         if overwrite:
             if dataset_exists_upstream:
                 upstream_dataset = unify.download_dataset(
                     self._name,
                     api_key=self._api_key,
                 )
-                unique_upstream = [
-                    item.model_dump()
-                    for item in upstream_dataset
-                    if item not in self._data
+                unique_upstream_ids = [
+                    item["id"] for item in upstream_dataset if item["entry"] not in self._data
                 ]
-                unify.delete_data(self._name, unique_upstream)
-                unify.add_data_by_value(self._name, raw_data)
+                if unique_upstream_ids:
+                    for _id in unique_upstream_ids:
+                        unify.delete_dataset_entry(self._name, _id)
+                unify.add_dataset_entries(self._name, raw_data)
             else:
-                unify.upload_dataset_from_dictionary(self._name, raw_data)
+                unify.upload_dataset(self._name, raw_data)
         else:
             if dataset_exists_upstream:
-                unify.add_data_by_value(self._name, raw_data)
+                unify.add_dataset_entries(self._name, raw_data)
             else:
-                unify.upload_dataset_from_dictionary(self._name, raw_data)
+                unify.upload_dataset(self._name, raw_data)
         return self
 
     def download(self, overwrite: bool = False) -> Self:

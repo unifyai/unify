@@ -63,10 +63,10 @@ class TestDatasetConstruction(unittest.TestCase):
     def test_create_dataset_from_upstream(self) -> None:
         if "TestCreateDatasetFromStr" in unify.list_datasets():
             unify.delete_dataset("TestCreateDatasetFromStr")
-        unify.upload_dataset_from_file(
-            "TestCreateDatasetFromStr",
-            os.path.join(dir_path, "prompts.jsonl"),
-        )
+        
+        dataset = unify.Dataset(["a", "b", "c"], name="TestCreateDatasetFromStr")
+        self.assertNotIn(dataset.name, unify.list_datasets())
+        dataset.upload()
         assert "TestCreateDatasetFromStr" in unify.list_datasets()
         dataset = unify.Dataset.from_upstream("TestCreateDatasetFromStr")
         self.assertIsInstance(dataset[0], dict)
