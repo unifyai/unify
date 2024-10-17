@@ -9,7 +9,7 @@ from typing_extensions import Self
 from unify.types import Prompt, _Formatted
 
 # noinspection PyProtectedMember
-from .utils.helpers import _validate_api_key
+from .utils.helpers import _validate_api_key, _populate_empty_ids
 
 
 class Dataset(_Formatted):
