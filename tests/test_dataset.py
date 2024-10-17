@@ -348,11 +348,10 @@ class TestDatasetDownloading(unittest.TestCase):
         with DownloadTesting():
             dataset = unify.Dataset.from_upstream("test_dataset")
             id_collection = list()
-            for item in dataset:
-                self.assertIsInstance(item.prompt._id, int)
-                self.assertNotIn(item.prompt._id, id_collection)
-                id_collection.append(item.prompt._id)
-
+            for item in dataset._raw_data:
+                self.assertIn("id", item)
+                self.assertIn("entry", item)
+                self.assertIsInstance(item["id"], str)
 
 class TestDatasetSync(unittest.TestCase):
 

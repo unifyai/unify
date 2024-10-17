@@ -81,6 +81,7 @@ def download_dataset(
             f.write("\n".join([json.dumps(d) for d in response.json()]))
             return None
     ret = response.json()
+    return [{"id": e["id"], "entry": e["entry"]} for e in ret]
     return ret
 
 
@@ -259,6 +260,91 @@ def get_dataset_entry(
     response = requests.get(
         BASE_URL + f"/datasetv2/{name}/entry/{id}",
         headers=headers,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def download_artifacts(
+    name: str,
+    api_key: Optional[str] = None,
+) -> Union[List[Any], None]:
+    """
+    Downloads a dataset from the platform.
+
+    Args:
+        name: Name of the dataset to download the artifacts for.
+
+        api_key: If specified, unify API key to be used. Defaults to the value in the
+        `UNIFY_KEY` environment variable.
+
+    """
+    api_key = _validate_api_key(api_key)
+    headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    response = requests.get(BASE_URL + f"/datasetv2/{name}/artifacts", headers=headers)
+    response.raise_for_status()
+    ret = response.json()
+    return ret
+
+
+def create_artifacts(
+    name: str,
+    artifacts: dict,
+    api_key: Optional[str] = None,
+) -> Union[List[Any], None]:
+    """
+    Downloads a dataset from the platform.
+
+    Args:
+        name: Name of the dataset to download the artifacts for.
+
+        artifacts: A dict containing the artifacts to upload
+
+        api_key: If specified, unify API key to be used. Defaults to the value in the
+        `UNIFY_KEY` environment variable.
+
+    """
+    api_key = _validate_api_key(api_key)
+    headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    data = {"artifacts": artifacts}
+    response = requests.post(
+        BASE_URL + f"/datasetv2/{name}/artifacts", json=data, headers=headers
+    )
+    response.raise_for_status()
+    ret = response.json()
+    return ret
+
+
+def delete_artifact(
+    name: str,
+    key: str,
+    api_key: Optional[str] = None,
+) -> Union[List[Any], None]:
+    """
+    Downloads a dataset from the platform.
+
+    Args:
+        name: Name of the dataset to delete an artifact from.
+
+        key: The key of the artifact to delete
+
+        api_key: If specified, unify API key to be used. Defaults to the value in the
+        `UNIFY_KEY` environment variable.
+
+    """
+    api_key = _validate_api_key(api_key)
+    headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    response = requests.delete(
+        BASE_URL + f"/datasetv2/{name}/artifacts/{key}", json=data, headers=headers
     )
     response.raise_for_status()
     return response.json()
