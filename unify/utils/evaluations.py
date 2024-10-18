@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import inspect
+import time
+import uuid
 import functools
 from contextvars import ContextVar
 from typing import Any, Dict, List, Optional, Union
@@ -24,6 +26,10 @@ current_global_active_log_kwargs = ContextVar(
 )
 current_logged_logs = ContextVar("current_logged_logs_ids", default={})
 current_context_nest_level = ContextVar("current_context_nest_level", default=0)
+
+# span
+current_span = ContextVar("current_span", default={})
+running_time = ContextVar("running_time", default=0.0)
 
 
 def _get_and_maybe_create_project(project: str, api_key: Optional[str] = None) -> str:
@@ -680,3 +686,101 @@ class Context:
         current_context_nest_level.reset(self.nest_level_token)
         if current_context_nest_level.get() == 0:
             current_logged_logs.set({})
+
+
+def span(io=True):
+    def wrapper(fn):
+        def wrapped(*args, **kwargs):
+            t1 = time.perf_counter()
+            if not current_span.get():
+                running_time.set(t1)
+            inputs = None
+            if io:
+                signature = inspect.signature(fn)
+                bound_args = signature.bind(*args, **kwargs)
+                bound_args.apply_defaults()
+                inputs = bound_args.arguments
+            new_span = {
+                "id": str(uuid.uuid4()),
+                "parent_span_id": (
+                    None if not current_span.get() else current_span.get()["id"]
+                ),
+                "span_name": fn.__name__,
+                "exec_time": None,
+                "offset": round(
+                    0.0 if not current_span.get() else t1 - running_time.get(), 2
+                ),
+                "inputs": inputs,
+                "outputs": None,
+                "child_spans": [],
+            }
+            token = current_span.set(new_span)
+            # capture the arguments here
+            result = None
+            try:
+                result = fn(*args, **kwargs)
+                return result
+            finally:
+                t2 = time.perf_counter()
+                exec_time = t2 - t1
+                current_span.get()["exec_time"] = round(exec_time, 2)
+                current_span.get()["outputs"] = (
+                    None if result is None or not io else result
+                )
+                if token.old_value is token.MISSING:
+                    current_span.reset(token)
+                else:
+                    current_span.reset(token)
+                    current_span.get()["child_spans"].append(new_span)
+
+        async def async_wrapped(*args, **kwargs):
+            t1 = time.perf_counter()
+            if not current_span.get():
+                running_time.set(t1)
+            inputs = None
+            if io:
+                signature = inspect.signature(fn)
+                bound_args = signature.bind(*args, **kwargs)
+                bound_args.apply_defaults()
+                inputs = bound_args.arguments
+            new_span = {
+                "id": str(uuid.uuid4()),
+                "parent_span_id": (
+                    None if not current_span.get() else current_span.get()["id"]
+                ),
+                "span_name": fn.__name__,
+                "exec_time": None,
+                "offset": round(
+                    0.0 if not current_span.get() else t1 - running_time.get(), 2
+                ),
+                "inputs": inputs,
+                "outputs": None,
+                "errors": None,
+                "child_spans": [],
+            }
+            token = current_span.set(new_span)
+            # capture the arguments here
+            result = None
+            try:
+                result = await fn(*args, **kwargs)
+                return result
+            except Exception as e:
+                new_span["errors"] = str(e)
+                raise e
+            finally:
+                t2 = time.perf_counter()
+                exec_time = t2 - t1
+                current_span.get()["exec_time"] = round(exec_time, 2)
+                current_span.get()["outputs"] = (
+                    None if result is None or not io else result
+                )
+                if token.old_value is token.MISSING:
+                    unify.log(trace=current_span.get())
+                    current_span.reset(token)
+                else:
+                    current_span.reset(token)
+                    current_span.get()["child_spans"].append(new_span)
+
+        return wrapped if not inspect.iscoroutinefunction(fn) else async_wrapped
+
+    return wrapper
