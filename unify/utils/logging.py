@@ -1039,14 +1039,17 @@ def span(io=True):
                 ),
                 "inputs": inputs,
                 "outputs": None,
+                "errors": None,
                 "child_spans": [],
             }
             token = current_span.set(new_span)
-            # capture the arguments here
             result = None
             try:
                 result = fn(*args, **kwargs)
                 return result
+            except Exception as e:
+                new_span["errors"] = str(e)
+                raise e
             finally:
                 t2 = time.perf_counter()
                 exec_time = t2 - t1
