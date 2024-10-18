@@ -26,12 +26,13 @@ from .utils import (
     datasets,
     endpoint_metrics,
     helpers,
-    evaluations,
+    logging,
     queries,
     router_configurations,
     router_deployment,
     router_training,
     supported_endpoints,
+    versioning,
 )
 from .utils.credits import *
 from .utils.custom_api_keys import *
@@ -39,12 +40,13 @@ from .utils.custom_endpoints import *
 from .utils.datasets import *
 from .utils.endpoint_metrics import *
 from .utils.helpers import *
-from .utils.evaluations import *
+from .utils.logging import *
 from .utils.queries import *
 from .utils.router_configurations import *
 from .utils.router_deployment import *
 from .utils.router_training import *
 from .utils.supported_endpoints import *
+from .utils.versioning import *
 
 from .chat import chatbot, clients, logging
 from .chat.clients import multi_llm
@@ -52,7 +54,7 @@ from .chat.chatbot import *
 from unify.chat.clients.uni_llm import *
 from unify.chat.clients.multi_llm import *
 
-from . import agent, casting, dataset, evaluator, repr, types
+from . import agent, casting, dataset, evaluator, repr, types, map
 from .agent import *
 from .casting import *
 from .dataset import *
@@ -60,6 +62,7 @@ from .evaluator import *
 from .chat.logging import *
 from .repr import *
 from .types import *
+from .map import *
 
 
 # Project #
