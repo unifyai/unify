@@ -9,7 +9,7 @@ from typing_extensions import Self
 from unify.types import Prompt, _Formatted
 
 # noinspection PyProtectedMember
-from .utils.helpers import _validate_api_key, _populate_empty_ids
+from .utils.helpers import _validate_api_key
 
 
 class Dataset(_Formatted):
@@ -214,11 +214,16 @@ class Dataset(_Formatted):
         """
         self._assert_name_exists()
         upstream_dataset = unify.download_dataset(self._name, api_key=self._api_key)
-        unique_upstream = [item for item in upstream_dataset if item not in self._data]
+        unique_upstream = [
+            item["entry"]
+            for item in upstream_dataset
+            if item["entry"] not in self._data
+        ]
         print(
             "The following {} entries are stored upstream but not locally\n: "
             "{}".format(len(unique_upstream), unique_upstream),
         )
+        upstream_entries = set([item["entry"] for item in upstream_dataset])
         unique_local = [item for item in self._data if item not in upstream_dataset]
         print(
             "The following {} entries are stored upstream but not locally\n: "

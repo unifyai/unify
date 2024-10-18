@@ -63,7 +63,7 @@ class TestDatasetConstruction(unittest.TestCase):
     def test_create_dataset_from_upstream(self) -> None:
         if "TestCreateDatasetFromStr" in unify.list_datasets():
             unify.delete_dataset("TestCreateDatasetFromStr")
-        
+
         dataset = unify.Dataset(["a", "b", "c"], name="TestCreateDatasetFromStr")
         self.assertNotIn(dataset.name, unify.list_datasets())
         dataset.upload()
@@ -352,6 +352,7 @@ class TestDatasetDownloading(unittest.TestCase):
                 self.assertIn("id", item)
                 self.assertIn("entry", item)
                 self.assertIsInstance(item["id"], str)
+
 
 class TestDatasetSync(unittest.TestCase):
 
