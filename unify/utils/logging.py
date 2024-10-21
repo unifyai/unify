@@ -1058,6 +1058,7 @@ def span(io=True):
                     None if result is None or not io else result
                 )
                 if token.old_value is token.MISSING:
+                    unify.log(trace=current_span.get())
                     current_span.reset(token)
                 else:
                     current_span.reset(token)
