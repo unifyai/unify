@@ -5,7 +5,6 @@ import time
 import uuid
 import functools
 import json
-import threading
 from contextvars import ContextVar
 from typing import Any, Dict, List, Optional, Union, Tuple
 
@@ -14,9 +13,7 @@ import unify
 from unify import BASE_URL
 
 from ..types import _Formatted
-from .helpers import _validate_api_key
-
-PROJECT_LOCK = threading.Lock()
+from .helpers import _validate_api_key, _get_and_maybe_create_project
 
 # Helpers #
 # --------#
@@ -37,23 +34,6 @@ current_span = ContextVar("current_span", default={})
 running_time = ContextVar("running_time", default=0.0)
 
 
-def _get_and_maybe_create_project(project: str, api_key: Optional[str] = None) -> str:
-    api_key = _validate_api_key(api_key)
-    if project is None:
-        project = unify.active_project
-        if project is None:
-            raise Exception(
-                "No project specified in the arguments, and no globally set project "
-                "either. A project must be passed in the argument, or set globally via "
-                "unify.activate('project_name')",
-            )
-    PROJECT_LOCK.acquire()
-    if project not in list_projects(api_key):
-        create_project(project, api_key)
-    PROJECT_LOCK.release()
-    return project
-
-
 def _enclose_str(v):
     return json.dumps(v) if isinstance(v, str) else v
 
@@ -69,17 +49,45 @@ def _versioned_field(field_name: str):
     return True
 
 
+def _handle_version(
+    kwargs: Dict[str, Any],
+    version: Optional[Union[Union[int, str], Dict[str, Union[int, str]]]],
+) -> Dict[str, Any]:
+    if version is None and "version" in kwargs:
+        version = kwargs.pop("version")
+    if version is not None:
+        if isinstance(version, dict):
+            kwargs = {
+                k + "/" + str(version[k]) if k in version else k: v
+                for k, v in kwargs.items()
+            }
+        elif isinstance(version, str) or isinstance(version, int):
+            kwargs = {k + "/" + str(version): v for k, v in kwargs.items()}
+        else:
+            raise Exception(
+                f"Expected version to be of type int or str, "
+                f"but found {version} of type {type(version)}",
+            )
+    return kwargs
+
+
 # Projects #
 # ---------#
 
 
-def create_project(name: str, api_key: Optional[str] = None) -> Dict[str, str]:
+def create_project(
+    name: str,
+    overwrite: bool = False,
+    api_key: Optional[str] = None,
+) -> Dict[str, str]:
     """
     Creates a logging project and adds this to your account. This project will have
     a set of logs associated with it.
 
     Args:
         name: A unique, user-defined name used when referencing the project.
+
+        overwrite: Whether to overwrite an existing project if is already exists.
 
         api_key: If specified, unify API key to be used. Defaults to the value in the
         `UNIFY_KEY` environment variable.
@@ -93,6 +101,9 @@ def create_project(name: str, api_key: Optional[str] = None) -> Dict[str, str]:
         "Authorization": f"Bearer {api_key}",
     }
     body = {"name": name}
+    if overwrite:
+        if name in list_projects(api_key):
+            delete_project(name, api_key=api_key)
     response = requests.post(BASE_URL + "/project", headers=headers, json=body)
     response.raise_for_status()
     return response.json()
@@ -414,25 +425,16 @@ def log(
         "Authorization": f"Bearer {api_key}",
     }
     kwargs = {**kwargs, **current_global_active_log_kwargs.get()}
-    if version is None and "version" in kwargs:
-        version = kwargs.pop("version")
-    if version is not None:
-        if isinstance(version, dict):
-            kwargs = {
-                k + "/" + str(version[k]) if k in version else k: v
-                for k, v in kwargs.items()
-            }
-        elif isinstance(version, str) or isinstance(version, int):
-            kwargs = {k + "/" + str(version): v for k, v in kwargs.items()}
-        else:
-            raise Exception(
-                f"Expected version to be of type int or str, "
-                f"but found {version} of type {type(version)}",
-            )
+    kwargs = _handle_version(kwargs, version)
     project = _get_and_maybe_create_project(project, api_key)
     if skip_duplicates:
         retrieved_logs = get_logs_by_value(project, **kwargs, api_key=api_key)
         if retrieved_logs:
+            assert len(retrieved_logs) == 1, (
+                f"When skip_duplicates == True, then it's expected that each log "
+                f"entry is unique, but found {len(retrieved_logs)} entries with "
+                f"config {kwargs}"
+            )
             return retrieved_logs[0]
     body = {"project": project, "entries": kwargs}
     response = requests.post(BASE_URL + "/log", headers=headers, json=body)
@@ -450,6 +452,7 @@ def log(
 
 def add_log_entries(
     id: Optional[int] = None,
+    version: Optional[Union[Union[int, str], Dict[str, Union[int, str]]]] = None,
     api_key: Optional[str] = None,
     **kwargs,
 ) -> Dict[str, str]:
@@ -457,7 +460,12 @@ def add_log_entries(
     Add extra entries into an existing log.
 
     Args:
-        id: The log id to update with extra data. Looks for the current active log if no id is provided.
+        id: The log id to update with extra data. Looks for the current active log if no
+        id is provided.
+
+        version: Optional version parameters which are associated with each key being
+        logged, with the keys of this version dict being the keys being logged, and the
+        values being the name of this particular version.
 
         api_key: If specified, unify API key to be used. Defaults to the value in the
         `UNIFY_KEY` environment variable.
@@ -478,7 +486,6 @@ def add_log_entries(
         "Authorization": f"Bearer {api_key}",
     }
     if current_context_nest_level.get() > 0:
-
         kwargs = {
             **kwargs,
             **{
@@ -487,7 +494,9 @@ def add_log_entries(
                 if k not in current_logged_logs.get().get(id, {})
             },
         }
-    body = {"entries": {**kwargs, **current_global_active_log_kwargs.get()}}
+    kwargs = {**kwargs, **current_global_active_log_kwargs.get()}
+    kwargs = _handle_version(kwargs, version)
+    body = {"entries": kwargs}
     # ToDo: remove this once duplicates are prevented in the backend
     current_keys = get_log_by_id(id if id else current_active_log.id).entries.keys()
     assert not any(key in body["entries"] for key in current_keys), (
@@ -757,7 +766,7 @@ def get_logs(
         `UNIFY_KEY` environment variable.
 
     Returns:
-        The full set of log data for the project, after optionally applying filtering.
+        The list of logs for the project, after optionally applying filtering.
     """
     api_key = _validate_api_key(api_key)
     headers = {
@@ -778,6 +787,32 @@ def get_logs(
     return [
         Log(dct["id"], **dct["entries"], api_key=api_key) for dct in response.json()
     ]
+
+
+def delete_logs(
+    project: Optional[str] = None,
+    filter: Optional[str] = None,
+    api_key: Optional[str] = None,
+):
+    """
+    Returns a list of filtered logs from a project.
+
+    Args:
+        project: Name of the project to delete logs from.
+
+        filter: Boolean string to filter logs for deletion, for example:
+        "(temperature > 0.5 and (len(system_msg) < 100 or 'no' in usr_response))"
+
+        api_key: If specified, unify API key to be used. Defaults to the value in the
+        `UNIFY_KEY` environment variable.
+
+    Returns:
+        The list of deleted logs for the project, after optionally applying filtering.
+    """
+    logs = get_logs(project, filter, None, None, api_key)
+    for log in logs:
+        log.delete()
+    return logs
 
 
 def get_logs_with_fields(
@@ -878,6 +913,9 @@ def get_logs_by_value(
 
         api_key: If specified, unify API key to be used. Defaults to the value in the
         `UNIFY_KEY` environment variable.
+
+        Whether or not to include logs which contain identical key-value pairs to all
+        kwargs passed which are present in the log, but
 
         kwargs: The data to search the upstream logs for.
 
@@ -1099,7 +1137,8 @@ def span(io=True):
                 "span_name": fn.__name__,
                 "exec_time": None,
                 "offset": round(
-                    0.0 if not current_span.get() else t1 - running_time.get(), 2
+                    0.0 if not current_span.get() else t1 - running_time.get(),
+                    2,
                 ),
                 "inputs": inputs,
                 "outputs": None,
@@ -1146,7 +1185,8 @@ def span(io=True):
                 "span_name": fn.__name__,
                 "exec_time": None,
                 "offset": round(
-                    0.0 if not current_span.get() else t1 - running_time.get(), 2
+                    0.0 if not current_span.get() else t1 - running_time.get(),
+                    2,
                 ),
                 "inputs": inputs,
                 "outputs": None,
