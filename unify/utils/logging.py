@@ -75,6 +75,29 @@ def _handle_special_types(
     return new_kwargs
 
 
+def _get_current_active_log():
+    current_active_log = current_global_active_log.get()
+    if current_active_log is None:
+        raise Exception(
+            "If logs is unspecified, then current_global_active_log must be.",
+        )
+    return current_active_log
+
+
+def _parse_logs_input(logs):
+    if logs is None:
+        log_ids = []
+        current_active_log = _get_current_active_log()
+        log_ids = [current_active_log.id]
+    elif isinstance(logs, int):
+        log_ids = [logs]
+    elif isinstance(logs, Log):
+        log_ids = [Log.id]
+    elif isinstance(logs, list):
+        log_ids = [_l if isinstance(_l, int) else _l.id for _l in logs]
+    return log_ids
+
+
 def handle_multiple_logs(fn: callable):
 
     def wrapped(
@@ -491,9 +514,9 @@ def log(
     return created_log
 
 
-@handle_multiple_logs
 def add_log_entries(
     logs: Optional[Union[int, Log, List[Union[int, Log]]]] = None,
+    overwrite: Optional[bool] = False,
     api_key: Optional[str] = None,
     **kwargs,
 ) -> Dict[str, str]:
@@ -504,56 +527,37 @@ def add_log_entries(
         logs: The log(s) to update with extra data. Looks for the current active log if
         no id is provided.
 
+        overwrite: Whether to overwrite existing logs. Defaults to False.
+
         api_key: If specified, unify API key to be used. Defaults to the value in the
         `UNIFY_KEY` environment variable.
 
         kwargs: The data to log into the console.
 
+
     Returns:
         A message indicating whether the log was successfully updated.
     """
-    log_id = logs  # handle_multiple_logs decorator handles logs, returning a single id
-    current_active_log: Optional[Log] = current_global_active_log.get()
-    if current_active_log is None and log_id is None:
-        raise ValueError(
-            "`id` must be set if no current log is active within the context.",
-        )
+    log_ids = _parse_logs_input(logs)
+
     api_key = _validate_api_key(api_key)
     headers = {
         "accept": "application/json",
         "Authorization": f"Bearer {api_key}",
     }
-    if current_context_nest_level.get() > 0:
-        kwargs = {
-            **kwargs,
-            **{
-                k: v
-                for k, v in current_global_active_log_kwargs.get().items()
-                if k not in current_logged_logs.get().get(log_id, {})
-            },
-        }
+
     kwargs = {**kwargs, **current_global_active_log_kwargs.get()}
     kwargs = _handle_special_types(kwargs)
-    body = {"entries": kwargs}
-    # ToDo: remove this once duplicates are prevented in the backend
-    current_keys = get_log_by_id(
-        log_id if log_id else current_active_log.id,
-    ).entries.keys()
-    assert not any(key in body["entries"] for key in current_keys), (
-        "Duplicate keys detected, please use replace_log_entries or "
-        "update_log_entries if you want to replace or modify an existing key."
-    )
-    # End ToDo
+
     response = requests.put(
-        BASE_URL + f"/log/{log_id if log_id else current_active_log.id}",
+        BASE_URL + f"/logs",
         headers=headers,
-        json=body,
+        json={"ids": log_ids, "entries": kwargs, "overwrite": overwrite},
     )
     response.raise_for_status()
     return response.json()
 
 
-@handle_multiple_logs
 def delete_log(
     logs: Optional[Union[int, Log, List[Union[int, Log]]]] = None,
     api_key: Optional[str] = None,
@@ -570,18 +574,19 @@ def delete_log(
     Returns:
         A message indicating whether the logs were successfully deleted.
     """
-    log_id = logs  # handle_multiple_logs decorator handles logs, returning a single id
+    log_ids = _parse_logs_input(logs)
     api_key = _validate_api_key(api_key)
     headers = {
         "accept": "application/json",
         "Authorization": f"Bearer {api_key}",
     }
-    response = requests.delete(BASE_URL + f"/log/{log_id}", headers=headers)
+    response = requests.delete(
+        BASE_URL + f"/logs", json={"ids": log_ids}, headers=headers
+    )
     response.raise_for_status()
     return response.json()
 
 
-@handle_multiple_logs
 def delete_log_entry(
     entry: str,
     logs: Optional[Union[int, Log, List[Union[int, Log]]]] = None,
@@ -601,7 +606,7 @@ def delete_log_entry(
     Returns:
         A message indicating whether the log entries were successfully deleted.
     """
-    log_id = logs  # handle_multiple_logs decorator handles logs, returning a single id
+    log_ids = _parse_logs_input(logs)
     api_key = _validate_api_key(api_key)
     headers = {
         "accept": "application/json",
@@ -609,14 +614,12 @@ def delete_log_entry(
     }
     entry = entry.replace("/", "-")
     response = requests.delete(
-        BASE_URL + f"/log/{log_id}/entry/{entry}",
-        headers=headers,
+        BASE_URL + f"/logs/entry/{entry}", headers=headers, json={"ids": log_ids}
     )
     response.raise_for_status()
     return response.json()
 
 
-@handle_multiple_logs
 def replace_log_entries(
     logs: Optional[Union[int, Log, List[Union[int, Log]]]] = None,
     api_key: Optional[str] = None,
@@ -637,11 +640,8 @@ def replace_log_entries(
     Returns:
         A message indicating whether the log was successfully updated.
     """
-    log_id = logs  # handle_multiple_logs decorator handles logs, returning a single id
     api_key = _validate_api_key(api_key)
-    for k, v in kwargs.items():
-        delete_log_entry(k, log_id, api_key=api_key)
-    return add_log_entries(log_id, api_key=api_key, **kwargs)
+    return add_log_entries(logs=logs, overwrite=True, api_key=api_key, **kwargs)
 
 
 @handle_multiple_logs
@@ -895,7 +895,7 @@ def delete_logs(
     Returns:
         The list of deleted logs for the project, after optionally applying filtering.
     """
-    logs = get_logs(project, filter, None, None, api_key=api_key)
+    logs = get_logs(project, filter, api_key=api_key)
     for log in logs:
         log.delete()
     return logs
