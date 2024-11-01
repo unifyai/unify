@@ -48,7 +48,7 @@ data = {
             },
         ],
     },
-    "timestamp": (start_time + timedelta(seconds=0.01)),
+    "timestamp": (start_time + timedelta(seconds=0.01)).strftime("%Y-%m-%d, %H:%M:%S"),
     "tags": [tag],
 }
 
@@ -74,12 +74,12 @@ def test_get_queries_from_manual():
     unify.log_query(**data)
     history = unify.get_queries(
         endpoints="local_model_test@external",
-        start_time=start_time,
+        start_time=start_time.strftime("%Y-%m-%d %H:%M:%S"),
     )
     assert len(history) == 1
     history = unify.get_queries(
         endpoints="local_model_test@external",
-        start_time=datetime.now(timezone.utc) + timedelta(seconds=1),
+        start_time=(datetime.now(timezone.utc) + timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S"),
     )
     assert len(history) == 0
 

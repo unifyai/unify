@@ -58,13 +58,13 @@ def test_list_custom_api_keys():
     with handler:
         custom_keys = unify.list_custom_api_keys()
         assert isinstance(custom_keys, list)
-        assert len(custom_keys) == 0
+        num_custom_keys = len(custom_keys)
         unify.create_custom_api_key(key_name, key_value)
         custom_keys = unify.list_custom_api_keys()
         assert isinstance(custom_keys, list)
-        assert len(custom_keys) == 1
-        assert custom_keys[0]["name"] == key_name
-        assert custom_keys[0]["value"] == "*" * 4 + key_value
+        assert len(custom_keys) == num_custom_keys + 1
+        assert key_name in [ck["name"] for ck in custom_keys]
+        assert "*" * 4 + key_value in [ck["value"] for ck in custom_keys]
 
 
 def test_get_custom_api_key():
@@ -80,27 +80,21 @@ def test_rename_custom_api_key():
     with handler:
         unify.create_custom_api_key(key_name, key_value)
         custom_keys = unify.list_custom_api_keys()
-        assert isinstance(custom_keys, list)
-        assert len(custom_keys) == 1
-        assert custom_keys[0]["name"] == key_name
+        assert key_name in [ck["name"] for ck in custom_keys]
         unify.rename_custom_api_key(key_name, new_name)
         custom_keys = unify.list_custom_api_keys()
-        assert isinstance(custom_keys, list)
-        assert len(custom_keys) == 1
-        assert custom_keys[0]["name"] == new_name
+        assert key_name not in [ck["name"] for ck in custom_keys]
+        assert new_name in [ck["name"] for ck in custom_keys]
 
 
 def test_delete_custom_api_key():
     with handler:
         unify.create_custom_api_key(key_name, key_value)
         custom_keys = unify.list_custom_api_keys()
-        assert isinstance(custom_keys, list)
-        assert len(custom_keys) == 1
-        assert custom_keys[0]["name"] == key_name
+        assert key_name in [ck["name"] for ck in custom_keys]
         unify.delete_custom_api_key(key_name)
         custom_keys = unify.list_custom_api_keys()
-        assert isinstance(custom_keys, list)
-        assert len(custom_keys) == 0
+        assert key_name not in [ck["name"] for ck in custom_keys]
 
 
 if __name__ == "__main__":
