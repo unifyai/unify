@@ -1101,6 +1101,7 @@ def test_traced_w_caching():
     assert trace["outputs"] == [0, 1, 2]
 
     some_func(0, 1, 2)
+    unify.set_caching(False)
     logs = unify.get_logs(project="my_project")
     assert len(logs) == 1
     trace = logs[0].entries["trace"]
