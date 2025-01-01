@@ -46,6 +46,7 @@ RUNNING_TIME = ContextVar("running_time", default=0.0)
 def _removes_unique_trace_values(kw: Dict[str, Any]) -> Dict[str, Any]:
     del kw["id"]
     del kw["exec_time"]
+    del kw["timestamp"]
     if "parent_span_id" in kw:
         del kw["parent_span_id"]
     if "child_spans" in kw:

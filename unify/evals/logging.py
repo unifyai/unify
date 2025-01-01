@@ -21,7 +21,7 @@ class Log:
         self,
         *,
         id: int = None,
-        timestamp: Optional[datetime] = None,
+        timestamp: Optional[datetime] = None, # type: ignore
         project: Optional[str] = None,
         api_key: Optional[str] = None,
         params: Dict[str, Any] = None,
@@ -43,7 +43,7 @@ class Log:
         return self._id
 
     @property
-    def timestamp(self) -> Optional[datetime]:
+    def timestamp(self) -> Optional[datetime]: # type: ignore
         return self._timestamp
 
     @property
