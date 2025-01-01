@@ -52,20 +52,32 @@ def test_add_param():
     unify.log(c="c")
     logs = unify.get_logs()
     assert len(logs) == 3
-    assert logs[0].entries == {"a": "a"}
+    entries = logs[0].entries
+    entries.pop('timestamp', None)
+    assert entries == {"a": "a"}
     assert logs[0].params == {}
-    assert logs[1].entries == {"b": "b"}
+    entries = logs[1].entries
+    entries.pop('timestamp', None)
+    assert entries == {"b": "b"}
     assert logs[1].params == {}
-    assert logs[2].entries == {"c": "c"}
+    entries = logs[2].entries
+    entries.pop('timestamp', None)
+    assert entries == {"c": "c"}
     assert logs[2].params == {}
     unify.add_params(system_prompt="You know the alphabet.")
     logs = unify.get_logs()
     assert len(logs) == 3
-    assert logs[0].entries == {"a": "a"}
+    entries = logs[0].entries
+    entries.pop('timestamp', None)
+    assert entries == {"a": "a"}
     assert logs[0].params == {"system_prompt": "You know the alphabet."}
-    assert logs[1].entries == {"b": "b"}
+    entries = logs[1].entries
+    entries.pop('timestamp', None)
+    assert entries == {"b": "b"}
     assert logs[1].params == {"system_prompt": "You know the alphabet."}
-    assert logs[2].entries == {"c": "c"}
+    entries = logs[2].entries
+    entries.pop('timestamp', None)
+    assert entries == {"c": "c"}
     assert logs[2].params == {"system_prompt": "You know the alphabet."}
     unify.deactivate()
     unify.delete_project(project)
@@ -130,7 +142,9 @@ def test_log_dataset():
     )
     logs = unify.get_logs(project=project)
     assert len(logs) == 1
-    assert logs[0].entries == {"dataset": "letters"}
+    entries = logs[0].entries
+    entries.pop('timestamp', None)
+    assert entries == {"dataset": "letters"}
     downloaded = unify.download_dataset("letters")
     assert len(downloaded) == 3
     logs[0].delete()
@@ -173,7 +187,9 @@ def test_log_function_logs_code():
     unify.log(project=project, my_func=my_func)
     logs = unify.get_logs(project=project)
     assert len(logs) == 1
-    assert logs[0].entries["my_func"] == "    def my_func(a):\n        return a + 1\n"
+    entries = logs[0].entries
+    entries.pop('timestamp', None)
+    assert entries["my_func"] == "    def my_func(a):\n        return a + 1\n"
     unify.deactivate()
     unify.delete_project(project)
 
@@ -230,7 +246,9 @@ def test_log_ordering():
         )
     logs = unify.get_logs(project=project)
     for lg in logs:
-        assert list(lg.entries.keys()) == ["a", "b", "c"]
+        entries = lg.entries
+        entries.pop('timestamp', None)
+        assert list(entries.keys()) == ["a", "b", "c"]
     unify.deactivate()
     unify.delete_project(project)
 
