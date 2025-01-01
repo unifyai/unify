@@ -64,16 +64,22 @@ def test_replace_log_entries():
     }
     assert len(unify.get_logs(project=project)) == 0
     log = unify.log(project=project, **data)
-    assert unify.get_log_by_id(log.id).entries == data
+    entries = unify.get_log_by_id(log.id).entries
+    entries.pop('timestamp', None)
+    assert entries == data
     assert len(unify.get_logs(project=project)) == 1
     new_data = {
         "system_prompt": "You are a maths assistant",
         "user_prompt": "hi earth",
     }
     log.replace_entries(**new_data)
-    assert log.entries == new_data
+    entries = unify.get_log_by_id(log.id).entries
+    entries.pop('timestamp', None)
+    assert entries == new_data
     assert len(unify.get_logs(project=project)) == 1
-    assert unify.get_log_by_id(log.id).entries == new_data
+    entries = unify.get_log_by_id(log.id).entries
+    entries.pop('timestamp',None)
+    assert entries == new_data
 
 
 def test_update_log_entries():
@@ -274,23 +280,33 @@ def test_with_log():
     with unify.Log(a="a"):
         logs = unify.get_logs()
         assert len(logs) == 1
-        assert logs[0].entries == {"a": "a"}
+        entries = logs[0].entries
+        entries.pop('timestamp', None)
+        assert entries == {"a": "a"}
         unify.add_log_entries(b="b", c="c")
         logs = unify.get_logs()
         assert len(logs) == 1
-        assert logs[0].entries == {"a": "a", "b": "b", "c": "c"}
+        entries = logs[0].entries
+        entries.pop('timestamp', None)
+        assert entries == {"a": "a", "b": "b", "c": "c"}
         with unify.Log(d="d"):
             logs = unify.get_logs()
             assert len(logs) == 2
-            assert logs[1].entries == {"d": "d"}
+            entries = logs[1].entries
+            entries.pop('timestamp', None)
+            assert entries == {"d": "d"}
             unify.add_log_entries(e="e", f="f")
             logs = unify.get_logs()
             assert len(logs) == 2
-            assert logs[1].entries == {"d": "d", "e": "e", "f": "f"}
+            entries = logs[1].entries
+            entries.pop('timestamp', None)
+            assert entries == {"d": "d", "e": "e", "f": "f"}
         unify.add_log_entries(g="g")
         logs = unify.get_logs()
         assert len(logs) == 2
-        assert logs[0].entries == {"a": "a", "b": "b", "c": "c", "g": "g"}
+        entries = logs[0].entries
+        entries.pop('timestamp', None)
+        assert entries == {"a": "a", "b": "b", "c": "c", "g": "g"}
 
 
 def test_global_logging():
@@ -303,23 +319,33 @@ def test_global_logging():
     with unify.Log(a="a"):
         logs = unify.get_logs()
         assert len(logs) == 1
-        assert logs[0].entries == {"a": "a"}
+        entries = logs[0].entries
+        entries.pop('timestamp', None)
+        assert entries == {"a": "a"}
         unify.log(b="b", c="c")
         logs = unify.get_logs()
         assert len(logs) == 1
-        assert logs[0].entries == {"a": "a", "b": "b", "c": "c"}
+        entries = logs[0].entries
+        entries.pop('timestamp', None)
+        assert entries == {"a": "a", "b": "b", "c": "c"}
         with unify.Log(d="d"):
             logs = unify.get_logs()
             assert len(logs) == 2
-            assert logs[1].entries == {"d": "d"}
+            entries = logs[1].entries
+            entries.pop('timestamp', None)
+            assert entries == {"d": "d"}
             unify.log(e="e", f="f")
             logs = unify.get_logs()
             assert len(logs) == 2
-            assert logs[1].entries == {"d": "d", "e": "e", "f": "f"}
+            entries = logs[1].entries
+            entries.pop('timestamp', None)
+            assert entries == {"d": "d", "e": "e", "f": "f"}
         unify.log(g="g")
         logs = unify.get_logs()
         assert len(logs) == 2
-        assert logs[0].entries == {"a": "a", "b": "b", "c": "c", "g": "g"}
+        entries = logs[0].entries
+        entries.pop('timestamp', None)
+        assert entries == {"a": "a", "b": "b", "c": "c", "g": "g"}
 
 
 def test_with_log_threaded():
@@ -348,7 +374,7 @@ def test_with_log_threaded():
 
     logs = unify.get_logs(project="my_project")
     entries = [log.entries for log in logs]
-
+    [e.pop('timestamp',None) for e in entries]
     assert sorted([sorted(d.items()) for d in entries]) == [
         [("a", i * 7), ("b", i * 7 + 1), ("c", i * 7 + 2), ("g", i * 7 + 6)]
         for i in range(4)
@@ -375,7 +401,7 @@ async def test_with_log_async():
 
     logs = unify.get_logs(project="my_project")
     entries = [log.entries for log in logs]
-
+    [e.pop('timestamp',None) for e in entries]
     assert sorted([sorted(d.items()) for d in entries]) == [
         [("a", i * 7), ("b", i * 7 + 1), ("c", i * 7 + 2), ("g", i * 7 + 6)]
         for i in range(4)
@@ -395,24 +421,34 @@ def test_with_context():
     unify.log(project=project, a="a")
     logs = unify.get_logs()
     assert len(logs) == 1
-    assert logs[0].entries == {"a": "a"}
+    entries = logs[0].entries
+    entries.pop('timestamp', None)
+    assert entries == {"a": "a"}
     with unify.Context("capitalized"):
         logs = unify.get_logs()
         assert len(logs) == 1
-        assert logs[0].entries == {"a": "a"}
+        entries = logs[0].entries
+        entries.pop('timestamp', None)
+        assert entries == {"a": "a"}
         unify.add_log_entries(logs=logs, b="B")
         logs = unify.get_logs()
         assert len(logs) == 1
-        assert logs[0].entries == {"a": "a", "capitalized/b": "B"}
+        entries = logs[0].entries
+        entries.pop('timestamp', None)
+        assert entries == {"a": "a", "capitalized/b": "B"}
         with unify.Context("vowels"):
             logs = unify.get_logs()
             assert len(logs) == 1
-            assert logs[0].entries == {"a": "a", "capitalized/b": "B"}
+            entries = logs[0].entries
+            entries.pop('timestamp', None)
+            assert entries == {"a": "a", "capitalized/b": "B"}
             unify.add_log_entries(logs=logs, e="E")
             unify.add_log_params(logs=logs, u="U")
             logs = unify.get_logs()
             assert len(logs) == 1
-            assert logs[0].entries == {
+            entries = logs[0].entries
+            entries.pop('timestamp', None)
+            assert entries == {
                 "a": "a",
                 "capitalized/b": "B",
                 "capitalized/vowels/e": "E",
@@ -423,12 +459,16 @@ def test_with_context():
             unify.log(project=project, a="A")
     logs = unify.get_logs()
     assert len(logs) == 2
-    assert logs[0].entries == {
+    entries = logs[0].entries
+    entries.pop('timestamp', None)
+    assert entries == {
         "a": "a",
         "capitalized/b": "B",
         "capitalized/vowels/e": "E",
     }
-    assert logs[1].entries == {
+    entries = logs[1].entries
+    entries.pop('timestamp', None)
+    assert entries == {
         "capitalized/vowels/a": "A",
     }
 
@@ -464,12 +504,14 @@ def test_with_context_threaded():
         key=lambda dct: list(dct.values())[0],
     )
     for i, entry in enumerate(entries[0::2]):
+        entry.pop('timestamp', None)
         assert entry == {
             "a": i * 3,
             "capitalized/b": i * 3 + 1,
             "capitalized/vowels/e": i * 3 + 2,
         }
     for i, entry in enumerate(entries[1::2]):
+        entry.pop('timestamp', None)
         assert entry == {"capitalized/vowels/a": i * 3}
 
 
@@ -498,12 +540,14 @@ async def test_with_context_async():
         key=lambda dct: list(dct.values())[0],
     )
     for i, entry in enumerate(entries[0::2]):
+        entry.pop('timestamp', None)
         assert entry == {
             "a": i * 3,
             "capitalized/b": i * 3 + 1,
             "capitalized/vowels/e": i * 3 + 2,
         }
     for i, entry in enumerate(entries[1::2]):
+        entry.pop('timestamp', None)
         assert entry == {"capitalized/vowels/a": i * 3}
 
 
@@ -523,20 +567,28 @@ def test_with_entries():
         log = unify.log()
         logs = unify.get_logs()
         assert len(logs) == 1
-        assert logs[0].entries == {"a": "a"}
+        entries = logs[0].entries
+        entries.pop('timestamp', None)
+        assert entries == {"a": "a"}
         unify.add_log_entries(logs=log, b="b", c="c")
         logs = unify.get_logs()
         assert len(logs) == 1
-        assert logs[0].entries == {"a": "a", "b": "b", "c": "c"}
+        entries = logs[0].entries
+        entries.pop('timestamp', None)
+        assert entries == {"a": "a", "b": "b", "c": "c"}
         with unify.Entries(d="d"):
             unify.add_log_entries(logs=log)
             logs = unify.get_logs()
             assert len(logs) == 1
-            assert logs[0].entries == {"a": "a", "b": "b", "c": "c", "d": "d"}
+            entries = logs[0].entries
+            entries.pop('timestamp', None)
+            assert entries == {"a": "a", "b": "b", "c": "c", "d": "d"}
             unify.add_log_entries(logs=log, e="e", f="f")
             logs = unify.get_logs()
             assert len(logs) == 1
-            assert logs[0].entries == {
+            entries = logs[0].entries
+            entries.pop('timestamp', None)
+            assert entries == {
                 "a": "a",
                 "b": "b",
                 "c": "c",
@@ -547,7 +599,9 @@ def test_with_entries():
         unify.add_log_entries(logs=log, g="g")
         logs = unify.get_logs()
         assert len(logs) == 1
-        assert logs[0].entries == {
+        entries = logs[0].entries
+        entries.pop('timestamp', None)
+        assert entries == {
             "a": "a",
             "b": "b",
             "c": "c",
@@ -586,7 +640,7 @@ def test_with_entries_threaded():
 
     logs = unify.get_logs(project="my_project")
     entries = [log.entries for log in logs]
-
+    [e.pop('timestamp',None) for e in entries]
     assert sorted([sorted(d.items()) for d in entries]) == [
         [
             ("a", i * 7),
@@ -623,7 +677,7 @@ async def test_with_entries_async():
 
     logs = unify.get_logs(project="my_project")
     entries = [log.entries for log in logs]
-
+    [e.pop('timestamp',None) for e in entries]
     assert sorted([sorted(d.items()) for d in entries]) == [
         [
             ("a", i * 7),
@@ -794,13 +848,17 @@ def test_with_all():
             unify.add_log_entries(logs=log)
             logs = unify.get_logs()
             assert len(logs) == 1
-            assert logs[0].entries == {"d": "d"}
+            entries = logs[0].entries
+            entries.pop('timestamp', None)
+            assert entries == {"d": "d"}
             assert logs[0].params == {"a": "a", "b": "b", "c": "c"}
             unify.add_log_entries(logs=log, e="e")
             unify.add_log_params(logs=log, f="f")
             logs = unify.get_logs()
             assert len(logs) == 1
-            assert logs[0].entries == {"d": "d", "e": "e"}
+            entries = logs[0].entries
+            entries.pop('timestamp', None)
+            assert entries == {"d": "d", "e": "e"}
             assert logs[0].params == {
                 "a": "a",
                 "b": "b",
@@ -813,11 +871,15 @@ def test_with_all():
                 logs = unify.get_logs()
                 assert len(logs) == 2
                 assert logs[1].params == {"a": "a", "g": "g"}
-                assert logs[1].entries == {"d": "d", "h": "h"}
+                entries = logs[1].entries
+                entries.pop('timestamp',None)
+                assert entries == {"d": "d", "h": "h"}
             unify.add_log_entries(logs=log, i="i")
             logs = unify.get_logs()
             assert len(logs) == 2
-            assert logs[0].entries == {"d": "d", "e": "e", "i": "i"}
+            entries = logs[0].entries
+            entries.pop('timestamp', None)
+            assert entries == {"d": "d", "e": "e", "i": "i"}
             assert logs[0].params == {
                 "a": "a",
                 "b": "b",
@@ -874,6 +936,7 @@ def test_with_all_threaded():
                 ("g", math.floor(i / 2) * 9 + 6),
             ]
     entries = [log.entries for log in logs]
+    [e.pop('timestamp',None) for e in entries]
     observed = [sorted(d.items()) for d in sorted(entries, key=lambda x: x["d"])]
     for i, obs in enumerate(observed):
         if i % 2 == 0:
@@ -931,6 +994,7 @@ async def test_with_all_async():
                 ("g", math.floor(i / 2) * 9 + 6),
             ]
     entries = [log.entries for log in logs]
+    [e.pop('timestamp',None) for e in entries]
     observed = [sorted(d.items()) for d in sorted(entries, key=lambda x: x["d"])]
     for i, obs in enumerate(observed):
         if i % 2 == 0:
