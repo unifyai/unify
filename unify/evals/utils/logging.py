@@ -438,10 +438,10 @@ def delete_log_fields(
         "accept": "application/json",
         "Authorization": f"Bearer {api_key}",
     }
-    body = {"ids": log_ids}
+    body = {'fields': [(log_ids, field),]}
     field = field.replace("/", "-")
     response = requests.delete(
-        BASE_URL + f"/logs/field/{field}",
+        BASE_URL + f"/logs/fields",
         headers=headers,
         json=body,
     )
