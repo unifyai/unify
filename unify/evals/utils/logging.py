@@ -491,7 +491,7 @@ def get_logs(
     }
     response = requests.get(BASE_URL + "/logs", headers=headers, params=params)
     response.raise_for_status()
-    params, logs = response.json().values()
+    params, logs, count = response.json().values()
     return [
         unify.Log(
             id=dct["id"],
