@@ -4,7 +4,6 @@ from unify import AsyncMultiUnify, MultiUnify
 
 
 class TestMultiUnify:
-
     def test_constructor(self) -> None:
         MultiUnify(
             endpoints=["llama-3-8b-chat@together-ai", "gpt-4o@openai"],
@@ -127,7 +126,6 @@ class TestMultiUnify:
 
 @pytest.mark.asyncio
 class TestAsyncMultiUnify:
-
     async def test_async_generate(self):
         endpoints = (
             "llama-3-8b-chat@together-ai",

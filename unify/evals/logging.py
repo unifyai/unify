@@ -16,12 +16,11 @@ from .utils.compositions import *
 
 # noinspection PyShadowingBuiltins
 class Log:
-
     def __init__(
         self,
         *,
         id: int = None,
-        timestamp: Optional[datetime] = None, # type: ignore
+        timestamp: Optional[datetime] = None,  # type: ignore
         project: Optional[str] = None,
         api_key: Optional[str] = None,
         params: Dict[str, Any] = None,
@@ -43,7 +42,7 @@ class Log:
         return self._id
 
     @property
-    def timestamp(self) -> Optional[datetime]: # type: ignore
+    def timestamp(self) -> Optional[datetime]:  # type: ignore
         return self._timestamp
 
     @property
@@ -139,7 +138,6 @@ class Log:
 
 
 class Context:
-
     def __init__(self, context: str):
         self._context = context
 
@@ -153,7 +151,6 @@ class Context:
 
 
 class Entries:
-
     def __init__(self, **entries):
         self._entries = _handle_special_types(entries)
 
@@ -173,7 +170,6 @@ class Entries:
 
 
 class Params:
-
     def __init__(self, **params):
         self._params = _handle_special_types(params)
 
@@ -193,7 +189,6 @@ class Params:
 
 
 class Experiment:
-
     def __init__(self, name: str):
         self._name = name
 

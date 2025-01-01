@@ -28,7 +28,6 @@ from unify.utils.helpers import _default, _validate_api_key
 
 
 class _MultiClient(_Client, abc.ABC):
-
     def __init__(
         self,
         endpoints: Optional[Union[str, Iterable[str]]] = None,
@@ -754,7 +753,6 @@ class _MultiClient(_Client, abc.ABC):
 
 
 class MultiUnify(_MultiClient):
-
     async def _async_gen(
         self,
         user_message: Optional[str] = None,
@@ -914,7 +912,6 @@ class MultiUnify(_MultiClient):
 
 
 class AsyncMultiUnify(_MultiClient):
-
     async def _generate(  # noqa: WPS234, WPS211
         self,
         user_message: Optional[str] = None,
