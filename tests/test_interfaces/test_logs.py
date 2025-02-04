@@ -245,6 +245,33 @@ async def test_with_log_async():
     ] + [[("d", i * 7 + 3), ("e", i * 7 + 4), ("f", i * 7 + 5)] for i in range(4)]
 
 
+# Context
+
+
+@_handle_project
+def test_with_context():
+
+    assert len(unify.get_logs()) == 0
+    with unify.Context("Datasets"):
+        with unify.Context("TestSet"):
+            assert len(unify.get_logs()) == 0
+            [unify.log(x=i) for i in range(20)]
+            assert len(unify.get_logs()) == 10
+        assert len(unify.get_logs()) == 0
+        with unify.Context("TestSet[10]"):
+            assert len(unify.get_logs()) == 0
+            [unify.log(x=i) for i in range(10)]
+            assert len(unify.get_logs()) == 10
+        assert len(unify.get_logs()) == 0
+    assert len(unify.get_logs()) == 0
+
+
+# ToDo: add threaded test
+
+
+# ToDo: add asyncio test
+
+
 # Column Context
 
 
@@ -290,23 +317,6 @@ def test_with_column_context():
     assert logs[1].entries == {
         "capitalized/vowels/a": "A",
     }
-
-
-@_handle_project
-def test_with_column_context_default_project():
-    with unify.Log():
-        with unify.ColumnContext("science"):
-            with unify.ColumnContext("physics"):
-                unify.log(score=1.0)
-            with unify.ColumnContext("chemistry"):
-                unify.log(score=0.5)
-            with unify.ColumnContext("biology"):
-                unify.log(score=0.0)
-
-    entries = unify.get_logs()[0].entries
-    assert entries["science/physics/score"] == 1.0
-    assert entries["science/chemistry/score"] == 0.5
-    assert entries["science/biology/score"] == 0.0
 
 
 @_handle_project

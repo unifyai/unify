@@ -22,6 +22,7 @@ class Log:
         self,
         *,
         id: int = None,
+        context: str = None,
         ts: Optional[datetime] = None,
         project: Optional[str] = None,
         api_key: Optional[str] = None,
@@ -29,6 +30,7 @@ class Log:
         **entries,
     ):
         self._id = id
+        self._context = context
         self._ts = ts
         self._project = project
         self._entries = entries
@@ -40,6 +42,10 @@ class Log:
     @property
     def id(self) -> int:
         return self._id
+
+    @property
+    def context(self) -> str:
+        return self._context
 
     @property
     def ts(self) -> Optional[datetime]:
@@ -109,6 +115,20 @@ class Log:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.download()
         ACTIVE_LOG.reset(self._log_token)
+
+
+class Context:
+
+    def __init__(self, context: str):
+        self._context = context
+
+    def __enter__(self):
+        self._context_token = CONTEXT.set(
+            os.path.join(CONTEXT.get(), self._context),
+        )
+
+    def __exit__(self, *args, **kwargs):
+        CONTEXT.reset(self._context_token)
 
 
 class ColumnContext:

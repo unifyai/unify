@@ -26,7 +26,10 @@ ACTIVE_LOG = ContextVar("active_log", default=[])
 LOGGED = ContextVar("logged", default={})
 
 # context
-COLUMN_CONTEXT = ContextVar("context", default="")
+CONTEXT = ContextVar("context", default=None)
+
+# column context
+COLUMN_CONTEXT = ContextVar("column_context", default="")
 
 # entries
 ACTIVE_ENTRIES = ContextVar(
@@ -143,6 +146,7 @@ def log(
     params: Dict[str, Any] = None,
     new: bool = False,
     overwrite: bool = False,
+    context: Optional[str] = None,
     api_key: Optional[str] = None,
     **entries,
 ) -> unify.Log:
@@ -162,6 +166,9 @@ def log(
 
         overwrite: If adding to an existing log, dictates whether or not to overwrite
         fields with the same name.
+
+        context: The context to save the log to. Overrides unify.Context().
+        Defaults to None.
 
         api_key: If specified, unify API key to be used. Defaults to the value in the
         `UNIFY_KEY` environment variable.
@@ -201,10 +208,13 @@ def log(
     entries = _handle_special_types(entries)
     project = _get_and_maybe_create_project(project, api_key=api_key)
     body = {"project": project, "params": params, "entries": entries}
+    context = context if context else CONTEXT.get()
+    body["context"] = context
     response = requests.post(BASE_URL + "/logs", headers=headers, json=body)
     response.raise_for_status()
     created_log = unify.Log(
         id=response.json()[0],
+        context=context,
         api_key=api_key,
         **entries,
         params=params,
@@ -446,6 +456,7 @@ def get_logs(
     filter: Optional[str] = None,
     limit: Optional[int] = None,
     offset: int = 0,
+    context: Optional[str] = None,
     api_key: Optional[str] = None,
 ) -> List[unify.Log]:
     """
@@ -461,6 +472,9 @@ def get_logs(
 
         offset: The starting index of the logs to return. Default is 0.
 
+        context: The context to retrieve the logs from. Overrides unify.Context().
+        Defaults to None.
+
         api_key: If specified, unify API key to be used. Defaults to the value in the
         `UNIFY_KEY` environment variable.
 
@@ -473,11 +487,13 @@ def get_logs(
         "Authorization": f"Bearer {api_key}",
     }
     project = _get_and_maybe_create_project(project, api_key=api_key)
+    context = context if context else CONTEXT.get()
     params = {
         "project": project,
         "filter_expr": filter,
         "limit": limit,
         "offset": offset,
+        "context": context,
     }
     response = requests.get(BASE_URL + "/logs", headers=headers, params=params)
     response.raise_for_status()
@@ -485,6 +501,7 @@ def get_logs(
     return [
         unify.Log(
             id=dct["id"],
+            context=context,
             ts=dct["ts"],
             **dct["entries"],
             params={
