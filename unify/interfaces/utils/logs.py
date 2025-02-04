@@ -31,6 +31,7 @@ CONTEXT_MODE = ContextVar("context_mode", default="both")
 
 # column context
 COLUMN_CONTEXT = ContextVar("column_context", default="")
+COLUMN_CONTEXT_MODE = ContextVar("column_context_mode", default="both")
 
 # entries
 ACTIVE_ENTRIES = ContextVar(
@@ -136,7 +137,10 @@ def _to_log_ids(
 
 
 def _apply_column_context(**data):
-    context = COLUMN_CONTEXT.get()
+    if COLUMN_CONTEXT_MODE.get() in ("write", "both"):
+        context = COLUMN_CONTEXT.get()
+    else:
+        context = ""
     return {os.path.join(context, k): v for k, v in data.items()}
 
 

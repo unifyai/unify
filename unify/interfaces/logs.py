@@ -141,16 +141,24 @@ class Context:
 
 class ColumnContext:
 
-    def __init__(self, column_context: str):
+    def __init__(self, column_context: str, mode: str = "both"):
+        assert mode in (
+            "read",
+            "write",
+            "both",
+        ), f"mode must be one of 'read', 'write', or 'both', but found {mode}"
         self._column_context = column_context
+        self._mode = mode
 
     def __enter__(self):
         self._column_context_token = COLUMN_CONTEXT.set(
             os.path.join(COLUMN_CONTEXT.get(), self._column_context),
         )
+        self._mode_token = COLUMN_CONTEXT_MODE.set(self._mode)
 
     def __exit__(self, *args, **kwargs):
         COLUMN_CONTEXT.reset(self._column_context_token)
+        COLUMN_CONTEXT_MODE.reset(self._mode_token)
 
 
 class Entries:
