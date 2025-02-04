@@ -111,18 +111,18 @@ class Log:
         ACTIVE_LOG.reset(self._log_token)
 
 
-class Context:
+class ColumnContext:
 
-    def __init__(self, context: str):
-        self._context = context
+    def __init__(self, column_context: str):
+        self._column_context = column_context
 
     def __enter__(self):
-        self._context_token = CONTEXT.set(
-            os.path.join(CONTEXT.get(), self._context),
+        self._column_context_token = COLUMN_CONTEXT.set(
+            os.path.join(COLUMN_CONTEXT.get(), self._column_context),
         )
 
     def __exit__(self, *args, **kwargs):
-        CONTEXT.reset(self._context_token)
+        COLUMN_CONTEXT.reset(self._column_context_token)
 
 
 class Entries:

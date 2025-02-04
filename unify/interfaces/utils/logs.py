@@ -26,7 +26,7 @@ ACTIVE_LOG = ContextVar("active_log", default=[])
 LOGGED = ContextVar("logged", default={})
 
 # context
-CONTEXT = ContextVar("context", default="")
+COLUMN_CONTEXT = ContextVar("context", default="")
 
 # entries
 ACTIVE_ENTRIES = ContextVar(
@@ -131,8 +131,8 @@ def _to_log_ids(
     )
 
 
-def _apply_context(**data):
-    context = CONTEXT.get()
+def _apply_column_context(**data):
+    context = COLUMN_CONTEXT.get()
     return {os.path.join(context, k): v for k, v in data.items()}
 
 
@@ -193,8 +193,8 @@ def log(
         "accept": "application/json",
         "Authorization": f"Bearer {api_key}",
     }
-    params = _apply_context(**(params if params else {}))
-    entries = _apply_context(**entries)
+    params = _apply_column_context(**(params if params else {}))
+    entries = _apply_column_context(**entries)
     params = {**params, **ACTIVE_PARAMS.get()}
     params = _handle_special_types(params)
     entries = {**entries, **ACTIVE_ENTRIES.get()}
@@ -234,7 +234,7 @@ def _add_to_log(
         "params",
         "entries",
     ), "mode must be one of 'params', 'entries'"
-    data = _apply_context(**data)
+    data = _apply_column_context(**data)
     nest_level = {
         "params": PARAMS_NEST_LEVEL,
         "entries": ENTRIES_NEST_LEVEL,

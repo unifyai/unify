@@ -245,17 +245,17 @@ async def test_with_log_async():
     ] + [[("d", i * 7 + 3), ("e", i * 7 + 4), ("f", i * 7 + 5)] for i in range(4)]
 
 
-# Context
+# Column Context
 
 
 @_handle_project
-def test_with_context():
+def test_with_column_context():
 
     unify.log(a="a")
     logs = unify.get_logs()
     assert len(logs) == 1
     assert logs[0].entries == {"a": "a"}
-    with unify.Context("capitalized"):
+    with unify.ColumnContext("capitalized"):
         logs = unify.get_logs()
         assert len(logs) == 1
         assert logs[0].entries == {"a": "a"}
@@ -263,7 +263,7 @@ def test_with_context():
         logs = unify.get_logs()
         assert len(logs) == 1
         assert logs[0].entries == {"a": "a", "capitalized/b": "B"}
-        with unify.Context("vowels"):
+        with unify.ColumnContext("vowels"):
             logs = unify.get_logs()
             assert len(logs) == 1
             assert logs[0].entries == {"a": "a", "capitalized/b": "B"}
@@ -293,14 +293,14 @@ def test_with_context():
 
 
 @_handle_project
-def test_with_context_default_project():
+def test_with_column_context_default_project():
     with unify.Log():
-        with unify.Context("science"):
-            with unify.Context("physics"):
+        with unify.ColumnContext("science"):
+            with unify.ColumnContext("physics"):
                 unify.log(score=1.0)
-            with unify.Context("chemistry"):
+            with unify.ColumnContext("chemistry"):
                 unify.log(score=0.5)
-            with unify.Context("biology"):
+            with unify.ColumnContext("biology"):
                 unify.log(score=0.0)
 
     entries = unify.get_logs()[0].entries
@@ -310,13 +310,13 @@ def test_with_context_default_project():
 
 
 @_handle_project
-def test_with_context_threaded():
+def test_with_column_context_threaded():
 
     def fn(a, b, e):
         log = unify.log(a=a)
-        with unify.Context("capitalized"):
+        with unify.ColumnContext("capitalized"):
             log.add_entries(b=b)
-            with unify.Context("vowels"):
+            with unify.ColumnContext("vowels"):
                 log.add_entries(e=e)
                 unify.log(a=a)
 
@@ -347,13 +347,13 @@ def test_with_context_threaded():
 
 @_handle_project
 @pytest.mark.asyncio
-async def test_with_context_async():
+async def test_with_column_context_async():
 
     async def fn(a, b, e):
         log = unify.log(a=a)
-        with unify.Context("capitalized"):
+        with unify.ColumnContext("capitalized"):
             log.add_entries(b=b)
-            with unify.Context("vowels"):
+            with unify.ColumnContext("vowels"):
                 log.add_entries(e=e)
                 unify.log(a=a)
 
