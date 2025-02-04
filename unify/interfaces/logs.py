@@ -119,16 +119,24 @@ class Log:
 
 class Context:
 
-    def __init__(self, context: str):
+    def __init__(self, context: str, mode: str = "both"):
+        assert mode in (
+            "read",
+            "write",
+            "both",
+        ), f"mode must be one of 'read', 'write', or 'both', but found {mode}"
         self._context = context
+        self._mode = mode
 
     def __enter__(self):
         self._context_token = CONTEXT.set(
             os.path.join(CONTEXT.get(), self._context),
         )
+        self._mode_token = CONTEXT_MODE.set(self._mode)
 
     def __exit__(self, *args, **kwargs):
         CONTEXT.reset(self._context_token)
+        CONTEXT_MODE.reset(self._mode_token)
 
 
 class ColumnContext:

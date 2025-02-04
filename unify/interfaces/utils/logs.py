@@ -27,6 +27,7 @@ LOGGED = ContextVar("logged", default={})
 
 # context
 CONTEXT = ContextVar("context", default=None)
+CONTEXT_MODE = ContextVar("context_mode", default="both")
 
 # column context
 COLUMN_CONTEXT = ContextVar("column_context", default="")
@@ -208,8 +209,11 @@ def log(
     entries = _handle_special_types(entries)
     project = _get_and_maybe_create_project(project, api_key=api_key)
     body = {"project": project, "params": params, "entries": entries}
-    context = context if context else CONTEXT.get()
-    body["context"] = context
+    if CONTEXT_MODE.get() in ("write", "both"):
+        context = os.path.join(CONTEXT.get(), context) if context else CONTEXT.get()
+        body["context"] = context
+    else:
+        context = None
     response = requests.post(BASE_URL + "/logs", headers=headers, json=body)
     response.raise_for_status()
     created_log = unify.Log(
@@ -487,7 +491,10 @@ def get_logs(
         "Authorization": f"Bearer {api_key}",
     }
     project = _get_and_maybe_create_project(project, api_key=api_key)
-    context = context if context else CONTEXT.get()
+    if CONTEXT_MODE.get() in ("read", "both"):
+        context = os.path.join(CONTEXT.get(), context) if context else CONTEXT.get()
+    else:
+        context = None
     params = {
         "project": project,
         "filter_expr": filter,
