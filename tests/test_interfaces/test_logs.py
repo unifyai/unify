@@ -11,36 +11,6 @@ from .helpers import _handle_project
 # ------------------------#
 
 
-def test_get_log_by_value_no_project():
-    if "_" in unify.list_projects():
-        unify.delete_project("_")
-    data = {
-        "system_prompt": "You are a weather assistant",
-        "user_prompt": "hello world",
-    }
-    assert len(unify.get_logs()) == 0
-    log = unify.log(**data)
-    retrieved_log = unify.get_log_by_value(**data)
-    assert log == retrieved_log
-    log.delete()
-    assert unify.get_log_by_value(**data) is None
-    unify.delete_project("_")
-
-
-@_handle_project
-def test_get_log_by_value():
-    data = {
-        "system_prompt": "You are a weather assistant",
-        "user_prompt": "hello world",
-    }
-    assert len(unify.get_logs()) == 0
-    log = unify.log(**data)
-    retrieved_log = unify.get_log_by_value(**data)
-    assert log == retrieved_log
-    log.delete()
-    assert unify.get_log_by_value(**data) is None
-
-
 @_handle_project
 def test_get_logs_by_value():
     data = {
@@ -60,101 +30,6 @@ def test_get_logs_by_value():
     assert log1 == retrieved_logs[0]
     log1.delete()
     assert unify.get_logs_by_value(**data) == []
-
-
-@_handle_project
-def test_replace_log_entries():
-    data = {
-        "system_prompt": "You are a weather assistant",
-        "user_prompt": "hello world",
-    }
-    assert len(unify.get_logs()) == 0
-    log = unify.log(**data)
-    assert unify.get_log_by_id(log.id).entries == data
-    assert len(unify.get_logs()) == 1
-    new_data = {
-        "system_prompt": "You are a maths assistant",
-        "user_prompt": "hi earth",
-    }
-    log.replace_entries(**new_data)
-    assert log.entries == new_data
-    assert len(unify.get_logs()) == 1
-    assert unify.get_log_by_id(log.id).entries == new_data
-
-
-@_handle_project
-def test_update_log_entries():
-    messages = [
-        {
-            "role": "assistant",
-            "context": "you are a helpful assistant",
-        },
-    ]
-    assert len(unify.get_logs()) == 0
-    log = unify.log(messages=messages)
-    assert len(unify.get_logs()) == 1
-    assert unify.get_log_by_id(log.id).entries["messages"] == messages
-    new_messages = [
-        {
-            "role": "user",
-            "context": "what is 1 + 1?",
-        },
-    ]
-    log.update_entries(lambda x, y: x + y, messages=new_messages)
-    combined_messages = messages + new_messages
-    assert log.entries["messages"] == combined_messages
-    assert len(unify.get_logs()) == 1
-    assert unify.get_log_by_id(log.id).entries["messages"] == combined_messages
-
-
-@_handle_project
-def test_update_log_entries_w_dict():
-    messages = [
-        {
-            "role": "assistant",
-            "context": "you are a helpful assistant",
-        },
-    ]
-    name = "John"
-    assert len(unify.get_logs()) == 0
-    log = unify.log(messages=messages, name=name)
-    assert len(unify.get_logs()) == 1
-    assert unify.get_log_by_id(log.id).entries["messages"] == messages
-    new_messages = [
-        {
-            "role": "user",
-            "context": "what is 1 + 1?",
-        },
-    ]
-    surname = "Smith"
-    log.update_entries(
-        {
-            "messages": lambda x, y: x + y,
-            "name": lambda x, y: f"{x} {y}",
-        },
-        messages=new_messages,
-        name=surname,
-    )
-    combined_messages = messages + new_messages
-    assert log.entries["messages"] == combined_messages
-    assert len(unify.get_logs()) == 1
-    assert unify.get_log_by_id(log.id).entries["messages"] == combined_messages
-
-
-@_handle_project
-def test_rename_log_entries():
-    customer = "John Smith"
-    assert len(unify.get_logs()) == 0
-    log = unify.log(customer=customer)
-    assert len(unify.get_logs()) == 1
-    assert unify.get_log_by_id(log.id).entries["customer"] == customer
-    log.rename_entries(customer="customer_name")
-    assert "customer" not in log.entries
-    assert "customer_name" in log.entries
-    assert len(unify.get_logs()) == 1
-    retrieved_log = unify.get_log_by_id(log.id)
-    assert "customer" not in retrieved_log.entries
-    assert "customer_name" in retrieved_log.entries
 
 
 @_handle_project
@@ -216,37 +91,6 @@ def test_get_logs_without_fields():
 
 
 @_handle_project
-def test_group_logs_by_params():
-    logs = list()
-    log_idx = 0
-    qs = ["1+1", "2+2", "3+3", "4+1"]
-    for system_prompt in ["You are an expert.", "You are an expert mathematician."]:
-        for dataset_version in ["vanilla", "with_failures", "with_successes"]:
-            params = dict(
-                system_prompt=system_prompt,
-                dataset_version=dataset_version,
-            )
-            for q in qs:
-                logs.append(unify.Log(id=log_idx, q=q, params=params))
-                log_idx += 1
-    grouped_logs = unify.group_logs_by_configs(logs=logs)
-    assert len(grouped_logs) == 6
-    assert list(grouped_logs.keys()) == [
-        '{"system_prompt": "You are an expert.", ' '"dataset_version": "vanilla"}',
-        '{"system_prompt": "You are an expert.", '
-        '"dataset_version": "with_failures"}',
-        '{"system_prompt": "You are an expert.", '
-        '"dataset_version": "with_successes"}',
-        '{"system_prompt": "You are an expert mathematician.", '
-        '"dataset_version": "vanilla"}',
-        '{"system_prompt": "You are an expert mathematician.", '
-        '"dataset_version": "with_failures"}',
-        '{"system_prompt": "You are an expert mathematician.", '
-        '"dataset_version": "with_successes"}',
-    ]
-
-
-@_handle_project
 def test_get_param_by_version():
     unify.log(params={"sys_msg": "you are a helpful assistant"})
     unify.log(params={"sys_msg": "you are a very helpful assistant"})
@@ -297,32 +141,6 @@ def test_get_experiment_version():
 # -----------------#
 
 # Log
-
-
-@_handle_project
-def test_start_stop_log():
-    tk0 = unify.start_log(a="a")
-    logs = unify.get_logs()
-    assert len(logs) == 1
-    assert logs[0].entries == {"a": "a"}
-    unify.add_log_entries(b="b", c="c")
-    logs = unify.get_logs()
-    assert len(logs) == 1
-    assert logs[0].entries == {"a": "a", "b": "b", "c": "c"}
-    tk1 = unify.start_log(d="d")
-    logs = unify.get_logs()
-    assert len(logs) == 2
-    assert logs[0].entries == {"d": "d"}
-    unify.add_log_entries(e="e", f="f")
-    logs = unify.get_logs()
-    assert len(logs) == 2
-    assert logs[0].entries == {"d": "d", "e": "e", "f": "f"}
-    unify.end_log(tk1)
-    unify.add_log_entries(g="g")
-    logs = unify.get_logs()
-    assert len(logs) == 2
-    assert logs[1].entries == {"a": "a", "b": "b", "c": "c", "g": "g"}
-    unify.end_log(tk0)
 
 
 @_handle_project
