@@ -3,6 +3,14 @@ import asyncio
 import threading
 import warnings
 import aiohttp
+import time
+import logging
+import os
+
+# Configure logging based on environment variable
+ASYNC_LOGGER_DEBUG = os.getenv('ASYNC_LOGGER_DEBUG', '').lower() == 'true'
+logger = logging.getLogger('async_logger')
+logger.setLevel(logging.DEBUG if ASYNC_LOGGER_DEBUG else logging.WARNING)
 
 class AsyncLoggerManager:
     def __init__(
@@ -50,10 +58,23 @@ class AsyncLoggerManager:
             return
 
         self.running = False
+        # Wait until the queue is flushed
+        while not self.queue.empty():
+            time.sleep(self.flush_interval)
         if self.worker_thread:
             # No need to call _flush_sync; the worker loop will flush remaining logs
             self.worker_thread.join()
             self.worker_thread = None
+
+    def _safe_enqueue(self, event):
+        if self.queue.full():
+            try:
+                dropped = self.queue.get_nowait()
+                logger.debug("Queue full. Dropping oldest event: %s", dropped)
+            except asyncio.QueueEmpty:
+                pass
+        self.queue.put_nowait(event)
+
 
     def log_create(self, project: str, context: str, params: dict, entries: dict) -> asyncio.Future:
         """
@@ -71,7 +92,7 @@ class AsyncLoggerManager:
             "future": fut,
         }
         # Enqueue using the event loop's thread-safe call.
-        self._loop.call_soon_threadsafe(self.queue.put_nowait, event)
+        self._loop.call_soon_threadsafe(self._safe_enqueue, event)
         return fut
 
     def log_update(
@@ -99,7 +120,7 @@ class AsyncLoggerManager:
             "mutable": mutable,
             "data": data,
         }
-        self._loop.call_soon_threadsafe(self.queue.put_nowait, event)
+        self._loop.call_soon_threadsafe(self._safe_enqueue, event)
 
     def _async_worker(self):
         self._loop = asyncio.new_event_loop()
@@ -151,7 +172,7 @@ class AsyncLoggerManager:
                 grouped[key]["futures"].append(event["future"])
             for group in grouped.values():
                 try:
-                    print("creating logs with context", group["context"])
+                    logger.debug("Creating logs with context %s", group["context"])
                     async with self.session.post(
                         f"{self.base_url}/logs",
                         json={
@@ -169,8 +190,8 @@ class AsyncLoggerManager:
                                     fut.set_exception(Exception("Failed to create log: " + error_text))
                         else:
                             json_resp = await response.json()
-                            # Debug: print the response received
-                            print("Received create response:", json_resp)
+                            # Debug: log the response received
+                            logger.debug("Received create response: %s", json_resp)
                             # Extract log id(s) based on the response format
                             if isinstance(json_resp, list):
                                 log_ids = json_resp
@@ -189,9 +210,9 @@ class AsyncLoggerManager:
                             for fut, log_id in zip(group["futures"], log_ids):
                                 if not fut.done():
                                     fut.set_result(log_id)
-                                    print("Set future result:", log_id)
+                                    logger.debug("Set future result: %s", log_id)
                 except Exception as e:
-                    print("Exception during log creation:", e)
+                    logger.error("Exception during log creation: %s", e)
                     for fut in group["futures"]:
                         if not fut.done():
                             fut.set_exception(e)
@@ -206,7 +227,7 @@ class AsyncLoggerManager:
                     if not event["log_future"].done():
                         await event["log_future"]
                 except Exception as e:
-                    print("Exception while awaiting log creation:", e)
+                    logger.error("Exception while awaiting log creation: %s", e)
                     continue  # Skip updates if log creation failed
                 log_id = event["log_future"].result()
                 key = (
@@ -235,15 +256,15 @@ class AsyncLoggerManager:
                         async with self.session.put(
                             f"{self.base_url}/logs",
                             json={
-                                "ids": group["log_ids"],
+                                "ids": list(set(group["log_ids"])),
                                 group["mode"]: data,
-                                "overwrite": True , #group["overwrite"]
+                                "overwrite": group["overwrite"],
                                 "context": group["context"],
                             },
                             headers=self.headers,
                         ) as response:
                             if response.status != 200:
                                 error_text = await response.text()
-                                print("Update failed:", error_text)
+                                logger.error("Update failed: %s", error_text)
                 except Exception as e:
-                        print("Exception during log update:", e)
+                        logger.error("Exception during log update: %s", e)

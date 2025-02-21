@@ -480,6 +480,8 @@ def _add_to_log(
     active = {"params": ACTIVE_PARAMS, "entries": ACTIVE_ENTRIES}[mode]
     api_key = _validate_api_key(api_key)
     context = _handle_context(context)
+    data = _handle_special_types(data)
+    data = _handle_mutability(mutable, data)
     if ASYNC_LOGGING and _async_logger is not None:
         # For simplicity, assume logs is a single unify.Log.
         if logs is None:
@@ -529,8 +531,7 @@ def _add_to_log(
                 "All logs must share the same context if they're all being updated at the same time."
             )
             data = all_kwargs[0]
-        data = _handle_special_types(data)
-        data = _handle_mutability(mutable, data)
+        print("overwriting", overwrite)
         body = {"ids": log_ids, mode: data, "overwrite": overwrite, "context": context}
         response = requests.put(BASE_URL + "/logs", headers=headers, json=body)
         if response.status_code != 200:
