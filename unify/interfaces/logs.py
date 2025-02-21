@@ -23,6 +23,7 @@ class Log:
         self,
         *,
         id: int = None,
+        _future=None,
         ts: Optional[datetime] = None,
         project: Optional[str] = None,
         context: Optional[str] = None,
@@ -31,6 +32,7 @@ class Log:
         **entries,
     ):
         self._id = id
+        self._future = _future  # May be an asyncio.Future that will eventually yield the real id
         self._ts = ts
         self._project = project
         self._context = context
@@ -51,6 +53,8 @@ class Log:
 
     @property
     def id(self) -> int:
+        if self._id is None and self._future is not None and self._future.done():
+            self._id = self._future.result()
         return self._id
 
     @property
@@ -83,6 +87,10 @@ class Log:
     # Public
 
     def download(self):
+        # If id is not yet resolved, wait for the future
+        if self._id is None and self._future is not None:
+            self._id = self._future.result(timeout=5)
+            print("downloaded log with id", self._id)
         log = get_log_by_id(id=self._id, api_key=self._api_key)
         self._params = log._params
         self._entries = log._entries
@@ -133,7 +141,7 @@ class Log:
         self._ts = lg.ts
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.download()
+        #self.download()
         ACTIVE_LOG.reset(self._log_token)
 
 
