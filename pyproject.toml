@@ -30,6 +30,7 @@ black = "^24.3.0"
 wget = "^3.2"
 autoflake = "^1.6.1"
 pydoc-markdown = "^4.0.0"
+opencv-python = "^4.9.0"
 
 [tool.isort]
 profile = "black"
