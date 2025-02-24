@@ -27,6 +27,7 @@ isort = "^5.11.4"
 pre-commit = "^3.0.1"
 wemake-python-styleguide = "^0.17.0"
 black = "^24.3.0"
+wget = "^3.2"
 autoflake = "^1.6.1"
 pydoc-markdown = "^4.0.0"
 
