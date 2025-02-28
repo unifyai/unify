@@ -164,6 +164,81 @@ async def test_with_log_async():
     ] + [[("d", i * 7 + 3), ("e", i * 7 + 4), ("f", i * 7 + 5)] for i in range(4)]
 
 
+# Context
+
+
+@_handle_project
+def test_with_context():
+
+    with unify.Context("Foo", mode="both"):
+        [unify.log(x=i) for i in range(10)]
+        assert len(unify.get_logs()) == 10
+
+    with unify.Context("Foo", mode="read"):
+        assert len(unify.get_logs()) == 10
+
+    with unify.Context("Foo", mode="write"):
+        [unify.log(x=i) for i in range(10)]
+        assert len(unify.get_logs()) == 20
+
+    with unify.Context("Foo", mode="read"):
+        assert len(unify.get_logs()) == 20
+
+    with unify.Context("Foo"):
+        assert len(unify.get_logs()) == 20
+
+
+@_handle_project
+def test_with_context_nested():
+
+    with unify.Context("Foo"):
+        [unify.log(x=i) for i in range(10)]
+
+        with unify.Context("Bar"):
+            [unify.log(y=i) for i in range(5)]
+            assert len(unify.get_logs()) == 5
+
+        with unify.Context("Bar/Baz"):
+            [unify.log(z=i) for i in range(20)]
+            assert len(unify.get_logs()) == 20
+
+        with unify.Context("Bar"):
+            with unify.Context("Baz"):
+                assert len(unify.get_logs()) == 20
+
+        assert len(unify.get_logs()) == 10
+
+
+@_handle_project
+def test_with_context_mode_nested():
+
+    with unify.Context("Foo"):
+        [unify.log(x=i) for i in range(10)]
+
+        with unify.Context("Bar"):
+            [unify.log(y=i) for i in range(5)]
+            assert len(unify.get_logs()) == 5
+
+        with unify.Context("Bar/Baz"):
+            [unify.log(z=i) for i in range(20)]
+            assert len(unify.get_logs()) == 20
+
+        with unify.Context("Bar/Baz", mode="write"):
+            assert len(unify.get_logs()) == 10  # Get from Foo
+
+        with unify.Context("Bar/Baz", mode="read"):
+            [unify.log(y=i) for i in range(5)]
+            assert len(unify.get_logs()) == 10  # Read from Bar/Baz
+
+        assert len(unify.get_logs()) == 15
+
+
+# ToDo: add threaded test
+
+
+# ToDo: add asyncio test
+
+
 # Column Context
 
 
