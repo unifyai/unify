@@ -166,7 +166,7 @@ class Context:
     def __enter__(self):
         if CONTEXT_MODE.get() in ("both", self._mode):
             self._context_token = CONTEXT.set(
-                os.path.join(CONTEXT.get(), self._context),
+                os.path.join(CONTEXT.get(), os.path.normpath(self._context)),
             )
             self._mode_token = CONTEXT_MODE.set(self._mode)
         else:
@@ -192,7 +192,7 @@ class ColumnContext:
     def __enter__(self):
         if COLUMN_CONTEXT_MODE.get() in ("both", self._mode):
             self._col_context_token = COLUMN_CONTEXT.set(
-                os.path.join(COLUMN_CONTEXT.get(), self._col_context),
+                os.path.join(COLUMN_CONTEXT.get(), os.path.normpath(self._col_context)),
             )
             self._mode_token = COLUMN_CONTEXT_MODE.set(self._mode)
         else:
