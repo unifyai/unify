@@ -154,29 +154,55 @@ class Log:
 
 
 class Context:
-    def __init__(self, context: str):
+    def __init__(self, context: str, mode: str = "both"):
         self._context = context
+        assert mode in (
+            "both",
+            "read",
+            "write",
+        ), f"mode must be one of 'read', 'write', or 'both', but found {mode}"
+        self._mode = mode
 
     def __enter__(self):
-        self._context_token = CONTEXT.set(
-            os.path.join(CONTEXT.get(), self._context),
-        )
+        if CONTEXT_MODE.get() in ("both", self._mode):
+            self._context_token = CONTEXT.set(
+                os.path.join(CONTEXT.get(), self._context),
+            )
+            self._mode_token = CONTEXT_MODE.set(self._mode)
+        else:
+            raise Exception(
+                f"Child mode must match parent mode. Parent: {CONTEXT_MODE.get()}, Child: {self._mode}",
+            )
 
     def __exit__(self, *args, **kwargs):
         CONTEXT.reset(self._context_token)
+        CONTEXT_MODE.reset(self._mode_token)
 
 
 class ColumnContext:
-    def __init__(self, context: str):
+    def __init__(self, context: str, mode: str = "both"):
         self._col_context = context
+        assert mode in (
+            "both",
+            "read",
+            "write",
+        ), f"mode must be one of 'read', 'write', or 'both', but found {mode}"
+        self._mode = mode
 
     def __enter__(self):
-        self._col_context_token = COLUMN_CONTEXT.set(
-            os.path.join(COLUMN_CONTEXT.get(), self._col_context),
-        )
+        if COLUMN_CONTEXT_MODE.get() in ("both", self._mode):
+            self._col_context_token = COLUMN_CONTEXT.set(
+                os.path.join(COLUMN_CONTEXT.get(), self._col_context),
+            )
+            self._mode_token = COLUMN_CONTEXT_MODE.set(self._mode)
+        else:
+            raise Exception(
+                f"Child mode must match parent mode. Parent: {CONTEXT_MODE.get()}, Child: {self._mode}",
+            )
 
     def __exit__(self, *args, **kwargs):
         COLUMN_CONTEXT.reset(self._col_context_token)
+        COLUMN_CONTEXT_MODE.reset(self._mode_token)
 
 
 class Entries:

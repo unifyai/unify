@@ -40,9 +40,11 @@ LOGGED = ContextVar("logged", default={})
 
 # context
 CONTEXT = ContextVar("context", default="")
+CONTEXT_MODE = ContextVar("context_mode", default="both")
 
 # column context
 COLUMN_CONTEXT = ContextVar("column_context", default="")
+COLUMN_CONTEXT_MODE = ContextVar("column_context_mode", default="both")
 
 # entries
 ACTIVE_ENTRIES = ContextVar(
