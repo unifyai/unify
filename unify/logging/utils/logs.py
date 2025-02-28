@@ -38,8 +38,11 @@ _async_logger: Optional[AsyncLoggerManager] = None
 ACTIVE_LOG = ContextVar("active_log", default=[])
 LOGGED = ContextVar("logged", default={})
 
+# context
+CONTEXT = ContextVar("context", default="")
+
 # column context
-COLUMN_CONTEXT = ContextVar("context", default="")
+COLUMN_CONTEXT = ContextVar("column_context", default="")
 
 # entries
 ACTIVE_ENTRIES = ContextVar(
@@ -211,7 +214,7 @@ def _apply_col_context(**data):
 
 def _handle_context(context: Optional[Union[str, Dict[str, str]]] = None):
     if context is None:
-        return None
+        return {"name": CONTEXT.get()}
     if isinstance(context, str):
         return {"name": context}
     else:
@@ -843,6 +846,7 @@ def get_logs(
         "Authorization": f"Bearer {api_key}",
     }
     project = _get_and_maybe_create_project(project, api_key=api_key)
+    context = context if context else CONTEXT.get()
     params = {
         "project": project,
         "context": context,
@@ -866,6 +870,7 @@ def get_logs(
                 param_name: (param_ver, params[param_name][param_ver])
                 for param_name, param_ver in dct["params"].items()
             },
+            context=context,
             api_key=api_key,
         )
         for dct in logs
