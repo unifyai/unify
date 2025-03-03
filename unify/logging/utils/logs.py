@@ -212,9 +212,12 @@ def _to_log_ids(
 
 
 def _apply_col_context(**data):
-    if COLUMN_CONTEXT_MODE.get() in ("both", "write"):
+    if COLUMN_CONTEXT_MODE.get() == "both":
+        assert COLUMN_CONTEXT_WRITE.get() == COLUMN_CONTEXT_READ.get()
         col_context = COLUMN_CONTEXT_WRITE.get()
-    if COLUMN_CONTEXT_MODE.get() in ("both", "read"):
+    elif COLUMN_CONTEXT_MODE.get() == "write":
+        col_context = COLUMN_CONTEXT_WRITE.get()
+    elif COLUMN_CONTEXT_MODE.get() == "read":
         col_context = COLUMN_CONTEXT_READ.get()
     return {os.path.join(col_context, k): v for k, v in data.items()}
 
@@ -861,6 +864,7 @@ def get_logs(
         "limit": limit,
         "offset": offset,
         "return_ids_only": return_ids_only,
+        "column_context": COLUMN_CONTEXT_READ.get(),
     }
     response = requests.get(BASE_URL + "/logs", headers=headers, params=params)
     if response.status_code != 200:

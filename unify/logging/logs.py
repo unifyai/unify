@@ -167,11 +167,17 @@ class Context:
         if CONTEXT_MODE.get() in ("both", self._mode):
             if self._mode in ("both", "write"):
                 self._context_token_write = CONTEXT_WRITE.set(
-                    os.path.join(CONTEXT_WRITE.get(), os.path.normpath(self._context)),
+                    os.path.join(
+                        CONTEXT_WRITE.get(),
+                        os.path.normpath(self._context),
+                    ).replace("\\", "/"),
                 )
             if self._mode in ("both", "read"):
                 self._context_token_read = CONTEXT_READ.set(
-                    os.path.join(CONTEXT_READ.get(), os.path.normpath(self._context)),
+                    os.path.join(
+                        CONTEXT_READ.get(),
+                        os.path.normpath(self._context),
+                    ).replace("\\", "/"),
                 )
             self._mode_token = CONTEXT_MODE.set(self._mode)
         else:
@@ -204,20 +210,22 @@ class ColumnContext:
                 self._context_token_write = COLUMN_CONTEXT_WRITE.set(
                     os.path.join(
                         COLUMN_CONTEXT_WRITE.get(),
-                        os.path.normpath(self._context),
-                    ),
+                        os.path.normpath(self._col_context),
+                        "",
+                    ).replace("\\", "/"),
                 )
             if self._mode in ("both", "read"):
                 self._context_token_read = COLUMN_CONTEXT_READ.set(
                     os.path.join(
                         COLUMN_CONTEXT_READ.get(),
-                        os.path.normpath(self._context),
-                    ),
+                        os.path.normpath(self._col_context),
+                        "",
+                    ).replace("\\", "/"),
                 )
             self._mode_token = COLUMN_CONTEXT_MODE.set(self._mode)
         else:
             raise Exception(
-                f"Child mode must match parent mode. Parent: {CONTEXT_MODE.get()}, Child: {self._mode}",
+                f"Child mode must match parent mode. Parent: {COLUMN_CONTEXT_MODE.get()}, Child: {self._mode}",
             )
 
     def __exit__(self, *args, **kwargs):
