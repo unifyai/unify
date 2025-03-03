@@ -224,11 +224,12 @@ def test_with_context_mode_nested():
             assert len(unify.get_logs()) == 20
 
         with unify.Context("Bar/Baz", mode="write"):
+            [unify.log(y=i) for i in range(5)]
             assert len(unify.get_logs()) == 10  # Get from Foo
 
         with unify.Context("Bar/Baz", mode="read"):
             [unify.log(y=i) for i in range(5)]
-            assert len(unify.get_logs()) == 10  # Read from Bar/Baz
+            assert len(unify.get_logs()) == 25  # Read from Bar/Baz
 
         assert len(unify.get_logs()) == 15
 

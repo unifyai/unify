@@ -39,11 +39,13 @@ ACTIVE_LOG = ContextVar("active_log", default=[])
 LOGGED = ContextVar("logged", default={})
 
 # context
-CONTEXT = ContextVar("context", default="")
+CONTEXT_READ = ContextVar("context", default="")
+CONTEXT_WRITE = ContextVar("context", default="")
 CONTEXT_MODE = ContextVar("context_mode", default="both")
 
 # column context
-COLUMN_CONTEXT = ContextVar("column_context", default="")
+COLUMN_CONTEXT_READ = ContextVar("column_context", default="")
+COLUMN_CONTEXT_WRITE = ContextVar("column_context", default="")
 COLUMN_CONTEXT_MODE = ContextVar("column_context_mode", default="both")
 
 # entries
@@ -210,13 +212,16 @@ def _to_log_ids(
 
 
 def _apply_col_context(**data):
-    col_context = COLUMN_CONTEXT.get()
+    if COLUMN_CONTEXT_MODE.get() in ("both", "write"):
+        col_context = COLUMN_CONTEXT_WRITE.get()
+    if COLUMN_CONTEXT_MODE.get() in ("both", "read"):
+        col_context = COLUMN_CONTEXT_READ.get()
     return {os.path.join(col_context, k): v for k, v in data.items()}
 
 
 def _handle_context(context: Optional[Union[str, Dict[str, str]]] = None):
     if context is None:
-        return {"name": CONTEXT.get()}
+        return {"name": CONTEXT_WRITE.get()}
     if isinstance(context, str):
         return {"name": context}
     else:
@@ -848,7 +853,7 @@ def get_logs(
         "Authorization": f"Bearer {api_key}",
     }
     project = _get_and_maybe_create_project(project, api_key=api_key)
-    context = context if context else CONTEXT.get()
+    context = context if context else CONTEXT_READ.get()
     params = {
         "project": project,
         "context": context,

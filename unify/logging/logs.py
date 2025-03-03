@@ -165,9 +165,14 @@ class Context:
 
     def __enter__(self):
         if CONTEXT_MODE.get() in ("both", self._mode):
-            self._context_token = CONTEXT.set(
-                os.path.join(CONTEXT.get(), os.path.normpath(self._context)),
-            )
+            if self._mode in ("both", "write"):
+                self._context_token_write = CONTEXT_WRITE.set(
+                    os.path.join(CONTEXT_WRITE.get(), os.path.normpath(self._context)),
+                )
+            if self._mode in ("both", "read"):
+                self._context_token_read = CONTEXT_READ.set(
+                    os.path.join(CONTEXT_READ.get(), os.path.normpath(self._context)),
+                )
             self._mode_token = CONTEXT_MODE.set(self._mode)
         else:
             raise Exception(
@@ -175,7 +180,11 @@ class Context:
             )
 
     def __exit__(self, *args, **kwargs):
-        CONTEXT.reset(self._context_token)
+        if self._mode in ("both", "write"):
+            CONTEXT_WRITE.reset(self._context_token_write)
+        if self._mode in ("both", "read"):
+            CONTEXT_READ.reset(self._context_token_read)
+
         CONTEXT_MODE.reset(self._mode_token)
 
 
@@ -191,9 +200,20 @@ class ColumnContext:
 
     def __enter__(self):
         if COLUMN_CONTEXT_MODE.get() in ("both", self._mode):
-            self._col_context_token = COLUMN_CONTEXT.set(
-                os.path.join(COLUMN_CONTEXT.get(), os.path.normpath(self._col_context)),
-            )
+            if self._mode in ("both", "write"):
+                self._context_token_write = COLUMN_CONTEXT_WRITE.set(
+                    os.path.join(
+                        COLUMN_CONTEXT_WRITE.get(),
+                        os.path.normpath(self._context),
+                    ),
+                )
+            if self._mode in ("both", "read"):
+                self._context_token_read = COLUMN_CONTEXT_READ.set(
+                    os.path.join(
+                        COLUMN_CONTEXT_READ.get(),
+                        os.path.normpath(self._context),
+                    ),
+                )
             self._mode_token = COLUMN_CONTEXT_MODE.set(self._mode)
         else:
             raise Exception(
@@ -201,7 +221,10 @@ class ColumnContext:
             )
 
     def __exit__(self, *args, **kwargs):
-        COLUMN_CONTEXT.reset(self._col_context_token)
+        if self._mode in ("both", "write"):
+            COLUMN_CONTEXT_WRITE.reset(self._context_token_write)
+        if self._mode in ("both", "read"):
+            COLUMN_CONTEXT_READ.reset(self._context_token_read)
         COLUMN_CONTEXT_MODE.reset(self._mode_token)
 
 
