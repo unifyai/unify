@@ -56,10 +56,15 @@ ACTIVE_ENTRIES = ContextVar(
 ENTRIES_NEST_LEVEL = ContextVar("entries_nest_level", default=0)
 
 # params
-ACTIVE_PARAMS = ContextVar(
-    "active_params",
+ACTIVE_PARAMS_WRITE = ContextVar(
+    "active_params_write",
     default={},
 )
+ACTIVE_PARAMS_READ = ContextVar(
+    "active_params_read",
+    default={},
+)
+ACTIVE_PARAMS_MODE = ContextVar("active_params_mode", default="both")
 PARAMS_NEST_LEVEL = ContextVar("params_nest_level", default=0)
 
 # span
@@ -364,7 +369,7 @@ def log(
         return log
     # Process parameters and entries
     params = _apply_col_context(**(params if params else {}))
-    params = {**params, **ACTIVE_PARAMS.get()}
+    params = {**params, **ACTIVE_PARAMS_WRITE.get()}
     params = _handle_special_types(params)
     params = _handle_mutability(mutable, params)
     entries = _apply_col_context(**entries)
@@ -532,7 +537,7 @@ def _add_to_log(
     assert mode in ("params", "entries"), "mode must be one of 'params', 'entries'"
     data = _apply_col_context(**data)
     nest_level = {"params": PARAMS_NEST_LEVEL, "entries": ENTRIES_NEST_LEVEL}[mode]
-    active = {"params": ACTIVE_PARAMS, "entries": ACTIVE_ENTRIES}[mode]
+    active = {"params": ACTIVE_PARAMS_WRITE, "entries": ACTIVE_ENTRIES}[mode]
     api_key = _validate_api_key(api_key)
     context = _handle_context(context)
     data = _handle_special_types(data)
@@ -857,6 +862,14 @@ def get_logs(
     }
     project = _get_and_maybe_create_project(project, api_key=api_key)
     context = context if context else CONTEXT_READ.get()
+    if ACTIVE_PARAMS_READ.get():
+        _filter = " and ".join(
+            f"{k}=='{v}'" for k, v in ACTIVE_PARAMS_READ.get().items()
+        )
+        if filter:
+            filter = f"({filter}) and ({_filter})"
+        else:
+            filter = _filter
     params = {
         "project": project,
         "context": context,

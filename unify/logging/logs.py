@@ -256,26 +256,61 @@ class Entries:
 
 
 class Params:
-    def __init__(self, **params):
+    def __init__(self, mode: str = "both", **params):
         self._params = _handle_special_types(params)
+        self._mode = mode
+        assert mode in (
+            "both",
+            "read",
+            "write",
+        ), f"mode must be one of 'read', 'write', or 'both', but found {mode}"
 
     def __enter__(self):
-        self._params_token = ACTIVE_PARAMS.set(
-            {**ACTIVE_PARAMS.get(), **self._params},
-        )
-        self._nest_token = PARAMS_NEST_LEVEL.set(
-            PARAMS_NEST_LEVEL.get() + 1,
-        )
+        if not (ACTIVE_PARAMS_MODE.get() in ("both", self._mode)):
+            raise Exception(
+                f"Child mode must match parent mode. Parent: {ACTIVE_PARAMS_MODE.get()}, Child: {self._mode}",
+            )
+        self._mode_token = ACTIVE_PARAMS_MODE.set(self._mode)
+        if self._mode in ("both", "write"):
+            self._params_token = ACTIVE_PARAMS_WRITE.set(
+                {**ACTIVE_PARAMS_WRITE.get(), **self._params},
+            )
+            self._nest_token = PARAMS_NEST_LEVEL.set(
+                PARAMS_NEST_LEVEL.get() + 1,
+            )
+
+        if self._mode in ("both", "read"):
+            self._experiment_token_read = ACTIVE_PARAMS_READ.set(
+                {**ACTIVE_PARAMS_READ.get(), **self._params},
+            )
 
     def __exit__(self, *args, **kwargs):
-        ACTIVE_PARAMS.reset(self._params_token)
-        PARAMS_NEST_LEVEL.reset(self._nest_token)
-        if PARAMS_NEST_LEVEL.get() == 0:
-            LOGGED.set({})
+        ACTIVE_PARAMS_MODE.reset(self._mode_token)
+
+        if self._mode in ("both", "write"):
+            ACTIVE_PARAMS_WRITE.reset(self._params_token)
+            PARAMS_NEST_LEVEL.reset(self._nest_token)
+            if PARAMS_NEST_LEVEL.get() == 0:
+                LOGGED.set({})
+
+        if self._mode in ("both", "read"):
+            ACTIVE_PARAMS_READ.reset(self._experiment_token_read)
 
 
 class Experiment:
-    def __init__(self, name: Optional[Union[str, int]] = None, overwrite: bool = False):
+    def __init__(
+        self,
+        name: Optional[Union[str, int]] = None,
+        overwrite: bool = False,
+        mode: str = "both",
+    ):
+        self._mode = mode
+        assert mode in (
+            "both",
+            "read",
+            "write",
+        ), f"mode must be one of 'read', 'write', or 'both', but found {mode}"
+
         latest_exp_name = get_experiment_name(-1)
         if latest_exp_name is None:
             self._name = name if name is not None else "0"
@@ -290,21 +325,35 @@ class Experiment:
         self._overwrite = overwrite
 
     def __enter__(self):
+        if not (ACTIVE_PARAMS_MODE.get() in ("both", self._mode)):
+            raise Exception(
+                f"Child mode must match parent mode. Parent: {ACTIVE_PARAMS_MODE.get()}, Child: {self._mode}",
+            )
+        self._mode_token = ACTIVE_PARAMS_MODE.set(self._mode)
         if self._overwrite:
             logs = get_logs(filter=f"experiment=='{self._name}'")
             delete_logs(logs=logs)
-        self._params_token = ACTIVE_PARAMS.set(
-            {**ACTIVE_PARAMS.get(), **{"experiment": self._name}},
-        )
-        self._nest_token = PARAMS_NEST_LEVEL.set(
-            PARAMS_NEST_LEVEL.get() + 1,
-        )
+        if self._mode in ("both", "write"):
+            self._params_token_write = ACTIVE_PARAMS_WRITE.set(
+                {**ACTIVE_PARAMS_WRITE.get(), **{"experiment": self._name}},
+            )
+            self._nest_token = PARAMS_NEST_LEVEL.set(
+                PARAMS_NEST_LEVEL.get() + 1,
+            )
+        if self._mode in ("both", "read"):
+            self._experiment_token_read = ACTIVE_PARAMS_READ.set(
+                {**ACTIVE_PARAMS_READ.get(), **{"experiment": self._name}},
+            )
 
     def __exit__(self, *args, **kwargs):
-        ACTIVE_PARAMS.reset(self._params_token)
-        PARAMS_NEST_LEVEL.reset(self._nest_token)
-        if PARAMS_NEST_LEVEL.get() == 0:
-            LOGGED.set({})
+        ACTIVE_PARAMS_MODE.reset(self._mode_token)
+        if self._mode in ("both", "write"):
+            ACTIVE_PARAMS_WRITE.reset(self._params_token_write)
+            PARAMS_NEST_LEVEL.reset(self._nest_token)
+            if PARAMS_NEST_LEVEL.get() == 0:
+                LOGGED.set({})
+        if self._mode in ("both", "read"):
+            ACTIVE_PARAMS_READ.reset(self._experiment_token_read)
 
 
 # Tracing #
