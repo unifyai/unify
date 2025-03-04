@@ -237,22 +237,45 @@ class ColumnContext:
 
 
 class Entries:
-    def __init__(self, **entries):
+    def __init__(self, mode: str = "both", **entries):
         self._entries = _handle_special_types(entries)
+        self._mode = mode
+        assert mode in (
+            "both",
+            "read",
+            "write",
+        ), f"mode must be one of 'read', 'write', or 'both', but found {mode}"
 
     def __enter__(self):
-        self._entries_token = ACTIVE_ENTRIES.set(
-            {**ACTIVE_ENTRIES.get(), **self._entries},
-        )
-        self._nest_token = ENTRIES_NEST_LEVEL.set(
-            ENTRIES_NEST_LEVEL.get() + 1,
-        )
+        if not (ACTIVE_ENTRIES_MODE.get() in ("both", self._mode)):
+            raise Exception(
+                f"Child mode must match parent mode. Parent: {ACTIVE_ENTRIES_MODE.get()}, Child: {self._mode}",
+            )
+        self._mode_token = ACTIVE_ENTRIES_MODE.set(self._mode)
+        if self._mode in ("both", "write"):
+            self._entries_token = ACTIVE_ENTRIES_WRITE.set(
+                {**ACTIVE_ENTRIES_WRITE.get(), **self._entries},
+            )
+            self._nest_token = ENTRIES_NEST_LEVEL.set(
+                ENTRIES_NEST_LEVEL.get() + 1,
+            )
+
+        if self._mode in ("both", "read"):
+            self._experiment_token_read = ACTIVE_ENTRIES_READ.set(
+                {**ACTIVE_ENTRIES_READ.get(), **self._entries},
+            )
 
     def __exit__(self, *args, **kwargs):
-        ACTIVE_ENTRIES.reset(self._entries_token)
-        ENTRIES_NEST_LEVEL.reset(self._nest_token)
-        if ENTRIES_NEST_LEVEL.get() == 0:
-            LOGGED.set({})
+        if self._mode in ("both", "write"):
+            ACTIVE_ENTRIES_WRITE.reset(self._entries_token)
+            ENTRIES_NEST_LEVEL.reset(self._nest_token)
+            if ENTRIES_NEST_LEVEL.get() == 0:
+                LOGGED.set({})
+
+        if self._mode in ("both", "read"):
+            ACTIVE_ENTRIES_READ.reset(self._experiment_token_read)
+
+        ACTIVE_ENTRIES_MODE.reset(self._mode_token)
 
 
 class Params:

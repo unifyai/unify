@@ -49,10 +49,15 @@ COLUMN_CONTEXT_WRITE = ContextVar("column_context", default="")
 COLUMN_CONTEXT_MODE = ContextVar("column_context_mode", default="both")
 
 # entries
-ACTIVE_ENTRIES = ContextVar(
-    "active_entries",
+ACTIVE_ENTRIES_WRITE = ContextVar(
+    "active_entries_write",
     default={},
 )
+ACTIVE_ENTRIES_READ = ContextVar(
+    "active_entries_read",
+    default={},
+)
+ACTIVE_ENTRIES_MODE = ContextVar("active_entries_mode", default="both")
 ENTRIES_NEST_LEVEL = ContextVar("entries_nest_level", default=0)
 
 # params
@@ -373,7 +378,7 @@ def log(
     params = _handle_special_types(params)
     params = _handle_mutability(mutable, params)
     entries = _apply_col_context(**entries)
-    entries = {**entries, **ACTIVE_ENTRIES.get()}
+    entries = {**entries, **ACTIVE_ENTRIES_WRITE.get()}
     entries = _handle_special_types(entries)
     entries = _handle_mutability(mutable, entries)
     project = _get_and_maybe_create_project(project, api_key=api_key)
@@ -537,7 +542,7 @@ def _add_to_log(
     assert mode in ("params", "entries"), "mode must be one of 'params', 'entries'"
     data = _apply_col_context(**data)
     nest_level = {"params": PARAMS_NEST_LEVEL, "entries": ENTRIES_NEST_LEVEL}[mode]
-    active = {"params": ACTIVE_PARAMS_WRITE, "entries": ACTIVE_ENTRIES}[mode]
+    active = {"params": ACTIVE_PARAMS_WRITE, "entries": ACTIVE_ENTRIES_WRITE}[mode]
     api_key = _validate_api_key(api_key)
     context = _handle_context(context)
     data = _handle_special_types(data)
@@ -864,7 +869,8 @@ def get_logs(
     context = context if context else CONTEXT_READ.get()
     if ACTIVE_PARAMS_READ.get():
         _filter = " and ".join(
-            f"{k}=='{v}'" for k, v in ACTIVE_PARAMS_READ.get().items()
+            f"{k}=='{v}'"
+            for k, v in (ACTIVE_PARAMS_READ.get() | ACTIVE_ENTRIES_READ.get()).items()
         )
         if filter:
             filter = f"({filter}) and ({_filter})"
