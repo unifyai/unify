@@ -39,13 +39,13 @@ ACTIVE_LOG = ContextVar("active_log", default=[])
 LOGGED = ContextVar("logged", default={})
 
 # context
-CONTEXT_READ = ContextVar("context", default="")
-CONTEXT_WRITE = ContextVar("context", default="")
+CONTEXT_READ = ContextVar("context_read", default="")
+CONTEXT_WRITE = ContextVar("context_write", default="")
 CONTEXT_MODE = ContextVar("context_mode", default="both")
 
 # column context
-COLUMN_CONTEXT_READ = ContextVar("column_context", default="")
-COLUMN_CONTEXT_WRITE = ContextVar("column_context", default="")
+COLUMN_CONTEXT_READ = ContextVar("column_context_read", default="")
+COLUMN_CONTEXT_WRITE = ContextVar("column_context_write", default="")
 COLUMN_CONTEXT_MODE = ContextVar("column_context_mode", default="both")
 
 # entries

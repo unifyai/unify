@@ -166,14 +166,14 @@ class Context:
     def __enter__(self):
         if CONTEXT_MODE.get() in ("both", self._mode):
             if self._mode in ("both", "write"):
-                self._context_token_write = CONTEXT_WRITE.set(
+                self._context_write_token = CONTEXT_WRITE.set(
                     os.path.join(
                         CONTEXT_WRITE.get(),
                         os.path.normpath(self._context),
                     ).replace("\\", "/"),
                 )
             if self._mode in ("both", "read"):
-                self._context_token_read = CONTEXT_READ.set(
+                self._context_read_token = CONTEXT_READ.set(
                     os.path.join(
                         CONTEXT_READ.get(),
                         os.path.normpath(self._context),
@@ -187,9 +187,9 @@ class Context:
 
     def __exit__(self, *args, **kwargs):
         if self._mode in ("both", "write"):
-            CONTEXT_WRITE.reset(self._context_token_write)
+            CONTEXT_WRITE.reset(self._context_write_token)
         if self._mode in ("both", "read"):
-            CONTEXT_READ.reset(self._context_token_read)
+            CONTEXT_READ.reset(self._context_read_token)
 
         CONTEXT_MODE.reset(self._mode_token)
 
@@ -207,7 +207,7 @@ class ColumnContext:
     def __enter__(self):
         if COLUMN_CONTEXT_MODE.get() in ("both", self._mode):
             if self._mode in ("both", "write"):
-                self._context_token_write = COLUMN_CONTEXT_WRITE.set(
+                self._context_write_token = COLUMN_CONTEXT_WRITE.set(
                     os.path.join(
                         COLUMN_CONTEXT_WRITE.get(),
                         os.path.normpath(self._col_context),
@@ -215,7 +215,7 @@ class ColumnContext:
                     ).replace("\\", "/"),
                 )
             if self._mode in ("both", "read"):
-                self._context_token_read = COLUMN_CONTEXT_READ.set(
+                self._context_read_token = COLUMN_CONTEXT_READ.set(
                     os.path.join(
                         COLUMN_CONTEXT_READ.get(),
                         os.path.normpath(self._col_context),
@@ -230,9 +230,9 @@ class ColumnContext:
 
     def __exit__(self, *args, **kwargs):
         if self._mode in ("both", "write"):
-            COLUMN_CONTEXT_WRITE.reset(self._context_token_write)
+            COLUMN_CONTEXT_WRITE.reset(self._context_write_token)
         if self._mode in ("both", "read"):
-            COLUMN_CONTEXT_READ.reset(self._context_token_read)
+            COLUMN_CONTEXT_READ.reset(self._context_read_token)
         COLUMN_CONTEXT_MODE.reset(self._mode_token)
 
 
@@ -261,7 +261,7 @@ class Entries:
             )
 
         if self._mode in ("both", "read"):
-            self._experiment_token_read = ACTIVE_ENTRIES_READ.set(
+            self._entries_read_token = ACTIVE_ENTRIES_READ.set(
                 {**ACTIVE_ENTRIES_READ.get(), **self._entries},
             )
 
@@ -273,7 +273,7 @@ class Entries:
                 LOGGED.set({})
 
         if self._mode in ("both", "read"):
-            ACTIVE_ENTRIES_READ.reset(self._experiment_token_read)
+            ACTIVE_ENTRIES_READ.reset(self._entries_read_token)
 
         ACTIVE_ENTRIES_MODE.reset(self._mode_token)
 
@@ -303,7 +303,7 @@ class Params:
             )
 
         if self._mode in ("both", "read"):
-            self._experiment_token_read = ACTIVE_PARAMS_READ.set(
+            self._params_read_token = ACTIVE_PARAMS_READ.set(
                 {**ACTIVE_PARAMS_READ.get(), **self._params},
             )
 
@@ -317,7 +317,7 @@ class Params:
                 LOGGED.set({})
 
         if self._mode in ("both", "read"):
-            ACTIVE_PARAMS_READ.reset(self._experiment_token_read)
+            ACTIVE_PARAMS_READ.reset(self._params_read_token)
 
 
 class Experiment:
@@ -364,7 +364,7 @@ class Experiment:
                 PARAMS_NEST_LEVEL.get() + 1,
             )
         if self._mode in ("both", "read"):
-            self._experiment_token_read = ACTIVE_PARAMS_READ.set(
+            self._params_read_token = ACTIVE_PARAMS_READ.set(
                 {**ACTIVE_PARAMS_READ.get(), **{"experiment": self._name}},
             )
 
@@ -376,7 +376,7 @@ class Experiment:
             if PARAMS_NEST_LEVEL.get() == 0:
                 LOGGED.set({})
         if self._mode in ("both", "read"):
-            ACTIVE_PARAMS_READ.reset(self._experiment_token_read)
+            ACTIVE_PARAMS_READ.reset(self._params_read_token)
 
 
 # Tracing #
