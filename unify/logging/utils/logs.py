@@ -867,11 +867,9 @@ def get_logs(
     }
     project = _get_and_maybe_create_project(project, api_key=api_key)
     context = context if context else CONTEXT_READ.get()
-    if ACTIVE_PARAMS_READ.get():
-        _filter = " and ".join(
-            f"{k}=='{v}'"
-            for k, v in (ACTIVE_PARAMS_READ.get() | ACTIVE_ENTRIES_READ.get()).items()
-        )
+    merged_filters = ACTIVE_PARAMS_READ.get() | ACTIVE_ENTRIES_READ.get()
+    if merged_filters:
+        _filter = " and ".join(f"{k}=='{v}'" for k, v in merged_filters.items())
         if filter:
             filter = f"({filter}) and ({_filter})"
         else:
