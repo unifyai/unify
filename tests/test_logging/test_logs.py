@@ -234,7 +234,138 @@ def test_with_context_mode_nested():
         assert len(unify.get_logs()) == 15
 
 
-# ToDo: add threaded test
+@_handle_project
+def test_with_context_threaded():
+    NUM_THREADS = 4
+    THREAD_MULTIPLIER = 10
+    FOO_LOGS_PER_THREAD = 3
+    BAR_LOGS_PER_THREAD = 5
+    BAZ_LOGS_PER_THREAD = 7
+
+    def fn(i):
+        with unify.Context("Foo"):
+            [unify.log(x=j) for j in range(i, i + FOO_LOGS_PER_THREAD)]
+            with unify.Context("Bar"):
+                [unify.log(x=j) for j in range(i, i + BAR_LOGS_PER_THREAD)]
+            with unify.Context("Bar/Baz"):
+                [unify.log(x=j) for j in range(i, i + BAZ_LOGS_PER_THREAD)]
+
+    threads = [
+        threading.Thread(
+            target=fn,
+            args=[i * THREAD_MULTIPLIER],
+        )
+        for i in range(NUM_THREADS)
+    ]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+
+    with unify.Context("Foo"):
+        assert len(unify.get_logs()) == NUM_THREADS * FOO_LOGS_PER_THREAD
+        logs = unify.get_logs()
+        x_values = sorted([log.entries["x"] for log in logs])
+        expected_x = sorted(
+            [
+                j
+                for i in range(NUM_THREADS)
+                for j in range(
+                    i * THREAD_MULTIPLIER,
+                    i * THREAD_MULTIPLIER + FOO_LOGS_PER_THREAD,
+                )
+            ],
+        )
+        assert x_values == expected_x
+
+    with unify.Context("Foo/Bar"):
+        assert len(unify.get_logs()) == NUM_THREADS * BAR_LOGS_PER_THREAD
+        logs = unify.get_logs()
+        x_values = sorted([log.entries["x"] for log in logs])
+        expected_x = sorted(
+            [
+                j
+                for i in range(NUM_THREADS)
+                for j in range(
+                    i * THREAD_MULTIPLIER,
+                    i * THREAD_MULTIPLIER + BAR_LOGS_PER_THREAD,
+                )
+            ],
+        )
+        assert x_values == expected_x
+
+    with unify.Context("Foo/Bar/Baz"):
+        assert len(unify.get_logs()) == NUM_THREADS * BAZ_LOGS_PER_THREAD
+        logs = unify.get_logs()
+        x_values = sorted([log.entries["x"] for log in logs])
+        expected_x = sorted(
+            [
+                j
+                for i in range(NUM_THREADS)
+                for j in range(
+                    i * THREAD_MULTIPLIER,
+                    i * THREAD_MULTIPLIER + BAZ_LOGS_PER_THREAD,
+                )
+            ],
+        )
+        assert x_values == expected_x
+
+
+@_handle_project
+def test_with_context_mode_threaded():
+    NUM_THREADS = 4
+    THREAD_MULTIPLIER = 10
+    FOO_LOGS_PER_THREAD = 5
+    BAR_LOGS_PER_THREAD = 7
+
+    def fn(i):
+        with unify.Context("Foo"):
+            [unify.log(x=j) for j in range(i, i + FOO_LOGS_PER_THREAD)]
+            with unify.Context("Bar", mode="write"):
+                [unify.log(x=j) for j in range(i, i + BAR_LOGS_PER_THREAD)]
+            with unify.Context("Bar", mode="read"):
+                [unify.log(x=j) for j in range(i, i + FOO_LOGS_PER_THREAD)]
+
+    threads = [
+        threading.Thread(
+            target=fn,
+            args=[i * THREAD_MULTIPLIER],
+        )
+        for i in range(NUM_THREADS)
+    ]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+
+    with unify.Context("Foo"):
+        assert len(unify.get_logs()) == NUM_THREADS * FOO_LOGS_PER_THREAD * 2
+        logs = unify.get_logs()
+        x_values = sorted([log.entries["x"] for log in logs])
+        expected_x = sorted(
+            [
+                j
+                for i in range(NUM_THREADS)
+                for j in range(
+                    i * THREAD_MULTIPLIER,
+                    i * THREAD_MULTIPLIER + FOO_LOGS_PER_THREAD,
+                )
+            ]
+            * 2,
+        )
+        assert x_values == expected_x
+
+    with unify.Context("Foo/Bar"):
+        assert len(unify.get_logs()) == NUM_THREADS * BAR_LOGS_PER_THREAD
+        logs = unify.get_logs()
+        x_values = sorted([log.entries["x"] for log in logs])
+        expected_x = sorted(
+            [
+                j
+                for i in range(NUM_THREADS)
+                for j in range(
+                    i * THREAD_MULTIPLIER,
+                    i * THREAD_MULTIPLIER + BAR_LOGS_PER_THREAD,
+                )
+            ],
+        )
+        assert x_values == expected_x
 
 
 # ToDo: add asyncio test
