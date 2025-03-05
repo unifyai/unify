@@ -182,7 +182,7 @@ class Context:
             self._mode_token = CONTEXT_MODE.set(self._mode)
         else:
             raise Exception(
-                f"Child mode must match parent mode. Parent: {CONTEXT_MODE.get()}, Child: {self._mode}",
+                f"Cannot nest context with mode '{self._mode}' under parent with mode '{CONTEXT_MODE.get()}'",
             )
 
     def __exit__(self, *args, **kwargs):
@@ -225,7 +225,7 @@ class ColumnContext:
             self._mode_token = COLUMN_CONTEXT_MODE.set(self._mode)
         else:
             raise Exception(
-                f"Child mode must match parent mode. Parent: {COLUMN_CONTEXT_MODE.get()}, Child: {self._mode}",
+                f"Cannot nest context with mode '{self._mode}' under parent with mode '{COLUMN_CONTEXT_MODE.get()}'",
             )
 
     def __exit__(self, *args, **kwargs):
@@ -249,7 +249,7 @@ class Entries:
     def __enter__(self):
         if not (ACTIVE_ENTRIES_MODE.get() in ("both", self._mode)):
             raise Exception(
-                f"Child mode must match parent mode. Parent: {ACTIVE_ENTRIES_MODE.get()}, Child: {self._mode}",
+                f"Cannot nest context with mode '{self._mode}' under parent with mode '{ACTIVE_ENTRIES_MODE.get()}'",
             )
         self._mode_token = ACTIVE_ENTRIES_MODE.set(self._mode)
         if self._mode in ("both", "write"):
@@ -291,7 +291,7 @@ class Params:
     def __enter__(self):
         if not (ACTIVE_PARAMS_MODE.get() in ("both", self._mode)):
             raise Exception(
-                f"Child mode must match parent mode. Parent: {ACTIVE_PARAMS_MODE.get()}, Child: {self._mode}",
+                f"Cannot nest context with mode '{self._mode}' under parent with mode '{ACTIVE_PARAMS_MODE.get()}'",
             )
         self._mode_token = ACTIVE_PARAMS_MODE.set(self._mode)
         if self._mode in ("both", "write"):
@@ -350,7 +350,7 @@ class Experiment:
     def __enter__(self):
         if not (ACTIVE_PARAMS_MODE.get() in ("both", self._mode)):
             raise Exception(
-                f"Child mode must match parent mode. Parent: {ACTIVE_PARAMS_MODE.get()}, Child: {self._mode}",
+                f"Cannot nest context with mode '{self._mode}' under parent with mode '{ACTIVE_PARAMS_MODE.get()}'",
             )
         self._mode_token = ACTIVE_PARAMS_MODE.set(self._mode)
         if self._overwrite:
