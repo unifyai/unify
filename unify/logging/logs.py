@@ -355,8 +355,7 @@ class Experiment:
         self._mode_token = ACTIVE_PARAMS_MODE.set(self._mode)
         if self._overwrite:
             logs = get_logs(filter=f"experiment=='{self._name}'")
-            if len(logs) > 0:
-                delete_logs(logs=logs)
+            delete_logs(logs=logs)
         if self._mode in ("both", "write"):
             self._params_token_write = ACTIVE_PARAMS_WRITE.set(
                 {**ACTIVE_PARAMS_WRITE.get(), **{"experiment": self._name}},
