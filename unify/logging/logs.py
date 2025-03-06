@@ -169,7 +169,7 @@ class Log:
 
 
 class Context:
-    def _join_path(base_path: str, context: str) -> str:
+    def _join_path(self, base_path: str, context: str) -> str:
         return os.path.join(
             base_path,
             os.path.normpath(context),
@@ -203,7 +203,7 @@ class Context:
 
 
 class ColumnContext:
-    def _join_path(base_path: str, context: str) -> str:
+    def _join_path(self, base_path: str, context: str) -> str:
         return os.path.join(
             base_path,
             os.path.normpath(context),
