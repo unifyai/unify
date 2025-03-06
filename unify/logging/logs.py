@@ -16,6 +16,21 @@ from .utils.logs import log as unify_log
 # -----------------#
 
 
+def _validate_mode(mode: str) -> None:
+    assert mode in (
+        "both",
+        "read",
+        "write",
+    ), f"mode must be one of 'read', 'write', or 'both', but found {mode}"
+
+
+def _validate_mode_nesting(parent_mode: str, child_mode: str) -> None:
+    if not (parent_mode in ("both", child_mode)):
+        raise Exception(
+            f"Cannot nest context with mode '{child_mode}' under parent with mode '{parent_mode}'",
+        )
+
+
 # noinspection PyShadowingBuiltins
 class Log:
     def __init__(
@@ -154,35 +169,28 @@ class Log:
 
 
 class Context:
+    def _join_path(base_path: str, context: str) -> str:
+        return os.path.join(
+            base_path,
+            os.path.normpath(context),
+        ).replace("\\", "/")
+
     def __init__(self, context: str, mode: str = "both"):
         self._context = context
-        assert mode in (
-            "both",
-            "read",
-            "write",
-        ), f"mode must be one of 'read', 'write', or 'both', but found {mode}"
+        _validate_mode(mode)
         self._mode = mode
 
     def __enter__(self):
-        if CONTEXT_MODE.get() in ("both", self._mode):
-            if self._mode in ("both", "write"):
-                self._context_write_token = CONTEXT_WRITE.set(
-                    os.path.join(
-                        CONTEXT_WRITE.get(),
-                        os.path.normpath(self._context),
-                    ).replace("\\", "/"),
-                )
-            if self._mode in ("both", "read"):
-                self._context_read_token = CONTEXT_READ.set(
-                    os.path.join(
-                        CONTEXT_READ.get(),
-                        os.path.normpath(self._context),
-                    ).replace("\\", "/"),
-                )
-            self._mode_token = CONTEXT_MODE.set(self._mode)
-        else:
-            raise Exception(
-                f"Cannot nest context with mode '{self._mode}' under parent with mode '{CONTEXT_MODE.get()}'",
+        _validate_mode_nesting(CONTEXT_MODE.get(), self._mode)
+        self._mode_token = CONTEXT_MODE.set(self._mode)
+
+        if self._mode in ("both", "write"):
+            self._context_write_token = CONTEXT_WRITE.set(
+                self._join_path(CONTEXT_WRITE.get(), self._context),
+            )
+        if self._mode in ("both", "read"):
+            self._context_read_token = CONTEXT_READ.set(
+                self._join_path(CONTEXT_READ.get(), self._context),
             )
 
     def __exit__(self, *args, **kwargs):
@@ -195,37 +203,29 @@ class Context:
 
 
 class ColumnContext:
+    def _join_path(base_path: str, context: str) -> str:
+        return os.path.join(
+            base_path,
+            os.path.normpath(context),
+            "",
+        ).replace("\\", "/")
+
     def __init__(self, context: str, mode: str = "both"):
         self._col_context = context
-        assert mode in (
-            "both",
-            "read",
-            "write",
-        ), f"mode must be one of 'read', 'write', or 'both', but found {mode}"
+        _validate_mode(mode)
         self._mode = mode
 
     def __enter__(self):
-        if COLUMN_CONTEXT_MODE.get() in ("both", self._mode):
-            if self._mode in ("both", "write"):
-                self._context_write_token = COLUMN_CONTEXT_WRITE.set(
-                    os.path.join(
-                        COLUMN_CONTEXT_WRITE.get(),
-                        os.path.normpath(self._col_context),
-                        "",
-                    ).replace("\\", "/"),
-                )
-            if self._mode in ("both", "read"):
-                self._context_read_token = COLUMN_CONTEXT_READ.set(
-                    os.path.join(
-                        COLUMN_CONTEXT_READ.get(),
-                        os.path.normpath(self._col_context),
-                        "",
-                    ).replace("\\", "/"),
-                )
-            self._mode_token = COLUMN_CONTEXT_MODE.set(self._mode)
-        else:
-            raise Exception(
-                f"Cannot nest context with mode '{self._mode}' under parent with mode '{COLUMN_CONTEXT_MODE.get()}'",
+        _validate_mode_nesting(COLUMN_CONTEXT_MODE.get(), self._mode)
+
+        self._mode_token = COLUMN_CONTEXT_MODE.set(self._mode)
+        if self._mode in ("both", "write"):
+            self._context_write_token = COLUMN_CONTEXT_WRITE.set(
+                self._join_path(COLUMN_CONTEXT_WRITE.get(), self._col_context),
+            )
+        if self._mode in ("both", "read"):
+            self._context_read_token = COLUMN_CONTEXT_READ.set(
+                self._join_path(COLUMN_CONTEXT_READ.get(), self._col_context),
             )
 
     def __exit__(self, *args, **kwargs):
@@ -239,18 +239,11 @@ class ColumnContext:
 class Entries:
     def __init__(self, mode: str = "both", **entries):
         self._entries = _handle_special_types(entries)
+        _validate_mode(mode)
         self._mode = mode
-        assert mode in (
-            "both",
-            "read",
-            "write",
-        ), f"mode must be one of 'read', 'write', or 'both', but found {mode}"
 
     def __enter__(self):
-        if not (ACTIVE_ENTRIES_MODE.get() in ("both", self._mode)):
-            raise Exception(
-                f"Cannot nest context with mode '{self._mode}' under parent with mode '{ACTIVE_ENTRIES_MODE.get()}'",
-            )
+        _validate_mode_nesting(ACTIVE_ENTRIES_MODE.get(), self._mode)
         self._mode_token = ACTIVE_ENTRIES_MODE.set(self._mode)
         if self._mode in ("both", "write"):
             self._entries_token = ACTIVE_ENTRIES_WRITE.set(
@@ -281,18 +274,11 @@ class Entries:
 class Params:
     def __init__(self, mode: str = "both", **params):
         self._params = _handle_special_types(params)
+        _validate_mode(mode)
         self._mode = mode
-        assert mode in (
-            "both",
-            "read",
-            "write",
-        ), f"mode must be one of 'read', 'write', or 'both', but found {mode}"
 
     def __enter__(self):
-        if not (ACTIVE_PARAMS_MODE.get() in ("both", self._mode)):
-            raise Exception(
-                f"Cannot nest context with mode '{self._mode}' under parent with mode '{ACTIVE_PARAMS_MODE.get()}'",
-            )
+        _validate_mode_nesting(ACTIVE_PARAMS_MODE.get(), self._mode)
         self._mode_token = ACTIVE_PARAMS_MODE.set(self._mode)
         if self._mode in ("both", "write"):
             self._params_token = ACTIVE_PARAMS_WRITE.set(
@@ -327,12 +313,8 @@ class Experiment:
         overwrite: bool = False,
         mode: str = "both",
     ):
+        _validate_mode(mode)
         self._mode = mode
-        assert mode in (
-            "both",
-            "read",
-            "write",
-        ), f"mode must be one of 'read', 'write', or 'both', but found {mode}"
 
         latest_exp_name = get_experiment_name(-1)
         if latest_exp_name is None:
@@ -348,14 +330,13 @@ class Experiment:
         self._overwrite = overwrite
 
     def __enter__(self):
-        if not (ACTIVE_PARAMS_MODE.get() in ("both", self._mode)):
-            raise Exception(
-                f"Cannot nest context with mode '{self._mode}' under parent with mode '{ACTIVE_PARAMS_MODE.get()}'",
-            )
+        _validate_mode_nesting(ACTIVE_PARAMS_MODE.get(), self._mode)
         self._mode_token = ACTIVE_PARAMS_MODE.set(self._mode)
+
         if self._overwrite:
             logs = get_logs(filter=f"experiment=='{self._name}'")
             delete_logs(logs=logs)
+
         if self._mode in ("both", "write"):
             self._params_token_write = ACTIVE_PARAMS_WRITE.set(
                 {**ACTIVE_PARAMS_WRITE.get(), **{"experiment": self._name}},
