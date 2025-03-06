@@ -169,6 +169,7 @@ async def test_with_log_async():
 
 @_handle_project
 def test_with_context():
+    [unify.log(x=i) for i in range(3)]
 
     with unify.Context("Foo", mode="both"):
         [unify.log(x=i) for i in range(10)]
@@ -179,7 +180,7 @@ def test_with_context():
 
     with unify.Context("Foo", mode="write"):
         [unify.log(x=i) for i in range(10)]
-        assert len(unify.get_logs()) == 20
+        assert len(unify.get_logs()) == 3
 
     with unify.Context("Foo", mode="read"):
         assert len(unify.get_logs()) == 20
