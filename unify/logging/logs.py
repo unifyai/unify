@@ -250,16 +250,8 @@ class ColumnContext:
 
     def __enter__(self):
         _validate_mode_nesting(COLUMN_CONTEXT_MODE.get(), self._mode)
-
-        if self._overwrite:
-            logs = unify.get_logs(
-                column_context=self._col_context,
-                return_ids_only=True,
-            )
-            if len(logs) > 0:
-                unify.delete_logs(logs=logs)
-
         self._mode_token = COLUMN_CONTEXT_MODE.set(self._mode)
+
         if self._mode in ("both", "write"):
             self._context_write_token = COLUMN_CONTEXT_WRITE.set(
                 self._join_path(COLUMN_CONTEXT_WRITE.get(), self._col_context),
@@ -268,6 +260,13 @@ class ColumnContext:
             self._context_read_token = COLUMN_CONTEXT_READ.set(
                 self._join_path(COLUMN_CONTEXT_READ.get(), self._col_context),
             )
+
+        if self._overwrite and self._mode == "read":
+            raise Exception(f"Cannot overwrite logs in read mode.")
+        elif self._overwrite:
+            logs = unify.get_logs(return_ids_only=True)
+            if len(logs) > 0:
+                unify.delete_logs(logs=logs)
 
     def __exit__(self, *args, **kwargs):
         if self._mode in ("both", "write"):
