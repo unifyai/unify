@@ -7,7 +7,15 @@ import requests
 _logger = logging.getLogger("unify_requests")
 _log_enabled = os.getenv("UNIFY_REQUESTS_DEBUG", "false").lower() in ("true", "1")
 if _log_enabled:
-    _handler = logging.FileHandler("requests.log", mode="w")
+    _type = os.getenv("UNIFY_REQUESTS_TYPE", "file").lower()
+    if _type == "file":
+        _handler = logging.FileHandler("requests.log", "w")
+    elif _type == "console":
+        _handler = logging.StreamHandler()
+    else:
+        raise ValueError(
+            f"Invalid value for UNIFY_REQUESTS_TYPE, must be 'file' or 'console' got '{_type}'",
+        )
     _handler.setLevel(logging.DEBUG)
     _handler.formatter = logging.Formatter(
         "%(levelname)s:%(name)s:%(asctime)s:%(message)s",
