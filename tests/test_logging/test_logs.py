@@ -452,6 +452,27 @@ def test_with_col_context_default_project():
 
 
 @_handle_project
+def test_with_col_context_overwrite():
+    with unify.ColumnContext("boo"):
+        [unify.log(a=i) for i in range(10)]
+        assert len(unify.get_logs()) == 10
+
+    with unify.ColumnContext("foo"):
+        [unify.log(a=i) for i in range(10)]
+        assert len(unify.get_logs()) == 10
+
+    with unify.ColumnContext("foo", overwrite=True):
+        [unify.log(a=i) for i in range(5)]
+        assert len(unify.get_logs()) == 5
+
+    with unify.ColumnContext("foo", overwrite=False):
+        assert len(unify.get_logs()) == 5
+        [unify.log(a=i) for i in range(5)]
+
+    assert len(unify.get_logs()) == 20
+
+
+@_handle_project
 def test_with_col_context_mode_restricted():
     with unify.ColumnContext("foo", mode="read"):
         with pytest.raises(Exception):

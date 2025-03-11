@@ -242,13 +242,22 @@ class ColumnContext:
             "",
         ).replace("\\", "/")
 
-    def __init__(self, context: str, mode: str = "both"):
+    def __init__(self, context: str, mode: str = "both", overwrite: bool = False):
         self._col_context = context
         _validate_mode(mode)
         self._mode = mode
+        self._overwrite = overwrite
 
     def __enter__(self):
         _validate_mode_nesting(COLUMN_CONTEXT_MODE.get(), self._mode)
+
+        if self._overwrite:
+            logs = unify.get_logs(
+                column_context=self._col_context,
+                return_ids_only=True,
+            )
+            if len(logs) > 0:
+                unify.delete_logs(logs=logs)
 
         self._mode_token = COLUMN_CONTEXT_MODE.set(self._mode)
         if self._mode in ("both", "write"):
