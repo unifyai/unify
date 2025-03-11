@@ -720,6 +720,24 @@ def test_with_entries_mode_restricted():
                 pass
 
 
+@_handle_project
+def test_with_entries_overwrite():
+    with unify.Entries(x=0):
+        [unify.log(x=i) for i in range(20)]
+        assert len(unify.get_logs()) == 20
+
+    with unify.Entries(x=0, overwrite=True):
+        [unify.log(x=i) for i in range(10)]
+        assert len(unify.get_logs()) == 10
+
+    assert len(unify.get_logs()) == 10
+
+    with unify.Entries(x=0, overwrite=True):
+        pass
+
+    assert len(unify.get_logs()) == 0
+
+
 # Params
 
 
@@ -885,6 +903,24 @@ def test_with_params_mode_restricted():
         with pytest.raises(Exception):
             with unify.Params(msg="foo", mode="read"):
                 pass
+
+
+@_handle_project
+def test_with_params_overwrite():
+    with unify.Params(msg="foo"):
+        [unify.log(x=i) for i in range(20)]
+        assert len(unify.get_logs()) == 20
+
+    with unify.Params(msg="foo", overwrite=True):
+        [unify.log(x=i) for i in range(10)]
+        assert len(unify.get_logs()) == 10
+
+    assert len(unify.get_logs()) == 10
+
+    with unify.Params(msg="foo", overwrite=True):
+        pass
+
+    assert len(unify.get_logs()) == 0
 
 
 @_handle_project
