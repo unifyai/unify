@@ -202,15 +202,19 @@ def unset_context():
 
 
 class Context:
-
-    def __init__(self, context: str, mode: str = "both"):
+    def __init__(self, context: str, mode: str = "both", overwrite: bool = False):
         self._context = context
         _validate_mode(mode)
         self._mode = mode
+        self._overwrite = overwrite
 
     def __enter__(self):
         _validate_mode_nesting(CONTEXT_MODE.get(), self._mode)
         self._mode_token = CONTEXT_MODE.set(self._mode)
+
+        if self._overwrite and self._context in unify.get_contexts():
+            unify.delete_context(self._context)
+            unify.create_context(self._context)
 
         if self._mode in ("both", "write"):
             self._context_write_token = CONTEXT_WRITE.set(

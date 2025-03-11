@@ -217,6 +217,29 @@ def test_with_context():
 
 
 @_handle_project
+def test_with_context_overwrite():
+    with unify.Context("foo", overwrite=True):
+        [unify.log(a=i) for i in range(10)]
+        assert len(unify.get_logs()) == 10
+
+    with unify.Context("foo"):
+        assert len(unify.get_logs()) == 10
+        [unify.log(a=i) for i in range(10)]
+
+    with unify.Context("foo", overwrite=False):
+        assert len(unify.get_logs()) == 20
+
+    assert len(unify.get_logs(context="foo")) == 20
+
+    with unify.Context("foo", overwrite=True):
+        assert len(unify.get_logs()) == 0
+        [unify.log(a=i) for i in range(10)]
+        assert len(unify.get_logs()) == 10
+
+    assert len(unify.get_logs(context="foo")) == 10
+
+
+@_handle_project
 def test_with_context_nested():
 
     with unify.Context("Foo"):
