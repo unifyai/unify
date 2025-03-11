@@ -389,11 +389,6 @@ class Experiment:
         _validate_mode_nesting(ACTIVE_PARAMS_MODE.get(), self._mode)
         self._mode_token = ACTIVE_PARAMS_MODE.set(self._mode)
 
-        if self._overwrite:
-            logs = get_logs(filter=f"experiment=='{self._name}'")
-            if len(logs) > 0:
-                delete_logs(logs=logs)
-
         if self._mode in ("both", "write"):
             self._params_token_write = ACTIVE_PARAMS_WRITE.set(
                 {**ACTIVE_PARAMS_WRITE.get(), **{"experiment": self._name}},
@@ -405,6 +400,13 @@ class Experiment:
             self._params_read_token = ACTIVE_PARAMS_READ.set(
                 {**ACTIVE_PARAMS_READ.get(), **{"experiment": self._name}},
             )
+
+        if self._overwrite and self._mode == "read":
+            raise Exception(f"Cannot overwrite logs in read mode.")
+        elif self._overwrite:
+            logs = unify.get_logs(return_ids_only=True)
+            if len(logs) > 0:
+                delete_logs(logs=logs)
 
     def __exit__(self, *args, **kwargs):
         ACTIVE_PARAMS_MODE.reset(self._mode_token)
