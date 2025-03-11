@@ -212,10 +212,6 @@ class Context:
         _validate_mode_nesting(CONTEXT_MODE.get(), self._mode)
         self._mode_token = CONTEXT_MODE.set(self._mode)
 
-        if self._overwrite and self._context in unify.get_contexts():
-            unify.delete_context(self._context)
-            unify.create_context(self._context)
-
         if self._mode in ("both", "write"):
             self._context_write_token = CONTEXT_WRITE.set(
                 _join_path(CONTEXT_WRITE.get(), self._context),
@@ -224,6 +220,13 @@ class Context:
             self._context_read_token = CONTEXT_READ.set(
                 _join_path(CONTEXT_READ.get(), self._context),
             )
+
+        if self._overwrite and self._context in unify.get_contexts():
+            if self._mode == "read":
+                raise Exception(f"Cannot overwrite logs in read mode.")
+
+            unify.delete_context(self._context)
+            unify.create_context(self._context)
 
     def __exit__(self, *args, **kwargs):
         if self._mode in ("both", "write"):
@@ -261,9 +264,10 @@ class ColumnContext:
                 self._join_path(COLUMN_CONTEXT_READ.get(), self._col_context),
             )
 
-        if self._overwrite and self._mode == "read":
-            raise Exception(f"Cannot overwrite logs in read mode.")
-        elif self._overwrite:
+        if self._overwrite:
+            if self._mode == "read":
+                raise Exception(f"Cannot overwrite logs in read mode.")
+
             logs = unify.get_logs(return_ids_only=True)
             if len(logs) > 0:
                 unify.delete_logs(logs=logs)
@@ -299,9 +303,10 @@ class Entries:
                 {**ACTIVE_ENTRIES_READ.get(), **self._entries},
             )
 
-        if self._overwrite and self._mode == "read":
-            raise Exception(f"Cannot overwrite logs in read mode.")
-        elif self._overwrite:
+        if self._overwrite:
+            if self._mode == "read":
+                raise Exception(f"Cannot overwrite logs in read mode.")
+
             logs = unify.get_logs(return_ids_only=True)
             if len(logs) > 0:
                 unify.delete_logs(logs=logs)
@@ -342,9 +347,10 @@ class Params:
                 {**ACTIVE_PARAMS_READ.get(), **self._params},
             )
 
-        if self._overwrite and self._mode == "read":
-            raise Exception(f"Cannot overwrite logs in read mode.")
-        elif self._overwrite:
+        if self._overwrite:
+            if self._mode == "read":
+                raise Exception(f"Cannot overwrite logs in read mode.")
+
             logs = unify.get_logs(return_ids_only=True)
             if len(logs) > 0:
                 unify.delete_logs(logs=logs)
@@ -401,12 +407,13 @@ class Experiment:
                 {**ACTIVE_PARAMS_READ.get(), **{"experiment": self._name}},
             )
 
-        if self._overwrite and self._mode == "read":
-            raise Exception(f"Cannot overwrite logs in read mode.")
-        elif self._overwrite:
+        if self._overwrite:
+            if self._mode == "read":
+                raise Exception(f"Cannot overwrite logs in read mode.")
+
             logs = unify.get_logs(return_ids_only=True)
             if len(logs) > 0:
-                delete_logs(logs=logs)
+                unify.delete_logs(logs=logs)
 
     def __exit__(self, *args, **kwargs):
         ACTIVE_PARAMS_MODE.reset(self._mode_token)
