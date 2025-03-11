@@ -861,6 +861,8 @@ def get_logs(
 
         context: Context of the logs to get.
 
+        column_context: Column context of the logs to get.
+
         filter: Boolean string to filter logs, for example:
         "(temperature > 0.5 and (len(system_msg) < 100 or 'no' in usr_response))"
 
