@@ -1,7 +1,12 @@
-import asyncio
+import os
+import random
+import time
 
 import pytest
 import unify
+from unify.utils._caching import _cache_fpath, _get_cache, _write_to_cache
+
+from ..test_logging.helpers import _handle_project
 
 # Helpers #
 # --------#
@@ -65,6 +70,74 @@ def test_threaded_map() -> None:
             unify.map(evaluate_w_log, qs)
             for q in qs:
                 evaluate_w_log(q)
+
+
+def test_map_mode() -> None:
+    unify.set_map_mode("threading")
+    assert unify.get_map_mode() == "threading"
+    unify.map(evaluate_w_log, qs)
+    unify.set_map_mode("asyncio")
+    assert unify.get_map_mode() == "asyncio"
+    unify.map(evaluate_w_log, qs)
+    unify.set_map_mode("loop")
+    assert unify.get_map_mode() == "loop"
+    unify.map(evaluate_w_log, qs)
+
+
+@_handle_project
+def test_map_w_cache() -> None:
+    local_cache_path = _cache_fpath.replace(".cache.json", ".test_cache.json")
+    try:
+        unify.utils._caching._cache_fpath = local_cache_path
+        if os.path.exists(local_cache_path):
+            os.remove(local_cache_path)
+
+        @unify.traced(name="gen{x}")
+        def gen(x, cache):
+            ret = None
+            if cache in [True, "read", "read-only"]:
+                ret = _get_cache(
+                    fn_name="gen",
+                    kw={"x": x},
+                    raise_on_empty=(cache == "read-only"),
+                )
+            if ret is None:
+                ret = random.randint(1, 5) + x
+            if cache in [True, "write"]:
+                _write_to_cache(
+                    fn_name="gen",
+                    kw={"x": x},
+                    response=ret,
+                )
+            return ret
+
+        @unify.traced
+        def fn(cache):
+            x = gen(0, cache)
+            time.sleep(random.uniform(0, 0.1))
+            y = gen(x, cache)
+            time.sleep(random.uniform(0, 0.1))
+            z = gen(y, cache)
+
+        @unify.traced
+        def cache_is_true():
+            unify.map(fn, [True] * 10)
+
+        @unify.traced
+        def cache_is_read_only():
+            unify.map(fn, ["read-only"] * 10)
+
+        cache_is_true()
+        breakpoint()
+        cache_is_read_only()
+        breakpoint()
+        os.remove(local_cache_path)
+        unify.utils._caching._cache_fpath = _cache_fpath
+    except Exception as e:
+        unify.utils._caching._cache_fpath = _cache_fpath
+        if os.path.exists(local_cache_path):
+            os.remove(local_cache_path)
+        raise e
 
 
 def test_threaded_map_from_args() -> None:
@@ -154,9 +227,9 @@ def test_asyncio_map_with_context() -> None:
     with ProjectHandling():
         with unify.Project("test_project"):
 
-            async def contextual_func(a, b, c=3):
+            def contextual_func(a, b, c=3):
                 with unify.Entries(a=a, b=b, c=c):
-                    await asyncio.sleep(0.1)
+                    time.sleep(0.1)
                     unify.log(test="some random value")
                 return a + b + c
 
@@ -185,9 +258,9 @@ def test_asyncio_map_with_context_from_args() -> None:
     with ProjectHandling():
         with unify.Project("test_project"):
 
-            async def contextual_func(a, b, c=3):
+            def contextual_func(a, b, c=3):
                 with unify.Entries(a=a, b=b, c=c):
-                    await asyncio.sleep(0.1)
+                    time.sleep(0.1)
                     unify.log(test="some random value")
                 return a + b + c
 

@@ -21,7 +21,11 @@ from ...utils._caching import (
     _get_caching_fname,
     _write_to_cache,
 )
-from ...utils.helpers import _get_and_maybe_create_project, _validate_api_key
+from ...utils.helpers import (
+    _check_response,
+    _get_and_maybe_create_project,
+    _validate_api_key,
+)
 from .async_logger import AsyncLoggerManager
 
 # logging configuration
@@ -445,8 +449,7 @@ def _sync_log(
         "entries": entries,
     }
     response = _requests.post(BASE_URL + "/logs", headers=headers, json=body)
-    if response.status_code != 200:
-        raise Exception(response.json())
+    _check_response(response)
     return unify.Log(
         id=response.json()[0],
         api_key=api_key,
@@ -516,8 +519,7 @@ def create_logs(
                 headers=headers,
                 data=_json_chunker(body),
             )
-        if response.status_code != 200:
-            raise Exception(response.json())
+        _check_response(response)
         return [
             unify.Log(
                 project=project,
@@ -619,8 +621,7 @@ def _add_to_log(
             data = all_kwargs[0]
         body = {"ids": log_ids, mode: data, "overwrite": overwrite, "context": context}
         response = _requests.put(BASE_URL + "/logs", headers=headers, json=body)
-        if response.status_code != 200:
-            raise Exception(response.json())
+        _check_response(response)
         if nest_level.get() > 0:
             logged = LOGGED.get()
             new_logged = {}
@@ -747,8 +748,7 @@ def update_logs(
         "overwrite": overwrite,
     }
     response = _requests.put(BASE_URL + "/logs", headers=headers, json=body)
-    if response.status_code != 200:
-        raise Exception(response.json())
+    _check_response(response)
     return response.json()
 
 
@@ -756,6 +756,7 @@ def delete_logs(
     *,
     logs: Optional[Union[int, unify.Log, List[Union[int, unify.Log]]]] = None,
     project: Optional[str] = None,
+    context: Optional[str] = None,
     api_key: Optional[str] = None,
 ) -> Dict[str, str]:
     """
@@ -773,20 +774,24 @@ def delete_logs(
         A message indicating whether the logs were successfully deleted.
     """
     if logs is None:
-        logs = get_logs(project=project, api_key=api_key)
+        logs = get_logs(project=project, context=context, api_key=api_key)
         if not logs:
             return {"message": "No logs to delete"}
     project = _get_and_maybe_create_project(project, api_key=api_key)
+    context = context if context else CONTEXT_READ.get()
     log_ids = _to_log_ids(logs)
     api_key = _validate_api_key(api_key)
     headers = {
         "accept": "application/json",
         "Authorization": f"Bearer {api_key}",
     }
-    body = {"project": project, "ids_and_fields": [(log_ids, None)]}
+    body = {
+        "project": project,
+        "context": context,
+        "ids_and_fields": [(log_ids, None)],
+    }
     response = _requests.delete(BASE_URL + f"/logs", headers=headers, json=body)
-    if response.status_code != 200:
-        raise Exception(response.json())
+    _check_response(response)
     if USR_LOGGING:
         logging.info(f"Deleted Logs({', '.join([str(i) for i in log_ids])})")
     return response.json()
@@ -828,8 +833,7 @@ def delete_log_fields(
         headers=headers,
         json=body,
     )
-    if response.status_code != 200:
-        raise Exception(response.json())
+    _check_response(response)
     if USR_LOGGING:
         logging.info(
             f"Deleted Field `{field}` from Logs({', '.join([str(i) for i in log_ids])})",
@@ -900,8 +904,7 @@ def get_logs(
         "column_context": column_context,
     }
     response = _requests.get(BASE_URL + "/logs", headers=headers, params=params)
-    if response.status_code != 200:
-        raise Exception(response.json())
+    _check_response(response)
     if return_ids_only:
         return response.json()
     params, logs, _ = response.json().values()
@@ -953,8 +956,7 @@ def get_log_by_id(
         params={"project": project, "from_ids": [id]},
         headers=headers,
     )
-    if response.status_code != 200:
-        raise Exception(response.json())
+    _check_response(response)
     params, lgs, count = response.json().values()
     if len(lgs) == 0:
         raise Exception(f"Log with id {id} does not exist")
@@ -1011,8 +1013,7 @@ def get_logs_metric(
         headers=headers,
         params=params,
     )
-    if response.status_code != 200:
-        raise Exception(response.json())
+    _check_response(response)
     return response.json()
 
 
@@ -1046,8 +1047,7 @@ def get_groups(
     project = _get_and_maybe_create_project(project, api_key=api_key)
     params = {"project": project, "key": key}
     response = _requests.get(BASE_URL + "/logs/groups", headers=headers, params=params)
-    if response.status_code != 200:
-        raise Exception(response.json())
+    _check_response(response)
     return response.json()
 
 

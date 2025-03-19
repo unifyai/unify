@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import textwrap
 import time
+import traceback
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -116,6 +117,7 @@ class Log:
         update_logs(
             logs=self._id,
             api_key=self._api_key,
+            context=self._context,
             entries=entries,
             overwrite=True,
         )
@@ -175,11 +177,18 @@ def _join_path(base_path: str, context: str) -> str:
     ).replace("\\", "/")
 
 
-def set_context(context: str, mode: str = "both"):
+def set_context(context: str, mode: str = "both", overwrite: bool = False):
     global MODE, MODE_TOKEN, CONTEXT_READ_TOKEN, CONTEXT_WRITE_TOKEN
     MODE = mode
     _validate_mode_nesting(CONTEXT_MODE.get(), mode)
     MODE_TOKEN = CONTEXT_MODE.set(mode)
+
+    if overwrite and context in unify.get_contexts():
+        if mode == "read":
+            raise Exception(f"Cannot overwrite logs in read mode.")
+
+        unify.delete_context(context)
+        unify.create_context(context)
 
     if mode in ("both", "write"):
         CONTEXT_WRITE_TOKEN = CONTEXT_WRITE.set(
@@ -474,11 +483,11 @@ def traced(
         inputs = _make_json_serializable(inputs)
         try:
             lines, start_line = inspect.getsourcelines(fn)
-            code = "".join(lines)
+            code = textwrap.dedent("".join(lines))
         except:
             lines, start_line = None, None
             try:
-                code = inspect.getsource(fn)
+                code = textwrap.dedent(inspect.getsource(fn))
             except:
                 code = None
         name_w_sub = name
@@ -516,53 +525,41 @@ def traced(
             result = fn(*args, **kwargs)
             return result
         except Exception as e:
-            new_span["errors"] = str(e)
+            new_span["errors"] = traceback.format_exc()
             raise e
         finally:
-            if result is None:
-                outputs = None
-                if SPAN.get()["type"] == "llm-cached":
-                    # tried to load cache but nothing found,
-                    # do not add this failed cache load to trace
-                    if token.old_value is token.MISSING:
-                        SPAN.reset(token)
-                    else:
-                        SPAN.reset(token)
-                    if log_token:
-                        ACTIVE_LOG.set([])
-            else:
-                outputs = _make_json_serializable(result)
-                t2 = time.perf_counter()
-                exec_time = t2 - t1
-                SPAN.get()["exec_time"] = exec_time
-                SPAN.get()["outputs"] = outputs
-                if SPAN.get()["type"] == "llm":
-                    SPAN.get()["llm_usage"] = outputs["usage"]
-                if SPAN.get()["type"] in ("llm", "llm-cached"):
-                    SPAN.get()["llm_usage_inc_cache"] = outputs["usage"]
-                # ToDo: ensure there is a global log set upon the first trace,
-                #  and removed on the last
-                trace = SPAN.get()
-                if prune_empty:
-                    trace = _prune_dict(trace)
-                unify.add_log_entries(
-                    trace=trace,
-                    overwrite=True,
-                    # mutable=SPAN.get()["parent_span_id"] is not None,
+            outputs = _make_json_serializable(result) if result is not None else None
+            t2 = time.perf_counter()
+            exec_time = t2 - t1
+            SPAN.get()["exec_time"] = exec_time
+            SPAN.get()["outputs"] = outputs
+            if SPAN.get()["type"] == "llm" and outputs is not None:
+                SPAN.get()["llm_usage"] = outputs["usage"]
+            if SPAN.get()["type"] in ("llm", "llm-cached") and outputs is not None:
+                SPAN.get()["llm_usage_inc_cache"] = outputs["usage"]
+            # ToDo: ensure there is a global log set upon the first trace,
+            #  and removed on the last
+            trace = SPAN.get()
+            if prune_empty:
+                trace = _prune_dict(trace)
+            unify.add_log_entries(
+                trace=trace,
+                overwrite=True,
+                # mutable=SPAN.get()["parent_span_id"] is not None,
+            )
+            SPAN.reset(token)
+            if token.old_value is not token.MISSING:
+                SPAN.get()["child_spans"].append(new_span)
+                SPAN.get()["llm_usage"] = _nested_add(
+                    SPAN.get()["llm_usage"],
+                    new_span["llm_usage"],
                 )
-                SPAN.reset(token)
-                if token.old_value is not token.MISSING:
-                    SPAN.get()["child_spans"].append(new_span)
-                    SPAN.get()["llm_usage"] = _nested_add(
-                        SPAN.get()["llm_usage"],
-                        new_span["llm_usage"],
-                    )
-                    SPAN.get()["llm_usage_inc_cache"] = _nested_add(
-                        SPAN.get()["llm_usage_inc_cache"],
-                        new_span["llm_usage_inc_cache"],
-                    )
-                if log_token:
-                    ACTIVE_LOG.set([])
+                SPAN.get()["llm_usage_inc_cache"] = _nested_add(
+                    SPAN.get()["llm_usage_inc_cache"],
+                    new_span["llm_usage_inc_cache"],
+                )
+            if log_token:
+                ACTIVE_LOG.set([])
 
     async def async_wrapped(*args, **kwargs):
         t1 = time.perf_counter()
