@@ -163,15 +163,7 @@ class AsyncLoggerManager:
         }
         self.loop.call_soon_threadsafe(self.queue.put_nowait, event)
 
-    async def stop(self):
-        await self.queue.join()
-        for task in self.consumers:
-            task.cancel()
-        await self.session.close()
-
     def stop_sync(self):
-        if self.shutdown_flag.is_set():
-            return
-        self.shutdown_flag.set()
-        future = asyncio.run_coroutine_threadsafe(self.stop(), self.loop)
-        future.result()
+        while self.queue.qsize() > 0:
+            time.sleep(0.1)
+        self.loop.stop()
