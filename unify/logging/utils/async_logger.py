@@ -2,8 +2,6 @@
 import asyncio
 import logging
 import os
-import signal
-import sys
 import threading
 import time
 from typing import List
@@ -13,6 +11,7 @@ import aiohttp
 # Configure logging based on environment variable
 ASYNC_LOGGER_DEBUG = os.getenv("ASYNC_LOGGER_DEBUG", "").lower() == "true"
 logger = logging.getLogger("async_logger")
+logger.addHandler(logging.FileHandler("async_logger.log", mode="w"))
 logger.setLevel(logging.DEBUG if ASYNC_LOGGER_DEBUG else logging.WARNING)
 
 
@@ -46,14 +45,9 @@ class AsyncLoggerManager:
             connector=connector,
         )
 
-        signal.signal(signal.SIGINT, self._handle_sigint)
         self.thread = threading.Thread(target=self._run_loop, daemon=True)
         self.thread.start()
         self.start_flag.wait()
-
-    def _handle_sigint(self, signum, frame):
-        # TODO: work around, handle this properly.
-        sys.exit(0)
 
     def _run_loop(self):
         asyncio.set_event_loop(self.loop)
