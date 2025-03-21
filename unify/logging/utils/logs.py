@@ -103,9 +103,6 @@ def _removes_unique_trace_values(kw: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def initialize_async_logger(
-    batch_size: int = ASYNC_BATCH_SIZE,
-    flush_interval: float = ASYNC_FLUSH_INTERVAL,
-    max_queue_size: int = ASYNC_MAX_QUEUE_SIZE,
     api_key: Optional[str] = None,
 ) -> None:
     """
