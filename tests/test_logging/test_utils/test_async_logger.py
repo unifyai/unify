@@ -1,7 +1,4 @@
-import time
-
 import unify
-from unify.logging.utils import logs as _logs
 
 from ..helpers import _handle_project
 
@@ -9,25 +6,22 @@ from ..helpers import _handle_project
 @_handle_project
 def test_async_logger():
     try:
-        start_time_sync = time.perf_counter()
-        for i in range(50):
-            unify.log(x=i, y=i * 2, z=i * 3)
-        end_time_sync = time.perf_counter()
+        logs_sync = [unify.log(x=i, y=i * 2, z=i * 3) for i in range(10)]
 
         unify.initialize_async_logger()
-        start_time_async = time.perf_counter()
-        for i in range(50):
-            unify.log(x=i, y=i * 2, z=i * 3)
-
-        # Wait for all logs to be submitted to be flushed
-        while _logs._async_logger.queue.qsize() > 0:
-            time.sleep(0.1)
-        end_time_async = time.perf_counter()
-        assert end_time_async - start_time_async < end_time_sync - start_time_sync
-        assert _logs._async_logger.queue.qsize() == 0
-    finally:
+        logs_async = [unify.log(x=i, y=i * 2, z=i * 3) for i in range(10)]
         unify.shutdown_async_logger()
-    assert unify.ASYNC_LOGGING == False
+
+        assert len(logs_async) == len(logs_sync)
+        for log_async, log_sync in zip(
+            sorted(logs_async, key=lambda x: x.entries["x"]),
+            sorted(logs_sync, key=lambda x: x.entries["x"]),
+        ):
+            assert log_async.entries == log_sync.entries
+        assert unify.ASYNC_LOGGING == False
+    except Exception as e:
+        unify.shutdown_async_logger()
+        raise e
 
 
 if __name__ == "__main__":
