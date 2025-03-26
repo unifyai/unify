@@ -3,6 +3,7 @@ import asyncio
 import logging
 import os
 import threading
+from concurrent.futures import TimeoutError
 from typing import List
 
 import aiohttp
@@ -24,7 +25,7 @@ class AsyncLoggerManager:
     ):
 
         self.loop = asyncio.new_event_loop()
-        self.queue = asyncio.Queue()
+        self.queue = None
         self.consumers: List[asyncio.Task] = []
         self.num_consumers = num_consumers
         self.start_flag = threading.Event()
@@ -69,7 +70,7 @@ class AsyncLoggerManager:
                 try:
                     future.result(timeout=0.5)
                     break
-                except asyncio.TimeoutError:
+                except (asyncio.TimeoutError, TimeoutError):
                     continue
         except Exception as e:
             logger.error(f"Error in join: {e}")
@@ -81,6 +82,7 @@ class AsyncLoggerManager:
 
     def _run_loop(self):
         asyncio.set_event_loop(self.loop)
+        self.queue = asyncio.Queue()
 
         for _ in range(self.num_consumers):
             self.consumers.append(self._log_consumer())
