@@ -637,6 +637,15 @@ class LogTransformer(ast.NodeTransformer):
             node.args.kwarg = ast.arg(arg="kwargs")
 
         node = self.generic_visit(node)
+        node.body = [
+            ast.Try(
+                body=node.body,
+                handlers=[],
+                orelse=[],
+                finalbody=[self._call_log()],
+            ),
+        ]
+
         self._in_function = False
         self.param_names = []
         self.assigned_names = set()
@@ -663,10 +672,7 @@ class LogTransformer(ast.NodeTransformer):
                     self.assigned_names.add(target.id)
         return node
 
-    def visit_Return(self, node: ast.Return):
-        if not self._in_function:
-            return node
-
+    def _call_log(self):
         log_keywords = []
         # Add regular parameters (that weren't reassigned)
         for p in self.param_names:
@@ -722,10 +728,6 @@ class LogTransformer(ast.NodeTransformer):
         )
         log_keywords.append(ast.keyword(arg=None, value=kwargs_dict))
 
-        return_value = (
-            node.value if node.value is not None else ast.Constant(value=None)
-        )
-
         log_call = ast.Expr(
             value=ast.Call(
                 func=ast.Name(id="unify_log", ctx=ast.Load()),
@@ -734,7 +736,7 @@ class LogTransformer(ast.NodeTransformer):
             ),
         )
 
-        return [log_call, ast.Return(value=return_value)]
+        return log_call
 
 
 def log_decorator(func):
