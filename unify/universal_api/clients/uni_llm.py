@@ -1179,6 +1179,7 @@ class AsyncUnify(_UniClient):
         # python client arguments
         return_full_completion: bool,
         cache: Union[bool, str],
+        local_cache: bool,
     ) -> Union[str, ChatCompletion]:
         kw = self._handle_kw(
             prompt=prompt,
@@ -1277,6 +1278,7 @@ class AsyncUnify(_UniClient):
         # python client arguments
         return_full_completion: bool,
         cache: Union[bool, str],
+        local_cache: bool,
         # passthrough arguments
         extra_headers: Optional[Headers],
         extra_query: Optional[Query],
@@ -1332,6 +1334,7 @@ class AsyncUnify(_UniClient):
             # python client arguments
             return_full_completion=return_full_completion,
             cache=cache,
+            local_cache=local_cache,
         )
 
     def to_sync_client(self):
