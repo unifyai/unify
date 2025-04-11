@@ -1,3 +1,4 @@
+import ast
 import difflib
 import inspect
 import json
@@ -47,7 +48,14 @@ def _get_caching_fpath():
     return os.path.join(_cache_dir, CACHE_FNAME)
 
 
-def _create_cache_if_none(filename: str = None):
+def _create_cache_if_none(local: bool, filename: str = None):
+    from unify import create_context, get_contexts
+
+    if not local:
+        if "Unify_Cache" not in get_contexts():
+            create_context("Unify_Cache")
+        return
+
     global _cache, _cache_fpath, _cache_dir
     if filename is None:
         cache_fpath = _get_caching_fpath()
@@ -83,6 +91,27 @@ def _minimal_char_diff(a: str, b: str, context: int = 5) -> str:
     return "".join(diff_parts)
 
 
+def _get_entry_from_cache(cache_key: str, local: bool) -> bool:
+    from unify import get_logs
+
+    if local:
+        return _cache[cache_key]
+    else:
+        logs = get_logs(context="Unify_Cache", filter=f"key == '{cache_key}'")
+        entry = logs[0].entries["value"]
+        return entry
+
+
+def _is_in_cache(cache_key: str, local: bool) -> bool:
+    from unify import get_logs
+
+    if local:
+        return cache_key in _cache
+    else:
+        logs = get_logs(context="Unify_Cache", filter=f"key == '{cache_key}'")
+        return len(logs) > 0
+
+
 # noinspection PyTypeChecker,PyUnboundLocalVariable
 def _get_cache(
     fn_name: str,
@@ -91,10 +120,11 @@ def _get_cache(
     raise_on_empty: bool = False,
     read_closest: bool = False,
     delete_closest: bool = False,
+    local: bool = False,
 ) -> Optional[Any]:
     global CACHE_LOCK
     # prevents circular import
-    from unify.logging.logs import Log
+    from unify.logging.logs import Log, delete_logs, get_logs
 
     type_str_to_type = {
         "ChatCompletion": ChatCompletion,
@@ -104,11 +134,12 @@ def _get_cache(
     CACHE_LOCK.acquire()
     # noinspection PyBroadException
     try:
-        _create_cache_if_none(filename)
+        _create_cache_if_none(local, filename)
         kw = {k: v for k, v in kw.items() if v is not None}
         kw_str = _dumps(kw)
         cache_str = fn_name + "_" + kw_str
-        if cache_str not in _cache:
+        if local and cache_str not in _cache:
+            # TODO Support for Upstream Cache?
             if raise_on_empty or read_closest:
                 closest_match = difflib.get_close_matches(
                     cache_str,
@@ -130,17 +161,30 @@ def _get_cache(
             else:
                 CACHE_LOCK.release()
                 return
-        ret = json.loads(_cache[cache_str])
-        if cache_str + "_res_types" not in _cache:
+        if not _is_in_cache(cache_str + "_res_types", local):
             CACHE_LOCK.release()
-            return ret
-        for idx_str, type_str in _cache[cache_str + "_res_types"].items():
+            return
+        ret = json.loads(_get_entry_from_cache(cache_str, local))
+        res_types = _get_entry_from_cache(cache_str + "_res_types", local)
+        if not local:
+            # TODO: This is a hack, we should find a better way to do this
+            res_types = ast.literal_eval(
+                _get_entry_from_cache(cache_str + "_res_types", local),
+            )
+        for idx_str, type_str in res_types.items():
             type_str = type_str.split("[")[0]
             idx_list = json.loads(idx_str)
             if len(idx_list) == 0:
                 if read_closest and delete_closest:
-                    del _cache[cache_str]
-                    del _cache[cache_str + "_res_types"]
+                    if local:
+                        del _cache[cache_str]
+                        del _cache[cache_str + "_res_types"]
+                    else:
+                        logs = get_logs(
+                            context="Unify_Cache",
+                            filter=f"key == '{cache_str}' or key == '{cache_str + '_res_types'}'",
+                        )
+                        delete_logs(context="Unify_Cache", logs=logs)
                 CACHE_LOCK.release()
                 typ = type_str_to_type[type_str]
                 if issubclass(typ, BaseModel):
@@ -161,8 +205,15 @@ def _get_cache(
                     break
                 item = item[idx]
         if read_closest and delete_closest:
-            del _cache[cache_str]
-            del _cache[cache_str + "_res_types"]
+            if local:
+                del _cache[cache_str]
+                del _cache[cache_str + "_res_types"]
+            else:
+                logs = get_logs(
+                    context="Unify_Cache",
+                    filter=f"key == '{cache_str}' or key == '{cache_str + '_res_types'}'",
+                )
+                delete_logs(context="Unify_Cache", logs=logs)
         CACHE_LOCK.release()
         return ret
     except:
@@ -213,27 +264,47 @@ def _write_to_cache(
     fn_name: str,
     kw: Dict[str, Any],
     response: Any,
+    local: bool,
     filename: str = None,
 ):
+
     global CACHE_LOCK
     CACHE_LOCK.acquire()
     # noinspection PyBroadException
     try:
-        _create_cache_if_none(filename)
+        _create_cache_if_none(local, filename)
         kw = {k: v for k, v in kw.items() if v is not None}
         kw_str = _dumps(kw)
         cache_str = fn_name + "_" + kw_str
         _res_types = {}
         response_str = _dumps(response, _res_types)
-        if _res_types:
-            _cache[cache_str + "_res_types"] = _res_types
-        _cache[cache_str] = response_str
-        if filename is None:
-            cache_fpath = _get_caching_fpath()
+        if local:
+            if _res_types:
+                _cache[cache_str + "_res_types"] = _res_types
+            _cache[cache_str] = response_str
+            if filename is None:
+                cache_fpath = _get_caching_fpath()
+            else:
+                cache_fpath = os.path.join(_cache_dir, filename)
+            with open(cache_fpath, "w") as outfile:
+                json.dump(_cache, outfile)
         else:
-            cache_fpath = os.path.join(_cache_dir, filename)
-        with open(cache_fpath, "w") as outfile:
-            json.dump(_cache, outfile)
+            # prevents circular import
+            from unify.logging.logs import delete_logs, get_logs, log
+
+            logs = get_logs(
+                context="Unify_Cache",
+                filter=f"key == '{cache_str}' or key == '{cache_str + '_res_types'}'",
+            )
+            if len(logs) > 0:
+                delete_logs(logs=logs, context="Unify_Cache")
+            if _res_types:
+                log(
+                    key=cache_str + "_res_types",
+                    context="Unify_Cache",
+                    value=json.dumps(_res_types),
+                )
+            log(key=cache_str, context="Unify_Cache", value=response_str)
         CACHE_LOCK.release()
     except:
         CACHE_LOCK.release()
