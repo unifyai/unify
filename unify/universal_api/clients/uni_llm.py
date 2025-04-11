@@ -86,7 +86,7 @@ class _UniClient(_Client, abc.ABC):
         return_full_completion: bool = False,
         traced: bool = False,
         cache: Optional[Union[bool, str]] = None,
-        local_cache: bool = False,
+        local_cache: bool = True,
         # passthrough arguments
         extra_headers: Optional[Headers] = None,
         extra_query: Optional[Query] = None,
