@@ -48,7 +48,7 @@ def _get_caching_fpath():
     return os.path.join(_cache_dir, CACHE_FNAME)
 
 
-def _create_cache_if_none(local: bool, filename: str = None):
+def _create_cache_if_none(filename: str = None, local: bool = True):
     from unify import create_context, get_contexts
 
     if not local:
@@ -91,7 +91,7 @@ def _minimal_char_diff(a: str, b: str, context: int = 5) -> str:
     return "".join(diff_parts)
 
 
-def _get_entry_from_cache(cache_key: str, local: bool) -> bool:
+def _get_entry_from_cache(cache_key: str, local: bool = True) -> bool:
     from unify import get_logs
 
     if local:
@@ -102,7 +102,7 @@ def _get_entry_from_cache(cache_key: str, local: bool) -> bool:
         return entry
 
 
-def _is_in_cache(cache_key: str, local: bool) -> bool:
+def _is_in_cache(cache_key: str, local: bool = True) -> bool:
     from unify import get_logs
 
     if local:
@@ -120,7 +120,7 @@ def _get_cache(
     raise_on_empty: bool = False,
     read_closest: bool = False,
     delete_closest: bool = False,
-    local: bool = False,
+    local: bool = True,
 ) -> Optional[Any]:
     global CACHE_LOCK
     # prevents circular import
@@ -134,7 +134,7 @@ def _get_cache(
     CACHE_LOCK.acquire()
     # noinspection PyBroadException
     try:
-        _create_cache_if_none(local, filename)
+        _create_cache_if_none(filename, local)
         kw = {k: v for k, v in kw.items() if v is not None}
         kw_str = _dumps(kw)
         cache_str = fn_name + "_" + kw_str
@@ -264,7 +264,7 @@ def _write_to_cache(
     fn_name: str,
     kw: Dict[str, Any],
     response: Any,
-    local: bool,
+    local: bool = True,
     filename: str = None,
 ):
 
@@ -272,7 +272,7 @@ def _write_to_cache(
     CACHE_LOCK.acquire()
     # noinspection PyBroadException
     try:
-        _create_cache_if_none(local, filename)
+        _create_cache_if_none(filename, local)
         kw = {k: v for k, v in kw.items() if v is not None}
         kw_str = _dumps(kw)
         cache_str = fn_name + "_" + kw_str
