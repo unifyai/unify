@@ -112,6 +112,16 @@ def _get_entry_from_cache(cache_key: str, local: bool = True):
     return r, res_types
 
 
+def _is_key_in_cache(cache_key: str, local: bool = True):
+    from unify import get_logs
+
+    if local:
+        return cache_key in _cache
+    else:
+        logs = get_logs(context="Unify_Cache", filter=f"key == '{cache_key}'")
+        return len(logs) > 0
+
+
 def _delete_from_cache(cache_str: str, local: bool = True):
     from unify.logging.logs import delete_logs, get_logs
 
@@ -124,6 +134,16 @@ def _delete_from_cache(cache_str: str, local: bool = True):
             filter=f"key == '{cache_str}'",
         )
         delete_logs(context="Unify_Cache", logs=logs)
+
+
+def _get_cache_keys(local: bool = True):
+    from unify import get_logs
+
+    if local:
+        return list(_cache.keys())
+    else:
+        logs = get_logs(context="Unify_Cache")
+        return [log.entries["key"] for log in logs]
 
 
 # noinspection PyTypeChecker,PyUnboundLocalVariable
@@ -152,12 +172,12 @@ def _get_cache(
         kw = {k: v for k, v in kw.items() if v is not None}
         kw_str = _dumps(kw)
         cache_str = fn_name + "_" + kw_str
-        if local and cache_str not in _cache:
-            # TODO Support for Upstream Cache?
+        if not _is_key_in_cache(cache_str, local):
             if raise_on_empty or read_closest:
+                keys_to_search = _get_cache_keys(local)
                 closest_match = difflib.get_close_matches(
                     cache_str,
-                    list(_cache.keys()),
+                    keys_to_search,
                     n=1,
                     cutoff=0,
                 )[0]
