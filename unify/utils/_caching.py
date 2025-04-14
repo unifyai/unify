@@ -97,15 +97,17 @@ def _get_entry_from_cache(cache_key: str, local: bool = True):
     r = res_types = None
 
     if local:
-        r = json.loads(_cache[cache_key])
+        if cache_key in _cache:
+            r = json.loads(_cache[cache_key])
         if cache_key + "_res_types" in _cache:
             res_types = _cache[cache_key + "_res_types"]
     else:
         logs = get_logs(context="Unify_Cache", filter=f"key == '{cache_key}'")
-        entry = logs[0].entries
-        r = json.loads(entry["value"])
-        if "res_types" in entry:
-            res_types = json.loads(entry["res_types"])
+        if len(logs) > 0:
+            entry = logs[0].entries
+            r = json.loads(entry["value"])
+            if "res_types" in entry:
+                res_types = json.loads(entry["res_types"])
 
     return r, res_types
 
