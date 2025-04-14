@@ -207,7 +207,7 @@ def _get_cache(
         CACHE_LOCK.release()
         return ret
     except:
-        if CACHE_LOCK.locked:
+        if CACHE_LOCK.locked():
             CACHE_LOCK.release()
         raise Exception(
             f"Failed to get cache for function {fn_name} with kwargs {kw} "
