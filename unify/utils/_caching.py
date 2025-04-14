@@ -1,9 +1,9 @@
-import ast
 import difflib
 import inspect
 import json
 import os
 import threading
+import time
 from typing import Any, Dict, List, Optional, Union
 
 from openai.types.chat import ChatCompletion, ParsedChatCompletion
@@ -91,25 +91,37 @@ def _minimal_char_diff(a: str, b: str, context: int = 5) -> str:
     return "".join(diff_parts)
 
 
-def _get_entry_from_cache(cache_key: str, local: bool = True) -> bool:
+def _get_entry_from_cache(cache_key: str, local: bool = True):
     from unify import get_logs
 
-    if local:
-        return _cache[cache_key]
-    else:
-        logs = get_logs(context="Unify_Cache", filter=f"key == '{cache_key}'")
-        entry = logs[0].entries["value"]
-        return entry
-
-
-def _is_in_cache(cache_key: str, local: bool = True) -> bool:
-    from unify import get_logs
+    r = res_types = None
 
     if local:
-        return cache_key in _cache
+        r = json.loads(_cache[cache_key])
+        if cache_key + "_res_types" in _cache:
+            res_types = _cache[cache_key + "_res_types"]
     else:
         logs = get_logs(context="Unify_Cache", filter=f"key == '{cache_key}'")
-        return len(logs) > 0
+        entry = logs[0].entries
+        r = json.loads(entry["value"])
+        if "res_types" in entry:
+            res_types = json.loads(entry["res_types"])
+
+    return r, res_types
+
+
+def _delete_from_cache(cache_str: str, local: bool = True):
+    from unify.logging.logs import delete_logs, get_logs
+
+    if local:
+        del _cache[cache_str]
+        del _cache[cache_str + "_res_types"]
+    else:
+        logs = get_logs(
+            context="Unify_Cache",
+            filter=f"key == '{cache_str}'",
+        )
+        delete_logs(context="Unify_Cache", logs=logs)
 
 
 # noinspection PyTypeChecker,PyUnboundLocalVariable
@@ -124,7 +136,7 @@ def _get_cache(
 ) -> Optional[Any]:
     global CACHE_LOCK
     # prevents circular import
-    from unify.logging.logs import Log, delete_logs, get_logs
+    from unify.logging.logs import Log
 
     type_str_to_type = {
         "ChatCompletion": ChatCompletion,
@@ -161,30 +173,16 @@ def _get_cache(
             else:
                 CACHE_LOCK.release()
                 return
-        if not _is_in_cache(cache_str + "_res_types", local):
+        ret, res_types = _get_entry_from_cache(cache_str, local)
+        if res_types is None:
             CACHE_LOCK.release()
-            return
-        ret = json.loads(_get_entry_from_cache(cache_str, local))
-        res_types = _get_entry_from_cache(cache_str + "_res_types", local)
-        if not local:
-            # TODO: This is a hack, we should find a better way to do this
-            res_types = ast.literal_eval(
-                _get_entry_from_cache(cache_str + "_res_types", local),
-            )
+            return ret
         for idx_str, type_str in res_types.items():
             type_str = type_str.split("[")[0]
             idx_list = json.loads(idx_str)
             if len(idx_list) == 0:
                 if read_closest and delete_closest:
-                    if local:
-                        del _cache[cache_str]
-                        del _cache[cache_str + "_res_types"]
-                    else:
-                        logs = get_logs(
-                            context="Unify_Cache",
-                            filter=f"key == '{cache_str}' or key == '{cache_str + '_res_types'}'",
-                        )
-                        delete_logs(context="Unify_Cache", logs=logs)
+                    _delete_from_cache(cache_str, local)
                 CACHE_LOCK.release()
                 typ = type_str_to_type[type_str]
                 if issubclass(typ, BaseModel):
@@ -205,15 +203,7 @@ def _get_cache(
                     break
                 item = item[idx]
         if read_closest and delete_closest:
-            if local:
-                del _cache[cache_str]
-                del _cache[cache_str + "_res_types"]
-            else:
-                logs = get_logs(
-                    context="Unify_Cache",
-                    filter=f"key == '{cache_str}' or key == '{cache_str + '_res_types'}'",
-                )
-                delete_logs(context="Unify_Cache", logs=logs)
+            _delete_from_cache(cache_str, local)
         CACHE_LOCK.release()
         return ret
     except:
@@ -294,17 +284,18 @@ def _write_to_cache(
 
             logs = get_logs(
                 context="Unify_Cache",
-                filter=f"key == '{cache_str}' or key == '{cache_str + '_res_types'}'",
+                filter=f"key == '{cache_str}'",
             )
             if len(logs) > 0:
                 delete_logs(logs=logs, context="Unify_Cache")
+
+            entries = {
+                "created_at": time.asctime(),
+                "value": response_str,
+            }
             if _res_types:
-                log(
-                    key=cache_str + "_res_types",
-                    context="Unify_Cache",
-                    value=json.dumps(_res_types),
-                )
-            log(key=cache_str, context="Unify_Cache", value=response_str)
+                entries["res_types"] = json.dumps(_res_types)
+            log(key=cache_str, context="Unify_Cache", **entries)
         CACHE_LOCK.release()
     except:
         CACHE_LOCK.release()
