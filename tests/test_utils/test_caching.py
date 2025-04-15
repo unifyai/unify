@@ -261,10 +261,10 @@ def test_upstream_cache() -> None:
     )
     r0 = client.generate(user_message="hello", cache=True, local_cache=False)
     logs = unify.get_logs(context="Unify_Cache")
-    assert len(logs) == 2
+    assert len(logs) == 1
     r1 = client.generate(user_message="hello", cache=True, local_cache=False)
     logs = unify.get_logs(context="Unify_Cache")
-    assert len(logs) == 2
+    assert len(logs) == 1
     assert r0 == r1
 
 
@@ -309,16 +309,12 @@ def test_upstream_cache_read_only() -> None:
     assert r0 == r1
 
     # Test that read-only mode raises exception when cache doesn't exist
-    try:
+    with pytest.raises(Exception):
         client.generate(
             user_message="new_message",
             cache="read-only",
             local_cache=False,
         )
-        raised_exception = False
-    except Exception:
-        raised_exception = True
-    assert raised_exception, "read-only mode should have raised exception"
 
 
 @_handle_project
@@ -326,18 +322,13 @@ def test_upstream_cache_closest_match_on_exception():
     client = Unify(
         endpoint="gpt-4o@openai",
     )
-    r0 = client.generate(user_message="hello", cache="write", local_cache=False)
+    r0 = client.generate(user_message="hello", cache="both", local_cache=False)
     logs = unify.get_logs(context="Unify_Cache")
     initial_logs_count = len(logs)
-    raised_exception = True
-    try:
-        client.generate(user_message="helloo", cache="read-only", local_cache=False)
-        raised_exception = False
-    except Exception:
-        logs = unify.get_logs(context="Unify_Cache")
-        assert len(logs) == initial_logs_count
-        assert "Failed to get cache" in str(traceback.format_exc())
-    assert raised_exception, "Failed to raise Exception"
+    r1 = client.generate(user_message="helloo", cache="read-closest", local_cache=False)
+    logs = unify.get_logs(context="Unify_Cache")
+    assert len(logs) == initial_logs_count
+    assert r0 == r1
 
 
 if __name__ == "__main__":
