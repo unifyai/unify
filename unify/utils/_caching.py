@@ -3,7 +3,6 @@ import inspect
 import json
 import os
 import threading
-import time
 from typing import Any, Dict, List, Optional, Union
 
 from openai.types.chat import ChatCompletion, ParsedChatCompletion
@@ -91,6 +90,10 @@ def _minimal_char_diff(a: str, b: str, context: int = 5) -> str:
     return "".join(diff_parts)
 
 
+def _get_filter_expr(cache_key: str):
+    return f"key == {json.dumps(cache_key)}"
+
+
 def _get_entry_from_cache(cache_key: str, local: bool = True):
     from unify import get_logs
 
@@ -102,7 +105,7 @@ def _get_entry_from_cache(cache_key: str, local: bool = True):
         if cache_key + "_res_types" in _cache:
             res_types = _cache[cache_key + "_res_types"]
     else:
-        logs = get_logs(context="Unify_Cache", filter=f"key == '{cache_key}'")
+        logs = get_logs(context="Unify_Cache", filter=_get_filter_expr(cache_key))
         if len(logs) > 0:
             entry = logs[0].entries
             r = json.loads(entry["value"])
@@ -118,7 +121,7 @@ def _is_key_in_cache(cache_key: str, local: bool = True):
     if local:
         return cache_key in _cache
     else:
-        logs = get_logs(context="Unify_Cache", filter=f"key == '{cache_key}'")
+        logs = get_logs(context="Unify_Cache", filter=_get_filter_expr(cache_key))
         return len(logs) > 0
 
 
@@ -131,7 +134,7 @@ def _delete_from_cache(cache_str: str, local: bool = True):
     else:
         logs = get_logs(
             context="Unify_Cache",
-            filter=f"key == '{cache_str}'",
+            filter=_get_filter_expr(cache_str),
         )
         delete_logs(context="Unify_Cache", logs=logs)
 
@@ -306,13 +309,12 @@ def _write_to_cache(
 
             logs = get_logs(
                 context="Unify_Cache",
-                filter=f"key == '{cache_str}'",
+                filter=_get_filter_expr(cache_str),
             )
             if len(logs) > 0:
                 delete_logs(logs=logs, context="Unify_Cache")
 
             entries = {
-                "created_at": time.asctime(),
                 "value": response_str,
             }
             if _res_types:
