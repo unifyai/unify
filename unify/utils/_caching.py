@@ -52,8 +52,8 @@ def _create_cache_if_none(filename: str = None, local: bool = True):
     from unify import create_context, get_contexts
 
     if not local:
-        if "Unify_Cache" not in get_contexts():
-            create_context("Unify_Cache")
+        if UPSTREAM_CACHE_CONTEXT_NAME not in get_contexts():
+            create_context(UPSTREAM_CACHE_CONTEXT_NAME)
         return
 
     global _cache, _cache_fpath, _cache_dir
