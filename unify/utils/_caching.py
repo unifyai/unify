@@ -18,6 +18,7 @@ CACHE_LOCK = threading.Lock()
 
 CACHING = False
 CACHE_FNAME = ".cache.json"
+UPSTREAM_CACHE_CONTEXT_NAME = "UNIFY_CACHE"
 
 
 def set_caching(value: bool) -> None:
@@ -97,22 +98,25 @@ def _get_filter_expr(cache_key: str):
 def _get_entry_from_cache(cache_key: str, local: bool = True):
     from unify import get_logs
 
-    r = res_types = None
+    value = res_types = None
 
     if local:
         if cache_key in _cache:
-            r = json.loads(_cache[cache_key])
+            value = json.loads(_cache[cache_key])
         if cache_key + "_res_types" in _cache:
             res_types = _cache[cache_key + "_res_types"]
     else:
-        logs = get_logs(context="Unify_Cache", filter=_get_filter_expr(cache_key))
+        logs = get_logs(
+            context=UPSTREAM_CACHE_CONTEXT_NAME,
+            filter=_get_filter_expr(cache_key),
+        )
         if len(logs) > 0:
             entry = logs[0].entries
-            r = json.loads(entry["value"])
+            value = json.loads(entry["value"])
             if "res_types" in entry:
                 res_types = json.loads(entry["res_types"])
 
-    return r, res_types
+    return value, res_types
 
 
 def _is_key_in_cache(cache_key: str, local: bool = True):
@@ -121,7 +125,10 @@ def _is_key_in_cache(cache_key: str, local: bool = True):
     if local:
         return cache_key in _cache
     else:
-        logs = get_logs(context="Unify_Cache", filter=_get_filter_expr(cache_key))
+        logs = get_logs(
+            context=UPSTREAM_CACHE_CONTEXT_NAME,
+            filter=_get_filter_expr(cache_key),
+        )
         return len(logs) > 0
 
 
@@ -133,10 +140,10 @@ def _delete_from_cache(cache_str: str, local: bool = True):
         del _cache[cache_str + "_res_types"]
     else:
         logs = get_logs(
-            context="Unify_Cache",
+            context=UPSTREAM_CACHE_CONTEXT_NAME,
             filter=_get_filter_expr(cache_str),
         )
-        delete_logs(context="Unify_Cache", logs=logs)
+        delete_logs(context=UPSTREAM_CACHE_CONTEXT_NAME, logs=logs)
 
 
 def _get_cache_keys(local: bool = True):
@@ -145,7 +152,7 @@ def _get_cache_keys(local: bool = True):
     if local:
         return list(_cache.keys())
     else:
-        logs = get_logs(context="Unify_Cache")
+        logs = get_logs(context=UPSTREAM_CACHE_CONTEXT_NAME)
         return [log.entries["key"] for log in logs]
 
 
@@ -308,18 +315,18 @@ def _write_to_cache(
             from unify.logging.logs import delete_logs, get_logs, log
 
             logs = get_logs(
-                context="Unify_Cache",
+                context=UPSTREAM_CACHE_CONTEXT_NAME,
                 filter=_get_filter_expr(cache_str),
             )
             if len(logs) > 0:
-                delete_logs(logs=logs, context="Unify_Cache")
+                delete_logs(logs=logs, context=UPSTREAM_CACHE_CONTEXT_NAME)
 
             entries = {
                 "value": response_str,
             }
             if _res_types:
                 entries["res_types"] = json.dumps(_res_types)
-            log(key=cache_str, context="Unify_Cache", **entries)
+            log(key=cache_str, context=UPSTREAM_CACHE_CONTEXT_NAME, **entries)
         CACHE_LOCK.release()
     except:
         CACHE_LOCK.release()
