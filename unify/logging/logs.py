@@ -599,7 +599,7 @@ def traced(
                 2,
             ),
             "inputs": inputs,
-            "code": f"```python\n{code}\n```",
+            "code": f"```python\n{code}```",
             "code_fpath": inspect.getsourcefile(fn),
             "code_start_line": start_line,
             "outputs": None,
