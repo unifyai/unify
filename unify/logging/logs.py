@@ -581,11 +581,17 @@ def traced(
                 code = textwrap.dedent(inspect.getsource(fn))
             except:
                 code = None
+        name_w_sub = name
+        if name_w_sub is not None:
+            for k, v in inputs.items():
+                substr = "{" + k + "}"
+                if substr in name_w_sub:
+                    name_w_sub = name_w_sub.replace(substr, str(v))
         new_span = {
             "id": str(uuid.uuid4()),
             "type": span_type,
             "parent_span_id": (None if not SPAN.get() else SPAN.get()["id"]),
-            "span_name": fn.__name__ if name is None else name,
+            "span_name": fn.__name__ if name_w_sub is None else name_w_sub,
             "exec_time": None,
             "timestamp": ts,
             "offset": round(
