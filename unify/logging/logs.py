@@ -516,6 +516,7 @@ def _create_span(fn, args, kwargs, span_type, name):
         "outputs": None,
         "errors": None,
         "child_spans": [],
+        "completed": False,
     }
     if inspect.ismethod(fn) and hasattr(fn.__self__, "endpoint"):
         new_span["endpoint"] = fn.__self__.endpoint
@@ -525,6 +526,7 @@ def _create_span(fn, args, kwargs, span_type, name):
 def _finalize_span(new_span, token, outputs, exec_time, prune_empty):
     SPAN.get()["exec_time"] = exec_time
     SPAN.get()["outputs"] = outputs
+    SPAN.get()["completed"] = True
     if SPAN.get()["type"] == "llm" and outputs is not None:
         SPAN.get()["llm_usage"] = outputs["usage"]
     if SPAN.get()["type"] in ("llm", "llm-cached") and outputs is not None:
