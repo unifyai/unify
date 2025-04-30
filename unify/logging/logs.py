@@ -585,77 +585,63 @@ def _trace_module(module, prune_empty, span_type, name, filter):
     return module
 
 
-def traced(
-    fn: callable = None,
-    *,
-    prune_empty: bool = True,
-    span_type: str = "function",
-    name: Optional[str] = None,
-    trace_contexts: Optional[List[str]] = None,
-    trace_dirs: Optional[List[str]] = None,
-    filter: Optional[Callable[[callable], bool]] = None,
+def _transform_function(fn, prune_empty, span_type, trace_dirs):
+    def check_path_at_runtime(fn, target_dirs, *args, **kwargs):
+        if (
+            inspect.isbuiltin(fn)
+            or not os.path.dirname(inspect.getsourcefile(fn)) in target_dirs
+        ):
+            return fn(*args, **kwargs)
+
+        try:
+            return traced(
+                prune_empty=prune_empty,
+                span_type=span_type,
+                trace_dirs=target_dirs,
+            )(fn)(*args, **kwargs)
+        except Exception as e:
+            raise e
+
+    for i, dir_path in enumerate(trace_dirs):
+        if not os.path.isabs(dir_path):
+            dir_path = os.path.normpath(
+                os.path.join(os.path.dirname(inspect.getsourcefile(fn)), dir_path),
+            )
+            trace_dirs[i] = dir_path
+
+    source = textwrap.dedent(inspect.getsource(fn))
+    source_lines = source.split("\n")
+    if source_lines[0].strip().startswith("@"):
+        source = "\n".join(source_lines[1:])
+
+    tree = ast.parse(source)
+    transformer = TraceTransformer(trace_dirs)
+    tree = transformer.visit(tree)
+    ast.fix_missing_locations(tree)
+    code = compile(tree, filename=inspect.getsourcefile(fn), mode="exec")
+    module = inspect.getmodule(fn)
+
+    func_globals = module.__dict__.copy() if module else globals().copy()
+    func_globals["check_path_at_runtime"] = check_path_at_runtime
+
+    exec(code, func_globals)
+    old_fn = fn
+    fn = func_globals[fn.__name__]
+    functools.update_wrapper(fn, old_fn)
+    return fn
+
+
+def _trace_function(
+    fn,
+    prune_empty,
+    span_type,
+    name,
+    trace_contexts,
+    trace_dirs,
+    filter,
 ):
-
-    if fn is None:
-        return lambda f: traced(
-            f,
-            prune_empty=prune_empty,
-            span_type=span_type,
-            name=name,
-            trace_contexts=trace_contexts,
-            trace_dirs=trace_dirs,
-        )
-
-    if inspect.isclass(fn):
-        return _trace_class(fn, prune_empty, span_type, name, filter)
-
-    if inspect.ismodule(fn):
-        return _trace_module(fn, prune_empty, span_type, name, filter)
-
     if trace_dirs is not None:
-
-        def check_path_at_runtime(fn, target_dirs, *args, **kwargs):
-            if (
-                inspect.isbuiltin(fn)
-                or not os.path.dirname(inspect.getsourcefile(fn)) in target_dirs
-            ):
-                return fn(*args, **kwargs)
-
-            try:
-                return traced(
-                    prune_empty=prune_empty,
-                    span_type=span_type,
-                    trace_dirs=target_dirs,
-                )(fn)(*args, **kwargs)
-            except Exception as e:
-                raise e
-
-        for i, dir_path in enumerate(trace_dirs):
-            if not os.path.isabs(dir_path):
-                dir_path = os.path.normpath(
-                    os.path.join(os.path.dirname(inspect.getsourcefile(fn)), dir_path),
-                )
-                trace_dirs[i] = dir_path
-
-        source = textwrap.dedent(inspect.getsource(fn))
-        source_lines = source.split("\n")
-        if source_lines[0].strip().startswith("@"):
-            source = "\n".join(source_lines[1:])
-
-        tree = ast.parse(source)
-        transformer = TraceTransformer(trace_dirs)
-        tree = transformer.visit(tree)
-        ast.fix_missing_locations(tree)
-        code = compile(tree, filename=inspect.getsourcefile(fn), mode="exec")
-        module = inspect.getmodule(fn)
-
-        func_globals = module.__dict__.copy() if module else globals().copy()
-        func_globals["check_path_at_runtime"] = check_path_at_runtime
-
-        exec(code, func_globals)
-        old_fn = fn
-        fn = func_globals[fn.__name__]
-        functools.update_wrapper(fn, old_fn)
+        fn = _transform_function(fn, prune_empty, span_type, trace_dirs)
 
     @functools.wraps(fn)
     def wrapped(*args, **kwargs):
@@ -695,6 +681,44 @@ def traced(
                 ACTIVE_LOG.set([])
 
     return wrapped if not inspect.iscoroutinefunction(fn) else async_wrapped
+
+
+def traced(
+    fn: callable = None,
+    *,
+    prune_empty: bool = True,
+    span_type: str = "function",
+    name: Optional[str] = None,
+    trace_contexts: Optional[List[str]] = None,
+    trace_dirs: Optional[List[str]] = None,
+    filter: Optional[Callable[[callable], bool]] = None,
+):
+
+    if fn is None:
+        return lambda f: traced(
+            f,
+            prune_empty=prune_empty,
+            span_type=span_type,
+            name=name,
+            trace_contexts=trace_contexts,
+            trace_dirs=trace_dirs,
+        )
+
+    if inspect.isclass(fn):
+        return _trace_class(fn, prune_empty, span_type, name, filter)
+
+    if inspect.ismodule(fn):
+        return _trace_module(fn, prune_empty, span_type, name, filter)
+
+    return _trace_function(
+        fn,
+        prune_empty,
+        span_type,
+        name,
+        trace_contexts,
+        trace_dirs,
+        filter,
+    )
 
 
 class LogTransformer(ast.NodeTransformer):
