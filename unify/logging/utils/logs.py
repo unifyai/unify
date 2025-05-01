@@ -85,6 +85,7 @@ ACTIVE_PARAMS_MODE = ContextVar("active_params_mode", default="both")
 PARAMS_NEST_LEVEL = ContextVar("params_nest_level", default=0)
 
 # span
+GLOBAL_SPAN = ContextVar("global_span", default={})
 SPAN = ContextVar("span", default={})
 RUNNING_TIME = ContextVar("running_time", default=0.0)
 

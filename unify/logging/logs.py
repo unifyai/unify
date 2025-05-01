@@ -520,10 +520,28 @@ def _create_span(fn, args, kwargs, span_type, name):
     }
     if inspect.ismethod(fn) and hasattr(fn.__self__, "endpoint"):
         new_span["endpoint"] = fn.__self__.endpoint
-    return new_span, exec_start_time
+    if not GLOBAL_SPAN.get():
+        global_token = GLOBAL_SPAN.set(new_span)
+        local_token = SPAN.set(GLOBAL_SPAN.get())
+    else:
+        global_token = None
+        SPAN.get()["child_spans"].append(new_span)
+        local_token = SPAN.set(new_span)
+    unify.add_log_entries(
+        trace=GLOBAL_SPAN.get(),
+        overwrite=True,
+    )
+    return new_span, exec_start_time, local_token, global_token
 
 
-def _finalize_span(new_span, token, outputs, exec_time, prune_empty):
+def _finalize_span(
+    new_span,
+    local_token,
+    outputs,
+    exec_time,
+    prune_empty,
+    global_token,
+):
     SPAN.get()["exec_time"] = exec_time
     SPAN.get()["outputs"] = outputs
     SPAN.get()["completed"] = True
@@ -531,19 +549,11 @@ def _finalize_span(new_span, token, outputs, exec_time, prune_empty):
         SPAN.get()["llm_usage"] = outputs["usage"]
     if SPAN.get()["type"] in ("llm", "llm-cached") and outputs is not None:
         SPAN.get()["llm_usage_inc_cache"] = outputs["usage"]
-    # ToDo: ensure there is a global log set upon the first trace,
-    #  and removed on the last
     trace = SPAN.get()
     if prune_empty:
         trace = _prune_dict(trace)
-    unify.add_log_entries(
-        trace=trace,
-        overwrite=True,
-        # mutable=SPAN.get()["parent_span_id"] is not None,
-    )
-    SPAN.reset(token)
-    if token.old_value is not token.MISSING:
-        SPAN.get()["child_spans"].append(new_span)
+    SPAN.reset(local_token)
+    if local_token.old_value is not local_token.MISSING:
         SPAN.get()["llm_usage"] = _nested_add(
             SPAN.get()["llm_usage"],
             new_span["llm_usage"],
@@ -552,6 +562,12 @@ def _finalize_span(new_span, token, outputs, exec_time, prune_empty):
             SPAN.get()["llm_usage_inc_cache"],
             new_span["llm_usage_inc_cache"],
         )
+    unify.add_log_entries(
+        trace=GLOBAL_SPAN.get(),
+        overwrite=True,
+    )
+    if global_token:
+        GLOBAL_SPAN.reset(global_token)
 
 
 def _trace_class(cls, prune_empty, span_type, name, filter):
@@ -646,8 +662,13 @@ def _trace_function(
     @functools.wraps(fn)
     def wrapped(*args, **kwargs):
         log_token = None if ACTIVE_LOG.get() else ACTIVE_LOG.set([unify.log()])
-        new_span, exec_start_time = _create_span(fn, args, kwargs, span_type, name)
-        token = SPAN.set(new_span)
+        new_span, exec_start_time, local_token, global_token = _create_span(
+            fn,
+            args,
+            kwargs,
+            span_type,
+            name,
+        )
         result = None
         try:
             result = fn(*args, **kwargs)
@@ -658,14 +679,26 @@ def _trace_function(
         finally:
             outputs = _make_json_serializable(result) if result is not None else None
             exec_time = time.perf_counter() - exec_start_time
-            _finalize_span(new_span, token, outputs, exec_time, prune_empty)
+            _finalize_span(
+                new_span,
+                local_token,
+                outputs,
+                exec_time,
+                prune_empty,
+                global_token,
+            )
             if log_token:
                 ACTIVE_LOG.set([])
 
     async def async_wrapped(*args, **kwargs):
         log_token = None if ACTIVE_LOG.get() else ACTIVE_LOG.set([unify.log()])
-        new_span, exec_start_time = _create_span(fn, args, kwargs, span_type, name)
-        token = SPAN.set(new_span)
+        new_span, exec_start_time, local_token, global_token = _create_span(
+            fn,
+            args,
+            kwargs,
+            span_type,
+            name,
+        )
         result = None
         try:
             result = await fn(*args, **kwargs)
@@ -676,7 +709,14 @@ def _trace_function(
         finally:
             outputs = _make_json_serializable(result) if result is not None else None
             exec_time = time.perf_counter() - exec_start_time
-            _finalize_span(new_span, token, outputs, exec_time, prune_empty)
+            _finalize_span(
+                new_span,
+                local_token,
+                outputs,
+                exec_time,
+                prune_empty,
+                global_token,
+            )
             if log_token:
                 ACTIVE_LOG.set([])
 
