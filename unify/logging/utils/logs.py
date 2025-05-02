@@ -101,23 +101,19 @@ class _AsyncTraceLogger(threading.Thread):
         pass
 
     def __init__(self):
-        super().__init__()
+        super().__init__(name="TraceLoggerThread", daemon=True)
         self.queue = queue.Queue()
-        self.daemon = True
         self.start()
         atexit.register(self.stop)
 
     def run(self):
         while True:
-            try:
-                item = self.queue.get(block=False)
-                if isinstance(item, self._StopEvent):
-                    break
+            item = self.queue.get()
+            if isinstance(item, self._StopEvent):
+                break
 
-                log_id, trace = item
-                unify.add_log_entries(logs=log_id, trace=trace, overwrite=True)
-            except queue.Empty:
-                continue
+            log_id, trace = item
+            unify.add_log_entries(logs=log_id, trace=trace, overwrite=True)
 
     def update_trace(self, log_id, trace):
         self.queue.put_nowait((log_id, trace))
