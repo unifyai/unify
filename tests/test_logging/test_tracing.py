@@ -244,6 +244,7 @@ def test_traced_none_handling():
         return [a, b, c, d]
 
     some_func(1, 2, None, 4)
+    _wait_for_trace_logger()
     logs = unify.get_logs()
     assert len(logs) == 2
     entries = logs[0].entries

@@ -554,6 +554,9 @@ def _finalize_span(
     trace = SPAN.get()
     if prune_empty:
         trace = _prune_dict(trace)
+        SPAN.set(trace)
+        if global_token:
+            GLOBAL_SPAN.set(trace)
     SPAN.reset(local_token)
     if local_token.old_value is not local_token.MISSING:
         SPAN.get()["llm_usage"] = _nested_add(
