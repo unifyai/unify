@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 import functools
 import inspect
 import textwrap
@@ -12,7 +13,11 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from ..utils.helpers import _make_json_serializable, _prune_dict, _validate_api_key
 from .utils.compositions import *
-from .utils.logs import _handle_special_types
+from .utils.logs import (
+    _get_trace_logger,
+    _handle_special_types,
+    _initialize_trace_logger,
+)
 from .utils.logs import log as unify_log
 
 # Context Handlers #
@@ -527,10 +532,7 @@ def _create_span(fn, args, kwargs, span_type, name):
         global_token = None
         SPAN.get()["child_spans"].append(new_span)
         local_token = SPAN.set(new_span)
-    unify.add_log_entries(
-        trace=GLOBAL_SPAN.get(),
-        overwrite=True,
-    )
+    _get_trace_logger().update_trace(ACTIVE_LOG.get(), copy.deepcopy(GLOBAL_SPAN.get()))
     return new_span, exec_start_time, local_token, global_token
 
 
@@ -562,10 +564,7 @@ def _finalize_span(
             SPAN.get()["llm_usage_inc_cache"],
             new_span["llm_usage_inc_cache"],
         )
-    unify.add_log_entries(
-        trace=GLOBAL_SPAN.get(),
-        overwrite=True,
-    )
+    _get_trace_logger().update_trace(ACTIVE_LOG.get(), copy.deepcopy(GLOBAL_SPAN.get()))
     if global_token:
         GLOBAL_SPAN.reset(global_token)
 
@@ -733,6 +732,7 @@ def traced(
     trace_dirs: Optional[List[str]] = None,
     filter: Optional[Callable[[callable], bool]] = None,
 ):
+    _initialize_trace_logger()
 
     if fn is None:
         return lambda f: traced(
