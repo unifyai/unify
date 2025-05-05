@@ -227,5 +227,19 @@ def test_get_source():
     assert "source = unify.get_source()" in source
 
 
+@_handle_project
+def test_delete_logs_by_ids():
+    logs = [unify.log(x=i) for i in range(3)]
+    assert len(unify.get_logs()) == 3
+
+    unify.delete_logs(logs=logs[0])
+    logs = unify.get_logs()
+    assert len(logs) == 2
+    assert all(log.id != logs[0].id for log in logs)
+
+    unify.delete_logs(logs=logs[1:])
+    assert len(unify.get_logs()) == 0
+
+
 if __name__ == "__main__":
     pass
