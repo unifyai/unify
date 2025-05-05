@@ -64,6 +64,119 @@ def create_context(
     return response.json()
 
 
+def rename_context(
+    name: str,
+    new_name: str,
+    *,
+    project: Optional[str] = None,
+    api_key: Optional[str] = None,
+) -> None:
+    """
+    Rename a context.
+
+    Args:
+        name: Name of the context to rename.
+
+        new_name: New name of the context.
+
+        project: Name of the project the context belongs to.
+
+        api_key: If specified, unify API key to be used. Defaults to the value in the
+        `UNIFY_KEY` environment variable.
+    """
+    api_key = _validate_api_key(api_key)
+    project = _get_and_maybe_create_project(
+        project,
+        api_key=api_key,
+        create_if_missing=False,
+    )
+    headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    response = _requests.patch(
+        BASE_URL + f"/project/{project}/contexts/{name}/rename",
+        headers=headers,
+        json={"new_name": new_name},
+    )
+    _check_response(response)
+    return response.json()
+
+
+def create_columns(
+    name: str,
+    columns: Dict[str, str],
+    *,
+    project: Optional[str] = None,
+    api_key: Optional[str] = None,
+) -> None:
+    """
+    Create columns for a context.
+
+    Args:
+        name: Name of the context to create columns for.
+
+        columns: Dictionary mapping column names to their explicit types (or None for auto-detection).
+
+        project: Name of the project the context belongs to.
+
+        api_key: If specified, unify API key to be used. Defaults to the value in the
+        `UNIFY_KEY` environment variable.
+    """
+    api_key = _validate_api_key(api_key)
+    project = _get_and_maybe_create_project(
+        project,
+        api_key=api_key,
+        create_if_missing=False,
+    )
+    headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    response = _requests.post(
+        BASE_URL + f"/project/{project}/contexts/{name}/columns",
+        headers=headers,
+        json=columns,
+    )
+    _check_response(response)
+    return response.json()
+
+
+def get_context(
+    name: str,
+    *,
+    project: Optional[str] = None,
+    api_key: Optional[str] = None,
+) -> Dict[str, str]:
+    """
+    Get information about a specific context including its versioning status and current version.
+
+    Args:
+        name: Name of the context to get.
+
+        project: Name of the project the context belongs to.
+
+        api_key: If specified, unify API key to be used. Defaults to the value in the
+        `UNIFY_KEY` environment variable.
+    """
+    api_key = _validate_api_key(api_key)
+    project = _get_and_maybe_create_project(
+        project,
+        api_key=api_key,
+        create_if_missing=False,
+    )
+    headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    response = _requests.get(
+        BASE_URL + f"/project/{project}/contexts/{name}",
+        headers=headers,
+    )
+    _check_response(response)
+    return response.json()
+
+
 def get_contexts(
     *,
     prefix: Optional[str] = None,
