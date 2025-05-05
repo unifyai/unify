@@ -934,9 +934,25 @@ def get_logs(
     filter: Optional[str] = None,
     limit: Optional[int] = None,
     offset: int = 0,
+    return_versions: Optional[bool] = None,
+    group_threshold: Optional[int] = None,
+    value_limit: Optional[int] = None,
+    sorting: Optional[Dict[str, Any]] = None,
+    group_sorting: Optional[Dict[str, Any]] = None,
+    from_ids: Optional[List[int]] = None,
+    exclude_ids: Optional[List[int]] = None,
+    from_fields: Optional[List[str]] = None,
+    exclude_fields: Optional[List[str]] = None,
+    group_by: Optional[List[str]] = None,
+    group_limit: Optional[int] = None,
+    group_offset: Optional[int] = 0,
+    group_depth: Optional[int] = None,
+    nested_groups: Optional[bool] = None,
+    groups_only: Optional[bool] = None,
+    return_timestamps: Optional[bool] = None,
     return_ids_only: bool = False,
     api_key: Optional[str] = None,
-) -> List[unify.Log]:
+) -> Union[List[unify.Log], Dict[str, Any]]:
     """
     Returns a list of filtered logs from a project.
 
@@ -953,6 +969,38 @@ def get_logs(
         limit: The maximum number of logs to return. Default is None (unlimited).
 
         offset: The starting index of the logs to return. Default is 0.
+
+        return_versions: Whether to return all versions of logs.
+
+        group_threshold: Entries that appear in at least this many logs will be grouped together.
+
+        value_limit: Maximum number of characters to return for string values.
+
+        sorting: A dictionary specifying the sorting order for the logs by field names.
+
+        group_sorting: A dictionary specifying the sorting order for the groups relative to each other based on aggregated metrics.
+
+        from_ids: A list of log IDs to include in the results.
+
+        exclude_ids: A list of log IDs to exclude from the results.
+
+        from_fields: A list of field names to include in the results.
+
+        exclude_fields: A list of field names to exclude from the results.
+
+        group_by: A list of field names to group the logs by.
+
+        group_limit: The maximum number of groups to return at each level.
+
+        group_offset: Number of groups to skip at each level.
+
+        group_depth: Maximum depth of nested groups to return.
+
+        nested_groups: Whether to return nested groups.
+
+        groups_only: Whether to return only the groups.
+
+        return_timestamps: Whether to return the timestamps of the logs.
 
         return_ids_only: Whether to return only the log ids.
 
@@ -986,11 +1034,33 @@ def get_logs(
         "offset": offset,
         "return_ids_only": return_ids_only,
         "column_context": column_context,
+        "return_versions": return_versions,
+        "group_threshold": group_threshold,
+        "value_limit": value_limit,
+        "sorting": json.dumps(sorting) if sorting is not None else None,
+        "group_sorting": (
+            json.dumps(group_sorting) if group_sorting is not None else None
+        ),
+        "from_ids": from_ids,
+        "exclude_ids": exclude_ids,
+        "from_fields": from_fields,
+        "exclude_fields": exclude_fields,
+        "group_by": group_by,
+        "group_limit": group_limit,
+        "group_offset": group_offset,
+        "group_depth": group_depth,
+        "nested_groups": nested_groups,
+        "groups_only": groups_only,
+        "return_timestamps": return_timestamps,
     }
+
     response = _requests.get(BASE_URL + "/logs", headers=headers, params=params)
     _check_response(response)
-    if return_ids_only:
+
+    # In grouped mode or other response structures, simply return raw json
+    if "logs" not in response.json():
         return response.json()
+
     params, logs, _ = response.json().values()
     return [
         unify.Log(
