@@ -817,6 +817,8 @@ def delete_logs(
     logs: Optional[Union[int, unify.Log, List[Union[int, unify.Log]]]] = None,
     project: Optional[str] = None,
     context: Optional[str] = None,
+    delete_empty_logs: bool = False,
+    source_type: str = "all",
     api_key: Optional[str] = None,
 ) -> Dict[str, str]:
     """
@@ -826,6 +828,13 @@ def delete_logs(
         logs: log(s) to delete from a project.
 
         project: Name of the project to delete logs from.
+
+        context: Context of the logs to delete. Logs will be removed from that context instead of being entirely deleted,
+        unless it is the last context associated with the log.
+
+        delete_empty_logs: Whether to delete logs that become empty after deleting the specified fields.
+
+        source_type: Type of logs to delete. Can be "all", "derived", or "base".
 
         api_key: If specified, unify API key to be used. Defaults to the value in the
         `UNIFY_KEY` environment variable.
@@ -849,8 +858,15 @@ def delete_logs(
         "project": project,
         "context": context,
         "ids_and_fields": [(log_ids, None)],
+        "source_type": source_type,
     }
-    response = _requests.delete(BASE_URL + f"/logs", headers=headers, json=body)
+    params = {"delete_empty_logs": delete_empty_logs}
+    response = _requests.delete(
+        BASE_URL + "/logs",
+        headers=headers,
+        params=params,
+        json=body,
+    )
     _check_response(response)
     if USR_LOGGING:
         logger.info(f"Deleted Logs({', '.join([str(i) for i in log_ids])})")
