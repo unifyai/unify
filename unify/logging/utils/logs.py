@@ -1238,6 +1238,54 @@ def get_groups(
     return response.json()
 
 
+def get_logs_latest_timestamp(
+    *,
+    project: Optional[str] = None,
+    context: Optional[str] = None,
+    column_context: Optional[str] = None,
+    filter: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    from_ids: Optional[List[int]] = None,
+    exclude_ids: Optional[List[int]] = None,
+    limit: Optional[int] = None,
+    offset: Optional[int] = None,
+    api_key: Optional[str] = None,
+) -> int:
+    """
+    Returns the update timestamp of the most recently updated log within the specified page and filter bounds.
+    """
+
+
+def update_derived_log(
+    *,
+    target: Union[List[int], int],
+    project: Optional[str] = None,
+    context: Optional[str] = None,
+    key: Optional[str] = None,
+    equation: Optional[str] = None,
+    referenced_logs: Optional[List[int]] = None,
+    api_key: Optional[str] = None,
+) -> None:
+    """
+    Update the derived entries for a log.
+    """
+
+
+def join_logs(
+    *,
+    pair_of_args: List[Dict[str, Any]],
+    join_expr: str,
+    mode: str,
+    new_context: str,
+    project: Optional[str] = None,
+    columns: Optional[List[str]] = None,
+    api_key: Optional[str] = None,
+):
+    """
+    Join two sets of logs based on specified criteria and creates new logs with the joined data.
+    """
+
+
 # User Logging #
 # -------------#
 
