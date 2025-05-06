@@ -222,6 +222,57 @@ def test_get_logs():
 
 
 @_handle_project
+def test_get_logs_from_ids():
+    logs = [unify.log(x=i) for i in range(5)]
+    ids = [l.id for l in logs]
+
+    logs_from_ids = unify.get_logs(from_ids=[ids[0]])
+    assert len(logs_from_ids) == 1
+    assert logs_from_ids[0].id == ids[0]
+
+    logs_from_ids = unify.get_logs(from_ids=ids)
+    assert len(logs_from_ids) == 5
+    for l in logs_from_ids:
+        assert l.id in ids
+
+    logs_from_ids = unify.get_logs(from_ids=ids[0:2])
+    assert len(logs_from_ids) == 2
+    for l in logs_from_ids:
+        assert l.id in ids[0:2]
+
+
+@_handle_project
+def test_get_logs_exclude_ids():
+    logs = [unify.log(x=i) for i in range(5)]
+    ids = [l.id for l in logs]
+
+    logs_exclude_ids = unify.get_logs(exclude_ids=[ids[0]])
+    assert len(logs_exclude_ids) == 4
+    for l in logs_exclude_ids:
+        assert l.id != ids[0]
+
+    logs_exclude_ids = unify.get_logs(exclude_ids=ids)
+    assert len(logs_exclude_ids) == 0
+
+    logs_exclude_ids = unify.get_logs(exclude_ids=ids[0:2])
+    assert len(logs_exclude_ids) == 3
+
+
+@_handle_project
+def test_get_logs_group_by():
+    for i in range(2):
+        for y in range(3):
+            unify.log(x=i, y=y)
+
+    logs = unify.get_logs(group_by=["x"])
+    assert isinstance(logs, dict)
+    assert "x" in logs.keys()
+    assert len(logs["x"]) == 2
+    assert len(logs["x"][0]["logs"]) == 3
+    assert len(logs["x"][1]["logs"]) == 3
+
+
+@_handle_project
 def test_get_source():
     source = unify.get_source()
     assert "source = unify.get_source()" in source

@@ -1041,8 +1041,8 @@ def get_logs(
         "group_sorting": (
             json.dumps(group_sorting) if group_sorting is not None else None
         ),
-        "from_ids": from_ids,
-        "exclude_ids": exclude_ids,
+        "from_ids": "&".join(map(str, from_ids)) if from_ids else None,
+        "exclude_ids": "&".join(map(str, exclude_ids)) if exclude_ids else None,
         "from_fields": from_fields,
         "exclude_fields": exclude_fields,
         "group_by": group_by,
