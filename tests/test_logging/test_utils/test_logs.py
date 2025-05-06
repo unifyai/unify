@@ -289,6 +289,18 @@ def test_get_logs_exclude_ids():
 
 
 @_handle_project
+def test_get_logs_value_limit():
+    msg = "hello world"
+    unify.log(msg=msg)
+    logs = unify.get_logs(value_limit=5)
+    assert len(logs) == 1
+    assert logs[0].entries["msg"] == msg[:5] + "..."
+
+    logs = unify.get_logs(value_limit=None)
+    assert logs[0].entries["msg"] == msg
+
+
+@_handle_project
 def test_get_logs_group_by():
     for i in range(2):
         for y in range(3):
