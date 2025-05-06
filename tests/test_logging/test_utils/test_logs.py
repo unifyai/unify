@@ -242,6 +242,36 @@ def test_get_logs_from_ids():
 
 
 @_handle_project
+def test_get_logs_from_fields():
+    [unify.log(x=i) for i in range(3)]
+    logs = unify.get_logs(from_fields=["x"])
+    assert len(logs) == 3
+
+    [unify.log(y=i) for i in range(3)]
+    logs = unify.get_logs(from_fields=["y"])
+    assert len(logs) == 3
+
+    logs = unify.get_logs(from_fields=["x", "y"])
+    assert len(logs) == 6
+
+
+@_handle_project
+def test_get_logs_exclude_fields():
+    [unify.log(x=i) for i in range(3)]
+    assert len(unify.get_logs()) == 3
+
+    logs = unify.get_logs(exclude_fields=["x"])
+    assert len(logs) == 0
+
+    [unify.log(y=i) for i in range(3)]
+    logs = unify.get_logs(exclude_fields=["x"])
+    assert len(logs) == 3
+
+    logs = unify.get_logs(exclude_fields=["x", "y"])
+    assert len(logs) == 0
+
+
+@_handle_project
 def test_get_logs_exclude_ids():
     logs = [unify.log(x=i) for i in range(5)]
     ids = [l.id for l in logs]
