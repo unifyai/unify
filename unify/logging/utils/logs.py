@@ -1254,21 +1254,65 @@ def get_logs_latest_timestamp(
     """
     Returns the update timestamp of the most recently updated log within the specified page and filter bounds.
     """
+    api_key = _validate_api_key(api_key)
+    headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    project = _get_and_maybe_create_project(project, api_key=api_key)
+    context = context if context else CONTEXT_READ.get()
+    column_context = column_context if column_context else COLUMN_CONTEXT_READ.get()
+    params = {
+        "project": project,
+        "context": context,
+        "column_context": column_context,
+        "filter_expr": filter,
+        "sort_by": sort_by,
+        "from_ids": "&".join(map(str, from_ids)) if from_ids else None,
+        "exclude_ids": "&".join(map(str, exclude_ids)) if exclude_ids else None,
+        "limit": limit,
+        "offset": offset,
+    }
+    response = _requests.get(
+        BASE_URL + "/logs/latest_timestamp",
+        headers=headers,
+        params=params,
+    )
+    _check_response(response)
+    return response.json()
 
 
 def update_derived_log(
     *,
     target: Union[List[int], int],
-    project: Optional[str] = None,
-    context: Optional[str] = None,
     key: Optional[str] = None,
     equation: Optional[str] = None,
     referenced_logs: Optional[List[int]] = None,
+    project: Optional[str] = None,
+    context: Optional[str] = None,
     api_key: Optional[str] = None,
 ) -> None:
     """
     Update the derived entries for a log.
     """
+    api_key = _validate_api_key(api_key)
+    headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    project = _get_and_maybe_create_project(project, api_key=api_key)
+    context = context if context else CONTEXT_READ.get()
+    params = {
+        "project": project,
+        "context": context,
+        "target": target,
+        "key": key,
+        "equation": equation,
+        "referenced_logs": referenced_logs,
+    }
+    response = _requests.put(BASE_URL + "/logs/derived", headers=headers, params=params)
+    _check_response(response)
+    return response.json()
 
 
 def join_logs(
@@ -1277,13 +1321,30 @@ def join_logs(
     join_expr: str,
     mode: str,
     new_context: str,
-    project: Optional[str] = None,
     columns: Optional[List[str]] = None,
+    project: Optional[str] = None,
     api_key: Optional[str] = None,
 ):
     """
     Join two sets of logs based on specified criteria and creates new logs with the joined data.
     """
+    api_key = _validate_api_key(api_key)
+    headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    project = _get_and_maybe_create_project(project, api_key=api_key)
+    params = {
+        "project": project,
+        "pair_of_args": pair_of_args,
+        "join_expr": join_expr,
+        "mode": mode,
+        "new_context": new_context,
+        "columns": columns,
+    }
+    response = _requests.post(BASE_URL + "/logs/join", headers=headers, params=params)
+    _check_response(response)
+    return response.json()
 
 
 # User Logging #
