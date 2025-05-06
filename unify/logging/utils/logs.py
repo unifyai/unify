@@ -1057,8 +1057,7 @@ def get_logs(
     response = _requests.get(BASE_URL + "/logs", headers=headers, params=params)
     _check_response(response)
 
-    # In grouped mode or other response structures, simply return raw json
-    if "logs" not in response.json():
+    if group_by:
         return response.json()
 
     params, logs, _ = response.json().values()
@@ -1193,6 +1192,9 @@ def get_groups(
     *,
     key: str,
     project: Optional[str] = None,
+    filter: Optional[Dict[str, Any]] = None,
+    from_ids: Optional[List[int]] = None,
+    exclude_ids: Optional[List[int]] = None,
     api_key: Optional[str] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """
@@ -1203,6 +1205,13 @@ def get_groups(
         key: Name of the log entry to do equality matching for.
 
         project: Name of the project to get logs from.
+
+        filter: Boolean string to filter logs, for example:
+        "(temperature > 0.5 and (len(system_msg) < 100 or 'no' in usr_response))"
+
+        from_ids: A list of log IDs to include in the results.
+
+        exclude_ids: A list of log IDs to exclude from the results.
 
         api_key: If specified, unify API key to be used. Defaults to the value in the
         `UNIFY_KEY` environment variable.
@@ -1217,7 +1226,13 @@ def get_groups(
         "Authorization": f"Bearer {api_key}",
     }
     project = _get_and_maybe_create_project(project, api_key=api_key)
-    params = {"project": project, "key": key}
+    params = {
+        "project": project,
+        "key": key,
+        "filter_expr": filter,
+        "from_ids": from_ids,
+        "exclude_ids": exclude_ids,
+    }
     response = _requests.get(BASE_URL + "/logs/groups", headers=headers, params=params)
     _check_response(response)
     return response.json()
