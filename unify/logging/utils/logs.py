@@ -1133,6 +1133,9 @@ def get_logs_metric(
     key: str,
     filter: Optional[str] = None,
     project: Optional[str] = None,
+    context: Optional[str] = None,
+    from_ids: Optional[List[int]] = None,
+    exclude_ids: Optional[List[int]] = None,
     api_key: Optional[str] = None,
 ) -> Union[float, int, bool]:
     """
@@ -1150,6 +1153,12 @@ def get_logs_metric(
 
         project: The id of the project to retrieve the logs for.
 
+        context: The context of the logs to retrieve the metrics for.
+
+        from_ids: A list of log IDs to include in the results.
+
+        exclude_ids: A list of log IDs to exclude from the results.
+
         api_key: If specified, unify API key to be used. Defaults to the value in the
         `UNIFY_KEY` environment variable.
 
@@ -1163,7 +1172,14 @@ def get_logs_metric(
         "Authorization": f"Bearer {api_key}",
     }
     project = _get_and_maybe_create_project(project, api_key=api_key)
-    params = {"project": project, "filter_expr": filter, "key": key}
+    params = {
+        "project": project,
+        "filter_expr": filter,
+        "key": key,
+        "from_ids": "&".join(map(str, from_ids)) if from_ids else None,
+        "exclude_ids": "&".join(map(str, exclude_ids)) if exclude_ids else None,
+        "context": context if context else CONTEXT_READ.get(),
+    }
     response = _requests.get(
         BASE_URL + f"/logs/metric/{metric}",
         headers=headers,
