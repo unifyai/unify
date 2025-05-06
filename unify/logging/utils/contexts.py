@@ -18,6 +18,7 @@ def create_context(
     name: str,
     description: str = None,
     is_versioned: bool = False,
+    allow_duplicates: bool = True,
     *,
     project: Optional[str] = None,
     api_key: Optional[str] = None,
@@ -31,6 +32,8 @@ def create_context(
         description: Description of the context to create.
 
         is_versioned: Whether the context is versioned.
+
+        allow_duplicates: Whether to allow duplicates in the context.
 
         project: Name of the project the context belongs to.
 
@@ -54,6 +57,7 @@ def create_context(
         "name": name,
         "description": description,
         "is_versioned": is_versioned,
+        "allow_duplicates": allow_duplicates,
     }
     response = _requests.post(
         BASE_URL + f"/project/{project}/contexts",
@@ -97,7 +101,7 @@ def rename_context(
     response = _requests.patch(
         BASE_URL + f"/project/{project}/contexts/{name}/rename",
         headers=headers,
-        json={"new_name": new_name},
+        json={"name": new_name},
     )
     _check_response(response)
     return response.json()
