@@ -1424,6 +1424,51 @@ def create_fields(
     return response.json()
 
 
+def rename_field(
+    *,
+    name: str,
+    new_name: str,
+    project: Optional[str] = None,
+    context: Optional[str] = None,
+    api_key: Optional[str] = None,
+):
+    """
+    Rename a field in a project.
+
+    Args:
+        name: The name of the field to rename.
+
+        new_name: The new name for the field.
+
+        project: Name of the project to rename the field in.
+
+        context: The context to rename the field in.
+
+        api_key: If specified, unify API key to be used. Defaults to the value in the
+        `UNIFY_KEY` environment variable.
+    """
+    api_key = _validate_api_key(api_key)
+    headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    project = _get_and_maybe_create_project(project, api_key=api_key)
+    context = context if context else CONTEXT_WRITE.get()
+    params = {
+        "project": project,
+        "context": context,
+        "old_field_name": name,
+        "new_field_name": new_name,
+    }
+    response = _requests.post(
+        BASE_URL + "/logs/fields/rename_field",
+        headers=headers,
+        params=params,
+    )
+    _check_response(response)
+    return response.json()
+
+
 def get_fields(
     *,
     project: Optional[str] = None,
