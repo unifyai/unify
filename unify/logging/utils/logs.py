@@ -1057,12 +1057,8 @@ def get_logs(
     response = _requests.get(BASE_URL + "/logs", headers=headers, params=params)
     _check_response(response)
 
-    if group_by:
-        return response.json()
-
-    params, logs, _ = response.json().values()
-    return [
-        unify.Log(
+    def _create_log(dct, params, context, api_key):
+        return unify.Log(
             id=dct["id"],
             ts=dct["ts"],
             **dct["entries"],
@@ -1074,8 +1070,52 @@ def get_logs(
             context=context,
             api_key=api_key,
         )
-        for dct in logs
-    ]
+
+    if not group_by:
+        params, logs, _ = response.json().values()
+        return [_create_log(dct, params, context, api_key) for dct in logs]
+
+    def _recurse_nested_groups(node, prev_key=None, context_entries=None):
+        if isinstance(node, dict):
+            if "group" in node and isinstance(node["group"], list):
+                for group_item in node["group"]:
+                    if "value" in group_item:
+                        context_entries[prev_key] = group_item["key"]
+                        group_item["value"] = _recurse_nested_groups(
+                            group_item["value"],
+                            prev_key,
+                            context_entries,
+                        )
+            else:
+                for key, value in node.items():
+                    node[key] = _recurse_nested_groups(value, key, context_entries)
+        elif isinstance(node, list):
+            if node and isinstance(node[0], dict) and "id" in node[0]:
+                return [
+                    _create_log(item, item["params"], context, api_key) for item in node
+                ]
+            else:
+                return [
+                    _recurse_nested_groups(item, prev_key, context_entries)
+                    for item in node
+                ]
+        return node
+
+    def _replace_leaf_logs(group, _logs_mapping):
+        for k, v in group.items():
+            if isinstance(v, dict):
+                _replace_leaf_logs(v, _logs_mapping)
+            elif isinstance(v, list):
+                for i, l in enumerate(v):
+                    v[i] = _logs_mapping[l]
+
+    if nested_groups:
+        return _recurse_nested_groups(logs)
+    else:
+        logs_mapping = {}
+        for dct in logs:
+            logs_mapping[dct["id"]] = _create_log(dct, params, context, api_key)
+        return _replace_leaf_logs(logs, logs_mapping)
 
 
 # noinspection PyShadowingBuiltins
