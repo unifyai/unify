@@ -1388,8 +1388,8 @@ def join_logs(
 
 
 def create_fields(
+    fields: Union[Dict[str, Any], List[str]],
     *,
-    fields: Dict[str, Any],
     project: Optional[str] = None,
     context: Optional[str] = None,
     api_key: Optional[str] = None,
@@ -1398,7 +1398,7 @@ def create_fields(
     Creates one or more fields in a project.
 
     Args:
-        fields: Dictionary mapping field names to their descriptions (or None if no description).
+        fields: Dictionary mapping field names to their types (or None if no explicit type).
 
         project: Name of the project to create fields in.
 
@@ -1414,20 +1414,22 @@ def create_fields(
     }
     project = _get_and_maybe_create_project(project, api_key=api_key)
     context = context if context else CONTEXT_WRITE.get()
-    params = {
+    if isinstance(fields, list):
+        fields = {field: None for field in fields}
+    body = {
         "project": project,
         "context": context,
         "fields": fields,
     }
-    response = _requests.post(BASE_URL + "/logs/fields", headers=headers, params=params)
+    response = _requests.post(BASE_URL + "/logs/fields", headers=headers, json=body)
     _check_response(response)
     return response.json()
 
 
 def rename_field(
-    *,
     name: str,
     new_name: str,
+    *,
     project: Optional[str] = None,
     context: Optional[str] = None,
     api_key: Optional[str] = None,
@@ -1454,16 +1456,16 @@ def rename_field(
     }
     project = _get_and_maybe_create_project(project, api_key=api_key)
     context = context if context else CONTEXT_WRITE.get()
-    params = {
+    body = {
         "project": project,
         "context": context,
         "old_field_name": name,
         "new_field_name": new_name,
     }
     response = _requests.post(
-        BASE_URL + "/logs/fields/rename_field",
+        BASE_URL + "/logs/rename_field",
         headers=headers,
-        params=params,
+        json=body,
     )
     _check_response(response)
     return response.json()
@@ -1506,8 +1508,8 @@ def get_fields(
 
 
 def delete_fields(
-    *,
     fields: List[str],
+    *,
     project: Optional[str] = None,
     context: Optional[str] = None,
     api_key: Optional[str] = None,
@@ -1532,7 +1534,7 @@ def delete_fields(
     }
     project = _get_and_maybe_create_project(project, api_key=api_key)
     context = context if context else CONTEXT_WRITE.get()
-    params = {
+    body = {
         "project": project,
         "context": context,
         "fields": fields,
@@ -1540,7 +1542,7 @@ def delete_fields(
     response = _requests.delete(
         BASE_URL + "/logs/fields",
         headers=headers,
-        params=params,
+        json=body,
     )
     _check_response(response)
     return response.json()

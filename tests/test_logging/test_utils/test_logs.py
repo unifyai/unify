@@ -334,5 +334,56 @@ def test_delete_logs_by_ids():
     assert len(unify.get_logs()) == 0
 
 
+@_handle_project
+def test_create_fields():
+    field_name = "full_name"
+    unify.create_fields(fields={field_name: "str"})
+    fields = unify.get_fields()
+    assert field_name in fields
+    assert fields[field_name]["data_type"] == "string"
+
+
+@_handle_project
+def test_rename_field():
+    field_name = "full_name"
+    unify.create_fields([field_name])
+    fields = unify.get_fields()
+    assert field_name in fields
+
+    new_field_name = "first_name"
+    unify.rename_field(name=field_name, new_name=new_field_name)
+
+    fields = unify.get_fields()
+    assert new_field_name in fields
+    assert field_name not in fields
+
+
+@_handle_project
+def test_get_fields():
+    assert len(unify.get_fields()) == 0
+
+    field_name = "full_name"
+    unify.create_fields(fields={field_name: None})
+    fields = unify.get_fields()
+    assert field_name in fields
+
+
+@_handle_project
+def test_delete_fields():
+    field_name = "full_name"
+    unify.create_fields(fields={field_name: None})
+    fields = unify.get_fields()
+    assert field_name in fields
+
+    unify.log(first_name="John")
+    assert len(unify.get_logs()) == 1
+
+    unify.delete_fields([field_name])
+    assert len(unify.get_logs()) == 0
+
+    fields = unify.get_fields()
+    assert field_name not in fields
+
+
 if __name__ == "__main__":
     pass
