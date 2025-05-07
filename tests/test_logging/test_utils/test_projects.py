@@ -40,5 +40,17 @@ def test_delete_project_logs():
     assert "test_delete_project_logs" in unify.list_projects()
 
 
+@_handle_project
+def test_delete_project_contexts():
+    unify.create_context("foo")
+    unify.create_context("bar")
+
+    assert len(unify.get_contexts()) == 2
+    unify.delete_project_contexts("test_delete_project_contexts")
+
+    assert len(unify.get_contexts()) == 0
+    assert "test_delete_project_contexts" in unify.list_projects()
+
+
 if __name__ == "__main__":
     pass

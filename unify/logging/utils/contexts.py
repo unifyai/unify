@@ -143,9 +143,9 @@ def get_context(
 
 
 def get_contexts(
+    project: Optional[str] = None,
     *,
     prefix: Optional[str] = None,
-    project: Optional[str] = None,
     api_key: Optional[str] = None,
 ) -> Dict[str, str]:
     """
