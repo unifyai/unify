@@ -1387,6 +1387,120 @@ def join_logs(
     return response.json()
 
 
+def create_fields(
+    *,
+    fields: Dict[str, Any],
+    project: Optional[str] = None,
+    context: Optional[str] = None,
+    api_key: Optional[str] = None,
+):
+    """
+    Creates one or more fields in a project.
+
+    Args:
+        fields: Dictionary mapping field names to their descriptions (or None if no description).
+
+        project: Name of the project to create fields in.
+
+        context: The context to create fields in.
+
+        api_key: If specified, unify API key to be used. Defaults to the value in the
+        `UNIFY_KEY` environment variable.
+    """
+    api_key = _validate_api_key(api_key)
+    headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    project = _get_and_maybe_create_project(project, api_key=api_key)
+    context = context if context else CONTEXT_WRITE.get()
+    params = {
+        "project": project,
+        "context": context,
+        "fields": fields,
+    }
+    response = _requests.post(BASE_URL + "/logs/fields", headers=headers, params=params)
+    _check_response(response)
+    return response.json()
+
+
+def get_fields(
+    *,
+    project: Optional[str] = None,
+    context: Optional[str] = None,
+    api_key: Optional[str] = None,
+):
+    """
+    Get a dictionary of fields names and their types
+
+    Args:
+        project: Name of the project to get fields from.
+
+        context: The context to get fields from.
+
+        api_key: If specified, unify API key to be used. Defaults to the value in the
+        `UNIFY_KEY` environment variable.
+
+    Returns:
+        A dictionary of fields names and their types
+    """
+    api_key = _validate_api_key(api_key)
+    headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    project = _get_and_maybe_create_project(project, api_key=api_key)
+    context = context if context else CONTEXT_READ.get()
+    params = {
+        "project": project,
+        "context": context,
+    }
+    response = _requests.get(BASE_URL + "/logs/fields", headers=headers, params=params)
+    _check_response(response)
+    return response.json()
+
+
+def delete_fields(
+    *,
+    fields: List[str],
+    project: Optional[str] = None,
+    context: Optional[str] = None,
+    api_key: Optional[str] = None,
+):
+    """
+    Delete one or more fields from a project.
+
+    Args:
+        fields: List of field names to delete.
+
+        project: Name of the project to delete fields from.
+
+        context: The context to delete fields from.
+
+        api_key: If specified, unify API key to be used. Defaults to the value in the
+        `UNIFY_KEY` environment variable.
+    """
+    api_key = _validate_api_key(api_key)
+    headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    project = _get_and_maybe_create_project(project, api_key=api_key)
+    context = context if context else CONTEXT_WRITE.get()
+    params = {
+        "project": project,
+        "context": context,
+        "fields": fields,
+    }
+    response = _requests.delete(
+        BASE_URL + "/logs/fields",
+        headers=headers,
+        params=params,
+    )
+    _check_response(response)
+    return response.json()
+
+
 # User Logging #
 # -------------#
 
