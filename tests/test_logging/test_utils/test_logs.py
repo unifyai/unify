@@ -307,11 +307,18 @@ def test_get_logs_group_by():
             unify.log(x=i, y=y)
 
     logs = unify.get_logs(group_by=["x"])
-    assert isinstance(logs, dict)
-    assert "x" in logs.keys()
-    assert len(logs["x"]) == 2
-    assert len(logs["x"][0]["logs"]) == 3
-    assert len(logs["x"][1]["logs"]) == 3
+    assert isinstance(logs, unify.LogGroup)
+    assert logs.field == "x"
+    assert len(logs.value) == 2
+    assert "0" in logs.value
+    assert "1" in logs.value
+    assert len(logs.value["0"]) == 3
+    assert len(logs.value["1"]) == 3
+
+    logs = unify.get_logs(group_by=["y"])
+    assert isinstance(logs, unify.LogGroup)
+    assert logs.field == "y"
+    assert len(logs.value) == 3
 
 
 @_handle_project

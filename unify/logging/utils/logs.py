@@ -947,7 +947,7 @@ def get_logs(
     group_limit: Optional[int] = None,
     group_offset: Optional[int] = 0,
     group_depth: Optional[int] = None,
-    nested_groups: Optional[bool] = None,
+    nested_groups: Optional[bool] = True,
     groups_only: Optional[bool] = None,
     return_timestamps: Optional[bool] = None,
     return_ids_only: bool = False,
@@ -1057,12 +1057,15 @@ def get_logs(
     response = _requests.get(BASE_URL + "/logs", headers=headers, params=params)
     _check_response(response)
 
-    def _create_log(dct, params, context, api_key):
+    def _create_log(dct, params, context, api_key, context_entries=None):
+        if context_entries is None:
+            context_entries = {}
         return unify.Log(
             id=dct["id"],
             ts=dct["ts"],
             **dct["entries"],
             **dct["derived_entries"],
+            **context_entries,
             params={
                 param_name: (param_ver, params[param_name][param_ver])
                 for param_name, param_ver in dct["params"].items()
@@ -1077,31 +1080,43 @@ def get_logs(
         params, logs, _ = response.json().values()
         return [_create_log(dct, params, context, api_key) for dct in logs]
 
-    def _recurse_nested_groups(node, prev_key=None, context_entries=None):
-        if isinstance(node, dict):
-            if "group" in node and isinstance(node["group"], list):
-                for group_item in node["group"]:
-                    if "value" in group_item:
-                        context_entries[prev_key] = group_item["key"]
-                        group_item["value"] = _recurse_nested_groups(
-                            group_item["value"],
-                            prev_key,
+    params, logs, _ = response.json().values()
+
+    def _recurse_nested_groups(node, context_entries, prev_key=None):
+        if isinstance(node, dict) and "group" not in node:
+            ret = unify.LogGroup(list(node.keys())[0])
+            ret.value = _recurse_nested_groups(
+                node[ret.field],
+                context_entries,
+                ret.field,
+            )
+            return ret
+        else:
+            if isinstance(node["group"][0]["value"], list):
+                ret = {}
+                for n in node["group"]:
+                    context_entries[prev_key] = n["key"]
+                    ret[n["key"]] = [
+                        _create_log(
+                            item,
+                            item["params"],
+                            context,
+                            api_key,
                             context_entries,
                         )
+                        for item in n["value"]
+                    ]
+                return ret
             else:
-                for key, value in node.items():
-                    node[key] = _recurse_nested_groups(value, key, context_entries)
-        elif isinstance(node, list):
-            if node and isinstance(node[0], dict) and "id" in node[0]:
-                return [
-                    _create_log(item, item["params"], context, api_key) for item in node
-                ]
-            else:
-                return [
-                    _recurse_nested_groups(item, prev_key, context_entries)
-                    for item in node
-                ]
-        return node
+                ret = {}
+                for n in node["group"]:
+                    context_entries[prev_key] = n["key"]
+                    ret[n["key"]] = _recurse_nested_groups(
+                        n["value"],
+                        context_entries,
+                        n["key"],
+                    )
+                return ret
 
     def _replace_leaf_logs(group, _logs_mapping):
         for k, v in group.items():
@@ -1112,7 +1127,7 @@ def get_logs(
                     v[i] = _logs_mapping[l]
 
     if nested_groups:
-        return _recurse_nested_groups(logs)
+        return _recurse_nested_groups(logs, {})
     else:
         logs_mapping = {}
         for dct in logs:
