@@ -511,6 +511,90 @@ def _sync_log(
     )
 
 
+def _create_log(dct, params, context, api_key, context_entries=None):
+    if context_entries is None:
+        context_entries = {}
+    return unify.Log(
+        id=dct["id"],
+        ts=dct["ts"],
+        **dct["entries"],
+        **dct["derived_entries"],
+        **context_entries,
+        params={
+            param_name: (param_ver, params[param_name][param_ver])
+            for param_name, param_ver in dct["params"].items()
+        },
+        context=context,
+        api_key=api_key,
+    )
+
+
+def _create_log_groups_nested(
+    params,
+    context,
+    api_key,
+    node,
+    context_entries,
+    prev_key=None,
+):
+    if isinstance(node, dict) and "group" not in node:
+        ret = unify.LogGroup(list(node.keys())[0])
+        ret.value = _create_log_groups_nested(
+            params,
+            context,
+            api_key,
+            node[ret.field],
+            context_entries,
+            ret.field,
+        )
+        return ret
+    else:
+        if isinstance(node["group"][0]["value"], list):
+            ret = {}
+            for n in node["group"]:
+                context_entries[prev_key] = n["key"]
+                ret[n["key"]] = [
+                    _create_log(
+                        item,
+                        item["params"],
+                        context,
+                        api_key,
+                        context_entries,
+                    )
+                    for item in n["value"]
+                ]
+            return ret
+        else:
+            ret = {}
+            for n in node["group"]:
+                context_entries[prev_key] = n["key"]
+                ret[n["key"]] = _create_log_groups_nested(
+                    params,
+                    context,
+                    api_key,
+                    n["value"],
+                    context_entries,
+                    n["key"],
+                )
+            return ret
+
+
+def _create_log_groups_not_nested(logs, groups, params, context, api_key):
+    logs_mapping = {}
+    for dct in logs:
+        logs_mapping[dct["id"]] = _create_log(dct, params, context, api_key)
+
+    ret = []
+    for group_key, group_value in groups.items():
+        if isinstance(group_value, dict):
+            val = {}
+            for k, v in group_value.items():
+                if isinstance(v, list):
+                    val[k] = [logs_mapping[log_id] for log_id in v]
+            ret.append(unify.LogGroup(group_key, val))
+    return ret
+
+
 def create_logs(
     *,
     project: Optional[str] = None,
@@ -1057,82 +1141,18 @@ def get_logs(
     response = _requests.get(BASE_URL + "/logs", headers=headers, params=params)
     _check_response(response)
 
-    def _create_log(dct, params, context, api_key, context_entries=None):
-        if context_entries is None:
-            context_entries = {}
-        return unify.Log(
-            id=dct["id"],
-            ts=dct["ts"],
-            **dct["entries"],
-            **dct["derived_entries"],
-            **context_entries,
-            params={
-                param_name: (param_ver, params[param_name][param_ver])
-                for param_name, param_ver in dct["params"].items()
-            },
-            context=context,
-            api_key=api_key,
-        )
-
     if not group_by:
         if return_ids_only:
             return response.json()
         params, logs, _ = response.json().values()
         return [_create_log(dct, params, context, api_key) for dct in logs]
 
-    params, logs, _ = response.json().values()
-
-    def _recurse_nested_groups(node, context_entries, prev_key=None):
-        if isinstance(node, dict) and "group" not in node:
-            ret = unify.LogGroup(list(node.keys())[0])
-            ret.value = _recurse_nested_groups(
-                node[ret.field],
-                context_entries,
-                ret.field,
-            )
-            return ret
-        else:
-            if isinstance(node["group"][0]["value"], list):
-                ret = {}
-                for n in node["group"]:
-                    context_entries[prev_key] = n["key"]
-                    ret[n["key"]] = [
-                        _create_log(
-                            item,
-                            item["params"],
-                            context,
-                            api_key,
-                            context_entries,
-                        )
-                        for item in n["value"]
-                    ]
-                return ret
-            else:
-                ret = {}
-                for n in node["group"]:
-                    context_entries[prev_key] = n["key"]
-                    ret[n["key"]] = _recurse_nested_groups(
-                        n["value"],
-                        context_entries,
-                        n["key"],
-                    )
-                return ret
-
-    def _replace_leaf_logs(group, _logs_mapping):
-        for k, v in group.items():
-            if isinstance(v, dict):
-                _replace_leaf_logs(v, _logs_mapping)
-            elif isinstance(v, list):
-                for i, l in enumerate(v):
-                    v[i] = _logs_mapping[l]
-
     if nested_groups:
-        return _recurse_nested_groups(logs, {})
+        params, logs, _ = response.json().values()
+        return _create_log_groups_nested(params, context, api_key, logs, {})
     else:
-        logs_mapping = {}
-        for dct in logs:
-            logs_mapping[dct["id"]] = _create_log(dct, params, context, api_key)
-        return _replace_leaf_logs(logs, logs_mapping)
+        params, groups, logs, _ = response.json().values()
+        return _create_log_groups_not_nested(logs, groups, params, context, api_key)
 
 
 # noinspection PyShadowingBuiltins

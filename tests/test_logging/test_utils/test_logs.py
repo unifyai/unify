@@ -322,6 +322,46 @@ def test_get_logs_group_by():
 
 
 @_handle_project
+def test_get_logs_group_by_entries():
+    unify.log(name="John", age=21, msg="Hello")
+    unify.log(name="John", age=21, msg="Bye")
+
+    logs = unify.get_logs(group_by=["name", "msg"])
+    assert isinstance(logs, unify.LogGroup)
+    assert logs.field == "name"
+    assert "John" in logs.value
+
+    second_group = logs.value["John"]
+    assert isinstance(second_group, unify.LogGroup)
+    assert second_group.field == "msg"
+    assert "Hello" in second_group.value
+    assert "Bye" in second_group.value
+
+    log = logs.value["John"].value["Hello"][0]
+    assert log.entries["name"] == "John"
+    assert log.entries["msg"] == "Hello"
+
+    log = logs.value["John"].value["Bye"][0]
+    assert log.entries["name"] == "John"
+    assert log.entries["msg"] == "Bye"
+
+
+@_handle_project
+def test_get_logs_group_by_not_nested():
+    for i in range(2):
+        for y in range(3):
+            unify.log(x=i, y=y)
+
+    logs = unify.get_logs(group_by=["x"], nested_groups=False)
+    assert isinstance(logs, list)
+    assert len(logs) == 1
+    for _, v in logs[0].value.items():
+        assert isinstance(v, list)
+        for log in v:
+            assert isinstance(log, unify.Log)
+
+
+@_handle_project
 def test_get_source():
     source = unify.get_source()
     assert "source = unify.get_source()" in source
