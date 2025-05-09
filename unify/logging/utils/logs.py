@@ -1072,6 +1072,8 @@ def get_logs(
         )
 
     if not group_by:
+        if return_ids_only:
+            return response.json()
         params, logs, _ = response.json().values()
         return [_create_log(dct, params, context, api_key) for dct in logs]
 
