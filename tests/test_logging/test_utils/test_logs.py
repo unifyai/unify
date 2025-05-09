@@ -347,7 +347,7 @@ def test_create_fields():
     unify.create_fields(fields={field_name: "str"})
     fields = unify.get_fields()
     assert field_name in fields
-    assert fields[field_name]["data_type"] == "string"
+    assert fields[field_name]["data_type"] == "str"
 
 
 @_handle_project
