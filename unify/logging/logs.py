@@ -756,21 +756,29 @@ def traced(
             trace_dirs=trace_dirs,
         )
 
+    if hasattr(fn, "__unify_traced"):
+        return fn
+
+    ret = None
     if inspect.isclass(fn):
-        return _trace_class(fn, prune_empty, span_type, name, filter)
+        ret = _trace_class(fn, prune_empty, span_type, name, filter)
 
     if inspect.ismodule(fn):
-        return _trace_module(fn, prune_empty, span_type, name, filter)
+        ret = _trace_module(fn, prune_empty, span_type, name, filter)
 
-    return _trace_function(
-        fn,
-        prune_empty,
-        span_type,
-        name,
-        trace_contexts,
-        trace_dirs,
-        filter,
-    )
+    if inspect.isfunction(fn):
+        ret = _trace_function(
+            fn,
+            prune_empty,
+            span_type,
+            name,
+            trace_contexts,
+            trace_dirs,
+            filter,
+        )
+
+    setattr(ret, "__unify_traced", True)
+    return ret
 
 
 class LogTransformer(ast.NodeTransformer):
