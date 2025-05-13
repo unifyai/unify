@@ -21,16 +21,22 @@ class TraceFinder(importlib.abc.MetaPathFinder):
     def __init__(self, targets=[], filter=None):
         self.targets = targets
         self.filter = filter
-        self._original_finder = importlib.machinery.PathFinder
 
     def find_spec(self, fullname, path, target=None):
         for target_module in self.targets:
             if not fullname.startswith(target_module):
                 return None
 
-        spec = self._original_finder.find_spec(fullname, path)
-        if not spec or not spec.loader:
-            return None
+        original_sys_meta_path = sys.meta_path[:]
+        sys.meta_path = [
+            finder for finder in sys.meta_path if not isinstance(finder, TraceFinder)
+        ]
+        try:
+            spec = importlib.util.find_spec(fullname, path)
+            if spec is None:
+                return None
+        finally:
+            sys.meta_path = original_sys_meta_path
 
         if spec.origin is None or not spec.origin.endswith(".py"):
             return None
