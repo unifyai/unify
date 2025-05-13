@@ -1,7 +1,7 @@
 import importlib
 import sys
 
-from unify import traced
+import unify
 
 
 class TraceLoader(importlib.abc.Loader):
@@ -14,7 +14,7 @@ class TraceLoader(importlib.abc.Loader):
 
     def exec_module(self, module):
         self._original_loader.exec_module(module)
-        traced(module, filter=self.filter)
+        unify.traced(module, filter=self.filter)
 
 
 class TraceFinder(importlib.abc.MetaPathFinder):
