@@ -785,8 +785,7 @@ def traced(
             name,
             filter if filter else _default_trace_filter,
         )
-
-    if inspect.ismodule(fn):
+    elif inspect.ismodule(fn):
         ret = _trace_module(
             fn,
             prune_empty,
@@ -794,8 +793,7 @@ def traced(
             name,
             filter if filter else _default_trace_filter,
         )
-
-    if inspect.isfunction(fn):
+    elif inspect.isfunction(fn):
         ret = _trace_function(
             fn,
             prune_empty,
@@ -806,7 +804,9 @@ def traced(
             filter,
         )
 
-    setattr(ret, "__unify_traced", True)
+    if ret is not None:
+        setattr(ret, "__unify_traced", True)
+
     return ret
 
 
