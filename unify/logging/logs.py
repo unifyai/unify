@@ -510,6 +510,12 @@ def _create_span(fn, args, kwargs, span_type, name):
             substr = "{" + k + "}"
             if substr in name_w_sub:
                 name_w_sub = name_w_sub.replace(substr, str(v))
+
+    try:
+        code_fpath = inspect.getsourcefile(fn)
+    except Exception as e:
+        code_fpath = None
+
     new_span = {
         "id": str(uuid.uuid4()),
         "type": span_type,
@@ -524,7 +530,7 @@ def _create_span(fn, args, kwargs, span_type, name):
         "llm_usage": None,
         "llm_usage_inc_cache": None,
         "code": f"```python\n{code}\n```",
-        "code_fpath": inspect.getsourcefile(fn),
+        "code_fpath": code_fpath,
         "code_start_line": start_line,
         "inputs": inputs,
         "outputs": None,
@@ -581,12 +587,20 @@ def _finalize_span(
         GLOBAL_SPAN.reset(global_token)
 
 
+def _default_trace_filter(obj, name):
+    return not (name.startswith("__") and name.endswith("__"))
+
+
 def _trace_class(cls, prune_empty, span_type, name, filter):
-    for member_name, value in inspect.getmembers(cls, predicate=inspect.isfunction):
-        if member_name.startswith("__") and member_name.endswith("__"):
+    _obj_filter = (
+        lambda obj: inspect.isfunction(obj)
+        or inspect.isclass(obj)
+        or inspect.ismethod(obj)
+    )
+    for member_name, value in inspect.getmembers(cls, predicate=_obj_filter):
+        if not filter(value, member_name):
             continue
-        if filter is not None and not filter(value):
-            continue
+
         _name = f"{name if name is not None else cls.__name__}.{member_name}"
         setattr(
             cls,
@@ -597,12 +611,15 @@ def _trace_class(cls, prune_empty, span_type, name, filter):
 
 
 def _trace_module(module, prune_empty, span_type, name, filter):
-    _obj_filter = lambda obj: inspect.isfunction(obj) or inspect.isclass(obj)
+    _obj_filter = (
+        lambda obj: inspect.isfunction(obj)
+        or inspect.isclass(obj)
+        or inspect.ismethod(obj)
+    )
     for member_name, value in inspect.getmembers(module, predicate=_obj_filter):
-        if member_name.startswith("__") and member_name.endswith("__"):
+        if not filter(value, member_name):
             continue
-        if filter is not None and not filter(value):
-            continue
+
         _name = f"{name if name is not None else module.__name__}.{member_name}"
         setattr(
             module,
@@ -761,10 +778,22 @@ def traced(
 
     ret = None
     if inspect.isclass(fn):
-        ret = _trace_class(fn, prune_empty, span_type, name, filter)
+        ret = _trace_class(
+            fn,
+            prune_empty,
+            span_type,
+            name,
+            filter if filter else _default_trace_filter,
+        )
 
     if inspect.ismodule(fn):
-        ret = _trace_module(fn, prune_empty, span_type, name, filter)
+        ret = _trace_module(
+            fn,
+            prune_empty,
+            span_type,
+            name,
+            filter if filter else _default_trace_filter,
+        )
 
     if inspect.isfunction(fn):
         ret = _trace_function(
