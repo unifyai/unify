@@ -1,11 +1,12 @@
 import importlib
 import sys
+from typing import Callable, List
 
 import unify
 
 
 class TraceLoader(importlib.abc.Loader):
-    def __init__(self, original_loader, filter=None):
+    def __init__(self, original_loader, filter: Callable = None):
         self._original_loader = original_loader
         self.filter = filter
 
@@ -18,7 +19,7 @@ class TraceLoader(importlib.abc.Loader):
 
 
 class TraceFinder(importlib.abc.MetaPathFinder):
-    def __init__(self, targets=[], filter=None):
+    def __init__(self, targets: List[str], filter: Callable = None):
         self.targets = targets
         self.filter = filter
 
@@ -45,12 +46,31 @@ class TraceFinder(importlib.abc.MetaPathFinder):
         return spec
 
 
-def install_tracing_hook(targets=[], filter=None):
+def install_tracing_hook(targets: List[str], filter: Callable = None):
+    """Install an import hook that wraps imported modules with the traced decorator.
+
+    This function adds a TraceFinder to sys.meta_path that will intercept module imports
+    and wrap them with the traced decorator. The hook will only be installed if one
+    doesn't already exist.
+
+    Args:
+        targets: List of module name prefixes to target for tracing. Only modules
+            whose names start with these prefixes will be wrapped.
+
+        filter: A filter function that is passed to the traced decorator.
+
+    """
     if not any(isinstance(finder, TraceFinder) for finder in sys.meta_path):
         sys.meta_path.insert(0, TraceFinder(targets, filter))
 
 
 def disable_tracing_hook():
+    """Remove the tracing import hook from sys.meta_path.
+
+    This function removes any TraceFinder instances from sys.meta_path, effectively
+    disabling the tracing functionality for subsequent module imports.
+
+    """
     for finder in sys.meta_path:
         if isinstance(finder, TraceFinder):
             sys.meta_path.remove(finder)
