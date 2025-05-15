@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import time
@@ -350,6 +351,49 @@ def test_cached_decorator_both_mode():
     assert z1 == z2 == 3
     assert t1 - t0 > 1
     assert t2 - t1 < 0.1
+
+
+@_handle_project
+@pytest.mark.asyncio
+async def test_cached_decorator_async():
+    @unify.cached
+    async def add_two_numbers(x, y):
+        await asyncio.sleep(1)
+        return x + y
+
+    with _CacheHandler():
+        t0 = time.perf_counter()
+        z1 = await add_two_numbers(1, 2)
+        t1 = time.perf_counter()
+        z2 = await add_two_numbers(1, 2)
+        t2 = time.perf_counter()
+
+    assert z1 == z2 == 3
+    assert t1 - t0 > 1
+    assert t2 - t1 < 0.1
+
+
+@_handle_project
+def test_cached_decorator_upstream_cache():
+    @unify.cached(local=False)
+    def add_two_numbers(x, y):
+        return x + y
+
+    add_two_numbers(1, 2)
+    logs = unify.get_logs(context=UPSTREAM_CACHE_CONTEXT_NAME)
+    assert len(logs) == 1
+
+
+@_handle_project
+@pytest.mark.asyncio
+async def test_cached_decorator_upstream_cache_async():
+    @unify.cached(local=False)
+    async def add_two_numbers(x, y):
+        return x + y
+
+    await add_two_numbers(1, 2)
+    logs = unify.get_logs(context=UPSTREAM_CACHE_CONTEXT_NAME)
+    assert len(logs) == 1
 
 
 if __name__ == "__main__":
