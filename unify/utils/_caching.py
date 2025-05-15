@@ -388,7 +388,42 @@ def cached(
                 )
         return ret
 
-    return wrapped
+    async def async_wrapped(*args, **kwargs):
+        nonlocal mode
+        if isinstance(mode, str) and mode.endswith("-closest"):
+            mode = mode.removesuffix("-closest")
+            read_closest = True
+        else:
+            read_closest = False
+        in_cache = False
+        ret = None
+        if mode in [True, "both", "read", "read-only"]:
+            ret = _get_cache(
+                fn_name=fn.__name__,
+                kw=kwargs,
+                raise_on_empty=mode == "read-only",
+                read_closest=read_closest,
+                delete_closest=read_closest,
+                local=local,
+            )
+            in_cache = True if ret is not None else False
+        if ret is None:
+            ret = await fn(*args, **kwargs)
+        if (ret is not None or read_closest) and mode in [
+            True,
+            "both",
+            "write",
+        ]:
+            if not in_cache or mode == "write":
+                _write_to_cache(
+                    fn_name=fn.__name__,
+                    kw=kwargs,
+                    response=ret,
+                    local=local,
+                )
+        return ret
+
+    return wrapped if not inspect.iscoroutinefunction(fn) else async_wrapped
 
 
 # File Manipulation #
