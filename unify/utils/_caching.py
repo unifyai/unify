@@ -336,6 +336,32 @@ def _write_to_cache(
         )
 
 
+def _handle_reading_from_cache(
+    fn_name: str,
+    kwargs: Dict[str, Any],
+    mode: str,
+    local: bool = True,
+):
+    if isinstance(mode, str) and mode.endswith("-closest"):
+        mode = mode.removesuffix("-closest")
+        read_closest = True
+    else:
+        read_closest = False
+    in_cache = False
+    ret = None
+    if mode in [True, "both", "read", "read-only"]:
+        ret = _get_cache(
+            fn_name=fn_name,
+            kw=kwargs,
+            raise_on_empty=mode == "read-only",
+            read_closest=read_closest,
+            delete_closest=read_closest,
+            local=local,
+        )
+        in_cache = True if ret is not None else False
+    return ret, read_closest, in_cache
+
+
 # Decorators #
 # -----------#
 
@@ -354,24 +380,12 @@ def cached(
         )
 
     def wrapped(*args, **kwargs):
-        nonlocal mode
-        if isinstance(mode, str) and mode.endswith("-closest"):
-            mode = mode.removesuffix("-closest")
-            read_closest = True
-        else:
-            read_closest = False
-        in_cache = False
-        ret = None
-        if mode in [True, "both", "read", "read-only"]:
-            ret = _get_cache(
-                fn_name=fn.__name__,
-                kw=kwargs,
-                raise_on_empty=mode == "read-only",
-                read_closest=read_closest,
-                delete_closest=read_closest,
-                local=local,
-            )
-            in_cache = True if ret is not None else False
+        ret, read_closest, in_cache = _handle_reading_from_cache(
+            fn.__name__,
+            kwargs,
+            mode,
+            local,
+        )
         if ret is None:
             ret = fn(*args, **kwargs)
         if (ret is not None or read_closest) and mode in [
@@ -389,24 +403,12 @@ def cached(
         return ret
 
     async def async_wrapped(*args, **kwargs):
-        nonlocal mode
-        if isinstance(mode, str) and mode.endswith("-closest"):
-            mode = mode.removesuffix("-closest")
-            read_closest = True
-        else:
-            read_closest = False
-        in_cache = False
-        ret = None
-        if mode in [True, "both", "read", "read-only"]:
-            ret = _get_cache(
-                fn_name=fn.__name__,
-                kw=kwargs,
-                raise_on_empty=mode == "read-only",
-                read_closest=read_closest,
-                delete_closest=read_closest,
-                local=local,
-            )
-            in_cache = True if ret is not None else False
+        ret, read_closest, in_cache = _handle_reading_from_cache(
+            fn.__name__,
+            kwargs,
+            mode,
+            local,
+        )
         if ret is None:
             ret = await fn(*args, **kwargs)
         if (ret is not None or read_closest) and mode in [
