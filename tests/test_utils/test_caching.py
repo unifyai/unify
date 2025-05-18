@@ -473,6 +473,26 @@ def test_cached_decorator_mode_read_only():
             add_two_numbers(1, 1)
 
 
+def test_cached_decorator_mode_read_closest():
+    @unify.cached(mode="write")
+    def squared(y):
+        return y * y * 2
+
+    @unify.cached(mode="read-closest")
+    def square(x):
+        return x * x
+
+    with _CacheHandler() as cache_handler:
+        r0 = squared(1)
+        assert os.path.exists(cache_handler.test_path)
+        mt1 = os.path.getmtime(cache_handler.test_path)
+
+        r1 = square(2)
+        mt2 = os.path.getmtime(cache_handler.test_path)
+        assert mt2 == mt1
+        assert r0 == r1
+
+
 def test_cached_decorator_mode_write():
     @unify.cached(mode="write")
     def square(x):
