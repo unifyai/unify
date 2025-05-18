@@ -185,6 +185,12 @@ def _get_cache(
         if not _is_key_in_cache(cache_str, local):
             if raise_on_empty or read_closest:
                 keys_to_search = _get_cache_keys(local)
+                if len(keys_to_search) == 0:
+                    CACHE_LOCK.release()
+                    raise Exception(
+                        f"Failed to get cache for function {fn_name} with kwargs {_dumps(kw, indent=4)} "
+                        f"Cache is empty, mode is read-only ",
+                    )
                 closest_match = difflib.get_close_matches(
                     cache_str,
                     keys_to_search,
