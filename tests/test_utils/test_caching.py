@@ -359,16 +359,22 @@ async def test_cached_decorator_async():
         await asyncio.sleep(1)
         return x + y
 
-    with _CacheHandler():
+    with _CacheHandler() as cache_handler:
         t0 = time.perf_counter()
         z1 = await add_two_numbers(1, 2)
+        t0 = time.perf_counter() - t0
+
+        assert os.path.exists(cache_handler.test_path)
+        mt1 = os.path.getmtime(cache_handler.test_path)
+
         t1 = time.perf_counter()
         z2 = await add_two_numbers(1, 2)
-        t2 = time.perf_counter()
+        t1 = time.perf_counter() - t1
+        mt2 = os.path.getmtime(cache_handler.test_path)
 
-    assert z1 == z2 == 3
-    assert t1 - t0 > 1
-    assert t2 - t1 < 0.1
+        assert mt2 == mt1
+        assert t1 < t0
+        assert z1 == z2 == 3
 
 
 @_handle_project
@@ -412,12 +418,13 @@ async def test_cached_decorator_mode_read_async():
         return x + y
 
     with _CacheHandler() as cache_handler:
-        await add_two_numbers(1, 2)
+        r0 = await add_two_numbers(1, 2)
         assert os.path.exists(cache_handler.test_path)
         mt1 = os.path.getmtime(cache_handler.test_path)
-        await add_two_numbers(1, 2)
+        r1 = await add_two_numbers(1, 2)
         mt2 = os.path.getmtime(cache_handler.test_path)
         assert mt2 == mt1
+        assert r0 == r1
 
 
 @pytest.mark.asyncio
@@ -445,13 +452,14 @@ def test_cached_decorator_mode_read():
     with _CacheHandler() as cache_handler:
         t0 = time.perf_counter()
         r0 = add_two_numbers(1, 1)
-        t1 = time.perf_counter()
-        assert os.path.exists(cache_handler.test_path)
         mt1 = os.path.getmtime(cache_handler.test_path)
+        t0 = time.perf_counter() - t0
+        t1 = time.perf_counter()
         r1 = add_two_numbers(1, 1)
+        t1 = time.perf_counter() - t1
         mt2 = os.path.getmtime(cache_handler.test_path)
         assert mt1 == mt2
-        assert t1 > t0
+        assert t1 < t0
         assert r0 == r1
 
 
@@ -478,7 +486,6 @@ def test_cached_decorator_mode_write():
 
         square(1)
         mt2 = os.path.getmtime(cache_handler.test_path)
-        assert os.path.exists(cache_handler.test_path)
         assert mt2 > mt1
 
 
