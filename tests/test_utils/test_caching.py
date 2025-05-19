@@ -496,10 +496,10 @@ def test_cached_decorator_mode_read_closest():
 def test_cached_decorator_mode_write():
     @unify.cached(mode="write")
     def square(x):
+        time.sleep(0.5)
         return x * x
 
     with _CacheHandler() as cache_handler:
-
         square(1)
         assert os.path.exists(cache_handler.test_path)
         mt1 = os.path.getmtime(cache_handler.test_path)
