@@ -483,6 +483,13 @@ class TraceTransformer(ast.NodeTransformer):
         )
 
 
+def _get_llm_usage(outputs):
+    try:
+        return outputs["usage"]
+    except Exception as e:
+        return outputs
+
+
 def _nested_add(a, b):
     if a is None and isinstance(b, dict):
         a = {k: None if isinstance(v, dict) else 0 for k, v in b.items()}
@@ -578,9 +585,9 @@ def _finalize_span(
     SPAN.get()["outputs"] = outputs
     SPAN.get()["completed"] = True
     if SPAN.get()["type"] == "llm" and outputs is not None:
-        SPAN.get()["llm_usage"] = outputs["usage"]
+        SPAN.get()["llm_usage"] = _get_llm_usage(outputs)
     if SPAN.get()["type"] in ("llm", "llm-cached") and outputs is not None:
-        SPAN.get()["llm_usage_inc_cache"] = outputs["usage"]
+        SPAN.get()["llm_usage_inc_cache"] = _get_llm_usage(outputs)
     trace = SPAN.get()
     if prune_empty:
         trace = _prune_dict(trace)
