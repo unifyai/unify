@@ -1380,11 +1380,45 @@ class AsyncUnify(_UniClient):
             log_query_body=log_query_body,
             log_response_body=log_response_body,
         )
-        # ToDo: add all proper cache support, as is done for synchronous version above
-        if cache is True:
-            chat_completion = _get_cache(fn_name="chat.completions.create", kw=kw)
+        if isinstance(cache, str) and cache.endswith("-closest"):
+            cache = cache.removesuffix("-closest")
+            read_closest = True
         else:
-            chat_completion = None
+            read_closest = False
+        chat_completion = None
+        in_cache = False
+        if cache in [True, "both", "read", "read-only"]:
+            if self._traced:
+
+                def _get_cache_traced(**kw):
+                    return _get_cache(
+                        fn_name="chat.completions.create",
+                        kw=kw,
+                        raise_on_empty=cache == "read-only",
+                        read_closest=read_closest,
+                        delete_closest=read_closest,
+                        local=local_cache,
+                    )
+
+                chat_completion = await unify.traced(
+                    _get_cache_traced(**kw),
+                    span_type="llm-cached",
+                    name=(
+                        endpoint
+                        if tags is None
+                        else endpoint + "[" + ",".join([str(t) for t in tags]) + "]"
+                    ),
+                )(**kw)
+            else:
+                chat_completion = _get_cache(
+                    fn_name="chat.completions.create",
+                    kw=kw,
+                    raise_on_empty=cache == "read-only",
+                    read_closest=read_closest,
+                    delete_closest=read_closest,
+                    local=local_cache,
+                )
+                in_cache = True if chat_completion is not None else False
         if chat_completion is None:
             try:
                 if endpoint in LOCAL_MODELS:
@@ -1421,11 +1455,17 @@ class AsyncUnify(_UniClient):
                         )
             except openai.APIStatusError as e:
                 raise Exception(e.message)
-            if cache is True:
+        if (chat_completion is not None or read_closest) and cache in [
+            True,
+            "both",
+            "write",
+        ]:
+            if not in_cache or cache == "write":
                 _write_to_cache(
                     fn_name="chat.completions.create",
                     kw=kw,
                     response=chat_completion,
+                    local=local_cache,
                 )
         if return_full_completion:
             return chat_completion

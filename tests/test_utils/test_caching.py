@@ -8,7 +8,7 @@ import pytest
 import unify
 from tests.test_logging.helpers import _handle_project
 from tests.test_utils.helpers import _CacheHandler
-from unify import Unify
+from unify import AsyncUnify, Unify
 from unify.utils._caching import UPSTREAM_CACHE_CONTEXT_NAME
 
 
@@ -25,6 +25,27 @@ def test_cache() -> None:
         mt0 = os.path.getmtime(cache_handler.test_path)
         t = time.perf_counter()
         r1 = client.generate(user_message="hello", cache=True)
+        mt1 = os.path.getmtime(cache_handler.test_path)
+        t1 = time.perf_counter() - t
+        assert t1 < t0
+        assert mt0 == mt1
+        assert r0 == r1
+
+
+@pytest.mark.asyncio
+async def test_cache_async():
+    with _CacheHandler() as cache_handler:
+        client = AsyncUnify(
+            endpoint="gpt-4o@openai",
+            cache=True,
+        )
+        t = time.perf_counter()
+        r0 = await client.generate(user_message="hello")
+        t0 = time.perf_counter() - t
+        assert os.path.exists(cache_handler.test_path)
+        mt0 = os.path.getmtime(cache_handler.test_path)
+        t = time.perf_counter()
+        r1 = await client.generate(user_message="hello")
         mt1 = os.path.getmtime(cache_handler.test_path)
         t1 = time.perf_counter() - t
         assert t1 < t0
