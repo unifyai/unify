@@ -1006,7 +1006,7 @@ class Unify(_UniClient):
                 if self.traced:
                     chat_completion = unify.traced(
                         self._client.chat.completions.create,
-                        span_type="llm",
+                        span_type="llm-stream",
                         name=(
                             endpoint
                             if tags is None
@@ -1333,7 +1333,7 @@ class AsyncUnify(_UniClient):
                     # ToDo: test if this works, it probably won't
                     async_stream = await unify.traced(
                         self._client.chat.completions.create,
-                        span_type="llm",
+                        span_type="llm-stream",
                         name=(
                             endpoint
                             if tags is None
