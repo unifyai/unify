@@ -447,6 +447,7 @@ async def test_traced_async():
 
     _wait_for_trace_logger()
     logs = unify.get_logs()
+    logs = sorted(logs, key=lambda x: x.entries["trace"]["inputs"]["st"])
 
     for i, log in enumerate(logs):
         trace = log.entries["trace"]
@@ -508,7 +509,10 @@ async def test_traced_async_source_code():
     logs = unify.get_logs()
     assert len(logs) == 1
     source = inspect.getsource(some_func).replace(" ", "").replace("\n", "")
-    assert logs[0].entries["trace"]["code"].replace(" ", "").replace("\n", "") == source
+    assert (
+        logs[0].entries["trace"]["code"].replace(" ", "").replace("\n", "")
+        == f"```python{source}```"
+    )
 
 
 @_handle_project
