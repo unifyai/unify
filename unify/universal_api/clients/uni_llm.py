@@ -1574,3 +1574,9 @@ class AsyncUnify(_UniClient):
             instance.
         """
         return Unify(**self._constructor_args)
+
+    async def close(self):
+        """
+        Close the underlying client.
+        """
+        await self._client.close()

@@ -39,15 +39,19 @@ async def test_cache_async():
             endpoint="gpt-4o@openai",
             cache=True,
         )
+
         t = time.perf_counter()
         r0 = await client.generate(user_message="hello")
         t0 = time.perf_counter() - t
-        assert os.path.exists(cache_handler.test_path)
         mt0 = os.path.getmtime(cache_handler.test_path)
+
         t = time.perf_counter()
         r1 = await client.generate(user_message="hello")
         mt1 = os.path.getmtime(cache_handler.test_path)
         t1 = time.perf_counter() - t
+
+        await client.close()
+        assert os.path.exists(cache_handler.test_path)
         assert t1 < t0
         assert mt0 == mt1
         assert r0 == r1
