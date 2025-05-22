@@ -1408,6 +1408,7 @@ class AsyncUnify(_UniClient):
                         if tags is None
                         else endpoint + "[" + ",".join([str(t) for t in tags]) + "]"
                     ),
+                    fn_type="async",
                 )(**kw)
             else:
                 chat_completion = _get_cache(
@@ -1444,6 +1445,7 @@ class AsyncUnify(_UniClient):
                                 + ",".join([str(t) for t in tags])
                                 + "]"
                             ),
+                            fn_type="async",
                         )(**kw)
                     else:
                         chat_completion = await self._client.chat.completions.create(

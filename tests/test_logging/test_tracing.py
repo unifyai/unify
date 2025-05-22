@@ -177,6 +177,7 @@ def test_traced_uni_llm():
 async def test_traced_uni_llm_async():
     client = unify.AsyncUnify("gpt-4o@openai", traced=True)
     await client.generate("hello")
+    await client.close()
     _wait_for_trace_logger()
     trace = unify.get_logs()[0].entries["trace"]
 
