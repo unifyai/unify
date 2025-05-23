@@ -799,7 +799,9 @@ def _trace_function(
     @functools.wraps(fn)
     async def async_wrapped(*args, **kwargs):
         log_token = (
-            None if ACTIVE_TRACE_LOG.get() else ACTIVE_TRACE_LOG.set([unify.log()])
+            None
+            if ACTIVE_TRACE_LOG.get()
+            else ACTIVE_TRACE_LOG.set([unify.log(context=get_trace_context())])
         )
         new_span, exec_start_time, local_token, global_token = _create_span(
             fn,
@@ -829,7 +831,7 @@ def _trace_function(
             if log_token:
                 ACTIVE_TRACE_LOG.set([])
 
-    if inspect.iscoroutinefunction(fn) or fn_type == "async":
+    if inspect.iscoroutinefunction(inspect.unwrap(fn)) or fn_type == "async":
         return async_wrapped
 
     return wrapped
