@@ -1400,15 +1400,14 @@ class AsyncUnify(_UniClient):
                         local=local_cache,
                     )
 
-                chat_completion = await unify.traced(
-                    _get_cache_traced(**kw),
+                chat_completion = unify.traced(
+                    _get_cache_traced,
                     span_type="llm-cached",
                     name=(
                         endpoint
                         if tags is None
                         else endpoint + "[" + ",".join([str(t) for t in tags]) + "]"
                     ),
-                    fn_type="async",
                 )(**kw)
             else:
                 chat_completion = _get_cache(

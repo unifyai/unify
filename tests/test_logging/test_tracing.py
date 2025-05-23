@@ -174,7 +174,7 @@ def test_traced_uni_llm():
 
 @_handle_project
 @pytest.mark.asyncio
-async def test_traced_uni_llm_async():
+async def test_traced_async_uni_llm():
     client = unify.AsyncUnify("gpt-4o@openai", traced=True)
     await client.generate("hello")
     await client.close()
@@ -210,22 +210,22 @@ async def test_traced_uni_llm_async():
 
 
 @_handle_project
-def test_traced_uni_llm_stream():
-    client = unify.Unify("gpt-4o@openai", traced=True)
-    res = client.generate("hello", stream=True)
-    # TODO ideally we should be able to trace without flushing the stream
-    for _ in res:
-        pass
+def test_traced_uni_llm_w_caching():
+
+    client = unify.Unify("gpt-4o@openai", cache=True)
+    client.generate("hello")
+    client.set_traced(True)
+    client.generate("hello")
     _wait_for_trace_logger()
     trace = unify.get_logs()[0].entries["trace"]
 
-    assert trace["type"] == "llm"
+    assert trace["type"] == "llm-cached"
     assert trace["span_name"] == "gpt-4o@openai"
     assert trace["offset"] == 0
     assert trace["inputs"] == {
         "messages": [{"role": "user", "content": "hello"}],
         "model": "gpt-4o@openai",
-        "stream": True,
+        "stream": False,
         "temperature": 1.0,
         "extra_body": {
             "signature": "python",
@@ -248,12 +248,13 @@ def test_traced_uni_llm_stream():
 
 
 @_handle_project
-def test_traced_uni_llm_w_caching():
-
-    client = unify.Unify("gpt-4o@openai", cache=True)
-    client.generate("hello")
+@pytest.mark.asyncio
+async def test_traced_async_uni_llm_w_caching():
+    client = unify.AsyncUnify("gpt-4o@openai", cache=True)
+    await client.generate("hello")
     client.set_traced(True)
-    client.generate("hello")
+    await client.generate("hello")
+    await client.close()
     _wait_for_trace_logger()
     trace = unify.get_logs()[0].entries["trace"]
 
