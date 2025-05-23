@@ -871,7 +871,6 @@ def traced(
             span_type,
             name,
             filter if filter else _default_trace_filter,
-            fn_type,
         )
     elif inspect.ismodule(obj):
         ret = _trace_module(

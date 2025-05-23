@@ -1450,7 +1450,6 @@ class AsyncUnify(_UniClient):
                             f"calling {kw['model']}... (thread {threading.get_ident()})",
                         )
                     if self.traced:
-                        # ToDo: test if this works, it probably won't
                         chat_completion = await unify.traced(
                             self._client.chat.completions.create,
                             span_type="llm",
