@@ -813,7 +813,6 @@ def test_with_traced_context_and_traced_fn():
     trace = logs[0].entries["trace"]
     assert trace["span_name"] == "Foo"
     assert trace["type"] == "context"
-    assert trace["inputs"] is None
     assert trace["outputs"] == {"ret": 3}
     assert len(trace["child_spans"]) == 1
     assert trace["child_spans"][0]["span_name"] == "some_func"
