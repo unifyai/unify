@@ -473,7 +473,7 @@ class Traced:
 
     def __enter__(self):
         self.frame = inspect.currentframe().f_back
-        self.locals_before = self.frame.f_locals.copy()
+        self.locals_before = copy.deepcopy(self.frame.f_locals.copy())
 
         try:
             self.code = inspect.getsource(self.frame.f_code)

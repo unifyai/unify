@@ -740,11 +740,15 @@ def test_traced_context_set_get():
 def test_with_traced_context():
     a = 0
     b = 1
+    ll = []
+    msg = "Bye"
     e = 10
     with unify.Traced("First Context"):
         c = a + b
         b = 20
         d = b - 20
+        msg = f"Hello {msg}"
+        ll.append(0)
 
     _wait_for_trace_logger()
     logs = unify.get_logs()
@@ -752,8 +756,8 @@ def test_with_traced_context():
     trace = logs[0].entries["trace"]
     assert trace["span_name"] == "First Context"
     assert trace["type"] == "context"
-    assert trace["inputs"] == {"a": 0, "b": 1}
-    assert trace["outputs"] == {"c": 1, "b": 20, "d": 0}
+    assert trace["inputs"] == {"a": 0, "b": 1, "ll": [], "msg": "Bye"}
+    assert trace["outputs"] == {"c": 1, "b": 20, "d": 0, "msg": "Hello Bye", "ll": [0]}
     assert len(trace["child_spans"]) == 0
 
 
