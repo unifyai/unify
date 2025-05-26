@@ -494,6 +494,12 @@ class Traced:
         ts = datetime.now(timezone.utc).isoformat()
         if not SPAN.get():
             RUNNING_TIME.set(self.exec_start_time)
+
+        input_vars = self._extract_read_vars()
+        inputs = {
+            k: self.locals_before[k] for k in input_vars if k in self.locals_before
+        }
+
         new_span = {
             "id": str(uuid.uuid4()),
             "type": "context",
@@ -510,7 +516,7 @@ class Traced:
             "code": f"```python\n{self.code}\n```",
             "code_fpath": self.code_fpath,
             "code_start_line": self.lineno,
-            "inputs": None,
+            "inputs": _make_json_serializable(inputs) if inputs else None,
             "outputs": None,
             "errors": None,
             "child_spans": [],
@@ -535,20 +541,13 @@ class Traced:
     def __exit__(self, exc_type, exc_value, exc_tb):
         locals_after = self.frame.f_locals
 
-        input_vars = self._extract_read_vars()
-        inputs = {
-            k: self.locals_before[k] for k in input_vars if k in self.locals_before
-        }
-
         outputs = {
             k: v
             for k, v in locals_after.items()
             if k not in self.locals_before or self.locals_before[k] != v
         }
 
-        # TODO handle exception
         SPAN.get()["exec_time"] = time.perf_counter() - self.exec_start_time
-        SPAN.get()["inputs"] = _make_json_serializable(inputs) if inputs else None
         SPAN.get()["outputs"] = _make_json_serializable(outputs) if outputs else None
         SPAN.get()["completed"] = True
         if exc_tb:
