@@ -482,6 +482,7 @@ class Traced:
         except OSError:
             self.code = ""
             self.code_fpath = ""
+            self.start_linenumber = 0
 
         self.runtime_lineno = self.frame.f_lineno
 
@@ -540,15 +541,15 @@ class Traced:
         return self
 
     def __exit__(self, exc_type, exc_value, exc_tb):
-        locals_after = self.frame.f_locals
+        SPAN.get()["exec_time"] = time.perf_counter() - self.exec_start_time
 
+        locals_after = self.frame.f_locals
         outputs = {
             k: v
             for k, v in locals_after.items()
             if k not in self.locals_before or self.locals_before[k] != v
         }
 
-        SPAN.get()["exec_time"] = time.perf_counter() - self.exec_start_time
         SPAN.get()["outputs"] = _make_json_serializable(outputs) if outputs else None
         SPAN.get()["completed"] = True
         if exc_tb:
@@ -565,39 +566,36 @@ class Traced:
         if self.log_token:
             ACTIVE_TRACE_LOG.set([])
 
+    class _VarReadVisitor(ast.NodeVisitor):
+        def __init__(self):
+            self.read_vars = set()
+
+        def visit_Name(self, node):
+            if isinstance(node.ctx, ast.Load):
+                self.read_vars.add(node.id)
+
+    class _WithBlockFinder(ast.NodeVisitor):
+        def __init__(self, lineno):
+            self.lineno = lineno
+            self.target_node = None
+
+        def visit_With(self, node):
+            if node.lineno <= self.lineno <= node.end_lineno:
+                self.target_node = node
+
     def _extract_read_vars(self):
-        """
-        Uses AST to extract variable names that are read inside the 'with' block.
-        """
         if not self.code:
             return set(self.locals_before)  # fallback: assume all are used
 
         tree = ast.parse(textwrap.dedent(self.code))
 
-        class VarReadVisitor(ast.NodeVisitor):
-            def __init__(self):
-                self.read_vars = set()
-
-            def visit_Name(self, node):
-                if isinstance(node.ctx, ast.Load):
-                    self.read_vars.add(node.id)
-
-        class WithBlockFinder(ast.NodeVisitor):
-            def __init__(self, lineno):
-                self.lineno = lineno
-                self.target_node = None
-
-            def visit_With(self, node):
-                if node.lineno <= self.lineno <= node.end_lineno:
-                    self.target_node = node
-
-        finder = WithBlockFinder(self.runtime_lineno - self.start_linenumber + 1)
+        finder = self._WithBlockFinder(self.runtime_lineno - self.start_linenumber + 1)
         finder.visit(tree)
 
         if not finder.target_node:
             return set(self.locals_before)
 
-        reader = VarReadVisitor()
+        reader = self._VarReadVisitor()
         reader.visit(finder.target_node)
 
         return reader.read_vars
