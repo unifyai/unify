@@ -478,11 +478,12 @@ class Traced:
         try:
             self.code = inspect.getsource(self.frame.f_code)
             self.code_fpath = inspect.getsourcefile(self.frame.f_code)
+            self.start_linenumber = inspect.getsourcelines(self.frame.f_code)[1]
         except OSError:
             self.code = ""
             self.code_fpath = ""
 
-        self.lineno = self.frame.f_lineno
+        self.runtime_lineno = self.frame.f_lineno
 
         self.log_token = (
             None
@@ -515,7 +516,7 @@ class Traced:
             "llm_usage_inc_cache": None,
             "code": f"```python\n{self.code}\n```",
             "code_fpath": self.code_fpath,
-            "code_start_line": self.lineno,
+            "code_start_line": self.runtime_lineno,
             "inputs": _make_json_serializable(inputs) if inputs else None,
             "outputs": None,
             "errors": None,
@@ -590,7 +591,7 @@ class Traced:
                 if node.lineno <= self.lineno <= node.end_lineno:
                     self.target_node = node
 
-        finder = WithBlockFinder(self.lineno)
+        finder = WithBlockFinder(self.runtime_lineno - self.start_linenumber + 1)
         finder.visit(tree)
 
         if not finder.target_node:
