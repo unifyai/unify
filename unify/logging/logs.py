@@ -469,6 +469,7 @@ class Experiment:
 class Traced:
     def __init__(self, name):
         self.name = name
+        _initialize_trace_logger()
 
     def __enter__(self):
         self.frame = inspect.currentframe().f_back
@@ -523,6 +524,7 @@ class Traced:
             self.global_token = None
             SPAN.get()["child_spans"].append(new_span)
             self.local_token = SPAN.set(new_span)
+
         _get_trace_logger().update_trace(
             ACTIVE_TRACE_LOG.get(),
             copy.deepcopy(GLOBAL_SPAN.get()),
@@ -530,7 +532,7 @@ class Traced:
         )
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
+    def __exit__(self, exc_type, exc_value, exc_tb):
         locals_after = self.frame.f_locals
 
         input_vars = self._extract_read_vars()
@@ -549,6 +551,8 @@ class Traced:
         SPAN.get()["inputs"] = _make_json_serializable(inputs) if inputs else None
         SPAN.get()["outputs"] = _make_json_serializable(outputs) if outputs else None
         SPAN.get()["completed"] = True
+        if exc_tb:
+            SPAN.get()["errors"] = traceback.format_exc()
 
         SPAN.reset(self.local_token)
         _get_trace_logger().update_trace(
