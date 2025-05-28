@@ -505,14 +505,22 @@ class Traced:
 
         self.used_vars = self._extract_read_vars()
         self.inputs = {}
-        for k, v in {**self.frame.f_locals, **self.frame.f_globals}.items():
+
+        def _deepcopy_or_original(v):
+            # If deepcopy fails, we just capture the original value
+            # This will fail to capture if the variable was modified in the function
+            try:
+                return copy.deepcopy(v)
+            except Exception as e:
+                return v
+
+        for k, v in self.frame.f_globals.items():
             if k in self.used_vars and self.filter(k, v):
-                try:
-                    self.inputs[k] = copy.deepcopy(v)
-                except Exception as e:
-                    # A deepcopy failed, so we just capture the original value
-                    # This will fail to capture if the variable was modified in the function
-                    self.inputs[k] = v
+                self.inputs[k] = _deepcopy_or_original(v)
+
+        for k, v in self.frame.f_locals.items():
+            if k in self.used_vars:
+                self.inputs[k] = _deepcopy_or_original(v)
 
         new_span = {
             "id": str(uuid.uuid4()),
@@ -559,12 +567,15 @@ class Traced:
         # - Created in the function
         # - Inputs that have been modified
         outputs = {}
-        for k, v in {**self.frame.f_locals, **self.frame.f_globals}.items():
+        for k, v in self.frame.f_globals.items():
             if k in self.inputs:
                 if self.inputs[k] != v:
                     outputs[k] = v
-                else:
-                    continue
+
+        for k, v in self.frame.f_locals.items():
+            if k in self.inputs:
+                if self.inputs[k] != v:
+                    outputs[k] = v
             elif k in self.used_vars:
                 outputs[k] = v
 
