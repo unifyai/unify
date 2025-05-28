@@ -602,6 +602,9 @@ class Traced:
         def visit_Name(self, node):
             self.read_vars.add(node.id)
 
+        def visit_withitem(self, node):
+            pass
+
     class _WithBlockFinder(ast.NodeVisitor):
         def __init__(self, lineno):
             self.lineno = lineno
