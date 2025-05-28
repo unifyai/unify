@@ -467,13 +467,19 @@ class Experiment:
 
 
 class Traced:
-    def __init__(self, name):
+    def __init__(self, name, filter=None):
         self.name = name
+        self.filter = filter or self._default_filter
         _initialize_trace_logger()
+
+    def _default_filter(self, name, obj):
+        return not (
+            name.startswith("__") or name.endswith("__") or inspect.ismodule(obj)
+        )
 
     def __enter__(self):
         self.frame = inspect.currentframe().f_back
-        self.locals_before = copy.deepcopy(self.frame.f_locals.copy())
+        self.locals_before = {}
 
         try:
             self.code = inspect.getsource(self.frame.f_code)
@@ -497,10 +503,16 @@ class Traced:
         if not SPAN.get():
             RUNNING_TIME.set(self.exec_start_time)
 
-        input_vars = self._extract_read_vars()
-        inputs = {
-            k: self.locals_before[k] for k in input_vars if k in self.locals_before
-        }
+        self.used_vars = self._extract_read_vars()
+        self.inputs = {}
+        for k, v in {**self.frame.f_locals, **self.frame.f_globals}.items():
+            if k in self.used_vars and self.filter(k, v):
+                try:
+                    self.inputs[k] = copy.deepcopy(v)
+                except Exception as e:
+                    # A deepcopy failed, so we just capture the original value
+                    # This will fail to capture if the variable was modified in the function
+                    self.inputs[k] = v
 
         new_span = {
             "id": str(uuid.uuid4()),
@@ -518,7 +530,7 @@ class Traced:
             "code": f"```python\n{self.code}\n```",
             "code_fpath": self.code_fpath,
             "code_start_line": self.runtime_lineno,
-            "inputs": _make_json_serializable(inputs) if inputs else None,
+            "inputs": _make_json_serializable(self.inputs) if self.inputs else None,
             "outputs": None,
             "errors": None,
             "child_spans": [],
@@ -543,12 +555,18 @@ class Traced:
     def __exit__(self, exc_type, exc_value, exc_tb):
         SPAN.get()["exec_time"] = time.perf_counter() - self.exec_start_time
 
-        locals_after = self.frame.f_locals
-        outputs = {
-            k: v
-            for k, v in locals_after.items()
-            if k not in self.locals_before or self.locals_before[k] != v
-        }
+        # Outputs contains variables that are:
+        # - Created in the function
+        # - Inputs that have been modified
+        outputs = {}
+        for k, v in {**self.frame.f_locals, **self.frame.f_globals}.items():
+            if k in self.inputs:
+                if self.inputs[k] != v:
+                    outputs[k] = v
+                else:
+                    continue
+            elif k in self.used_vars:
+                outputs[k] = v
 
         SPAN.get()["outputs"] = _make_json_serializable(outputs) if outputs else None
         SPAN.get()["completed"] = True
