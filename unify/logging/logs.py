@@ -467,12 +467,12 @@ class Experiment:
 
 
 class Traced:
-    def __init__(self, name, filter=None):
+    def __init__(self, name, *, globals_filter=None):
         self.name = name
-        self.filter = filter or self._default_filter
+        self.globals_filter = globals_filter or self._default_globals_filter
         _initialize_trace_logger()
 
-    def _default_filter(self, name, obj):
+    def _default_globals_filter(self, name, obj):
         return not (
             name.startswith("__") or name.endswith("__") or inspect.ismodule(obj)
         )
@@ -502,14 +502,14 @@ class Traced:
 
         def _deepcopy_or_original(v):
             # If deepcopy fails, we just capture the original value
-            # This will fail to capture if the variable was modified in the function
+            # This will fail to capture output state if the variable was modified in the function
             try:
                 return copy.deepcopy(v)
             except Exception as e:
                 return v
 
         for k, v in self.frame.f_globals.items():
-            if k in self.used_vars and self.filter(k, v):
+            if k in self.used_vars and self.globals_filter(k, v):
                 self.inputs[k] = _deepcopy_or_original(v)
 
         for k, v in self.frame.f_locals.items():
