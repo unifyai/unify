@@ -479,7 +479,6 @@ class Traced:
 
     def __enter__(self):
         self.frame = inspect.currentframe().f_back
-        self.locals_before = {}
 
         try:
             self.code = inspect.getsource(self.frame.f_code)
@@ -497,11 +496,6 @@ class Traced:
             if ACTIVE_TRACE_LOG.get()
             else ACTIVE_TRACE_LOG.set([unify.log(context=get_trace_context())])
         )
-
-        self.exec_start_time = time.perf_counter()
-        ts = datetime.now(timezone.utc).isoformat()
-        if not SPAN.get():
-            RUNNING_TIME.set(self.exec_start_time)
 
         self.used_vars = self._extract_read_vars()
         self.inputs = {}
@@ -521,6 +515,11 @@ class Traced:
         for k, v in self.frame.f_locals.items():
             if k in self.used_vars:
                 self.inputs[k] = _deepcopy_or_original(v)
+
+        self.exec_start_time = time.perf_counter()
+        ts = datetime.now(timezone.utc).isoformat()
+        if not SPAN.get():
+            RUNNING_TIME.set(self.exec_start_time)
 
         new_span = {
             "id": str(uuid.uuid4()),
@@ -616,7 +615,7 @@ class Traced:
 
     def _extract_read_vars(self):
         if not self.code:
-            return set(self.locals_before)  # fallback: assume all are used
+            return set()
 
         tree = ast.parse(textwrap.dedent(self.code))
 
@@ -624,7 +623,7 @@ class Traced:
         finder.visit(tree)
 
         if not finder.target_node:
-            return set(self.locals_before)
+            return set()
 
         reader = self._VarReadVisitor()
         reader.visit(finder.target_node)
