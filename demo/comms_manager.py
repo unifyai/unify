@@ -8,11 +8,7 @@ from events import *
 
 # Subscription IDs
 project_id = "gcp-project-runtime"
-subscription_id = os.getenv("ASSISTANT_ID", "default-assistant-sub")
-call_subscription_id = "call-sub"
-email_subscription_id = "email-sub"
-msg_subscription_id = "msg-sub"
-whatsapp_subscription_id = "whatsapp-sub"
+subscription_id = os.getenv("ASSISTANT_ID", "default-assistant") + "-sub"
 
 # Map subscription IDs to their corresponding event types
 events_map: dict[str, Event] = {
