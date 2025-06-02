@@ -931,7 +931,15 @@ def _trace_function(
         log_token = (
             None
             if ACTIVE_TRACE_LOG.get()
-            else ACTIVE_TRACE_LOG.set([unify.log(context=get_trace_context())])
+            else ACTIVE_TRACE_LOG.set(
+                [
+                    unify.log(
+                        trace={},
+                        explicit_types="jsonb",
+                        context=get_trace_context(),
+                    ),
+                ],
+            )
         )
         new_span, exec_start_time, local_token, global_token = _create_span(
             fn,
@@ -966,7 +974,15 @@ def _trace_function(
         log_token = (
             None
             if ACTIVE_TRACE_LOG.get()
-            else ACTIVE_TRACE_LOG.set([unify.log(context=get_trace_context())])
+            else ACTIVE_TRACE_LOG.set(
+                [
+                    unify.log(
+                        trace={},
+                        explicit_types="jsonb",
+                        context=get_trace_context(),
+                    ),
+                ],
+            )
         )
         new_span, exec_start_time, local_token, global_token = _create_span(
             fn,
