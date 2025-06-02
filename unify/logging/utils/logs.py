@@ -430,6 +430,22 @@ def _json_chunker(big_dict, chunk_size=1024 * 1024):
     pbar.close()
 
 
+def _handle_explicit_types(
+    explicit_types: Optional[Union[str, Dict[str, str]]],
+    entries: Dict[str, Any],
+):
+    if explicit_types is None:
+        return entries
+
+    if isinstance(explicit_types, dict):
+        for field, type_spec in explicit_types.items():
+            entries["explicit_types"][field]["type"] = type_spec
+    elif isinstance(explicit_types, str):
+        for field in entries["explicit_types"].keys():
+            entries["explicit_types"][field]["type"] = explicit_types
+    return entries
+
+
 def log(
     fn: Optional[Callable] = None,
     *,
@@ -439,6 +455,7 @@ def log(
     new: bool = False,
     overwrite: bool = False,
     mutable: Optional[Union[bool, Dict[str, bool]]] = True,
+    explicit_types: Optional[Union[str, Dict[str, str]]] = None,
     api_key: Optional[str] = None,
     **entries,
 ) -> Union[unify.Log, Callable]:
@@ -468,6 +485,8 @@ def log(
         fields with the same name.
 
         mutable: Either a boolean to apply uniform mutability for all fields, or a dictionary mapping field names to booleans for per-field control. Defaults to True.
+
+        explicit_types: Either a string to apply uniform explicit types for all fields, or a dictionary mapping field names to their type specifications.
 
         api_key: If specified, unify API key to be used. Defaults to the value in the
         `UNIFY_KEY` environment variable.
@@ -527,6 +546,7 @@ def log(
     entries = {**entries, **ACTIVE_ENTRIES_WRITE.get()}
     entries = _handle_special_types(entries)
     entries = _handle_mutability(mutable, entries)
+    entries = _handle_explicit_types(explicit_types, entries)
     project = _get_and_maybe_create_project(project, api_key=api_key)
     if ASYNC_LOGGING and _async_logger is not None:
         # Use async logging: enqueue a create event and capture the Future.
