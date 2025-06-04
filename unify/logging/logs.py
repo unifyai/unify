@@ -1038,6 +1038,7 @@ def _trace_function(
     filter,
     fn_type,
     recursive,
+    depth,
 ):
     if trace_dirs is not None:
         fn = _transform_function(fn, prune_empty, span_type, trace_dirs)
@@ -1046,6 +1047,16 @@ def _trace_function(
     compiled_ast = None
 
     if recursive:
+        if depth <= 0:
+            return _trace_wrapper_factory(
+                inspect.unwrap(fn),
+                span_type,
+                name,
+                prune_empty,
+                False,
+                None,
+            )
+
         try:
             source = inspect.getsource(fn)
             source = textwrap.dedent(source)
@@ -1100,6 +1111,7 @@ def _trace_function(
             "filter": filter,
             "fn_type": fn_type,
             "recursive": recursive,
+            "depth": depth - 1,
         }
 
         trace_args_ast = {}
@@ -1156,6 +1168,7 @@ def traced(
     filter: Optional[Callable[[callable], bool]] = None,
     fn_type: Optional[str] = None,
     recursive: bool = False,  # Only valid for Functions.
+    depth: Optional[int] = None,
 ):
     _initialize_trace_logger()
 
@@ -1170,6 +1183,7 @@ def traced(
             filter=filter,
             fn_type=fn_type,
             recursive=recursive,
+            depth=depth,
         )
 
     if hasattr(obj, "__unify_traced"):
@@ -1193,6 +1207,8 @@ def traced(
             filter if filter else _default_trace_filter,
         )
     elif inspect.isfunction(obj) or inspect.ismethod(obj):
+        if depth is None:
+            depth = float("inf")
         ret = _trace_function(
             obj,
             prune_empty,
@@ -1203,6 +1219,7 @@ def traced(
             filter,
             fn_type,
             recursive,
+            depth,
         )
     else:
         ret = _trace_instance(
