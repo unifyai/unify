@@ -4,6 +4,7 @@ import ast
 import copy
 import functools
 import inspect
+import logging
 import textwrap
 import time
 import traceback
@@ -21,6 +22,12 @@ from .utils.logs import (
     get_trace_context,
 )
 from .utils.logs import log as unify_log
+
+trace_logger = logging.getLogger("unify.trace")
+trace_logger.setLevel(logging.DEBUG)
+handler = logging.StreamHandler()
+handler.setLevel(logging.DEBUG)
+trace_logger.addHandler(handler)
 
 # Context Handlers #
 # -----------------#
@@ -481,6 +488,7 @@ class _Traced:
             if ACTIVE_TRACE_LOG.get()
             else ACTIVE_TRACE_LOG.set([unify.log(context=get_trace_context())])
         )
+        trace_logger.debug(f"Entering {self.fn.__name__}")
         self.new_span, self.exec_start_time, self.local_token, self.global_token = (
             _create_span(
                 self.fn,
@@ -507,6 +515,7 @@ class _Traced:
             self.prune_empty,
             self.global_token,
         )
+        trace_logger.debug(f"Exiting {self.fn.__name__}")
         if self.log_token:
             ACTIVE_TRACE_LOG.set([])
 
@@ -958,7 +967,7 @@ def _transform_function(fn, prune_empty, span_type, trace_dirs):
     return fn
 
 
-def _get_or_compile(func, compiled_ast, recursive):
+def _get_or_compile(func, compiled_ast):
     if hasattr(func, "__cached_tracer"):
         transformed_func = func.__cached_tracer
     else:
@@ -977,7 +986,7 @@ def _trace_wrapper_factory(fn, span_type, name, prune_empty, recursive, compiled
 
             @functools.wraps(fn)
             async def async_wrapped(*args, **kwargs):
-                transformed_fn = _get_or_compile(fn, compiled_ast, recursive)
+                transformed_fn = _get_or_compile(fn, compiled_ast)
                 with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
                     _t.result = await transformed_fn(*args, **kwargs)
                     return _t.result
@@ -998,7 +1007,7 @@ def _trace_wrapper_factory(fn, span_type, name, prune_empty, recursive, compiled
 
             @functools.wraps(fn)
             def wrapped(*args, **kwargs):
-                transformed_fn = _get_or_compile(fn, compiled_ast, recursive)
+                transformed_fn = _get_or_compile(fn, compiled_ast)
                 with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
                     _t.result = transformed_fn(*args, **kwargs)
                     return _t.result
@@ -1029,7 +1038,98 @@ def _trace_function(
     if trace_dirs is not None:
         fn = _transform_function(fn, prune_empty, span_type, trace_dirs)
 
+    trace_logger.debug(f"tracing {fn.__name__}")
     compiled_ast = None
+
+    if recursive:
+        try:
+            source = inspect.getsource(fn)
+            source = textwrap.dedent(source)
+        except Exception as e:
+            trace_logger.error(f"Error getting source for {fn.__name__}: {e}")
+            # Fallback to non-recursive tracing
+            return _trace_wrapper_factory(
+                inspect.unwrap(fn),
+                span_type,
+                name,
+                prune_empty,
+                False,
+                None,
+            )
+
+        parsed_ast = ast.parse(source)
+        func_def = parsed_ast.body[0]
+        if not isinstance(func_def, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # Fallback to non-recursive tracing
+            return _trace_wrapper_factory(
+                inspect.unwrap(fn),
+                span_type,
+                name,
+                prune_empty,
+                False,
+                None,
+            )
+
+        # Remove decorators
+        # TODO should only remove traced decorator
+        func_def.decorator_list = []
+
+        class CallCollector(ast.NodeVisitor):
+            def __init__(self):
+                self.call_names = set()
+
+            def visit_Call(self, node):
+                if isinstance(node.func, ast.Name):
+                    self.call_names.add(node.func.id)
+                self.generic_visit(node)
+
+        collector = CallCollector()
+        collector.visit(func_def)
+        call_names = collector.call_names
+
+        trace_args = {
+            "prune_empty": prune_empty,
+            "span_type": span_type,
+            "name": name,
+            "trace_contexts": trace_contexts,
+            "trace_dirs": trace_dirs,
+            "filter": filter,
+            "fn_type": fn_type,
+            "recursive": recursive,
+        }
+
+        trace_args_ast = {}
+        for k, v in trace_args.items():
+            # TODO should properly handle all possible types
+            trace_args_ast[k] = ast.Constant(value=v)
+
+        class CallTransformer(ast.NodeTransformer):
+            def visit_Call(self, node):
+                self.generic_visit(node)
+                if isinstance(node.func, ast.Name) and node.func.id in call_names:
+                    tracer_call = ast.Call(
+                        func=ast.Name(id="traced", ctx=ast.Load()),
+                        args=[
+                            ast.Name(id=node.func.id, ctx=ast.Load()),
+                        ],
+                        keywords=[
+                            *[
+                                ast.keyword(arg=k, value=trace_args_ast[k])
+                                for k in trace_args_ast
+                            ],
+                        ],
+                    )
+                    return ast.Call(
+                        func=tracer_call,
+                        args=node.args,
+                        keywords=node.keywords,
+                    )
+                return node
+
+        func_def = CallTransformer().visit(func_def)
+        ast.fix_missing_locations(parsed_ast)
+        trace_logger.debug(f"compiling {fn.__name__}")
+        compiled_ast = compile(parsed_ast, filename="<ast>", mode="exec")
 
     return _trace_wrapper_factory(
         inspect.unwrap(fn),
@@ -1063,6 +1163,9 @@ def traced(
             name=name,
             trace_contexts=trace_contexts,
             trace_dirs=trace_dirs,
+            filter=filter,
+            fn_type=fn_type,
+            recursive=recursive,
         )
 
     if hasattr(obj, "__unify_traced"):
