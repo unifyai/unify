@@ -988,8 +988,9 @@ def _trace_wrapper_factory(fn, span_type, name, prune_empty, recursive, compiled
             async def async_wrapped(*args, **kwargs):
                 transformed_fn = _get_or_compile(fn, compiled_ast)
                 with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
-                    _t.result = await transformed_fn(*args, **kwargs)
-                    return _t.result
+                    result = await transformed_fn(*args, **kwargs)
+                    _t.result = result
+                    return result
 
             return async_wrapped
         else:
@@ -997,8 +998,9 @@ def _trace_wrapper_factory(fn, span_type, name, prune_empty, recursive, compiled
             @functools.wraps(fn)
             async def async_wrapped(*args, **kwargs):
                 with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
-                    _t.result = await fn(*args, **kwargs)
-                    return _t.result
+                    result = await fn(*args, **kwargs)
+                    _t.result = result
+                    return result
 
             return async_wrapped
 
@@ -1009,8 +1011,9 @@ def _trace_wrapper_factory(fn, span_type, name, prune_empty, recursive, compiled
             def wrapped(*args, **kwargs):
                 transformed_fn = _get_or_compile(fn, compiled_ast)
                 with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
-                    _t.result = transformed_fn(*args, **kwargs)
-                    return _t.result
+                    result = transformed_fn(*args, **kwargs)
+                    _t.result = result
+                    return result
 
             return wrapped
         else:
@@ -1018,8 +1021,9 @@ def _trace_wrapper_factory(fn, span_type, name, prune_empty, recursive, compiled
             @functools.wraps(fn)
             def wrapped(*args, **kwargs):
                 with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
-                    _t.result = fn(*args, **kwargs)
-                    return _t.result
+                    result = fn(*args, **kwargs)
+                    _t.result = result
+                    return result
 
             return wrapped
 
@@ -1212,7 +1216,7 @@ def traced(
     if ret is not None:
         try:
             setattr(ret, "__unify_traced", True)
-        except AttributeError:
+        except (AttributeError, TypeError):
             pass
 
     return ret
