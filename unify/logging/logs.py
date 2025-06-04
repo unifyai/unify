@@ -958,6 +958,34 @@ def _transform_function(fn, prune_empty, span_type, trace_dirs):
     return fn
 
 
+def _trace_wrapper_factory(fn, span_type, name, prune_empty, recursive):
+    if inspect.iscoroutinefunction(fn):
+        if not recursive:
+
+            @functools.wraps(fn)
+            async def async_wrapped(*args, **kwargs):
+                with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
+                    _t.result = await fn(*args, **kwargs)
+                    return _t.result
+
+            return async_wrapped
+        else:
+            pass
+
+    if inspect.isfunction(fn):
+        if not recursive:
+
+            @functools.wraps(fn)
+            def wrapped(*args, **kwargs):
+                with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
+                    _t.result = fn(*args, **kwargs)
+                    return _t.result
+
+            return wrapped
+        else:
+            pass
+
+
 def _trace_function(
     fn,
     prune_empty,
@@ -967,26 +995,18 @@ def _trace_function(
     trace_dirs,
     filter,
     fn_type,
+    recursive,
 ):
     if trace_dirs is not None:
         fn = _transform_function(fn, prune_empty, span_type, trace_dirs)
 
-    @functools.wraps(fn)
-    def wrapped(*args, **kwargs):
-        with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
-            _t.result = fn(*args, **kwargs)
-            return _t.result
-
-    @functools.wraps(fn)
-    async def async_wrapped(*args, **kwargs):
-        with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
-            _t.result = await fn(*args, **kwargs)
-            return _t.result
-
-    if inspect.iscoroutinefunction(inspect.unwrap(fn)) or fn_type == "async":
-        return async_wrapped
-
-    return wrapped
+    return _trace_wrapper_factory(
+        inspect.unwrap(fn),
+        span_type,
+        name,
+        prune_empty,
+        recursive,
+    )
 
 
 def traced(
@@ -999,6 +1019,7 @@ def traced(
     trace_dirs: Optional[List[str]] = None,
     filter: Optional[Callable[[callable], bool]] = None,
     fn_type: Optional[str] = None,
+    recursive: bool = False,  # Only valid for Functions.
 ):
     _initialize_trace_logger()
 
@@ -1042,6 +1063,7 @@ def traced(
             trace_dirs,
             filter,
             fn_type,
+            recursive,
         )
     else:
         ret = _trace_instance(
