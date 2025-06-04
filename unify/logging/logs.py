@@ -466,6 +466,51 @@ class Experiment:
 # --------#
 
 
+class _Traced:
+    def __init__(self, fn, args, kwargs, span_type, name, prune_empty):
+        self.fn = fn
+        self.args = args
+        self.kwargs = kwargs
+        self.span_type = span_type
+        self.name = name
+        self.prune_empty = prune_empty
+
+    def __enter__(self):
+        self.log_token = (
+            None
+            if ACTIVE_TRACE_LOG.get()
+            else ACTIVE_TRACE_LOG.set([unify.log(context=get_trace_context())])
+        )
+        self.new_span, self.exec_start_time, self.local_token, self.global_token = (
+            _create_span(
+                self.fn,
+                self.args,
+                self.kwargs,
+                self.span_type,
+                self.name,
+            )
+        )
+        return self
+
+    def __exit__(self, exc_type, exc_value, exc_tb):
+        exec_time = time.perf_counter() - self.exec_start_time
+        if exc_type:
+            self.new_span["errors"] = traceback.format_exc()
+        outputs = (
+            _make_json_serializable(self.result) if self.result is not None else None
+        )
+        _finalize_span(
+            self.new_span,
+            self.local_token,
+            outputs,
+            exec_time,
+            self.prune_empty,
+            self.global_token,
+        )
+        if self.log_token:
+            ACTIVE_TRACE_LOG.set([])
+
+
 class Traced:
     def __init__(self, name, *, globals_filter=None):
         self.name = name
@@ -928,73 +973,15 @@ def _trace_function(
 
     @functools.wraps(fn)
     def wrapped(*args, **kwargs):
-        log_token = (
-            None
-            if ACTIVE_TRACE_LOG.get()
-            else ACTIVE_TRACE_LOG.set([unify.log(context=get_trace_context())])
-        )
-        new_span, exec_start_time, local_token, global_token = _create_span(
-            fn,
-            args,
-            kwargs,
-            span_type,
-            name,
-        )
-        result = None
-        try:
-            result = fn(*args, **kwargs)
-            return result
-        except Exception as e:
-            new_span["errors"] = traceback.format_exc()
-            raise e
-        finally:
-            outputs = _make_json_serializable(result) if result is not None else None
-            exec_time = time.perf_counter() - exec_start_time
-            _finalize_span(
-                new_span,
-                local_token,
-                outputs,
-                exec_time,
-                prune_empty,
-                global_token,
-            )
-            if log_token:
-                ACTIVE_TRACE_LOG.set([])
+        with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
+            _t.result = fn(*args, **kwargs)
+            return _t.result
 
     @functools.wraps(fn)
     async def async_wrapped(*args, **kwargs):
-        log_token = (
-            None
-            if ACTIVE_TRACE_LOG.get()
-            else ACTIVE_TRACE_LOG.set([unify.log(context=get_trace_context())])
-        )
-        new_span, exec_start_time, local_token, global_token = _create_span(
-            fn,
-            args,
-            kwargs,
-            span_type,
-            name,
-        )
-        result = None
-        try:
-            result = await fn(*args, **kwargs)
-            return result
-        except Exception as e:
-            new_span["errors"] = traceback.format_exc()
-            raise e
-        finally:
-            outputs = _make_json_serializable(result) if result is not None else None
-            exec_time = time.perf_counter() - exec_start_time
-            _finalize_span(
-                new_span,
-                local_token,
-                outputs,
-                exec_time,
-                prune_empty,
-                global_token,
-            )
-            if log_token:
-                ACTIVE_TRACE_LOG.set([])
+        with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
+            _t.result = await fn(*args, **kwargs)
+            return _t.result
 
     if inspect.iscoroutinefunction(inspect.unwrap(fn)) or fn_type == "async":
         return async_wrapped
