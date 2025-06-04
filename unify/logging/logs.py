@@ -958,9 +958,32 @@ def _transform_function(fn, prune_empty, span_type, trace_dirs):
     return fn
 
 
-def _trace_wrapper_factory(fn, span_type, name, prune_empty, recursive):
+def _get_or_compile(func, compiled_ast, recursive):
+    if hasattr(func, "__cached_tracer"):
+        transformed_func = func.__cached_tracer
+    else:
+        global_ns = func.__globals__.copy()
+        global_ns["traced"] = traced
+        local_ns = {}
+        exec(compiled_ast, global_ns, local_ns)
+        transformed_func = local_ns[func.__name__]
+        func.__cached_tracer = transformed_func
+    return transformed_func
+
+
+def _trace_wrapper_factory(fn, span_type, name, prune_empty, recursive, compiled_ast):
     if inspect.iscoroutinefunction(fn):
-        if not recursive:
+        if recursive:
+
+            @functools.wraps(fn)
+            async def async_wrapped(*args, **kwargs):
+                transformed_fn = _get_or_compile(fn, compiled_ast, recursive)
+                with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
+                    _t.result = await transformed_fn(*args, **kwargs)
+                    return _t.result
+
+            return async_wrapped
+        else:
 
             @functools.wraps(fn)
             async def async_wrapped(*args, **kwargs):
@@ -969,11 +992,19 @@ def _trace_wrapper_factory(fn, span_type, name, prune_empty, recursive):
                     return _t.result
 
             return async_wrapped
-        else:
-            pass
 
-    if inspect.isfunction(fn):
-        if not recursive:
+    else:
+        if recursive:
+
+            @functools.wraps(fn)
+            def wrapped(*args, **kwargs):
+                transformed_fn = _get_or_compile(fn, compiled_ast, recursive)
+                with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
+                    _t.result = transformed_fn(*args, **kwargs)
+                    return _t.result
+
+            return wrapped
+        else:
 
             @functools.wraps(fn)
             def wrapped(*args, **kwargs):
@@ -982,8 +1013,6 @@ def _trace_wrapper_factory(fn, span_type, name, prune_empty, recursive):
                     return _t.result
 
             return wrapped
-        else:
-            pass
 
 
 def _trace_function(
@@ -1000,12 +1029,15 @@ def _trace_function(
     if trace_dirs is not None:
         fn = _transform_function(fn, prune_empty, span_type, trace_dirs)
 
+    compiled_ast = None
+
     return _trace_wrapper_factory(
         inspect.unwrap(fn),
         span_type,
         name,
         prune_empty,
         recursive,
+        compiled_ast,
     )
 
 
