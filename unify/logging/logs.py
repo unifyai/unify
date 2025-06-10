@@ -991,7 +991,7 @@ def _trace_wrapper_factory(
 
         return wrapped
 
-    raise ValueError(
+    raise TypeError(
         f"Unsupported object type, should be function, coroutine or method: {fn_type}",
     )
 
