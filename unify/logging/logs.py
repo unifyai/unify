@@ -1005,6 +1005,8 @@ def _trace_function(
             compiled_ast=None,
         )
 
+    # TODO skipping logic should be moved to the wrapper factory
+    # also, we should skip the logging logic, and not just the tracing logic
     if skip_modules is not None and inspect.getmodule(fn) in skip_modules:
         return fn
 
