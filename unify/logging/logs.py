@@ -930,7 +930,15 @@ def _trace_wrapper_factory(
     prune_empty,
     recursive,
     compiled_ast,
+    skip_modules,
+    skip_functions,
 ):
+    # TODO we should skip the logging logic, and not the transformation logic
+    if (skip_modules is not None and inspect.getmodule(fn) in skip_modules) or (
+        skip_functions is not None and fn in skip_functions
+    ):
+        return fn
+
     if inspect.iscoroutinefunction(inspect.unwrap(fn)) or fn_type == "async":
         if recursive:
 
@@ -1006,14 +1014,9 @@ def _trace_function(
             prune_empty=prune_empty,
             recursive=False,
             compiled_ast=None,
+            skip_modules=skip_modules,
+            skip_functions=skip_functions,
         )
-
-    # TODO skipping logic should be moved to the wrapper factory
-    # also, we should skip the logging logic, and not just the tracing logic
-    if (skip_modules is not None and inspect.getmodule(fn) in skip_modules) or (
-        skip_functions is not None and fn in skip_functions
-    ):
-        return fn
 
     if depth <= 0:
         return _trace_wrapper_factory(
@@ -1024,6 +1027,8 @@ def _trace_function(
             prune_empty=prune_empty,
             recursive=False,
             compiled_ast=None,
+            skip_modules=skip_modules,
+            skip_functions=skip_functions,
         )
 
     try:
@@ -1040,6 +1045,8 @@ def _trace_function(
             prune_empty=prune_empty,
             recursive=False,
             compiled_ast=None,
+            skip_modules=skip_modules,
+            skip_functions=skip_functions,
         )
 
     parsed_ast = ast.parse(source)
@@ -1054,6 +1061,8 @@ def _trace_function(
             prune_empty=prune_empty,
             recursive=False,
             compiled_ast=None,
+            skip_modules=skip_modules,
+            skip_functions=skip_functions,
         )
 
     # Remove decorators
@@ -1137,6 +1146,8 @@ def _trace_function(
         prune_empty=prune_empty,
         recursive=True,
         compiled_ast=compiled_ast,
+        skip_modules=skip_modules,
+        skip_functions=skip_functions,
     )
 
 
