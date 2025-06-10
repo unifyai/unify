@@ -1237,6 +1237,38 @@ def _trace_function(
     transformer.visit(parsed_ast)
     ast.fix_missing_locations(parsed_ast)
     trace_logger.debug(f"Compiling AST for {fn.__name__}")
+
+    # TODO: Temporary
+    def _print_clean_source(tree_to_print):
+        # Removes docstring
+        for node in ast.walk(tree_to_print):
+            if not isinstance(
+                node,
+                (ast.FunctionDef, ast.ClassDef, ast.AsyncFunctionDef),
+            ):
+                continue
+
+            if not len(node.body):
+                continue
+
+            if not isinstance(node.body[0], ast.Expr):
+                continue
+
+            if not hasattr(node.body[0], "value") or not isinstance(
+                node.body[0].value,
+                ast.Str,
+            ):
+                continue
+
+            node.body = node.body[1:]
+
+        source_unparsed = "\n".join(
+            f"{i+1}: {line}"
+            for i, line in enumerate(ast.unparse(tree_to_print).split("\n"))
+        )
+        trace_logger.debug(f"AST[{fn.__name__}]:\n{source_unparsed}")
+
+    _print_clean_source(parsed_ast)
     compiled_ast = compile(parsed_ast, filename="<ast>", mode="exec")
 
     return _trace_wrapper_factory(
