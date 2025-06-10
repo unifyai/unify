@@ -482,6 +482,7 @@ class _Traced:
         self.span_type = span_type
         self.name = name
         self.prune_empty = prune_empty
+        self.result = None
 
     def __enter__(self):
         self.log_token = (
