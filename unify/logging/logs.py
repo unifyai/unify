@@ -492,7 +492,6 @@ class _Traced:
             if ACTIVE_TRACE_LOG.get()
             else ACTIVE_TRACE_LOG.set([unify.log(context=get_trace_context())])
         )
-        trace_logger.debug(f"Entering {self.fn.__name__}")
         self.new_span, self.exec_start_time, self.local_token, self.global_token = (
             _create_span(
                 self.fn,
@@ -519,7 +518,6 @@ class _Traced:
             self.prune_empty,
             self.global_token,
         )
-        trace_logger.debug(f"Exiting {self.fn.__name__}")
         if self.log_token:
             ACTIVE_TRACE_LOG.set([])
 
