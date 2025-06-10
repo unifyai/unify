@@ -1084,10 +1084,19 @@ def _trace_function(
         "skip_functions": skip_functions,
     }
 
+    fn.__trace_args = trace_args
+
     trace_args_ast = {}
-    for k, v in trace_args.items():
-        # TODO should properly handle all possible types
-        trace_args_ast[k] = ast.Constant(value=v)
+    for k in trace_args.keys():
+        trace_args_ast[k] = ast.Subscript(
+            value=ast.Attribute(
+                value=ast.Name(id=fn.__name__, ctx=ast.Load()),
+                ctx=ast.Load(),
+                attr="__trace_args",
+            ),
+            slice=ast.Index(value=ast.Constant(value=k)),
+            ctx=ast.Load(),
+        )
 
     class CallTransformer(ast.NodeTransformer):
         def visit_Call(self, node):
@@ -1112,9 +1121,10 @@ def _trace_function(
                 )
             return node
 
-    func_def = CallTransformer().visit(func_def)
+    transformer = CallTransformer()
+    transformer.visit(parsed_ast)
     ast.fix_missing_locations(parsed_ast)
-    trace_logger.debug(f"compiling {fn.__name__}")
+    trace_logger.debug(f"Compiling AST for {fn.__name__}")
     compiled_ast = compile(parsed_ast, filename="<ast>", mode="exec")
 
     return _trace_wrapper_factory(
@@ -1145,6 +1155,7 @@ def traced(
     _initialize_trace_logger()
 
     if obj is None:
+        # Any changes to the arguments of traced should be reflected here.
         return lambda f: traced(
             f,
             prune_empty=prune_empty,
@@ -1155,6 +1166,8 @@ def traced(
             fn_type=fn_type,
             recursive=recursive,
             depth=depth,
+            skip_modules=skip_modules,
+            skip_functions=skip_functions,
         )
 
     if hasattr(obj, "__unify_traced"):
