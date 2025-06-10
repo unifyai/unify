@@ -980,118 +980,126 @@ def _trace_function(
     skip_modules,
 ):
     trace_logger.debug(f"tracing {fn.__name__}")
-    compiled_ast = None
 
-    if recursive:
-        if skip_modules is not None and inspect.getmodule(fn) in skip_modules:
-            return fn
+    if not recursive:
+        return _trace_wrapper_factory(
+            inspect.unwrap(fn),
+            span_type,
+            name,
+            prune_empty,
+            False,
+            None,
+        )
 
-        if depth <= 0:
-            return _trace_wrapper_factory(
-                inspect.unwrap(fn),
-                span_type,
-                name,
-                prune_empty,
-                False,
-                None,
-            )
+    if skip_modules is not None and inspect.getmodule(fn) in skip_modules:
+        return fn
 
-        try:
-            source = inspect.getsource(fn)
-            source = textwrap.dedent(source)
-        except Exception as e:
-            trace_logger.error(f"Error getting source for {fn.__name__}: {e}")
-            # Fallback to non-recursive tracing
-            return _trace_wrapper_factory(
-                inspect.unwrap(fn),
-                span_type,
-                name,
-                prune_empty,
-                False,
-                None,
-            )
+    if depth <= 0:
+        return _trace_wrapper_factory(
+            inspect.unwrap(fn),
+            span_type,
+            name,
+            prune_empty,
+            False,
+            None,
+        )
 
-        parsed_ast = ast.parse(source)
-        func_def = parsed_ast.body[0]
-        if not isinstance(func_def, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            # Fallback to non-recursive tracing
-            return _trace_wrapper_factory(
-                inspect.unwrap(fn),
-                span_type,
-                name,
-                prune_empty,
-                False,
-                None,
-            )
+    try:
+        source = inspect.getsource(fn)
+        source = textwrap.dedent(source)
+    except Exception as e:
+        trace_logger.error(f"Error getting source for {fn.__name__}: {e}")
+        # Fallback to non-recursive tracing
+        return _trace_wrapper_factory(
+            inspect.unwrap(fn),
+            span_type,
+            name,
+            prune_empty,
+            False,
+            None,
+        )
 
-        # Remove decorators
-        # TODO should only remove traced decorator
-        func_def.decorator_list = []
+    parsed_ast = ast.parse(source)
+    func_def = parsed_ast.body[0]
+    if not isinstance(func_def, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        # Fallback to non-recursive tracing
+        return _trace_wrapper_factory(
+            inspect.unwrap(fn),
+            span_type,
+            name,
+            prune_empty,
+            False,
+            None,
+        )
 
-        class CallCollector(ast.NodeVisitor):
-            def __init__(self):
-                self.call_names = set()
+    # Remove decorators
+    # TODO should only remove traced decorator
+    func_def.decorator_list = []
 
-            def visit_Call(self, node):
-                if isinstance(node.func, ast.Name):
-                    self.call_names.add(node.func.id)
-                self.generic_visit(node)
+    class CallCollector(ast.NodeVisitor):
+        def __init__(self):
+            self.call_names = set()
 
-        collector = CallCollector()
-        collector.visit(func_def)
-        call_names = collector.call_names
+        def visit_Call(self, node):
+            if isinstance(node.func, ast.Name):
+                self.call_names.add(node.func.id)
+            self.generic_visit(node)
 
-        trace_args = {
-            "prune_empty": prune_empty,
-            "span_type": span_type,
-            "name": name,
-            "trace_contexts": trace_contexts,
-            "filter": filter,
-            "fn_type": fn_type,
-            "recursive": recursive,
-            "depth": depth - 1,
-            "skip_modules": skip_modules,
-        }
+    collector = CallCollector()
+    collector.visit(func_def)
+    call_names = collector.call_names
 
-        trace_args_ast = {}
-        for k, v in trace_args.items():
-            # TODO should properly handle all possible types
-            trace_args_ast[k] = ast.Constant(value=v)
+    trace_args = {
+        "prune_empty": prune_empty,
+        "span_type": span_type,
+        "name": name,
+        "trace_contexts": trace_contexts,
+        "filter": filter,
+        "fn_type": fn_type,
+        "recursive": recursive,
+        "depth": depth - 1,
+        "skip_modules": skip_modules,
+    }
 
-        class CallTransformer(ast.NodeTransformer):
-            def visit_Call(self, node):
-                self.generic_visit(node)
-                if isinstance(node.func, ast.Name) and node.func.id in call_names:
-                    tracer_call = ast.Call(
-                        func=ast.Name(id="traced", ctx=ast.Load()),
-                        args=[
-                            ast.Name(id=node.func.id, ctx=ast.Load()),
+    trace_args_ast = {}
+    for k, v in trace_args.items():
+        # TODO should properly handle all possible types
+        trace_args_ast[k] = ast.Constant(value=v)
+
+    class CallTransformer(ast.NodeTransformer):
+        def visit_Call(self, node):
+            self.generic_visit(node)
+            if isinstance(node.func, ast.Name) and node.func.id in call_names:
+                tracer_call = ast.Call(
+                    func=ast.Name(id="traced", ctx=ast.Load()),
+                    args=[
+                        ast.Name(id=node.func.id, ctx=ast.Load()),
+                    ],
+                    keywords=[
+                        *[
+                            ast.keyword(arg=k, value=trace_args_ast[k])
+                            for k in trace_args_ast
                         ],
-                        keywords=[
-                            *[
-                                ast.keyword(arg=k, value=trace_args_ast[k])
-                                for k in trace_args_ast
-                            ],
-                        ],
-                    )
-                    return ast.Call(
-                        func=tracer_call,
-                        args=node.args,
-                        keywords=node.keywords,
-                    )
-                return node
+                    ],
+                )
+                return ast.Call(
+                    func=tracer_call,
+                    args=node.args,
+                    keywords=node.keywords,
+                )
+            return node
 
-        func_def = CallTransformer().visit(func_def)
-        ast.fix_missing_locations(parsed_ast)
-        trace_logger.debug(f"compiling {fn.__name__}")
-        compiled_ast = compile(parsed_ast, filename="<ast>", mode="exec")
+    func_def = CallTransformer().visit(func_def)
+    ast.fix_missing_locations(parsed_ast)
+    trace_logger.debug(f"compiling {fn.__name__}")
+    compiled_ast = compile(parsed_ast, filename="<ast>", mode="exec")
 
     return _trace_wrapper_factory(
         inspect.unwrap(fn),
         span_type,
         name,
         prune_empty,
-        recursive,
+        True,
         compiled_ast,
     )
 
