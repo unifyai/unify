@@ -1071,7 +1071,7 @@ def _trace_function(
 ):
     trace_logger.debug(f"tracing {fn.__name__}")
 
-    if not recursive:
+    if not recursive or depth <= 0:
         return _trace_wrapper_factory(
             fn=fn,
             fn_type=fn_type,
@@ -1081,23 +1081,7 @@ def _trace_function(
             recursive=False,
             filter=filter,
             trace_contexts=trace_contexts,
-            depth=depth,
-            compiled_ast=None,
-            skip_modules=skip_modules,
-            skip_functions=skip_functions,
-        )
-
-    if depth <= 0:
-        return _trace_wrapper_factory(
-            fn=fn,
-            fn_type=fn_type,
-            span_type=span_type,
-            name=name,
-            prune_empty=prune_empty,
-            recursive=False,
-            filter=filter,
-            trace_contexts=trace_contexts,
-            depth=depth,
+            depth=0,
             compiled_ast=None,
             skip_modules=skip_modules,
             skip_functions=skip_functions,
@@ -1159,33 +1143,6 @@ def _trace_function(
     collector = CallCollector()
     collector.visit(func_def)
     call_names = collector.call_names
-
-    trace_args = {
-        "prune_empty": prune_empty,
-        "span_type": span_type,
-        "name": name,
-        "trace_contexts": trace_contexts,
-        "filter": filter,
-        "fn_type": fn_type,
-        "recursive": recursive,
-        "depth": depth - 1,
-        "skip_modules": skip_modules,
-        "skip_functions": skip_functions,
-    }
-
-    fn.__trace_args = trace_args
-
-    trace_args_ast = {}
-    for k in trace_args.keys():
-        trace_args_ast[k] = ast.Subscript(
-            value=ast.Attribute(
-                value=ast.Name(id=fn.__name__, ctx=ast.Load()),
-                ctx=ast.Load(),
-                attr="__trace_args",
-            ),
-            slice=ast.Index(value=ast.Constant(value=k)),
-            ctx=ast.Load(),
-        )
 
     class CallTransformer(ast.NodeTransformer):
         def visit_Call(self, node):
@@ -1252,7 +1209,7 @@ def _trace_function(
         recursive=True,
         filter=filter,
         trace_contexts=trace_contexts,
-        depth=depth,
+        depth=depth - 1,
         compiled_ast=compiled_ast,
         skip_modules=skip_modules,
         skip_functions=skip_functions,
