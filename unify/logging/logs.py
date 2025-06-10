@@ -952,7 +952,7 @@ def _trace_wrapper_factory(
 
             return async_wrapped
 
-    else:
+    elif inspect.isfunction(fn) or inspect.ismethod(fn):
         if recursive:
 
             @functools.wraps(fn)
@@ -974,6 +974,10 @@ def _trace_wrapper_factory(
                     return result
 
             return wrapped
+
+    raise ValueError(
+        f"Unsupported object type, should be function, coroutine or method: {fn_type}",
+    )
 
 
 def _trace_function(
