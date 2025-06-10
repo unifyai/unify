@@ -933,57 +933,63 @@ def _trace_wrapper_factory(
     skip_modules,
     skip_functions,
 ):
-    # TODO we should skip the logging logic, and not the transformation logic
+    should_skip = False
     if (skip_modules is not None and inspect.getmodule(fn) in skip_modules) or (
         skip_functions is not None and fn in skip_functions
     ):
-        return fn
+        should_skip = True
 
-    if inspect.iscoroutinefunction(inspect.unwrap(fn)) or fn_type == "async":
-        if recursive:
+    is_coroutine = inspect.iscoroutinefunction(inspect.unwrap(fn)) or fn_type == "async"
+    if is_coroutine and recursive:
 
-            @functools.wraps(fn)
-            async def async_wrapped(*args, **kwargs):
-                transformed_fn = _get_or_compile(fn, compiled_ast)
-                with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
-                    result = await transformed_fn(*args, **kwargs)
-                    _t.result = result
-                    return result
+        @functools.wraps(fn)
+        async def async_wrapped(*args, **kwargs):
+            transformed_fn = _get_or_compile(fn, compiled_ast)
+            if should_skip:  # TODO could be optimized
+                return transformed_fn(*args, **kwargs)
+            with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
+                result = await transformed_fn(*args, **kwargs)
+                _t.result = result
+                return result
 
-            return async_wrapped
-        else:
+        return async_wrapped
 
-            @functools.wraps(fn)
-            async def async_wrapped(*args, **kwargs):
-                with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
-                    result = await fn(*args, **kwargs)
-                    _t.result = result
-                    return result
+    if is_coroutine and not recursive:
 
-            return async_wrapped
+        @functools.wraps(fn)
+        async def async_wrapped(*args, **kwargs):
+            with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
+                result = await fn(*args, **kwargs)
+                _t.result = result
+                return result
 
-    elif inspect.isfunction(fn) or inspect.ismethod(fn):
-        if recursive:
+        return async_wrapped
 
-            @functools.wraps(fn)
-            def wrapped(*args, **kwargs):
-                transformed_fn = _get_or_compile(fn, compiled_ast)
-                with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
-                    result = transformed_fn(*args, **kwargs)
-                    _t.result = result
-                    return result
+    is_function = inspect.isfunction(fn) or inspect.ismethod(fn)
+    if is_function and recursive:
 
-            return wrapped
-        else:
+        @functools.wraps(fn)
+        def wrapped(*args, **kwargs):
+            transformed_fn = _get_or_compile(fn, compiled_ast)
+            if should_skip:  # TODO could be optimized
+                return transformed_fn(*args, **kwargs)
+            with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
+                result = transformed_fn(*args, **kwargs)
+                _t.result = result
+                return result
 
-            @functools.wraps(fn)
-            def wrapped(*args, **kwargs):
-                with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
-                    result = fn(*args, **kwargs)
-                    _t.result = result
-                    return result
+        return wrapped
 
-            return wrapped
+    if is_function and not recursive:
+
+        @functools.wraps(fn)
+        def wrapped(*args, **kwargs):
+            with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
+                result = fn(*args, **kwargs)
+                _t.result = result
+                return result
+
+        return wrapped
 
     raise ValueError(
         f"Unsupported object type, should be function, coroutine or method: {fn_type}",
