@@ -23,6 +23,7 @@ from .utils.logs import (
 )
 from .utils.logs import log as unify_log
 
+# TODO: Remove this
 trace_logger = logging.getLogger("unify.trace")
 trace_logger.setLevel(logging.DEBUG)
 handler = logging.StreamHandler()
