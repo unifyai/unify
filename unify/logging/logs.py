@@ -919,8 +919,17 @@ def _get_or_compile(func, compiled_ast):
     return transformed_func
 
 
-def _trace_wrapper_factory(fn, span_type, name, prune_empty, recursive, compiled_ast):
-    if inspect.iscoroutinefunction(fn):
+def _trace_wrapper_factory(
+    *,
+    fn,
+    fn_type,
+    span_type,
+    name,
+    prune_empty,
+    recursive,
+    compiled_ast,
+):
+    if inspect.iscoroutinefunction(inspect.unwrap(fn)) or fn_type == "async":
         if recursive:
 
             @functools.wraps(fn)
@@ -983,12 +992,13 @@ def _trace_function(
 
     if not recursive:
         return _trace_wrapper_factory(
-            inspect.unwrap(fn),
-            span_type,
-            name,
-            prune_empty,
-            False,
-            None,
+            fn=fn,
+            fn_type=fn_type,
+            span_type=span_type,
+            name=name,
+            prune_empty=prune_empty,
+            recursive=False,
+            compiled_ast=None,
         )
 
     if skip_modules is not None and inspect.getmodule(fn) in skip_modules:
@@ -996,12 +1006,13 @@ def _trace_function(
 
     if depth <= 0:
         return _trace_wrapper_factory(
-            inspect.unwrap(fn),
-            span_type,
-            name,
-            prune_empty,
-            False,
-            None,
+            fn=fn,
+            fn_type=fn_type,
+            span_type=span_type,
+            name=name,
+            prune_empty=prune_empty,
+            recursive=False,
+            compiled_ast=None,
         )
 
     try:
@@ -1011,12 +1022,13 @@ def _trace_function(
         trace_logger.error(f"Error getting source for {fn.__name__}: {e}")
         # Fallback to non-recursive tracing
         return _trace_wrapper_factory(
-            inspect.unwrap(fn),
-            span_type,
-            name,
-            prune_empty,
-            False,
-            None,
+            fn=fn,
+            fn_type=fn_type,
+            span_type=span_type,
+            name=name,
+            prune_empty=prune_empty,
+            recursive=False,
+            compiled_ast=None,
         )
 
     parsed_ast = ast.parse(source)
@@ -1024,12 +1036,13 @@ def _trace_function(
     if not isinstance(func_def, (ast.FunctionDef, ast.AsyncFunctionDef)):
         # Fallback to non-recursive tracing
         return _trace_wrapper_factory(
-            inspect.unwrap(fn),
-            span_type,
-            name,
-            prune_empty,
-            False,
-            None,
+            fn=fn,
+            fn_type=fn_type,
+            span_type=span_type,
+            name=name,
+            prune_empty=prune_empty,
+            recursive=False,
+            compiled_ast=None,
         )
 
     # Remove decorators
@@ -1095,12 +1108,13 @@ def _trace_function(
     compiled_ast = compile(parsed_ast, filename="<ast>", mode="exec")
 
     return _trace_wrapper_factory(
-        inspect.unwrap(fn),
-        span_type,
-        name,
-        prune_empty,
-        True,
-        compiled_ast,
+        fn=fn,
+        fn_type=fn_type,
+        span_type=span_type,
+        name=name,
+        prune_empty=prune_empty,
+        recursive=True,
+        compiled_ast=compiled_ast,
     )
 
 
