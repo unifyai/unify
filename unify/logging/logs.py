@@ -27,6 +27,8 @@ from .utils.logs import log as unify_log
 trace_logger = logging.getLogger("unify.trace")
 trace_logger.setLevel(logging.DEBUG)
 handler = logging.StreamHandler()
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+handler.setFormatter(formatter)
 handler.setLevel(logging.DEBUG)
 trace_logger.addHandler(handler)
 
@@ -909,10 +911,12 @@ def _trace_module(module, prune_empty, span_type, name, filter):
 def _get_or_compile(func, compiled_ast):
     if hasattr(func, "__cached_tracer"):
         transformed_func = func.__cached_tracer
+        trace_logger.debug(f"Using cached tracer for {func.__name__}")
     else:
         global_ns = func.__globals__.copy()
         global_ns["traced"] = traced
         local_ns = {}
+        trace_logger.debug(f"Executing compiled AST for {func.__name__}")
         exec(compiled_ast, global_ns, local_ns)
         transformed_func = local_ns[func.__name__]
         func.__cached_tracer = transformed_func
