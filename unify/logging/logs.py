@@ -32,6 +32,46 @@ handler.setFormatter(formatter)
 handler.setLevel(logging.DEBUG)
 trace_logger.addHandler(handler)
 
+# TODO: Move to utils
+ACTIVE_TRACE_PARAMETERS = ContextVar("active_trace_parameters", default=None)
+
+
+def _set_active_trace_parameters(
+    prune_empty: bool = True,
+    span_type: str = "function",
+    name: Optional[str] = None,
+    trace_contexts: Optional[List[str]] = None,
+    filter: Optional[Callable[[callable], bool]] = None,
+    fn_type: Optional[str] = None,
+    recursive: bool = False,  # Only valid for Functions.
+    depth: Optional[int] = None,
+    skip_modules: Optional[List[ModuleType]] = None,
+    skip_functions: Optional[List[Callable]] = None,
+):
+    token = ACTIVE_TRACE_PARAMETERS.set(
+        {
+            "prune_empty": prune_empty,
+            "span_type": span_type,
+            "name": name,
+            "trace_contexts": trace_contexts,
+            "filter": filter,
+            "fn_type": fn_type,
+            "recursive": recursive,
+            "depth": depth,
+            "skip_modules": skip_modules,
+            "skip_functions": skip_functions,
+        },
+    )
+    return token
+
+
+def _reset_active_trace_parameters(token):
+    ACTIVE_TRACE_PARAMETERS.reset(token)
+
+
+####
+
+
 # Context Handlers #
 # -----------------#
 
@@ -929,6 +969,9 @@ def _trace_wrapper_factory(
     name,
     prune_empty,
     recursive,
+    filter,
+    trace_contexts,
+    depth,
     compiled_ast,
     skip_modules,
     skip_functions,
@@ -944,12 +987,28 @@ def _trace_wrapper_factory(
 
         @functools.wraps(fn)
         async def async_wrapped(*args, **kwargs):
+            token = _set_active_trace_parameters(
+                prune_empty=prune_empty,
+                span_type=span_type,
+                name=name,
+                trace_contexts=trace_contexts,
+                filter=filter,
+                fn_type=fn_type,
+                recursive=recursive,
+                depth=depth,
+                skip_modules=skip_modules,
+                skip_functions=skip_functions,
+            )
             transformed_fn = _get_or_compile(fn, compiled_ast)
             if should_skip:  # TODO could be optimized
-                return transformed_fn(*args, **kwargs)
+                result = await transformed_fn(*args, **kwargs)
+                _reset_active_trace_parameters(token)
+                return result
+
             with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
                 result = await transformed_fn(*args, **kwargs)
                 _t.result = result
+                _reset_active_trace_parameters(token)
                 return result
 
         return async_wrapped
@@ -970,12 +1029,28 @@ def _trace_wrapper_factory(
 
         @functools.wraps(fn)
         def wrapped(*args, **kwargs):
+            token = _set_active_trace_parameters(
+                prune_empty=prune_empty,
+                span_type=span_type,
+                name=name,
+                trace_contexts=trace_contexts,
+                filter=filter,
+                fn_type=fn_type,
+                recursive=recursive,
+                depth=depth,
+                skip_modules=skip_modules,
+                skip_functions=skip_functions,
+            )
             transformed_fn = _get_or_compile(fn, compiled_ast)
             if should_skip:  # TODO could be optimized
-                return transformed_fn(*args, **kwargs)
+                result = transformed_fn(*args, **kwargs)
+                _reset_active_trace_parameters(token)
+                return result
+
             with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
                 result = transformed_fn(*args, **kwargs)
                 _t.result = result
+                _reset_active_trace_parameters(token)
                 return result
 
         return wrapped
@@ -1011,6 +1086,19 @@ def _trace_function(
 ):
     trace_logger.debug(f"tracing {fn.__name__}")
 
+    if ACTIVE_TRACE_PARAMETERS.get() is not None:
+        args = ACTIVE_TRACE_PARAMETERS.get()
+        prune_empty = args["prune_empty"]
+        span_type = args["span_type"]
+        name = args["name"]
+        trace_contexts = args["trace_contexts"]
+        filter = args["filter"]
+        fn_type = args["fn_type"]
+        recursive = args["recursive"]
+        depth = args["depth"]
+        skip_modules = args["skip_modules"]
+        skip_functions = args["skip_functions"]
+
     if not recursive:
         return _trace_wrapper_factory(
             fn=fn,
@@ -1019,6 +1107,9 @@ def _trace_function(
             name=name,
             prune_empty=prune_empty,
             recursive=False,
+            filter=filter,
+            trace_contexts=trace_contexts,
+            depth=depth,
             compiled_ast=None,
             skip_modules=skip_modules,
             skip_functions=skip_functions,
@@ -1032,6 +1123,9 @@ def _trace_function(
             name=name,
             prune_empty=prune_empty,
             recursive=False,
+            filter=filter,
+            trace_contexts=trace_contexts,
+            depth=depth,
             compiled_ast=None,
             skip_modules=skip_modules,
             skip_functions=skip_functions,
@@ -1050,6 +1144,9 @@ def _trace_function(
             name=name,
             prune_empty=prune_empty,
             recursive=False,
+            filter=filter,
+            trace_contexts=trace_contexts,
+            depth=depth,
             compiled_ast=None,
             skip_modules=skip_modules,
             skip_functions=skip_functions,
@@ -1066,6 +1163,9 @@ def _trace_function(
             name=name,
             prune_empty=prune_empty,
             recursive=False,
+            filter=filter,
+            trace_contexts=trace_contexts,
+            depth=depth,
             compiled_ast=None,
             skip_modules=skip_modules,
             skip_functions=skip_functions,
@@ -1124,12 +1224,7 @@ def _trace_function(
                     args=[
                         ast.Name(id=node.func.id, ctx=ast.Load()),
                     ],
-                    keywords=[
-                        *[
-                            ast.keyword(arg=k, value=trace_args_ast[k])
-                            for k in trace_args_ast
-                        ],
-                    ],
+                    keywords=[],
                 )
                 return ast.Call(
                     func=tracer_call,
@@ -1151,6 +1246,9 @@ def _trace_function(
         name=name,
         prune_empty=prune_empty,
         recursive=True,
+        filter=filter,
+        trace_contexts=trace_contexts,
+        depth=depth,
         compiled_ast=compiled_ast,
         skip_modules=skip_modules,
         skip_functions=skip_functions,
