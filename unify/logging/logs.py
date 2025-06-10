@@ -976,11 +976,6 @@ def _trace_wrapper_factory(
     skip_modules,
     skip_functions,
 ):
-    should_skip = False
-    if (skip_modules is not None and inspect.getmodule(fn) in skip_modules) or (
-        skip_functions is not None and fn in skip_functions
-    ):
-        should_skip = True
 
     is_coroutine = inspect.iscoroutinefunction(inspect.unwrap(fn)) or fn_type == "async"
     if is_coroutine and recursive:
@@ -1000,11 +995,6 @@ def _trace_wrapper_factory(
                 skip_functions=skip_functions,
             )
             transformed_fn = _get_or_compile(fn, compiled_ast)
-            if should_skip:  # TODO could be optimized
-                result = await transformed_fn(*args, **kwargs)
-                _reset_active_trace_parameters(token)
-                return result
-
             with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
                 result = await transformed_fn(*args, **kwargs)
                 _t.result = result
@@ -1042,11 +1032,6 @@ def _trace_wrapper_factory(
                 skip_functions=skip_functions,
             )
             transformed_fn = _get_or_compile(fn, compiled_ast)
-            if should_skip:  # TODO could be optimized
-                result = transformed_fn(*args, **kwargs)
-                _reset_active_trace_parameters(token)
-                return result
-
             with _Traced(fn, args, kwargs, span_type, name, prune_empty) as _t:
                 result = transformed_fn(*args, **kwargs)
                 _t.result = result
@@ -1085,19 +1070,6 @@ def _trace_function(
     skip_functions,
 ):
     trace_logger.debug(f"tracing {fn.__name__}")
-
-    if ACTIVE_TRACE_PARAMETERS.get() is not None:
-        args = ACTIVE_TRACE_PARAMETERS.get()
-        prune_empty = args["prune_empty"]
-        span_type = args["span_type"]
-        name = args["name"]
-        trace_contexts = args["trace_contexts"]
-        filter = args["filter"]
-        fn_type = args["fn_type"]
-        recursive = args["recursive"]
-        depth = args["depth"]
-        skip_modules = args["skip_modules"]
-        skip_functions = args["skip_functions"]
 
     if not recursive:
         return _trace_wrapper_factory(
@@ -1319,7 +1291,22 @@ def traced(
             skip_functions=skip_functions,
         )
 
-    if hasattr(obj, "__unify_traced"):
+    if ACTIVE_TRACE_PARAMETERS.get() is not None:
+        args = ACTIVE_TRACE_PARAMETERS.get()
+        prune_empty = args["prune_empty"]
+        span_type = args["span_type"]
+        name = args["name"]
+        trace_contexts = args["trace_contexts"]
+        filter = args["filter"]
+        fn_type = args["fn_type"]
+        recursive = args["recursive"]
+        depth = args["depth"]
+        skip_modules = args["skip_modules"]
+        skip_functions = args["skip_functions"]
+
+    if hasattr(obj, "__unify_traced") or (
+        skip_modules is not None and inspect.getmodule(obj) in skip_modules
+    ):
         return obj
 
     ret = None
@@ -1340,6 +1327,9 @@ def traced(
             filter if filter else _default_trace_filter,
         )
     elif inspect.isfunction(obj) or inspect.ismethod(obj):
+        if skip_functions is not None and obj in skip_functions:
+            return obj
+
         if depth is None:
             depth = float("inf")
         ret = _trace_function(
