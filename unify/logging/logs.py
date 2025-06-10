@@ -975,11 +975,15 @@ def _trace_function(
     fn_type,
     recursive,
     depth,
+    skip_modules,
 ):
     trace_logger.debug(f"tracing {fn.__name__}")
     compiled_ast = None
 
     if recursive:
+        if skip_modules is not None and inspect.getmodule(fn) in skip_modules:
+            return fn
+
         if depth <= 0:
             return _trace_wrapper_factory(
                 inspect.unwrap(fn),
@@ -1044,6 +1048,7 @@ def _trace_function(
             "fn_type": fn_type,
             "recursive": recursive,
             "depth": depth - 1,
+            "skip_modules": skip_modules,
         }
 
         trace_args_ast = {}
@@ -1100,6 +1105,7 @@ def traced(
     fn_type: Optional[str] = None,
     recursive: bool = False,  # Only valid for Functions.
     depth: Optional[int] = None,
+    skip_modules: Optional[List[ModuleType]] = None,
 ):
     _initialize_trace_logger()
 
@@ -1149,6 +1155,7 @@ def traced(
             fn_type,
             recursive,
             depth,
+            skip_modules,
         )
     else:
         ret = _trace_instance(
