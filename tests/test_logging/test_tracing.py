@@ -831,5 +831,41 @@ def test_with_traced_context_and_traced_fn():
     assert trace["child_spans"][0]["type"] == "function"
 
 
+def baz():
+    return 1
+
+
+def bar():
+    x = baz()
+    return x + baz()
+
+
+def foo():
+    return bar()
+
+
+@_handle_project
+def test_traced_recursive():
+    fn = unify.traced(foo, recursive=True)
+    fn()
+
+    _wait_for_trace_logger()
+    logs = unify.get_logs()
+    assert len(logs) == 1
+    trace = logs[0].entries["trace"]
+    assert trace["span_name"] == "foo"
+    assert len(trace["child_spans"]) == 1
+    assert trace["outputs"] == 2
+
+    bar_trace = trace["child_spans"][0]
+    assert bar_trace["span_name"] == "bar"
+    assert len(bar_trace["child_spans"]) == 2
+    assert bar_trace["child_spans"][0]["span_name"] == "baz"
+    assert bar_trace["child_spans"][0]["outputs"] == 1
+    assert bar_trace["child_spans"][1]["span_name"] == "baz"
+    assert bar_trace["child_spans"][1]["outputs"] == 1
+    assert bar_trace["outputs"] == 2
+
+
 if __name__ == "__main__":
     pass
