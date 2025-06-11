@@ -867,5 +867,33 @@ def test_traced_recursive():
     assert bar_trace["outputs"] == 2
 
 
+@_handle_project
+def test_traced_recursive_w_local_function():
+    @unify.traced(recursive=True)
+    def bar():
+        def foo(i):
+            return i
+
+        return foo(1) + foo(2)
+
+    bar()
+
+    _wait_for_trace_logger()
+    logs = unify.get_logs()
+    assert len(logs) == 1
+
+    trace = logs[0].entries["trace"]
+    assert trace["span_name"] == "bar"
+    assert trace["outputs"] == 3
+
+    assert len(trace["child_spans"]) == 2
+    assert trace["child_spans"][0]["span_name"] == "foo"
+    assert trace["child_spans"][0]["inputs"] == {"i": 1}
+    assert trace["child_spans"][0]["outputs"] == 1
+    assert trace["child_spans"][1]["span_name"] == "foo"
+    assert trace["child_spans"][1]["inputs"] == {"i": 2}
+    assert trace["child_spans"][1]["outputs"] == 2
+
+
 if __name__ == "__main__":
     pass
