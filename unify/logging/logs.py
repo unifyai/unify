@@ -1068,16 +1068,24 @@ def _trace_module(module, prune_empty, span_type, name, filter):
 
 def _get_or_compile(func, compiled_ast):
     if hasattr(func, "__cached_tracer"):
-        transformed_func = func.__cached_tracer
+        transformed_func = getattr(func, "__cached_tracer")
         trace_logger.debug(f"Using cached tracer for {func.__name__}")
     else:
+        is_bound = hasattr(func, "__self__") and func.__self__ is not None
+        orig_fn = func.__func__ if is_bound else func
+        instance = func.__self__ if is_bound else None
         global_ns = func.__globals__.copy()
         global_ns["traced"] = traced
         local_ns = {}
         trace_logger.debug(f"Executing compiled AST for {func.__name__}")
         exec(compiled_ast, global_ns, local_ns)
-        transformed_func = local_ns[func.__name__]
-        func.__cached_tracer = transformed_func
+        transformed_func = local_ns[orig_fn.__name__]
+        if is_bound:
+            transformed_func = MethodType(transformed_func, instance)
+        try:
+            setattr(func, "__cached_tracer", transformed_func)
+        except:
+            pass
     return transformed_func
 
 
