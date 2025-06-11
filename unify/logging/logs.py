@@ -514,6 +514,128 @@ class Experiment:
 # --------#
 
 
+class TracerCallCollector(ast.NodeVisitor):
+    def __init__(self, main_function_name):
+        self.main_function_name = main_function_name
+        self.call_names = set()
+        self.local_function_names = set()
+
+    def visit_FunctionDef(self, node):
+        self.generic_visit(node)
+        self.local_function_names.add(node.name)
+        return node
+
+    def visit_AsyncFunctionDef(self, node):
+        self.generic_visit(node)
+        self.local_function_names.add(node.name)
+        return node
+
+    def visit_Call(self, node):
+        self.generic_visit(node)
+
+        if isinstance(node.func, ast.Name):
+            self.call_names.add(node.func.id)
+
+        if isinstance(node.func, ast.Attribute):
+            self.call_names.add(node.func.attr)
+
+    def get_external_call_names(self):
+        return self.call_names - self.local_function_names
+
+    def get_local_function_names(self):
+        return self.local_function_names - set([self.main_function_name])
+
+
+class TracerCallTransformer(ast.NodeTransformer):
+    def __init__(self, local_defined_functions_names, non_local_call_names):
+        self.local_defined_functions_names = local_defined_functions_names
+        self.non_local_call_names = non_local_call_names
+
+    def visit_FunctionDef(self, node):
+        if node.name in self.local_defined_functions_names:
+            node.decorator_list.append(
+                ast.Call(
+                    func=ast.Name(id="traced", ctx=ast.Load()),
+                    args=[],
+                    keywords=[],
+                ),
+            )
+        self.generic_visit(node)
+        return node
+
+    def visit_AsyncFunctionDef(self, node):
+        if node.name in self.local_defined_functions_names:
+            node.decorator_list.append(
+                ast.Call(
+                    func=ast.Name(id="traced", ctx=ast.Load()),
+                    args=[],
+                    keywords=[],
+                ),
+            )
+        self.generic_visit(node)
+        return node
+
+    def visit_Call(self, node):
+        self.generic_visit(node)
+
+        # Handle direct function calls
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id in self.non_local_call_names
+        ):
+            tracer_call = ast.Call(
+                func=ast.Name(id="traced", ctx=ast.Load()),
+                args=[
+                    ast.Name(id=node.func.id, ctx=ast.Load()),
+                ],
+                keywords=[],
+            )
+            return ast.Call(
+                func=tracer_call,
+                args=node.args,
+                keywords=node.keywords,
+            )
+
+        # Handle nested attribute calls like x.y.sth()
+        if isinstance(node.func, ast.Attribute):
+            # Get the full attribute chain
+            attrs = []
+            current = node.func
+            while isinstance(current, ast.Attribute):
+                attrs.insert(0, current.attr)
+                current = current.value
+
+            # If the final value is a Name and the last attribute is in call_names
+            if isinstance(current, ast.Name) and attrs[-1] in self.non_local_call_names:
+                # Reconstruct the attribute chain
+                func_name = current
+                for attr in attrs[:-1]:
+                    func_name = ast.Attribute(
+                        value=func_name,
+                        attr=attr,
+                        ctx=ast.Load(),
+                    )
+
+                tracer_call = ast.Call(
+                    func=ast.Name(id="traced", ctx=ast.Load()),
+                    args=[
+                        ast.Attribute(
+                            value=func_name,
+                            attr=attrs[-1],
+                            ctx=ast.Load(),
+                        ),
+                    ],
+                    keywords=[],
+                )
+                return ast.Call(
+                    func=tracer_call,
+                    args=node.args,
+                    keywords=node.keywords,
+                )
+
+        return node
+
+
 class _Traced:
     def __init__(self, fn, args, kwargs, span_type, name, prune_empty):
         self.fn = fn
@@ -1122,133 +1244,10 @@ def _trace_function(
     # TODO should only remove traced decorator
     func_def.decorator_list = []
 
-    class CallCollector(ast.NodeVisitor):
-        def __init__(self, main_function_name):
-            self.main_function_name = main_function_name
-            self.call_names = set()
-            self.local_function_names = set()
-
-        def visit_FunctionDef(self, node):
-            self.generic_visit(node)
-            self.local_function_names.add(node.name)
-            return node
-
-        def visit_AsyncFunctionDef(self, node):
-            self.generic_visit(node)
-            self.local_function_names.add(node.name)
-            return node
-
-        def visit_Call(self, node):
-            self.generic_visit(node)
-
-            if isinstance(node.func, ast.Name):
-                self.call_names.add(node.func.id)
-
-            if isinstance(node.func, ast.Attribute):
-                self.call_names.add(node.func.attr)
-
-        def get_external_call_names(self):
-            return self.call_names - self.local_function_names
-
-        def get_local_function_names(self):
-            return self.local_function_names - set([self.main_function_name])
-
-    class CallTransformer(ast.NodeTransformer):
-        def __init__(self, local_defined_functions_names, non_local_call_names):
-            self.local_defined_functions_names = local_defined_functions_names
-            self.non_local_call_names = non_local_call_names
-
-        def visit_FunctionDef(self, node):
-            if node.name in self.local_defined_functions_names:
-                node.decorator_list.append(
-                    ast.Call(
-                        func=ast.Name(id="traced", ctx=ast.Load()),
-                        args=[],
-                        keywords=[],
-                    ),
-                )
-            self.generic_visit(node)
-            return node
-
-        def visit_AsyncFunctionDef(self, node):
-            if node.name in self.local_defined_functions_names:
-                node.decorator_list.append(
-                    ast.Call(
-                        func=ast.Name(id="traced", ctx=ast.Load()),
-                        args=[],
-                        keywords=[],
-                    ),
-                )
-            self.generic_visit(node)
-            return node
-
-        def visit_Call(self, node):
-            self.generic_visit(node)
-
-            # Handle direct function calls
-            if (
-                isinstance(node.func, ast.Name)
-                and node.func.id in self.non_local_call_names
-            ):
-                tracer_call = ast.Call(
-                    func=ast.Name(id="traced", ctx=ast.Load()),
-                    args=[
-                        ast.Name(id=node.func.id, ctx=ast.Load()),
-                    ],
-                    keywords=[],
-                )
-                return ast.Call(
-                    func=tracer_call,
-                    args=node.args,
-                    keywords=node.keywords,
-                )
-
-            # Handle nested attribute calls like x.y.sth()
-            if isinstance(node.func, ast.Attribute):
-                # Get the full attribute chain
-                attrs = []
-                current = node.func
-                while isinstance(current, ast.Attribute):
-                    attrs.insert(0, current.attr)
-                    current = current.value
-
-                # If the final value is a Name and the last attribute is in call_names
-                if (
-                    isinstance(current, ast.Name)
-                    and attrs[-1] in self.non_local_call_names
-                ):
-                    # Reconstruct the attribute chain
-                    func_name = current
-                    for attr in attrs[:-1]:
-                        func_name = ast.Attribute(
-                            value=func_name,
-                            attr=attr,
-                            ctx=ast.Load(),
-                        )
-
-                    tracer_call = ast.Call(
-                        func=ast.Name(id="traced", ctx=ast.Load()),
-                        args=[
-                            ast.Attribute(
-                                value=func_name,
-                                attr=attrs[-1],
-                                ctx=ast.Load(),
-                            ),
-                        ],
-                        keywords=[],
-                    )
-                    return ast.Call(
-                        func=tracer_call,
-                        args=node.args,
-                        keywords=node.keywords,
-                    )
-
-            return node
-
-    collector = CallCollector(func_def.name)
+    collector = TracerCallCollector(func_def.name)
     collector.visit(func_def)
 
-    transformer = CallTransformer(
+    transformer = TracerCallTransformer(
         collector.get_local_function_names(),
         collector.get_external_call_names(),
     )
