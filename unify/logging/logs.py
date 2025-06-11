@@ -40,7 +40,6 @@ def _set_active_trace_parameters(
     prune_empty: bool = True,
     span_type: str = "function",
     name: Optional[str] = None,
-    trace_contexts: Optional[List[str]] = None,
     filter: Optional[Callable[[callable], bool]] = None,
     fn_type: Optional[str] = None,
     recursive: bool = False,  # Only valid for Functions.
@@ -53,7 +52,6 @@ def _set_active_trace_parameters(
             "prune_empty": prune_empty,
             "span_type": span_type,
             "name": name,
-            "trace_contexts": trace_contexts,
             "filter": filter,
             "fn_type": fn_type,
             "recursive": recursive,
@@ -970,7 +968,6 @@ def _trace_wrapper_factory(
     prune_empty,
     recursive,
     filter,
-    trace_contexts,
     depth,
     compiled_ast,
     skip_modules,
@@ -986,7 +983,6 @@ def _trace_wrapper_factory(
                 prune_empty=prune_empty,
                 span_type=span_type,
                 name=name,
-                trace_contexts=trace_contexts,
                 filter=filter,
                 fn_type=fn_type,
                 recursive=recursive,
@@ -1023,7 +1019,6 @@ def _trace_wrapper_factory(
                 prune_empty=prune_empty,
                 span_type=span_type,
                 name=name,
-                trace_contexts=trace_contexts,
                 filter=filter,
                 fn_type=fn_type,
                 recursive=recursive,
@@ -1061,7 +1056,6 @@ def _trace_function(
     prune_empty,
     span_type,
     name,
-    trace_contexts,
     filter,
     fn_type,
     recursive,
@@ -1080,7 +1074,6 @@ def _trace_function(
             prune_empty=prune_empty,
             recursive=False,
             filter=filter,
-            trace_contexts=trace_contexts,
             depth=0,
             compiled_ast=None,
             skip_modules=skip_modules,
@@ -1101,7 +1094,6 @@ def _trace_function(
             prune_empty=prune_empty,
             recursive=False,
             filter=filter,
-            trace_contexts=trace_contexts,
             depth=depth,
             compiled_ast=None,
             skip_modules=skip_modules,
@@ -1120,7 +1112,6 @@ def _trace_function(
             prune_empty=prune_empty,
             recursive=False,
             filter=filter,
-            trace_contexts=trace_contexts,
             depth=depth,
             compiled_ast=None,
             skip_modules=skip_modules,
@@ -1252,7 +1243,6 @@ def _trace_function(
         prune_empty=prune_empty,
         recursive=True,
         filter=filter,
-        trace_contexts=trace_contexts,
         depth=depth - 1,
         compiled_ast=compiled_ast,
         skip_modules=skip_modules,
@@ -1266,7 +1256,6 @@ def traced(
     prune_empty: bool = True,
     span_type: str = "function",
     name: Optional[str] = None,
-    trace_contexts: Optional[List[str]] = None,
     filter: Optional[Callable[[callable], bool]] = None,
     fn_type: Optional[str] = None,
     recursive: bool = False,  # Only valid for Functions.
@@ -1283,7 +1272,6 @@ def traced(
             prune_empty=prune_empty,
             span_type=span_type,
             name=name,
-            trace_contexts=trace_contexts,
             filter=filter,
             fn_type=fn_type,
             recursive=recursive,
@@ -1297,7 +1285,6 @@ def traced(
         prune_empty = args["prune_empty"]
         span_type = args["span_type"]
         name = args["name"]
-        trace_contexts = args["trace_contexts"]
         filter = args["filter"]
         fn_type = args["fn_type"]
         recursive = args["recursive"]
@@ -1338,7 +1325,6 @@ def traced(
             prune_empty,
             span_type,
             name,
-            trace_contexts,
             filter,
             fn_type,
             recursive,
