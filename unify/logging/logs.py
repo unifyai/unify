@@ -19,6 +19,8 @@ from .utils.logs import (
     _get_trace_logger,
     _handle_special_types,
     _initialize_trace_logger,
+    _reset_active_trace_parameters,
+    _set_active_trace_parameters,
     get_trace_context,
 )
 from .utils.logs import log as unify_log
@@ -31,43 +33,6 @@ formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(messag
 handler.setFormatter(formatter)
 handler.setLevel(logging.DEBUG)
 trace_logger.addHandler(handler)
-
-# TODO: Move to utils
-ACTIVE_TRACE_PARAMETERS = ContextVar("active_trace_parameters", default=None)
-
-
-def _set_active_trace_parameters(
-    prune_empty: bool = True,
-    span_type: str = "function",
-    name: Optional[str] = None,
-    filter: Optional[Callable[[callable], bool]] = None,
-    fn_type: Optional[str] = None,
-    recursive: bool = False,  # Only valid for Functions.
-    depth: Optional[int] = None,
-    skip_modules: Optional[List[ModuleType]] = None,
-    skip_functions: Optional[List[Callable]] = None,
-):
-    token = ACTIVE_TRACE_PARAMETERS.set(
-        {
-            "prune_empty": prune_empty,
-            "span_type": span_type,
-            "name": name,
-            "filter": filter,
-            "fn_type": fn_type,
-            "recursive": recursive,
-            "depth": depth,
-            "skip_modules": skip_modules,
-            "skip_functions": skip_functions,
-        },
-    )
-    return token
-
-
-def _reset_active_trace_parameters(token):
-    ACTIVE_TRACE_PARAMETERS.reset(token)
-
-
-####
 
 
 # Context Handlers #
