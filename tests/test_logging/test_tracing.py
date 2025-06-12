@@ -831,6 +831,9 @@ def test_with_traced_context_and_traced_fn():
     assert trace["child_spans"][0]["type"] == "function"
 
 
+# Recursive Tracing #
+
+
 def baz():
     return 1
 
@@ -847,7 +850,7 @@ def foo():
 @_handle_project
 def test_traced_recursive():
     fn = unify.traced(foo, recursive=True)
-    fn()
+    res = fn()
 
     _wait_for_trace_logger()
     logs = unify.get_logs()
@@ -855,7 +858,7 @@ def test_traced_recursive():
     trace = logs[0].entries["trace"]
     assert trace["span_name"] == "foo"
     assert len(trace["child_spans"]) == 1
-    assert trace["outputs"] == 2
+    assert trace["outputs"] == res
 
     bar_trace = trace["child_spans"][0]
     assert bar_trace["span_name"] == "bar"
@@ -876,7 +879,7 @@ def test_traced_recursive_w_local_function():
 
         return foo(1) + foo(2)
 
-    bar()
+    res = bar()
 
     _wait_for_trace_logger()
     logs = unify.get_logs()
@@ -884,7 +887,7 @@ def test_traced_recursive_w_local_function():
 
     trace = logs[0].entries["trace"]
     assert trace["span_name"] == "bar"
-    assert trace["outputs"] == 3
+    assert trace["outputs"] == res
 
     assert len(trace["child_spans"]) == 2
     assert trace["child_spans"][0]["span_name"] == "foo"
@@ -926,17 +929,44 @@ def test_traced_recursive_method():
         a.set_value(1)
         return a.get_value()
 
-    foo()
+    res = foo()
     _wait_for_trace_logger()
     logs = unify.get_logs()
     assert len(logs) == 1
     trace = logs[0].entries["trace"]
     assert trace["span_name"] == "foo"
-    assert trace["outputs"] == 1
+    assert trace["outputs"] == res
     assert len(trace["child_spans"]) == 2
     assert trace["child_spans"][0]["span_name"] == "set_value"
     assert trace["child_spans"][1]["span_name"] == "get_value"
 
+
+@_handle_project
+def test_traced_recursive_skip_function():
+    def _bar():
+        return 0
+
+    def _baz():
+        return 1
+
+    @unify.traced(recursive=True, skip_functions=[_bar])
+    def foo():
+        return _bar() + _baz()
+
+    res = foo()
+
+    _wait_for_trace_logger()
+    logs = unify.get_logs()
+    assert len(logs) == 1
+    trace = logs[0].entries["trace"]
+    assert trace["span_name"] == "foo"
+    assert trace["outputs"] == res
+    assert len(trace["child_spans"]) == 1
+    assert trace["child_spans"][0]["span_name"] == "baz"
+    assert trace["child_spans"][0]["outputs"] == 1
+
+
+# -----------------#
 
 if __name__ == "__main__":
     pass
