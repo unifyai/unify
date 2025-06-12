@@ -809,6 +809,13 @@ class Traced:
         return reader.read_vars
 
 
+def _print_tree_source_with_lineno(fn_name, tree):
+    source_unparsed = "\n".join(
+        f"{i+1}: {line}" for i, line in enumerate(ast.unparse(tree).split("\n"))
+    )
+    _traced_logger.debug(f"AST[{fn_name}]:\n{source_unparsed}")
+
+
 def _nested_add(a, b):
     if a is None and isinstance(b, dict):
         a = {k: None if isinstance(v, dict) else 0 for k, v in b.items()}
@@ -1230,37 +1237,9 @@ def _trace_function(
     ast.fix_missing_locations(parsed_ast)
     _traced_logger.debug(f"Compiling AST for {fn.__name__}")
 
-    # TODO: Temporary
-    def _print_clean_source(tree_to_print):
-        # Removes docstring
-        for node in ast.walk(tree_to_print):
-            if not isinstance(
-                node,
-                (ast.FunctionDef, ast.ClassDef, ast.AsyncFunctionDef),
-            ):
-                continue
+    if _traced_logger_enabled:
+        _print_tree_source_with_lineno(fn.__name__, parsed_ast)
 
-            if not len(node.body):
-                continue
-
-            if not isinstance(node.body[0], ast.Expr):
-                continue
-
-            if not hasattr(node.body[0], "value") or not isinstance(
-                node.body[0].value,
-                ast.Str,
-            ):
-                continue
-
-            node.body = node.body[1:]
-
-        source_unparsed = "\n".join(
-            f"{i+1}: {line}"
-            for i, line in enumerate(ast.unparse(tree_to_print).split("\n"))
-        )
-        _traced_logger.debug(f"AST[{fn.__name__}]:\n{source_unparsed}")
-
-    _print_clean_source(parsed_ast)
     compiled_ast = compile(parsed_ast, filename="<ast>", mode="exec")
 
     return _trace_wrapper_factory(
