@@ -950,19 +950,19 @@ def test_traced_recursive_skip_function():
         return 1
 
     @unify.traced(recursive=True, skip_functions=[_bar])
-    def foo():
+    def _foo():
         return _bar() + _baz()
 
-    res = foo()
+    res = _foo()
 
     _wait_for_trace_logger()
     logs = unify.get_logs()
     assert len(logs) == 1
     trace = logs[0].entries["trace"]
-    assert trace["span_name"] == "foo"
+    assert trace["span_name"] == "_foo"
     assert trace["outputs"] == res
     assert len(trace["child_spans"]) == 1
-    assert trace["child_spans"][0]["span_name"] == "baz"
+    assert trace["child_spans"][0]["span_name"] == "_baz"
     assert trace["child_spans"][0]["outputs"] == 1
 
 
