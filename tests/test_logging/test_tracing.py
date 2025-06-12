@@ -909,6 +909,16 @@ class A:
 
 @_handle_project
 def test_traced_recursive_method():
+    class A:
+        def __init__(self):
+            self.x = 0
+
+        def set_value(self, value):
+            self.x = value
+            return self
+
+        def get_value(self):
+            return self.x
 
     @unify.traced(recursive=True)
     def foo():

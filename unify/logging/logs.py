@@ -1075,6 +1075,12 @@ def _get_or_compile(func, compiled_ast):
         orig_fn = func.__func__ if is_bound else func
         instance = func.__self__ if is_bound else None
         global_ns = func.__globals__.copy()
+
+        # TODO: This is a hack to get the original function's closure
+        if orig_fn.__closure__:
+            for var, cell in zip(orig_fn.__code__.co_freevars, orig_fn.__closure__):
+                global_ns[var] = cell.cell_contents
+
         global_ns["traced"] = traced
         local_ns = {}
         trace_logger.debug(f"Executing compiled AST for {func.__name__}")
@@ -1086,6 +1092,7 @@ def _get_or_compile(func, compiled_ast):
             setattr(func, "__cached_tracer", transformed_func)
         except:
             pass
+
     return transformed_func
 
 
