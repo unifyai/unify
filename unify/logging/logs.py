@@ -25,15 +25,12 @@ from .utils.logs import (
 )
 from .utils.logs import log as unify_log
 
-# TODO: Remove this
-trace_logger = logging.getLogger("unify.trace")
-trace_logger.setLevel(logging.DEBUG)
-handler = logging.StreamHandler()
-formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-handler.setFormatter(formatter)
-handler.setLevel(logging.DEBUG)
-trace_logger.addHandler(handler)
-
+_traced_logger = logging.getLogger("unify_tracer")
+_traced_logger_enabled = os.getenv("UNIFY_TRACED_DEBUG", "false").lower() in (
+    "true",
+    "1",
+)
+_traced_logger.setLevel(logging.DEBUG if _traced_logger_enabled else logging.ERROR)
 
 # Context Handlers #
 # -----------------#
@@ -1034,7 +1031,7 @@ def _trace_module(module, prune_empty, span_type, name, filter):
 def _get_or_compile(func, compiled_ast):
     if hasattr(func, "__cached_tracer"):
         transformed_func = getattr(func, "__cached_tracer")
-        trace_logger.debug(f"Using cached tracer for {func.__name__}")
+        _traced_logger.debug(f"Using cached tracer for {func.__name__}")
     else:
         is_bound = hasattr(func, "__self__") and func.__self__ is not None
         orig_fn = func.__func__ if is_bound else func
@@ -1048,7 +1045,7 @@ def _get_or_compile(func, compiled_ast):
 
         global_ns["traced"] = traced
         local_ns = {}
-        trace_logger.debug(f"Executing compiled AST for {func.__name__}")
+        _traced_logger.debug(f"Executing compiled AST for {func.__name__}")
         exec(compiled_ast, global_ns, local_ns)
         transformed_func = local_ns[orig_fn.__name__]
         if is_bound:
@@ -1165,8 +1162,6 @@ def _trace_function(
     skip_modules,
     skip_functions,
 ):
-    trace_logger.debug(f"tracing {fn.__name__}")
-
     if not recursive or depth <= 0:
         return _trace_wrapper_factory(
             fn=fn,
@@ -1186,7 +1181,7 @@ def _trace_function(
         source = inspect.getsource(fn)
         source = textwrap.dedent(source)
     except Exception as e:
-        trace_logger.error(f"Error getting source for {fn.__name__}: {e}")
+        _traced_logger.warning(f"Error getting source for {fn.__name__}: {e}")
         # Fallback to non-recursive tracing
         return _trace_wrapper_factory(
             fn=fn,
@@ -1233,7 +1228,7 @@ def _trace_function(
     )
     transformer.visit(parsed_ast)
     ast.fix_missing_locations(parsed_ast)
-    trace_logger.debug(f"Compiling AST for {fn.__name__}")
+    _traced_logger.debug(f"Compiling AST for {fn.__name__}")
 
     # TODO: Temporary
     def _print_clean_source(tree_to_print):
@@ -1263,7 +1258,7 @@ def _trace_function(
             f"{i+1}: {line}"
             for i, line in enumerate(ast.unparse(tree_to_print).split("\n"))
         )
-        trace_logger.debug(f"AST[{fn.__name__}]:\n{source_unparsed}")
+        _traced_logger.debug(f"AST[{fn.__name__}]:\n{source_unparsed}")
 
     _print_clean_source(parsed_ast)
     compiled_ast = compile(parsed_ast, filename="<ast>", mode="exec")
@@ -1312,6 +1307,8 @@ def traced(
             skip_modules=skip_modules,
             skip_functions=skip_functions,
         )
+
+    _traced_logger.debug(f"Applying trace decorator to {obj.__name__}")
 
     if ACTIVE_TRACE_PARAMETERS.get() is not None:
         args = ACTIVE_TRACE_PARAMETERS.get()
