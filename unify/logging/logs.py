@@ -1169,6 +1169,8 @@ def _trace_function(
     skip_modules,
     skip_functions,
 ):
+    _traced_logger.debug(f"Applying trace decorator to function {fn.__name__}")
+
     if not recursive or depth <= 0:
         return _trace_wrapper_factory(
             fn=fn,
@@ -1286,8 +1288,6 @@ def traced(
             skip_modules=skip_modules,
             skip_functions=skip_functions,
         )
-
-    _traced_logger.debug(f"Applying trace decorator to {obj.__name__}")
 
     if ACTIVE_TRACE_PARAMETERS.get() is not None:
         args = ACTIVE_TRACE_PARAMETERS.get()
