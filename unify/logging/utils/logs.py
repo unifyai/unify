@@ -123,7 +123,11 @@ class _AsyncTraceLogger(threading.Thread):
         # Start a dedicated event loop in a daemon thread
         self._loop = asyncio.new_event_loop()
         self._loop.set_default_executor(ThreadPoolExecutor())
-        self._client = aiohttp.ClientSession(loop=self._loop)
+        headers = {
+            "accept": "application/json",
+            "Authorization": f"Bearer {self._api_key}",
+        }
+        self._client = aiohttp.ClientSession(loop=self._loop, headers=headers)
         self._thread = threading.Thread(
             target=self._loop.run_forever,
             daemon=True,
@@ -133,7 +137,6 @@ class _AsyncTraceLogger(threading.Thread):
         signal.signal(signal.SIGINT, self._on_sigint)
 
     def _on_sigint(self, signum, frame):
-        print("Shutting down immediately")
         self.shutdown_updater(flush=False)
         exit(0)
 
@@ -164,7 +167,7 @@ class _AsyncTraceLogger(threading.Thread):
                 try:
                     await self._send_request(log_id, value)
                 except Exception as e:
-                    print(f"[LogUpdater] error updating {log_id!r}: {e!r}")
+                    logger.error(f"[LogUpdater] error updating {log_id!r}")
 
                 if value["trace"].get("completed") == True:
                     async with state.lock:
@@ -190,18 +193,14 @@ class _AsyncTraceLogger(threading.Thread):
             },
             "overwrite": True,
         }
-        print(body)
-        headers = {
-            "Authorization": f"Bearer {self._api_key}",
-        }
+
         async with self._client.put(
             f"{BASE_URL}/logs",
             json=body,
-            headers=headers,
         ) as resp:
             json_resp = await resp.json()
-            print(f"[LogUpdater] updated {log_id!r}: {json_resp}")
-            resp.raise_for_status()
+
+            _check_response(json_resp)
 
     async def drain(self) -> None:
         """
@@ -210,7 +209,6 @@ class _AsyncTraceLogger(threading.Thread):
         # As long as any ID is mid-flight, sleep briefly and retry
 
         while any(state.in_flight for state in self._states.values()):
-            print(len(self._states))
             await asyncio.sleep(0.05)
 
     def update_trace(self, log: unify.Log, trace: dict, context: str) -> None:
@@ -236,7 +234,6 @@ class _AsyncTraceLogger(threading.Thread):
     async def _shutdown_tasks(self) -> None:
         for task in self.tasks:
             await task.cancel()
-        print("Cancelled tasks", len(self.tasks))
 
     def shutdown_updater(self, flush: bool = True) -> None:
         """
@@ -247,7 +244,6 @@ class _AsyncTraceLogger(threading.Thread):
         self.stopped = True
 
         if flush:
-            print("Flushing")
             # 1) Drain: wait until in-flight → False for every log_id
             drain_future = asyncio.run_coroutine_threadsafe(
                 self.drain(),
@@ -261,7 +257,6 @@ class _AsyncTraceLogger(threading.Thread):
                         timeout=0.1,
                     )  # blocks until all requests are done
                 except (asyncio.TimeoutError, TimeoutError):
-                    # print("Waiting")
                     continue
                 else:
                     break
