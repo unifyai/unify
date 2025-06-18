@@ -167,7 +167,7 @@ class _AsyncTraceLogger(threading.Thread):
                 try:
                     await self._send_request(log_id, value)
                 except Exception as e:
-                    logger.error(f"[LogUpdater] error updating {log_id!r}: {e}")
+                    logger.error(f"error updating trace {log_id!r}: {e}")
 
                 if value["trace"].get("completed") == True:
                     async with state.lock:
@@ -179,18 +179,18 @@ class _AsyncTraceLogger(threading.Thread):
             pass
 
     async def _send_request(self, log_id: str, value: Dict[str, Any]) -> None:
+
+        entries = {"trace": value["trace"]}
+        entries = _apply_col_context(**entries)
+        entries = {**entries, **ACTIVE_ENTRIES_WRITE.get()}
+        entries = _handle_special_types(entries)
+        entries = _handle_mutability(True, entries)
+
         body = {
             "logs": [log_id],
             "project": value["project"],
             "context": value["context"],
-            "entries": {
-                "explicit_types": {
-                    "trace": {
-                        "mutable": True,
-                    },
-                },
-                "trace": value["trace"],
-            },
+            "entries": entries,
             "overwrite": True,
         }
 
