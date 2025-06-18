@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 import atexit
 import inspect
 import json
 import logging
+import signal
 import threading
+
+import aiohttp
 
 logger = logging.getLogger(__name__)
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from typing import Any, Callable, Dict, List, Optional, Union
 
@@ -98,123 +103,41 @@ TRACING_LOG_CONTEXT = None
 # chunking
 CHUNK_LIMIT = 5000000
 
-import asyncio
-import signal
-from concurrent.futures import ThreadPoolExecutor
 
-import aiohttp
-
-
-class _UpdateState:
-    __slots__ = ("lock", "in_flight", "pending_value")
+class _TraceLogState:
+    __slots__ = ("lock", "processing", "pending_value")
 
     def __init__(self) -> None:
         self.lock = asyncio.Lock()
-        self.in_flight = False
+        self.processing = False
         self.pending_value: Dict[str, Any] | None = None
 
 
-class _AsyncTraceLogger(threading.Thread):
+class _AsyncTraceLogger:
     def __init__(self) -> None:
-        self._states: dict[str, _UpdateState] = {}
+        self._states: dict[str, _TraceLogState] = {}
         self.stopped = False
         self._api_key = _validate_api_key(None)
 
-        # Start a dedicated event loop in a daemon thread
-        self._loop = asyncio.new_event_loop()
-        self._loop.set_default_executor(ThreadPoolExecutor())
+        atexit.register(self.shutdown, flush=True)
+        signal.signal(signal.SIGINT, self._on_sigint)
+
         headers = {
             "accept": "application/json",
             "Authorization": f"Bearer {self._api_key}",
         }
+
+        self._loop = asyncio.new_event_loop()
+        self._loop.set_default_executor(ThreadPoolExecutor())
         self._client = aiohttp.ClientSession(loop=self._loop, headers=headers)
         self._thread = threading.Thread(
+            name="UnifyTraceLogger",
             target=self._loop.run_forever,
             daemon=True,
         )
         self._thread.start()
-        atexit.register(self.shutdown_updater, flush=True)
-        signal.signal(signal.SIGINT, self._on_sigint)
 
-    def _on_sigint(self, signum, frame):
-        self.shutdown_updater(flush=False)
-        exit(0)
-
-    async def _update_log(self, log_metadata, trace) -> None:
-        state = self._states.setdefault(log_metadata["id"], _UpdateState())
-        async with state.lock:
-            state.pending_value = {
-                "trace": trace,
-                "project": log_metadata["project"],
-                "context": log_metadata["context"],
-            }
-            if not state.in_flight:
-                state.in_flight = True
-                asyncio.create_task(self._process_queue(log_metadata["id"], state))
-
-    async def _process_queue(self, log_id: int, state: _UpdateState) -> None:
-        try:
-            while True:
-                async with state.lock:
-                    value = state.pending_value
-                    state.pending_value = None
-
-                if value is None:
-                    async with state.lock:
-                        state.in_flight = False
-                    return
-
-                try:
-                    await self._send_request(log_id, value)
-                except Exception as e:
-                    logger.error(f"error updating trace {log_id!r}: {e}")
-
-                if value["trace"].get("completed") == True:
-                    async with state.lock:
-                        state.in_flight = False
-                    # remove this log_id entirely
-                    self._states.pop(log_id, None)
-                    return
-        except asyncio.CancelledError:
-            pass
-
-    async def _send_request(self, log_id: str, value: Dict[str, Any]) -> None:
-
-        entries = {"trace": value["trace"]}
-        entries = _apply_col_context(**entries)
-        entries = {**entries, **ACTIVE_ENTRIES_WRITE.get()}
-        entries = _handle_special_types(entries)
-        entries = _handle_mutability(True, entries)
-
-        body = {
-            "logs": [log_id],
-            "project": value["project"],
-            "context": value["context"],
-            "entries": entries,
-            "overwrite": True,
-        }
-
-        async with self._client.put(
-            f"{BASE_URL}/logs",
-            json=body,
-        ) as resp:
-            resp.raise_for_status()
-
-    async def drain(self) -> None:
-        """
-        Wait until every in-flight update has completed.
-        """
-        # As long as any ID is mid-flight, sleep briefly and retry
-
-        while any(state.in_flight for state in self._states.values()):
-            await asyncio.sleep(0.05)
-
-    def update_trace(self, log: unify.Log, trace: dict, context: str) -> None:
-        """
-        Sync‐callable: schedules the async update and returns immediately.
-        """
-        # Submit the coroutine to the background loop
-        log = log[0]
+    def update_trace(self, log: unify.Log, trace: dict):
         metadata = {
             "id": log.id,
             "project": unify.active_project(),
@@ -225,26 +148,14 @@ class _AsyncTraceLogger(threading.Thread):
             self._loop,
         )
 
-    async def _close_client(self) -> None:
-        await self._client.close()
-        await asyncio.sleep(1)
-
-    async def _shutdown_tasks(self) -> None:
-        for task in self.tasks:
-            await task.cancel()
-
-    def shutdown_updater(self, flush: bool = True) -> None:
-        """
-        Cleanly stop the loop and close the HTTP client. Call this at program exit.
-        """
+    def shutdown(self, flush: bool = True) -> None:
         if self.stopped:
             return
         self.stopped = True
 
         if flush:
-            # 1) Drain: wait until in-flight → False for every log_id
             drain_future = asyncio.run_coroutine_threadsafe(
-                self.drain(),
+                self._drain(),
                 self._loop,
             )
             from concurrent.futures import TimeoutError
@@ -270,10 +181,83 @@ class _AsyncTraceLogger(threading.Thread):
         )
         close_future.result()
 
-        # 2) Stop and join the loop thread
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._thread.join()
         self._loop.close()
+
+    async def _update_log(self, log_metadata, trace) -> None:
+        state = self._states.setdefault(log_metadata["id"], _TraceLogState())
+        async with state.lock:
+            state.pending_value = {
+                "trace": trace,
+                "project": log_metadata["project"],
+                "context": log_metadata["context"],
+            }
+            if not state.processing:
+                state.processing = True
+                asyncio.create_task(self._process_log(log_metadata["id"], state))
+
+    async def _process_log(self, log_id: int, state: _TraceLogState):
+        try:
+            while True:
+                async with state.lock:
+                    value = state.pending_value
+                    state.pending_value = None
+
+                if value is None:
+                    async with state.lock:
+                        state.processing = False
+                    return
+
+                try:
+                    await self._send_request(log_id, value)
+                except Exception as e:
+                    logger.error(f"error updating trace {log_id!r}: {e}")
+
+                if value["trace"].get("completed") == True:
+                    async with state.lock:
+                        state.processing = False
+                    self._states.pop(log_id, None)
+                    return
+        except asyncio.CancelledError:
+            pass
+
+    def _on_sigint(self, signum, frame):
+        self.shutdown(flush=False)
+        exit(0)
+
+    async def _send_request(self, log_id: str, value: Dict[str, Any]):
+        entries = {"trace": value["trace"]}
+        entries = _apply_col_context(**entries)
+        entries = {**entries, **ACTIVE_ENTRIES_WRITE.get()}
+        entries = _handle_special_types(entries)
+        entries = _handle_mutability(True, entries)
+
+        body = {
+            "logs": [log_id],
+            "project": value["project"],
+            "context": value["context"],
+            "entries": entries,
+            "overwrite": True,
+        }
+
+        async with self._client.put(
+            f"{BASE_URL}/logs",
+            json=body,
+        ) as resp:
+            resp.raise_for_status()
+
+    async def _drain(self):
+        while any(state.processing for state in self._states.values()):
+            await asyncio.sleep(0.05)
+
+    async def _shutdown_tasks(self):
+        for task in self.tasks:
+            await task.cancel()
+
+    async def _close_client(self):
+        await self._client.close()
+        await asyncio.sleep(1)
 
 
 def _removes_unique_trace_values(kw: Dict[str, Any]) -> Dict[str, Any]:

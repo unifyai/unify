@@ -17,7 +17,7 @@ from .helpers import _handle_project
 
 def _wait_for_trace_logger():
     logger = _get_trace_logger()
-    while any(state.in_flight for state in logger._states.values()):
+    while any(state.processing for state in logger._states.values()):
         time.sleep(0.1)
 
 
