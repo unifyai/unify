@@ -167,7 +167,7 @@ class _AsyncTraceLogger(threading.Thread):
                 try:
                     await self._send_request(log_id, value)
                 except Exception as e:
-                    logger.error(f"[LogUpdater] error updating {log_id!r}")
+                    logger.error(f"[LogUpdater] error updating {log_id!r}: {e}")
 
                 if value["trace"].get("completed") == True:
                     async with state.lock:
@@ -198,9 +198,7 @@ class _AsyncTraceLogger(threading.Thread):
             f"{BASE_URL}/logs",
             json=body,
         ) as resp:
-            json_resp = await resp.json()
-
-            _check_response(json_resp)
+            resp.raise_for_status()
 
     async def drain(self) -> None:
         """
