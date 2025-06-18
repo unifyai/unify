@@ -15,6 +15,7 @@ import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
+from types import ModuleType
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import unify
@@ -45,6 +46,8 @@ ASYNC_MAX_QUEUE_SIZE = 10000  # Default maximum queue size
 
 # Tracing
 ACTIVE_TRACE_LOG = ContextVar("active_trace_log", default=[])
+ACTIVE_TRACE_PARAMETERS = ContextVar("active_trace_parameters", default=None)
+TRACING_LOG_CONTEXT = None
 _async_logger: Optional[AsyncLoggerManager] = None
 _trace_logger: Optional[_AsyncTraceLogger] = None
 
@@ -96,9 +99,6 @@ PARAMS_NEST_LEVEL = ContextVar("params_nest_level", default=0)
 GLOBAL_SPAN = ContextVar("global_span", default={})
 SPAN = ContextVar("span", default={})
 RUNNING_TIME = ContextVar("running_time", default=0.0)
-
-# tracing
-TRACING_LOG_CONTEXT = None
 
 # chunking
 CHUNK_LIMIT = 5000000
@@ -321,6 +321,37 @@ def _initialize_trace_logger():
 
 def _get_trace_logger():
     return _trace_logger
+
+
+def _set_active_trace_parameters(
+    prune_empty: bool = True,
+    span_type: str = "function",
+    name: Optional[str] = None,
+    filter: Optional[Callable[[callable], bool]] = None,
+    fn_type: Optional[str] = None,
+    recursive: bool = False,  # Only valid for Functions.
+    depth: Optional[int] = None,
+    skip_modules: Optional[List[ModuleType]] = None,
+    skip_functions: Optional[List[Callable]] = None,
+):
+    token = ACTIVE_TRACE_PARAMETERS.set(
+        {
+            "prune_empty": prune_empty,
+            "span_type": span_type,
+            "name": name,
+            "filter": filter,
+            "fn_type": fn_type,
+            "recursive": recursive,
+            "depth": depth,
+            "skip_modules": skip_modules,
+            "skip_functions": skip_functions,
+        },
+    )
+    return token
+
+
+def _reset_active_trace_parameters(token):
+    ACTIVE_TRACE_PARAMETERS.reset(token)
 
 
 def set_trace_context(context: str):
@@ -670,6 +701,8 @@ def log(
             api_key=api_key,
         )
 
+    created_log.entries.pop("explicit_types", None)
+
     if PARAMS_NEST_LEVEL.get() > 0 or ENTRIES_NEST_LEVEL.get() > 0:
         LOGGED.set(
             {
@@ -707,8 +740,12 @@ def _sync_log(
     }
     response = _requests.post(BASE_URL + "/logs", headers=headers, json=body)
     _check_response(response)
+    resp_json = response.json()
+    if resp_json["row_ids"]["ids"][0] is not None:
+        entries[resp_json["row_ids"]["name"]] = resp_json["row_ids"]["ids"][0]
+
     return unify.Log(
-        id=response.json()["log_event_ids"][0],
+        id=resp_json["log_event_ids"][0],
         api_key=api_key,
         **entries,
         params=params,
@@ -863,6 +900,13 @@ def create_logs(
                 data=_json_chunker(body),
             )
         _check_response(response)
+        resp_json = response.json()
+
+        if resp_json["row_ids"]["ids"][0] is not None:
+            unique_column_name = resp_json["row_ids"]["name"]
+            for e, i in zip(entries, range(len(resp_json["row_ids"]["ids"]))):
+                e[unique_column_name] = resp_json["row_ids"]["ids"][i]
+
         return [
             unify.Log(
                 project=project,
@@ -871,7 +915,7 @@ def create_logs(
                 **p,
                 id=i,
             )
-            for e, p, i in zip(entries, params, response.json()["log_event_ids"])
+            for e, p, i in zip(entries, params, resp_json["log_event_ids"])
         ]
 
     pbar = tqdm(total=len(params), unit="logs", desc="Creating Logs")
