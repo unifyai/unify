@@ -35,14 +35,12 @@ from .universal_api.utils import (
     credits,
     custom_api_keys,
     custom_endpoints,
-    endpoint_metrics,
     queries,
     supported_endpoints,
 )
 from .universal_api.utils.credits import *
 from .universal_api.utils.custom_api_keys import *
 from .universal_api.utils.custom_endpoints import *
-from .universal_api.utils.endpoint_metrics import *
 from .universal_api.utils.queries import *
 from .universal_api.utils.supported_endpoints import *
 
