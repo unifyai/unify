@@ -231,10 +231,6 @@ class _AsyncTraceLogger:
         except asyncio.CancelledError:
             pass
 
-    def _on_sigint(self, signum, frame):
-        self.shutdown(flush=False)
-        exit(0)
-
     async def _send_request(self, log_id: str, value: Dict[str, Any]):
         entries = {"trace": value["trace"]}
         entries = _apply_col_context(**entries)
@@ -267,6 +263,10 @@ class _AsyncTraceLogger:
     async def _close_client(self):
         await self._client.close()
         await asyncio.sleep(1)
+
+    def _on_sigint(self, signum, frame):
+        self.shutdown(flush=False)
+        exit(0)
 
 
 def _removes_unique_trace_values(kw: Dict[str, Any]) -> Dict[str, Any]:
