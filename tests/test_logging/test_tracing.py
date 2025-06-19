@@ -17,7 +17,7 @@ from .helpers import _handle_project
 
 def _wait_for_trace_logger():
     logger = _get_trace_logger()
-    while any(state.processing for state in logger._states.values()):
+    while logger.is_processing():
         time.sleep(0.1)
 
 

@@ -118,6 +118,7 @@ class _AsyncTraceLogger:
         self._states: dict[str, _TraceLogState] = {}
         self.stopped = False
         self._api_key = _validate_api_key(None)
+        self._pending_submit_requests = 0
 
         atexit.register(self.shutdown, flush=True)
         signal.signal(signal.SIGINT, self._on_sigint)
@@ -143,10 +144,18 @@ class _AsyncTraceLogger:
             "project": unify.active_project(),
             "context": log.context,
         }
-        asyncio.run_coroutine_threadsafe(
+        fut = asyncio.run_coroutine_threadsafe(
             self._update_log(metadata, trace),
             self._loop,
         )
+        self._pending_submit_requests += 1
+        fut.add_done_callback(self._update_log_callback)
+
+    def is_processing(self) -> bool:
+        return self._pending_submit_requests > 0 or len(self._states) > 0
+
+    def _update_log_callback(self, fut):
+        self._pending_submit_requests -= 1
 
     def shutdown(self, flush: bool = True) -> None:
         if self.stopped:
