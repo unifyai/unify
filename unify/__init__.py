@@ -44,14 +44,12 @@ from .universal_api.utils.custom_endpoints import *
 from .universal_api.utils.queries import *
 from .universal_api.utils.supported_endpoints import *
 
-from .logging.utils import artifacts
 from .logging.utils import compositions
 from .logging.utils import contexts
 from .logging.utils import datasets
 from .logging.utils import logs
 from .logging.utils import projects
 
-from .logging.utils.artifacts import *
 from .logging.utils.compositions import *
 from .logging.utils.contexts import *
 from .logging.utils.datasets import *
