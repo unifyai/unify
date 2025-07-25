@@ -121,7 +121,8 @@ class _AsyncTraceLogger:
         self._pending_submit_requests = 0
 
         atexit.register(self.shutdown, flush=True)
-        signal.signal(signal.SIGINT, self._on_sigint)
+        if threading.current_thread() is threading.main_thread():
+            signal.signal(signal.SIGINT, self._on_sigint)
 
         headers = {
             "accept": "application/json",
