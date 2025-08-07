@@ -1316,10 +1316,18 @@ class AsyncUnify(_UniClient):
             else:
                 if unify.CLIENT_LOGGING:
                     print(f"calling {kw['model']}... (thread {threading.get_ident()})")
+
+                if "response_format" in kw and kw["response_format"]:
+                    chat_method = self._client.beta.chat.completions.stream
+                    if "stream" in kw:
+                        del kw["stream"] # .stream() does not accept the stream argument
+                else:
+                    chat_method = self._client.chat.completions.create
+
                 if self._traced:
                     # ToDo: test if this works, it probably won't
                     async_stream = await unify.traced(
-                        self._client.chat.completions.create,
+                        chat_method,
                         span_type="llm-stream",
                         name=(
                             endpoint
@@ -1327,15 +1335,23 @@ class AsyncUnify(_UniClient):
                             else endpoint + "[" + ",".join([str(t) for t in tags]) + "]"
                         ),
                     )(**kw)
+
+                    async for chunk in async_stream:  # type: ignore[union-attr]
+                        if return_full_completion:
+                            yield chunk
+                        else:
+                            yield chunk.choices[0].delta.content or ""
                 else:
-                    async_stream = await self._client.chat.completions.create(**kw)
+                    async with chat_method(**kw) as async_stream:
+                        async for chunk in async_stream:  # type: ignore[union-attr]
+                            if return_full_completion:
+                                yield chunk
+                            else:
+                                yield chunk.delta
+
                 if unify.CLIENT_LOGGING:
                     print(f"done (thread {threading.get_ident()})")
-            async for chunk in async_stream:  # type: ignore[union-attr]
-                if return_full_completion:
-                    yield chunk
-                else:
-                    yield chunk.choices[0].delta.content or ""
+
         except openai.APIStatusError as e:
             raise Exception(e.message)
 
