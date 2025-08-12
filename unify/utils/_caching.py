@@ -9,7 +9,7 @@ from openai.types.chat import ChatCompletion, ParsedChatCompletion
 from pydantic import BaseModel
 
 _cache: Optional[Dict] = None
-_cache_dir = (
+_CACHE_DIR = (
     os.environ["UNIFY_CACHE_DIR"] if "UNIFY_CACHE_DIR" in os.environ else os.getcwd()
 )
 
@@ -42,9 +42,12 @@ def _get_caching_fname():
     return CACHE_FNAME
 
 
-def _get_caching_fpath():
-    global _cache_dir, CACHE_FNAME
-    return os.path.join(_cache_dir, CACHE_FNAME)
+def _get_caching_fpath(fname: str = None):
+    global _CACHE_DIR, CACHE_FNAME
+    if fname is None:
+        return os.path.join(_CACHE_DIR, CACHE_FNAME)
+    else:
+        return os.path.join(_CACHE_DIR, fname)
 
 
 def _create_cache_if_none(filename: str = None, local: bool = True):
@@ -55,11 +58,8 @@ def _create_cache_if_none(filename: str = None, local: bool = True):
             create_context(UPSTREAM_CACHE_CONTEXT_NAME)
         return
 
-    global _cache, _cache_dir
-    if filename is None:
-        cache_fpath = _get_caching_fpath()
-    else:
-        cache_fpath = os.path.join(_cache_dir, filename)
+    global _cache
+    cache_fpath = _get_caching_fpath(filename)
     if _cache is None:
         if not os.path.exists(cache_fpath):
             with open(cache_fpath, "w") as outfile:
@@ -325,10 +325,7 @@ def _write_to_cache(
             if _res_types:
                 _cache[cache_str + "_res_types"] = _res_types
             _cache[cache_str] = response_str
-            if filename is None:
-                cache_fpath = _get_caching_fpath()
-            else:
-                cache_fpath = os.path.join(_cache_dir, filename)
+            cache_fpath = _get_caching_fpath(filename)
             with open(cache_fpath, "w") as outfile:
                 json.dump(_cache, outfile)
         else:
