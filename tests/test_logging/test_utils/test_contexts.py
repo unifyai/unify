@@ -93,5 +93,30 @@ def test_get_context():
     assert context["allow_duplicates"] is allow_duplicates
 
 
+@_handle_project
+def test_context_nesting():
+    current_ctx = unify.get_active_context()
+    assert current_ctx["read"] == ""
+    assert current_ctx["write"] == ""
+
+    with unify.Context("A"):
+        current_ctx = unify.get_active_context()
+        assert current_ctx["read"] == "A"
+        assert current_ctx["write"] == "A"
+        assert unify.get_context(current_ctx["read"])["name"] == "A"
+        assert unify.get_context(current_ctx["write"])["name"] == "A"
+
+        with unify.Context("B"):
+            current_ctx = unify.get_active_context()
+            assert current_ctx["read"] == "A/B"
+            assert current_ctx["write"] == "A/B"
+            assert unify.get_context(current_ctx["read"])["name"] == "A/B"
+            assert unify.get_context(current_ctx["write"])["name"] == "A/B"
+
+    current_ctx = unify.get_active_context()
+    assert current_ctx["read"] == ""
+    assert current_ctx["write"] == ""
+
+
 if __name__ == "__main__":
     pass

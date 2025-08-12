@@ -265,16 +265,27 @@ class Context:
         _validate_mode_nesting(CONTEXT_MODE.get(), self._mode)
         self._mode_token = CONTEXT_MODE.set(self._mode)
 
-        if self._mode in ("both", "write"):
+        if self._mode == "both":
+            assert CONTEXT_WRITE.get() == CONTEXT_READ.get()
+            self._context = _join_path(CONTEXT_WRITE.get(), self._context)
+            self._context_write_token = CONTEXT_WRITE.set(self._context)
+            self._context_read_token = CONTEXT_READ.set(self._context)
+        elif self._mode == "write":
+            self._context = _join_path(CONTEXT_WRITE.get(), self._context)
             self._context_write_token = CONTEXT_WRITE.set(
                 _join_path(CONTEXT_WRITE.get(), self._context),
             )
-        if self._mode in ("both", "read"):
+        elif self._mode == "read":
+            self._context = _join_path(CONTEXT_READ.get(), self._context)
             self._context_read_token = CONTEXT_READ.set(
                 _join_path(CONTEXT_READ.get(), self._context),
             )
 
-        if self._overwrite and self._context in unify.get_contexts():
+        context_exists_remote = self._context in unify.get_contexts()
+
+        if not context_exists_remote:
+            unify.create_context(self._context, is_versioned=self._is_versioned)
+        elif self._overwrite and context_exists_remote:
             if self._mode == "read":
                 raise Exception(f"Cannot overwrite logs in read mode.")
 
@@ -282,9 +293,13 @@ class Context:
             unify.create_context(self._context, is_versioned=self._is_versioned)
 
     def __exit__(self, *args, **kwargs):
-        if self._mode in ("both", "write"):
+        if self._mode == "both":
+            assert CONTEXT_WRITE.get() == CONTEXT_READ.get()
             CONTEXT_WRITE.reset(self._context_write_token)
-        if self._mode in ("both", "read"):
+            CONTEXT_READ.reset(self._context_read_token)
+        elif self._mode == "write":
+            CONTEXT_WRITE.reset(self._context_write_token)
+        elif self._mode == "read":
             CONTEXT_READ.reset(self._context_read_token)
 
         CONTEXT_MODE.reset(self._mode_token)
