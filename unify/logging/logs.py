@@ -210,37 +210,52 @@ def _join_path(base_path: str, context: str) -> str:
     ).replace("\\", "/")
 
 
-def set_context(context: str, mode: str = "both", overwrite: bool = False):
-    global MODE, MODE_TOKEN, CONTEXT_READ_TOKEN, CONTEXT_WRITE_TOKEN
-    MODE = mode
-    _validate_mode_nesting(CONTEXT_MODE.get(), mode)
-    MODE_TOKEN = CONTEXT_MODE.set(mode)
+def set_context(
+    context: str,
+    mode: str = "both",
+    overwrite: bool = False,
+    relative: bool = True,
+):
+    if mode == "both":
+        if relative:
+            assert CONTEXT_WRITE.get() == CONTEXT_READ.get()
+            context = _join_path(CONTEXT_WRITE.get(), context)
+            CONTEXT_WRITE.set(context)
+            CONTEXT_READ.set(context)
+        else:
+            CONTEXT_WRITE.set(context)
+            CONTEXT_READ.set(context)
+    elif mode == "write":
+        if relative:
+            context = _join_path(CONTEXT_WRITE.get(), context)
+            CONTEXT_WRITE.set(context)
+        else:
+            CONTEXT_WRITE.set(context)
+    elif mode == "read":
+        if relative:
+            context = _join_path(CONTEXT_READ.get(), context)
+            CONTEXT_READ.set(context)
+        else:
+            CONTEXT_READ.set(context)
 
-    if overwrite and context in unify.get_contexts():
+    context_exists_remote = context in unify.get_contexts()
+    if overwrite and context_exists_remote:
         if mode == "read":
             raise Exception(f"Cannot overwrite logs in read mode.")
         unify.delete_context(context)
-    if context not in unify.get_contexts():
+    if not context_exists_remote:
         unify.create_context(context)
 
-    if mode in ("both", "write"):
-        CONTEXT_WRITE_TOKEN = CONTEXT_WRITE.set(
-            _join_path(CONTEXT_WRITE.get(), context),
-        )
-    if mode in ("both", "read"):
-        CONTEXT_READ_TOKEN = CONTEXT_READ.set(
-            _join_path(CONTEXT_READ.get(), context),
-        )
 
-
-def unset_context():
-    global MODE, MODE_TOKEN, CONTEXT_READ_TOKEN, CONTEXT_WRITE_TOKEN
-    if MODE in ("both", "write"):
-        CONTEXT_WRITE.reset(CONTEXT_WRITE_TOKEN)
-    if MODE in ("both", "read"):
-        CONTEXT_READ.reset(CONTEXT_READ_TOKEN)
-
-    CONTEXT_MODE.reset(MODE_TOKEN)
+def unset_context(mode: str = "both"):
+    if mode == "both":
+        assert CONTEXT_WRITE.get() == CONTEXT_READ.get()
+        CONTEXT_WRITE.set("")
+        CONTEXT_READ.set("")
+    elif mode == "write":
+        CONTEXT_WRITE.set("")
+    elif mode == "read":
+        CONTEXT_READ.set("")
 
 
 def get_active_context():
