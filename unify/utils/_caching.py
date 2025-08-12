@@ -12,18 +12,17 @@ _cache: Optional[Dict] = None
 _cache_dir = (
     os.environ["UNIFY_CACHE_DIR"] if "UNIFY_CACHE_DIR" in os.environ else os.getcwd()
 )
-_cache_fpath: str = os.path.join(_cache_dir, ".cache.json")
 
 CACHE_LOCK = threading.Lock()
 
-CACHING = False
+CACHING_ENABLED = False
 CACHE_FNAME = ".cache.json"
 UPSTREAM_CACHE_CONTEXT_NAME = "UNIFY_CACHE"
 
 
 def set_caching(value: bool) -> None:
-    global CACHING, CACHE_FNAME
-    CACHING = value
+    global CACHING_ENABLED, CACHE_FNAME
+    CACHING_ENABLED = value
 
 
 def set_caching_fname(value: Optional[str] = None) -> None:
@@ -36,7 +35,7 @@ def set_caching_fname(value: Optional[str] = None) -> None:
 
 
 def _get_caching():
-    return CACHING
+    return CACHING_ENABLED
 
 
 def _get_caching_fname():
@@ -56,7 +55,7 @@ def _create_cache_if_none(filename: str = None, local: bool = True):
             create_context(UPSTREAM_CACHE_CONTEXT_NAME)
         return
 
-    global _cache, _cache_fpath, _cache_dir
+    global _cache, _cache_dir
     if filename is None:
         cache_fpath = _get_caching_fpath()
     else:
