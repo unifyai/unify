@@ -118,5 +118,37 @@ def test_context_nesting():
     assert current_ctx["write"] == ""
 
 
+@_handle_project
+def test_context_relative():
+    unify.set_context("A", relative=True)
+
+    unify.set_context("B", relative=True)
+    current_ctx = unify.get_active_context()
+    assert current_ctx["read"] == "A/B"
+    assert current_ctx["write"] == "A/B"
+    assert unify.get_context(current_ctx["read"])["name"] == "A/B"
+
+    unify.set_context("C", relative=True)
+    current_ctx = unify.get_active_context()
+    assert current_ctx["read"] == "A/B/C"
+    assert current_ctx["write"] == "A/B/C"
+    assert unify.get_context(current_ctx["read"])["name"] == "A/B/C"
+
+
+@_handle_project
+def test_context_not_relative():
+    unify.set_context("A", relative=False)
+    current_ctx = unify.get_active_context()
+    assert current_ctx["read"] == "A"
+    assert current_ctx["write"] == "A"
+    assert unify.get_context(current_ctx["read"])["name"] == "A"
+
+    unify.set_context("B", relative=False)
+    current_ctx = unify.get_active_context()
+    assert current_ctx["read"] == "B"
+    assert current_ctx["write"] == "B"
+    assert unify.get_context(current_ctx["read"])["name"] == "B"
+
+
 if __name__ == "__main__":
     pass
