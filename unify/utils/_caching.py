@@ -10,18 +10,27 @@ from unify.utils.caching._base_cache import BaseCache
 from unify.utils.caching._local_cache import LocalCache
 from unify.utils.caching._remote_cache import RemoteCache
 
-CACHING_ENABLED = False
 CACHE_LOCK = threading.Lock()
-BACKENDS = {
+CACHING_ENABLED = False
+CURRENT_CACHE_BACKEND = "local"
+CACHE_BACKENDS = {
     "local": LocalCache,
     "remote": RemoteCache,
     "local_separate": None,
 }
 
 
-def get_cache_backend(backend: str) -> Type[BaseCache]:
-    assert backend in BACKENDS, f"Invalid backend: {backend}"
-    return BACKENDS[backend]
+def set_cache_backend(backend: str) -> None:
+    global CURRENT_CACHE_BACKEND
+    assert backend in CACHE_BACKENDS, f"Invalid backend: {backend}"
+    CURRENT_CACHE_BACKEND = backend
+
+
+def get_cache_backend(backend: Optional[str] = None) -> Type[BaseCache]:
+    if backend is None:
+        backend = CURRENT_CACHE_BACKEND
+    assert backend in CACHE_BACKENDS, f"Invalid backend: {backend}"
+    return CACHE_BACKENDS[backend]
 
 
 def set_caching(value: bool) -> bool:
@@ -64,7 +73,7 @@ def _get_cache(
     raise_on_empty: bool = False,
     read_closest: bool = False,
     delete_closest: bool = False,
-    backend: str = "local",
+    backend: Optional[str] = None,
 ) -> Optional[Any]:
     global CACHE_LOCK
     # prevents circular import
@@ -192,7 +201,7 @@ def _write_to_cache(
     fn_name: str,
     kw: Dict[str, Any],
     response: Any,
-    backend: str = "local",
+    backend: Optional[str] = None,
     filename: str = None,
 ):
 
@@ -224,7 +233,7 @@ def _handle_reading_from_cache(
     fn_name: str,
     kwargs: Dict[str, Any],
     mode: str,
-    backend: str = "local",
+    backend: Optional[str] = None,
 ):
     if isinstance(mode, str) and mode.endswith("-closest"):
         mode = mode.removesuffix("-closest")
@@ -254,7 +263,7 @@ def cached(
     fn: callable = None,
     *,
     mode: Union[bool, str] = True,
-    backend: str = "local",
+    backend: Optional[str] = None,
 ):
     if fn is None:
         return lambda f: cached(

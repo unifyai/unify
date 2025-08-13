@@ -88,7 +88,7 @@ class _UniClient(_Client, abc.ABC):
         return_full_completion: bool = False,
         traced: bool = False,
         cache: Optional[Union[bool, str]] = None,
-        cache_backend: str = "local",
+        cache_backend: Optional[str] = None,
         # passthrough arguments
         extra_headers: Optional[Headers] = None,
         extra_query: Optional[Query] = None,
@@ -699,7 +699,7 @@ class _UniClient(_Client, abc.ABC):
         stateful: Optional[bool] = None,
         return_full_completion: Optional[bool] = None,
         cache: Optional[Union[bool, str]] = None,
-        cache_backend: Optional[str] = "local",
+        cache_backend: Optional[str] = None,
         # passthrough arguments
         extra_headers: Optional[Headers] = None,
         extra_query: Optional[Query] = None,
