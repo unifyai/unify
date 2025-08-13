@@ -247,15 +247,9 @@ def set_context(
         unify.create_context(context)
 
 
-def unset_context(mode: str = "both"):
-    if mode == "both":
-        assert CONTEXT_WRITE.get() == CONTEXT_READ.get()
-        CONTEXT_WRITE.set("")
-        CONTEXT_READ.set("")
-    elif mode == "write":
-        CONTEXT_WRITE.set("")
-    elif mode == "read":
-        CONTEXT_READ.set("")
+def unset_context():
+    CONTEXT_WRITE.set("")
+    CONTEXT_READ.set("")
 
 
 def get_active_context():
