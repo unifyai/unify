@@ -274,9 +274,13 @@ def cached(
         )
 
     def wrapped(*args, **kwargs):
+        sig = inspect.signature(fn)
+        bound = sig.bind_partial(*args, **kwargs)
+        bound.apply_defaults()
+        args_kwargs = bound.arguments
         ret, read_closest, in_cache = _handle_reading_from_cache(
             fn.__name__,
-            kwargs,
+            args_kwargs,
             mode,
             backend,
         )
@@ -290,16 +294,20 @@ def cached(
             if not in_cache or mode == "write":
                 _write_to_cache(
                     fn_name=fn.__name__,
-                    kw=kwargs,
+                    kw=args_kwargs,
                     response=ret,
                     backend=backend,
                 )
         return ret
 
     async def async_wrapped(*args, **kwargs):
+        sig = inspect.signature(fn)
+        bound = sig.bind_partial(*args, **kwargs)
+        bound.apply_defaults()
+        args_kwargs = bound.arguments
         ret, read_closest, in_cache = _handle_reading_from_cache(
             fn.__name__,
-            kwargs,
+            args_kwargs,
             mode,
             backend,
         )
@@ -313,7 +321,7 @@ def cached(
             if not in_cache or mode == "write":
                 _write_to_cache(
                     fn_name=fn.__name__,
-                    kw=kwargs,
+                    kw=args_kwargs,
                     response=ret,
                     backend=backend,
                 )
