@@ -351,10 +351,10 @@ def test_upstream_cache() -> None:
     client = Unify(
         endpoint="gpt-4o@openai",
     )
-    r0 = client.generate(user_message="hello", cache=True, local_cache=False)
+    r0 = client.generate(user_message="hello", cache=True, cache_backend="remote")
     logs = unify.get_logs(context=RemoteCache.get_filename())
     assert len(logs) == 1
-    r1 = client.generate(user_message="hello", cache=True, local_cache=False)
+    r1 = client.generate(user_message="hello", cache=True, cache_backend="remote")
     logs = unify.get_logs(context=RemoteCache.get_filename())
     assert len(logs) == 1
     assert r0 == r1
@@ -365,10 +365,10 @@ def test_upstream_cache_write() -> None:
     client = Unify(
         endpoint="gpt-4o@openai",
     )
-    client.generate(user_message="hello", cache="write", local_cache=False)
+    client.generate(user_message="hello", cache="write", cache_backend="remote")
     logs = unify.get_logs(context=RemoteCache.get_filename())
     initial_logs_count = len(logs)
-    client.generate(user_message="hello", cache="write", local_cache=False)
+    client.generate(user_message="hello", cache="write", cache_backend="remote")
     logs = unify.get_logs(context=RemoteCache.get_filename())
     assert len(logs) == initial_logs_count
 
@@ -378,10 +378,10 @@ def test_upstream_cache_read() -> None:
     client = Unify(
         endpoint="gpt-4o@openai",
     )
-    r0 = client.generate(user_message="hello", cache="write", local_cache=False)
+    r0 = client.generate(user_message="hello", cache="write", cache_backend="remote")
     logs = unify.get_logs(context=RemoteCache.get_filename())
     initial_logs_count = len(logs)
-    r1 = client.generate(user_message="hello", cache="read", local_cache=False)
+    r1 = client.generate(user_message="hello", cache="read", cache_backend="remote")
     logs = unify.get_logs(context=RemoteCache.get_filename())
     assert len(logs) == initial_logs_count
     assert r0 == r1
@@ -392,10 +392,12 @@ def test_upstream_cache_read_only() -> None:
     client = Unify(
         endpoint="gpt-4o@openai",
     )
-    r0 = client.generate(user_message="hello", cache="write", local_cache=False)
+    r0 = client.generate(user_message="hello", cache="write", cache_backend="remote")
     logs = unify.get_logs(context=RemoteCache.get_filename())
     initial_logs_count = len(logs)
-    r1 = client.generate(user_message="hello", cache="read-only", local_cache=False)
+    r1 = client.generate(
+        user_message="hello", cache="read-only", cache_backend="remote"
+    )
     logs = unify.get_logs(context=RemoteCache.get_filename())
     assert len(logs) == initial_logs_count
     assert r0 == r1
@@ -405,7 +407,7 @@ def test_upstream_cache_read_only() -> None:
         client.generate(
             user_message="new_message",
             cache="read-only",
-            local_cache=False,
+            cache_backend="remote",
         )
 
 
@@ -414,10 +416,12 @@ def test_upstream_cache_closest_match_on_exception():
     client = Unify(
         endpoint="gpt-4o@openai",
     )
-    r0 = client.generate(user_message="hello", cache="both", local_cache=False)
+    r0 = client.generate(user_message="hello", cache="both", cache_backend="remote")
     logs = unify.get_logs(context=RemoteCache.get_filename())
     initial_logs_count = len(logs)
-    r1 = client.generate(user_message="helloo", cache="read-closest", local_cache=False)
+    r1 = client.generate(
+        user_message="helloo", cache="read-closest", cache_backend="remote"
+    )
     logs = unify.get_logs(context=RemoteCache.get_filename())
     assert len(logs) == initial_logs_count
     assert r0 == r1
@@ -469,7 +473,7 @@ async def test_cached_decorator_async():
 
 @_handle_project
 def test_cached_decorator_upstream_cache():
-    @unify.cached(local=False)
+    @unify.cached(backend="remote")
     def add_two_numbers(x, y):
         return x + y
 
@@ -481,7 +485,7 @@ def test_cached_decorator_upstream_cache():
 @_handle_project
 @pytest.mark.asyncio
 async def test_cached_decorator_upstream_cache_async():
-    @unify.cached(local=False)
+    @unify.cached(backend="remote")
     async def add_two_numbers(x, y):
         return x + y
 
