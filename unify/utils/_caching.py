@@ -8,6 +8,7 @@ from openai.types.chat import ChatCompletion, ParsedChatCompletion
 from pydantic import BaseModel
 from unify.utils.caching._base_cache import BaseCache
 from unify.utils.caching._local_cache import LocalCache
+from unify.utils.caching._local_separate_cache import LocalSeparateCache
 from unify.utils.caching._remote_cache import RemoteCache
 
 CACHE_LOCK = threading.Lock()
@@ -16,7 +17,7 @@ CURRENT_CACHE_BACKEND = "local"
 CACHE_BACKENDS = {
     "local": LocalCache,
     "remote": RemoteCache,
-    "local_separate": None,
+    "local_separate": LocalSeparateCache,
 }
 
 
