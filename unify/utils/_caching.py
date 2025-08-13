@@ -12,10 +12,16 @@ from unify.utils.caching._remote_cache import RemoteCache
 
 CACHING_ENABLED = False
 CACHE_LOCK = threading.Lock()
+BACKENDS = {
+    "local": LocalCache,
+    "remote": RemoteCache,
+    "local_separate": None,
+}
 
 
-def get_cache_backend(local: bool = True) -> Type[BaseCache]:
-    return LocalCache if local else RemoteCache
+def get_cache_backend(backend: str) -> Type[BaseCache]:
+    assert backend in BACKENDS, f"Invalid backend: {backend}"
+    return BACKENDS[backend]
 
 
 def set_caching(value: bool) -> bool:
@@ -58,7 +64,7 @@ def _get_cache(
     raise_on_empty: bool = False,
     read_closest: bool = False,
     delete_closest: bool = False,
-    local: bool = True,
+    backend: str = "local",
 ) -> Optional[Any]:
     global CACHE_LOCK
     # prevents circular import
@@ -72,13 +78,13 @@ def _get_cache(
     CACHE_LOCK.acquire()
     # noinspection PyBroadException
     try:
-        get_cache_backend(local).create_or_load(filename)
+        get_cache_backend(backend).create_or_load(filename)
         kw = {k: v for k, v in kw.items() if v is not None}
         kw_str = _dumps(kw)
         cache_str = fn_name + "_" + kw_str
-        if not get_cache_backend(local).key_exists(cache_str):
+        if not get_cache_backend(backend).key_exists(cache_str):
             if raise_on_empty or read_closest:
-                keys_to_search = get_cache_backend(local).get_keys()
+                keys_to_search = get_cache_backend(backend).get_keys()
                 if len(keys_to_search) == 0:
                     CACHE_LOCK.release()
                     raise Exception(
@@ -105,7 +111,7 @@ def _get_cache(
             else:
                 CACHE_LOCK.release()
                 return
-        ret, res_types = get_cache_backend(local).get_entry(cache_str)
+        ret, res_types = get_cache_backend(backend).get_entry(cache_str)
         if res_types is None:
             CACHE_LOCK.release()
             return ret
@@ -114,7 +120,7 @@ def _get_cache(
             idx_list = json.loads(idx_str)
             if len(idx_list) == 0:
                 if read_closest and delete_closest:
-                    get_cache_backend(local).delete(cache_str)
+                    get_cache_backend(backend).delete(cache_str)
                 CACHE_LOCK.release()
                 typ = type_str_to_type[type_str]
                 if issubclass(typ, BaseModel):
@@ -135,7 +141,7 @@ def _get_cache(
                     break
                 item = item[idx]
         if read_closest and delete_closest:
-            get_cache_backend(local).delete(cache_str)
+            get_cache_backend(backend).delete(cache_str)
         CACHE_LOCK.release()
         return ret
     except:
@@ -186,7 +192,7 @@ def _write_to_cache(
     fn_name: str,
     kw: Dict[str, Any],
     response: Any,
-    local: bool = True,
+    backend: str = "local",
     filename: str = None,
 ):
 
@@ -194,13 +200,13 @@ def _write_to_cache(
     CACHE_LOCK.acquire()
     # noinspection PyBroadException
     try:
-        get_cache_backend(local).create_or_load(filename)
+        get_cache_backend(backend).create_or_load(filename)
         kw = {k: v for k, v in kw.items() if v is not None}
         kw_str = _dumps(kw)
         cache_str = fn_name + "_" + kw_str
         _res_types = {}
         response_str = _dumps(response, _res_types)
-        get_cache_backend(local).update_entry(
+        get_cache_backend(backend).update_entry(
             key=cache_str,
             value=response_str,
             res_types=_res_types,
@@ -218,7 +224,7 @@ def _handle_reading_from_cache(
     fn_name: str,
     kwargs: Dict[str, Any],
     mode: str,
-    local: bool = True,
+    backend: str = "local",
 ):
     if isinstance(mode, str) and mode.endswith("-closest"):
         mode = mode.removesuffix("-closest")
@@ -234,7 +240,7 @@ def _handle_reading_from_cache(
             raise_on_empty=mode == "read-only",
             read_closest=read_closest,
             delete_closest=read_closest,
-            local=local,
+            backend=backend,
         )
         in_cache = True if ret is not None else False
     return ret, read_closest, in_cache
@@ -248,13 +254,13 @@ def cached(
     fn: callable = None,
     *,
     mode: Union[bool, str] = True,
-    local: bool = True,
+    backend: str = "local",
 ):
     if fn is None:
         return lambda f: cached(
             f,
             mode=mode,
-            local=local,
+            backend=backend,
         )
 
     def wrapped(*args, **kwargs):
@@ -262,7 +268,7 @@ def cached(
             fn.__name__,
             kwargs,
             mode,
-            local,
+            backend,
         )
         if ret is None:
             ret = fn(*args, **kwargs)
@@ -276,7 +282,7 @@ def cached(
                     fn_name=fn.__name__,
                     kw=kwargs,
                     response=ret,
-                    local=local,
+                    backend=backend,
                 )
         return ret
 
@@ -285,7 +291,7 @@ def cached(
             fn.__name__,
             kwargs,
             mode,
-            local,
+            backend,
         )
         if ret is None:
             ret = await fn(*args, **kwargs)
@@ -299,7 +305,7 @@ def cached(
                     fn_name=fn.__name__,
                     kw=kwargs,
                     response=ret,
-                    local=local,
+                    backend=backend,
                 )
         return ret
 
