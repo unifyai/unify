@@ -146,7 +146,7 @@ def test_cache_read_only() -> None:
         assert mt0 == mt1
         assert r0 == r1
         os.remove(cache_handler.test_path)
-        unify._caching._cache = None
+        unify._caching.LocalCache._cache = None
         try:
             client.generate(user_message="hello", cache="read-only")
             raised_exception = False
@@ -174,7 +174,7 @@ async def test_cache_read_only_async() -> None:
         assert mt0 == mt1
         assert r0 == r1
         os.remove(cache_handler.test_path)
-        unify._caching._cache = None
+        unify._caching.LocalCache._cache = None
         try:
             await client.generate(user_message="hello", cache="read-only")
             raised_exception = False

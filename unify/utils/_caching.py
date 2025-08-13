@@ -3,35 +3,123 @@ import inspect
 import json
 import os
 import threading
+from abc import ABC
 from typing import Any, Dict, List, Optional, Union
 
 from openai.types.chat import ChatCompletion, ParsedChatCompletion
 from pydantic import BaseModel
 
-_cache: Optional[Dict] = None
-_CACHE_DIR = (
-    os.environ["UNIFY_CACHE_DIR"] if "UNIFY_CACHE_DIR" in os.environ else os.getcwd()
-)
 
-CACHE_LOCK = threading.Lock()
+class BaseCache(ABC):
+    # TODO: Implement a base class for caching
+    pass
+
+
+class LocalCache(BaseCache):
+    _cache: Optional[Dict] = None
+    _cache_dir: str = (
+        os.environ["UNIFY_CACHE_DIR"]
+        if "UNIFY_CACHE_DIR" in os.environ
+        else os.getcwd()
+    )
+    _cache_lock: threading.Lock = threading.Lock()
+    _cache_fname: str = ".cache.json"
+    _enabled: bool = False
+
+    @classmethod
+    def set_filename(cls, filename: str) -> None:
+        cls._cache_fname = filename
+        cls._cache = None  # Force a reload of the cache
+
+    @classmethod
+    def get_filename(cls) -> str:
+        return cls._cache_fname
+
+    @classmethod
+    def get_cache_filepath(cls, filename: str = None) -> str:
+        if filename is None:
+            filename = cls.get_filename()
+
+        return os.path.join(cls._cache_dir, filename)
+
+    @classmethod
+    def is_enabled(cls) -> bool:
+        return cls._enabled
+
+    @classmethod
+    def update_entry(
+        cls,
+        *,
+        key: str,
+        value: Any,
+        res_types: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if res_types:
+            cls._cache[key + "_res_types"] = res_types
+        cls._cache[key] = value
+
+    @classmethod
+    def write(cls, filename: str = None) -> None:
+        cache_fpath = cls.get_cache_filepath(filename)
+        with open(cache_fpath, "w") as outfile:
+            json.dump(cls._cache, outfile)
+
+    @classmethod
+    def create_or_load(cls, filename: str = None) -> None:
+        cache_fpath = cls.get_cache_filepath(filename)
+        if cls._cache is None:
+            if not os.path.exists(cache_fpath):
+                with open(cache_fpath, "w") as outfile:
+                    json.dump({}, outfile)
+
+            # Check if file is empty or contains invalid JSON
+            try:
+                with open(cache_fpath) as outfile:
+                    content = outfile.read().strip()
+                    if not content:
+                        # File is empty, initialize with empty dict
+                        with open(cache_fpath, "w") as outfile:
+                            json.dump({}, outfile)
+                        cls._cache = {}
+                    else:
+                        # Try to parse the JSON
+                        cls._cache = json.loads(content)
+            except json.JSONDecodeError:
+                # File contains invalid JSON, reinitialize
+                with open(cache_fpath, "w") as outfile:
+                    json.dump({}, outfile)
+                cls._cache = {}
+
+    @classmethod
+    def get_keys(cls) -> List[str]:
+        return list(cls._cache.keys())
+
+    @classmethod
+    def get_entry(cls, cache_key: str) -> Optional[Any]:
+        return cls._cache.get(cache_key), cls._cache.get(f"{cache_key}_res_types")
+
+    @classmethod
+    def key_exists(cls, cache_key: str) -> bool:
+        return cache_key in cls._cache
+
+    @classmethod
+    def delete(cls, cache_key: str) -> None:
+        del cls._cache[cache_key]
+        del cls._cache[cache_key + "_res_types"]
+
 
 CACHING_ENABLED = False
-CACHE_FNAME = ".cache.json"
 UPSTREAM_CACHE_CONTEXT_NAME = "UNIFY_CACHE"
+CACHE_LOCK = threading.Lock()
 
 
 def set_caching(value: bool) -> None:
-    global CACHING_ENABLED, CACHE_FNAME
+    global CACHING_ENABLED
     CACHING_ENABLED = value
 
 
 def set_caching_fname(value: Optional[str] = None) -> None:
-    global CACHE_FNAME, _cache
-    if value is not None:
-        CACHE_FNAME = value
-    else:
-        CACHE_FNAME = ".cache.json"
-    _cache = None  # Force a reload of the cache
+    LocalCache.set_filename(value)
 
 
 def _get_caching():
@@ -39,15 +127,11 @@ def _get_caching():
 
 
 def _get_caching_fname():
-    return CACHE_FNAME
+    return LocalCache.get_filename()
 
 
 def _get_caching_fpath(fname: str = None):
-    global _CACHE_DIR, CACHE_FNAME
-    if fname is None:
-        return os.path.join(_CACHE_DIR, CACHE_FNAME)
-    else:
-        return os.path.join(_CACHE_DIR, fname)
+    return LocalCache.get_cache_filepath(fname)
 
 
 def _create_cache_if_none(filename: str = None, local: bool = True):
@@ -58,30 +142,7 @@ def _create_cache_if_none(filename: str = None, local: bool = True):
             create_context(UPSTREAM_CACHE_CONTEXT_NAME)
         return
 
-    global _cache
-    cache_fpath = _get_caching_fpath(filename)
-    if _cache is None:
-        if not os.path.exists(cache_fpath):
-            with open(cache_fpath, "w") as outfile:
-                json.dump({}, outfile)
-
-        # Check if file is empty or contains invalid JSON
-        try:
-            with open(cache_fpath) as outfile:
-                content = outfile.read().strip()
-                if not content:
-                    # File is empty, initialize with empty dict
-                    with open(cache_fpath, "w") as outfile:
-                        json.dump({}, outfile)
-                    _cache = {}
-                else:
-                    # Try to parse the JSON
-                    _cache = json.loads(content)
-        except json.JSONDecodeError:
-            # File contains invalid JSON, reinitialize
-            with open(cache_fpath, "w") as outfile:
-                json.dump({}, outfile)
-            _cache = {}
+    LocalCache.create_or_load(filename)
 
 
 def _minimal_char_diff(a: str, b: str, context: int = 5) -> str:
@@ -116,10 +177,8 @@ def _get_entry_from_cache(cache_key: str, local: bool = True):
     value = res_types = None
 
     if local:
-        if cache_key in _cache:
-            value = json.loads(_cache[cache_key])
-        if cache_key + "_res_types" in _cache:
-            res_types = _cache[cache_key + "_res_types"]
+        value, res_types = LocalCache.get_entry(cache_key)
+        value = json.loads(value) if value else None
     else:
         logs = get_logs(
             context=UPSTREAM_CACHE_CONTEXT_NAME,
@@ -138,7 +197,7 @@ def _is_key_in_cache(cache_key: str, local: bool = True):
     from unify import get_logs
 
     if local:
-        return cache_key in _cache
+        return LocalCache.key_exists(cache_key)
     else:
         logs = get_logs(
             context=UPSTREAM_CACHE_CONTEXT_NAME,
@@ -151,8 +210,7 @@ def _delete_from_cache(cache_str: str, local: bool = True):
     from unify.logging.logs import delete_logs, get_logs
 
     if local:
-        del _cache[cache_str]
-        del _cache[cache_str + "_res_types"]
+        LocalCache.delete(cache_str)
     else:
         logs = get_logs(
             context=UPSTREAM_CACHE_CONTEXT_NAME,
@@ -165,7 +223,7 @@ def _get_cache_keys(local: bool = True):
     from unify import get_logs
 
     if local:
-        return list(_cache.keys())
+        return LocalCache.get_keys()
     else:
         logs = get_logs(context=UPSTREAM_CACHE_CONTEXT_NAME)
         return [log.entries["key"] for log in logs]
@@ -322,12 +380,12 @@ def _write_to_cache(
         _res_types = {}
         response_str = _dumps(response, _res_types)
         if local:
-            if _res_types:
-                _cache[cache_str + "_res_types"] = _res_types
-            _cache[cache_str] = response_str
-            cache_fpath = _get_caching_fpath(filename)
-            with open(cache_fpath, "w") as outfile:
-                json.dump(_cache, outfile)
+            LocalCache.update_entry(
+                key=cache_str,
+                value=response_str,
+                res_types=_res_types,
+            )
+            LocalCache.write(filename)
         else:
             # prevents circular import
             from unify.logging.logs import delete_logs, get_logs, log
