@@ -9,7 +9,7 @@ import unify
 from tests.test_logging.helpers import _handle_project
 from tests.test_utils.helpers import _CacheHandler
 from unify import AsyncUnify, Unify
-from unify.utils._caching import UPSTREAM_CACHE_CONTEXT_NAME
+from unify.utils.caching._remote_cache import RemoteCache
 
 
 # noinspection PyBroadException
@@ -352,10 +352,10 @@ def test_upstream_cache() -> None:
         endpoint="gpt-4o@openai",
     )
     r0 = client.generate(user_message="hello", cache=True, local_cache=False)
-    logs = unify.get_logs(context=UPSTREAM_CACHE_CONTEXT_NAME)
+    logs = unify.get_logs(context=RemoteCache.get_filename())
     assert len(logs) == 1
     r1 = client.generate(user_message="hello", cache=True, local_cache=False)
-    logs = unify.get_logs(context=UPSTREAM_CACHE_CONTEXT_NAME)
+    logs = unify.get_logs(context=RemoteCache.get_filename())
     assert len(logs) == 1
     assert r0 == r1
 
@@ -366,10 +366,10 @@ def test_upstream_cache_write() -> None:
         endpoint="gpt-4o@openai",
     )
     client.generate(user_message="hello", cache="write", local_cache=False)
-    logs = unify.get_logs(context=UPSTREAM_CACHE_CONTEXT_NAME)
+    logs = unify.get_logs(context=RemoteCache.get_filename())
     initial_logs_count = len(logs)
     client.generate(user_message="hello", cache="write", local_cache=False)
-    logs = unify.get_logs(context=UPSTREAM_CACHE_CONTEXT_NAME)
+    logs = unify.get_logs(context=RemoteCache.get_filename())
     assert len(logs) == initial_logs_count
 
 
@@ -379,10 +379,10 @@ def test_upstream_cache_read() -> None:
         endpoint="gpt-4o@openai",
     )
     r0 = client.generate(user_message="hello", cache="write", local_cache=False)
-    logs = unify.get_logs(context=UPSTREAM_CACHE_CONTEXT_NAME)
+    logs = unify.get_logs(context=RemoteCache.get_filename())
     initial_logs_count = len(logs)
     r1 = client.generate(user_message="hello", cache="read", local_cache=False)
-    logs = unify.get_logs(context=UPSTREAM_CACHE_CONTEXT_NAME)
+    logs = unify.get_logs(context=RemoteCache.get_filename())
     assert len(logs) == initial_logs_count
     assert r0 == r1
 
@@ -393,10 +393,10 @@ def test_upstream_cache_read_only() -> None:
         endpoint="gpt-4o@openai",
     )
     r0 = client.generate(user_message="hello", cache="write", local_cache=False)
-    logs = unify.get_logs(context=UPSTREAM_CACHE_CONTEXT_NAME)
+    logs = unify.get_logs(context=RemoteCache.get_filename())
     initial_logs_count = len(logs)
     r1 = client.generate(user_message="hello", cache="read-only", local_cache=False)
-    logs = unify.get_logs(context=UPSTREAM_CACHE_CONTEXT_NAME)
+    logs = unify.get_logs(context=RemoteCache.get_filename())
     assert len(logs) == initial_logs_count
     assert r0 == r1
 
@@ -415,10 +415,10 @@ def test_upstream_cache_closest_match_on_exception():
         endpoint="gpt-4o@openai",
     )
     r0 = client.generate(user_message="hello", cache="both", local_cache=False)
-    logs = unify.get_logs(context=UPSTREAM_CACHE_CONTEXT_NAME)
+    logs = unify.get_logs(context=RemoteCache.get_filename())
     initial_logs_count = len(logs)
     r1 = client.generate(user_message="helloo", cache="read-closest", local_cache=False)
-    logs = unify.get_logs(context=UPSTREAM_CACHE_CONTEXT_NAME)
+    logs = unify.get_logs(context=RemoteCache.get_filename())
     assert len(logs) == initial_logs_count
     assert r0 == r1
 
@@ -474,7 +474,7 @@ def test_cached_decorator_upstream_cache():
         return x + y
 
     add_two_numbers(1, 2)
-    logs = unify.get_logs(context=UPSTREAM_CACHE_CONTEXT_NAME)
+    logs = unify.get_logs(context=RemoteCache.get_filename())
     assert len(logs) == 1
 
 
@@ -486,7 +486,7 @@ async def test_cached_decorator_upstream_cache_async():
         return x + y
 
     await add_two_numbers(1, 2)
-    logs = unify.get_logs(context=UPSTREAM_CACHE_CONTEXT_NAME)
+    logs = unify.get_logs(context=RemoteCache.get_filename())
     assert len(logs) == 1
 
 

@@ -7,9 +7,9 @@ from typing import Any, Dict, List, Optional, Union
 from openai.types.chat import ChatCompletion, ParsedChatCompletion
 from pydantic import BaseModel
 from unify.utils.caching._local_cache import LocalCache
+from unify.utils.caching._remote_cache import RemoteCache
 
 CACHING_ENABLED = False
-UPSTREAM_CACHE_CONTEXT_NAME = "UNIFY_CACHE"
 CACHE_LOCK = threading.Lock()
 
 
@@ -35,12 +35,8 @@ def _get_caching_fpath(fname: str = None):
 
 
 def _create_cache_if_none(filename: str = None, local: bool = True):
-    from unify import create_context, get_contexts
-
     if not local:
-        if UPSTREAM_CACHE_CONTEXT_NAME not in get_contexts():
-            create_context(UPSTREAM_CACHE_CONTEXT_NAME)
-        return
+        RemoteCache.create_or_load(filename)
 
     LocalCache.create_or_load(filename)
 
@@ -72,61 +68,34 @@ def _get_filter_expr(cache_key: str):
 
 
 def _get_entry_from_cache(cache_key: str, local: bool = True):
-    from unify import get_logs
-
-    value = res_types = None
-
     if local:
         value, res_types = LocalCache.get_entry(cache_key)
         value = json.loads(value) if value else None
     else:
-        logs = get_logs(
-            context=UPSTREAM_CACHE_CONTEXT_NAME,
-            filter=_get_filter_expr(cache_key),
-        )
-        if len(logs) > 0:
-            entry = logs[0].entries
-            value = json.loads(entry["value"])
-            if "res_types" in entry:
-                res_types = json.loads(entry["res_types"])
+        value, res_types = RemoteCache.get_entry(cache_key)
 
     return value, res_types
 
 
 def _is_key_in_cache(cache_key: str, local: bool = True):
-    from unify import get_logs
-
     if local:
         return LocalCache.key_exists(cache_key)
     else:
-        logs = get_logs(
-            context=UPSTREAM_CACHE_CONTEXT_NAME,
-            filter=_get_filter_expr(cache_key),
-        )
-        return len(logs) > 0
+        return RemoteCache.key_exists(cache_key)
 
 
 def _delete_from_cache(cache_str: str, local: bool = True):
-    from unify.logging.logs import delete_logs, get_logs
-
     if local:
         LocalCache.delete(cache_str)
     else:
-        logs = get_logs(
-            context=UPSTREAM_CACHE_CONTEXT_NAME,
-            filter=_get_filter_expr(cache_str),
-        )
-        delete_logs(context=UPSTREAM_CACHE_CONTEXT_NAME, logs=logs)
+        RemoteCache.delete(cache_str)
 
 
 def _get_cache_keys(local: bool = True):
-    from unify import get_logs
-
     if local:
         return LocalCache.get_keys()
     else:
-        logs = get_logs(context=UPSTREAM_CACHE_CONTEXT_NAME)
-        return [log.entries["key"] for log in logs]
+        return RemoteCache.get_keys()
 
 
 # noinspection PyTypeChecker,PyUnboundLocalVariable
@@ -287,22 +256,11 @@ def _write_to_cache(
             )
             LocalCache.write(filename)
         else:
-            # prevents circular import
-            from unify.logging.logs import delete_logs, get_logs, log
-
-            logs = get_logs(
-                context=UPSTREAM_CACHE_CONTEXT_NAME,
-                filter=_get_filter_expr(cache_str),
+            RemoteCache.update_entry(
+                key=cache_str,
+                value=response_str,
+                res_types=_res_types,
             )
-            if len(logs) > 0:
-                delete_logs(logs=logs, context=UPSTREAM_CACHE_CONTEXT_NAME)
-
-            entries = {
-                "value": response_str,
-            }
-            if _res_types:
-                entries["res_types"] = json.dumps(_res_types)
-            log(key=cache_str, context=UPSTREAM_CACHE_CONTEXT_NAME, **entries)
         CACHE_LOCK.release()
     except:
         CACHE_LOCK.release()
