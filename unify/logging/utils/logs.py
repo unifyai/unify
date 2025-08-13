@@ -24,12 +24,7 @@ from unify import BASE_URL
 from unify.utils import _requests
 from unify.utils.helpers import flexible_deepcopy
 
-from ...utils._caching import (
-    _get_cache,
-    _get_caching,
-    _get_caching_fname,
-    _write_to_cache,
-)
+from ...utils._caching import _get_cache, _write_to_cache, is_caching_enabled
 from ...utils.helpers import (
     _check_response,
     _get_and_maybe_create_project,
@@ -488,7 +483,7 @@ def _apply_row_ids(
 
 def _handle_cache(fn: Callable) -> Callable:
     def wrapped(*args, **kwargs):
-        if not _get_caching():
+        if not is_caching_enabled():
             return fn(*args, **kwargs)
         kw_for_key = flexible_deepcopy(kwargs)
         if fn.__name__ == "add_log_entries" and "trace" in kwargs:
@@ -497,7 +492,6 @@ def _handle_cache(fn: Callable) -> Callable:
         ret = _get_cache(
             fn_name=fn.__name__,
             kw=combined_kw,
-            filename=_get_caching_fname(),
         )
         if ret is not None:
             return ret
@@ -506,7 +500,6 @@ def _handle_cache(fn: Callable) -> Callable:
             fn_name=fn.__name__,
             kw=combined_kw,
             response=ret,
-            filename=_get_caching_fname(),
         )
         return ret
 

@@ -22,16 +22,8 @@ def set_caching_fname(value: Optional[str] = None) -> None:
     LocalCache.set_filename(value)
 
 
-def _get_caching():
+def is_caching_enabled() -> bool:
     return CACHING_ENABLED
-
-
-def _get_caching_fname():
-    return LocalCache.get_filename()
-
-
-def _get_caching_fpath(fname: str = None):
-    return LocalCache.get_cache_filepath(fname)
 
 
 def _create_cache_if_none(filename: str = None, local: bool = True):
@@ -61,10 +53,6 @@ def _minimal_char_diff(a: str, b: str, context: int = 5) -> str:
             diff_parts.append(f"[+{b[j1:j2]}+]")
 
     return "".join(diff_parts)
-
-
-def _get_filter_expr(cache_key: str):
-    return f"key == {json.dumps(cache_key)}"
 
 
 def _get_entry_from_cache(cache_key: str, local: bool = True):

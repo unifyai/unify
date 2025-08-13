@@ -43,7 +43,7 @@ from unify.universal_api.clients.helpers import (
     _assert_is_valid_provider,
 )
 
-from ...utils._caching import _get_cache, _get_caching, _write_to_cache
+from ...utils._caching import _get_cache, _write_to_cache, is_caching_enabled
 from ...utils.helpers import _default
 from ..clients.base import _Client
 from ..types import Prompt
@@ -923,7 +923,7 @@ class _UniClient(_Client, abc.ABC):
             log_response_body=_default(log_response_body, self._log_response_body),
             # python client arguments
             return_full_completion=return_full_completion,
-            cache=_default(cache, _get_caching()),
+            cache=_default(cache, is_caching_enabled()),
             local_cache=_default(local_cache, self._local_cache),
             # passthrough arguments
             extra_headers=_default(extra_headers, self._extra_headers),
