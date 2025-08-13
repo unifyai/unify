@@ -1,6 +1,5 @@
 import os
 
-import unify
 from unify.utils.caching._local_cache import LocalCache
 
 
@@ -11,7 +10,7 @@ class _CacheHandler:
         self.test_path = ""
 
     def __enter__(self):
-        unify.set_caching_fname(self._fname)
+        LocalCache.set_filename(self._fname)
         self.test_path = LocalCache.get_cache_filepath(self._fname)
         if os.path.exists(self.test_path):
             os.remove(self.test_path)
@@ -20,4 +19,4 @@ class _CacheHandler:
     def __exit__(self, exc_type, exc_value, traceback):
         if os.path.exists(self.test_path):
             os.remove(self.test_path)
-        unify.set_caching_fname(self._old_cache_fpath)
+        LocalCache.set_filename(self._old_cache_fpath)

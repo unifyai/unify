@@ -2,10 +2,11 @@ import difflib
 import inspect
 import json
 import threading
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Type, Union
 
 from openai.types.chat import ChatCompletion, ParsedChatCompletion
 from pydantic import BaseModel
+from unify.utils.caching._base_cache import BaseCache
 from unify.utils.caching._local_cache import LocalCache
 from unify.utils.caching._remote_cache import RemoteCache
 
@@ -13,24 +14,18 @@ CACHING_ENABLED = False
 CACHE_LOCK = threading.Lock()
 
 
-def set_caching(value: bool) -> None:
+def get_cache_backend(local: bool = True) -> Type[BaseCache]:
+    return LocalCache if local else RemoteCache
+
+
+def set_caching(value: bool) -> bool:
     global CACHING_ENABLED
     CACHING_ENABLED = value
-
-
-def set_caching_fname(value: Optional[str] = None) -> None:
-    LocalCache.set_filename(value)
+    return CACHING_ENABLED
 
 
 def is_caching_enabled() -> bool:
     return CACHING_ENABLED
-
-
-def _create_cache_if_none(filename: str = None, local: bool = True):
-    if not local:
-        RemoteCache.create_or_load(filename)
-
-    LocalCache.create_or_load(filename)
 
 
 def _minimal_char_diff(a: str, b: str, context: int = 5) -> str:
@@ -55,37 +50,6 @@ def _minimal_char_diff(a: str, b: str, context: int = 5) -> str:
     return "".join(diff_parts)
 
 
-def _get_entry_from_cache(cache_key: str, local: bool = True):
-    if local:
-        value, res_types = LocalCache.get_entry(cache_key)
-        value = json.loads(value) if value else None
-    else:
-        value, res_types = RemoteCache.get_entry(cache_key)
-
-    return value, res_types
-
-
-def _is_key_in_cache(cache_key: str, local: bool = True):
-    if local:
-        return LocalCache.key_exists(cache_key)
-    else:
-        return RemoteCache.key_exists(cache_key)
-
-
-def _delete_from_cache(cache_str: str, local: bool = True):
-    if local:
-        LocalCache.delete(cache_str)
-    else:
-        RemoteCache.delete(cache_str)
-
-
-def _get_cache_keys(local: bool = True):
-    if local:
-        return LocalCache.get_keys()
-    else:
-        return RemoteCache.get_keys()
-
-
 # noinspection PyTypeChecker,PyUnboundLocalVariable
 def _get_cache(
     fn_name: str,
@@ -108,13 +72,13 @@ def _get_cache(
     CACHE_LOCK.acquire()
     # noinspection PyBroadException
     try:
-        _create_cache_if_none(filename, local)
+        get_cache_backend(local).create_or_load(filename)
         kw = {k: v for k, v in kw.items() if v is not None}
         kw_str = _dumps(kw)
         cache_str = fn_name + "_" + kw_str
-        if not _is_key_in_cache(cache_str, local):
+        if not get_cache_backend(local).key_exists(cache_str):
             if raise_on_empty or read_closest:
-                keys_to_search = _get_cache_keys(local)
+                keys_to_search = get_cache_backend(local).get_keys()
                 if len(keys_to_search) == 0:
                     CACHE_LOCK.release()
                     raise Exception(
@@ -141,7 +105,7 @@ def _get_cache(
             else:
                 CACHE_LOCK.release()
                 return
-        ret, res_types = _get_entry_from_cache(cache_str, local)
+        ret, res_types = get_cache_backend(local).get_entry(cache_str)
         if res_types is None:
             CACHE_LOCK.release()
             return ret
@@ -150,7 +114,7 @@ def _get_cache(
             idx_list = json.loads(idx_str)
             if len(idx_list) == 0:
                 if read_closest and delete_closest:
-                    _delete_from_cache(cache_str, local)
+                    get_cache_backend(local).delete(cache_str)
                 CACHE_LOCK.release()
                 typ = type_str_to_type[type_str]
                 if issubclass(typ, BaseModel):
@@ -171,7 +135,7 @@ def _get_cache(
                     break
                 item = item[idx]
         if read_closest and delete_closest:
-            _delete_from_cache(cache_str, local)
+            get_cache_backend(local).delete(cache_str)
         CACHE_LOCK.release()
         return ret
     except:
@@ -230,25 +194,17 @@ def _write_to_cache(
     CACHE_LOCK.acquire()
     # noinspection PyBroadException
     try:
-        _create_cache_if_none(filename, local)
+        get_cache_backend(local).create_or_load(filename)
         kw = {k: v for k, v in kw.items() if v is not None}
         kw_str = _dumps(kw)
         cache_str = fn_name + "_" + kw_str
         _res_types = {}
         response_str = _dumps(response, _res_types)
-        if local:
-            LocalCache.update_entry(
-                key=cache_str,
-                value=response_str,
-                res_types=_res_types,
-            )
-            LocalCache.write(filename)
-        else:
-            RemoteCache.update_entry(
-                key=cache_str,
-                value=response_str,
-                res_types=_res_types,
-            )
+        get_cache_backend(local).update_entry(
+            key=cache_str,
+            value=response_str,
+            res_types=_res_types,
+        )
         CACHE_LOCK.release()
     except:
         CACHE_LOCK.release()

@@ -48,6 +48,7 @@ class LocalCache(BaseCache):
         if res_types:
             cls._cache[key + "_res_types"] = res_types
         cls._cache[key] = value
+        cls.write()
 
     @classmethod
     def write(cls, filename: str = None) -> None:
@@ -87,7 +88,9 @@ class LocalCache(BaseCache):
 
     @classmethod
     def get_entry(cls, cache_key: str) -> Optional[Any]:
-        return cls._cache.get(cache_key), cls._cache.get(f"{cache_key}_res_types")
+        value = cls._cache.get(cache_key)
+        value = json.loads(value) if value else None
+        return value, cls._cache.get(f"{cache_key}_res_types")
 
     @classmethod
     def key_exists(cls, cache_key: str) -> bool:
