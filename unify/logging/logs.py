@@ -281,14 +281,10 @@ class Context:
             self._context_read_token = CONTEXT_READ.set(self._context)
         elif self._mode == "write":
             self._context = _join_path(CONTEXT_WRITE.get(), self._context)
-            self._context_write_token = CONTEXT_WRITE.set(
-                _join_path(CONTEXT_WRITE.get(), self._context),
-            )
+            self._context_write_token = CONTEXT_WRITE.set(self._context)
         elif self._mode == "read":
             self._context = _join_path(CONTEXT_READ.get(), self._context)
-            self._context_read_token = CONTEXT_READ.set(
-                _join_path(CONTEXT_READ.get(), self._context),
-            )
+            self._context_read_token = CONTEXT_READ.set(self._context)
 
         context_exists_remote = self._context in unify.get_contexts()
 
