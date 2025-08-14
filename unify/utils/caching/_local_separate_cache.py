@@ -13,7 +13,7 @@ class LocalSeparateCache(BaseCache):
         if "UNIFY_CACHE_DIR" in os.environ
         else os.getcwd()
     )
-    _cache_fname_read: str = ".cache_read.json"
+    _cache_fname_read: str = ".cache.json"
     _cache_fname_write: str = ".cache_write.json"
     _enabled: bool = False
 
