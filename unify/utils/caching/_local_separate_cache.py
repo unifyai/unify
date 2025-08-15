@@ -68,27 +68,15 @@ class LocalSeparateCache(BaseCache):
                 json.dump({}, outfile)
 
         if cls._cache_read is None:
+            # Read only cache
+            cls._cache_read = {}
             filepath = cls._cache_fname_read
-            if not os.path.exists(filepath):
-                with open(filepath, "w") as outfile:
-                    json.dump({}, outfile)
-
-            # Check if file is empty or contains invalid JSON
             try:
                 with open(filepath) as outfile:
                     content = outfile.read().strip()
-                    if not content:
-                        # File is empty, initialize with empty dict
-                        with open(filepath, "w") as outfile:
-                            json.dump({}, outfile)
-                        cls._cache_read = {}
-                    else:
-                        # Try to parse the JSON
+                    if content:
                         cls._cache_read = json.loads(content)
             except json.JSONDecodeError:
-                # File contains invalid JSON, reinitialize
-                with open(filepath, "w") as outfile:
-                    json.dump({}, outfile)
                 cls._cache_read = {}
 
     @classmethod
@@ -108,7 +96,7 @@ class LocalSeparateCache(BaseCache):
         if value is not None:
             cls.update_entry(
                 key=cache_key,
-                value=value,
+                value=cls._dumps(value),
                 res_types=cls._cache_read.get(f"{cache_key}_res_types"),
             )
         return value, cls._cache_read.get(f"{cache_key}_res_types")

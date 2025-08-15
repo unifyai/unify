@@ -2,7 +2,7 @@ import difflib
 import inspect
 import json
 import threading
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, Dict, Optional, Type, Union
 
 from openai.types.chat import ChatCompletion, ParsedChatCompletion
 from pydantic import BaseModel
@@ -90,7 +90,7 @@ def _get_cache(
     try:
         get_cache_backend(backend).create_or_load(filename)
         kw = {k: v for k, v in kw.items() if v is not None}
-        kw_str = _dumps(kw)
+        kw_str = BaseCache._dumps(kw)
         cache_str = fn_name + "_" + kw_str
         if not get_cache_backend(backend).key_exists(cache_str):
             if raise_on_empty or read_closest:
@@ -98,7 +98,7 @@ def _get_cache(
                 if len(keys_to_search) == 0:
                     CACHE_LOCK.release()
                     raise Exception(
-                        f"Failed to get cache for function {fn_name} with kwargs {_dumps(kw, indent=4)} "
+                        f"Failed to get cache for function {fn_name} with kwargs {BaseCache._dumps(kw, indent=4)} "
                         f"Cache is empty, mode is read-only ",
                     )
                 closest_match = difflib.get_close_matches(
@@ -113,7 +113,7 @@ def _get_cache(
                 else:
                     CACHE_LOCK.release()
                     raise Exception(
-                        f"Failed to get cache for function {fn_name} with kwargs {_dumps(kw, indent=4)} "
+                        f"Failed to get cache for function {fn_name} with kwargs {BaseCache._dumps(kw, indent=4)} "
                         f"from cache at {filename}. \n\nCorresponding key\n{cache_str}\nwas not found in the cache.\n\n"
                         f"The closest match is:\n{closest_match}\n\n"
                         f"The contracted diff is:\n{minimal_char_diff}\n\n",
@@ -163,40 +163,6 @@ def _get_cache(
         )
 
 
-def _dumps(
-    obj: Any,
-    cached_types: Dict[str, str] = None,
-    idx: List[Union[str, int]] = None,
-    indent: int = None,
-) -> Any:
-    # prevents circular import
-    from unify.logging.logs import Log
-
-    base = False
-    if idx is None:
-        base = True
-        idx = list()
-    if isinstance(obj, BaseModel):
-        if cached_types is not None:
-            cached_types[json.dumps(idx, indent=indent)] = obj.__class__.__name__
-        ret = obj.model_dump()
-    elif inspect.isclass(obj) and issubclass(obj, BaseModel):
-        ret = obj.schema_json()
-    elif isinstance(obj, Log):
-        if cached_types is not None:
-            cached_types[json.dumps(idx, indent=indent)] = obj.__class__.__name__
-        ret = obj.to_json()
-    elif isinstance(obj, dict):
-        ret = {k: _dumps(v, cached_types, idx + ["k"]) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        ret = [_dumps(v, cached_types, idx + [i]) for i, v in enumerate(obj)]
-    elif isinstance(obj, tuple):
-        ret = tuple(_dumps(v, cached_types, idx + [i]) for i, v in enumerate(obj))
-    else:
-        ret = obj
-    return json.dumps(ret, indent=indent) if base else ret
-
-
 # noinspection PyTypeChecker,PyUnresolvedReferences
 def _write_to_cache(
     fn_name: str,
@@ -212,10 +178,10 @@ def _write_to_cache(
     try:
         get_cache_backend(backend).create_or_load(filename)
         kw = {k: v for k, v in kw.items() if v is not None}
-        kw_str = _dumps(kw)
+        kw_str = BaseCache._dumps(kw)
         cache_str = fn_name + "_" + kw_str
         _res_types = {}
-        response_str = _dumps(response, _res_types)
+        response_str = BaseCache._dumps(response, _res_types)
         get_cache_backend(backend).update_entry(
             key=cache_str,
             value=response_str,
