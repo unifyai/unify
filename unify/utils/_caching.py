@@ -1,88 +1,47 @@
 import difflib
 import inspect
 import json
-import os
 import threading
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Optional, Type, Union
 
 from openai.types.chat import ChatCompletion, ParsedChatCompletion
 from pydantic import BaseModel
-
-_cache: Optional[Dict] = None
-_cache_dir = (
-    os.environ["UNIFY_CACHE_DIR"] if "UNIFY_CACHE_DIR" in os.environ else os.getcwd()
-)
-_cache_fpath: str = os.path.join(_cache_dir, ".cache.json")
+from unify.utils.caching._base_cache import BaseCache
+from unify.utils.caching._local_cache import LocalCache
+from unify.utils.caching._local_separate_cache import LocalSeparateCache
+from unify.utils.caching._remote_cache import RemoteCache
 
 CACHE_LOCK = threading.Lock()
-
-CACHING = False
-CACHE_FNAME = ".cache.json"
-UPSTREAM_CACHE_CONTEXT_NAME = "UNIFY_CACHE"
-
-
-def set_caching(value: bool) -> None:
-    global CACHING, CACHE_FNAME
-    CACHING = value
+CACHING_ENABLED = False
+CURRENT_CACHE_BACKEND = "local"
+CACHE_BACKENDS = {
+    "local": LocalCache,
+    "remote": RemoteCache,
+    "local_separate": LocalSeparateCache,
+}
 
 
-def set_caching_fname(value: Optional[str] = None) -> None:
-    global CACHE_FNAME, _cache
-    if value is not None:
-        CACHE_FNAME = value
-    else:
-        CACHE_FNAME = ".cache.json"
-    _cache = None  # Force a reload of the cache
+def set_cache_backend(backend: str) -> None:
+    global CURRENT_CACHE_BACKEND
+    assert backend in CACHE_BACKENDS, f"Invalid backend: {backend}"
+    CURRENT_CACHE_BACKEND = backend
 
 
-def _get_caching():
-    return CACHING
+def get_cache_backend(backend: Optional[str] = None) -> Type[BaseCache]:
+    if backend is None:
+        backend = CURRENT_CACHE_BACKEND
+    assert backend in CACHE_BACKENDS, f"Invalid backend: {backend}"
+    return CACHE_BACKENDS[backend]
 
 
-def _get_caching_fname():
-    return CACHE_FNAME
+def set_caching(value: bool) -> bool:
+    global CACHING_ENABLED
+    CACHING_ENABLED = value
+    return CACHING_ENABLED
 
 
-def _get_caching_fpath():
-    global _cache_dir, CACHE_FNAME
-    return os.path.join(_cache_dir, CACHE_FNAME)
-
-
-def _create_cache_if_none(filename: str = None, local: bool = True):
-    from unify import create_context, get_contexts
-
-    if not local:
-        if UPSTREAM_CACHE_CONTEXT_NAME not in get_contexts():
-            create_context(UPSTREAM_CACHE_CONTEXT_NAME)
-        return
-
-    global _cache, _cache_fpath, _cache_dir
-    if filename is None:
-        cache_fpath = _get_caching_fpath()
-    else:
-        cache_fpath = os.path.join(_cache_dir, filename)
-    if _cache is None:
-        if not os.path.exists(cache_fpath):
-            with open(cache_fpath, "w") as outfile:
-                json.dump({}, outfile)
-
-        # Check if file is empty or contains invalid JSON
-        try:
-            with open(cache_fpath) as outfile:
-                content = outfile.read().strip()
-                if not content:
-                    # File is empty, initialize with empty dict
-                    with open(cache_fpath, "w") as outfile:
-                        json.dump({}, outfile)
-                    _cache = {}
-                else:
-                    # Try to parse the JSON
-                    _cache = json.loads(content)
-        except json.JSONDecodeError:
-            # File contains invalid JSON, reinitialize
-            with open(cache_fpath, "w") as outfile:
-                json.dump({}, outfile)
-            _cache = {}
+def is_caching_enabled() -> bool:
+    return CACHING_ENABLED
 
 
 def _minimal_char_diff(a: str, b: str, context: int = 5) -> str:
@@ -107,71 +66,6 @@ def _minimal_char_diff(a: str, b: str, context: int = 5) -> str:
     return "".join(diff_parts)
 
 
-def _get_filter_expr(cache_key: str):
-    return f"key == {json.dumps(cache_key)}"
-
-
-def _get_entry_from_cache(cache_key: str, local: bool = True):
-    from unify import get_logs
-
-    value = res_types = None
-
-    if local:
-        if cache_key in _cache:
-            value = json.loads(_cache[cache_key])
-        if cache_key + "_res_types" in _cache:
-            res_types = _cache[cache_key + "_res_types"]
-    else:
-        logs = get_logs(
-            context=UPSTREAM_CACHE_CONTEXT_NAME,
-            filter=_get_filter_expr(cache_key),
-        )
-        if len(logs) > 0:
-            entry = logs[0].entries
-            value = json.loads(entry["value"])
-            if "res_types" in entry:
-                res_types = json.loads(entry["res_types"])
-
-    return value, res_types
-
-
-def _is_key_in_cache(cache_key: str, local: bool = True):
-    from unify import get_logs
-
-    if local:
-        return cache_key in _cache
-    else:
-        logs = get_logs(
-            context=UPSTREAM_CACHE_CONTEXT_NAME,
-            filter=_get_filter_expr(cache_key),
-        )
-        return len(logs) > 0
-
-
-def _delete_from_cache(cache_str: str, local: bool = True):
-    from unify.logging.logs import delete_logs, get_logs
-
-    if local:
-        del _cache[cache_str]
-        del _cache[cache_str + "_res_types"]
-    else:
-        logs = get_logs(
-            context=UPSTREAM_CACHE_CONTEXT_NAME,
-            filter=_get_filter_expr(cache_str),
-        )
-        delete_logs(context=UPSTREAM_CACHE_CONTEXT_NAME, logs=logs)
-
-
-def _get_cache_keys(local: bool = True):
-    from unify import get_logs
-
-    if local:
-        return list(_cache.keys())
-    else:
-        logs = get_logs(context=UPSTREAM_CACHE_CONTEXT_NAME)
-        return [log.entries["key"] for log in logs]
-
-
 # noinspection PyTypeChecker,PyUnboundLocalVariable
 def _get_cache(
     fn_name: str,
@@ -180,7 +74,7 @@ def _get_cache(
     raise_on_empty: bool = False,
     read_closest: bool = False,
     delete_closest: bool = False,
-    local: bool = True,
+    backend: Optional[str] = None,
 ) -> Optional[Any]:
     global CACHE_LOCK
     # prevents circular import
@@ -194,17 +88,17 @@ def _get_cache(
     CACHE_LOCK.acquire()
     # noinspection PyBroadException
     try:
-        _create_cache_if_none(filename, local)
+        get_cache_backend(backend).create_or_load(filename)
         kw = {k: v for k, v in kw.items() if v is not None}
-        kw_str = _dumps(kw)
+        kw_str = BaseCache._dumps(kw)
         cache_str = fn_name + "_" + kw_str
-        if not _is_key_in_cache(cache_str, local):
+        if not get_cache_backend(backend).key_exists(cache_str):
             if raise_on_empty or read_closest:
-                keys_to_search = _get_cache_keys(local)
+                keys_to_search = get_cache_backend(backend).get_keys()
                 if len(keys_to_search) == 0:
                     CACHE_LOCK.release()
                     raise Exception(
-                        f"Failed to get cache for function {fn_name} with kwargs {_dumps(kw, indent=4)} "
+                        f"Failed to get cache for function {fn_name} with kwargs {BaseCache._dumps(kw, indent=4)} "
                         f"Cache is empty, mode is read-only ",
                     )
                 closest_match = difflib.get_close_matches(
@@ -219,7 +113,7 @@ def _get_cache(
                 else:
                     CACHE_LOCK.release()
                     raise Exception(
-                        f"Failed to get cache for function {fn_name} with kwargs {_dumps(kw, indent=4)} "
+                        f"Failed to get cache for function {fn_name} with kwargs {BaseCache._dumps(kw, indent=4)} "
                         f"from cache at {filename}. \n\nCorresponding key\n{cache_str}\nwas not found in the cache.\n\n"
                         f"The closest match is:\n{closest_match}\n\n"
                         f"The contracted diff is:\n{minimal_char_diff}\n\n",
@@ -227,7 +121,7 @@ def _get_cache(
             else:
                 CACHE_LOCK.release()
                 return
-        ret, res_types = _get_entry_from_cache(cache_str, local)
+        ret, res_types = get_cache_backend(backend).get_entry(cache_str)
         if res_types is None:
             CACHE_LOCK.release()
             return ret
@@ -236,7 +130,7 @@ def _get_cache(
             idx_list = json.loads(idx_str)
             if len(idx_list) == 0:
                 if read_closest and delete_closest:
-                    _delete_from_cache(cache_str, local)
+                    get_cache_backend(backend).delete(cache_str)
                 CACHE_LOCK.release()
                 typ = type_str_to_type[type_str]
                 if issubclass(typ, BaseModel):
@@ -257,7 +151,7 @@ def _get_cache(
                     break
                 item = item[idx]
         if read_closest and delete_closest:
-            _delete_from_cache(cache_str, local)
+            get_cache_backend(backend).delete(cache_str)
         CACHE_LOCK.release()
         return ret
     except:
@@ -269,46 +163,12 @@ def _get_cache(
         )
 
 
-def _dumps(
-    obj: Any,
-    cached_types: Dict[str, str] = None,
-    idx: List[Union[str, int]] = None,
-    indent: int = None,
-) -> Any:
-    # prevents circular import
-    from unify.logging.logs import Log
-
-    base = False
-    if idx is None:
-        base = True
-        idx = list()
-    if isinstance(obj, BaseModel):
-        if cached_types is not None:
-            cached_types[json.dumps(idx, indent=indent)] = obj.__class__.__name__
-        ret = obj.model_dump()
-    elif inspect.isclass(obj) and issubclass(obj, BaseModel):
-        ret = obj.schema_json()
-    elif isinstance(obj, Log):
-        if cached_types is not None:
-            cached_types[json.dumps(idx, indent=indent)] = obj.__class__.__name__
-        ret = obj.to_json()
-    elif isinstance(obj, dict):
-        ret = {k: _dumps(v, cached_types, idx + ["k"]) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        ret = [_dumps(v, cached_types, idx + [i]) for i, v in enumerate(obj)]
-    elif isinstance(obj, tuple):
-        ret = tuple(_dumps(v, cached_types, idx + [i]) for i, v in enumerate(obj))
-    else:
-        ret = obj
-    return json.dumps(ret, indent=indent) if base else ret
-
-
 # noinspection PyTypeChecker,PyUnresolvedReferences
 def _write_to_cache(
     fn_name: str,
     kw: Dict[str, Any],
     response: Any,
-    local: bool = True,
+    backend: Optional[str] = None,
     filename: str = None,
 ):
 
@@ -316,39 +176,17 @@ def _write_to_cache(
     CACHE_LOCK.acquire()
     # noinspection PyBroadException
     try:
-        _create_cache_if_none(filename, local)
+        get_cache_backend(backend).create_or_load(filename)
         kw = {k: v for k, v in kw.items() if v is not None}
-        kw_str = _dumps(kw)
+        kw_str = BaseCache._dumps(kw)
         cache_str = fn_name + "_" + kw_str
         _res_types = {}
-        response_str = _dumps(response, _res_types)
-        if local:
-            if _res_types:
-                _cache[cache_str + "_res_types"] = _res_types
-            _cache[cache_str] = response_str
-            if filename is None:
-                cache_fpath = _get_caching_fpath()
-            else:
-                cache_fpath = os.path.join(_cache_dir, filename)
-            with open(cache_fpath, "w") as outfile:
-                json.dump(_cache, outfile)
-        else:
-            # prevents circular import
-            from unify.logging.logs import delete_logs, get_logs, log
-
-            logs = get_logs(
-                context=UPSTREAM_CACHE_CONTEXT_NAME,
-                filter=_get_filter_expr(cache_str),
-            )
-            if len(logs) > 0:
-                delete_logs(logs=logs, context=UPSTREAM_CACHE_CONTEXT_NAME)
-
-            entries = {
-                "value": response_str,
-            }
-            if _res_types:
-                entries["res_types"] = json.dumps(_res_types)
-            log(key=cache_str, context=UPSTREAM_CACHE_CONTEXT_NAME, **entries)
+        response_str = BaseCache._dumps(response, _res_types)
+        get_cache_backend(backend).update_entry(
+            key=cache_str,
+            value=response_str,
+            res_types=_res_types,
+        )
         CACHE_LOCK.release()
     except:
         CACHE_LOCK.release()
@@ -362,7 +200,7 @@ def _handle_reading_from_cache(
     fn_name: str,
     kwargs: Dict[str, Any],
     mode: str,
-    local: bool = True,
+    backend: Optional[str] = None,
 ):
     if isinstance(mode, str) and mode.endswith("-closest"):
         mode = mode.removesuffix("-closest")
@@ -378,7 +216,7 @@ def _handle_reading_from_cache(
             raise_on_empty=mode == "read-only",
             read_closest=read_closest,
             delete_closest=read_closest,
-            local=local,
+            backend=backend,
         )
         in_cache = True if ret is not None else False
     return ret, read_closest, in_cache
@@ -392,21 +230,25 @@ def cached(
     fn: callable = None,
     *,
     mode: Union[bool, str] = True,
-    local: bool = True,
+    backend: Optional[str] = None,
 ):
     if fn is None:
         return lambda f: cached(
             f,
             mode=mode,
-            local=local,
+            backend=backend,
         )
 
     def wrapped(*args, **kwargs):
+        sig = inspect.signature(fn)
+        bound = sig.bind_partial(*args, **kwargs)
+        bound.apply_defaults()
+        args_kwargs = bound.arguments
         ret, read_closest, in_cache = _handle_reading_from_cache(
             fn.__name__,
-            kwargs,
+            args_kwargs,
             mode,
-            local,
+            backend,
         )
         if ret is None:
             ret = fn(*args, **kwargs)
@@ -418,18 +260,22 @@ def cached(
             if not in_cache or mode == "write":
                 _write_to_cache(
                     fn_name=fn.__name__,
-                    kw=kwargs,
+                    kw=args_kwargs,
                     response=ret,
-                    local=local,
+                    backend=backend,
                 )
         return ret
 
     async def async_wrapped(*args, **kwargs):
+        sig = inspect.signature(fn)
+        bound = sig.bind_partial(*args, **kwargs)
+        bound.apply_defaults()
+        args_kwargs = bound.arguments
         ret, read_closest, in_cache = _handle_reading_from_cache(
             fn.__name__,
-            kwargs,
+            args_kwargs,
             mode,
-            local,
+            backend,
         )
         if ret is None:
             ret = await fn(*args, **kwargs)
@@ -441,9 +287,9 @@ def cached(
             if not in_cache or mode == "write":
                 _write_to_cache(
                     fn_name=fn.__name__,
-                    kw=kwargs,
+                    kw=args_kwargs,
                     response=ret,
-                    local=local,
+                    backend=backend,
                 )
         return ret
 
