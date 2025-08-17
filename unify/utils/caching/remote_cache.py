@@ -7,7 +7,7 @@ This cache stores data remotely using the Unify logging infrastructure.
 import json
 from typing import Any, Dict, List, Optional
 
-from unify.utils.caching._base_cache import BaseCache
+from unify.utils.caching.base_cache import BaseCache
 
 
 class RemoteCache(BaseCache):

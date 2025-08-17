@@ -9,7 +9,7 @@ import os
 import threading
 from typing import Any, Dict, List, Optional
 
-from unify.utils.caching._base_cache import BaseCache
+from unify.utils.caching.base_cache import BaseCache
 
 
 class LocalCache(BaseCache):

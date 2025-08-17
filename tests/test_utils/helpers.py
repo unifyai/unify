@@ -1,6 +1,6 @@
 import os
 
-from unify.utils.caching._local_cache import LocalCache
+from unify.utils.caching import LocalCache
 
 
 class _CacheHandler:

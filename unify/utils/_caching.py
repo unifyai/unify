@@ -13,10 +13,7 @@ from typing import Any, Dict, Optional, Type, Union
 
 from openai.types.chat import ChatCompletion, ParsedChatCompletion
 from pydantic import BaseModel
-from unify.utils.caching._base_cache import BaseCache
-from unify.utils.caching._local_cache import LocalCache
-from unify.utils.caching._local_separate_cache import LocalSeparateCache
-from unify.utils.caching._remote_cache import RemoteCache
+from unify.utils.caching import BaseCache, LocalCache, LocalSeparateCache, RemoteCache
 
 # Global state
 CACHE_LOCK = threading.Lock()

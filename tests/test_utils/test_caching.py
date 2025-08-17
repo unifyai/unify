@@ -9,7 +9,7 @@ import unify
 from tests.test_logging.helpers import _handle_project
 from tests.test_utils.helpers import _CacheHandler
 from unify import AsyncUnify, Unify
-from unify.utils.caching._remote_cache import RemoteCache
+from unify.utils.caching import RemoteCache
 
 
 # noinspection PyBroadException
