@@ -1,3 +1,10 @@
+"""
+Main caching module providing high-level caching functionality.
+
+This module provides decorators and utilities for caching function results
+with multiple backend options and flexible caching modes.
+"""
+
 import difflib
 import inspect
 import json
@@ -11,9 +18,12 @@ from unify.utils.caching._local_cache import LocalCache
 from unify.utils.caching._local_separate_cache import LocalSeparateCache
 from unify.utils.caching._remote_cache import RemoteCache
 
+# Global state
 CACHE_LOCK = threading.Lock()
 CACHING_ENABLED = False
 CURRENT_CACHE_BACKEND = "local"
+
+# Available cache backends
 CACHE_BACKENDS = {
     "local": LocalCache,
     "remote": RemoteCache,
@@ -22,25 +32,35 @@ CACHE_BACKENDS = {
 
 
 def set_cache_backend(backend: str) -> None:
+    """Set the current cache backend."""
     global CURRENT_CACHE_BACKEND
-    assert backend in CACHE_BACKENDS, f"Invalid backend: {backend}"
+    if backend not in CACHE_BACKENDS:
+        raise ValueError(
+            f"Invalid backend: {backend}. Available: {list(CACHE_BACKENDS.keys())}",
+        )
     CURRENT_CACHE_BACKEND = backend
 
 
 def get_cache_backend(backend: Optional[str] = None) -> Type[BaseCache]:
+    """Get the cache backend class."""
     if backend is None:
         backend = CURRENT_CACHE_BACKEND
-    assert backend in CACHE_BACKENDS, f"Invalid backend: {backend}"
+    if backend not in CACHE_BACKENDS:
+        raise ValueError(
+            f"Invalid backend: {backend}. Available: {list(CACHE_BACKENDS.keys())}",
+        )
     return CACHE_BACKENDS[backend]
 
 
 def set_caching(value: bool) -> bool:
+    """Enable or disable caching globally."""
     global CACHING_ENABLED
     CACHING_ENABLED = value
     return CACHING_ENABLED
 
 
 def is_caching_enabled() -> bool:
+    """Check if caching is globally enabled."""
     return CACHING_ENABLED
 
 
@@ -88,17 +108,17 @@ def _get_cache(
     CACHE_LOCK.acquire()
     # noinspection PyBroadException
     try:
-        get_cache_backend(backend).create_or_load(filename)
+        get_cache_backend(backend).initialize_cache(filename)
         kw = {k: v for k, v in kw.items() if v is not None}
-        kw_str = BaseCache._dumps(kw)
+        kw_str = BaseCache.serialize_object(kw)
         cache_str = fn_name + "_" + kw_str
-        if not get_cache_backend(backend).key_exists(cache_str):
+        if not get_cache_backend(backend).has_key(cache_str):
             if raise_on_empty or read_closest:
-                keys_to_search = get_cache_backend(backend).get_keys()
+                keys_to_search = get_cache_backend(backend).list_keys()
                 if len(keys_to_search) == 0:
                     CACHE_LOCK.release()
                     raise Exception(
-                        f"Failed to get cache for function {fn_name} with kwargs {BaseCache._dumps(kw, indent=4)} "
+                        f"Failed to get cache for function {fn_name} with kwargs {BaseCache.serialize_object(kw, indent=4)} "
                         f"Cache is empty, mode is read-only ",
                     )
                 closest_match = difflib.get_close_matches(
@@ -113,7 +133,7 @@ def _get_cache(
                 else:
                     CACHE_LOCK.release()
                     raise Exception(
-                        f"Failed to get cache for function {fn_name} with kwargs {BaseCache._dumps(kw, indent=4)} "
+                        f"Failed to get cache for function {fn_name} with kwargs {BaseCache.serialize_object(kw, indent=4)} "
                         f"from cache at {filename}. \n\nCorresponding key\n{cache_str}\nwas not found in the cache.\n\n"
                         f"The closest match is:\n{closest_match}\n\n"
                         f"The contracted diff is:\n{minimal_char_diff}\n\n",
@@ -121,7 +141,7 @@ def _get_cache(
             else:
                 CACHE_LOCK.release()
                 return
-        ret, res_types = get_cache_backend(backend).get_entry(cache_str)
+        ret, res_types = get_cache_backend(backend).retrieve_entry(cache_str)
         if res_types is None:
             CACHE_LOCK.release()
             return ret
@@ -130,7 +150,7 @@ def _get_cache(
             idx_list = json.loads(idx_str)
             if len(idx_list) == 0:
                 if read_closest and delete_closest:
-                    get_cache_backend(backend).delete(cache_str)
+                    get_cache_backend(backend).remove_entry(cache_str)
                 CACHE_LOCK.release()
                 typ = type_str_to_type[type_str]
                 if issubclass(typ, BaseModel):
@@ -151,16 +171,16 @@ def _get_cache(
                     break
                 item = item[idx]
         if read_closest and delete_closest:
-            get_cache_backend(backend).delete(cache_str)
+            get_cache_backend(backend).remove_entry(cache_str)
         CACHE_LOCK.release()
         return ret
-    except:
+    except Exception as e:
         if CACHE_LOCK.locked():
             CACHE_LOCK.release()
         raise Exception(
             f"Failed to get cache for function {fn_name} with kwargs {kw} "
             f"from cache at {filename}",
-        )
+        ) from e
 
 
 # noinspection PyTypeChecker,PyUnresolvedReferences
@@ -174,26 +194,25 @@ def _write_to_cache(
 
     global CACHE_LOCK
     CACHE_LOCK.acquire()
-    # noinspection PyBroadException
     try:
-        get_cache_backend(backend).create_or_load(filename)
+        get_cache_backend(backend).initialize_cache(filename)
         kw = {k: v for k, v in kw.items() if v is not None}
-        kw_str = BaseCache._dumps(kw)
+        kw_str = BaseCache.serialize_object(kw)
         cache_str = fn_name + "_" + kw_str
         _res_types = {}
-        response_str = BaseCache._dumps(response, _res_types)
-        get_cache_backend(backend).update_entry(
+        response_str = BaseCache.serialize_object(response, _res_types)
+        get_cache_backend(backend).store_entry(
             key=cache_str,
             value=response_str,
             res_types=_res_types,
         )
         CACHE_LOCK.release()
-    except:
+    except Exception as e:
         CACHE_LOCK.release()
         raise Exception(
             f"Failed to write function {fn_name} with kwargs {kw} and "
             f"response {response} to cache at {filename}",
-        )
+        ) from e
 
 
 def _handle_reading_from_cache(

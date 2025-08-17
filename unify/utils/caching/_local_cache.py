@@ -1,3 +1,9 @@
+"""
+Local file-based cache implementation.
+
+This cache stores data in a local JSON file and provides fast in-memory access.
+"""
+
 import json
 import os
 import threading
@@ -7,96 +13,117 @@ from unify.utils.caching._base_cache import BaseCache
 
 
 class LocalCache(BaseCache):
-    _cache: Optional[Dict] = None
-    _cache_dir: str = (
-        os.environ["UNIFY_CACHE_DIR"]
-        if "UNIFY_CACHE_DIR" in os.environ
-        else os.getcwd()
-    )
+    """Local file-based cache implementation."""
+
+    _cache: Optional[Dict[str, Any]] = None
+    _cache_dir: str = os.environ.get("UNIFY_CACHE_DIR", os.getcwd())
     _cache_lock: threading.Lock = threading.Lock()
-    _cache_fname: str = ".cache.json"
+    _cache_filename: str = ".cache.json"
     _enabled: bool = False
 
     @classmethod
-    def set_filename(cls, filename: str) -> None:
-        cls._cache_fname = filename
-        cls._cache = None  # Force a reload of the cache
+    def set_cache_name(cls, name: str) -> None:
+        """Set the cache filename and reset the in-memory cache."""
+        cls._cache_filename = name
+        cls._cache = None  # Force reload on next access
 
     @classmethod
-    def get_filename(cls) -> str:
-        return cls._cache_fname
+    def get_cache_name(cls) -> str:
+        """Get the current cache filename."""
+        return cls._cache_filename
 
     @classmethod
-    def get_cache_filepath(cls, filename: str = None) -> str:
-        if filename is None:
-            filename = cls.get_filename()
-
-        return os.path.join(cls._cache_dir, filename)
+    def get_cache_filepath(cls, name: str = None) -> str:
+        """Get the full filepath for the cache file."""
+        if name is None:
+            name = cls.get_cache_name()
+        return os.path.join(cls._cache_dir, name)
 
     @classmethod
     def is_enabled(cls) -> bool:
+        """Check if the cache is enabled."""
         return cls._enabled
 
     @classmethod
-    def update_entry(
+    def store_entry(
         cls,
         *,
         key: str,
         value: Any,
         res_types: Optional[Dict[str, Any]] = None,
     ) -> None:
+        """Store a key-value pair in the cache."""
         if res_types:
-            cls._cache[key + "_res_types"] = res_types
+            cls._cache[f"{key}_res_types"] = res_types
         cls._cache[key] = value
         cls.write()
 
     @classmethod
     def write(cls, filename: str = None) -> None:
-        cache_fpath = cls.get_cache_filepath(filename)
-        with open(cache_fpath, "w") as outfile:
-            json.dump(cls._cache, outfile)
+        """Write the cache to disk."""
+        cache_filepath = cls.get_cache_filepath(filename)
+        with open(cache_filepath, "w") as outfile:
+            json.dump(cls._cache, outfile, indent=2)
 
     @classmethod
-    def create_or_load(cls, filename: str = None) -> None:
-        cache_fpath = cls.get_cache_filepath(filename)
-        if cls._cache is None:
-            if not os.path.exists(cache_fpath):
-                with open(cache_fpath, "w") as outfile:
-                    json.dump({}, outfile)
+    def initialize_cache(cls, name: str = None) -> None:
+        """Initialize or load the cache from disk."""
+        cache_filepath = cls.get_cache_filepath(name)
 
-            # Check if file is empty or contains invalid JSON
+        if cls._cache is None:
+            # Create cache file if it doesn't exist
+            if not os.path.exists(cache_filepath):
+                with open(cache_filepath, "w") as outfile:
+                    json.dump({}, outfile)
+                cls._cache = {}
+                return
+
+            # Load existing cache
             try:
-                with open(cache_fpath) as outfile:
-                    content = outfile.read().strip()
+                with open(cache_filepath, "r") as infile:
+                    content = infile.read().strip()
                     if not content:
                         # File is empty, initialize with empty dict
-                        with open(cache_fpath, "w") as outfile:
-                            json.dump({}, outfile)
                         cls._cache = {}
                     else:
-                        # Try to parse the JSON
+                        # Parse the JSON content
                         cls._cache = json.loads(content)
-            except json.JSONDecodeError:
-                # File contains invalid JSON, reinitialize
-                with open(cache_fpath, "w") as outfile:
-                    json.dump({}, outfile)
+            except (json.JSONDecodeError, IOError):
+                # File contains invalid JSON or can't be read, reinitialize
                 cls._cache = {}
 
     @classmethod
-    def get_keys(cls) -> List[str]:
+    def list_keys(cls) -> List[str]:
         return list(cls._cache.keys())
 
     @classmethod
-    def get_entry(cls, cache_key: str) -> Optional[Any]:
-        value = cls._cache.get(cache_key)
-        value = json.loads(value) if value else None
-        return value, cls._cache.get(f"{cache_key}_res_types")
+    def retrieve_entry(cls, key: str) -> tuple[Optional[Any], Optional[Dict[str, Any]]]:
+        """
+        Retrieve a value from the cache.
+
+        Returns:
+            Tuple of (value, type_registry) or (None, None) if not found
+        """
+        if cls._cache is None:
+            return None, None
+
+        value = cls._cache.get(key)
+        if value is None:
+            return None, None
+
+        deserialized_value = json.loads(value)
+        res_types = cls._cache.get(f"{key}_res_types")
+        return deserialized_value, res_types
 
     @classmethod
-    def key_exists(cls, cache_key: str) -> bool:
-        return cache_key in cls._cache
+    def has_key(cls, key: str) -> bool:
+        """Check if a key exists in the cache."""
+        return cls._cache is not None and key in cls._cache
 
     @classmethod
-    def delete(cls, cache_key: str) -> None:
-        del cls._cache[cache_key]
-        del cls._cache[cache_key + "_res_types"]
+    def remove_entry(cls, key: str) -> None:
+        """Remove an entry and its res_types from the cache."""
+        if cls._cache is not None:
+            del cls._cache[key]
+            del cls._cache[f"{key}_res_types"]
+            cls.write()

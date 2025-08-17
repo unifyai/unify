@@ -6,108 +6,138 @@ from unify.utils.caching._base_cache import BaseCache
 
 
 class LocalSeparateCache(BaseCache):
-    _cache_read: Optional[Dict] = None
-    _cache_write: Optional[Dict] = None
-    _cache_dir: str = (
-        os.environ["UNIFY_CACHE_DIR"]
-        if "UNIFY_CACHE_DIR" in os.environ
-        else os.getcwd()
-    )
-    _cache_fname_read: str = ".cache.json"
-    _cache_fname_write: str = ".cache_write.json"
+    """Local cache with separate read and write storage for better performance."""
+
+    _cache_read: Optional[Dict[str, Any]] = None
+    _cache_write: Optional[Dict[str, Any]] = None
+    _cache_dir: str = os.environ.get("UNIFY_CACHE_DIR", os.getcwd())
+    _cache_name_read: str = ".cache.json"
+    _cache_name_write: str = ".cache_write.json"
     _enabled: bool = False
 
     @classmethod
-    def set_filename(cls, filename: str) -> None:
-        cls._cache_fname_read = filename + "_read"
-        cls._cache_fname_write = filename + "_write"
-        cls._cache_read = None  # Force a reload of the cache
-        cls._cache_write = None  # Force a reload of the cache
+    def set_cache_name(cls, name: str) -> None:
+        """Set the cache names and reset both caches."""
+        cls._cache_name_read = f"{name}_read"
+        cls._cache_name_write = f"{name}_write"
+        cls._cache_read = None  # Force reload of read cache
+        cls._cache_write = None  # Force reload of write cache
 
     @classmethod
-    def get_filename(cls) -> str:
-        return cls._cache_fname_read
+    def get_cache_name(cls) -> str:
+        """Get the current read cache name."""
+        return cls._cache_name_read
 
     @classmethod
-    def get_cache_filepath(cls, filename: str = None) -> str:
-        if filename is None:
-            filename = cls.get_filename()
-
-        return os.path.join(cls._cache_dir, filename)
+    def get_cache_filepath(cls, name: str = None) -> str:
+        """Get the full filepath for the cache file."""
+        if name is None:
+            name = cls.get_cache_name()
+        return os.path.join(cls._cache_dir, name)
 
     @classmethod
     def is_enabled(cls) -> bool:
+        """Check if the cache is enabled."""
         return cls._enabled
 
     @classmethod
-    def update_entry(
+    def store_entry(
         cls,
         *,
         key: str,
         value: Any,
         res_types: Optional[Dict[str, Any]] = None,
     ) -> None:
+        """Store a key-value pair in the write cache."""
         if res_types:
-            cls._cache_write[key + "_res_types"] = res_types
+            cls._cache_write[f"{key}_res_types"] = res_types
         cls._cache_write[key] = value
         cls.write()
 
     @classmethod
     def write(cls, filename: str = None) -> None:
-        cache_fpath = cls._cache_fname_write
-        with open(cache_fpath, "w") as outfile:
-            json.dump(cls._cache_write, outfile)
+        """Write the write cache to disk."""
+        if cls._cache_write is None:
+            return
+
+        cache_filepath = os.path.join(cls._cache_dir, cls._cache_name_write)
+        with open(cache_filepath, "w") as outfile:
+            json.dump(cls._cache_write, outfile, indent=2)
 
     @classmethod
-    def create_or_load(cls, filename: str = None) -> None:
-        # Always create the write cache
+    def initialize_cache(cls, name: str = None) -> None:
+        """Initialize both read and write caches."""
+        # Always initialize the write cache
         if cls._cache_write is None:
             cls._cache_write = {}
-            filepath = cls._cache_fname_write
-            with open(filepath, "w") as outfile:
+            write_filepath = os.path.join(cls._cache_dir, cls._cache_name_write)
+            with open(write_filepath, "w") as outfile:
                 json.dump({}, outfile)
 
+        # Initialize the read cache
         if cls._cache_read is None:
-            # Read only cache
             cls._cache_read = {}
-            filepath = cls._cache_fname_read
+            read_filepath = os.path.join(cls._cache_dir, cls._cache_name_read)
+
             try:
-                with open(filepath) as outfile:
-                    content = outfile.read().strip()
-                    if content:
-                        cls._cache_read = json.loads(content)
-            except json.JSONDecodeError:
+                if os.path.exists(read_filepath):
+                    with open(read_filepath, "r") as infile:
+                        content = infile.read().strip()
+                        if content:
+                            cls._cache_read = json.loads(content)
+            except (json.JSONDecodeError, IOError):
+                # File contains invalid JSON or can't be read, keep empty cache
                 cls._cache_read = {}
 
     @classmethod
-    def get_keys(cls) -> List[str]:
+    def list_keys(cls) -> List[str]:
         return list(cls._cache_read.keys()) + list(cls._cache_write.keys())
 
     @classmethod
-    def get_entry(cls, cache_key: str) -> Optional[Any]:
+    def retrieve_entry(cls, key: str) -> tuple[Optional[Any], Optional[Dict[str, Any]]]:
+        """
+        Retrieve a value from the cache, checking write cache first.
+
+        Returns:
+            Tuple of (value, res_types) or (None, None) if not found
+        """
         # First check the write cache
-        value = cls._cache_write.get(cache_key)
-        if value is not None:
-            return json.loads(value), cls._cache_write.get(f"{cache_key}_res_types")
+        if cls._cache_write and key in cls._cache_write:
+            value = cls._cache_write[key]
+            res_types = cls._cache_write.get(f"{key}_res_types")
+            deserialized_value = json.loads(value)
+            return deserialized_value, res_types
 
-        # If not found, check the read cache
-        value = cls._cache_read.get(cache_key)
-        value = json.loads(value) if value else None
-        if value is not None:
-            cls.update_entry(
-                key=cache_key,
-                value=cls._dumps(value),
-                res_types=cls._cache_read.get(f"{cache_key}_res_types"),
+        # If not found in write cache, check the read cache
+        if cls._cache_read and key in cls._cache_read:
+            value = cls._cache_read[key]
+            res_types = cls._cache_read.get(f"{key}_res_types")
+
+            deserialized_value = json.loads(value)
+            # Promote to write cache for faster future access
+            cls.store_entry(
+                key=key,
+                value=cls.serialize_object(deserialized_value),
+                res_types=res_types,
             )
-        return value, cls._cache_read.get(f"{cache_key}_res_types")
+            return deserialized_value, res_types
+
+        return None, None
 
     @classmethod
-    def key_exists(cls, cache_key: str) -> bool:
-        return cache_key in cls._cache_read or cache_key in cls._cache_write
+    def has_key(cls, key: str) -> bool:
+        """Check if a key exists in either cache."""
+        return (cls._cache_write is not None and key in cls._cache_write) or (
+            cls._cache_read is not None and key in cls._cache_read
+        )
 
     @classmethod
-    def delete(cls, cache_key: str) -> None:
-        del cls._cache_write[cache_key]
-        del cls._cache_write[cache_key + "_res_types"]
-        del cls._cache_read[cache_key]
-        del cls._cache_read[cache_key + "_res_types"]
+    def remove_entry(cls, key: str) -> None:
+        """Remove an entry from both caches."""
+        if cls._cache_write:
+            cls._cache_write.pop(key, None)
+            cls._cache_write.pop(f"{key}_res_types", None)
+        if cls._cache_read:
+            cls._cache_read.pop(key, None)
+            cls._cache_read.pop(f"{key}_res_types", None)
+        cls.write()
