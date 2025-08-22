@@ -12,6 +12,8 @@ from typing import Any, Dict, List, Optional
 
 from unify.utils.caching.base_cache import BaseCache
 
+from .ndsjson_cache import _load_ndjson_cache, _write_to_ndjson_cache
+
 
 class LocalCache(BaseCache):
     """Local file-based cache implementation."""
@@ -19,7 +21,7 @@ class LocalCache(BaseCache):
     _cache: Optional[Dict[str, Any]] = None
     _cache_dir: str = os.environ.get("UNIFY_CACHE_DIR", os.getcwd())
     _cache_lock: threading.Lock = threading.Lock()
-    _cache_filename: str = ".cache.json"
+    _cache_filename: str = ".cache.ndjson"
     _enabled: bool = False
 
     @classmethod
@@ -54,17 +56,8 @@ class LocalCache(BaseCache):
         res_types: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Store a key-value pair in the cache."""
-        if res_types:
-            cls._cache[f"{key}_res_types"] = res_types
-        cls._cache[key] = value
-        cls.write()
-
-    @classmethod
-    def write(cls, filename: str = None) -> None:
-        """Write the cache to disk."""
-        cache_filepath = cls.get_cache_filepath(filename)
-        with open(cache_filepath, "w") as outfile:
-            json.dump(cls._cache, outfile, indent=2)
+        cls._cache[key] = {"value": value, "res_types": res_types}
+        _write_to_ndjson_cache(cls.get_cache_filepath(), key, value, res_types)
 
     @classmethod
     def initialize_cache(cls, name: str = None) -> None:
@@ -72,29 +65,17 @@ class LocalCache(BaseCache):
         cache_filepath = cls.get_cache_filepath(name)
 
         if cls._cache is None:
-            # Create cache file if it doesn't exist
-            if not os.path.exists(cache_filepath):
-                with open(cache_filepath, "w") as outfile:
-                    json.dump({}, outfile)
-                cls._cache = {}
-                return
-
-            # Load existing cache
             try:
-                with open(cache_filepath, "r") as infile:
-                    content = infile.read().strip()
-                    if not content:
-                        # File is empty, initialize with empty dict
-                        cls._cache = {}
-                    else:
-                        # Parse the JSON content
-                        cls._cache = json.loads(content)
-            except (json.JSONDecodeError, IOError):
+                cls._cache = _load_ndjson_cache(cache_filepath)
+            # Create cache file if it doesn't exist
+            except Exception:
                 # File contains invalid JSON or can't be read, reinitialize
                 warnings.warn(
-                    f"Cache file {cache_filepath} contains invalid JSON or can't be read, reinitializing.",
+                    f"Cache file {cache_filepath} contains invalid NDJSON or can't be read",
                 )
                 cls._cache = {}
+                with open(cache_filepath, "w") as f:
+                    f.write("")
 
     @classmethod
     def list_keys(cls) -> List[str]:
@@ -115,9 +96,8 @@ class LocalCache(BaseCache):
         if value is None:
             return None, None
 
-        deserialized_value = json.loads(value)
-        res_types = cls._cache.get(f"{key}_res_types")
-        return deserialized_value, res_types
+        deserialized_value = json.loads(value["value"])
+        return deserialized_value, value["res_types"]
 
     @classmethod
     def has_key(cls, key: str) -> bool:
@@ -129,5 +109,4 @@ class LocalCache(BaseCache):
         """Remove an entry and its res_types from the cache."""
         if cls._cache is not None:
             del cls._cache[key]
-            del cls._cache[f"{key}_res_types"]
-            cls.write()
+            # TODO: remove from file, requires dumping all the cache to the file
