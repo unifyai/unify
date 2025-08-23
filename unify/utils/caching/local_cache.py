@@ -73,10 +73,10 @@ class LocalCache(BaseCache):
 
                 with open(cache_filepath, "r") as f:
                     cls._cache = _load_ndjson_cache(f)
-            except Exception:
-                # File contains invalid JSON or can't be read, reinitialize
+            except IOError:
+                # File does not exist or can't be read, reinitialize
                 warnings.warn(
-                    f"Cache file {cache_filepath} contains invalid NDJSON or can't be read",
+                    f"Cache file {cache_filepath} can't be read, reinitializing",
                 )
                 cls._cache = {}
                 with open(cache_filepath, "w") as f:
