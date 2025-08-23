@@ -67,6 +67,10 @@ class LocalCache(BaseCache):
 
         if cls._cache is None:
             try:
+                if not os.path.exists(cache_filepath):
+                    with open(cache_filepath, "w") as f:
+                        f.write("")
+
                 with open(cache_filepath, "r") as f:
                     cls._cache = _load_ndjson_cache(f)
             except Exception:
