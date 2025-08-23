@@ -7,6 +7,9 @@ def _load_ndjson_cache(filehandler: TextIO):
     cache = {}
 
     for line in filehandler:
+        line = line.strip()
+        if not line:
+            continue
         try:
             item = json.loads(line)
             cache[item["key"]] = {
