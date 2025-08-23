@@ -6,7 +6,7 @@ from typing import Any, List, Optional, TextIO
 def _load_ndjson_cache(filehandler: TextIO):
     cache = {}
 
-    for line in filehandler:
+    for line_number, line in enumerate(filehandler, start=1):
         line = line.strip()
         if not line:
             continue
@@ -18,7 +18,7 @@ def _load_ndjson_cache(filehandler: TextIO):
             }
         except json.JSONDecodeError:
             warnings.warn(
-                f"Cache file {filehandler.name} contains invalid cache entry, skipping line: {line[:40]}...",
+                f"Cache file {filehandler.name} contains invalid cache entry, skipping line {line_number}: {line[:40]}...",
             )
 
     return cache
