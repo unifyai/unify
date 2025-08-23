@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from unify.utils.caching.base_cache import BaseCache
 
-from .ndsjson_cache import _load_ndjson_cache, _write_to_ndjson_cache
+from .ndsjson_cache_utils import _load_ndjson_cache, _write_to_ndjson_cache
 
 
 class LocalSeparateCache(BaseCache):
