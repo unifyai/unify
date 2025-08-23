@@ -57,7 +57,8 @@ class LocalCache(BaseCache):
     ) -> None:
         """Store a key-value pair in the cache."""
         cls._cache[key] = {"value": value, "res_types": res_types}
-        _write_to_ndjson_cache(cls.get_cache_filepath(), key, value, res_types)
+        with open(cls.get_cache_filepath(), "a") as f:
+            _write_to_ndjson_cache(f, key, value, res_types)
 
     @classmethod
     def initialize_cache(cls, name: str = None) -> None:
@@ -66,8 +67,8 @@ class LocalCache(BaseCache):
 
         if cls._cache is None:
             try:
-                cls._cache = _load_ndjson_cache(cache_filepath)
-            # Create cache file if it doesn't exist
+                with open(cache_filepath, "r") as f:
+                    cls._cache = _load_ndjson_cache(f)
             except Exception:
                 # File contains invalid JSON or can't be read, reinitialize
                 warnings.warn(
@@ -109,4 +110,11 @@ class LocalCache(BaseCache):
         """Remove an entry and its res_types from the cache."""
         if cls._cache is not None:
             del cls._cache[key]
-            # TODO: remove from file, requires dumping all the cache to the file
+            with open(cls.get_cache_filepath(), "w") as f:
+                for key, value in cls._cache.items():
+                    _write_to_ndjson_cache(
+                        f,
+                        key,
+                        value["value"],
+                        value["res_types"],
+                    )
