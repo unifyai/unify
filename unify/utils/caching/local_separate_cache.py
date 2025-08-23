@@ -126,17 +126,16 @@ class LocalSeparateCache(BaseCache):
     def remove_entry(cls, key: str) -> None:
         """Remove an entry from both caches."""
         if cls._cache_write:
-            cls._cache_write.pop(key, None)
-            # Must re-write the cache file
-            with open(cls.get_cache_filepath(cls._cache_name_write), "w") as f:
-                for key, value in cls._cache_write.items():
-                    _write_to_ndjson_cache(
-                        f,
-                        key,
-                        value["value"],
-                        value["res_types"],
-                    )
+            item = cls._cache_write.pop(key, None)
+            if item is not None:
+                with open(cls.get_cache_filepath(cls._cache_name_write), "w") as f:
+                    for key, value in cls._cache_write.items():
+                        _write_to_ndjson_cache(
+                            f,
+                            key,
+                            value["value"],
+                            value["res_types"],
+                        )
 
         if cls._cache_read:
             cls._cache_read.pop(key, None)
-        # TODO: remove from file, requires dumping all the cache to the file

@@ -109,12 +109,13 @@ class LocalCache(BaseCache):
     def remove_entry(cls, key: str) -> None:
         """Remove an entry and its res_types from the cache."""
         if cls._cache is not None:
-            del cls._cache[key]
-            with open(cls.get_cache_filepath(), "w") as f:
-                for key, value in cls._cache.items():
-                    _write_to_ndjson_cache(
-                        f,
-                        key,
-                        value["value"],
-                        value["res_types"],
-                    )
+            item = cls._cache.pop(key, None)
+            if item is not None:
+                with open(cls.get_cache_filepath(), "w") as f:
+                    for key, value in cls._cache.items():
+                        _write_to_ndjson_cache(
+                            f,
+                            key,
+                            value["value"],
+                            value["res_types"],
+                        )
