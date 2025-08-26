@@ -1514,6 +1514,13 @@ class AsyncUnify(_UniClient):
                     response=chat_completion,
                     backend=cache_backend,
                 )
+        if self.DIRECT_OPENAI_MODE:
+            unify.log_query(
+                endpoint=f"{endpoint}@openai",
+                query_body=kw,
+                response_body=chat_completion.model_dump(),
+                consume_credits=True,
+            )
         if return_full_completion:
             return chat_completion
         content = chat_completion.choices[0].message.content
