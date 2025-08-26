@@ -274,7 +274,7 @@ class _MultiClient(_Client, abc.ABC):
             endpoints = list(endpoints)
         self._api_key = _validate_api_key(api_key)
         self._openai_api_key = _validate_openai_api_key(
-            self.DIRECT_OPENAI_MODE,
+            self._DIRECT_OPENAI_MODE,
             openai_api_key,
         )
         self._endpoints = endpoints
