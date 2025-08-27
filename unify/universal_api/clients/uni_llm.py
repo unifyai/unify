@@ -1166,7 +1166,7 @@ class Unify(_UniClient):
                     response=chat_completion,
                     backend=cache_backend,
                 )
-        if self._should_use_direct_mode:
+        if self._should_use_direct_mode and not in_cache:
             unify.log_query(
                 endpoint=f"{endpoint}@openai",
                 query_body=kw,
@@ -1519,7 +1519,7 @@ class AsyncUnify(_UniClient):
                     response=chat_completion,
                     backend=cache_backend,
                 )
-        if self._should_use_direct_mode:
+        if self._should_use_direct_mode and not in_cache:
             asyncio.create_task(
                 asyncio.to_thread(
                     unify.log_query,
