@@ -36,7 +36,7 @@ from openai.types.chat import (
 from openai.types.chat.chat_completion import Choice
 from pydantic import BaseModel
 from typing_extensions import Self
-from unify import BASE_URL, LOCAL_MODELS
+from unify import BASE_URL, LOCAL_MODELS, list_models
 from unify.universal_api.clients.helpers import (
     _assert_is_valid_endpoint,
     _assert_is_valid_model,
@@ -310,7 +310,6 @@ class _UniClient(_Client, abc.ABC):
                 "if the model or provider are passed, then the endpoint must not be"
                 "passed.",
             )
-        self._client = self._get_client()
         self._endpoint = None
         self._provider = None
         self._model = None
@@ -320,6 +319,16 @@ class _UniClient(_Client, abc.ABC):
             self.set_provider(provider)
         if model:
             self.set_model(model)
+
+        self._should_use_direct_mode = False
+        if self._is_direct_mode_available() and self.model in list_models(
+            provider="openai",
+        ):
+            self._should_use_direct_mode = True
+            self._endpoint = self.model
+            self._provider = "openai"
+
+        self._client = self._get_client()
 
     # Settable Properties #
     # --------------------#
@@ -367,11 +376,6 @@ class _UniClient(_Client, abc.ABC):
         Returns:
             This client, useful for chaining inplace calls.
         """
-        if self._is_direct_mode_available():
-            self._model = value.split("@")[0]
-            self._endpoint = self._model
-            self._provider = "openai"
-            return self
         _assert_is_valid_endpoint(value, api_key=self._api_key)
         self._endpoint = value
         if value == "user-input":
@@ -964,7 +968,7 @@ class Unify(_UniClient):
 
     def _get_client(self):
         try:
-            if self._is_direct_mode_available():
+            if self._should_use_direct_mode:
                 return openai.OpenAI(
                     api_key=self._openai_api_key,
                     timeout=3600.0,  # one hour
@@ -1007,7 +1011,7 @@ class Unify(_UniClient):
             log_query_body=log_query_body,
             log_response_body=log_response_body,
         )
-        if self._is_direct_mode_available():
+        if self._should_use_direct_mode:
             kw.pop("extra_body")
         try:
             if endpoint in LOCAL_MODELS:
@@ -1070,7 +1074,7 @@ class Unify(_UniClient):
             log_query_body=log_query_body,
             log_response_body=log_response_body,
         )
-        if self._is_direct_mode_available():
+        if self._should_use_direct_mode:
             kw.pop("extra_body")
         if isinstance(cache, str) and cache.endswith("-closest"):
             cache = cache.removesuffix("-closest")
@@ -1161,7 +1165,7 @@ class Unify(_UniClient):
                     response=chat_completion,
                     backend=cache_backend,
                 )
-        if self._is_direct_mode_available():
+        if self._should_use_direct_mode:
             unify.log_query(
                 endpoint=f"{endpoint}@openai",
                 query_body=kw,
@@ -1314,7 +1318,7 @@ class AsyncUnify(_UniClient):
         try:
             # Async event hooks must use AsyncClient
             http_client = make_async_httpx_client_for_unify_logging(BASE_URL)
-            if self._is_direct_mode_available():
+            if self._should_use_direct_mode:
                 return openai.AsyncOpenAI(
                     api_key=self._openai_api_key,
                     timeout=3600.0,  # one hour
@@ -1357,7 +1361,7 @@ class AsyncUnify(_UniClient):
             log_query_body=log_query_body,
             log_response_body=log_response_body,
         )
-        if self._is_direct_mode_available():
+        if self._should_use_direct_mode:
             kw.pop("extra_body")
         try:
             if endpoint in LOCAL_MODELS:
@@ -1419,7 +1423,7 @@ class AsyncUnify(_UniClient):
             log_query_body=log_query_body,
             log_response_body=log_response_body,
         )
-        if self._is_direct_mode_available():
+        if self._should_use_direct_mode:
             kw.pop("extra_body")
         if isinstance(cache, str) and cache.endswith("-closest"):
             cache = cache.removesuffix("-closest")
@@ -1514,7 +1518,7 @@ class AsyncUnify(_UniClient):
                     response=chat_completion,
                     backend=cache_backend,
                 )
-        if self._is_direct_mode_available():
+        if self._should_use_direct_mode:
             unify.log_query(
                 endpoint=f"{endpoint}@openai",
                 query_body=kw,
