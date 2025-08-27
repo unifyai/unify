@@ -46,11 +46,10 @@ def _validate_openai_api_key(direct_mode: bool, api_key: Optional[str]) -> str:
     if not direct_mode:
         return None
     if api_key is None:
-        # Not to mistaknely use global openai api key
-        api_key = os.environ.get("UNIFY_OPENAI_KEY")
+        api_key = os.environ.get("OPENAI_API_KEY")
     if api_key is None:
         warnings.warn(
-            "UNIFY_OPENAI_KEY is missing when trying to use direct mode. "
+            "OPENAI_API_KEY is missing when trying to use direct mode. "
             "Falling back to Unify API.",
         )
     return api_key
