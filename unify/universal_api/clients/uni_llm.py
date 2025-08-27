@@ -1,5 +1,6 @@
 # global
 import abc
+import asyncio
 import inspect
 import threading
 
@@ -1519,11 +1520,15 @@ class AsyncUnify(_UniClient):
                     backend=cache_backend,
                 )
         if self._should_use_direct_mode:
-            unify.log_query(
-                endpoint=f"{endpoint}@openai",
-                query_body=kw,
-                response_body=chat_completion.model_dump(),
-                consume_credits=True,
+            asyncio.create_task(
+                asyncio.to_thread(
+                    unify.log_query,
+                    endpoint=f"{endpoint}@openai",
+                    query_body=kw,
+                    response_body=chat_completion.model_dump(),
+                    consume_credits=True,
+                ),
+                name="unify_client_log_query",
             )
         if return_full_completion:
             return chat_completion
