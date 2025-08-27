@@ -367,7 +367,7 @@ class _UniClient(_Client, abc.ABC):
         Returns:
             This client, useful for chaining inplace calls.
         """
-        if self._DIRECT_OPENAI_MODE:
+        if self._is_direct_mode_available():
             self._model = value.split("@")[0]
             self._endpoint = self._model
             self._provider = "openai"
@@ -964,7 +964,7 @@ class Unify(_UniClient):
 
     def _get_client(self):
         try:
-            if self._DIRECT_OPENAI_MODE:
+            if self._is_direct_mode_available():
                 return openai.OpenAI(
                     api_key=self._openai_api_key,
                     timeout=3600.0,  # one hour
@@ -1007,7 +1007,7 @@ class Unify(_UniClient):
             log_query_body=log_query_body,
             log_response_body=log_response_body,
         )
-        if self._DIRECT_OPENAI_MODE:
+        if self._is_direct_mode_available():
             kw.pop("extra_body")
         try:
             if endpoint in LOCAL_MODELS:
@@ -1070,7 +1070,7 @@ class Unify(_UniClient):
             log_query_body=log_query_body,
             log_response_body=log_response_body,
         )
-        if self._DIRECT_OPENAI_MODE:
+        if self._is_direct_mode_available():
             kw.pop("extra_body")
         if isinstance(cache, str) and cache.endswith("-closest"):
             cache = cache.removesuffix("-closest")
@@ -1161,7 +1161,7 @@ class Unify(_UniClient):
                     response=chat_completion,
                     backend=cache_backend,
                 )
-        if self._DIRECT_OPENAI_MODE:
+        if self._is_direct_mode_available():
             unify.log_query(
                 endpoint=f"{endpoint}@openai",
                 query_body=kw,
@@ -1314,7 +1314,7 @@ class AsyncUnify(_UniClient):
         try:
             # Async event hooks must use AsyncClient
             http_client = make_async_httpx_client_for_unify_logging(BASE_URL)
-            if self._DIRECT_OPENAI_MODE:
+            if self._is_direct_mode_available():
                 return openai.AsyncOpenAI(
                     api_key=self._openai_api_key,
                     timeout=3600.0,  # one hour
@@ -1357,7 +1357,7 @@ class AsyncUnify(_UniClient):
             log_query_body=log_query_body,
             log_response_body=log_response_body,
         )
-        if self._DIRECT_OPENAI_MODE:
+        if self._is_direct_mode_available():
             kw.pop("extra_body")
         try:
             if endpoint in LOCAL_MODELS:
@@ -1419,7 +1419,7 @@ class AsyncUnify(_UniClient):
             log_query_body=log_query_body,
             log_response_body=log_response_body,
         )
-        if self._DIRECT_OPENAI_MODE:
+        if self._is_direct_mode_available():
             kw.pop("extra_body")
         if isinstance(cache, str) and cache.endswith("-closest"):
             cache = cache.removesuffix("-closest")
@@ -1514,7 +1514,7 @@ class AsyncUnify(_UniClient):
                     response=chat_completion,
                     backend=cache_backend,
                 )
-        if self._DIRECT_OPENAI_MODE:
+        if self._is_direct_mode_available():
             unify.log_query(
                 endpoint=f"{endpoint}@openai",
                 query_body=kw,
