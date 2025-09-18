@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from unify import BASE_URL
 from unify.utils import _requests
@@ -27,15 +27,12 @@ def create_assistant(
     api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Create a new assistant for the authenticated user.
-
-    Returns the API response JSON.
+    Create a new assistant. Returns the API response JSON.
     """
     api_key = _validate_api_key(api_key)
     headers = {
         "accept": "application/json",
         "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
     }
 
     payload = {
@@ -69,11 +66,11 @@ def list_assistants(
     phone: Optional[str] = None,
     email: Optional[str] = None,
     api_key: Optional[str] = None,
-) -> Dict[str, Any]:
+) -> List[Dict[str, Any]]:
     """
-    List all assistants for the authenticated user.
+    List all assistants. Returns the API response JSON.
 
-    Optional filters: phone, email. Returns the API response JSON.
+    Optional filters: phone, email.
     """
     api_key = _validate_api_key(api_key)
     headers = {
@@ -86,11 +83,11 @@ def list_assistants(
 
     response = _requests.get(f"{BASE_URL}/assistant", headers=headers, params=params)
     _check_response(response)
-    return response.json()
+    return response.json()["info"]
 
 
 def update_assistant(
-    assistant_id: int,
+    assistant_id: Union[int, str],
     *,
     first_name: Optional[str] = None,
     surname: Optional[str] = None,
@@ -151,7 +148,7 @@ def update_assistant(
 
 
 def delete_assistant(
-    assistant_id: int,
+    assistant_id: Union[int, str],
     *,
     api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
