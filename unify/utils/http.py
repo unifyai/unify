@@ -6,14 +6,14 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3 import Retry
 
-_logger = logging.getLogger("unify_requests")
-_log_enabled = os.getenv("UNIFY_REQUESTS_DEBUG", "false").lower() in ("true", "1")
-_logger.setLevel(logging.DEBUG if _log_enabled else logging.WARNING)
+_LOGGER = logging.getLogger("unify_requests")
+_LOG_ENABLED = os.getenv("UNIFY_REQUESTS_DEBUG", "false").lower() in ("true", "1")
+_LOGGER.setLevel(logging.DEBUG if _LOG_ENABLED else logging.WARNING)
 
-_session = requests.Session()
-_retries = Retry(total=5, backoff_factor=0.1, status_forcelist=[500, 502, 503, 504])
-_session.mount("http://", HTTPAdapter(max_retries=_retries))
-_session.mount("https://", HTTPAdapter(max_retries=_retries))
+_SESSION = requests.Session()
+_RETRIES = Retry(total=5, backoff_factor=0.1, status_forcelist=[500, 502, 503, 504])
+_SESSION.mount("http://", HTTPAdapter(max_retries=_RETRIES))
+_SESSION.mount("https://", HTTPAdapter(max_retries=_RETRIES))
 
 
 class RequestError(Exception):
@@ -25,7 +25,7 @@ class RequestError(Exception):
 
 
 def _log(type: str, url: str, mask_key: bool = True, /, **kwargs):
-    if not _log_enabled:
+    if not _LOG_ENABLED:
         return
     _kwargs_str = ""
     if mask_key and "headers" in kwargs:
@@ -46,7 +46,7 @@ def _log(type: str, url: str, mask_key: bool = True, /, **kwargs):
 url:{url}
 {_kwargs_str}
 """
-    _logger.debug(log_msg)
+    _LOGGER.debug(log_msg)
 
 
 def _mask_auth_key(kwargs: dict):
@@ -58,7 +58,7 @@ def _mask_auth_key(kwargs: dict):
 def request(method, url, **kwargs):
     _log(f"{method}", url, True, **kwargs)
     try:
-        res = _session.request(method, url, **kwargs)
+        res = _SESSION.request(method, url, **kwargs)
         res.raise_for_status()
     except requests.exceptions.HTTPError as e:
         kwargs = _mask_auth_key(kwargs)
