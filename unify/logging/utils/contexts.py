@@ -3,11 +3,7 @@ from typing import Dict, List, Optional, Union
 from unify import BASE_URL
 from unify.utils import http
 
-from ...utils.helpers import (
-    _check_response,
-    _create_request_header,
-    _get_and_maybe_create_project,
-)
+from ...utils.helpers import _create_request_header, _get_and_maybe_create_project
 from .logs import CONTEXT_WRITE
 
 # Contexts #
@@ -71,7 +67,6 @@ def create_context(
         headers=headers,
         json=body,
     )
-    _check_response(response)
     return response.json()
 
 
@@ -114,7 +109,6 @@ def create_contexts(
         headers=headers,
         json=contexts,
     )
-    _check_response(response)
     return response.json()
 
 
@@ -149,7 +143,6 @@ def rename_context(
         headers=headers,
         json={"name": new_name},
     )
-    _check_response(response)
     return response.json()
 
 
@@ -180,7 +173,6 @@ def get_context(
         BASE_URL + f"/project/{project}/contexts/{name}",
         headers=headers,
     )
-    _check_response(response)
     return response.json()
 
 
@@ -217,7 +209,6 @@ def get_contexts(
         BASE_URL + f"/project/{project}/contexts",
         headers=headers,
     )
-    _check_response(response)
     contexts = response.json()
     contexts = {context["name"]: context["description"] for context in contexts}
     if prefix:
@@ -263,7 +254,6 @@ def delete_context(
             BASE_URL + f"/project/{project}/contexts/{ctx}",
             headers=headers,
         )
-        _check_response(response)
     if all_contexts:
         return response.json()
 
@@ -307,7 +297,6 @@ def add_logs_to_context(
         headers=headers,
         json=body,
     )
-    _check_response(response)
     return response.json()
 
 
@@ -343,7 +332,6 @@ def commit_context(
         headers=headers,
         json=body,
     )
-    _check_response(response)
     return response.json()
 
 
@@ -379,7 +367,6 @@ def rollback_context(
         headers=headers,
         json=body,
     )
-    _check_response(response)
     return response.json()
 
 
@@ -411,5 +398,4 @@ def get_context_commits(
         BASE_URL + f"/project/{project}/contexts/{name}/commits",
         headers=headers,
     )
-    _check_response(response)
     return response.json()

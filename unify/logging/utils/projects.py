@@ -3,7 +3,7 @@ from typing import Dict, List, Optional, Union
 from unify import BASE_URL
 from unify.utils import http
 
-from ...utils.helpers import _check_response, _create_request_header, _validate_api_key
+from ...utils.helpers import _create_request_header, _validate_api_key
 
 # Projects #
 # ---------#
@@ -49,7 +49,6 @@ def create_project(
             else:
                 delete_project(name=name, api_key=api_key)
     response = http.post(BASE_URL + "/project", headers=headers, json=body)
-    _check_response(response)
     return response.json()
 
 
@@ -81,7 +80,6 @@ def rename_project(
         headers=headers,
         json=body,
     )
-    _check_response(response)
     return response.json()
 
 
@@ -105,7 +103,6 @@ def delete_project(
     api_key = _validate_api_key(api_key)
     headers = _create_request_header(api_key)
     response = http.delete(BASE_URL + f"/project/{name}", headers=headers)
-    _check_response(response)
     return response.json()
 
 
@@ -126,7 +123,6 @@ def delete_project_logs(
     api_key = _validate_api_key(api_key)
     headers = _create_request_header(api_key)
     response = http.delete(BASE_URL + f"/project/{name}/logs", headers=headers)
-    _check_response(response)
     return response.json()
 
 
@@ -147,7 +143,6 @@ def delete_project_contexts(
     api_key = _validate_api_key(api_key)
     headers = _create_request_header(api_key)
     response = http.delete(BASE_URL + f"/project/{name}/contexts", headers=headers)
-    _check_response(response)
     return response.json()
 
 
@@ -168,7 +163,6 @@ def list_projects(
     api_key = _validate_api_key(api_key)
     headers = _create_request_header(api_key)
     response = http.get(BASE_URL + "/projects", headers=headers)
-    _check_response(response)
     return response.json()
 
 
@@ -198,7 +192,6 @@ def commit_project(
         headers=headers,
         json=body,
     )
-    _check_response(response)
     return response.json()
 
 
@@ -228,7 +221,6 @@ def rollback_project(
         headers=headers,
         json=body,
     )
-    _check_response(response)
     return response.json()
 
 
@@ -247,5 +239,4 @@ def get_project_commits(name: str, *, api_key: Optional[str] = None) -> List[Dic
     api_key = _validate_api_key(api_key)
     headers = _create_request_header(api_key)
     response = http.get(BASE_URL + f"/project/{name}/commits", headers=headers)
-    _check_response(response)
     return response.json()

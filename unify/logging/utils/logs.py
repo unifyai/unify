@@ -26,7 +26,6 @@ from unify.utils.helpers import flexible_deepcopy
 
 from ...utils._caching import _get_cache, _write_to_cache, is_caching_enabled
 from ...utils.helpers import (
-    _check_response,
     _create_request_header,
     _get_and_maybe_create_project,
     _validate_api_key,
@@ -782,7 +781,6 @@ def _sync_log(
         "entries": entries,
     }
     response = http.post(BASE_URL + "/logs", headers=headers, json=body)
-    _check_response(response)
     resp_json = response.json()
 
     # Apply row_ids to entries using the centralized helper
@@ -945,7 +943,6 @@ def create_logs(
                 headers=headers,
                 data=_json_chunker(body),
             )
-        _check_response(response)
         resp_json = response.json()
 
         # Apply row_ids to entries using the centralized helper
@@ -1056,7 +1053,6 @@ def _add_to_log(
             data = all_kwargs[0]
         body = {"logs": log_ids, mode: data, "overwrite": overwrite, "context": context}
         response = http.put(BASE_URL + "/logs", headers=headers, json=body)
-        _check_response(response)
         if nest_level.get() > 0:
             logged = LOGGED.get()
             new_logged = {}
@@ -1182,7 +1178,6 @@ def update_logs(
     if params is not None:
         body["params"] = params
     response = http.put(BASE_URL + "/logs", headers=headers, json=body)
-    _check_response(response)
     return response.json()
 
 
@@ -1237,7 +1232,6 @@ def delete_logs(
         params=params,
         json=body,
     )
-    _check_response(response)
     if USR_LOGGING:
         logger.info(f"Deleted Logs({', '.join([str(i) for i in log_ids])})")
     return response.json()
@@ -1284,7 +1278,6 @@ def delete_log_fields(
         headers=headers,
         json=body,
     )
-    _check_response(response)
     if USR_LOGGING:
         logger.info(
             f"Deleted Field `{field}` from Logs({', '.join([str(i) for i in log_ids])})",
@@ -1423,7 +1416,6 @@ def get_logs(
     }
 
     response = http.get(BASE_URL + "/logs", headers=headers, params=params)
-    _check_response(response)
 
     if not group_by:
         if return_ids_only:
@@ -1468,7 +1460,6 @@ def get_log_by_id(
         params={"project": project, "from_ids": [id]},
         headers=headers,
     )
-    _check_response(response)
     params, lgs, count = response.json().values()
     if len(lgs) == 0:
         raise Exception(f"Log with id {id} does not exist")
@@ -1539,7 +1530,6 @@ def get_logs_metric(
         headers=headers,
         params=params,
     )
-    _check_response(response)
     return response.json()
 
 
@@ -1586,7 +1576,6 @@ def get_groups(
         "exclude_ids": exclude_ids,
     }
     response = http.get(BASE_URL + "/logs/groups", headers=headers, params=params)
-    _check_response(response)
     return response.json()
 
 
@@ -1627,7 +1616,6 @@ def get_logs_latest_timestamp(
         headers=headers,
         params=params,
     )
-    _check_response(response)
     return response.json()
 
 
@@ -1676,7 +1664,6 @@ def update_derived_log(
         "referenced_logs": referenced_logs,
     }
     response = http.put(BASE_URL + "/logs/derived", headers=headers, json=body)
-    _check_response(response)
     return response.json()
 
 
@@ -1717,7 +1704,6 @@ def create_derived_logs(
     if derived is not None:
         body["derived"] = derived
     response = http.post(BASE_URL + "/logs/derived", headers=headers, json=body)
-    _check_response(response)
     return response.json()
 
 
@@ -1748,7 +1734,6 @@ def join_logs(
         "copy": copy,
     }
     response = http.post(BASE_URL + "/logs/join", headers=headers, json=body)
-    _check_response(response)
     return response.json()
 
 
@@ -1787,7 +1772,6 @@ def create_fields(
     if backfill_logs is not None:
         body["backfill_logs"] = backfill_logs
     response = http.post(BASE_URL + "/logs/fields", headers=headers, json=body)
-    _check_response(response)
     return response.json()
 
 
@@ -1829,7 +1813,6 @@ def rename_field(
         headers=headers,
         json=body,
     )
-    _check_response(response)
     return response.json()
 
 
@@ -1862,7 +1845,6 @@ def get_fields(
         "context": context,
     }
     response = http.get(BASE_URL + "/logs/fields", headers=headers, params=params)
-    _check_response(response)
     return response.json()
 
 
@@ -1900,7 +1882,6 @@ def delete_fields(
         headers=headers,
         json=body,
     )
-    _check_response(response)
     return response.json()
 
 

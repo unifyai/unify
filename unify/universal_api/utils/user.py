@@ -2,7 +2,7 @@ from typing import Optional
 
 from unify import BASE_URL
 from unify.utils import http
-from unify.utils.helpers import _check_response, _create_request_header
+from unify.utils.helpers import _create_request_header
 
 
 def get_user_basic_info(*, api_key: Optional[str] = None):
@@ -18,5 +18,4 @@ def get_user_basic_info(*, api_key: Optional[str] = None):
     """
     headers = _create_request_header(api_key)
     response = http.get(f"{BASE_URL}/user/basic-info", headers=headers)
-    _check_response(response)
     return response.json()

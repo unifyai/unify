@@ -2,7 +2,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from unify import BASE_URL
 from unify.utils import http
-from unify.utils.helpers import _check_response, _create_request_header
+from unify.utils.helpers import _create_request_header
 
 
 def create_assistant(
@@ -53,7 +53,6 @@ def create_assistant(
     payload = {k: v for k, v in payload.items() if v is not None}
 
     response = http.post(f"{BASE_URL}/assistant", headers=headers, json=payload)
-    _check_response(response)
     return response.json()
 
 
@@ -74,7 +73,6 @@ def list_assistants(
     params = {k: v for k, v in params.items() if v is not None}
 
     response = http.get(f"{BASE_URL}/assistant", headers=headers, params=params)
-    _check_response(response)
     return response.json()["info"]
 
 
@@ -131,7 +129,6 @@ def update_assistant(
         headers=headers,
         json=payload,
     )
-    _check_response(response)
     return response.json()
 
 
@@ -149,5 +146,4 @@ def delete_assistant(
         f"{BASE_URL}/assistant/{assistant_id}",
         headers=headers,
     )
-    _check_response(response)
     return response.json()
