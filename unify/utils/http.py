@@ -1,6 +1,8 @@
 import json
 import logging
 import os
+from functools import wraps
+from typing import Callable
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -25,8 +27,6 @@ class RequestError(Exception):
 
 
 def _log(type: str, url: str, mask_key: bool = True, /, **kwargs):
-    if not _LOG_ENABLED:
-        return
     _kwargs_str = ""
     if mask_key and "headers" in kwargs:
         key = kwargs["headers"]["Authorization"]
@@ -55,20 +55,35 @@ def _mask_auth_key(kwargs: dict):
     return kwargs
 
 
-def request(method, url, **kwargs):
-    _log(f"{method}", url, True, **kwargs)
+def _log_request_if_enabled(fn: Callable) -> Callable:
+    """
+    Only wrap request function if logging is enabled.
+    """
+    if not _LOG_ENABLED:
+        return fn
+
+    @wraps(fn)
+    def inner(method, url, **kwargs):
+        _log(f"{method}", url, True, **kwargs)
+        res: requests.Response = fn(method, url, **kwargs)
+        try:
+            _log(f"{method} response:{res.status_code}", url, response=res.json())
+        except requests.exceptions.JSONDecodeError:
+            _log(f"{method} response:{res.status_code}", url, response=res.text)
+        return res
+
+    return inner
+
+
+@_log_request_if_enabled
+def request(method, url, **kwargs) -> requests.Response:
     try:
         res = _SESSION.request(method, url, **kwargs)
         res.raise_for_status()
+        return res
     except requests.exceptions.HTTPError as e:
         kwargs = _mask_auth_key(kwargs)
         raise RequestError(url, method, e.response, **kwargs)
-
-    try:
-        _log(f"{method} response:{res.status_code}", url, response=res.json())
-    except requests.exceptions.JSONDecodeError:
-        _log(f"{method} response:{res.status_code}", url, response=res.text)
-    return res
 
 
 def get(url, params=None, **kwargs):
