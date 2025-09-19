@@ -12,6 +12,7 @@ _logger.setLevel(logging.DEBUG if _log_enabled else logging.WARNING)
 
 _session = requests.Session()
 _retries = Retry(total=5, backoff_factor=0.1, status_forcelist=[500, 502, 503, 504])
+_session.mount("http://", HTTPAdapter(max_retries=_retries))
 _session.mount("https://", HTTPAdapter(max_retries=_retries))
 
 
