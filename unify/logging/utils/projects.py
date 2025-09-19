@@ -3,7 +3,7 @@ from typing import Dict, List, Optional, Union
 from unify import BASE_URL
 from unify.utils import http
 
-from ...utils.helpers import _check_response, _validate_api_key
+from ...utils.helpers import _check_response, _create_request_header, _validate_api_key
 
 # Projects #
 # ---------#
@@ -38,10 +38,7 @@ def create_project(
         A message indicating whether the project was created successfully.
     """
     api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     body = {"name": name, "is_versioned": is_versioned}
     if overwrite:
         if name in list_projects(api_key=api_key):
@@ -77,10 +74,7 @@ def rename_project(
         A message indicating whether the project was successfully renamed.
     """
     api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     body = {"name": new_name}
     response = http.patch(
         BASE_URL + f"/project/{name}",
@@ -109,10 +103,7 @@ def delete_project(
         Whether the project was successfully deleted.
     """
     api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     response = http.delete(BASE_URL + f"/project/{name}", headers=headers)
     _check_response(response)
     return response.json()
@@ -133,10 +124,7 @@ def delete_project_logs(
         `UNIFY_KEY` environment variable.
     """
     api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     response = http.delete(BASE_URL + f"/project/{name}/logs", headers=headers)
     _check_response(response)
     return response.json()
@@ -157,10 +145,7 @@ def delete_project_contexts(
         `UNIFY_KEY` environment variable.
     """
     api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     response = http.delete(BASE_URL + f"/project/{name}/contexts", headers=headers)
     _check_response(response)
     return response.json()
@@ -181,10 +166,7 @@ def list_projects(
         List of all project names.
     """
     api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     response = http.get(BASE_URL + "/projects", headers=headers)
     _check_response(response)
     return response.json()
@@ -209,10 +191,7 @@ def commit_project(
         A dictionary containing the new commit_hash.
     """
     api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     body = {"commit_message": commit_message}
     response = http.post(
         BASE_URL + f"/project/{name}/commit",
@@ -242,10 +221,7 @@ def rollback_project(
         A message indicating the success of the rollback operation.
     """
     api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     body = {"commit_hash": commit_hash}
     response = http.post(
         BASE_URL + f"/project/{name}/rollback",
@@ -269,10 +245,7 @@ def get_project_commits(name: str, *, api_key: Optional[str] = None) -> List[Dic
         A list of dictionaries, each representing a commit.
     """
     api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     response = http.get(BASE_URL + f"/project/{name}/commits", headers=headers)
     _check_response(response)
     return response.json()

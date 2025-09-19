@@ -5,8 +5,8 @@ from unify.utils import http
 
 from ...utils.helpers import (
     _check_response,
+    _create_request_header,
     _get_and_maybe_create_project,
-    _validate_api_key,
 )
 from .logs import CONTEXT_WRITE
 
@@ -52,16 +52,12 @@ def create_context(
     Returns:
         A message indicating whether the context was successfully created.
     """
-    api_key = _validate_api_key(api_key)
     project = _get_and_maybe_create_project(
         project,
         api_key=api_key,
         create_if_missing=False,
     )
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     body = {
         "name": name,
         "description": description,
@@ -107,16 +103,12 @@ def create_contexts(
     Returns:
         A message indicating whether the contexts were successfully created.
     """
-    api_key = _validate_api_key(api_key)
     project = _get_and_maybe_create_project(
         project,
         api_key=api_key,
         create_if_missing=False,
     )
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     response = http.post(
         BASE_URL + f"/project/{project}/contexts",
         headers=headers,
@@ -146,16 +138,12 @@ def rename_context(
         api_key: If specified, unify API key to be used. Defaults to the value in the
         `UNIFY_KEY` environment variable.
     """
-    api_key = _validate_api_key(api_key)
     project = _get_and_maybe_create_project(
         project,
         api_key=api_key,
         create_if_missing=False,
     )
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     response = http.patch(
         BASE_URL + f"/project/{project}/contexts/{name}/rename",
         headers=headers,
@@ -182,16 +170,12 @@ def get_context(
         api_key: If specified, unify API key to be used. Defaults to the value in the
         `UNIFY_KEY` environment variable.
     """
-    api_key = _validate_api_key(api_key)
     project = _get_and_maybe_create_project(
         project,
         api_key=api_key,
         create_if_missing=False,
     )
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     response = http.get(
         BASE_URL + f"/project/{project}/contexts/{name}",
         headers=headers,
@@ -223,11 +207,7 @@ def get_contexts(
     Returns:
         A message indicating whether the artifacts were successfully added.
     """
-    api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     project = _get_and_maybe_create_project(
         project,
         api_key=api_key,
@@ -269,16 +249,12 @@ def delete_context(
         api_key: If specified, unify API key to be used. Defaults to the value in the
         `UNIFY_KEY` environment variable.
     """
-    api_key = _validate_api_key(api_key)
     project = _get_and_maybe_create_project(
         project,
         api_key=api_key,
         create_if_missing=False,
     )
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
 
     # ToDo: remove this hack once this task [https://app.clickup.com/t/86c3kuch6] is done
     all_contexts = get_contexts(project, prefix=name)
@@ -315,17 +291,13 @@ def add_logs_to_context(
     Returns:
         A message indicating whether the logs were successfully added to the context.
     """
-    api_key = _validate_api_key(api_key)
     context = context if context else CONTEXT_WRITE.get()
     project = _get_and_maybe_create_project(
         project,
         api_key=api_key,
         create_if_missing=False,
     )
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     body = {
         "context_name": context,
         "log_ids": log_ids,
@@ -359,16 +331,12 @@ def commit_context(
     Returns:
         A dictionary containing the new commit_hash.
     """
-    api_key = _validate_api_key(api_key)
     project = _get_and_maybe_create_project(
         project,
         api_key=api_key,
         create_if_missing=False,
     )
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     body = {"commit_message": commit_message}
     response = http.post(
         BASE_URL + f"/project/{project}/contexts/{name}/commit",
@@ -399,16 +367,12 @@ def rollback_context(
     Returns:
         A message indicating the success of the rollback operation.
     """
-    api_key = _validate_api_key(api_key)
     project = _get_and_maybe_create_project(
         project,
         api_key=api_key,
         create_if_missing=False,
     )
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     body = {"commit_hash": commit_hash}
     response = http.post(
         BASE_URL + f"/project/{project}/contexts/{name}/rollback",
@@ -437,16 +401,12 @@ def get_context_commits(
     Returns:
         A list of dictionaries, each representing a commit.
     """
-    api_key = _validate_api_key(api_key)
     project = _get_and_maybe_create_project(
         project,
         api_key=api_key,
         create_if_missing=False,
     )
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     response = http.get(
         BASE_URL + f"/project/{project}/contexts/{name}/commits",
         headers=headers,

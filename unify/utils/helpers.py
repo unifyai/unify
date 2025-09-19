@@ -42,6 +42,14 @@ def _validate_api_key(api_key: Optional[str]) -> str:
     return api_key
 
 
+def _create_request_header(api_key: Optional[str]) -> Dict[str, str]:
+    return {
+        "Authorization": f"Bearer {_validate_api_key(api_key)}",
+        "accept": "application/json",
+        "Content-Type": "application/json",
+    }
+
+
 def _validate_openai_api_key(direct_mode: bool, api_key: Optional[str]) -> str:
     if not direct_mode:
         return None

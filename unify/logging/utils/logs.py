@@ -27,6 +27,7 @@ from unify.utils.helpers import flexible_deepcopy
 from ...utils._caching import _get_cache, _write_to_cache, is_caching_enabled
 from ...utils.helpers import (
     _check_response,
+    _create_request_header,
     _get_and_maybe_create_project,
     _validate_api_key,
 )
@@ -118,10 +119,7 @@ class _AsyncTraceLogger:
         atexit.register(self.shutdown, flush=True)
         signal.signal(signal.SIGINT, self._on_sigint)
 
-        headers = {
-            "accept": "application/json",
-            "Authorization": f"Bearer {self._api_key}",
-        }
+        headers = _create_request_header(self._api_key)
 
         self._loop = asyncio.new_event_loop()
         self._loop.set_default_executor(
@@ -775,10 +773,7 @@ def _sync_log(
 
     This is a helper function used when async logging is disabled or unavailable.
     """
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
 
     body = {
         "project": project,
@@ -924,10 +919,7 @@ def create_logs(
     api_key = _validate_api_key(api_key)
     project = _get_and_maybe_create_project(project, api_key=api_key)
     context = _handle_context(context)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     # ToDo: add support for all of the context variables, as is done for `unify.log` above
     params = _handle_mutability(mutable, params)
     entries = _handle_mutability(mutable, entries)
@@ -1045,10 +1037,7 @@ def _add_to_log(
     else:
         # Fallback to synchronous update if async logging isn’t enabled.
         log_ids = _to_log_ids(logs)
-        headers = {
-            "accept": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        }
+        headers = _create_request_header(api_key)
         all_kwargs = []
         if nest_level.get() > 0:
             for log_id in log_ids:
@@ -1181,11 +1170,7 @@ def update_logs(
     """
     if not logs and not params and not entries:
         return {"detail": "No logs to update."}
-    api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     log_ids = _to_log_ids(logs)
     body = {
         "logs": log_ids,
@@ -1238,11 +1223,7 @@ def delete_logs(
     project = _get_and_maybe_create_project(project, api_key=api_key)
     context = context if context else CONTEXT_READ.get()
     log_ids = _to_log_ids(logs)
-    api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     body = {
         "project": project,
         "context": context,
@@ -1290,10 +1271,7 @@ def delete_log_fields(
     """
     log_ids = _to_log_ids(logs)
     api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     project = _get_and_maybe_create_project(project, api_key=api_key)
     context = context if context else CONTEXT_READ.get()
     body = {
@@ -1401,10 +1379,7 @@ def get_logs(
     """
     # ToDo: add support for all context handlers
     api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     project = _get_and_maybe_create_project(
         project,
         api_key=api_key,
@@ -1486,10 +1461,7 @@ def get_log_by_id(
         The full set of log data.
     """
     api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     project = _get_and_maybe_create_project(project, api_key=api_key)
     response = http.get(
         BASE_URL + "/logs",
@@ -1552,10 +1524,7 @@ def get_logs_metric(
         the optional filtering.
     """
     api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     project = _get_and_maybe_create_project(project, api_key=api_key)
     params = {
         "project": project,
@@ -1607,10 +1576,7 @@ def get_groups(
         version of the log key with equal values, and the value being the equal value.
     """
     api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     project = _get_and_maybe_create_project(project, api_key=api_key)
     params = {
         "project": project,
@@ -1641,10 +1607,7 @@ def get_logs_latest_timestamp(
     Returns the update timestamp of the most recently updated log within the specified page and filter bounds.
     """
     api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     project = _get_and_maybe_create_project(project, api_key=api_key)
     context = context if context else CONTEXT_READ.get()
     column_context = column_context if column_context else COLUMN_CONTEXT_READ.get()
@@ -1701,10 +1664,7 @@ def update_derived_log(
         A message indicating whether the derived logs were successfully updated.
     """
     api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     project = _get_and_maybe_create_project(project, api_key=api_key)
     context = context if context else CONTEXT_WRITE.get()
     body = {
@@ -1744,10 +1704,7 @@ def create_derived_logs(
         A message indicating whether the derived logs were successfully created.
     """
     api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     project = _get_and_maybe_create_project(project, api_key=api_key)
     context = context if context else CONTEXT_WRITE.get()
     body = {
@@ -1779,10 +1736,7 @@ def join_logs(
     Join two sets of logs based on specified criteria and creates new logs with the joined data.
     """
     api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     project = _get_and_maybe_create_project(project, api_key=api_key)
     body = {
         "project": project,
@@ -1820,10 +1774,7 @@ def create_fields(
         `UNIFY_KEY` environment variable.
     """
     api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     project = _get_and_maybe_create_project(project, api_key=api_key)
     context = context if context else CONTEXT_WRITE.get()
     if isinstance(fields, list):
@@ -1864,10 +1815,7 @@ def rename_field(
         `UNIFY_KEY` environment variable.
     """
     api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     project = _get_and_maybe_create_project(project, api_key=api_key)
     context = context if context else CONTEXT_WRITE.get()
     body = {
@@ -1906,10 +1854,7 @@ def get_fields(
         A dictionary of fields names and their types
     """
     api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     project = _get_and_maybe_create_project(project, api_key=api_key)
     context = context if context else CONTEXT_READ.get()
     params = {
@@ -1942,10 +1887,7 @@ def delete_fields(
         `UNIFY_KEY` environment variable.
     """
     api_key = _validate_api_key(api_key)
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = _create_request_header(api_key)
     project = _get_and_maybe_create_project(project, api_key=api_key)
     context = context if context else CONTEXT_WRITE.get()
     body = {
