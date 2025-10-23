@@ -3,7 +3,6 @@ import atexit
 import logging
 import os
 import threading
-from concurrent.futures import TimeoutError
 from typing import List
 
 import aiohttp
@@ -80,13 +79,15 @@ class AsyncLoggerManager:
         await self.queue.join()
 
     def join(self):
+        import concurrent.futures as _cf
+
         try:
             future = asyncio.run_coroutine_threadsafe(self._join(), self.loop)
             while True:
                 try:
                     future.result(timeout=0.5)
                     break
-                except (asyncio.TimeoutError, TimeoutError):
+                except (asyncio.TimeoutError, _cf.TimeoutError, _cf._base.TimeoutError):
                     self.logger.debug(
                         f"Join waiting for {self.queue._unfinished_tasks} tasks to complete",
                     )
