@@ -37,7 +37,7 @@ from openai.types.chat import (
 from openai.types.chat.chat_completion import Choice
 from pydantic import BaseModel
 from typing_extensions import Self
-from unify import BASE_URL, LOCAL_MODELS, list_models
+from unify import BASE_URL, LOCAL_MODELS
 from unify.universal_api.clients.helpers import (
     _assert_is_valid_endpoint,
     _assert_is_valid_model,
@@ -98,6 +98,7 @@ class _UniClient(_Client, abc.ABC):
         stateful: bool = False,
         return_full_completion: bool = False,
         traced: bool = False,
+        direct_mode: bool = False,
         cache: Optional[Union[bool, str]] = None,
         cache_backend: Optional[str] = None,
         # passthrough arguments
@@ -295,6 +296,7 @@ class _UniClient(_Client, abc.ABC):
             stateful=stateful,
             return_full_completion=return_full_completion,
             traced=traced,
+            direct_mode=direct_mode,
             cache=cache,
             cache_backend=cache_backend,
             # passthrough arguments
@@ -324,13 +326,7 @@ class _UniClient(_Client, abc.ABC):
         if model:
             self.set_model(model)
 
-        self._should_use_direct_mode = False
-        if self._is_direct_mode_available() and self.model in list_models(
-            provider="openai",
-        ):
-            self._should_use_direct_mode = True
-            self._endpoint = self.model
-            self._provider = "openai"
+        self._should_use_direct_mode = self._direct_mode
 
         self._client = self._get_client()
 

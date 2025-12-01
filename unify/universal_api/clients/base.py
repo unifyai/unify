@@ -35,7 +35,7 @@ def set_client_direct_mode(value: bool) -> None:
     Args:
         value: The value to set the direct mode to.
     """
-    _Client._set_direct_mode(value)
+    _Client._set_default_direct_mode(value)
 
 
 class _Client(ABC):
@@ -85,6 +85,7 @@ class _Client(ABC):
         stateful: bool,
         return_full_completion: bool,
         traced: bool,
+        direct_mode: bool,
         cache: Union[bool, str],
         cache_backend: str,
         # passthrough arguments
@@ -129,6 +130,7 @@ class _Client(ABC):
         self._stateful = None
         self._return_full_completion = None
         self._traced = None
+        self._direct_mode = None
         self._cache = None
         self._cache_backend = None
         self._extra_headers = None
@@ -168,6 +170,7 @@ class _Client(ABC):
         self.set_stateful(stateful)
         self.set_return_full_completion(return_full_completion)
         self.set_traced(traced)
+        self.set_direct_mode(direct_mode)
         self.set_cache(cache)
         self.set_cache_backend(cache_backend)
         # passthrough arguments
@@ -201,11 +204,8 @@ class _Client(ABC):
         }
 
     @classmethod
-    def _set_direct_mode(cls, value: bool) -> None:
-        cls._DIRECT_OPENAI_MODE = value
-
-    def _is_direct_mode_available(self) -> bool:
-        return self._openai_api_key is not None and self._DIRECT_OPENAI_MODE
+    def _set_default_direct_mode(cls, value: bool) -> None:
+        cls._DEFAULT_DIRECT_MODE = value
 
     # Properties #
     # -----------#
@@ -1000,6 +1000,19 @@ class _Client(ABC):
             This client, useful for chaining inplace calls.
         """
         self._traced = value
+        return self
+
+    def set_direct_mode(self, value: bool) -> Self:
+        """
+        Set the default direct mode bool.  # noqa: DAR101.
+
+        Args:
+            value: The default direct mode bool.
+
+        Returns:
+            This client, useful for chaining inplace calls.
+        """
+        self._direct_mode = value
         return self
 
     def set_cache(self, value: bool) -> Self:
