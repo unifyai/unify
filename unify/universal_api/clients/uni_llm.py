@@ -20,6 +20,7 @@ from typing import (
     Union,
 )
 
+import litellm
 import openai
 
 # local
@@ -1073,20 +1074,23 @@ class Unify(_UniClient):
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider)
-        if self._should_use_direct_mode:
-            kw.pop("extra_body")
         if isinstance(cache, str) and cache.endswith("-closest"):
             cache = cache.removesuffix("-closest")
             read_closest = True
         else:
             read_closest = False
-        if "response_format" in kw:
-            chat_method = self._client.beta.chat.completions.parse
-            del kw["stream"]
-        elif endpoint == "user-input":
-            chat_method = lambda *a, **kw: input("write your agent response:\n")
+        if self._should_use_direct_mode:
+            chat_method = litellm.completion
+            kw["model"] = self._model
+            kw.pop("extra_body")
         else:
-            chat_method = self._client.chat.completions.create
+            if "response_format" in kw:
+                chat_method = self._client.beta.chat.completions.parse
+                del kw["stream"]
+            elif endpoint == "user-input":
+                chat_method = lambda *a, **kw: input("write your agent response:\n")
+            else:
+                chat_method = self._client.chat.completions.create
         chat_completion = None
         in_cache = False
         if cache in [True, "both", "read", "read-only"]:
@@ -1169,7 +1173,7 @@ class Unify(_UniClient):
             if response_format is not None:
                 kw["response_format"] = response_format.model_json_schema()
             unify.log_query(
-                endpoint=f"{endpoint}@openai",
+                endpoint=f"{endpoint}",
                 query_body=kw,
                 response_body=chat_completion.model_dump(),
                 consume_credits=True,
@@ -1525,7 +1529,7 @@ class AsyncUnify(_UniClient):
             asyncio.create_task(
                 asyncio.to_thread(
                     unify.log_query,
-                    endpoint=f"{endpoint}@openai",
+                    endpoint=f"{endpoint}",
                     query_body=kw,
                     response_body=chat_completion.model_dump(),
                     consume_credits=True,
