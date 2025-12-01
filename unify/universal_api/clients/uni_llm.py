@@ -968,11 +968,6 @@ class Unify(_UniClient):
 
     def _get_client(self):
         try:
-            if self._should_use_direct_mode:
-                return openai.OpenAI(
-                    api_key=self._openai_api_key,
-                    timeout=3600.0,  # one hour
-                )
             http_client = make_httpx_client_for_unify_logging(BASE_URL)
             return openai.OpenAI(
                 base_url=f"{BASE_URL}",
@@ -1325,12 +1320,6 @@ class AsyncUnify(_UniClient):
         try:
             # Async event hooks must use AsyncClient
             http_client = make_async_httpx_client_for_unify_logging(BASE_URL)
-            if self._should_use_direct_mode:
-                return openai.AsyncOpenAI(
-                    api_key=self._openai_api_key,
-                    timeout=3600.0,  # one hour
-                    http_client=http_client,
-                )
             return openai.AsyncOpenAI(
                 base_url=f"{BASE_URL}",
                 api_key=self._api_key,

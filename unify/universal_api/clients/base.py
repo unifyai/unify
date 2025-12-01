@@ -21,11 +21,7 @@ from unify import BASE_URL
 from unify.utils import http
 
 # noinspection PyProtectedMember
-from unify.utils.helpers import (
-    _create_request_header,
-    _validate_api_key,
-    _validate_openai_api_key,
-)
+from unify.utils.helpers import _create_request_header, _validate_api_key
 
 
 def set_client_direct_mode(value: bool) -> None:
@@ -96,10 +92,6 @@ class _Client(ABC):
 
         # initial values
         self._api_key = _validate_api_key(api_key)
-        self._openai_api_key = _validate_openai_api_key(
-            _Client._DIRECT_OPENAI_MODE,
-            openai_api_key,
-        )
         self._system_message = None
         self._messages = None
         self._frequency_penalty = None
