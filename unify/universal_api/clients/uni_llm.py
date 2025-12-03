@@ -58,6 +58,8 @@ from ..clients.base import _Client
 from ..endpoints.utils import get_model_alias
 from ..types import Prompt
 
+litellm.drop_params = True
+
 
 class _UniClient(_Client, abc.ABC):
     def __init__(
