@@ -1,6 +1,4 @@
-import litellm
-
-from .utils import get_model_alias_map
+from .utils import register_model_alias_map
 
 models = {
     "gemini-3-pro": "vertex_ai/gemini-3-pro-preview",
@@ -30,4 +28,4 @@ models = {
     "gpt-oss-120b": "vertex_ai/openai/gpt-oss-120b-maas",
 }
 
-litellm.model_alias_map.update(get_model_alias_map("vertex-ai", models))
+register_model_alias_map("vertex-ai", models)

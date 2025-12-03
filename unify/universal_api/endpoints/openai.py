@@ -1,6 +1,4 @@
-import litellm
-
-from .utils import get_model_alias_map
+from .utils import register_model_alias_map
 
 models = {
     "gpt-3.5-turbo": "gpt-3.5-turbo",
@@ -27,4 +25,4 @@ models = {
     "gpt-5.1-chat-latest": "gpt-5.1-chat-latest",
 }
 
-litellm.model_alias_map.update(get_model_alias_map("openai", models))
+register_model_alias_map("openai", models)

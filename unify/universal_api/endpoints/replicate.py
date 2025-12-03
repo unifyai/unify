@@ -1,6 +1,4 @@
-import litellm
-
-from .utils import get_model_alias_map
+from .utils import register_model_alias_map
 
 models = {
     "llama-4-maverick-instruct": "replicate/meta/llama-4-maverick-instruct",
@@ -28,4 +26,4 @@ models = {
     "gemini-3-pro": "replicate/google/gemini-3-pro",
 }
 
-litellm.model_alias_map.update(get_model_alias_map("replicate", models))
+register_model_alias_map("replicate", models)

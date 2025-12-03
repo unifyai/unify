@@ -1,6 +1,4 @@
-import litellm
-
-from .utils import get_model_alias_map
+from .utils import register_model_alias_map
 
 models = {
     "grok-4.1-fast-reasoning": "xai/grok-4.1-fast-reasoning",
@@ -13,4 +11,4 @@ models = {
     "grok-3-mini": "xai/grok-3-mini",
 }
 
-litellm.model_alias_map.update(get_model_alias_map("xai", models))
+register_model_alias_map("xai", models)

@@ -55,6 +55,7 @@ from unify.universal_api.utils.provider_preprocessing import (
 from ...utils._caching import _get_cache, _write_to_cache, is_caching_enabled
 from ...utils.helpers import _default
 from ..clients.base import _Client
+from ..endpoints.utils import get_model_alias
 from ..types import Prompt
 
 
@@ -1077,6 +1078,7 @@ class Unify(_UniClient):
             read_closest = False
         if self._direct_mode:
             chat_method = litellm.completion
+            kw["model"] = get_model_alias(endpoint)
             kw.pop("extra_body")
         else:
             if "response_format" in kw:
@@ -1431,6 +1433,7 @@ class AsyncUnify(_UniClient):
             read_closest = False
         if self._direct_mode:
             chat_method = litellm.acompletion
+            kw["model"] = get_model_alias(endpoint)
         else:
             if "response_format" in kw and kw["response_format"]:
                 chat_method = self._client.beta.chat.completions.parse

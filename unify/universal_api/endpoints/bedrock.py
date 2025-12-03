@@ -1,6 +1,4 @@
-import litellm
-
-from .utils import get_model_alias_map
+from .utils import register_model_alias_map
 
 models = {
     "gpt-oss-20b": "bedrock/us.openai.gpt-oss-20b-1:0",
@@ -23,4 +21,4 @@ models = {
     "claude-4.5-opus": "bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0",
 }
 
-litellm.model_alias_map.update(get_model_alias_map("bedrock", models))
+register_model_alias_map("bedrock", models)

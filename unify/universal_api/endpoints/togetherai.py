@@ -1,6 +1,4 @@
-import litellm
-
-from .utils import get_model_alias_map
+from .utils import register_model_alias_map
 
 models = {
     "gpt-oss-20b": "together_ai/openai/gpt-oss-20b",
@@ -18,5 +16,4 @@ models = {
     "qwen-2.5-7b-instruct": "together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
     "qwen-2.5-72b-instruct": "together_ai/Qwen/Qwen2.5-72B-Instruct-Turbo",
 }
-
-litellm.model_alias_map.update(get_model_alias_map("togetherai", models))
+register_model_alias_map("togetherai", models)

@@ -1,6 +1,4 @@
-import litellm
-
-from .utils import get_model_alias_map
+from .utils import register_model_alias_map
 
 models = {
     "mistral-large": "mistral/mistral-large-latest",
@@ -8,4 +6,4 @@ models = {
     "mistral-small": "mistral/mistral-small-latest",
 }
 
-litellm.model_alias_map.update(get_model_alias_map("mistral", models))
+register_model_alias_map("mistral", models)

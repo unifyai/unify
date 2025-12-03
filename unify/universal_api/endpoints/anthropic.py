@@ -1,6 +1,4 @@
-import litellm
-
-from .utils import get_model_alias_map
+from .utils import register_model_alias_map
 
 provider = "anthropic"
 models = {
@@ -14,4 +12,4 @@ models = {
     "claude-4.5-opus": "anthropic/claude-opus-4-5-20251101",
 }
 
-litellm.model_alias_map.update(get_model_alias_map("anthropic", models))
+register_model_alias_map("anthropic", models)

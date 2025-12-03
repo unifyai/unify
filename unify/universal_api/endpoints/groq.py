@@ -1,6 +1,4 @@
-import litellm
-
-from .utils import get_model_alias_map
+from .utils import register_model_alias_map
 
 models = {
     "llama-3.1-8b-chat": "groq/llama-3.1-8b-instant",
@@ -11,4 +9,4 @@ models = {
     "gpt-oss-120b": "groq/openai/gpt-oss-120b",
 }
 
-litellm.model_alias_map.update(get_model_alias_map("groq", models))
+register_model_alias_map("groq", models)
