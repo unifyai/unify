@@ -1429,12 +1429,15 @@ class AsyncUnify(_UniClient):
             read_closest = True
         else:
             read_closest = False
-        if "response_format" in kw and kw["response_format"]:
-            chat_method = self._client.beta.chat.completions.parse
-            if "stream" in kw:
-                del kw["stream"]  # .parse() does not accept the stream argument
+        if self._direct_mode:
+            chat_method = litellm.acompletion
         else:
-            chat_method = self._client.chat.completions.create
+            if "response_format" in kw and kw["response_format"]:
+                chat_method = self._client.beta.chat.completions.parse
+                if "stream" in kw:
+                    del kw["stream"]  # .parse() does not accept the stream argument
+            else:
+                chat_method = self._client.chat.completions.create
         chat_completion = None
         in_cache = False
         if cache in [True, "both", "read", "read-only"]:
