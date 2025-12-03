@@ -98,7 +98,7 @@ class _UniClient(_Client, abc.ABC):
         stateful: bool = False,
         return_full_completion: bool = False,
         traced: bool = False,
-        direct_mode: bool = False,
+        direct_mode: Optional[bool] = None,
         cache: Optional[Union[bool, str]] = None,
         cache_backend: Optional[str] = None,
         # passthrough arguments
@@ -295,7 +295,7 @@ class _UniClient(_Client, abc.ABC):
             stateful=stateful,
             return_full_completion=return_full_completion,
             traced=traced,
-            direct_mode=direct_mode,
+            direct_mode=direct_mode or _Client._DEFAULT_DIRECT_MODE,
             cache=cache,
             cache_backend=cache_backend,
             # passthrough arguments
@@ -324,8 +324,6 @@ class _UniClient(_Client, abc.ABC):
             self.set_provider(provider)
         if model:
             self.set_model(model)
-
-        self._should_use_direct_mode = self._direct_mode
 
         self._client = self._get_client()
 
@@ -1007,7 +1005,7 @@ class Unify(_UniClient):
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider)
-        if self._should_use_direct_mode:
+        if self._direct_mode:
             kw.pop("extra_body")
         try:
             if endpoint in LOCAL_MODELS:
@@ -1077,7 +1075,7 @@ class Unify(_UniClient):
             read_closest = True
         else:
             read_closest = False
-        if self._should_use_direct_mode:
+        if self._direct_mode:
             chat_method = litellm.completion
             kw.pop("extra_body")
         else:
@@ -1165,7 +1163,7 @@ class Unify(_UniClient):
                     response=chat_completion,
                     backend=cache_backend,
                 )
-        if self._should_use_direct_mode and not in_cache:
+        if self._direct_mode and not in_cache:
             response_format = kw.get("response_format")
             if response_format is not None:
                 kw["response_format"] = response_format.model_json_schema()
@@ -1360,7 +1358,7 @@ class AsyncUnify(_UniClient):
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider)
-        if self._should_use_direct_mode:
+        if self._direct_mode:
             kw.pop("extra_body")
         try:
             if endpoint in LOCAL_MODELS:
@@ -1424,7 +1422,7 @@ class AsyncUnify(_UniClient):
         )
         # Apply provider-specific preprocessing (before cache, on a copy of messages)
         apply_provider_preprocessing(kw, self._provider)
-        if self._should_use_direct_mode:
+        if self._direct_mode:
             kw.pop("extra_body")
         if isinstance(cache, str) and cache.endswith("-closest"):
             cache = cache.removesuffix("-closest")
@@ -1519,7 +1517,7 @@ class AsyncUnify(_UniClient):
                     response=chat_completion,
                     backend=cache_backend,
                 )
-        if self._should_use_direct_mode and not in_cache:
+        if self._direct_mode and not in_cache:
             response_format = kw.get("response_format")
             if response_format is not None:
                 kw["response_format"] = response_format.model_json_schema()

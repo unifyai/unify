@@ -37,7 +37,7 @@ def set_client_direct_mode(value: bool) -> None:
 class _Client(ABC):
     """Base Abstract class for interacting with the Unify chat completions endpoint."""
 
-    _DIRECT_OPENAI_MODE = False
+    _DEFAULT_DIRECT_MODE = False
 
     def __init__(
         self,
