@@ -94,7 +94,6 @@ class _UniClient(_Client, abc.ABC):
         log_query_body: Optional[bool] = True,
         log_response_body: Optional[bool] = True,
         api_key: Optional[str] = None,
-        openai_api_key: Optional[str] = None,
         # python client arguments
         stateful: bool = False,
         return_full_completion: bool = False,
@@ -292,7 +291,6 @@ class _UniClient(_Client, abc.ABC):
             log_query_body=log_query_body,
             log_response_body=log_response_body,
             api_key=api_key,
-            openai_api_key=openai_api_key,
             # python client arguments
             stateful=stateful,
             return_full_completion=return_full_completion,

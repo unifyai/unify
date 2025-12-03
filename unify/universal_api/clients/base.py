@@ -76,7 +76,6 @@ class _Client(ABC):
         log_query_body: Optional[bool],
         log_response_body: Optional[bool],
         api_key: Optional[str],
-        openai_api_key: Optional[str],
         # python client arguments
         stateful: bool,
         return_full_completion: bool,
