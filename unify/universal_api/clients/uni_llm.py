@@ -1081,7 +1081,6 @@ class Unify(_UniClient):
             read_closest = False
         if self._should_use_direct_mode:
             chat_method = litellm.completion
-            kw["model"] = self._model
             kw.pop("extra_body")
         else:
             if "response_format" in kw:
