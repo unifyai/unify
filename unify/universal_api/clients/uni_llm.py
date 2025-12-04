@@ -1170,7 +1170,10 @@ class Unify(_UniClient):
         if self._direct_mode and not in_cache:
             response_format = kw.get("response_format")
             if response_format is not None:
-                kw["response_format"] = response_format.model_json_schema()
+                try:
+                    kw["response_format"] = response_format.model_json_schema()
+                except:
+                    pass
             unify.log_query(
                 endpoint=f"{endpoint}",
                 query_body=kw,
@@ -1528,7 +1531,10 @@ class AsyncUnify(_UniClient):
         if self._direct_mode and not in_cache:
             response_format = kw.get("response_format")
             if response_format is not None:
-                kw["response_format"] = response_format.model_json_schema()
+                try:
+                    kw["response_format"] = response_format.model_json_schema()
+                except:
+                    pass
             asyncio.create_task(
                 asyncio.to_thread(
                     unify.log_query,
