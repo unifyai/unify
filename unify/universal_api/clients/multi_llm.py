@@ -69,6 +69,7 @@ class _MultiClient(_Client, abc.ABC):
         stateful: bool = False,
         return_full_completion: bool = False,
         traced: bool = False,
+        direct_mode: bool = False,
         cache: Union[bool, str] = None,
         cache_backend: Optional[str] = None,
         # passthrough arguments
@@ -254,6 +255,7 @@ class _MultiClient(_Client, abc.ABC):
             stateful=stateful,
             return_full_completion=return_full_completion,
             traced=traced,
+            direct_mode=direct_mode or _Client._DEFAULT_DIRECT_MODE,
             cache=cache,
             cache_backend=cache_backend,
             # passthrough arguments
@@ -308,6 +310,7 @@ class _MultiClient(_Client, abc.ABC):
                 api_key=self._api_key,
                 # python client arguments
                 stateful=self.stateful,
+                direct_mode=self._direct_mode,
                 return_full_completion=self.return_full_completion,
                 cache=self.cache,
                 # passthrough arguments
