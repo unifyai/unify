@@ -184,8 +184,6 @@ def create_global_configmap(api_client, namespace="default"):
             },
             "data": {
                 "PROJECT_ID": "gcp-project-runtime",
-                "VERTEXAI_PROJECT": "gcp-project-saas",
-                "VERTEXAI_LOCATION": "global",
             },
         }
 
