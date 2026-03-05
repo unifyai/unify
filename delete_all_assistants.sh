@@ -15,7 +15,7 @@ if [[ -z "${UNIFY_KEY:-}" ]]; then
   exit 1
 fi
 
-API_BASE="https://service.a.run.app/v0"
+API_BASE="https://internal.example.com/v0"
 
 echo "Listing assistants from $API_BASE ..."
 list_resp="$(curl -sS -f -H "Authorization: Bearer $UNIFY_KEY" "$API_BASE/assistant")" || {

@@ -28,7 +28,7 @@ import time
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 ORCHESTRA_URLS = {
-    "staging": "https://service.a.run.app/v0",
+    "staging": "https://internal.example.com/v0",
     "production": "https://api.unify.ai/v0",
 }
 

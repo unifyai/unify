@@ -37,7 +37,7 @@ load_dotenv()
 
 ORCHESTRA_URLS = {
     "prod": "https://api.unify.ai/v0",
-    "staging": "https://service.a.run.app/v0",
+    "staging": "https://internal.example.com/v0",
 }
 COMMS_URLS = {
     "prod": "https://unity-comms-app-000000000000.us-central1.run.app",
