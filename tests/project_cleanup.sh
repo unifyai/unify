@@ -128,7 +128,7 @@ else
     esac
   fi
   if [[ "$EXPLICIT_ENV" == "staging" ]]; then
-    API_BASE="https://service.a.run.app/v0"
+    API_BASE="https://internal.example.com/v0"
   else
     API_BASE="https://api.unify.ai/v0"
   fi
