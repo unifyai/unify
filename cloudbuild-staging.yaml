@@ -89,6 +89,7 @@ steps:
   args:
   - '-c'
   - |
+    set -e
     ADAPTERS=https://service.a.run.app
     AUTH="Authorization: Bearer $$ORCHESTRA_ADMIN_KEY"
 
