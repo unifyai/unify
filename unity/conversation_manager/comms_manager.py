@@ -64,9 +64,7 @@ if TYPE_CHECKING:
 
 # Subscription IDs
 project_id = "gcp-project-runtime"
-startup_subscription_id = (
-    "unity-startup" + SETTINGS.ENV_SUFFIX + "-sub"
-)
+startup_subscription_id = "unity-startup" + SETTINGS.ENV_SUFFIX + "-sub"
 
 
 def _get_subscription_id() -> str:
