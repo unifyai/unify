@@ -65,7 +65,7 @@ if TYPE_CHECKING:
 # Subscription IDs
 project_id = "gcp-project-runtime"
 startup_subscription_id = (
-    "unity-startup" + ("-staging" if SETTINGS.STAGING else "") + "-sub"
+    "unity-startup" + SETTINGS.ENV_SUFFIX + "-sub"
 )
 
 
