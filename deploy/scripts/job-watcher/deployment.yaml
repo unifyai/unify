@@ -1,3 +1,4 @@
+---
 apiVersion: scheduling.k8s.io/v1
 kind: PriorityClass
 metadata:
@@ -35,7 +36,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: job-watcher
-  namespace: staging
+  namespace: production
 rules:
 - apiGroups: ["batch"]
   resources: ["jobs"]
@@ -48,11 +49,11 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: job-watcher
-  namespace: staging
+  namespace: production
 subjects:
 - kind: ServiceAccount
   name: comm-sa
-  namespace: staging
+  namespace: production
 roleRef:
   kind: Role
   name: job-watcher
@@ -61,28 +62,28 @@ roleRef:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: job-watcher-staging
-  namespace: staging
+  name: job-watcher
+  namespace: production
   labels:
-    app: job-watcher-staging
+    app: job-watcher
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: job-watcher-staging
+      app: job-watcher
   template:
     metadata:
       labels:
-        app: job-watcher-staging
+        app: job-watcher
       annotations:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
     spec:
       priorityClassName: job-watcher-critical
       serviceAccountName: comm-sa
       containers:
-      - name: job-watcher-staging
-        image: us-central1-docker.pkg.dev/gcp-project-runtime/unity/job-watcher-staging:latest
-        command: ["kopf", "run", "watcher.py", "--liveness=http://0.0.0.0:8080/healthz", "--namespace=staging", "--standalone"]
+      - name: job-watcher
+        image: us-central1-docker.pkg.dev/gcp-project-runtime/unity/job-watcher:latest
+        command: ["kopf", "run", "watcher.py", "--liveness=http://0.0.0.0:8080/healthz", "--namespace=production", "--standalone"]
         ports:
         - containerPort: 8080
           name: health
@@ -93,13 +94,13 @@ spec:
             name: unity-secrets
         env:
         - name: WATCH_NAMESPACE
-          value: staging
+          value: production
         - name: DEPLOY_ENV
-          value: staging
+          value: production
         - name: UNITY_COMMS_URL
-          value: "https://unity-comms-app-staging-000000000000.us-central1.run.app"
+          value: "https://unity-comms-app-000000000000.us-central1.run.app"
         - name: ORCHESTRA_URL
-          value: "https://internal.example.com/v0"
+          value: "https://api.unify.ai/v0"
         resources:
           requests:
             cpu: 50m

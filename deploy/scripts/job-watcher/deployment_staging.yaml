@@ -1,3 +1,4 @@
+---
 apiVersion: scheduling.k8s.io/v1
 kind: PriorityClass
 metadata:
@@ -22,9 +23,6 @@ metadata:
 subjects:
 - kind: ServiceAccount
   name: comm-sa
-  namespace: preview
-- kind: ServiceAccount
-  name: comm-sa
   namespace: staging
 - kind: ServiceAccount
   name: comm-sa
@@ -38,7 +36,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: job-watcher
-  namespace: preview
+  namespace: staging
 rules:
 - apiGroups: ["batch"]
   resources: ["jobs"]
@@ -51,11 +49,11 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: job-watcher
-  namespace: preview
+  namespace: staging
 subjects:
 - kind: ServiceAccount
   name: comm-sa
-  namespace: preview
+  namespace: staging
 roleRef:
   kind: Role
   name: job-watcher
@@ -64,28 +62,28 @@ roleRef:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: job-watcher-preview
-  namespace: preview
+  name: job-watcher-staging
+  namespace: staging
   labels:
-    app: job-watcher-preview
+    app: job-watcher-staging
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: job-watcher-preview
+      app: job-watcher-staging
   template:
     metadata:
       labels:
-        app: job-watcher-preview
+        app: job-watcher-staging
       annotations:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
     spec:
       priorityClassName: job-watcher-critical
       serviceAccountName: comm-sa
       containers:
-      - name: job-watcher-preview
-        image: us-central1-docker.pkg.dev/gcp-project-runtime/unity/job-watcher-preview:latest
-        command: ["kopf", "run", "watcher.py", "--liveness=http://0.0.0.0:8080/healthz", "--namespace=preview", "--standalone"]
+      - name: job-watcher-staging
+        image: us-central1-docker.pkg.dev/gcp-project-runtime/unity/job-watcher-staging:latest
+        command: ["kopf", "run", "watcher.py", "--liveness=http://0.0.0.0:8080/healthz", "--namespace=staging", "--standalone"]
         ports:
         - containerPort: 8080
           name: health
@@ -96,11 +94,11 @@ spec:
             name: unity-secrets
         env:
         - name: WATCH_NAMESPACE
-          value: preview
+          value: staging
         - name: DEPLOY_ENV
-          value: preview
+          value: staging
         - name: UNITY_COMMS_URL
-          value: "https://unity-comms-app-preview-000000000000.us-central1.run.app"
+          value: "https://unity-comms-app-staging-000000000000.us-central1.run.app"
         - name: ORCHESTRA_URL
           value: "https://internal.example.com/v0"
         resources:
