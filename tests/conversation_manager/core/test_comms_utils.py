@@ -192,10 +192,8 @@ class TestUploadUnifyAttachment:
             response_json={"id": "uuid", "filename": "file.txt", "url": "https://url"},
         )
 
-        comms_app_url = (
-            "https://unity-comms-app-staging-000000000000.us-central1.run.app"
-        )
-        adapters_url = "https://service.a.run.app"
+        comms_app_url = "http://comms.test:8080"
+        adapters_url = "http://adapters.test:8081"
 
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
