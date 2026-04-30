@@ -64,6 +64,16 @@ DEFAULT_VOICE_PROVIDER = "cartesia"
 DEFAULT_VOICE_MODE = "tts"
 
 
+def _encode_int_csv(values: list[int]) -> str:
+    """Encode integer ids for env vars that can only carry plain strings."""
+    return ",".join(str(value) for value in values) if values else ""
+
+
+def _decode_int_csv(value: str) -> list[int]:
+    """Decode an integer-id CSV env var."""
+    return [int(item) for item in value.split(",") if item.strip()]
+
+
 @dataclass
 class AssistantDetails:
     """Details about the assistant."""
@@ -94,6 +104,7 @@ class AssistantDetails:
     user_desktop_url: str | None = (
         None  # URL for user's own desktop (not the managed VM)
     )
+    space_ids: list[int] = field(default_factory=list)
 
     @property
     def name(self) -> str:
@@ -246,6 +257,15 @@ class SessionDetails:
         self.team.ids = value
 
     @property
+    def space_ids(self) -> list[int]:
+        """Shortcut to assistant.space_ids for convenient access."""
+        return self.assistant.space_ids
+
+    @space_ids.setter
+    def space_ids(self, value: list[int]) -> None:
+        self.assistant.space_ids = value
+
+    @property
     def unify_key(self) -> str:
         """API key for Unify services.
 
@@ -302,6 +322,7 @@ class SessionDetails:
         org_id: int | None = None,
         org_name: str = "",
         team_ids: list[int] | None = None,
+        space_ids: list[int] | None = None,
         voice_provider: str = "",
         voice_id: str = "",
         binding_id: str = "",
@@ -344,6 +365,7 @@ class SessionDetails:
         self.org.id = org_id
         self.org.name = org_name
         self.team.ids = team_ids or []
+        self.assistant.space_ids = space_ids or []
         self.voice.provider = voice_provider
         self.voice.id = voice_id
         self._initialized = True
@@ -403,9 +425,8 @@ class SessionDetails:
         os.environ["USER_WHATSAPP_NUMBER"] = self.user.whatsapp_number
         os.environ["ORG_ID"] = str(self.org.id) if self.org.id is not None else ""
         os.environ["ORG_NAME"] = self.org.name
-        os.environ["TEAM_IDS"] = (
-            ",".join(str(t) for t in self.team.ids) if self.team.ids else ""
-        )
+        os.environ["TEAM_IDS"] = _encode_int_csv(self.team.ids)
+        self.export_space_ids_to_env()
         os.environ["VOICE_PROVIDER"] = self.voice.provider
         os.environ["VOICE_ID"] = self.voice.id
         os.environ["VOICE_MODE"] = self.voice.mode
@@ -415,6 +436,10 @@ class SessionDetails:
         os.environ["CONTACT"] = self.voice_call.contact_json
         os.environ["BOSS"] = self.voice_call.boss_json
         os.environ["UNIFY_KEY"] = self.unify_key
+
+    def export_space_ids_to_env(self) -> None:
+        """Export current shared-space memberships to the subprocess env shape."""
+        os.environ["SPACE_IDS"] = _encode_int_csv(self.assistant.space_ids)
 
     def populate_from_env(self) -> None:
         """Populate from environment variables.
@@ -491,7 +516,12 @@ class SessionDetails:
             self.org.name = val
         if val := os.environ.get("TEAM_IDS"):
             try:
-                self.team.ids = [int(t) for t in val.split(",") if t.strip()]
+                self.team.ids = _decode_int_csv(val)
+            except (ValueError, TypeError):
+                pass
+        if val := os.environ.get("SPACE_IDS"):
+            try:
+                self.assistant.space_ids = _decode_int_csv(val)
             except (ValueError, TypeError):
                 pass
         if val := os.environ.get("VOICE_PROVIDER"):
