@@ -213,12 +213,6 @@ def _task_due_event_from_payload(
 ) -> TaskDue | None:
     """Build a `TaskDue` event from a comms Pub/Sub payload.
 
-    Thin alias around :meth:`TaskDue.from_dict` kept here to preserve the
-    call-site name `comms_manager` already imports. The Pub/Sub ingress
-    has already gated on ``event_type == "task_due"`` before calling this,
-    so no additional type discriminator check is needed.
-    """
-
     return TaskDue.from_dict(payload, reason=reason)
 
 
