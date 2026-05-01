@@ -213,6 +213,10 @@ def _task_due_event_from_payload(
 ) -> TaskDue | None:
     """Build a `TaskDue` event from a comms Pub/Sub payload.
 
+    Thin alias around :meth:`TaskDue.from_dict` kept here to preserve the
+    call-site name `comms_manager` already imports.
+    """
+
     return TaskDue.from_dict(payload, reason=reason)
 
 
@@ -689,6 +693,8 @@ class CommsManager:
                         "assistant_email_provider",
                         "google_workspace",
                     ),
+                    "self_contact_id": event.get("self_contact_id", 0),
+                    "boss_contact_id": event.get("boss_contact_id", 1),
                     "assistant_whatsapp_number": event.get(
                         "assistant_whatsapp_number",
                         "",
@@ -2041,6 +2047,8 @@ class CommsManager:
                         "assistant_email_provider",
                         "google_workspace",
                     ),
+                    "self_contact_id": event.get("self_contact_id", 0),
+                    "boss_contact_id": event.get("boss_contact_id", 1),
                     "assistant_whatsapp_number": event.get(
                         "assistant_whatsapp_number",
                         "",
