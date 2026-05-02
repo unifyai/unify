@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
+from unity.common.accessible_spaces_block import build_accessible_spaces_block
+from unity.session_details import SpaceSummary
+
 from ..common.prompt_helpers import now, PromptParts
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -405,6 +408,7 @@ def build_system_prompt(
     is_coordinator: bool = False,
     user_desktop_control: bool = False,
     runtime_setup_note: str | None = None,
+    space_summaries: list[SpaceSummary] | None = None,
 ) -> PromptParts:
     """Build the system prompt for the ConversationManager LLM.
 
@@ -437,6 +441,8 @@ def build_system_prompt(
         tool listing and adds a missing-capability notice when False).
     runtime_setup_note : str | None
         Optional guidance about background setup/readiness.
+    space_summaries : list[SpaceSummary] | None
+        Shared spaces available to the assistant for memory routing.
 
     Returns
     -------
@@ -511,6 +517,8 @@ I communicate with my boss and their contacts directly through different mediums
 ---
 {bio}""",
     )
+
+    parts.add(build_accessible_spaces_block(space_summaries or []))
 
     # Onboarding reference
     desktop_access_faq = (
