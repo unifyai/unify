@@ -262,6 +262,7 @@ def build_brain_spec(
         is_coordinator=bool(getattr(cm, "is_coordinator", False)),
         user_desktop_control=SETTINGS.conversation.USER_DESKTOP_CONTROL_ENABLED,
         runtime_setup_note=runtime_setup_note,
+        space_summaries=getattr(cm, "space_summaries", []),
     )
     _system_prompt_ms = _mark_step()
 
