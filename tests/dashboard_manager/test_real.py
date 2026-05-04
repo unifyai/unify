@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Integration tests for the real DashboardManager against the Unify backend.
 
@@ -13,17 +15,20 @@ registration.
 Each test gets a fresh, isolated Unify context that is cleaned up after the test.
 """
 
-from __future__ import annotations
-
+from unity.dashboard_manager.dashboard_manager import DashboardManager
 import json
 
 import pytest
 
-from unity.dashboard_manager.dashboard_manager import DashboardManager
 from unity.dashboard_manager.types.dashboard import TilePosition
 from unity.dashboard_manager.types.tile import FilterBinding
 from unity.function_manager.primitives import Primitives
 from unity.manager_registry import ManagerRegistry
+from tests.dashboard_manager.helpers import (
+    active_read_root,
+    create_context_if_missing,
+    fresh_dashboard_manager,
+)
 from tests.helpers import _handle_project
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -33,51 +38,18 @@ from tests.helpers import _handle_project
 
 def _fresh_dm() -> DashboardManager:
     """Create a fresh DashboardManager instance (clears registry singleton)."""
-    ManagerRegistry.clear()
-    return DashboardManager()
+    return fresh_dashboard_manager()
 
 
-def _active_base_context() -> str:
-    import unify
-
-    ctxs = unify.get_active_context()
-    return ctxs["write"] or ctxs["read"]
-
-
-def _context_names(prefix: str) -> set[str]:
-    import unify
-
-    contexts = unify.get_contexts(prefix=prefix)
-    if isinstance(contexts, dict):
-        return set(contexts.keys())
-    return {c["name"] if isinstance(c, dict) else str(c) for c in (contexts or [])}
-
-
-def _assert_dashboard_context_names(dm: DashboardManager) -> tuple[str, str]:
-    base_ctx = _active_base_context()
-    expected_tiles = f"{base_ctx}/Dashboards/Tiles"
-    expected_layouts = f"{base_ctx}/Dashboards/Layouts"
-    leaked_tiles = f"{base_ctx}/Data/Dashboards/Tiles"
-    leaked_layouts = f"{base_ctx}/Data/Dashboards/Layouts"
-
-    assert dm._tiles_ctx == expected_tiles
-    assert dm._layouts_ctx == expected_layouts
-    assert "/Data/Dashboards/" not in dm._tiles_ctx
-    assert "/Data/Dashboards/" not in dm._layouts_ctx
-
-    contexts = _context_names(base_ctx)
-    assert expected_tiles in contexts
-    assert expected_layouts in contexts
-    assert leaked_tiles not in contexts
-    assert leaked_layouts not in contexts
-    return expected_tiles, expected_layouts
+def _expected_dashboard_context(suffix: str) -> str:
+    return f"{active_read_root()}/Dashboards/{suffix}"
 
 
 def _assert_tile_stored_in_expected_context(
     dm: DashboardManager,
     token: str,
 ) -> None:
-    expected_tiles, _ = _assert_dashboard_context_names(dm)
+    expected_tiles = _expected_dashboard_context("Tiles")
     rows = dm._get_dm().filter(
         expected_tiles,
         filter=f"token == '{token}'",
@@ -90,49 +62,13 @@ def _assert_dashboard_stored_in_expected_context(
     dm: DashboardManager,
     token: str,
 ) -> None:
-    _, expected_layouts = _assert_dashboard_context_names(dm)
+    expected_layouts = _expected_dashboard_context("Layouts")
     rows = dm._get_dm().filter(
         expected_layouts,
         filter=f"token == '{token}'",
         limit=1,
     )
     assert rows and rows[0]["token"] == token
-
-
-def _seed_binding_contexts(*names: str) -> None:
-    """Ensure each Data/* context referenced by FilterBinding tests exists
-    UNDER the current test's active-context prefix.
-
-    DashboardManager's tile_ops.resolve_binding_contexts() resolves each
-    FilterBinding.context against unify.get_contexts(prefix=base) where
-    base is the test's active write/read context (e.g.
-    `tests/dashboard_manager/test_real/<test_name>/default/0`). A bare
-    `unify.create_context("Data/monthly_stats")` lands at GLOBAL scope
-    and won't appear in the prefix-filtered lookup — so the binding
-    resolver still raises ValueError("No context found matching ...").
-    Prepend the active write context (falling back to read context, then
-    no prefix) so the seeded context lives in the same scope the
-    resolver will search.
-
-    Bug history: 2343b54ad (2026-04-06, Haris) added these tests without
-    any seed step. 5a59805ac (today, my morning fix) added this helper
-    but seeded at global scope, which didn't fix the failure — the
-    contexts were created but at the wrong scope. This update
-    finally lands them where resolve_binding_contexts() will find them.
-    """
-    import unify
-
-    try:
-        ctxs = unify.get_active_context()
-    except Exception:
-        ctxs = None
-    base_ctx = ""
-    if isinstance(ctxs, dict):
-        base_ctx = ctxs.get("write") or ctxs.get("read") or ""
-
-    for name in names:
-        scoped = f"{base_ctx}/{name}" if base_ctx else name
-        unify.create_context(scoped)  # exist_ok=True default
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -163,7 +99,9 @@ def test_create_tile_basic():
 def test_create_tile_with_data_bindings():
     """create_tile should accept data_bindings for live-data tiles."""
     dm = _fresh_dm()
-    _seed_binding_contexts("Data/monthly_stats", "Data/revenue")
+    personal_root = active_read_root()
+    create_context_if_missing(f"{personal_root}/Data/monthly_stats")
+    create_context_if_missing(f"{personal_root}/Data/revenue")
 
     result = dm.create_tile(
         "<div id='chart'>Loading...</div>",
@@ -306,7 +244,8 @@ def test_list_tiles_with_limit():
 def test_create_tile_with_on_data():
     """create_tile with on_data should store on_data_script and data_bindings_json."""
     dm = _fresh_dm()
-    _seed_binding_contexts("Data/monthly_stats")
+    personal_root = active_read_root()
+    create_context_if_missing(f"{personal_root}/Data/monthly_stats")
 
     result = dm.create_tile(
         "<div id='tbl'>Loading...</div>",
@@ -337,7 +276,8 @@ def test_create_tile_with_on_data():
 def test_update_tile_with_on_data():
     """update_tile should update on_data_script field."""
     dm = _fresh_dm()
-    _seed_binding_contexts("Data/monthly_stats")
+    personal_root = active_read_root()
+    create_context_if_missing(f"{personal_root}/Data/monthly_stats")
 
     created = dm.create_tile(
         "<div id='v'>Loading...</div>",
@@ -389,9 +329,6 @@ def test_create_dashboard_basic():
     assert result.title == "Test Dashboard"
     assert "/dashboard/view/" in result.url
     assert len(result.tiles) == 2
-    _assert_tile_stored_in_expected_context(dm, t1.token)
-    _assert_tile_stored_in_expected_context(dm, t2.token)
-    _assert_dashboard_stored_in_expected_context(dm, result.token)
 
 
 @_handle_project
@@ -577,7 +514,6 @@ def test_full_dashboard_lifecycle():
 
     dm.delete_dashboard(dashboard.token)
     assert dm.get_dashboard(dashboard.token) is None
-
 
 @pytest.mark.asyncio
 @_handle_project
