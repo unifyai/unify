@@ -1419,18 +1419,20 @@ class ContactManager(BaseContactManager):
             }
 
         blm = BlackListManager()
+        blacklist_context = blm._blacklist_context_for_destination(destination)
         created_ids: list[int] = []
 
         # Best-effort de-duplication per (medium, contact_detail)
         for detail, med in detail_media:
-            existing = blm.filter_blacklist(
+            existing = unify.get_logs(
+                context=blacklist_context,
                 filter=f"medium == '{med.value}' and contact_detail == '{detail}'",
                 limit=1,
-            )["entries"]
+            )
             if existing:
                 # Skip creating duplicates
                 try:
-                    created_ids.append(int(existing[0].blacklist_id))
+                    created_ids.append(int(existing[0].entries["blacklist_id"]))
                 except Exception:
                     pass
                 continue
@@ -1439,6 +1441,7 @@ class ContactManager(BaseContactManager):
                 medium=med,
                 contact_detail=detail,
                 reason=bl_reason,
+                destination=destination,
             )
             try:
                 created_ids.append(int(res["details"]["blacklist_id"]))
@@ -1446,17 +1449,14 @@ class ContactManager(BaseContactManager):
                 pass
 
         # Finally, delete the original contact
-        try:
-            _op_delete(
-                self,
-                contact_id=contact_id,
-                _log_id=None,
-                context=context,
-                data_store=store,
-            )
-            self._delete_contact_memberships(contact_id, destination=destination)
-        except Exception:
-            pass
+        _op_delete(
+            self,
+            contact_id=contact_id,
+            _log_id=None,
+            context=context,
+            data_store=store,
+        )
+        self._delete_contact_memberships(contact_id, destination=destination)
 
         return {
             "outcome": "contact details moved to blacklist",
