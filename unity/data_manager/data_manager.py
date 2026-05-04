@@ -67,6 +67,7 @@ _ABSOLUTE_PREFIXES = (
     "Dashboards/",
     "Files/",
     "FileRecords/",
+    "Spaces/",
     "Contacts",
     "Knowledge/",
     "Tasks",
