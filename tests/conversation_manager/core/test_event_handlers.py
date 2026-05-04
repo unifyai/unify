@@ -2724,6 +2724,7 @@ class TestAssistantUpdateEventHandler:
             user_email="boss@updated.com",
             voice_id="voice_123",
             voice_provider="cartesia",
+            is_coordinator=True,
         )
 
         with patch(
@@ -2761,6 +2762,7 @@ class TestAssistantUpdateEventHandler:
             user_email="boss@updated.com",
             voice_id="voice_123",
             voice_provider="cartesia",
+            is_coordinator=True,
         )
 
         with patch(
@@ -2770,6 +2772,7 @@ class TestAssistantUpdateEventHandler:
             await EventHandler.handle_event(event, mock_cm)
 
         mock_cm.set_details.assert_called_once()
+        assert mock_cm.set_details.call_args.args[0]["is_coordinator"] is True
 
     @pytest.mark.asyncio
     async def test_assistant_update_updates_call_config(self, mock_cm):
