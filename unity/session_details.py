@@ -161,11 +161,7 @@ def _decode_space_summaries(value: str) -> list[SpaceSummary]:
 
 @dataclass
 class AssistantDetails:
-    """Details about the assistant.
-
-    ``self_contact_id`` is the current resolved assistant-self contact id for
-    runtime routing. ``0`` is the default when no resolved value is supplied.
-    """
+    """Details about the assistant and its runtime routing identity."""
 
     agent_id: int | None = None
     binding_id: str = ""
@@ -204,11 +200,7 @@ class AssistantDetails:
 
 @dataclass
 class UserDetails:
-    """Details about the user (boss).
-
-    ``boss_contact_id`` is the current resolved boss contact id for runtime
-    routing. ``1`` is the default when no resolved value is supplied.
-    """
+    """Details about the user and their assistant-scoped boss identity."""
 
     id: str = UNASSIGNED_USER_ID
     first_name: str = ""
@@ -216,7 +208,6 @@ class UserDetails:
     number: str = ""
     email: str = ""
     whatsapp_number: str = ""
-    contact_id: int = 1  # Contact ID in Contacts table
     boss_contact_id: int = 1
 
     @property
@@ -378,7 +369,6 @@ class SessionDetails:
     @self_contact_id.setter
     def self_contact_id(self, value: int) -> None:
         self.assistant.self_contact_id = value
-        self.assistant.contact_id = value
 
     @property
     def boss_contact_id(self) -> int:
@@ -388,7 +378,6 @@ class SessionDetails:
     @boss_contact_id.setter
     def boss_contact_id(self, value: int) -> None:
         self.user.boss_contact_id = value
-        self.user.contact_id = value
 
     @property
     def unify_key(self) -> str:
@@ -747,3 +736,15 @@ class SessionDetails:
 
 # Global singleton instance
 SESSION_DETAILS = SessionDetails()
+
+
+def is_self_contact(contact_id: int | None) -> bool:
+    """Return whether a contact id is the assistant's own contact identity."""
+
+    return contact_id is not None and int(contact_id) == SESSION_DETAILS.self_contact_id
+
+
+def is_boss_contact(contact_id: int | None) -> bool:
+    """Return whether a contact id is the boss contact identity."""
+
+    return contact_id is not None and int(contact_id) == SESSION_DETAILS.boss_contact_id
