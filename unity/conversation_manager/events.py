@@ -1367,6 +1367,12 @@ class TaskDue(Event):
             return None
         if not activation_revision or not scheduled_for:
             return None
+        try:
+            destination = ContextRegistry.canonical_destination(
+                payload.get("destination"),
+            )
+        except ValueError:
+            return None
         task_label = str(payload.get("task_label") or "")
         resolved_reason = reason or (
             f"Scheduled task '{task_label}' became due."
@@ -1378,6 +1384,7 @@ class TaskDue(Event):
             source_task_log_id=source_task_log_id,
             activation_revision=activation_revision,
             scheduled_for=scheduled_for,
+            destination=destination,
             execution_mode=str(payload.get("execution_mode") or "live"),
             source_type=str(payload.get("source_type") or "scheduled"),
             task_label=task_label,
