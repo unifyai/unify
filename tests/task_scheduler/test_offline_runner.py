@@ -1,6 +1,9 @@
 """Tests for the headless offline task runner."""
 
 
+import pytest
+
+
 def _seed_env(monkeypatch, *, source_type="dashboard_action"):
     monkeypatch.setenv("ASSISTANT_ID", "42")
     monkeypatch.setenv("UNITY_OFFLINE_TASK_RUN_KEY", "offline:scheduled:42:101:rev")
@@ -173,3 +176,34 @@ def test_offline_delegate_runs_agentic_task_through_actor(monkeypatch):
     assert captured["kwargs"]["clarification_enabled"] is False
     assert captured["kwargs"]["persist"] is False
     assert captured["closed"] is True
+
+
+assert updates[0][2]["state"] == "running"
+    assert updates[1][2]["state"] == "failed"
+    assert updates[1][2]["error"] == "boom"
+
+
+def test_load_config_from_env_canonicalizes_destination(monkeypatch):
+    """Offline env destination labels are normalized before execution."""
+
+    from unity.task_scheduler import offline_runner
+
+    _seed_env(monkeypatch)
+    monkeypatch.setenv("TASK_DESTINATION", "space:007")
+
+    config = offline_runner._load_config_from_env()
+
+    assert config.destination == "space:7"
+
+
+def test_load_config_from_env_rejects_invalid_destination(monkeypatch):
+    """Offline runner fails fast on invalid destination labels."""
+
+    from unity.task_scheduler import offline_runner
+
+    _seed_env(monkeypatch)
+    monkeypatch.setenv("TASK_DESTINATION", "org_default")
+
+    with pytest.raises(RuntimeError, match="Invalid TASK_DESTINATION"):
+        offline_runner._load_config_from_env()
+

@@ -42,6 +42,7 @@ from unity.actor.environments import (
     ComputerEnvironment,
     StateManagerEnvironment,
 )
+from unity.common.context_registry import ContextRegistry
 from unity.common.task_execution_context import current_task_execution_delegate
 from unity.function_manager.primitives import ComputerPrimitives
 from unity.logger import LOGGER
@@ -78,7 +79,7 @@ class OfflineTaskConfig:
     source_type: str
     source_task_log_id: int
     activation_revision: str
-    destination: str = ""
+    destination: str | None = None
     task_name: str = ""
     task_description: str = ""
     scheduled_for: str = ""
@@ -108,6 +109,11 @@ def _optional_int_env(name: str) -> int | None:
 def _load_config_from_env() -> OfflineTaskConfig:
     """Construct one validated offline task config from process environment."""
 
+    raw_destination = os.environ.get("TASK_DESTINATION")
+    try:
+        destination = ContextRegistry.canonical_destination(raw_destination)
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid TASK_DESTINATION: {raw_destination}") from exc
     return OfflineTaskConfig(
         assistant_id=_require_env("ASSISTANT_ID"),
         run_key=_require_env("UNITY_OFFLINE_TASK_RUN_KEY"),
@@ -117,7 +123,7 @@ def _load_config_from_env() -> OfflineTaskConfig:
         source_type=os.environ.get("UNITY_OFFLINE_TASK_SOURCE_TYPE", "scheduled"),
         source_task_log_id=int(_require_env("UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID")),
         activation_revision=_require_env("UNITY_OFFLINE_TASK_ACTIVATION_REVISION"),
-        destination=os.environ.get("TASK_DESTINATION", ""),
+        destination=destination,
         task_name=os.environ.get("UNITY_OFFLINE_TASK_NAME", ""),
         task_description=os.environ.get("UNITY_OFFLINE_TASK_DESCRIPTION", ""),
         scheduled_for=os.environ.get("UNITY_OFFLINE_TASK_SCHEDULED_FOR", ""),
