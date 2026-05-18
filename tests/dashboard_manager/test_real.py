@@ -21,7 +21,10 @@ import json
 import pytest
 
 from unity.dashboard_manager.types.dashboard import TilePosition
-from unity.dashboard_manager.types.tile import FilterBinding
+from unity.dashboard_manager.types.tile import (
+    DASHBOARD_BRIDGE_MAX_ROW_LIMIT,
+    FilterBinding,
+)
 from unity.function_manager.primitives import Primitives
 from unity.manager_registry import ManagerRegistry
 from tests.dashboard_manager.helpers import (
@@ -254,6 +257,7 @@ def test_create_tile_with_on_data():
             FilterBinding(
                 context="Data/monthly_stats",
                 alias="stats",
+                limit=DASHBOARD_BRIDGE_MAX_ROW_LIMIT,
             ),
         ],
         on_data="document.getElementById('tbl').textContent = data.stats.length;",
@@ -270,6 +274,7 @@ def test_create_tile_with_on_data():
     parsed = json.loads(tile.data_bindings_json)
     assert len(parsed) == 1
     assert parsed[0]["alias"] == "stats"
+    assert parsed[0]["limit"] == DASHBOARD_BRIDGE_MAX_ROW_LIMIT
 
 
 @_handle_project
