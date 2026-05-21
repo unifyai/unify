@@ -448,18 +448,15 @@ def _build_comms_tool_listing(
     return "\n".join(lines)
 
 
-def _build_coordinator_workspace_tool_listing(*, is_org_workspace: bool) -> str:
+def _build_coordinator_workspace_tool_listing() -> str:
     """Build the Coordinator workspace tools block for the output format section."""
     lines = [
         "- `act` is the execution path for privileged Coordinator workspace lifecycle operations.",
         "- Inside `act`, use `primitives.coordinator.*` for assistant/space/membership/checklist reads and mutations.",
         "- Before running coordinator mutations inside `act`, gather identifiers and confirmation details in chat unless the request is already explicit and unambiguous.",
         "- Prefer one `act` request that executes the full confirmed setup step (and validates outcomes) over fragmented no-op turns.",
+        "- `primitives.coordinator.list_org_members` and `primitives.coordinator.invite_org_member` are available for org membership changes; run invite actions only after explicit admin confirmation, and expect membership changes to fail when no organization context is active.",
     ]
-    if is_org_workspace:
-        lines.append(
-            "- `primitives.coordinator.list_org_members` and `primitives.coordinator.invite_org_member` are available for org membership changes; run invite actions only after explicit admin confirmation.",
-        )
     return "\n".join(lines)
 
 
@@ -1260,9 +1257,7 @@ def build_system_prompt(
     coordinator_workspace_tool_listing = ""
     coordinator_knowledge_tool_listing = ""
     if is_coordinator and not demo_mode:
-        coordinator_workspace_tool_listing = _build_coordinator_workspace_tool_listing(
-            is_org_workspace=coordinator_has_org_context,
-        )
+        coordinator_workspace_tool_listing = _build_coordinator_workspace_tool_listing()
         coordinator_knowledge_tool_listing = _build_coordinator_knowledge_tool_listing()
     action_steering_tool_listing = _build_action_steering_tool_listing()
 
