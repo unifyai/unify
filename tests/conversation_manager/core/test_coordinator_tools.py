@@ -37,6 +37,7 @@ class TestCoordinatorTools:
             "delete_assistant",
             "update_assistant_config",
             "list_assistants",
+            "list_accessible_organizations",
             "list_org_members",
             "invite_org_member",
             "pre_seed_colleague",
@@ -66,6 +67,20 @@ class TestCoordinatorTools:
         assert "list_org_members" in tools
         assert "invite_org_member" in tools
         assert "add_setup_checklist_item" in tools
+
+    def test_list_accessible_organizations_uses_owner_key(self, monkeypatch):
+        calls = []
+
+        monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.list_organizations",
+            lambda **kwargs: calls.append(kwargs)
+            or [{"id": 7, "name": "Acme", "role_name": "Owner"}],
+        )
+
+        result = CoordinatorTools(cm=object()).list_accessible_organizations()
+
+        assert result == [{"id": 7, "name": "Acme", "role_name": "Owner"}]
+        assert calls == [{"api_key": "owner-key"}]
 
     def test_list_assistants_uses_owner_key_and_current_sdk_shape(self, monkeypatch):
         calls = []
@@ -498,14 +513,18 @@ class TestCoordinatorTools:
         assert result["error_kind"] == "invalid_argument"
         assert calls == []
 
-    def test_personal_coordinator_returns_empty_org_members(self, monkeypatch):
+    def test_list_org_members_resolves_single_accessible_org(self, monkeypatch):
         SESSION_DETAILS.org_id = None
-        called = False
+        list_members_calls = []
 
-        def fake_list_org_members(*_, **__):
-            nonlocal called
-            called = True
-            return []
+        monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.list_organizations",
+            lambda **_: [{"id": 13, "name": "Acme Ops", "role_name": "Admin"}],
+        )
+
+        def fake_list_org_members(*args, **kwargs):
+            list_members_calls.append((args, kwargs))
+            return [{"user_id": "member-1"}]
 
         monkeypatch.setattr(
             "unity.conversation_manager.domains.coordinator_tools.unify.list_org_members",
@@ -514,8 +533,29 @@ class TestCoordinatorTools:
 
         result = CoordinatorTools(cm=object()).list_org_members()
 
-        assert result == []
-        assert called is False
+        assert result == [{"user_id": "member-1"}]
+        assert list_members_calls == [((13,), {"api_key": "owner-key"})]
+
+    def test_list_org_members_requires_explicit_org_when_ambiguous(self, monkeypatch):
+        SESSION_DETAILS.org_id = None
+        calls = []
+        monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.list_organizations",
+            lambda **_: [
+                {"id": 11, "name": "Acme North", "role_name": "Admin"},
+                {"id": 12, "name": "Acme South", "role_name": "Member"},
+            ],
+        )
+        monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.list_org_members",
+            lambda *args, **kwargs: calls.append((args, kwargs)),
+        )
+
+        result = CoordinatorTools(cm=object()).list_org_members()
+
+        assert result["error_kind"] == "invalid_argument"
+        assert "organization_id" in result["message"]
+        assert calls == []
 
     def test_invite_org_member_happy_path(self, monkeypatch):
         calls = []
@@ -554,6 +594,10 @@ class TestCoordinatorTools:
         SESSION_DETAILS.org_id = None
         calls = []
         monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.list_organizations",
+            lambda **_: [],
+        )
+        monkeypatch.setattr(
             "unity.conversation_manager.domains.coordinator_tools.unify.invite_org_member",
             lambda *args, **kwargs: calls.append((args, kwargs)),
         )
@@ -564,6 +608,29 @@ class TestCoordinatorTools:
 
         assert result["error_kind"] == "invalid_argument"
         assert calls == []
+
+    def test_invite_org_member_supports_explicit_organization_id(self, monkeypatch):
+        SESSION_DETAILS.org_id = None
+        calls = []
+
+        monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.invite_org_member",
+            lambda *args, **kwargs: calls.append((args, kwargs))
+            or {"invitee_email": "sarah@example.com", "role_name": "Member"},
+        )
+
+        result = CoordinatorTools(cm=object()).invite_org_member(
+            organization_id=42,
+            email="sarah@example.com",
+        )
+
+        assert result["invitee_email"] == "sarah@example.com"
+        assert calls == [
+            (
+                (42, "sarah@example.com"),
+                {"role_name": None, "api_key": "owner-key"},
+            ),
+        ]
 
     def test_invite_org_member_rejects_unknown_role_name(self, monkeypatch):
         calls = []
@@ -602,7 +669,7 @@ class TestCoordinatorTools:
         assert result["error_kind"] == "conflict"
         assert result["message"] == "User is already a member of this organization"
 
-    def test_create_space_uses_owner_key_and_current_workspace_scope(
+    def test_create_space_uses_explicit_organization_id_when_provided(
         self,
         monkeypatch,
     ):
@@ -629,7 +696,7 @@ class TestCoordinatorTools:
             {
                 "name": "Ops",
                 "description": "Operations shared workspace.",
-                "organization_id": 7,
+                "organization_id": 999,
                 "api_key": "owner-key",
             },
         ]
@@ -659,7 +726,29 @@ class TestCoordinatorTools:
         assert result["error_kind"] == "duplicate_suppressed"
         assert create_calls == []
 
-    def test_list_spaces_cache_authorizes_follow_up_space_writes(self, monkeypatch):
+    def test_add_space_member_duplicate_suppression_includes_organization_id(self):
+        captured = {}
+        cm = SimpleNamespace(
+            suppress_duplicate_commissioning_tool=lambda **kwargs: captured.update(
+                kwargs,
+            )
+            or {
+                "error_kind": "duplicate_suppressed",
+                "message": "duplicate",
+                "details": kwargs["tool_args"],
+            },
+        )
+
+        result = CoordinatorTools(cm=cm).add_space_member(
+            space_id=11,
+            assistant_id=42,
+            organization_id=99,
+        )
+
+        assert result["error_kind"] == "duplicate_suppressed"
+        assert captured["tool_args"]["organization_id"] == 99
+
+    def test_list_spaces_lookup_authorizes_follow_up_space_writes(self, monkeypatch):
         list_calls = []
         delete_calls = []
 
@@ -685,7 +774,10 @@ class TestCoordinatorTools:
         result = tools.delete_space(space_id=11)
 
         assert result == {}
-        assert list_calls == [{"organization_id": 7, "api_key": "owner-key"}]
+        assert list_calls == [
+            {"organization_id": 999, "api_key": "owner-key"},
+            {"organization_id": 7, "api_key": "owner-key"},
+        ]
         assert delete_calls == [((11,), {"api_key": "owner-key"})]
 
     def test_space_member_writes_require_reachable_space_and_assistant(
@@ -890,7 +982,12 @@ class TestCoordinatorTools:
         )
         monkeypatch.setattr(
             "unity.conversation_manager.domains.coordinator_tools.unify.list_spaces",
-            lambda **kwargs: calls.append(("list_spaces", kwargs)) or [],
+            lambda **kwargs: calls.append(("list_spaces", kwargs))
+            or (
+                [{"space_id": 11, "name": "Ops HQ"}]
+                if any(name == "create_space" for name, *_ in calls)
+                else []
+            ),
         )
         monkeypatch.setattr(
             "unity.conversation_manager.domains.coordinator_tools.unify.create_space",
@@ -965,6 +1062,10 @@ class TestCoordinatorTools:
                     "organization_id": 7,
                     "api_key": "owner-key",
                 },
+            ),
+            (
+                "list_spaces",
+                {"organization_id": 7, "api_key": "owner-key"},
             ),
             (
                 "list_space_members",
