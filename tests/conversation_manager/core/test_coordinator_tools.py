@@ -107,6 +107,36 @@ class TestCoordinatorTools:
             },
         ]
 
+    def test_list_assistants_supports_explicit_organization_id(self, monkeypatch):
+        SESSION_DETAILS.org_id = None
+        calls = []
+
+        def fake_list_assistants(**kwargs):
+            calls.append(kwargs)
+            return [
+                {"agent_id": 41, "organization_id": 13},
+                {"agent_id": 42, "organization_id": 14},
+                {"agent_id": 43, "organization_id": None},
+            ]
+
+        monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.list_assistants",
+            fake_list_assistants,
+        )
+
+        result = CoordinatorTools(cm=object()).list_assistants(organization_id=13)
+
+        assert result == [{"agent_id": 41, "organization_id": 13}]
+        assert calls == [
+            {
+                "phone": None,
+                "email": None,
+                "agent_id": None,
+                "list_all_org": True,
+                "api_key": "owner-key",
+            },
+        ]
+
     def test_delete_requires_reachable_assistant(self, monkeypatch):
         delete_calls = []
 
@@ -212,6 +242,7 @@ class TestCoordinatorTools:
                     "timezone": "Europe/Berlin",
                     "about": "Handles escalation triage",
                     "nationality": "United States",
+                    "organization_id": 7,
                 },
                 "api_key": "owner-key",
             },
@@ -232,6 +263,75 @@ class TestCoordinatorTools:
 
         assert result["error_kind"] == "invalid_argument"
         assert result["details"] == {"field": "about"}
+        assert create_calls == []
+
+    def test_create_assistant_supports_explicit_organization_id(self, monkeypatch):
+        SESSION_DETAILS.org_id = None
+        calls = []
+
+        monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.create_assistant",
+            lambda **kwargs: calls.append(kwargs) or {"agent_id": 42},
+        )
+
+        result = CoordinatorTools(cm=object()).create_assistant(
+            first_name="Ops",
+            surname="Lead",
+            about="Operations coordinator.",
+            organization_id=42,
+        )
+
+        assert result == {"agent_id": 42}
+        assert calls[0]["config"]["organization_id"] == 42
+
+    def test_create_assistant_resolves_single_accessible_org(self, monkeypatch):
+        SESSION_DETAILS.org_id = None
+        calls = []
+
+        monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.list_organizations",
+            lambda **_: [{"id": 13, "name": "Ops", "role_name": "Owner"}],
+        )
+        monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.create_assistant",
+            lambda **kwargs: calls.append(kwargs) or {"agent_id": 42},
+        )
+
+        CoordinatorTools(cm=object()).create_assistant(
+            first_name="Ops",
+            surname="Lead",
+            about="Operations coordinator.",
+        )
+
+        assert calls[0]["config"]["organization_id"] == 13
+
+    def test_create_assistant_requires_explicit_org_when_ambiguous(
+        self,
+        monkeypatch,
+    ):
+        SESSION_DETAILS.org_id = None
+        create_calls = []
+
+        monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.list_organizations",
+            lambda **_: [
+                {"id": 11, "name": "Acme North", "role_name": "Admin"},
+                {"id": 12, "name": "Acme South", "role_name": "Member"},
+            ],
+        )
+        monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.create_assistant",
+            lambda **kwargs: create_calls.append(kwargs) or {"agent_id": 42},
+        )
+
+        result = CoordinatorTools(cm=object()).create_assistant(
+            first_name="Ops",
+            surname="Lead",
+            about="Operations coordinator.",
+        )
+
+        assert result["error_kind"] == "invalid_argument"
+        assert "organization_id" in result["message"]
         assert create_calls == []
 
     def test_create_assistant_explicit_profile_args_override_config_values(
@@ -265,6 +365,7 @@ class TestCoordinatorTools:
             "timezone": "Europe/London",
             "nationality": "United Kingdom",
             "about": "Leads daily cash operations.",
+            "organization_id": 7,
         }
 
     def test_create_assistant_derives_job_title_from_surname_for_multiword_first_name(
@@ -291,6 +392,7 @@ class TestCoordinatorTools:
             "nationality": "United States",
             "job_title": "Recruiter",
             "about": "Senior recruiter for supply-chain hiring.",
+            "organization_id": 7,
         }
 
     def test_create_assistant_conflict_parses_detail_payload_with_existing_id(
@@ -1046,7 +1148,10 @@ class TestCoordinatorTools:
                 {
                     "first_name": "Ops",
                     "surname": "Bot",
-                    "config": {"about": "Leads operations workflows."},
+                    "config": {
+                        "about": "Leads operations workflows.",
+                        "organization_id": 7,
+                    },
                     "api_key": "owner-key",
                 },
             ),
@@ -1150,6 +1255,7 @@ class TestCoordinatorTools:
             "timezone": "Europe/London",
             "nationality": "United Kingdom",
             "about": "Runs the operations command center.",
+            "organization_id": 7,
         }
 
     def test_commission_colleague_into_workspace_reuses_existing_membership(
@@ -1159,7 +1265,14 @@ class TestCoordinatorTools:
         add_calls = []
         monkeypatch.setattr(
             "unity.conversation_manager.domains.coordinator_tools.unify.list_assistants",
-            lambda **_: [{"agent_id": 42, "first_name": "Ops", "surname": "Bot"}],
+            lambda **_: [
+                {
+                    "agent_id": 42,
+                    "first_name": "Ops",
+                    "surname": "Bot",
+                    "organization_id": 7,
+                },
+            ],
         )
         monkeypatch.setattr(
             "unity.conversation_manager.domains.coordinator_tools.unify.list_spaces",
@@ -1194,7 +1307,14 @@ class TestCoordinatorTools:
         monkeypatch.setattr(
             "unity.conversation_manager.domains.coordinator_tools.unify.list_assistants",
             lambda **kwargs: (
-                [{"agent_id": 42, "first_name": "Ops", "surname": "Bot"}]
+                [
+                    {
+                        "agent_id": 42,
+                        "first_name": "Ops",
+                        "surname": "Bot",
+                        "organization_id": 7,
+                    },
+                ]
                 if kwargs.get("agent_id") == 42
                 else []
             ),
@@ -1241,8 +1361,18 @@ class TestCoordinatorTools:
         monkeypatch.setattr(
             "unity.conversation_manager.domains.coordinator_tools.unify.list_assistants",
             lambda **_: [
-                {"agent_id": 42, "first_name": "Ops", "surname": "Bot"},
-                {"agent_id": 43, "first_name": "Ops", "surname": "Bot"},
+                {
+                    "agent_id": 42,
+                    "first_name": "Ops",
+                    "surname": "Bot",
+                    "organization_id": 7,
+                },
+                {
+                    "agent_id": 43,
+                    "first_name": "Ops",
+                    "surname": "Bot",
+                    "organization_id": 7,
+                },
             ],
         )
 
@@ -1297,4 +1427,5 @@ class TestCoordinatorTools:
             "nationality": "United States",
             "job_title": "Recruiter",
             "about": "Leads recruiter scorecards and candidate routing.",
+            "organization_id": 7,
         }

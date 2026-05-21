@@ -58,6 +58,7 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         timezone: str | None = None,
         nationality: str | None = None,
         config: AssistantCreateConfig | None = None,
+        organization_id: int | None = None,
     ) -> dict[str, Any] | ToolError:
         """Create a colleague assistant in the active coordinator workspace.
 
@@ -84,6 +85,8 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         config : AssistantCreateConfig | None, optional
             Structured assistant-create overrides merged with coordinator
             defaults (for example ``create_infra`` and ``is_local``).
+        organization_id : int | None, optional
+            Optional explicit organization target for assistant creation.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
@@ -96,12 +99,14 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
             timezone=timezone,
             nationality=nationality,
             config=config,
+            organization_id=organization_id,
         )
 
     def delete_assistant(
         self,
         *,
         agent_id: int,
+        organization_id: int | None = None,
     ) -> dict[str, Any] | str | ToolError:
         """Delete a reachable colleague assistant from the coordinator workspace.
 
@@ -114,17 +119,23 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         ----------
         agent_id : int
             Assistant identifier to delete after explicit confirmation.
+        organization_id : int | None, optional
+            Optional explicit organization scope for reachability validation.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
             return permission_error
-        return self._delegate.delete_assistant(agent_id=agent_id)
+        return self._delegate.delete_assistant(
+            agent_id=agent_id,
+            organization_id=organization_id,
+        )
 
     def update_assistant_config(
         self,
         *,
         agent_id: int,
         config: AssistantConfigPatch,
+        organization_id: int | None = None,
     ) -> dict[str, Any] | ToolError:
         """Update config fields for a reachable colleague assistant.
 
@@ -143,11 +154,17 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
             ``timezone``, ``nationality``, ``weekly_limit``,
             ``max_parallel``, ``desktop_mode``, and voice fields
             (``voice_id`` with ``voice_provider``).
+        organization_id : int | None, optional
+            Optional explicit organization scope for reachability validation.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
             return permission_error
-        return self._delegate.update_assistant_config(agent_id=agent_id, config=config)
+        return self._delegate.update_assistant_config(
+            agent_id=agent_id,
+            config=config,
+            organization_id=organization_id,
+        )
 
     def list_assistants(
         self,
@@ -155,6 +172,7 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         phone: str | None = None,
         email: str | None = None,
         agent_id: int | None = None,
+        organization_id: int | None = None,
     ) -> list[dict[str, Any]] | ToolError:
         """List assistants visible inside the coordinator's reachable scope.
 
@@ -171,6 +189,8 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
             Optional email filter for narrow assistant lookup.
         agent_id : int | None, optional
             Optional assistant id filter for exact match lookup.
+        organization_id : int | None, optional
+            Optional explicit organization scope for assistant lookup.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
@@ -179,6 +199,7 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
             phone=phone,
             email=email,
             agent_id=agent_id,
+            organization_id=organization_id,
         )
 
     def list_accessible_organizations(self) -> list[dict[str, Any]] | ToolError:
@@ -248,6 +269,7 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         *,
         target_assistant_id: int,
         writes: list[CoordinatorPreseedWriteValue],
+        organization_id: int | None = None,
     ) -> dict[str, Any] | ToolError:
         """Seed colleague-owned setup rows into assistant-private contexts.
 
@@ -266,6 +288,8 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
             Allowed contexts are:
             ``Tasks``, ``Knowledge``, ``Guidance``, ``Data``,
             ``Functions/<name>``, and ``Dashboards/<name>``.
+        organization_id : int | None, optional
+            Optional explicit organization scope for reachability validation.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
@@ -273,6 +297,7 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         return self._delegate.pre_seed_colleague(
             target_assistant_id=target_assistant_id,
             writes=writes,
+            organization_id=organization_id,
         )
 
     def create_space(
@@ -502,6 +527,7 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         self,
         *,
         assistant_id: int,
+        organization_id: int | None = None,
     ) -> list[dict[str, Any]] | ToolError:
         """List shared spaces currently attached to a colleague assistant.
 
@@ -512,11 +538,16 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         ----------
         assistant_id : int
             Assistant identifier whose workspace memberships should be listed.
+        organization_id : int | None, optional
+            Optional explicit organization scope for assistant reachability checks.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
             return permission_error
-        return self._delegate.list_spaces_for_assistant(assistant_id=assistant_id)
+        return self._delegate.list_spaces_for_assistant(
+            assistant_id=assistant_id,
+            organization_id=organization_id,
+        )
 
     def commission_colleague_into_workspace(
         self,
