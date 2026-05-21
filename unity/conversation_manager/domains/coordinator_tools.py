@@ -256,6 +256,19 @@ class CoordinatorTools:
             merged["about"] = about
         return merged or None
 
+    @staticmethod
+    def _assistant_config_with_organization(
+        config: dict[str, Any] | None,
+        *,
+        organization_id: int | None,
+    ) -> dict[str, Any] | None:
+        """Return assistant config with an optional explicit organization target."""
+        if organization_id is None:
+            return config
+        merged = dict(config or {})
+        merged["organization_id"] = organization_id
+        return merged
+
     def create_assistant(
         self,
         *,
@@ -266,6 +279,7 @@ class CoordinatorTools:
         timezone: str | None = None,
         nationality: str | None = None,
         config: AssistantCreateConfig | None = None,
+        organization_id: int | None = None,
     ) -> dict[str, Any] | ToolError:
         """Create a new colleague assistant after explicit user confirmation.
 
@@ -288,10 +302,19 @@ class CoordinatorTools:
                 "timezone": timezone,
                 "nationality": nationality,
                 "config": config,
+                "organization_id": organization_id,
             },
         )
         if suppression is not None:
             return suppression
+
+        resolved_organization_id = self._resolve_target_organization_id(
+            requested_organization_id=organization_id,
+            require_organization=False,
+            operation_name="create_assistant",
+        )
+        if _is_tool_error(resolved_organization_id):
+            return resolved_organization_id
 
         normalized_about = self._normalize_about(about)
         if normalized_about is None:
@@ -309,6 +332,10 @@ class CoordinatorTools:
             timezone=timezone,
             nationality=nationality,
             config=config,
+        )
+        assistant_config = self._assistant_config_with_organization(
+            assistant_config,
+            organization_id=resolved_organization_id,
         )
         colleague_name = _display_name(first_name=first_name, surname=surname)
         activity_id = self._publish_activity(
@@ -351,6 +378,7 @@ class CoordinatorTools:
         self,
         *,
         agent_id: int,
+        organization_id: int | None = None,
     ) -> dict[str, Any] | str | ToolError:
         """Delete an existing colleague assistant by id.
 
@@ -369,7 +397,10 @@ class CoordinatorTools:
                 activity_entity("colleague", name="Colleague", entity_id=agent_id),
             ],
         )
-        reachable = self._assistant_is_reachable(agent_id)
+        reachable = self._assistant_is_reachable(
+            agent_id,
+            organization_id=organization_id,
+        )
         if isinstance(reachable, dict):
             self._publish_failure(
                 activity_id,
@@ -417,6 +448,7 @@ class CoordinatorTools:
         *,
         agent_id: int,
         config: AssistantConfigPatch,
+        organization_id: int | None = None,
     ) -> dict[str, Any] | ToolError:
         """Update profile/config fields for a reachable colleague assistant.
 
@@ -440,7 +472,10 @@ class CoordinatorTools:
                 activity_entity("colleague", name="Colleague", entity_id=agent_id),
             ],
         )
-        reachable = self._assistant_is_reachable(agent_id)
+        reachable = self._assistant_is_reachable(
+            agent_id,
+            organization_id=organization_id,
+        )
         if isinstance(reachable, dict):
             self._publish_failure(
                 activity_id,
@@ -488,6 +523,7 @@ class CoordinatorTools:
         phone: str | None = None,
         email: str | None = None,
         agent_id: int | None = None,
+        organization_id: int | None = None,
     ) -> list[dict[str, Any]] | ToolError:
         """List assistants visible to the Coordinator for lookup and validation.
 
@@ -497,19 +533,46 @@ class CoordinatorTools:
         used by other coordinator tools in the same turn.
         """
 
+        resolved_organization_id: int | None = None
+        if organization_id is not None:
+            resolved_organization_id = self._resolve_target_organization_id(
+                requested_organization_id=organization_id,
+                require_organization=False,
+                operation_name="list_assistants",
+            )
+            if _is_tool_error(resolved_organization_id):
+                return resolved_organization_id
+
+        list_all_org = SESSION_DETAILS.org_id is not None or (
+            resolved_organization_id is not None
+        )
         try:
             assistants = unify.list_assistants(
                 phone=phone,
                 email=email,
                 agent_id=agent_id,
-                list_all_org=SESSION_DETAILS.org_id is not None,
+                list_all_org=list_all_org,
                 api_key=SESSION_DETAILS.unify_key,
             )
         except RequestError as exc:
             return _request_error_to_tool_error(exc)
-        if phone is None and email is None and agent_id is None:
+        if resolved_organization_id is not None:
+            assistants = [
+                row
+                for row in assistants
+                if self._assistant_belongs_to_organization(
+                    row,
+                    organization_id=resolved_organization_id,
+                )
+            ]
+        if (
+            phone is None
+            and email is None
+            and agent_id is None
+            and resolved_organization_id is None
+        ):
             self._assistant_cache = assistants
-        self._remember_assistants(assistants)
+            self._remember_assistants(assistants)
         return assistants
 
     def list_accessible_organizations(self) -> list[dict[str, Any]] | ToolError:
@@ -655,6 +718,7 @@ class CoordinatorTools:
         *,
         target_assistant_id: int,
         writes: list[CoordinatorPreseedWriteValue],
+        organization_id: int | None = None,
     ) -> dict[str, Any] | ToolError:
         """Seed confirmed rows into one colleague's own memory roots.
 
@@ -701,7 +765,10 @@ class CoordinatorTools:
                 ),
             ],
         )
-        reachable = self._assistant_is_reachable(target_assistant_id)
+        reachable = self._assistant_is_reachable(
+            target_assistant_id,
+            organization_id=organization_id,
+        )
         if isinstance(reachable, dict):
             self._publish_failure(
                 activity_id,
@@ -1171,26 +1238,6 @@ class CoordinatorTools:
                 activity_entity("workspace", name=workspace_name, entity_id=space_id),
             ],
         )
-        assistant_step = self._resolve_or_create_commission_assistant(
-            assistant_first_name=assistant_first_name,
-            assistant_surname=assistant_surname,
-            assistant_about=assistant_about,
-            assistant_job_title=assistant_job_title,
-            assistant_timezone=assistant_timezone,
-            assistant_nationality=assistant_nationality,
-            assistant_config=assistant_config,
-            assistant_id=assistant_id,
-        )
-        if _is_tool_error(assistant_step):
-            self._publish_failure(
-                activity_id,
-                title=f"Could not commission {colleague_name} into {workspace_name}",
-                error=assistant_step,
-            )
-            return assistant_step
-
-        assistant_row = assistant_step["assistant"]
-        resolved_assistant_id = int(assistant_row["agent_id"])
         resolved_organization_id = self._resolve_target_organization_id(
             requested_organization_id=organization_id,
             require_organization=False,
@@ -1203,6 +1250,27 @@ class CoordinatorTools:
                 error=resolved_organization_id,
             )
             return resolved_organization_id
+        assistant_step = self._resolve_or_create_commission_assistant(
+            assistant_first_name=assistant_first_name,
+            assistant_surname=assistant_surname,
+            assistant_about=assistant_about,
+            assistant_job_title=assistant_job_title,
+            assistant_timezone=assistant_timezone,
+            assistant_nationality=assistant_nationality,
+            assistant_config=assistant_config,
+            assistant_id=assistant_id,
+            organization_id=resolved_organization_id,
+        )
+        if _is_tool_error(assistant_step):
+            self._publish_failure(
+                activity_id,
+                title=f"Could not commission {colleague_name} into {workspace_name}",
+                error=assistant_step,
+            )
+            return assistant_step
+
+        assistant_row = assistant_step["assistant"]
+        resolved_assistant_id = int(assistant_row["agent_id"])
         space_step = self._resolve_or_create_commission_space(
             space_name=space_name,
             space_description=space_description,
@@ -1394,6 +1462,7 @@ class CoordinatorTools:
         self,
         *,
         assistant_id: int,
+        organization_id: int | None = None,
     ) -> list[dict[str, Any]] | ToolError:
         """List shared workspaces currently attached to one assistant.
 
@@ -1401,7 +1470,10 @@ class CoordinatorTools:
         access, performing cleanup, or explaining current ownership boundaries.
         """
 
-        reachable = self._assistant_is_reachable(assistant_id)
+        reachable = self._assistant_is_reachable(
+            assistant_id,
+            organization_id=organization_id,
+        )
         if isinstance(reachable, dict):
             return reachable
         if not reachable:
@@ -1513,9 +1585,13 @@ class CoordinatorTools:
         assistant_nationality: str | None,
         assistant_config: AssistantCreateConfig | None,
         assistant_id: int | None,
+        organization_id: int | None,
     ) -> dict[str, Any] | ToolError:
         if assistant_id is not None:
-            listed = self.list_assistants(agent_id=assistant_id)
+            listed = self.list_assistants(
+                agent_id=assistant_id,
+                organization_id=organization_id,
+            )
             if _is_tool_error(listed):
                 return listed
             if not listed:
@@ -1532,7 +1608,7 @@ class CoordinatorTools:
             self._remember_assistant(assistant)
             return {"status": "reused", "assistant": assistant}
 
-        listed = self.list_assistants()
+        listed = self.list_assistants(organization_id=organization_id)
         if _is_tool_error(listed):
             return listed
         matches = [
@@ -1577,6 +1653,10 @@ class CoordinatorTools:
             timezone=assistant_timezone,
             nationality=assistant_nationality,
             config=assistant_config,
+        )
+        resolved_assistant_config = self._assistant_config_with_organization(
+            resolved_assistant_config,
+            organization_id=organization_id,
         )
         try:
             created = unify.create_assistant(
@@ -1713,17 +1793,26 @@ class CoordinatorTools:
             for member in members
         )
 
-    def _assistant_is_reachable(self, agent_id: int) -> bool | ToolError:
-        if str(agent_id) in self._known_assistant_ids:
+    def _assistant_is_reachable(
+        self,
+        agent_id: int,
+        *,
+        organization_id: int | None = None,
+    ) -> bool | ToolError:
+        if organization_id is None and str(agent_id) in self._known_assistant_ids:
             return True
-        assistants = self._assistant_cache
+        assistants = self._assistant_cache if organization_id is None else None
         if assistants is None:
-            listed = self.list_assistants(agent_id=agent_id)
+            listed = self.list_assistants(
+                agent_id=agent_id,
+                organization_id=organization_id,
+            )
             if _is_tool_error(listed):
                 return listed
             assistants = listed
         reachable_ids = {str(row.get("agent_id")) for row in assistants}
-        self._known_assistant_ids.update(reachable_ids)
+        if organization_id is None:
+            self._known_assistant_ids.update(reachable_ids)
         return str(agent_id) in reachable_ids
 
     def _space_is_reachable(
@@ -1756,7 +1845,10 @@ class CoordinatorTools:
         if not reachable_space:
             return _space_not_found(space_id)
 
-        reachable_assistant = self._assistant_is_reachable(assistant_id)
+        reachable_assistant = self._assistant_is_reachable(
+            assistant_id,
+            organization_id=organization_id,
+        )
         if isinstance(reachable_assistant, dict):
             return reachable_assistant
         if not reachable_assistant:
@@ -1769,6 +1861,18 @@ class CoordinatorTools:
             return int(value)
         except (TypeError, ValueError):
             return None
+
+    @classmethod
+    def _assistant_belongs_to_organization(
+        cls,
+        assistant: dict[str, Any],
+        *,
+        organization_id: int,
+    ) -> bool:
+        assistant_organization_id = cls._coerce_int(
+            assistant.get("organization_id") or assistant.get("org_id"),
+        )
+        return assistant_organization_id == organization_id
 
     @classmethod
     def _organization_choices(
