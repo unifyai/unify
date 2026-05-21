@@ -38,6 +38,10 @@ _AUTHORIZED_HUMANS = [
     {"id": "usr_ops", "first_name": "Helena", "surname": "Morris", "role": "admin"},
     {"id": "usr_fin", "first_name": "Malik", "surname": "Patel", "role": "member"},
 ]
+_ACCESSIBLE_ORGANIZATIONS = [
+    {"id": 7101, "name": "Acme Logistics", "role_name": "Admin"},
+    {"id": 7102, "name": "Acme Ventures", "role_name": "Member"},
+]
 
 _PRIMARY_LLM_CONFIG = {
     "model": "gpt-5.5@openai",
@@ -405,9 +409,18 @@ class _RecordingTools:
             ]
         return assistants
 
-    def list_org_members(self) -> list[dict[str, Any]]:
-        """List human organization members reachable from Coordinator scope."""
+    def list_accessible_organizations(self) -> list[dict[str, Any]]:
+        """List organizations accessible to the authenticated coordinator user."""
 
+        return list(_ACCESSIBLE_ORGANIZATIONS)
+
+    def list_org_members(
+        self,
+        *,
+        organization_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """List human organization members reachable from Coordinator scope."""
+        del organization_id
         return list(_AUTHORIZED_HUMANS)
 
     def pre_seed_colleague(
@@ -456,14 +469,25 @@ class _RecordingTools:
             "owner_user_id": owner_user_id,
         }
 
-    def delete_space(self, *, space_id: int) -> dict[str, Any]:
+    def delete_space(
+        self,
+        *,
+        space_id: int,
+        organization_id: int | None = None,
+    ) -> dict[str, Any]:
         """Delete a reachable shared workspace after explicit confirmation."""
-
+        del organization_id
         return {"status": "deleted", "space_id": space_id}
 
-    def update_space(self, *, space_id: int, patch: dict[str, Any]) -> dict[str, Any]:
+    def update_space(
+        self,
+        *,
+        space_id: int,
+        patch: dict[str, Any],
+        organization_id: int | None = None,
+    ) -> dict[str, Any]:
         """Update metadata for a reachable shared workspace."""
-
+        del organization_id
         return {"status": "updated", "space_id": space_id, "patch": patch}
 
     def add_space_member(
@@ -472,9 +496,10 @@ class _RecordingTools:
         space_id: int,
         assistant_id: int | None = None,
         member_user_id: str | None = None,
+        organization_id: int | None = None,
     ) -> dict[str, Any]:
         """Add exactly one assistant or org member to a reachable workspace."""
-
+        del organization_id
         return {
             "status": "added",
             "space_id": space_id,
@@ -487,9 +512,10 @@ class _RecordingTools:
         *,
         space_id: int,
         assistant_id: int,
+        organization_id: int | None = None,
     ) -> dict[str, Any]:
         """Remove a reachable assistant colleague from a reachable workspace."""
-
+        del organization_id
         return {"status": "removed", "space_id": space_id, "assistant_id": assistant_id}
 
     def list_spaces(
@@ -507,9 +533,14 @@ class _RecordingTools:
             {"space_id": 3103, "name": "Launch War Room"},
         ]
 
-    def list_space_members(self, *, space_id: int) -> list[dict[str, Any]]:
+    def list_space_members(
+        self,
+        *,
+        space_id: int,
+        organization_id: int | None = None,
+    ) -> list[dict[str, Any]]:
         """List assistant members for a reachable shared workspace."""
-
+        del organization_id
         return [
             {"space_id": space_id, "assistant_id": 7002, "name": "Revenue Ops"},
             {"space_id": space_id, "assistant_id": 7004, "name": "Contractor Bot"},

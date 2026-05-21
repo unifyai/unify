@@ -455,7 +455,7 @@ def _build_coordinator_workspace_tool_listing() -> str:
         "- Inside `act`, use `primitives.coordinator.*` for assistant/space/membership/checklist reads and mutations.",
         "- Before running coordinator mutations inside `act`, gather identifiers and confirmation details in chat unless the request is already explicit and unambiguous.",
         "- Prefer one `act` request that executes the full confirmed setup step (and validates outcomes) over fragmented no-op turns.",
-        "- `primitives.coordinator.list_org_members` and `primitives.coordinator.invite_org_member` are available for org membership changes; run invite actions only after explicit admin confirmation, and expect membership changes to fail when no organization context is active.",
+        "- Use `primitives.coordinator.list_accessible_organizations` to resolve organization ids before org-scoped mutations. If multiple candidate organizations exist, ask for clarification and then pass `organization_id` explicitly on org membership and workspace calls.",
     ]
     return "\n".join(lines)
 
