@@ -34,7 +34,7 @@ dependencies = [
     "requests>=2.31.0",
     # kubernetes>=36 causes AssistantSession discovery calls to reach GKE as
     # anonymous in preview Unity jobs.
-    "kubernetes>=28.1.0,<36.0.0",
+    "kubernetes>=35.0.0,<36.0.0",
     "textual>=0.40.0",
     "textual-dev>=1.2.0",
     "twilio>=8.0.0",
