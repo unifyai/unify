@@ -163,7 +163,7 @@ def init(
             unillm.set_billing_context(
                 assistant_id=SESSION_DETAILS.assistant.agent_id,
                 user_id=SESSION_DETAILS.user.id,
-                organization_id=SESSION_DETAILS.org_id,
+                organization_id=SESSION_DETAILS.workspace_org_id,
             )
     except (ImportError, Exception):
         pass

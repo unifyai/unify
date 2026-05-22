@@ -86,7 +86,7 @@ def _get_org_id() -> Optional[int]:
 
     Returns None for personal (non-org) context.
     """
-    return SESSION_DETAILS.org_id
+    return SESSION_DETAILS.workspace_org_id
 
 
 def _get_org_context() -> Optional[str]:

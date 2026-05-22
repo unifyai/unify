@@ -847,7 +847,8 @@ class ConversationManagerBrainActionTools:
         from unity.events.cost_attribution import COST_ATTRIBUTION
         from unity.session_details import SESSION_DETAILS
 
-        if SESSION_DETAILS.org_id is not None:
+        workspace_org_id = SESSION_DETAILS.workspace_org_id
+        if workspace_org_id is not None:
             contact = self._cm.contact_index.get_contact(
                 contact_id=requesting_contact_id,
             )
@@ -872,7 +873,7 @@ class ConversationManagerBrainActionTools:
                 unillm.set_billing_context(
                     assistant_id=SESSION_DETAILS.assistant.agent_id,
                     user_id=effective_user_id,
-                    organization_id=SESSION_DETAILS.org_id,
+                    organization_id=workspace_org_id,
                     source="tool",
                 )
             except (ImportError, Exception):

@@ -287,7 +287,7 @@ async def check_spending_limits_callback(
     agent_id = SESSION_DETAILS.assistant.agent_id
 
     user_id = SESSION_DETAILS.user_id
-    org_id = SESSION_DETAILS.org_id  # None for personal context
+    org_id = SESSION_DETAILS.workspace_org_id  # None for personal context
 
     timezone = "UTC"
     if SESSION_DETAILS.assistant:
