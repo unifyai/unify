@@ -1337,8 +1337,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         trace_meta = trace_meta or {}
 
-        workspace_org_id = SESSION_DETAILS.workspace_org_id
-        if workspace_org_id is not None:
+        if SESSION_DETAILS.org_id is not None:
             triggering_contact_id = trace_meta.get("triggering_contact_id")
             attributed_user_id = None
             if triggering_contact_id is not None:
@@ -1358,7 +1357,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 unillm.set_billing_context(
                     assistant_id=SESSION_DETAILS.assistant.agent_id,
                     user_id=attributed_user_id or SESSION_DETAILS.user.id,
-                    organization_id=workspace_org_id,
+                    organization_id=SESSION_DETAILS.org_id,
                     source="call" if self.mode.is_voice else "chat",
                 )
             except (ImportError, Exception):
@@ -2025,9 +2024,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.user_desktop_filesys_sync = payload.get("user_desktop_filesys_sync", False)
         self.user_desktop_url = payload.get("user_desktop_url")
         self.org_id: int | None = payload.get("org_id")
-        self.workspace_org_id: int | None = payload.get("workspace_org_id")
-        if self.workspace_org_id is None:
-            self.workspace_org_id = self.org_id
         self.org_name: str = payload.get("org_name", "")
         self.team_ids: list[int] = payload.get("team_ids") or []
         self.space_ids: list[int] = payload.get("space_ids") or []
@@ -2062,7 +2058,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
             user_whatsapp_number=self.user_whatsapp_number,
             user_boss_contact_id=self.boss_contact_id,
             org_id=self.org_id,
-            workspace_org_id=self.workspace_org_id,
             org_name=self.org_name,
             team_ids=self.team_ids,
             space_ids=self.space_ids,

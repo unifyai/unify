@@ -237,10 +237,7 @@ def build_brain_spec(
         )
 
         coordinator_manager = CoordinatorOnboardingManager()
-        if (
-            SESSION_DETAILS.is_coordinator
-            and SESSION_DETAILS.workspace_org_id is not None
-        ):
+        if SESSION_DETAILS.is_coordinator and SESSION_DETAILS.org_id is not None:
             authorized_humans = coordinator_manager.get_org_members()
         elif not SESSION_DETAILS.is_coordinator:
             workspace_coordinator_name = (
@@ -284,7 +281,7 @@ def build_brain_spec(
         is_coordinator=SESSION_DETAILS.is_coordinator,
         authorized_humans=authorized_humans,
         workspace_coordinator_name=workspace_coordinator_name,
-        is_org_workspace=SESSION_DETAILS.workspace_org_id is not None,
+        is_org_workspace=SESSION_DETAILS.org_id is not None,
     )
     _system_prompt_ms = _mark_step()
 

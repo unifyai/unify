@@ -78,7 +78,6 @@ def _mock_session_details(mock_sd, *, org_id=1):
     mock_sd.assistant.timezone = "UTC"
     mock_sd.is_initialized = True
     mock_sd.org_id = org_id
-    mock_sd.workspace_org_id = org_id
     mock_sd.org_name = "TestOrg" if org_id else ""
     mock_sd.unify_key = "test-key"
 
@@ -102,7 +101,6 @@ def mock_cm():
     cm.event_broker = MagicMock()
     cm.event_broker.publish = AsyncMock()
     cm.call_manager = MagicMock()
-    cm.suppress_duplicate_commissioning_tool = MagicMock(return_value=None)
     return cm
 
 

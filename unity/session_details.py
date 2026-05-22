@@ -280,7 +280,6 @@ class SessionDetails:
     voice_call: VoiceCallConfig = field(default_factory=VoiceCallConfig)
     _unify_key: str = field(default="", repr=False)
     _shared_unify_key: str = field(default="", repr=False)
-    _workspace_org_id: int | None = field(default=None, repr=False)
 
     # Organization context (None id for personal/non-org context)
     org: OrgDetails = field(default_factory=OrgDetails)
@@ -344,17 +343,6 @@ class SessionDetails:
     @team_ids.setter
     def team_ids(self, value: list[int]) -> None:
         self.team.ids = value
-
-    @property
-    def workspace_org_id(self) -> int | None:
-        """Active workspace organization id, falling back to assistant org scope."""
-        if self._workspace_org_id is not None:
-            return self._workspace_org_id
-        return self.org.id
-
-    @workspace_org_id.setter
-    def workspace_org_id(self, value: int | None) -> None:
-        self._workspace_org_id = value
 
     @property
     def space_ids(self) -> list[int]:
@@ -458,7 +446,6 @@ class SessionDetails:
         user_whatsapp_number: str = "",
         user_boss_contact_id: int = DEFAULT_BOSS_CONTACT_ID,
         org_id: int | None = None,
-        workspace_org_id: int | None = None,
         org_name: str = "",
         team_ids: list[int] | None = None,
         space_ids: list[int] | None = None,
@@ -507,9 +494,6 @@ class SessionDetails:
         self.user.whatsapp_number = user_whatsapp_number
         self.boss_contact_id = user_boss_contact_id
         self.org.id = org_id
-        self.workspace_org_id = (
-            workspace_org_id if workspace_org_id is not None else org_id
-        )
         self.org.name = org_name
         self.team.ids = team_ids or []
         self.assistant.space_ids = space_ids or []
@@ -528,7 +512,6 @@ class SessionDetails:
         self.voice_call = VoiceCallConfig()
         self._unify_key = ""
         self._shared_unify_key = ""
-        self._workspace_org_id = None
         self._initialized = False
 
     def export_to_env(self) -> None:
@@ -575,9 +558,6 @@ class SessionDetails:
         os.environ["USER_EMAIL"] = self.user.email
         os.environ["USER_WHATSAPP_NUMBER"] = self.user.whatsapp_number
         os.environ["ORG_ID"] = str(self.org.id) if self.org.id is not None else ""
-        os.environ["WORKSPACE_ORG_ID"] = (
-            str(self.workspace_org_id) if self.workspace_org_id is not None else ""
-        )
         os.environ["ORG_NAME"] = self.org.name
         os.environ["TEAM_IDS"] = _encode_int_csv(self.team.ids)
         self.export_space_ids_to_env()
@@ -688,11 +668,6 @@ class SessionDetails:
         if val := os.environ.get("ORG_ID"):
             try:
                 self.org.id = int(val)
-            except ValueError:
-                pass
-        if val := os.environ.get("WORKSPACE_ORG_ID"):
-            try:
-                self.workspace_org_id = int(val)
             except ValueError:
                 pass
         if val := os.environ.get("ORG_NAME"):
