@@ -9,7 +9,35 @@ from unity.task_scheduler.types.priority import Priority
 from unity.task_scheduler.types.repetition import Frequency, RepeatPattern
 from unity.task_scheduler.types.schedule import Schedule
 from unity.task_scheduler.types.status import Status
-from unity.task_scheduler.types.task import Task
+from unity.task_scheduler.types.task import DeliveryMode, ExecutionStyle, Task
+
+
+def test_task_derives_delivery_mode_and_execution_style_independently():
+    agentic_offline = Task(
+        task_id=9,
+        instance_id=0,
+        name="Offline agentic task",
+        description="Interpret this description in the headless lane.",
+        status=Status.scheduled,
+        priority=Priority.normal,
+        offline=True,
+        entrypoint=None,
+    )
+    symbolic_live = Task(
+        task_id=10,
+        instance_id=0,
+        name="Live symbolic task",
+        description="Run the durable executor in the live lane.",
+        status=Status.scheduled,
+        priority=Priority.normal,
+        offline=False,
+        entrypoint=321,
+    )
+
+    assert agentic_offline.delivery_mode == DeliveryMode.offline
+    assert agentic_offline.execution_style == ExecutionStyle.agentic
+    assert symbolic_live.delivery_mode == DeliveryMode.live
+    assert symbolic_live.execution_style == ExecutionStyle.symbolic
 
 
 def test_build_task_execution_request_includes_run_metadata():
@@ -35,6 +63,26 @@ def test_build_task_execution_request_includes_run_metadata():
     assert "Task response policy:" in request
     assert "Schedule metadata:" in request
     assert "Repeat metadata:" in request
+
+
+def test_build_task_execution_request_omits_history_and_info():
+    task = Task(
+        task_id=7,
+        instance_id=3,
+        name="Daily briefing",
+        description="Prepare the briefing from current sources.",
+        status=Status.scheduled,
+        priority=Priority.normal,
+        info="Previous run found cached facts and notified the user.",
+        schedule=Schedule(start_at=datetime(2026, 5, 18, 12, 0, tzinfo=timezone.utc)),
+    )
+
+    request = build_task_execution_request(task)
+
+    assert "Prepare the briefing from current sources." in request
+    assert "Previous run found cached facts" not in request
+    assert "history" not in request.lower()
+    assert "completed trajectory" not in request.lower()
 
 
 def test_build_task_run_guidelines_keep_child_actor_focused_on_one_task():

@@ -86,7 +86,8 @@ def build_task_run_guidelines(task: Task, reason: ActivatedBy) -> str:
         "itself; do not create another task unless the task description "
         "explicitly asks you to create or modify tasks. If this task has no "
         "stored entrypoint, interpret the natural-language description "
-        "directly using the available primitives and functions. Keep any "
+        "directly using the available primitives and functions. Offline "
+        "delivery does not change that execution style. Keep any "
         "progress notifications focused on this task run.\n\n"
         f"Activation reason: {reason.value}\n"
         f"Task id: {task.task_id}\n"
@@ -428,8 +429,8 @@ def build_update_prompt(
             "• For requests like \"whenever Alice emails about invoices\", create a live triggerable task with `trigger` and status 'triggerable'. Use contact lookup first when the trigger references a person.",
             "• A scheduled/triggered live task may have `entrypoint=None`. This is the normal default for newly described natural-language workflows: execution will wake a contained actor run that interprets the description.",
             "• Do not create an entrypoint function merely because a recurring task is being created. Entrypoint creation should follow an explicit user request or a successful run that has been reviewed as stable enough to store.",
-            "• If the user asks to repeat a workflow that just succeeded interactively and also wants hidden/offline execution, the workflow must first be stored as a function-backed skill; offline tasks require a numeric `entrypoint`.",
-            "• A stored entrypoint can still call `reason(...)` for bounded semantic judgment such as summarization, classification, ranking, drafting, or source selection. Keep broad planning and changing tool discovery actor-driven.",
+            "• Offline is a delivery lane, not an execution style. An offline task may be agentic (`entrypoint=None`) or symbolic (`entrypoint=<function_id>`).",
+            "• A stored entrypoint can still call `reason(...)` for bounded semantic judgment such as summarization, classification, ranking, drafting, or source selection. Keep broad planning and changing tool discovery actor-driven unless a certified symbolic executor preserves the workflow contract.",
             "",
             "Repeat field examples",
             "---------------------",

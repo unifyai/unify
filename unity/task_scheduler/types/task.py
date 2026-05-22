@@ -1,5 +1,6 @@
 """Task model: queue membership, scheduling/triggering, priority, and metadata."""
 
+from enum import Enum
 from pydantic import BaseModel, Field, model_validator
 from typing import Optional, List
 
@@ -10,6 +11,16 @@ from .trigger import Trigger
 from .repetition import RepeatPattern
 from .activated_by import ActivatedBy
 from datetime import datetime
+
+
+class DeliveryMode(str, Enum):
+    live = "live"
+    offline = "offline"
+
+
+class ExecutionStyle(str, Enum):
+    agentic = "agentic"
+    symbolic = "symbolic"
 
 
 class TaskBase(BaseModel):
@@ -64,18 +75,17 @@ class TaskBase(BaseModel):
     entrypoint: Optional[int] = Field(
         default=None,
         description=(
-            "Optional function_id from the Functions table that should be invoked to perform this task. "
-            "When null, a live task is executed by a contained Actor run interpreting the free-form "
-            "description on the fly. Do not set this for a newly described workflow unless the user "
-            "explicitly asks for a stored function-backed workflow or a successful execution has been "
-            "reviewed and distilled into a stable function."
+            "Optional function_id from the Functions table that should act as this task's symbolic "
+            "executor. When null, the task is agentic: an Actor interprets the task name, description, "
+            "and metadata at run time. Entrypoint availability is independent from live/offline delivery."
         ),
     )
     offline: bool = Field(
         default=False,
         description=(
-            "Whether this task should execute in the hidden offline lane instead of waking "
-            "the live assistant runtime. Offline tasks must provide a numeric entrypoint."
+            "Whether this task should execute in the hidden headless lane instead of waking "
+            "the live assistant runtime. Offline controls delivery only; entrypoint controls "
+            "whether execution is symbolic or agentic."
         ),
     )
     activated_by: Optional[ActivatedBy] = Field(
@@ -97,10 +107,23 @@ class TaskBase(BaseModel):
         if self.schedule is not None and self.trigger is not None:
             raise ValueError("A task cannot have both *schedule* and *trigger*.")
 
-        if self.offline and self.entrypoint is None:
-            raise ValueError("Offline tasks require a numeric entrypoint.")
-
         return self
+
+    @property
+    def delivery_mode(self) -> DeliveryMode:
+        """Return the normalized delivery lane for this task."""
+
+        return DeliveryMode.offline if self.offline else DeliveryMode.live
+
+    @property
+    def execution_style(self) -> ExecutionStyle:
+        """Return whether execution is actor-interpreted or function-backed."""
+
+        return (
+            ExecutionStyle.symbolic
+            if self.entrypoint is not None
+            else ExecutionStyle.agentic
+        )
 
     def to_post_json(self) -> dict:
         exclude: set[str] = set()

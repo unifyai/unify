@@ -169,10 +169,13 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         instance_id: Optional[int] = None,
         scheduler: Optional["TaskScheduler"] = None,
         entrypoint: Optional[int] = None,
+        entrypoint_kwargs: Optional[dict[str, Any]] = None,
         task_run_reference: Optional[TaskRunReference] = None,
         task_run_provenance: Optional[TaskRunProvenance] = None,
         task_entrypoint_review: Optional[dict[str, Any]] = None,
         task_guidelines: Optional[str] = None,
+        entrypoint_repair_attempts: int = 0,
+        entrypoint_repair_context: Optional[dict[str, Any]] = None,
     ) -> "ActiveTask":
         """
         Create an ActiveTask by starting work through a delegate or fallback actor.
@@ -206,6 +209,9 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                         clarification_up_q=_clarification_up_q,
                         clarification_down_q=_clarification_down_q,
                         guidelines=task_guidelines,
+                        entrypoint_kwargs=entrypoint_kwargs,
+                        entrypoint_repair_attempts=entrypoint_repair_attempts,
+                        entrypoint_repair_context=entrypoint_repair_context,
                     )
                 else:
                     if fallback_actor is None:
@@ -220,6 +226,9 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                         _clarification_down_q=_clarification_down_q,
                         # Always pass entrypoint to the actor so it can immediately run the function
                         entrypoint=entrypoint,
+                        entrypoint_kwargs=entrypoint_kwargs,
+                        entrypoint_repair_attempts=entrypoint_repair_attempts,
+                        entrypoint_repair_context=entrypoint_repair_context,
                         persist=False,  # Scheduler-run plans should complete instead of pausing for interjection
                     )
             except Exception as exc:
