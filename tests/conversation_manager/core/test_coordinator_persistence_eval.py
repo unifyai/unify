@@ -118,12 +118,11 @@ class _WorkspaceAwareRecordingTools(_AssistantAwareRecordingTools):
     def list_spaces(
         self,
         *,
-        organization_id: int | None = None,
         owner_user_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """List shared workspaces visible to the current Coordinator."""
 
-        del organization_id, owner_user_id
+        del owner_user_id
         return list(self._spaces)
 
     def list_space_members(self, *, space_id: int) -> list[dict[str, Any]]:

@@ -58,7 +58,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         timezone: str | None = None,
         nationality: str | None = None,
         config: AssistantCreateConfig | None = None,
-        organization_id: int | None = None,
     ) -> dict[str, Any] | ToolError:
         """Create a colleague assistant in the active coordinator workspace.
 
@@ -85,9 +84,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         config : AssistantCreateConfig | None, optional
             Structured assistant-create overrides merged with coordinator
             defaults (for example ``create_infra`` and ``is_local``).
-        organization_id : int | None, optional
-            Optional explicit organization target. When provided, it must match
-            the active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
@@ -100,14 +96,12 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
             timezone=timezone,
             nationality=nationality,
             config=config,
-            organization_id=organization_id,
         )
 
     def delete_assistant(
         self,
         *,
         agent_id: int,
-        organization_id: int | None = None,
     ) -> dict[str, Any] | str | ToolError:
         """Delete a reachable colleague assistant from the coordinator workspace.
 
@@ -120,16 +114,12 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         ----------
         agent_id : int
             Assistant identifier to delete after explicit confirmation.
-        organization_id : int | None, optional
-            Optional explicit organization id. When provided, it must match the
-            active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
             return permission_error
         return self._delegate.delete_assistant(
             agent_id=agent_id,
-            organization_id=organization_id,
         )
 
     def update_assistant_config(
@@ -137,7 +127,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         *,
         agent_id: int,
         config: AssistantConfigPatch,
-        organization_id: int | None = None,
     ) -> dict[str, Any] | ToolError:
         """Update config fields for a reachable colleague assistant.
 
@@ -156,9 +145,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
             ``timezone``, ``nationality``, ``weekly_limit``,
             ``max_parallel``, ``desktop_mode``, and voice fields
             (``voice_id`` with ``voice_provider``).
-        organization_id : int | None, optional
-            Optional explicit organization id. When provided, it must match the
-            active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
@@ -166,7 +152,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         return self._delegate.update_assistant_config(
             agent_id=agent_id,
             config=config,
-            organization_id=organization_id,
         )
 
     def list_assistants(
@@ -175,7 +160,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         phone: str | None = None,
         email: str | None = None,
         agent_id: int | None = None,
-        organization_id: int | None = None,
     ) -> list[dict[str, Any]] | ToolError:
         """List assistants visible inside the coordinator's reachable scope.
 
@@ -192,9 +176,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
             Optional email filter for narrow assistant lookup.
         agent_id : int | None, optional
             Optional assistant id filter for exact match lookup.
-        organization_id : int | None, optional
-            Optional explicit organization id. When provided, it must match the
-            active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
@@ -203,36 +184,24 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
             phone=phone,
             email=email,
             agent_id=agent_id,
-            organization_id=organization_id,
         )
 
-    def list_org_members(
-        self,
-        *,
-        organization_id: int | None = None,
-    ) -> list[dict[str, Any]] | ToolError:
+    def list_org_members(self) -> list[dict[str, Any]] | ToolError:
         """List authorized human organization members for membership targeting.
 
         Use this when membership actions target ``member_user_id`` (human org
         users) rather than assistant ids. This helps validate that a referenced
         org member is authorized and reachable before attempting workspace
         membership mutations.
-
-        Parameters
-        ----------
-        organization_id : int | None, optional
-            Optional explicit organization id. When provided, it must match the
-            active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
             return permission_error
-        return self._delegate.list_org_members(organization_id=organization_id)
+        return self._delegate.list_org_members()
 
     def invite_org_member(
         self,
         *,
-        organization_id: int | None = None,
         email: str,
         role_name: InviteOrgRoleName | None = None,
     ) -> dict[str, Any] | ToolError:
@@ -243,9 +212,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
 
         Parameters
         ----------
-        organization_id : int | None, optional
-            Optional explicit organization id. When provided, it must match the
-            active workspace organization for this Coordinator session.
         email : str
             Email address to invite into the organization.
         role_name : InviteOrgRoleName | None, optional
@@ -256,7 +222,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         if permission_error is not None:
             return permission_error
         return self._delegate.invite_org_member(
-            organization_id=organization_id,
             email=email,
             role_name=role_name,
         )
@@ -266,7 +231,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         *,
         target_assistant_id: int,
         writes: list[CoordinatorPreseedWriteValue],
-        organization_id: int | None = None,
     ) -> dict[str, Any] | ToolError:
         """Seed colleague-owned setup rows into assistant-private contexts.
 
@@ -285,9 +249,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
             Allowed contexts are:
             ``Tasks``, ``Knowledge``, ``Guidance``, ``Data``,
             ``Functions/<name>``, and ``Dashboards/<name>``.
-        organization_id : int | None, optional
-            Optional explicit organization id. When provided, it must match the
-            active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
@@ -295,7 +256,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         return self._delegate.pre_seed_colleague(
             target_assistant_id=target_assistant_id,
             writes=writes,
-            organization_id=organization_id,
         )
 
     def create_space(
@@ -303,7 +263,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         *,
         name: str,
         description: str,
-        organization_id: int | None = None,
         owner_user_id: str | None = None,
     ) -> dict[str, Any] | ToolError:
         """Create a shared workspace in the coordinator organization.
@@ -319,9 +278,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
             Workspace name to create.
         description : str
             Human-readable summary of workspace intent.
-        organization_id : int | None, optional
-            Optional explicit organization target. When provided, it must match
-            the active workspace organization for this Coordinator session.
         owner_user_id : str | None, optional
             Reserved field for API parity; ownership derives from coordinator scope.
         """
@@ -331,7 +287,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         return self._delegate.create_space(
             name=name,
             description=description,
-            organization_id=organization_id,
             owner_user_id=owner_user_id,
         )
 
@@ -339,7 +294,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         self,
         *,
         space_id: int,
-        organization_id: int | None = None,
     ) -> dict[str, Any] | ToolError:
         """Delete a reachable shared workspace after explicit confirmation.
 
@@ -351,16 +305,12 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         ----------
         space_id : int
             Workspace identifier to delete.
-        organization_id : int | None, optional
-            Optional explicit organization id. When provided, it must match the
-            active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
             return permission_error
         return self._delegate.delete_space(
             space_id=space_id,
-            organization_id=organization_id,
         )
 
     def update_space(
@@ -368,7 +318,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         *,
         space_id: int,
         patch: SpacePatch,
-        organization_id: int | None = None,
     ) -> dict[str, Any] | ToolError:
         """Apply metadata updates to a reachable shared workspace.
 
@@ -383,9 +332,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         patch : SpacePatch
             Partial update payload for editable workspace fields.
             Accepted keys are ``name`` and ``description``.
-        organization_id : int | None, optional
-            Optional explicit organization id. When provided, it must match the
-            active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
@@ -393,7 +339,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         return self._delegate.update_space(
             space_id=space_id,
             patch=patch,
-            organization_id=organization_id,
         )
 
     def add_space_member(
@@ -402,7 +347,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         space_id: int,
         assistant_id: int | None = None,
         member_user_id: str | None = None,
-        organization_id: int | None = None,
     ) -> dict[str, Any] | ToolError:
         """Add one assistant or one organization member to a workspace.
 
@@ -419,9 +363,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
             Assistant id to add as a member.
         member_user_id : str | None, optional
             Organization user id to add as a human member.
-        organization_id : int | None, optional
-            Optional explicit organization id. When provided, it must match the
-            active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
@@ -430,7 +371,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
             space_id=space_id,
             assistant_id=assistant_id,
             member_user_id=member_user_id,
-            organization_id=organization_id,
         )
 
     def remove_space_member(
@@ -438,7 +378,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         *,
         space_id: int,
         assistant_id: int,
-        organization_id: int | None = None,
     ) -> dict[str, Any] | ToolError:
         """Remove a colleague assistant from a shared workspace.
 
@@ -452,9 +391,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
             Workspace from which membership should be removed.
         assistant_id : int
             Assistant identifier to remove from membership.
-        organization_id : int | None, optional
-            Optional explicit organization id. When provided, it must match the
-            active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
@@ -462,13 +398,11 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         return self._delegate.remove_space_member(
             space_id=space_id,
             assistant_id=assistant_id,
-            organization_id=organization_id,
         )
 
     def list_spaces(
         self,
         *,
-        organization_id: int | None = None,
         owner_user_id: str | None = None,
     ) -> list[dict[str, Any]] | ToolError:
         """List shared spaces visible to the active coordinator.
@@ -479,9 +413,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
 
         Parameters
         ----------
-        organization_id : int | None, optional
-            Optional explicit organization target. When provided, it must match
-            the active workspace organization for this Coordinator session.
         owner_user_id : str | None, optional
             Reserved field for caller parity.
         """
@@ -489,7 +420,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         if permission_error is not None:
             return permission_error
         return self._delegate.list_spaces(
-            organization_id=organization_id,
             owner_user_id=owner_user_id,
         )
 
@@ -497,7 +427,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         self,
         *,
         space_id: int,
-        organization_id: int | None = None,
     ) -> list[dict[str, Any]] | ToolError:
         """List members currently attached to a reachable workspace.
 
@@ -509,23 +438,18 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         ----------
         space_id : int
             Workspace identifier whose membership should be listed.
-        organization_id : int | None, optional
-            Optional explicit organization id. When provided, it must match the
-            active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
             return permission_error
         return self._delegate.list_space_members(
             space_id=space_id,
-            organization_id=organization_id,
         )
 
     def list_spaces_for_assistant(
         self,
         *,
         assistant_id: int,
-        organization_id: int | None = None,
     ) -> list[dict[str, Any]] | ToolError:
         """List shared spaces currently attached to a colleague assistant.
 
@@ -536,16 +460,12 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         ----------
         assistant_id : int
             Assistant identifier whose workspace memberships should be listed.
-        organization_id : int | None, optional
-            Optional explicit organization id. When provided, it must match the
-            active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
             return permission_error
         return self._delegate.list_spaces_for_assistant(
             assistant_id=assistant_id,
-            organization_id=organization_id,
         )
 
     def commission_colleague_into_workspace(
@@ -562,7 +482,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         assistant_config: AssistantCreateConfig | None = None,
         assistant_id: int | None = None,
         space_id: int | None = None,
-        organization_id: int | None = None,
     ) -> dict[str, Any] | ToolError:
         """Commission a colleague into a workspace with idempotent step reporting.
 
@@ -596,9 +515,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
             Optional explicit assistant id to reuse instead of name lookup.
         space_id : int | None, optional
             Optional explicit workspace id to reuse instead of name lookup.
-        organization_id : int | None, optional
-            Optional explicit organization id. When provided, it must match the
-            active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
@@ -615,7 +531,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
             assistant_config=assistant_config,
             assistant_id=assistant_id,
             space_id=space_id,
-            organization_id=organization_id,
         )
 
     def add_setup_checklist_item(

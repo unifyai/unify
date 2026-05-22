@@ -79,7 +79,7 @@ class TestCoordinatorTools:
 
         def fake_list_assistants(**kwargs):
             calls.append(kwargs)
-            return [{"agent_id": 42, "first_name": "Ops"}]
+            return [{"agent_id": 42, "first_name": "Ops", "organization_id": 7}]
 
         monkeypatch.setattr(
             "unity.conversation_manager.domains.coordinator_tools.unify.list_assistants",
@@ -88,7 +88,7 @@ class TestCoordinatorTools:
 
         result = CoordinatorTools(cm=object()).list_assistants()
 
-        assert result == [{"agent_id": 42, "first_name": "Ops"}]
+        assert result == [{"agent_id": 42, "first_name": "Ops", "organization_id": 7}]
         assert calls == [
             {
                 "phone": None,
@@ -99,7 +99,7 @@ class TestCoordinatorTools:
             },
         ]
 
-    def test_list_assistants_rejects_explicit_org_in_personal_workspace(
+    def test_list_assistants_uses_personal_scope_without_list_all_org(
         self,
         monkeypatch,
     ):
@@ -115,11 +115,18 @@ class TestCoordinatorTools:
             fake_list_assistants,
         )
 
-        result = CoordinatorTools(cm=object()).list_assistants(organization_id=13)
+        result = CoordinatorTools(cm=object()).list_assistants()
 
-        assert result["error_kind"] == "invalid_argument"
-        assert "personal workspace Coordinator session" in result["message"]
-        assert calls == []
+        assert result == [{"agent_id": 41, "organization_id": 13}]
+        assert calls == [
+            {
+                "phone": None,
+                "email": None,
+                "agent_id": None,
+                "list_all_org": False,
+                "api_key": "owner-key",
+            },
+        ]
 
     def test_delete_requires_reachable_assistant(self, monkeypatch):
         delete_calls = []
@@ -145,7 +152,7 @@ class TestCoordinatorTools:
         assert list_calls[0]["agent_id"] == 99
         assert delete_calls == []
 
-    def test_delete_assistant_resolves_active_workspace_org_for_reachability(
+    def test_delete_assistant_checks_reachability_before_delete(
         self,
         monkeypatch,
     ):
@@ -156,10 +163,7 @@ class TestCoordinatorTools:
         monkeypatch.setattr(
             tools,
             "_assistant_is_reachable",
-            lambda agent_id, organization_id=None: captured.update(
-                {"agent_id": agent_id, "organization_id": organization_id},
-            )
-            or True,
+            lambda agent_id: captured.update({"agent_id": agent_id}) or True,
         )
         monkeypatch.setattr(
             "unity.conversation_manager.domains.coordinator_tools.unify.delete_assistant",
@@ -170,7 +174,7 @@ class TestCoordinatorTools:
         result = tools.delete_assistant(agent_id=42)
 
         assert result == {"status": "deleted"}
-        assert captured == {"agent_id": 42, "organization_id": 7}
+        assert captured == {"agent_id": 42}
         assert delete_calls == [((42,), {"api_key": "owner-key"})]
 
     def test_filtered_lists_do_not_poison_reachability_cache(self, monkeypatch):
@@ -179,7 +183,7 @@ class TestCoordinatorTools:
         def fake_list_assistants(**kwargs):
             list_calls.append(kwargs)
             if kwargs["phone"] is not None:
-                return [{"agent_id": 42}]
+                return [{"agent_id": 42, "organization_id": 7}]
             if kwargs["agent_id"] == 99:
                 return [{"agent_id": 99, "organization_id": 7}]
             return []
@@ -195,7 +199,9 @@ class TestCoordinatorTools:
         )
 
         tools = CoordinatorTools(cm=object())
-        assert tools.list_assistants(phone="+15555551234") == [{"agent_id": 42}]
+        assert tools.list_assistants(phone="+15555551234") == [
+            {"agent_id": 42, "organization_id": 7},
+        ]
 
         result = tools.delete_assistant(agent_id=99)
 
@@ -277,59 +283,6 @@ class TestCoordinatorTools:
         assert result["details"] == {"field": "about"}
         assert create_calls == []
 
-    def test_create_assistant_rejects_mismatched_explicit_organization_id(
-        self,
-        monkeypatch,
-    ):
-        calls = []
-
-        monkeypatch.setattr(
-            "unity.conversation_manager.domains.coordinator_tools.unify.create_assistant",
-            lambda **kwargs: calls.append(kwargs) or {"agent_id": 42},
-        )
-
-        result = CoordinatorTools(cm=object()).create_assistant(
-            first_name="Ops",
-            surname="Lead",
-            about="Operations coordinator.",
-            organization_id=42,
-        )
-
-        assert result["error_kind"] == "invalid_argument"
-        assert "active workspace organization" in result["message"]
-        assert result["details"] == {
-            "requested_organization_id": 42,
-            "active_organization_id": 7,
-        }
-        assert calls == []
-
-    def test_create_assistant_rejects_explicit_org_in_personal_workspace(
-        self,
-        monkeypatch,
-    ):
-        SESSION_DETAILS.org_id = None
-        calls = []
-
-        monkeypatch.setattr(
-            "unity.conversation_manager.domains.coordinator_tools.unify.create_assistant",
-            lambda **kwargs: calls.append(kwargs) or {"agent_id": 42},
-        )
-
-        result = CoordinatorTools(cm=object()).create_assistant(
-            first_name="Ops",
-            surname="Lead",
-            about="Operations coordinator.",
-            organization_id=42,
-        )
-
-        assert result["error_kind"] == "invalid_argument"
-        assert "personal workspace Coordinator session" in result["message"]
-        assert result["details"] == {
-            "requested_organization_id": 42,
-            "active_organization_id": None,
-        }
-        assert calls == []
-
     def test_create_assistant_personal_workspace_writes_without_org_id(
         self,
         monkeypatch,
@@ -385,7 +338,7 @@ class TestCoordinatorTools:
             "organization_id": 7,
         }
 
-    def test_update_assistant_config_resolves_active_workspace_org_for_reachability(
+    def test_update_assistant_config_checks_reachability_before_update(
         self,
         monkeypatch,
     ):
@@ -396,10 +349,7 @@ class TestCoordinatorTools:
         monkeypatch.setattr(
             tools,
             "_assistant_is_reachable",
-            lambda agent_id, organization_id=None: captured.update(
-                {"agent_id": agent_id, "organization_id": organization_id},
-            )
-            or True,
+            lambda agent_id: captured.update({"agent_id": agent_id}) or True,
         )
         monkeypatch.setattr(
             "unity.conversation_manager.domains.coordinator_tools.unify.update_assistant_config",
@@ -413,7 +363,7 @@ class TestCoordinatorTools:
         )
 
         assert result == {"agent_id": 42, "about": "updated"}
-        assert captured == {"agent_id": 42, "organization_id": 7}
+        assert captured == {"agent_id": 42}
         assert update_calls == [((42, {"about": "updated"}), {"api_key": "owner-key"})]
 
     def test_create_assistant_derives_job_title_from_surname_for_multiword_first_name(
@@ -663,7 +613,7 @@ class TestCoordinatorTools:
         assert result["error_kind"] == "invalid_argument"
         assert calls == []
 
-    def test_pre_seed_colleague_resolves_active_workspace_org_for_reachability(
+    def test_pre_seed_colleague_checks_reachability_before_write(
         self,
         monkeypatch,
     ):
@@ -674,10 +624,7 @@ class TestCoordinatorTools:
         monkeypatch.setattr(
             tools,
             "_assistant_is_reachable",
-            lambda agent_id, organization_id=None: captured.update(
-                {"agent_id": agent_id, "organization_id": organization_id},
-            )
-            or True,
+            lambda agent_id: captured.update({"agent_id": agent_id}) or True,
         )
         monkeypatch.setattr(
             "unity.conversation_manager.domains.coordinator_tools.unify.pre_seed_colleague",
@@ -691,7 +638,7 @@ class TestCoordinatorTools:
         )
 
         assert result == {"status": "seeded"}
-        assert captured == {"agent_id": 42, "organization_id": 7}
+        assert captured == {"agent_id": 42}
         assert seed_calls == [
             (
                 (
@@ -780,27 +727,6 @@ class TestCoordinatorTools:
 
         assert result["error_kind"] == "invalid_argument"
         assert "requires an organization workspace Coordinator" in result["message"]
-        assert calls == []
-
-    def test_invite_org_member_rejects_mismatched_explicit_organization_id(
-        self,
-        monkeypatch,
-    ):
-        calls = []
-
-        monkeypatch.setattr(
-            "unity.conversation_manager.domains.coordinator_tools.unify.invite_org_member",
-            lambda *args, **kwargs: calls.append((args, kwargs))
-            or {"invitee_email": "sarah@example.com", "role_name": "Member"},
-        )
-
-        result = CoordinatorTools(cm=object()).invite_org_member(
-            organization_id=42,
-            email="sarah@example.com",
-        )
-
-        assert result["error_kind"] == "invalid_argument"
-        assert "active workspace organization" in result["message"]
         assert calls == []
 
     def test_invite_org_member_rejects_unknown_role_name(self, monkeypatch):
@@ -953,32 +879,6 @@ class TestCoordinatorTools:
             },
         ]
 
-    def test_create_space_rejects_mismatched_explicit_organization_id(
-        self,
-        monkeypatch,
-    ):
-        calls = []
-
-        def fake_create_space(**kwargs):
-            calls.append(kwargs)
-            return {"space_id": 11, "name": "Ops"}
-
-        monkeypatch.setattr(
-            "unity.conversation_manager.domains.coordinator_tools.unify.create_space",
-            fake_create_space,
-        )
-
-        result = CoordinatorTools(cm=object()).create_space(
-            name="Ops",
-            description="Operations shared workspace.",
-            organization_id=999,
-            owner_user_id="other-user",
-        )
-
-        assert result["error_kind"] == "invalid_argument"
-        assert "active workspace organization" in result["message"]
-        assert calls == []
-
     def test_duplicate_commissioning_tool_suppression_short_circuits_writes(
         self,
         monkeypatch,
@@ -1004,7 +904,7 @@ class TestCoordinatorTools:
         assert result["error_kind"] == "duplicate_suppressed"
         assert create_calls == []
 
-    def test_add_space_member_duplicate_suppression_includes_organization_id(self):
+    def test_add_space_member_duplicate_suppression_captures_target_args(self):
         captured = {}
         cm = SimpleNamespace(
             suppress_duplicate_commissioning_tool=lambda **kwargs: captured.update(
@@ -1020,36 +920,14 @@ class TestCoordinatorTools:
         result = CoordinatorTools(cm=cm).add_space_member(
             space_id=11,
             assistant_id=42,
-            organization_id=99,
         )
 
         assert result["error_kind"] == "duplicate_suppressed"
-        assert captured["tool_args"]["organization_id"] == 99
-
-    def test_list_spaces_rejects_mismatched_explicit_organization_id(
-        self,
-        monkeypatch,
-    ):
-        list_calls = []
-
-        def fake_list_spaces(**kwargs):
-            list_calls.append(kwargs)
-            return [{"space_id": 11, "name": "Ops"}]
-
-        monkeypatch.setattr(
-            "unity.conversation_manager.domains.coordinator_tools.unify.list_spaces",
-            fake_list_spaces,
-        )
-
-        tools = CoordinatorTools(cm=object())
-        result = tools.list_spaces(
-            organization_id=999,
-            owner_user_id="other-user",
-        )
-
-        assert result["error_kind"] == "invalid_argument"
-        assert "active workspace organization" in result["message"]
-        assert list_calls == []
+        assert captured["tool_args"] == {
+            "space_id": 11,
+            "assistant_id": 42,
+            "member_user_id": None,
+        }
 
     def test_space_member_writes_require_reachable_space_and_assistant(
         self,
@@ -1191,7 +1069,7 @@ class TestCoordinatorTools:
             ("remove", (11, 42), {"api_key": "owner-key"}),
         ]
 
-    def test_list_spaces_for_assistant_resolves_active_workspace_org_for_reachability(
+    def test_list_spaces_for_assistant_checks_reachability_before_lookup(
         self,
         monkeypatch,
     ):
@@ -1202,10 +1080,7 @@ class TestCoordinatorTools:
         monkeypatch.setattr(
             tools,
             "_assistant_is_reachable",
-            lambda agent_id, organization_id=None: captured.update(
-                {"agent_id": agent_id, "organization_id": organization_id},
-            )
-            or True,
+            lambda agent_id: captured.update({"agent_id": agent_id}) or True,
         )
         monkeypatch.setattr(
             "unity.conversation_manager.domains.coordinator_tools.unify.list_spaces_for_assistant",
@@ -1216,7 +1091,7 @@ class TestCoordinatorTools:
         result = tools.list_spaces_for_assistant(assistant_id=42)
 
         assert result == [{"space_id": 11}]
-        assert captured == {"agent_id": 42, "organization_id": 7}
+        assert captured == {"agent_id": 42}
         assert list_calls == [((42,), {"api_key": "owner-key"})]
 
     def test_fabricated_space_id_returns_tool_error_without_sdk_write(
