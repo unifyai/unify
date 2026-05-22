@@ -137,19 +137,20 @@ class TestCoordinatorPrompt:
         assert "Dana Owner; email: dana@acme.com; role: admin" in prompt
         assert "Francis Lead; email: francis@acme.com; role: member" in prompt
         assert "**Coordinator workspace tools:**" in prompt
-        assert "`primitives.coordinator.list_accessible_organizations`" in prompt
-        assert "`organization_id` explicitly" in prompt
+        assert "`primitives.coordinator.list_org_members`" in prompt
+        assert "always target the active workspace organization" in prompt
         assert "Team Coordinator\n----------------" not in prompt
 
-    def test_personal_coordinator_uses_boss_details_and_lists_org_resolution_guidance(
+    def test_personal_coordinator_uses_boss_details_and_routes_org_work_to_switch(
         self,
     ):
         prompt = _build(is_coordinator=True, is_org_workspace=False)
 
         assert "Boss details" in prompt
         assert "Authorized humans" not in prompt
-        assert "list_accessible_organizations" in prompt
-        assert "`organization_id` explicitly" in prompt
+        assert "Organization membership actions are unavailable" in prompt
+        assert "switch to that organization's workspace coordinator" in prompt
+        assert "list_accessible_organizations" not in prompt
 
     def test_regular_assistant_gets_updated_coordinator_reference_block(self):
         prompt = _build(workspace_coordinator_name="Avery Coordinator")
@@ -307,8 +308,8 @@ class TestPromptSectionOwnershipMatrix:
                 "present": (
                     "**Coordinator workspace tools:**",
                     "Boss details\n------------",
-                    "list_accessible_organizations",
-                    "organization_id",
+                    "Organization membership actions are unavailable",
+                    "switch to that organization's workspace coordinator",
                 ),
                 "absent": (
                     "Authorized humans\n-----------------",

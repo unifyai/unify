@@ -86,7 +86,8 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
             Structured assistant-create overrides merged with coordinator
             defaults (for example ``create_infra`` and ``is_local``).
         organization_id : int | None, optional
-            Optional explicit organization target for assistant creation.
+            Optional explicit organization target. When provided, it must match
+            the active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
@@ -120,7 +121,8 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         agent_id : int
             Assistant identifier to delete after explicit confirmation.
         organization_id : int | None, optional
-            Optional explicit organization scope for reachability validation.
+            Optional explicit organization id. When provided, it must match the
+            active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
@@ -155,7 +157,8 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
             ``max_parallel``, ``desktop_mode``, and voice fields
             (``voice_id`` with ``voice_provider``).
         organization_id : int | None, optional
-            Optional explicit organization scope for reachability validation.
+            Optional explicit organization id. When provided, it must match the
+            active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
@@ -190,7 +193,8 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         agent_id : int | None, optional
             Optional assistant id filter for exact match lookup.
         organization_id : int | None, optional
-            Optional explicit organization scope for assistant lookup.
+            Optional explicit organization id. When provided, it must match the
+            active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
@@ -201,13 +205,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
             agent_id=agent_id,
             organization_id=organization_id,
         )
-
-    def list_accessible_organizations(self) -> list[dict[str, Any]] | ToolError:
-        """List organizations accessible to the authenticated coordinator user."""
-        permission_error = self._require_coordinator_role()
-        if permission_error is not None:
-            return permission_error
-        return self._delegate.list_accessible_organizations()
 
     def list_org_members(
         self,
@@ -224,8 +221,8 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         Parameters
         ----------
         organization_id : int | None, optional
-            Explicit organization id for membership lookup. When omitted,
-            runtime context resolves one accessible organization automatically.
+            Optional explicit organization id. When provided, it must match the
+            active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
@@ -247,8 +244,8 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         Parameters
         ----------
         organization_id : int | None, optional
-            Explicit organization id for the invite. When omitted, runtime
-            context resolves one accessible organization automatically.
+            Optional explicit organization id. When provided, it must match the
+            active workspace organization for this Coordinator session.
         email : str
             Email address to invite into the organization.
         role_name : InviteOrgRoleName | None, optional
@@ -289,7 +286,8 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
             ``Tasks``, ``Knowledge``, ``Guidance``, ``Data``,
             ``Functions/<name>``, and ``Dashboards/<name>``.
         organization_id : int | None, optional
-            Optional explicit organization scope for reachability validation.
+            Optional explicit organization id. When provided, it must match the
+            active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
@@ -322,8 +320,8 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         description : str
             Human-readable summary of workspace intent.
         organization_id : int | None, optional
-            Optional explicit organization target. When omitted, runtime context
-            resolves a single accessible organization or falls back to personal scope.
+            Optional explicit organization target. When provided, it must match
+            the active workspace organization for this Coordinator session.
         owner_user_id : str | None, optional
             Reserved field for API parity; ownership derives from coordinator scope.
         """
@@ -354,8 +352,8 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         space_id : int
             Workspace identifier to delete.
         organization_id : int | None, optional
-            Optional explicit organization id used for workspace reachability
-            validation in multi-org contexts.
+            Optional explicit organization id. When provided, it must match the
+            active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
@@ -386,8 +384,8 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
             Partial update payload for editable workspace fields.
             Accepted keys are ``name`` and ``description``.
         organization_id : int | None, optional
-            Optional explicit organization id used for workspace reachability
-            validation in multi-org contexts.
+            Optional explicit organization id. When provided, it must match the
+            active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
@@ -422,8 +420,8 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         member_user_id : str | None, optional
             Organization user id to add as a human member.
         organization_id : int | None, optional
-            Explicit organization id used for org-member validation when
-            ``member_user_id`` is provided.
+            Optional explicit organization id. When provided, it must match the
+            active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
@@ -455,8 +453,8 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         assistant_id : int
             Assistant identifier to remove from membership.
         organization_id : int | None, optional
-            Optional explicit organization id used for workspace reachability
-            validation in multi-org contexts.
+            Optional explicit organization id. When provided, it must match the
+            active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
@@ -482,8 +480,8 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         Parameters
         ----------
         organization_id : int | None, optional
-            Optional explicit organization target. When omitted, runtime context
-            resolves a single accessible organization or falls back to personal scope.
+            Optional explicit organization target. When provided, it must match
+            the active workspace organization for this Coordinator session.
         owner_user_id : str | None, optional
             Reserved field for caller parity.
         """
@@ -512,8 +510,8 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         space_id : int
             Workspace identifier whose membership should be listed.
         organization_id : int | None, optional
-            Optional explicit organization id used for workspace reachability
-            validation in multi-org contexts.
+            Optional explicit organization id. When provided, it must match the
+            active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
@@ -539,7 +537,8 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         assistant_id : int
             Assistant identifier whose workspace memberships should be listed.
         organization_id : int | None, optional
-            Optional explicit organization scope for assistant reachability checks.
+            Optional explicit organization id. When provided, it must match the
+            active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
@@ -598,7 +597,8 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         space_id : int | None, optional
             Optional explicit workspace id to reuse instead of name lookup.
         organization_id : int | None, optional
-            Explicit organization id for workspace resolution/creation.
+            Optional explicit organization id. When provided, it must match the
+            active workspace organization for this Coordinator session.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:

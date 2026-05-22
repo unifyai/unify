@@ -448,15 +448,22 @@ def _build_comms_tool_listing(
     return "\n".join(lines)
 
 
-def _build_coordinator_workspace_tool_listing() -> str:
+def _build_coordinator_workspace_tool_listing(*, is_org_workspace: bool) -> str:
     """Build the Coordinator workspace tools block for the output format section."""
     lines = [
         "- `act` is the execution path for privileged Coordinator workspace lifecycle operations.",
         "- Inside `act`, use `primitives.coordinator.*` for assistant/space/membership/checklist reads and mutations.",
         "- Before running coordinator mutations inside `act`, gather identifiers and confirmation details in chat unless the request is already explicit and unambiguous.",
         "- Prefer one `act` request that executes the full confirmed setup step (and validates outcomes) over fragmented no-op turns.",
-        "- Use `primitives.coordinator.list_accessible_organizations` to resolve organization ids before org-scoped mutations. If multiple candidate organizations exist, ask for clarification and then pass `organization_id` explicitly on org membership and workspace calls.",
     ]
+    if is_org_workspace:
+        lines.append(
+            "- `primitives.coordinator.list_org_members` and `primitives.coordinator.invite_org_member` are organization-scoped and always target the active workspace organization.",
+        )
+    else:
+        lines.append(
+            "- Organization membership actions are unavailable in personal workspace coordinator sessions. If the user asks for org actions, direct them to switch to that organization's workspace coordinator.",
+        )
     return "\n".join(lines)
 
 
@@ -1257,7 +1264,9 @@ def build_system_prompt(
     coordinator_workspace_tool_listing = ""
     coordinator_knowledge_tool_listing = ""
     if is_coordinator and not demo_mode:
-        coordinator_workspace_tool_listing = _build_coordinator_workspace_tool_listing()
+        coordinator_workspace_tool_listing = _build_coordinator_workspace_tool_listing(
+            is_org_workspace=coordinator_has_org_context,
+        )
         coordinator_knowledge_tool_listing = _build_coordinator_knowledge_tool_listing()
     action_steering_tool_listing = _build_action_steering_tool_listing()
 
