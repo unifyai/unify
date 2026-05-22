@@ -18,7 +18,11 @@ from typing import Any, Mapping
 
 import requests
 
-from unity.common.context_registry import ContextRegistry, SPACE_DESTINATION_PREFIX
+from unity.common.context_registry import (
+    ContextRegistry,
+    PERSONAL_DESTINATION,
+    SPACE_DESTINATION_PREFIX,
+)
 from unity.session_details import SESSION_DETAILS
 from unity.settings import SETTINGS
 
@@ -604,8 +608,11 @@ def get_task_activation(
     """Return the current activation row for one assistant/task pair, if any."""
 
     normalized_destination = _canonical_destination_or_none(destination)
-    raw_destination = _coerce_str(destination)
-    if normalized_destination is None and raw_destination not in {"", "personal"}:
+    if normalized_destination is None and destination not in (
+        None,
+        "",
+        PERSONAL_DESTINATION,
+    ):
         return None
     activation_key = build_activation_key(
         assistant_id=assistant_id,
