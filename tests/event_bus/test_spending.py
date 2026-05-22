@@ -202,6 +202,7 @@ class TestAtomicUpsert:
                 mock_session.user.id = "user123"
                 mock_session.assistant.agent_id = 456
                 mock_session.org_id = 789  # Set org context
+                mock_session.workspace_org_id = 789
                 mock_session.org_name = "TestOrg"  # Set org name
 
                 with patch("unity.common.log_utils.SETTINGS") as mock_settings:
@@ -729,6 +730,7 @@ class TestPersonalContextLimitChecks:
                 mock_session.assistant.agent_id = 123
                 mock_session.user_id = "user_456"
                 mock_session.org_id = None  # Personal context
+                mock_session.workspace_org_id = None
                 mock_session.assistant.timezone = "UTC"
 
                 with patch(

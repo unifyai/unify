@@ -57,6 +57,7 @@ def _patch_context(*, org_id=None):
             mock_session.assistant.agent_id = 1
             mock_session.user_id = "user_1"
             mock_session.org_id = org_id
+            mock_session.workspace_org_id = org_id
             mock_session.assistant.timezone = "UTC"
             self._stack.append(stack)
             return mock_session

@@ -402,6 +402,7 @@ class TestBuildBrainSpecCoordinatorPrompt:
                     "first_name": "Avery",
                     "surname": "Coordinator",
                     "is_coordinator": True,
+                    "organization_id": 7,
                 },
             ],
         ) as list_assistants:
@@ -411,10 +412,7 @@ class TestBuildBrainSpecCoordinatorPrompt:
         assert "Team Coordinator" in prompt
         assert "Avery Coordinator" in prompt
         assert "Escalate to Avery Coordinator" in prompt
-        list_assistants.assert_called_once_with(
-            list_all_org=True,
-            api_key="owner-key",
-        )
+        list_assistants.assert_called_once_with(api_key="owner-key")
 
     def test_coordinator_prompt_does_not_render_reciprocal_block(self):
         SESSION_DETAILS.org_id = 7

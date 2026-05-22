@@ -1254,6 +1254,8 @@ class TestStartupEvents:
                     "user_email": "user@test.com",
                     "voice_provider": "cartesia",
                     "voice_id": "voice_1",
+                    "org_id": 3,
+                    "workspace_org_id": 7,
                     "space_ids": [3, 7],
                     "space_summaries": [
                         {
@@ -1286,6 +1288,8 @@ class TestStartupEvents:
             ]
             assert event.self_contact_id == 42
             assert event.boss_contact_id == 43
+            assert event.org_id == 3
+            assert event.workspace_org_id == 7
             assert event.update_kind == "membership"
 
     @pytest.mark.asyncio
