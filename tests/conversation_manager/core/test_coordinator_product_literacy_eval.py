@@ -414,13 +414,8 @@ class _RecordingTools:
 
         return list(_ACCESSIBLE_ORGANIZATIONS)
 
-    def list_org_members(
-        self,
-        *,
-        organization_id: int | None = None,
-    ) -> list[dict[str, Any]]:
+    def list_org_members(self) -> list[dict[str, Any]]:
         """List human organization members reachable from Coordinator scope."""
-        del organization_id
         return list(_AUTHORIZED_HUMANS)
 
     def pre_seed_colleague(
@@ -452,7 +447,6 @@ class _RecordingTools:
         *,
         name: str,
         description: str,
-        organization_id: int | None = None,
         owner_user_id: str | None = None,
     ) -> dict[str, Any]:
         """Create a shared workspace after explicit setup confirmation.
@@ -465,7 +459,6 @@ class _RecordingTools:
             "space_id": 8101,
             "name": name,
             "description": description,
-            "organization_id": organization_id,
             "owner_user_id": owner_user_id,
         }
 
@@ -473,10 +466,8 @@ class _RecordingTools:
         self,
         *,
         space_id: int,
-        organization_id: int | None = None,
     ) -> dict[str, Any]:
         """Delete a reachable shared workspace after explicit confirmation."""
-        del organization_id
         return {"status": "deleted", "space_id": space_id}
 
     def update_space(
@@ -484,10 +475,8 @@ class _RecordingTools:
         *,
         space_id: int,
         patch: dict[str, Any],
-        organization_id: int | None = None,
     ) -> dict[str, Any]:
         """Update metadata for a reachable shared workspace."""
-        del organization_id
         return {"status": "updated", "space_id": space_id, "patch": patch}
 
     def add_space_member(
@@ -496,10 +485,8 @@ class _RecordingTools:
         space_id: int,
         assistant_id: int | None = None,
         member_user_id: str | None = None,
-        organization_id: int | None = None,
     ) -> dict[str, Any]:
         """Add exactly one assistant or org member to a reachable workspace."""
-        del organization_id
         return {
             "status": "added",
             "space_id": space_id,
@@ -512,21 +499,18 @@ class _RecordingTools:
         *,
         space_id: int,
         assistant_id: int,
-        organization_id: int | None = None,
     ) -> dict[str, Any]:
         """Remove a reachable assistant colleague from a reachable workspace."""
-        del organization_id
         return {"status": "removed", "space_id": space_id, "assistant_id": assistant_id}
 
     def list_spaces(
         self,
         *,
-        organization_id: int | None = None,
         owner_user_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """List shared workspaces visible to the current Coordinator."""
 
-        del organization_id, owner_user_id
+        del owner_user_id
         return [
             {"space_id": 3101, "name": "CashOps"},
             {"space_id": 3102, "name": "Invoice Sandbox"},
@@ -537,10 +521,8 @@ class _RecordingTools:
         self,
         *,
         space_id: int,
-        organization_id: int | None = None,
     ) -> list[dict[str, Any]]:
         """List assistant members for a reachable shared workspace."""
-        del organization_id
         return [
             {"space_id": space_id, "assistant_id": 7002, "name": "Revenue Ops"},
             {"space_id": space_id, "assistant_id": 7004, "name": "Contractor Bot"},
