@@ -185,6 +185,7 @@ class TestCoordinatorOnboardingManager:
                     "first_name": "Avery",
                     "surname": "Coordinator",
                     "is_coordinator": True,
+                    "organization_id": 7,
                 },
             ],
         ) as list_assistants:
@@ -225,6 +226,7 @@ class TestCoordinatorOnboardingManager:
                         "first_name": "Avery",
                         "surname": "Coordinator",
                         "is_coordinator": True,
+                        "organization_id": 7,
                     },
                 ],
             ],
@@ -249,6 +251,7 @@ class TestCoordinatorOnboardingManager:
                         "first_name": "Avery",
                         "surname": "Coordinator",
                         "is_coordinator": True,
+                        "organization_id": 7,
                     },
                 ],
                 [
@@ -256,17 +259,26 @@ class TestCoordinatorOnboardingManager:
                         "first_name": "Blair",
                         "surname": "Coordinator",
                         "is_coordinator": True,
+                        "organization_id": 8,
+                    },
+                ],
+                [
+                    {
+                        "first_name": "Casey",
+                        "surname": "Coordinator",
+                        "is_coordinator": True,
+                        "organization_id": 8,
                     },
                 ],
             ],
         ) as list_assistants:
             assert manager.get_workspace_coordinator_name() == "Avery Coordinator"
             SESSION_DETAILS.org_id = 8
-            assert manager.get_workspace_coordinator_name() == "Avery Coordinator"
-            SESSION_DETAILS.unify_key = "admin-key"
             assert manager.get_workspace_coordinator_name() == "Blair Coordinator"
+            SESSION_DETAILS.unify_key = "admin-key"
+            assert manager.get_workspace_coordinator_name() == "Casey Coordinator"
 
-        assert list_assistants.call_count == 2
+        assert list_assistants.call_count == 3
 
     def test_coordinator_name_lookup_does_not_create_onboarding_contexts(self):
         SESSION_DETAILS.org_id = 7
@@ -283,6 +295,7 @@ class TestCoordinatorOnboardingManager:
                         "first_name": "Avery",
                         "surname": "Coordinator",
                         "is_coordinator": True,
+                        "organization_id": 7,
                     },
                 ],
             ):
