@@ -477,19 +477,21 @@ _TASK_SCHEDULING_WORKFLOWS = textwrap.dedent("""
     - "Whenever Alice emails about invoices, summarize it and draft a reply"
     - "Turn what we just did into a recurring workflow"
 
-    Natural-language recurring tasks should normally start as live
-    description-driven tasks with `entrypoint=None`. The future due wake will
-    call `primitives.tasks.execute(task_id=...)`; execution then runs a
-    contained child actor dedicated to that task. Do not write and attach an
-    untested entrypoint function at task creation unless the user explicitly
-    requested a stored function-backed workflow.
+    Natural-language recurring tasks should normally start as description-driven
+    tasks with `entrypoint=None`. The future due wake will call
+    `primitives.tasks.execute(task_id=...)`; execution then runs a contained
+    child actor dedicated to that task. Do not write and attach an untested
+    entrypoint function at task creation unless the user explicitly requested a
+    stored function-backed workflow.
 
     If a workflow has just been completed interactively and the user wants it
     repeated, include the relevant context in the task description. Use
     `store_skills` or direct FunctionManager writes only when the user asks to
     store the workflow, or when the completed trajectory clearly reveals a
-    reusable function worth saving. Offline tasks require a stored entrypoint;
-    description-only recurring work should remain live.
+    reusable function worth saving. Offline delivery is independent from
+    execution style: an offline task can still be description-driven, and a
+    stored entrypoint is only a symbolic executor candidate until certification
+    approves unattended promotion.
 """).strip()
 
 

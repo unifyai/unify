@@ -9,10 +9,59 @@ from unity.task_scheduler.types.repetition import (
     Frequency,
     RepeatPattern,
     Weekday,
+    normalize_repeat_patterns,
     next_repeated_start_at,
 )
 from unity.task_scheduler.types.schedule import Schedule
 from unity.task_scheduler.types.status import Status
+
+
+def _passing_certification_metadata():
+    return {
+        "certification_evidence": {
+            "risk_classification": "read_only",
+            "input_contract": {
+                "required_inputs": ["scheduled_run_timestamp", "task_id"],
+            },
+            "equivalence_contract": {
+                "result_shape": "string summary",
+                "live_step_mapping": [
+                    "live web primitive call -> candidate primitives.web.ask call",
+                ],
+            },
+            "managed_primitive_contract": {
+                "preserved": True,
+                "managed_surfaces": ["primitives.web.ask"],
+                "ad_hoc_replacements": [],
+            },
+            "side_effect_contract": {
+                "side_effects": ["read web source before summarizing"],
+                "ordering": "read source before summarizing",
+            },
+            "idempotency_contract": {
+                "classification": "read_only",
+                "duplicate_run_behavior": "safe",
+            },
+            "cost_contract": {
+                "bounded": True,
+                "cost_model": "one managed web primitive call and one summary",
+            },
+            "failure_contract": {
+                "failure_semantics": "return a blocker summary for source failures",
+            },
+            "observability_contract": {
+                "result_summary": "string summary or blocker summary",
+            },
+            "attestations": {
+                "no_hardcoded_live_observations": True,
+                "no_removed_validation_gates": True,
+                "no_reordered_side_effects": True,
+                "no_discarded_recovery_branches": True,
+                "no_static_runtime_assumptions": True,
+                "no_ad_hoc_logic_replaced_managed_primitives": True,
+            },
+        },
+    }
 
 
 def test_next_repeated_start_at_skips_past_occurrences():
@@ -56,6 +105,94 @@ def test_next_repeated_start_at_honors_weekdays_and_count():
     assert exhausted is None
 
 
+def test_next_repeated_start_at_supports_minutely_cadence():
+    pattern = RepeatPattern(frequency=Frequency.MINUTELY, interval=30)
+    previous_start = datetime(2026, 5, 19, 9, 30, tzinfo=timezone.utc)
+
+    next_start = next_repeated_start_at(
+        previous_start=previous_start,
+        patterns=[pattern],
+        current_occurrence_index=0,
+        now=datetime(2026, 5, 19, 9, 31, tzinfo=timezone.utc),
+    )
+
+    assert next_start == datetime(2026, 5, 19, 10, 0, tzinfo=timezone.utc)
+
+
+def test_next_repeated_start_at_skips_missed_subdaily_occurrences():
+    pattern = RepeatPattern(frequency=Frequency.MINUTELY, interval=30)
+    previous_start = datetime(2026, 5, 19, 9, 30, tzinfo=timezone.utc)
+
+    next_start = next_repeated_start_at(
+        previous_start=previous_start,
+        patterns=[pattern],
+        current_occurrence_index=0,
+        now=datetime(2026, 5, 19, 10, 7, tzinfo=timezone.utc),
+    )
+
+    assert next_start == datetime(2026, 5, 19, 10, 30, tzinfo=timezone.utc)
+
+
+def test_next_repeated_start_at_honors_subdaily_count_and_until():
+    previous_start = datetime(2026, 5, 19, 9, 30, tzinfo=timezone.utc)
+
+    exhausted_by_count = next_repeated_start_at(
+        previous_start=previous_start,
+        patterns=[RepeatPattern(frequency=Frequency.MINUTELY, interval=30, count=1)],
+        current_occurrence_index=0,
+        now=datetime(2026, 5, 19, 9, 31, tzinfo=timezone.utc),
+    )
+    assert exhausted_by_count is None
+
+    exhausted_by_until = next_repeated_start_at(
+        previous_start=previous_start,
+        patterns=[
+            RepeatPattern(
+                frequency=Frequency.MINUTELY,
+                interval=30,
+                until=datetime(2026, 5, 19, 9, 45, tzinfo=timezone.utc),
+            ),
+        ],
+        current_occurrence_index=0,
+        now=datetime(2026, 5, 19, 9, 31, tzinfo=timezone.utc),
+    )
+    assert exhausted_by_until is None
+
+
+def test_next_repeated_start_at_supports_same_day_daily_time_slots():
+    patterns = [
+        RepeatPattern(frequency=Frequency.DAILY, interval=1, time_of_day="09:30"),
+        RepeatPattern(frequency=Frequency.DAILY, interval=1, time_of_day="10:00"),
+        RepeatPattern(frequency=Frequency.DAILY, interval=1, time_of_day="10:30"),
+    ]
+    previous_start = datetime(2026, 5, 19, 9, 30, tzinfo=timezone.utc)
+
+    next_start = next_repeated_start_at(
+        previous_start=previous_start,
+        patterns=patterns,
+        current_occurrence_index=0,
+        now=datetime(2026, 5, 19, 9, 31, tzinfo=timezone.utc),
+    )
+
+    assert next_start == datetime(2026, 5, 19, 10, 0, tzinfo=timezone.utc)
+
+
+def test_normalize_repeat_patterns_collapses_full_day_half_hour_slots():
+    patterns = [
+        RepeatPattern(
+            frequency=Frequency.DAILY,
+            interval=1,
+            time_of_day=f"{hour:02d}:{minute:02d}:00",
+        )
+        for hour in range(24)
+        for minute in (0, 30)
+    ]
+
+    normalized = normalize_repeat_patterns(patterns)
+
+    assert normalized == [RepeatPattern(frequency=Frequency.MINUTELY, interval=30)]
+
+
 @_handle_project
 def test_clone_task_instance_rearms_recurring_scheduled_task():
     scheduler = TaskScheduler()
@@ -83,7 +220,7 @@ def test_clone_task_instance_rearms_recurring_scheduled_task():
 
 
 @_handle_project
-def test_entrypoint_review_patches_future_description_driven_instances():
+def test_entrypoint_review_records_symbolic_candidate_without_offline_promotion():
     scheduler = TaskScheduler()
     initial_start = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(
         hours=1,
@@ -109,8 +246,184 @@ def test_entrypoint_review_patches_future_description_driven_instances():
     current_row = min(rows, key=lambda task: task.instance_id)
     future_row = max(rows, key=lambda task: task.instance_id)
 
-    assert result["outcome"] == "attached"
+    assert result["outcome"] == "candidate_recorded"
     assert current_row.entrypoint is None
+    assert future_row.entrypoint == 321
+    assert future_row.offline is False
+    assert result["certification_status"] == "required_before_offline_promotion"
+
+
+@_handle_project
+def test_offline_promotion_requires_passing_certification():
+    scheduler = TaskScheduler()
+    initial_start = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(
+        hours=1,
+    )
+    scheduler._create_task(
+        name="Daily certified summary",
+        description="Summarize updates every day.",
+        status=Status.scheduled,
+        schedule=Schedule(start_at=initial_start.isoformat()),
+        repeat=[RepeatPattern(frequency=Frequency.DAILY)],
+    )
+
+    current = scheduler._get_task_or_raise(0)
+    scheduler._clone_task_instance(current)
+    scheduler._attach_entrypoint_to_future_instances(
+        task_id=0,
+        completed_instance_id=0,
+        function_id=321,
+        rationale="The successful run revealed a stable workflow.",
+    )
+
+    rejected = scheduler._promote_symbolic_candidate_to_offline(
+        task_id=0,
+        completed_instance_id=0,
+        function_id=321,
+        certification_metadata={},
+        certification_result={
+            "evidence_based": True,
+            "executed_entrypoint": False,
+        },
+    )
+
+    future_row = max(
+        scheduler._filter_tasks(filter="task_id == 0"),
+        key=lambda task: task.instance_id,
+    )
+    assert rejected["outcome"] == "certification_rejected"
+    assert "missing_certification_evidence" in rejected["rejection_reasons"]
+    assert future_row.entrypoint == 321
+    assert future_row.offline is False
+
+
+@_handle_project
+def test_offline_promotion_rejects_failed_certification_attestation():
+    scheduler = TaskScheduler()
+    initial_start = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(
+        hours=1,
+    )
+    scheduler._create_task(
+        name="Daily certified summary",
+        description="Summarize updates every day.",
+        status=Status.scheduled,
+        schedule=Schedule(start_at=initial_start.isoformat()),
+        repeat=[RepeatPattern(frequency=Frequency.DAILY)],
+    )
+
+    current = scheduler._get_task_or_raise(0)
+    scheduler._clone_task_instance(current)
+    scheduler._attach_entrypoint_to_future_instances(
+        task_id=0,
+        completed_instance_id=0,
+        function_id=321,
+        rationale="The successful run revealed a stable workflow.",
+    )
+    metadata = _passing_certification_metadata()
+    metadata["certification_evidence"]["attestations"][
+        "no_static_runtime_assumptions"
+    ] = False
+
+    rejected = scheduler._promote_symbolic_candidate_to_offline(
+        task_id=0,
+        completed_instance_id=0,
+        function_id=321,
+        certification_metadata=metadata,
+        certification_result={
+            "evidence_based": True,
+            "executed_entrypoint": False,
+        },
+    )
+
+    assert rejected["outcome"] == "certification_rejected"
+    assert (
+        "failed_attestation:no_static_runtime_assumptions"
+        in rejected["rejection_reasons"]
+    )
+
+
+@_handle_project
+def test_offline_promotion_rejects_ad_hoc_primitive_replacements():
+    scheduler = TaskScheduler()
+    initial_start = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(
+        hours=1,
+    )
+    scheduler._create_task(
+        name="Daily certified summary",
+        description="Summarize updates every day.",
+        status=Status.scheduled,
+        schedule=Schedule(start_at=initial_start.isoformat()),
+        repeat=[RepeatPattern(frequency=Frequency.DAILY)],
+    )
+
+    current = scheduler._get_task_or_raise(0)
+    scheduler._clone_task_instance(current)
+    scheduler._attach_entrypoint_to_future_instances(
+        task_id=0,
+        completed_instance_id=0,
+        function_id=321,
+        rationale="The successful run revealed a stable workflow.",
+    )
+    metadata = _passing_certification_metadata()
+    metadata["certification_evidence"]["managed_primitive_contract"][
+        "ad_hoc_replacements"
+    ] = ["replaced primitives.web.ask with urllib scraping"]
+
+    rejected = scheduler._promote_symbolic_candidate_to_offline(
+        task_id=0,
+        completed_instance_id=0,
+        function_id=321,
+        certification_metadata=metadata,
+        certification_result={
+            "evidence_based": True,
+            "executed_entrypoint": False,
+        },
+    )
+
+    assert rejected["outcome"] == "certification_rejected"
+    assert "ad_hoc_logic_replaced_managed_primitive" in rejected["rejection_reasons"]
+
+
+@_handle_project
+def test_passing_certification_promotes_candidate_future_instances_offline():
+    scheduler = TaskScheduler()
+    initial_start = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(
+        hours=1,
+    )
+    scheduler._create_task(
+        name="Daily certified summary",
+        description="Summarize updates every day.",
+        status=Status.scheduled,
+        schedule=Schedule(start_at=initial_start.isoformat()),
+        repeat=[RepeatPattern(frequency=Frequency.DAILY)],
+    )
+
+    current = scheduler._get_task_or_raise(0)
+    scheduler._clone_task_instance(current)
+    scheduler._attach_entrypoint_to_future_instances(
+        task_id=0,
+        completed_instance_id=0,
+        function_id=321,
+        rationale="The successful run revealed a stable workflow.",
+    )
+
+    promoted = scheduler._promote_symbolic_candidate_to_offline(
+        task_id=0,
+        completed_instance_id=0,
+        function_id=321,
+        certification_metadata=_passing_certification_metadata(),
+        certification_result={
+            "evidence_based": True,
+            "executed_entrypoint": False,
+            "result_summary": "dry run completed",
+        },
+    )
+
+    future_row = max(
+        scheduler._filter_tasks(filter="task_id == 0"),
+        key=lambda task: task.instance_id,
+    )
+    assert promoted["outcome"] == "offline_promoted"
     assert future_row.entrypoint == 321
     assert future_row.offline is True
 
@@ -147,7 +460,7 @@ async def test_recurring_execution_clones_before_entrypoint_review_patch():
         function_id=321,
         rationale="The completed run was stable enough to reuse.",
     )
-    assert result["outcome"] == "attached"
+    assert result["outcome"] == "candidate_recorded"
 
     patched_next = [
         row
@@ -155,7 +468,7 @@ async def test_recurring_execution_clones_before_entrypoint_review_patch():
         if row.instance_id == 1
     ][0]
     assert patched_next.entrypoint == 321
-    assert patched_next.offline is True
+    assert patched_next.offline is False
 
     scheduler._clone_task_instance(patched_next)
     cloned_from_patched = [
@@ -164,7 +477,7 @@ async def test_recurring_execution_clones_before_entrypoint_review_patch():
         if row.instance_id == 2
     ][0]
     assert cloned_from_patched.entrypoint == 321
-    assert cloned_from_patched.offline is True
+    assert cloned_from_patched.offline is False
 
 
 @_handle_project

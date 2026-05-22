@@ -253,16 +253,16 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
         task's natural-language name/description and metadata. This is the
         normal default for newly described recurring workflows.
 
-        Offline tasks run in the hidden headless lane and must have a numeric
-        entrypoint before ``offline=True`` is set. Do not create a description-only
-        offline task.
+        Offline tasks run in the hidden headless lane. Offline is a delivery
+        choice only: description-driven offline tasks keep ``entrypoint=None``
+        and symbolic offline tasks use a numeric ``entrypoint``.
 
         Do not create an entrypoint function merely because a new recurring task
         was described. Entrypoint persistence should follow an explicit user
         request or a successful execution reviewed as stable enough to store.
         Stored functions may still use focused ``reason(...)`` calls for bounded
-        semantic judgment, but open-ended planning/tool discovery should remain
-        actor-driven.
+        semantic judgment, but future offline promotion requires separate
+        certification that the stored executor preserves the observed workflow.
 
         All parameters mirror :pymeth:`ask`; refer there for detailed
         semantics.
@@ -311,7 +311,8 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
         When a run-scoped execution environment is available, task execution is
         delegated through that environment while keeping one returned handle per
         task run. A task without an entrypoint is executed by a contained actor
-        run dedicated to that task. Without a run-scoped delegate, direct
+        run dedicated to that task. Offline delivery uses the same delegate
+        contract headlessly. Without a run-scoped delegate, direct
         execution requires an explicitly configured actor; otherwise execution
         fails loudly instead of silently using a simulated fallback.
 

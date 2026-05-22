@@ -86,8 +86,8 @@ This package manages the creation, scheduling, execution, and re‑ordering of t
 6) Offline activation
    - Offline means the hidden headless lane: the live ConversationManager and main actor are not woken.
    - Offline scheduled activations use Cloud Tasks targeting Communication's offline-dispatch endpoint, which creates a short-lived Unity Kubernetes job.
-   - The job runs `offline_runner.py`, which executes exactly one stored FunctionManager entrypoint through `SingleFunctionActor(headless=True)`.
-   - Offline tasks require an entrypoint. Description-only tasks should remain live unless a later successful run is distilled into a stored function.
+   - The job runs `offline_runner.py`, which starts the same actor substrate headlessly and delegates through `TaskScheduler.execute(...)`.
+   - Offline delivery is independent from execution style. Agentic offline tasks keep `entrypoint=None`; symbolic offline tasks use a stored FunctionManager entrypoint.
 
 
 ### Queue/schedule invariants (enforced centrally)
@@ -119,10 +119,10 @@ This package manages the creation, scheduling, execution, and re‑ordering of t
 
 ### Entrypoints and description-driven execution
 
-- `entrypoint` is optional for live tasks. When it is null, execution is actor-driven: a contained child actor run interprets the task name, description, schedule/trigger metadata, repeat pattern, and response policy.
-- `entrypoint` is required for offline tasks because the headless lane executes one stored function without booting the live assistant runtime.
+- `entrypoint` is optional for all tasks. When it is null, execution is actor-driven: a contained child actor run interprets the task name, description, schedule/trigger metadata, repeat pattern, and response policy.
+- `offline` controls delivery only. The headless lane still runs through the actor substrate; `entrypoint` controls whether that actor run is symbolic.
 - Direct `TaskScheduler.execute(...)` needs either a run-scoped actor delegate or an explicitly configured actor. A production live wake normally reaches execution through `Actor.act` and `primitives.tasks.execute(...)`; tests can still inject a simulated actor explicitly.
-- After a successful recurring or triggerable description-driven run, the actor always runs a storage review that considers whether the observed trajectory is stable enough to store as a function. The write is conditional: if future runs still need broad planning or tool discovery, the task remains description-driven. Stored functions may still use focused `reason(...)` calls for bounded judgment.
+- After a successful recurring or triggerable description-driven run, the actor always runs a storage review that considers whether the observed trajectory is stable enough to store as a function. The write is conditional: if future runs still need broad planning or tool discovery, the task remains description-driven. Stored functions may still use focused `reason(...)` calls for bounded judgment. Recording an entrypoint candidate does not promote future instances offline; offline promotion requires separate certification.
 
 
 ### Clarification and contacts

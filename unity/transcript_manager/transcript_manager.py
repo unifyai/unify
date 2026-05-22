@@ -599,6 +599,7 @@ class TranscriptManager(BaseTranscriptManager):
                 import threading
 
                 from .activity_sync import touch_assistant_activity
+                from unity.session_details import SESSION_DETAILS
 
                 agent_id = getattr(SESSION_DETAILS.assistant, "agent_id", None)
                 if agent_id is not None:
@@ -1288,6 +1289,7 @@ class TranscriptManager(BaseTranscriptManager):
             import threading
 
             from .activity_sync import touch_assistant_activity
+            from unity.session_details import SESSION_DETAILS
 
             agent_id = getattr(SESSION_DETAILS.assistant, "agent_id", None)
             if agent_id is not None:
