@@ -58,7 +58,9 @@ class CoordinatorOnboardingManager(BaseStateManager, metaclass=SingletonABCMeta)
         self._checklist_context: str | None = None
         self._org_members_cache_key: tuple[int | None, str] | object = _CACHE_EMPTY
         self._org_members_cache: list[dict[str, Any]] | object = _CACHE_EMPTY
-        self._workspace_coordinator_name_cache_key: str | None | object = _CACHE_EMPTY
+        self._workspace_coordinator_name_cache_key: tuple[int | None, str] | object = (
+            _CACHE_EMPTY
+        )
         self._workspace_coordinator_name_cache: str | None | object = _CACHE_EMPTY
 
     def get_checklist(self) -> list[dict[str, Any]]:
@@ -81,14 +83,15 @@ class CoordinatorOnboardingManager(BaseStateManager, metaclass=SingletonABCMeta)
         ):
             return self._org_members_cache  # type: ignore[return-value]
 
-        if SESSION_DETAILS.org_id is None:
+        workspace_org_id = SESSION_DETAILS.workspace_org_id
+        if workspace_org_id is None:
             self._org_members_cache_key = cache_key
             self._org_members_cache = []
             return []
 
         try:
             members = unify.list_org_members(
-                SESSION_DETAILS.org_id,
+                workspace_org_id,
                 api_key=SESSION_DETAILS.unify_key,
             )
         except RequestError:
@@ -112,11 +115,16 @@ class CoordinatorOnboardingManager(BaseStateManager, metaclass=SingletonABCMeta)
         except RequestError:
             return None
 
+        workspace_org_id = SESSION_DETAILS.workspace_org_id
         coordinator_name = next(
             (
                 _assistant_display_name(assistant)
                 for assistant in assistants
                 if assistant.get("is_coordinator") is True
+                and _assistant_matches_workspace(
+                    assistant=assistant,
+                    workspace_org_id=workspace_org_id,
+                )
             ),
             None,
         )
@@ -307,11 +315,33 @@ _CACHE_EMPTY = object()
 
 
 def _org_members_cache_key() -> tuple[int | None, str]:
-    return SESSION_DETAILS.org_id, SESSION_DETAILS.unify_key
+    return SESSION_DETAILS.workspace_org_id, SESSION_DETAILS.unify_key
 
 
-def _workspace_coordinator_cache_key() -> str | None:
-    return SESSION_DETAILS.unify_key
+def _workspace_coordinator_cache_key() -> tuple[int | None, str]:
+    return SESSION_DETAILS.workspace_org_id, SESSION_DETAILS.unify_key
+
+
+def _coerce_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _assistant_workspace_org_id(assistant: dict[str, Any]) -> int | None:
+    workspace_org_id = _coerce_int(assistant.get("workspace_org_id"))
+    if workspace_org_id is not None:
+        return workspace_org_id
+    return _coerce_int(assistant.get("organization_id") or assistant.get("org_id"))
+
+
+def _assistant_matches_workspace(
+    *,
+    assistant: dict[str, Any],
+    workspace_org_id: int | None,
+) -> bool:
+    return _assistant_workspace_org_id(assistant) == workspace_org_id
 
 
 def _assistant_display_name(assistant: dict[str, Any]) -> str | None:

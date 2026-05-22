@@ -543,7 +543,7 @@ class CoordinatorTools:
             if _is_tool_error(resolved_organization_id):
                 return resolved_organization_id
 
-        list_all_org = SESSION_DETAILS.org_id is not None or (
+        list_all_org = SESSION_DETAILS.workspace_org_id is not None or (
             resolved_organization_id is not None
         )
         try:
@@ -1902,8 +1902,8 @@ class CoordinatorTools:
     ) -> int | None | ToolError:
         if requested_organization_id is not None:
             return requested_organization_id
-        if SESSION_DETAILS.org_id is not None:
-            return SESSION_DETAILS.org_id
+        if SESSION_DETAILS.workspace_org_id is not None:
+            return SESSION_DETAILS.workspace_org_id
         organizations = self.list_accessible_organizations()
         if _is_tool_error(organizations):
             return organizations

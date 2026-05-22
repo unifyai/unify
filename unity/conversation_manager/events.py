@@ -1018,6 +1018,7 @@ class _SessionConfigBase(Event):
     user_desktop_filesys_sync: bool = False
     user_desktop_url: str | None = None
     org_id: int | None = None
+    workspace_org_id: int | None = None
     org_name: str = ""
     team_ids: list[int] = field(default_factory=list)
     space_ids: list[int] = field(default_factory=list)

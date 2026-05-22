@@ -53,7 +53,7 @@ class ColleagueNameCache:
     def _ensure_session_scope(self) -> None:
         """Invalidate cached lookups when org/key scope changes."""
 
-        current_key = (SESSION_DETAILS.org_id, SESSION_DETAILS.unify_key)
+        current_key = (SESSION_DETAILS.workspace_org_id, SESSION_DETAILS.unify_key)
         if self._session_cache_key == current_key:
             return
         self._name_by_assistant_id.clear()
@@ -89,7 +89,7 @@ class ColleagueNameCache:
         try:
             assistants = unify.list_assistants(
                 agent_id=assistant_id,
-                list_all_org=SESSION_DETAILS.org_id is not None,
+                list_all_org=SESSION_DETAILS.workspace_org_id is not None,
                 api_key=SESSION_DETAILS.unify_key,
             )
         except RequestError:
