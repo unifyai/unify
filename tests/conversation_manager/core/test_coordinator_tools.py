@@ -26,6 +26,13 @@ class TestCoordinatorTools:
         SESSION_DETAILS.unify_key = "owner-key"
         SESSION_DETAILS.org_id = 7
 
+    @pytest.fixture(autouse=True)
+    def _mock_default_org_role(self, monkeypatch):
+        monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.list_organizations",
+            lambda **_: [{"id": 7, "name": "Acme", "role_name": "Owner"}],
+        )
+
     def teardown_method(self):
         SESSION_DETAILS.reset()
 
@@ -716,6 +723,10 @@ class TestCoordinatorTools:
         calls = []
 
         monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.list_organizations",
+            lambda **_: [{"id": 42, "name": "Acme Ops", "role_name": "Admin"}],
+        )
+        monkeypatch.setattr(
             "unity.conversation_manager.domains.coordinator_tools.unify.invite_org_member",
             lambda *args, **kwargs: calls.append((args, kwargs))
             or {"invitee_email": "sarah@example.com", "role_name": "Member"},
@@ -771,11 +782,128 @@ class TestCoordinatorTools:
         assert result["error_kind"] == "conflict"
         assert result["message"] == "User is already a member of this organization"
 
+    def test_workspace_mutations_require_owner_or_admin_role(self, monkeypatch):
+        mutation_calls = []
+
+        monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.list_organizations",
+            lambda **_: [{"id": 7, "name": "Acme", "role_name": "Member"}],
+        )
+        monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.invite_org_member",
+            lambda *args, **kwargs: mutation_calls.append(
+                ("invite_org_member", args, kwargs),
+            )
+            or {"ok": True},
+        )
+        monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.create_space",
+            lambda **kwargs: mutation_calls.append(("create_space", kwargs))
+            or {"space_id": 11},
+        )
+        monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.delete_space",
+            lambda *args, **kwargs: mutation_calls.append(
+                ("delete_space", args, kwargs),
+            )
+            or {"ok": True},
+        )
+        monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.update_space",
+            lambda *args, **kwargs: mutation_calls.append(
+                ("update_space", args, kwargs),
+            )
+            or {"space_id": 11},
+        )
+        monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.add_space_member",
+            lambda *args, **kwargs: mutation_calls.append(
+                ("add_space_member", args, kwargs),
+            )
+            or {"membership_status": "active"},
+        )
+        monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.remove_space_member",
+            lambda *args, **kwargs: mutation_calls.append(
+                ("remove_space_member", args, kwargs),
+            )
+            or {"ok": True},
+        )
+        monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.create_assistant",
+            lambda **kwargs: mutation_calls.append(("create_assistant", kwargs))
+            or {"agent_id": 42},
+        )
+
+        tools = CoordinatorTools(cm=object())
+        results = {
+            "invite_org_member": tools.invite_org_member(email="member-only@test.com"),
+            "create_space": tools.create_space(
+                name="Ops",
+                description="Operations workspace.",
+            ),
+            "delete_space": tools.delete_space(space_id=11),
+            "update_space": tools.update_space(space_id=11, patch={"name": "Ops v2"}),
+            "add_space_member": tools.add_space_member(space_id=11, assistant_id=42),
+            "remove_space_member": tools.remove_space_member(
+                space_id=11,
+                assistant_id=42,
+            ),
+            "commission_colleague_into_workspace": tools.commission_colleague_into_workspace(
+                assistant_first_name="Avery",
+                space_name="Ops",
+                space_description="Operations workspace.",
+                assistant_about="Runs operations workflows.",
+            ),
+        }
+
+        for operation_name, result in results.items():
+            assert result["error_kind"] == "permission_denied"
+            assert (
+                f"`{operation_name}` requires Owner or Admin role in the target organization."
+                in result["message"]
+            )
+            assert result["details"]["role_name"] == "member"
+            assert result["details"]["required_roles"] == ["Owner", "Admin"]
+
+        assert mutation_calls == []
+
+    def test_workspace_mutation_gate_allows_admin_role(self, monkeypatch):
+        calls = []
+
+        monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.list_organizations",
+            lambda **_: [{"id": 7, "name": "Acme", "role_name": "Admin"}],
+        )
+        monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.create_space",
+            lambda **kwargs: calls.append(kwargs) or {"space_id": 11, "name": "Ops"},
+        )
+
+        result = CoordinatorTools(cm=object()).create_space(
+            name="Ops",
+            description="Operations workspace.",
+        )
+
+        assert result == {"space_id": 11, "name": "Ops"}
+        assert calls == [
+            {
+                "name": "Ops",
+                "description": "Operations workspace.",
+                "organization_id": 7,
+                "api_key": "owner-key",
+            },
+        ]
+
     def test_create_space_uses_explicit_organization_id_when_provided(
         self,
         monkeypatch,
     ):
         calls = []
+        monkeypatch.setattr(
+            "unity.conversation_manager.domains.coordinator_tools.unify.list_organizations",
+            lambda **_: [{"id": 999, "name": "Acme Ops", "role_name": "Owner"}],
+        )
 
         def fake_create_space(**kwargs):
             calls.append(kwargs)

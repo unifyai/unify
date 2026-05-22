@@ -95,6 +95,7 @@ _INVITE_ORG_ROLE_NAMES: tuple[InviteOrgRoleName, ...] = ("Admin", "Member", "Vie
 _INVITE_ORG_ROLE_BY_NORMALIZED_NAME: dict[str, InviteOrgRoleName] = {
     role_name.lower(): role_name for role_name in _INVITE_ORG_ROLE_NAMES
 }
+_WORKSPACE_MUTATION_ROLE_NAMES: tuple[str, ...] = ("owner", "admin")
 
 ChecklistItemStatus = Literal["pending", "done", "skipped"]
 
@@ -173,6 +174,7 @@ class CoordinatorTools:
         self._cm = cm
         self._assistant_cache: list[dict[str, Any]] | None = None
         self._known_assistant_ids: set[str] = set()
+        self._organization_cache: list[dict[str, Any]] | None = None
         self._space_cache: list[dict[str, Any]] | None = None
         self._known_space_ids: set[str] = set()
         self._activity_metadata: dict[
@@ -577,10 +579,13 @@ class CoordinatorTools:
 
     def list_accessible_organizations(self) -> list[dict[str, Any]] | ToolError:
         """List organizations the authenticated coordinator user can access."""
+        if self._organization_cache is not None:
+            return self._organization_cache
         try:
             organizations = unify.list_organizations(api_key=SESSION_DETAILS.unify_key)
         except RequestError as exc:
             return _request_error_to_tool_error(exc)
+        self._organization_cache = organizations
         return organizations
 
     def list_org_members(
@@ -682,6 +687,17 @@ class CoordinatorTools:
                 error=resolved_organization_id,
             )
             return resolved_organization_id
+        permission_error = self._require_workspace_admin_role(
+            organization_id=resolved_organization_id,
+            operation_name="invite_org_member",
+        )
+        if permission_error is not None:
+            self._publish_failure(
+                activity_id,
+                title="Could not invite organization member",
+                error=permission_error,
+            )
+            return permission_error
         try:
             result = unify.invite_org_member(
                 resolved_organization_id,
@@ -852,6 +868,12 @@ class CoordinatorTools:
         )
         if _is_tool_error(resolved_organization_id):
             return resolved_organization_id
+        permission_error = self._require_workspace_admin_role(
+            organization_id=resolved_organization_id,
+            operation_name="create_space",
+        )
+        if permission_error is not None:
+            return permission_error
         workspace_name = safe_activity_text(name, fallback="Workspace")
         activity_id = self._publish_activity(
             phase="started",
@@ -911,9 +933,32 @@ class CoordinatorTools:
                 activity_entity("workspace", name="Workspace", entity_id=space_id),
             ],
         )
+        resolved_organization_id = self._resolve_target_organization_id(
+            requested_organization_id=organization_id,
+            require_organization=False,
+            operation_name="delete_space",
+        )
+        if _is_tool_error(resolved_organization_id):
+            self._publish_failure(
+                activity_id,
+                title="Could not remove workspace",
+                error=resolved_organization_id,
+            )
+            return resolved_organization_id
+        permission_error = self._require_workspace_admin_role(
+            organization_id=resolved_organization_id,
+            operation_name="delete_space",
+        )
+        if permission_error is not None:
+            self._publish_failure(
+                activity_id,
+                title="Could not remove workspace",
+                error=permission_error,
+            )
+            return permission_error
         reachable = self._space_is_reachable(
             space_id,
-            organization_id=organization_id,
+            organization_id=resolved_organization_id,
         )
         if isinstance(reachable, dict):
             self._publish_failure(
@@ -980,9 +1025,32 @@ class CoordinatorTools:
                 activity_entity("workspace", name="Workspace", entity_id=space_id),
             ],
         )
+        resolved_organization_id = self._resolve_target_organization_id(
+            requested_organization_id=organization_id,
+            require_organization=False,
+            operation_name="update_space",
+        )
+        if _is_tool_error(resolved_organization_id):
+            self._publish_failure(
+                activity_id,
+                title="Could not update workspace",
+                error=resolved_organization_id,
+            )
+            return resolved_organization_id
+        permission_error = self._require_workspace_admin_role(
+            organization_id=resolved_organization_id,
+            operation_name="update_space",
+        )
+        if permission_error is not None:
+            self._publish_failure(
+                activity_id,
+                title="Could not update workspace",
+                error=permission_error,
+            )
+            return permission_error
         reachable = self._space_is_reachable(
             space_id,
-            organization_id=organization_id,
+            organization_id=resolved_organization_id,
         )
         if isinstance(reachable, dict):
             self._publish_failure(
@@ -1081,9 +1149,32 @@ class CoordinatorTools:
                 member_user_id=normalized_member_user_id,
             ),
         )
+        resolved_organization_id = self._resolve_target_organization_id(
+            requested_organization_id=organization_id,
+            require_organization=False,
+            operation_name="add_space_member",
+        )
+        if _is_tool_error(resolved_organization_id):
+            self._publish_failure(
+                activity_id,
+                title="Could not add colleague to workspace",
+                error=resolved_organization_id,
+            )
+            return resolved_organization_id
+        permission_error = self._require_workspace_admin_role(
+            organization_id=resolved_organization_id,
+            operation_name="add_space_member",
+        )
+        if permission_error is not None:
+            self._publish_failure(
+                activity_id,
+                title="Could not add colleague to workspace",
+                error=permission_error,
+            )
+            return permission_error
         reachable_space = self._space_is_reachable(
             space_id,
-            organization_id=organization_id,
+            organization_id=resolved_organization_id,
         )
         if isinstance(reachable_space, dict):
             self._publish_failure(
@@ -1101,7 +1192,10 @@ class CoordinatorTools:
             )
             return error
         if assistant_id is not None:
-            reachable_assistant = self._assistant_is_reachable(assistant_id)
+            reachable_assistant = self._assistant_is_reachable(
+                assistant_id,
+                organization_id=resolved_organization_id,
+            )
             if isinstance(reachable_assistant, dict):
                 self._publish_failure(
                     activity_id,
@@ -1121,7 +1215,7 @@ class CoordinatorTools:
             member_user_id_for_lookup = normalized_member_user_id or ""
             member_reachable = self._org_member_is_reachable(
                 member_user_id_for_lookup,
-                organization_id=organization_id,
+                organization_id=resolved_organization_id,
             )
             if isinstance(member_reachable, dict):
                 self._publish_failure(
@@ -1250,6 +1344,17 @@ class CoordinatorTools:
                 error=resolved_organization_id,
             )
             return resolved_organization_id
+        permission_error = self._require_workspace_admin_role(
+            organization_id=resolved_organization_id,
+            operation_name="commission_colleague_into_workspace",
+        )
+        if permission_error is not None:
+            self._publish_failure(
+                activity_id,
+                title=f"Could not commission {colleague_name} into {workspace_name}",
+                error=permission_error,
+            )
+            return permission_error
         assistant_step = self._resolve_or_create_commission_assistant(
             assistant_first_name=assistant_first_name,
             assistant_surname=assistant_surname,
@@ -1358,10 +1463,33 @@ class CoordinatorTools:
                 assistant_id=assistant_id,
             ),
         )
+        resolved_organization_id = self._resolve_target_organization_id(
+            requested_organization_id=organization_id,
+            require_organization=False,
+            operation_name="remove_space_member",
+        )
+        if _is_tool_error(resolved_organization_id):
+            self._publish_failure(
+                activity_id,
+                title="Could not remove colleague from workspace",
+                error=resolved_organization_id,
+            )
+            return resolved_organization_id
+        permission_error = self._require_workspace_admin_role(
+            organization_id=resolved_organization_id,
+            operation_name="remove_space_member",
+        )
+        if permission_error is not None:
+            self._publish_failure(
+                activity_id,
+                title="Could not remove colleague from workspace",
+                error=permission_error,
+            )
+            return permission_error
         invalid = self._validate_space_and_assistant(
             space_id,
             assistant_id,
-            organization_id=organization_id,
+            organization_id=resolved_organization_id,
         )
         if invalid is not None:
             self._publish_failure(
@@ -1892,6 +2020,66 @@ class CoordinatorTools:
                 },
             )
         return choices
+
+    @staticmethod
+    def _normalized_organization_role_name(role_name: Any) -> str | None:
+        if not isinstance(role_name, str):
+            return None
+        normalized = role_name.strip().lower()
+        if not normalized:
+            return None
+        return normalized
+
+    @classmethod
+    def _organization_role_name(cls, organization: dict[str, Any]) -> str | None:
+        normalized_role_name = cls._normalized_organization_role_name(
+            organization.get("role_name"),
+        )
+        if normalized_role_name is not None:
+            return normalized_role_name
+        if organization.get("is_owner") is True:
+            return "owner"
+        if organization.get("is_admin") is True:
+            return "admin"
+        return None
+
+    def _resolved_role_for_organization(
+        self,
+        organization_id: int,
+    ) -> str | None | ToolError:
+        organizations = self.list_accessible_organizations()
+        if _is_tool_error(organizations):
+            return organizations
+        for organization in organizations:
+            if self._coerce_int(organization.get("id")) != organization_id:
+                continue
+            return self._organization_role_name(organization)
+        return None
+
+    def _require_workspace_admin_role(
+        self,
+        *,
+        organization_id: int | None,
+        operation_name: str,
+    ) -> ToolError | None:
+        if organization_id is None:
+            return None
+        resolved_role = self._resolved_role_for_organization(organization_id)
+        if _is_tool_error(resolved_role):
+            return resolved_role
+        if resolved_role in _WORKSPACE_MUTATION_ROLE_NAMES:
+            return None
+        return {
+            "error_kind": "permission_denied",
+            "message": (
+                f"`{operation_name}` requires Owner or Admin role in the target organization."
+            ),
+            "details": {
+                "organization_id": organization_id,
+                "role_name": resolved_role,
+                "required_roles": ["Owner", "Admin"],
+            },
+        }
 
     def _resolve_target_organization_id(
         self,
