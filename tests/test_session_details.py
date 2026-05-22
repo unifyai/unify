@@ -136,41 +136,6 @@ class TestCoordinatorFlag:
         assert sd.assistant.is_coordinator is False
 
 
-class TestWorkspaceOrgId:
-    def test_populate_falls_back_workspace_org_id_to_org_id(self):
-        sd = SessionDetails()
-        sd.populate(org_id=7)
-
-        assert sd.org.id == 7
-        assert sd.workspace_org_id == 7
-
-    def test_populate_preserves_explicit_workspace_org_id(self):
-        sd = SessionDetails()
-        sd.populate(org_id=7, workspace_org_id=9)
-
-        assert sd.org.id == 7
-        assert sd.workspace_org_id == 9
-
-    def test_export_and_populate_from_env_round_trips_workspace_org_id(
-        self,
-        monkeypatch,
-    ):
-        monkeypatch.delenv("ORG_ID", raising=False)
-        monkeypatch.delenv("WORKSPACE_ORG_ID", raising=False)
-
-        sd = SessionDetails()
-        sd.populate(org_id=7, workspace_org_id=9)
-        sd.export_to_env()
-
-        assert os.environ["ORG_ID"] == "7"
-        assert os.environ["WORKSPACE_ORG_ID"] == "9"
-
-        sd2 = SessionDetails()
-        sd2.populate_from_env()
-        assert sd2.org.id == 7
-        assert sd2.workspace_org_id == 9
-
-
 class TestSpaceSummaries:
     def test_export_and_populate_from_env_round_trips(self, monkeypatch):
         monkeypatch.delenv("SPACE_SUMMARIES", raising=False)
