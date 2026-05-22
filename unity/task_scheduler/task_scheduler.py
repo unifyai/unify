@@ -59,6 +59,38 @@ TriggerLike = Optional[Union[Trigger, Dict[str, Any]]]
 RepeatLike = Optional[List[Union[RepeatPattern, Dict[str, Any]]]]
 ToolsDict = Dict[str, Callable]
 
+OFFLINE_CERTIFICATION_REQUIRED_EVIDENCE_FIELDS = {
+    "idempotency_contract",
+    "side_effect_contract",
+    "cost_contract",
+    "input_contract",
+    "failure_contract",
+    "observability_contract",
+    "equivalence_contract",
+    "managed_primitive_contract",
+}
+OFFLINE_CERTIFICATION_ALLOWED_RISK_CLASSIFICATIONS = {
+    "safe_noop",
+    "read_only",
+    "idempotent_effectful",
+    "unsafe_effectful",
+}
+OFFLINE_CERTIFICATION_REQUIRED_ATTESTATIONS = {
+    "no_hardcoded_live_observations",
+    "no_removed_validation_gates",
+    "no_reordered_side_effects",
+    "no_discarded_recovery_branches",
+    "no_static_runtime_assumptions",
+    "no_ad_hoc_logic_replaced_managed_primitives",
+}
+
+
+def _missing_certification_value(value: Any) -> bool:
+    """Return whether a certification evidence field is materially empty."""
+
+    return value in (None, "", [], {})
+
+
 # Contact manager obtained via ManagerRegistry to respect IMPL settings
 from ..manager_registry import ManagerRegistry
 from ..common.model_to_fields import model_to_fields
@@ -89,6 +121,8 @@ from ..common.read_only_ask_guard import ReadOnlyAskGuardHandle
 from ..common.sentinels import _UnsetSentinel
 from ..common.context_registry import ContextRegistry, TableContext
 from .machine_state import (
+    TaskRunProvenance,
+    build_task_run_key,
     consume_live_task_run_provenance,
     source_type_from_activation_reason,
 )
@@ -342,17 +376,101 @@ class TaskScheduler(BaseTaskScheduler):
             ),
         }
 
-        def _attach_entrypoint(*, function_id: int, rationale: str) -> dict[str, Any]:
+        def _attach_entrypoint(
+            *,
+            function_id: int,
+            rationale: str,
+            certification_metadata: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
             return self._attach_entrypoint_to_future_instances(
                 task_id=task.task_id,
                 completed_instance_id=task.instance_id,
                 function_id=function_id,
                 rationale=rationale,
+                certification_metadata=certification_metadata,
+            )
+
+        def _promote_entrypoint_offline(
+            *,
+            function_id: int,
+            certification_metadata: dict[str, Any],
+            certification_result: dict[str, Any],
+        ) -> dict[str, Any]:
+            return self._promote_symbolic_candidate_to_offline(
+                task_id=task.task_id,
+                completed_instance_id=task.instance_id,
+                function_id=function_id,
+                certification_metadata=certification_metadata,
+                certification_result=certification_result,
             )
 
         return {
             "metadata": metadata,
             "attach_entrypoint": _attach_entrypoint,
+            "promote_entrypoint_offline": _promote_entrypoint_offline,
+        }
+
+    def _build_task_run_context(
+        self,
+        *,
+        task: Task,
+        reason: ActivatedBy,
+        source_type: str,
+        task_run_provenance: TaskRunProvenance | None,
+    ) -> dict[str, Any]:
+        """Return deterministic run facts supplied by the scheduler."""
+
+        scheduled_for = None
+        activation_revision = None
+        source_medium = None
+        source_ref = None
+        source_contact_id = None
+        run_key = None
+        if task_run_provenance is not None:
+            scheduled_for = task_run_provenance.scheduled_for
+            activation_revision = task_run_provenance.activation_revision
+            source_medium = task_run_provenance.source_medium
+            source_ref = task_run_provenance.source_ref
+            source_contact_id = task_run_provenance.source_contact_id
+            run_key = build_task_run_key(task_run_provenance)
+        if scheduled_for is None and task.schedule_start_at is not None:
+            scheduled_for = task.schedule_start_at.isoformat()
+        return {
+            "task_id": task.task_id,
+            "instance_id": task.instance_id,
+            "task_name": task.name,
+            "source_type": source_type,
+            "activation_reason": reason.value,
+            "scheduled_for": scheduled_for,
+            "scheduled_run_timestamp": scheduled_for,
+            "run_key": run_key,
+            "activation_revision": activation_revision,
+            "source_medium": source_medium,
+            "source_ref": source_ref,
+            "source_contact_id": source_contact_id,
+            "delivery_mode": task.delivery_mode.value,
+            "execution_style": task.execution_style.value,
+        }
+
+    def _build_entrypoint_kwargs(
+        self,
+        *,
+        task: Task,
+        reason: ActivatedBy,
+        source_type: str,
+        task_run_provenance: TaskRunProvenance | None,
+    ) -> dict[str, Any]:
+        """Return explicit kwargs available to symbolic task entrypoints."""
+
+        context = self._build_task_run_context(
+            task=task,
+            reason=reason,
+            source_type=source_type,
+            task_run_provenance=task_run_provenance,
+        )
+        return {
+            **context,
+            "task_execution_context": context,
         }
 
     def _attach_entrypoint_to_future_instances(
@@ -362,8 +480,9 @@ class TaskScheduler(BaseTaskScheduler):
         completed_instance_id: int,
         function_id: int,
         rationale: str,
+        certification_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Attach an offline entrypoint to future non-terminal task instances."""
+        """Record a symbolic executor candidate on future non-terminal instances."""
 
         if function_id < 0:
             raise ValueError("function_id must be a non-negative integer.")
@@ -388,17 +507,151 @@ class TaskScheduler(BaseTaskScheduler):
             logs=log_ids,
             entries={
                 "entrypoint": int(function_id),
-                "offline": True,
             },
         )
         return {
-            "outcome": "attached",
+            "outcome": "candidate_recorded",
             "task_id": task_id,
             "patched_instance_ids": [
                 log.entries.get("instance_id") for log in future_logs
             ],
             "function_id": int(function_id),
             "rationale": rationale,
+            "certification_status": "required_before_offline_promotion",
+            "certification_metadata": certification_metadata or {},
+        }
+
+    def _offline_promotion_rejection_reasons(
+        self,
+        *,
+        certification_metadata: dict[str, Any],
+        certification_result: dict[str, Any],
+    ) -> list[str]:
+        """Return reasons a symbolic candidate is not certified for offline use."""
+
+        reasons: list[str] = []
+        evidence = certification_metadata.get("certification_evidence")
+        if not isinstance(evidence, dict) or not evidence:
+            reasons.append("missing_certification_evidence")
+            evidence = {}
+
+        missing_evidence_fields = sorted(
+            field
+            for field in OFFLINE_CERTIFICATION_REQUIRED_EVIDENCE_FIELDS
+            if _missing_certification_value(evidence.get(field))
+        )
+        reasons.extend(f"missing_evidence:{field}" for field in missing_evidence_fields)
+
+        risk_classification = evidence.get("risk_classification")
+        if _missing_certification_value(risk_classification):
+            reasons.append("missing_evidence:risk_classification")
+        elif (
+            risk_classification
+            not in OFFLINE_CERTIFICATION_ALLOWED_RISK_CLASSIFICATIONS
+        ):
+            reasons.append(f"invalid_risk_classification:{risk_classification}")
+        elif risk_classification == "unsafe_effectful":
+            reasons.append("unsafe_side_effect_contract")
+
+        managed_primitive_contract = evidence.get("managed_primitive_contract")
+        if isinstance(managed_primitive_contract, dict):
+            preserved = managed_primitive_contract.get("preserved")
+            if preserved is not True:
+                reasons.append("primitive_surface_changed")
+            ad_hoc_replacements = managed_primitive_contract.get(
+                "ad_hoc_replacements",
+            )
+            if ad_hoc_replacements not in (None, [], {}):
+                reasons.append("ad_hoc_logic_replaced_managed_primitive")
+        elif not _missing_certification_value(managed_primitive_contract):
+            reasons.append("invalid_evidence:managed_primitive_contract")
+
+        cost_contract = evidence.get("cost_contract")
+        if isinstance(cost_contract, dict) and cost_contract.get("bounded") is not True:
+            reasons.append("cost_contract_too_expensive")
+
+        attestations = evidence.get("attestations")
+        if not isinstance(attestations, dict):
+            reasons.append("missing_evidence:attestations")
+            attestations = {}
+        failed_attestations = sorted(
+            field
+            for field in OFFLINE_CERTIFICATION_REQUIRED_ATTESTATIONS
+            if attestations.get(field) is not True
+        )
+        reasons.extend(f"failed_attestation:{field}" for field in failed_attestations)
+
+        if certification_result.get("evidence_based") is not True:
+            reasons.append("certification_evidence_not_attested")
+        if certification_result.get("executed_entrypoint") is True:
+            reasons.append("certification_must_not_execute_entrypoint")
+        return reasons
+
+    def _promote_symbolic_candidate_to_offline(
+        self,
+        *,
+        task_id: int,
+        completed_instance_id: int,
+        function_id: int,
+        certification_metadata: dict[str, Any],
+        certification_result: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Promote future symbolic candidate instances to offline delivery."""
+
+        if function_id < 0:
+            raise ValueError("function_id must be a non-negative integer.")
+
+        rejection_reasons = self._offline_promotion_rejection_reasons(
+            certification_metadata=certification_metadata,
+            certification_result=certification_result,
+        )
+        if rejection_reasons:
+            return {
+                "outcome": "certification_rejected",
+                "task_id": task_id,
+                "completed_instance_id": completed_instance_id,
+                "function_id": int(function_id),
+                "rejection_reasons": rejection_reasons,
+            }
+
+        future_logs = self._view.get_rows(
+            filter=(
+                f"task_id == {task_id} and instance_id > {completed_instance_id} "
+                f"and entrypoint == {int(function_id)} "
+                "and status not in ('completed','cancelled','failed','active')"
+            ),
+            return_ids_only=False,
+        )
+        future_logs = [
+            log for log in future_logs if not bool(log.entries.get("offline"))
+        ]
+        if not future_logs:
+            return {
+                "outcome": "no_matching_candidate_instances",
+                "task_id": task_id,
+                "completed_instance_id": completed_instance_id,
+                "function_id": int(function_id),
+                "certification_status": "passed",
+                "certification_result": certification_result,
+            }
+
+        log_ids = [log.id for log in future_logs]
+        self._write_log_entries(
+            logs=log_ids,
+            entries={
+                "offline": True,
+            },
+        )
+        return {
+            "outcome": "offline_promoted",
+            "task_id": task_id,
+            "patched_instance_ids": [
+                log.entries.get("instance_id") for log in future_logs
+            ],
+            "function_id": int(function_id),
+            "certification_status": "passed",
+            "certification_metadata": certification_metadata,
+            "certification_result": certification_result,
         }
 
     # ------------------------------ Provisioning ----------------------------- #
@@ -871,6 +1124,15 @@ class TaskScheduler(BaseTaskScheduler):
             unlink_from_prev=unlink_from_prev,
         )
 
+        entrypoint_kwargs = None
+        if task.entrypoint is not None:
+            entrypoint_kwargs = self._build_entrypoint_kwargs(
+                task=task,
+                reason=reason,
+                source_type=task_run_source_type,
+                task_run_provenance=task_run_provenance,
+            )
+
         handle = await ActiveTask.create(
             fallback_actor,
             task_description=build_task_execution_request(task),
@@ -881,6 +1143,19 @@ class TaskScheduler(BaseTaskScheduler):
             instance_id=task.instance_id,
             scheduler=self,
             entrypoint=task.entrypoint,
+            entrypoint_kwargs=entrypoint_kwargs,
+            entrypoint_repair_attempts=1 if task.entrypoint is not None else 0,
+            entrypoint_repair_context=(
+                {
+                    "task_run_context": entrypoint_kwargs.get(
+                        "task_execution_context",
+                        {},
+                    ),
+                    "task_request": build_task_execution_request(task),
+                }
+                if entrypoint_kwargs is not None
+                else None
+            ),
             task_run_provenance=task_run_provenance,
             task_entrypoint_review=self._build_task_entrypoint_review(
                 task=task,
@@ -1316,11 +1591,11 @@ class TaskScheduler(BaseTaskScheduler):
         description : str
             Detailed free-text explanation of what should be done.
         entrypoint : int | None, default ``None``
-            Optional function_id from the Functions table that should be invoked to perform this task. When null,
-            the task is executed by an Actor interpreting the description on the fly.
+            Optional function_id from the Functions table that should act as this task's symbolic executor.
+            When null, execution is agentic and the actor interprets the description on the fly.
         offline : bool, default ``False``
-            When true, the task executes in the hidden offline lane and therefore
-            must provide a numeric ``entrypoint``.
+            When true, the task is delivered through the hidden offline lane.
+            Delivery is independent from whether execution is agentic or symbolic.
         status : Status | None, default ``None``
             Desired initial lifecycle state.  When omitted the method infers
             one based on *schedule* and current queue status.
@@ -1414,9 +1689,6 @@ class TaskScheduler(BaseTaskScheduler):
         if repeat is not None:
             repeat = [RepeatPattern(**r) if isinstance(r, dict) else r for r in repeat]
             repeat = normalize_repeat_patterns(repeat)
-
-        if offline and entrypoint is None:
-            raise ValueError("Offline tasks require a numeric entrypoint.")
 
         #  Trigger / schedule exclusivity
         if schedule is not None and trigger is not None:
@@ -3526,7 +3798,8 @@ class TaskScheduler(BaseTaskScheduler):
             Replacement trigger. Mutually exclusive with any schedule/start_at.
         offline : bool | None
             Toggle whether the task should execute in the hidden offline lane.
-            Offline tasks must retain a numeric ``entrypoint``.
+            Delivery is independent from whether the task has a numeric
+            ``entrypoint``.
 
         Returns
         -------
@@ -3678,15 +3951,6 @@ class TaskScheduler(BaseTaskScheduler):
             else:
                 offline = bool(offline)
             entries["offline"] = offline
-
-        desired_entrypoint = task.entrypoint
-        if "entrypoint" in entries:
-            desired_entrypoint = entries["entrypoint"]
-        desired_offline = task.offline
-        if "offline" in entries:
-            desired_offline = bool(entries["offline"])
-        if desired_offline and desired_entrypoint is None:
-            raise ValueError("Offline tasks require a numeric entrypoint.")
 
         # If clearing a trigger (trigger explicitly None) and current status is triggerable
         if (

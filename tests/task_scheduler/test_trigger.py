@@ -209,14 +209,14 @@ async def test_triggerable_start_clones_instance():
         function_id=654,
         rationale="The triggered run revealed a stable reusable workflow.",
     )
-    assert result["outcome"] == "attached"
+    assert result["outcome"] == "candidate_recorded"
     future_row = [
         row
         for row in ts._filter_tasks(filter=f"task_id == {tid}")
         if row.instance_id == 1
     ][0]
     assert future_row.entrypoint == 654
-    assert future_row.offline is True
+    assert future_row.offline is False
 
     # Clean-up (avoid background thread leaks)
     await handle.stop(cancel=True)

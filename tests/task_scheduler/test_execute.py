@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import functools
-from types import SimpleNamespace
 from typing import Dict, List
 from datetime import datetime, timezone, timedelta
 
@@ -389,21 +388,18 @@ async def test_scheduled_execution_offline_delegate_materializes_run_and_rearms(
 
     class _FunctionHandle:
         async def result(self):
-            return SimpleNamespace(
-                result={"ok": True},
-                stdout="sent",
-                stderr="",
-                error="",
-            )
+            return "sent"
 
-    class _FakeSingleFunctionActor:
-        def __init__(self, *, headless):
-            assert headless is True
+    class _FakeOfflineActor:
+        def __init__(self):
             captured["actor_created"] = True
 
-        async def act(self, *, request, function_id):
+        async def act(self, request, **kwargs):
             captured["function_request"] = request
-            captured["function_id"] = function_id
+            captured["function_id"] = kwargs["entrypoint"]
+            captured["entrypoint_kwargs"] = kwargs["entrypoint_kwargs"]
+            captured["clarification_enabled"] = kwargs["clarification_enabled"]
+            captured["persist"] = kwargs["persist"]
             return _FunctionHandle()
 
         async def close(self):
@@ -419,8 +415,8 @@ async def test_scheduled_execution_offline_delegate_materializes_run_and_rearms(
     monkeypatch.setattr(task_scheduler_module.SESSION_DETAILS.assistant, "agent_id", 42)
     monkeypatch.setattr(
         offline_runner,
-        "SingleFunctionActor",
-        _FakeSingleFunctionActor,
+        "_build_offline_actor",
+        _FakeOfflineActor,
     )
     remember_live_task_run_provenance(
         TaskRunProvenance(
@@ -475,6 +471,11 @@ async def test_scheduled_execution_offline_delegate_materializes_run_and_rearms(
     assert '"function_id": 777' in result
     assert captured["function_id"] == 777
     assert "Send the offline delegated report." in captured["function_request"]
+    assert captured["entrypoint_kwargs"]["scheduled_run_timestamp"] == (
+        "2026-04-10T09:00:00+00:00"
+    )
+    assert captured["clarification_enabled"] is False
+    assert captured["persist"] is False
     assert captured["actor_closed"] is True
     provenance = captured["provenance"]
     assert isinstance(provenance, TaskRunProvenance)
@@ -484,7 +485,7 @@ async def test_scheduled_execution_offline_delegate_materializes_run_and_rearms(
         run_key="offline:scheduled:42:delegate:once",
     )
     assert run_updates[-1][1]["state"] == "completed"
-    assert '"stdout": "sent"' in run_updates[-1][1]["result_summary"]
+    assert '"result": "sent"' in run_updates[-1][1]["result_summary"]
 
     rows = sorted(
         scheduler._filter_tasks(filter=f"task_id == {task_id}"),
@@ -516,20 +517,15 @@ async def test_triggered_execution_offline_delegate_consumes_trigger_provenance(
 
     class _FunctionHandle:
         async def result(self):
-            return SimpleNamespace(
-                result={"ok": True},
-                stdout="sent",
-                stderr="",
-                error="",
-            )
+            return "sent"
 
-    class _FakeSingleFunctionActor:
-        def __init__(self, *, headless):
-            assert headless is True
+    class _FakeOfflineActor:
+        def __init__(self):
+            pass
 
-        async def act(self, *, request, function_id):
+        async def act(self, request, **kwargs):
             captured["function_request"] = request
-            captured["function_id"] = function_id
+            captured["function_id"] = kwargs["entrypoint"]
             return _FunctionHandle()
 
         async def close(self):
@@ -545,8 +541,8 @@ async def test_triggered_execution_offline_delegate_consumes_trigger_provenance(
     monkeypatch.setattr(task_scheduler_module.SESSION_DETAILS.assistant, "agent_id", 42)
     monkeypatch.setattr(
         offline_runner,
-        "SingleFunctionActor",
-        _FakeSingleFunctionActor,
+        "_build_offline_actor",
+        _FakeOfflineActor,
     )
     monkeypatch.setattr(
         "unity.task_scheduler.active_task.create_or_adopt_live_task_run",
@@ -592,6 +588,105 @@ async def test_triggered_execution_offline_delegate_consumes_trigger_provenance(
         run_key="offline:triggered:42:delegate:once",
     )
     assert run_updates[-1][1]["state"] == "completed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.llm_call
+@_handle_project
+async def test_symbolic_task_execution_passes_deterministic_entrypoint_kwargs(
+    monkeypatch,
+):
+    scheduler = TaskScheduler()
+    task_id = scheduler._create_task(
+        name="Symbolic run context",
+        description="Run with deterministic context.",
+        entrypoint=777,
+    )["details"]["task_id"]
+    captured: dict[str, object] = {}
+
+    class _Handle:
+        async def result(self):
+            return "ok"
+
+    class _Delegate:
+        async def start_task_run(self, **kwargs):
+            captured.update(kwargs)
+            return _Handle()
+
+    monkeypatch.setattr(task_scheduler_module.SESSION_DETAILS.assistant, "agent_id", 42)
+
+    token = current_task_execution_delegate.set(_Delegate())
+    try:
+        handle = await scheduler.execute(task_id=task_id)
+        assert await handle.result() == "ok"
+    finally:
+        current_task_execution_delegate.reset(token)
+
+    entrypoint_kwargs = captured["entrypoint_kwargs"]
+    assert isinstance(entrypoint_kwargs, dict)
+    assert entrypoint_kwargs["task_id"] == task_id
+    assert entrypoint_kwargs["instance_id"] == 0
+    assert entrypoint_kwargs["execution_style"] == "symbolic"
+    assert entrypoint_kwargs["delivery_mode"] == "live"
+    assert entrypoint_kwargs["task_execution_context"]["task_id"] == task_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("offline", "entrypoint", "delivery_mode", "execution_style"),
+    [
+        (False, None, "live", "agentic"),
+        (False, 777, "live", "symbolic"),
+        (True, None, "offline", "agentic"),
+        (True, 777, "offline", "symbolic"),
+    ],
+)
+@_handle_project
+async def test_task_execution_routes_all_delivery_and_style_combinations(
+    offline,
+    entrypoint,
+    delivery_mode,
+    execution_style,
+):
+    scheduler = TaskScheduler()
+    task_id = scheduler._create_task(
+        name=f"{delivery_mode} {execution_style}",
+        description=f"Run the {delivery_mode} {execution_style} combination.",
+        entrypoint=entrypoint,
+        offline=offline,
+    )["details"]["task_id"]
+    captured: dict[str, object] = {}
+
+    class _Handle:
+        async def result(self):
+            return "ok"
+
+    class _Delegate:
+        async def start_task_run(self, **kwargs):
+            captured.update(kwargs)
+            return _Handle()
+
+    token = current_task_execution_delegate.set(_Delegate())
+    try:
+        handle = await scheduler.execute(task_id=task_id)
+        assert await handle.result() == "ok"
+    finally:
+        current_task_execution_delegate.reset(token)
+
+    assert captured["entrypoint"] == entrypoint
+    assert f"Task id: {task_id}" in captured["task_description"]
+    assert "Instance id: 0" in captured["task_description"]
+    if entrypoint is None:
+        assert captured["entrypoint_kwargs"] is None
+    else:
+        entrypoint_kwargs = captured["entrypoint_kwargs"]
+        assert isinstance(entrypoint_kwargs, dict)
+        assert entrypoint_kwargs["delivery_mode"] == delivery_mode
+        assert entrypoint_kwargs["execution_style"] == execution_style
+        assert (
+            entrypoint_kwargs["task_execution_context"]["delivery_mode"]
+            == delivery_mode
+        )
 
 
 # --------------------------------------------------------------------------- #
