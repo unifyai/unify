@@ -4,8 +4,8 @@ This module runs inside the short-lived Unity job created by Communication when
 a scheduled or triggered task should execute without waking the full live
 assistant runtime. It exists to answer one simple question:
 
-"How do we run one stored function-backed task in the background, with the
-assistant's identity and primitives available, but without booting the whole
+"How do we run one task in the background, with the assistant's identity and
+normal actor primitives available, but without booting the whole
 ConversationManager?"
 
 The runner is intentionally small and procedural:
@@ -14,14 +14,13 @@ The runner is intentionally small and procedural:
 2. Populate `SESSION_DETAILS` so shared primitives know which assistant is
    acting.
 3. Initialize Unity's normal runtime substrate for the assistant context.
-4. Enter `TaskScheduler.execute(...)` with a SingleFunctionActor-backed
-   execution delegate so scheduler lifecycle and recurring rearm semantics stay
-   central.
+4. Enter `TaskScheduler.execute(...)` with a CodeActActor-backed execution
+   delegate so scheduler lifecycle and recurring rearm semantics stay central.
 5. Persist the terminal run state through the scheduler-owned task run lifecycle.
 
-Communication owns orchestration and job creation. The stored function owns the
-actual task behavior. This module is the thin bridge that executes that one
-function and keeps the durable run record up to date.
+Communication owns orchestration and job creation. The task row owns whether
+execution is agentic or symbolic. This module is the thin bridge that starts
+the headless actor and keeps the durable run record up to date.
 """
 
 from __future__ import annotations
@@ -37,8 +36,14 @@ from typing import Any
 import requests
 
 import unity
-from unity.actor.single_function_actor import SingleFunctionActor
+from unity.actor.code_act_actor import CodeActActor
+from unity.actor.environments import (
+    ActorEnvironment,
+    ComputerEnvironment,
+    StateManagerEnvironment,
+)
 from unity.common.task_execution_context import current_task_execution_delegate
+from unity.function_manager.primitives import ComputerPrimitives
 from unity.logger import LOGGER
 from unity.session_details import SESSION_DETAILS
 from unity.task_scheduler.machine_state import (
@@ -68,7 +73,7 @@ class OfflineTaskConfig:
     assistant_id: str
     run_key: str
     task_id: int
-    function_id: int
+    function_id: int | None
     request: str
     source_type: str
     source_task_log_id: int
@@ -90,6 +95,15 @@ def _require_env(name: str) -> str:
     return value
 
 
+def _optional_int_env(name: str) -> int | None:
+    """Return an optional integer environment variable."""
+
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return None
+    return int(value)
+
+
 def _load_config_from_env() -> OfflineTaskConfig:
     """Construct one validated offline task config from process environment."""
 
@@ -97,7 +111,7 @@ def _load_config_from_env() -> OfflineTaskConfig:
         assistant_id=_require_env("ASSISTANT_ID"),
         run_key=_require_env("UNITY_OFFLINE_TASK_RUN_KEY"),
         task_id=int(_require_env("UNITY_OFFLINE_TASK_ID")),
-        function_id=int(_require_env("UNITY_OFFLINE_TASK_FUNCTION_ID")),
+        function_id=_optional_int_env("UNITY_OFFLINE_TASK_FUNCTION_ID"),
         request=_require_env("UNITY_OFFLINE_TASK_REQUEST"),
         source_type=os.environ.get("UNITY_OFFLINE_TASK_SOURCE_TYPE", "scheduled"),
         source_task_log_id=int(_require_env("UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID")),
@@ -175,6 +189,14 @@ def _json_safe_value(value: Any) -> Any:
 def _build_result_summary(config: OfflineTaskConfig, execution_result: Any) -> str:
     """Serialize a compact, hidden summary of the offline execution outcome."""
 
+    if isinstance(execution_result, str):
+        result_value: Any = execution_result
+        stdout = ""
+        stderr = ""
+    else:
+        result_value = getattr(execution_result, "result", None)
+        stdout = str(getattr(execution_result, "stdout", "") or "")
+        stderr = str(getattr(execution_result, "stderr", "") or "")
     payload = {
         "task_id": config.task_id,
         "function_id": config.function_id,
@@ -183,9 +205,9 @@ def _build_result_summary(config: OfflineTaskConfig, execution_result: Any) -> s
         "scheduled_for": config.scheduled_for or None,
         "source_medium": config.source_medium or None,
         "source_contact_id": config.source_contact_id or None,
-        "result": _json_safe_value(getattr(execution_result, "result", None)),
-        "stdout": _truncate_text(str(getattr(execution_result, "stdout", "") or "")),
-        "stderr": _truncate_text(str(getattr(execution_result, "stderr", "") or "")),
+        "result": _json_safe_value(result_value),
+        "stdout": _truncate_text(stdout),
+        "stderr": _truncate_text(stderr),
     }
     return _truncate_text(json.dumps(payload, default=str, ensure_ascii=True))
 
@@ -212,6 +234,18 @@ def _trigger_attempt_token(config: OfflineTaskConfig) -> str | None:
     return None
 
 
+def _build_offline_actor() -> CodeActActor:
+    """Construct the normal actor substrate for a headless task run."""
+
+    return CodeActActor(
+        environments=[
+            StateManagerEnvironment(),
+            ComputerEnvironment(ComputerPrimitives()),
+            ActorEnvironment(),
+        ],
+    )
+
+
 def _build_offline_provenance(config: OfflineTaskConfig) -> TaskRunProvenance:
     """Return scheduler run provenance matching the Communication run identity."""
 
@@ -233,7 +267,7 @@ def _build_offline_provenance(config: OfflineTaskConfig) -> TaskRunProvenance:
 
 
 class _OfflineTaskHandle:
-    """Handle wrapper that converts function execution results into task outcomes."""
+    """Handle wrapper that converts actor execution results into task outcomes."""
 
     def __init__(self, config: OfflineTaskConfig, inner_handle: Any) -> None:
         self._config = config
@@ -241,6 +275,8 @@ class _OfflineTaskHandle:
 
     async def result(self) -> str:
         execution_result = await self._inner_handle.result()
+        if isinstance(execution_result, str) and execution_result.startswith("Error:"):
+            raise RuntimeError(execution_result)
         error = str(getattr(execution_result, "error", "") or "").strip()
         if error:
             raise RuntimeError(error)
@@ -251,11 +287,11 @@ class _OfflineTaskHandle:
 
 
 class _OfflineTaskExecutionDelegate:
-    """Task execution delegate that runs one scheduler-owned entrypoint headlessly."""
+    """Task execution delegate that runs one scheduler-owned task headlessly."""
 
     def __init__(self, config: OfflineTaskConfig) -> None:
         self._config = config
-        self._actor: SingleFunctionActor | None = None
+        self._actor: CodeActActor | None = None
 
     async def start_task_run(
         self,
@@ -269,21 +305,83 @@ class _OfflineTaskExecutionDelegate:
         guidelines: str | None = None,
         **kwargs: Any,
     ) -> _OfflineTaskHandle:
-        if entrypoint is None:
+        requested_symbolic = self._config.function_id is not None
+        execution_style = "symbolic" if entrypoint is not None else "agentic"
+        if requested_symbolic and entrypoint is None:
             raise RuntimeError(
-                f"Offline task {self._config.task_id} has no stored entrypoint.",
+                "Offline task entrypoint mismatch: activation requested "
+                f"{self._config.function_id}, task row is agentic.",
             )
-        if int(entrypoint) != self._config.function_id:
+        if (
+            self._config.function_id is not None
+            and int(entrypoint) != self._config.function_id
+        ):
             raise RuntimeError(
                 "Offline task entrypoint mismatch: "
                 f"activation requested {self._config.function_id}, "
                 f"task row provides {entrypoint}.",
             )
+        if not requested_symbolic and entrypoint is not None:
+            raise RuntimeError(
+                "Offline task entrypoint mismatch: activation requested "
+                "agentic execution, task row provides a symbolic entrypoint.",
+            )
 
-        self._actor = SingleFunctionActor(headless=True)
+        task_guidelines = kwargs.pop("guidelines", None)
+        entrypoint_kwargs = dict(kwargs.pop("entrypoint_kwargs", {}) or {})
+        entrypoint_repair_attempts = int(
+            kwargs.pop(
+                "entrypoint_repair_attempts",
+                1 if entrypoint is not None else 0,
+            )
+            or 0,
+        )
+        entrypoint_repair_context = kwargs.pop("entrypoint_repair_context", None)
+        if self._config.scheduled_for:
+            entrypoint_kwargs.setdefault(
+                "scheduled_run_timestamp",
+                self._config.scheduled_for,
+            )
+            entrypoint_kwargs.setdefault("scheduled_for", self._config.scheduled_for)
+        entrypoint_kwargs.setdefault("task_id", self._config.task_id)
+        entrypoint_kwargs.setdefault("run_key", self._config.run_key)
+        entrypoint_kwargs.setdefault("source_type", self._config.source_type)
+        entrypoint_kwargs.setdefault(
+            "activation_revision",
+            self._config.activation_revision,
+        )
+        entrypoint_kwargs.setdefault(
+            "task_execution_context",
+            {
+                "task_id": self._config.task_id,
+                "run_key": self._config.run_key,
+                "source_type": self._config.source_type,
+                "scheduled_for": self._config.scheduled_for or None,
+                "activation_revision": self._config.activation_revision,
+                "execution_style": execution_style,
+                "delivery_mode": "offline",
+            },
+        )
+
+        self._actor = _build_offline_actor()
         handle = await self._actor.act(
-            request=task_description,
-            function_id=int(entrypoint),
+            task_description,
+            guidelines="\n\n".join(
+                filter(
+                    None,
+                    [
+                        task_guidelines,
+                        "This is a headless offline task run. Do not ask the user for live clarification.",
+                    ],
+                ),
+            ),
+            entrypoint=entrypoint,
+            entrypoint_kwargs=entrypoint_kwargs if entrypoint is not None else None,
+            clarification_enabled=False,
+            persist=False,
+            entrypoint_repair_attempts=entrypoint_repair_attempts,
+            entrypoint_repair_context=entrypoint_repair_context,
+            **kwargs,
         )
         return _OfflineTaskHandle(self._config, handle)
 
@@ -291,20 +389,6 @@ class _OfflineTaskExecutionDelegate:
         if self._actor is not None:
             await self._actor.close()
             self._actor = None
-
-
-async def _execute_direct_function(config: OfflineTaskConfig) -> Any:
-    """Run one non-scheduler function request through SingleFunctionActor."""
-
-    actor = SingleFunctionActor(headless=True)
-    try:
-        handle = await actor.act(
-            request=config.request,
-            function_id=config.function_id,
-        )
-        return await handle.result()
-    finally:
-        await actor.close()
 
 
 async def _execute_scheduler_managed_task(config: OfflineTaskConfig) -> Any:
@@ -328,13 +412,16 @@ async def _execute_scheduler_managed_task(config: OfflineTaskConfig) -> Any:
 
 
 async def _execute_offline_task(config: OfflineTaskConfig) -> Any:
-    """Execute one stored function entrypoint with assistant session context."""
+    """Execute one offline task with assistant session context."""
 
     SESSION_DETAILS.populate_from_env()
     unity.ensure_initialised(project_name=TASK_MACHINE_STATE_PROJECT)
-    if _is_scheduler_managed(config):
-        return await _execute_scheduler_managed_task(config)
-    return await _execute_direct_function(config)
+    if not _is_scheduler_managed(config):
+        raise RuntimeError(
+            "Offline task runner only supports scheduler-managed scheduled "
+            "and triggered task runs.",
+        )
+    return await _execute_scheduler_managed_task(config)
 
 
 def main() -> int:
@@ -347,17 +434,8 @@ def main() -> int:
         config.function_id,
         config.run_key,
     )
-    if not _is_scheduler_managed(config):
-        _update_task_run(
-            config.assistant_id,
-            config.run_key,
-            {
-                "state": "running",
-                "started_at": _now_iso(),
-            },
-        )
     try:
-        execution_result = asyncio.run(_execute_offline_task(config))
+        asyncio.run(_execute_offline_task(config))
     except Exception as exc:
         error_text = _truncate_text(traceback.format_exc())
         LOGGER.exception(
@@ -386,38 +464,11 @@ def main() -> int:
         )
         return 1
 
-    if _is_scheduler_managed(config):
-        LOGGER.info(
-            "Offline task scheduler lifecycle completed for task %s (run_key=%s)",
-            config.task_id,
-            config.run_key,
-        )
-        return 0
-
-    error = str(getattr(execution_result, "error", "") or "").strip()
-    updates = {
-        "completed_at": _now_iso(),
-        "result_summary": _build_result_summary(config, execution_result),
-    }
-    if error:
-        updates["state"] = "failed"
-        updates["error"] = _truncate_text(error)
-        LOGGER.error(
-            "Offline task execution failed for task %s (run_key=%s): %s",
-            config.task_id,
-            config.run_key,
-            error,
-        )
-        _update_task_run(config.assistant_id, config.run_key, updates)
-        return 1
-
-    updates["state"] = "completed"
     LOGGER.info(
-        "Offline task execution completed for task %s (run_key=%s)",
+        "Offline task scheduler lifecycle completed for task %s (run_key=%s)",
         config.task_id,
         config.run_key,
     )
-    _update_task_run(config.assistant_id, config.run_key, updates)
     return 0
 
 
