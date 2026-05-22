@@ -144,7 +144,6 @@ COORDINATOR_TOOL_METHOD_NAMES: tuple[str, ...] = (
     "delete_assistant",
     "update_assistant_config",
     "list_assistants",
-    "list_accessible_organizations",
     "list_org_members",
     "invite_org_member",
     "pre_seed_colleague",
@@ -399,9 +398,21 @@ class CoordinatorTools:
                 activity_entity("colleague", name="Colleague", entity_id=agent_id),
             ],
         )
+        resolved_organization_id = self._resolve_target_organization_id(
+            requested_organization_id=organization_id,
+            require_organization=False,
+            operation_name="delete_assistant",
+        )
+        if _is_tool_error(resolved_organization_id):
+            self._publish_failure(
+                activity_id,
+                title="Could not remove colleague",
+                error=resolved_organization_id,
+            )
+            return resolved_organization_id
         reachable = self._assistant_is_reachable(
             agent_id,
-            organization_id=organization_id,
+            organization_id=resolved_organization_id,
         )
         if isinstance(reachable, dict):
             self._publish_failure(
@@ -474,9 +485,21 @@ class CoordinatorTools:
                 activity_entity("colleague", name="Colleague", entity_id=agent_id),
             ],
         )
+        resolved_organization_id = self._resolve_target_organization_id(
+            requested_organization_id=organization_id,
+            require_organization=False,
+            operation_name="update_assistant_config",
+        )
+        if _is_tool_error(resolved_organization_id):
+            self._publish_failure(
+                activity_id,
+                title="Could not update colleague profile",
+                error=resolved_organization_id,
+            )
+            return resolved_organization_id
         reachable = self._assistant_is_reachable(
             agent_id,
-            organization_id=organization_id,
+            organization_id=resolved_organization_id,
         )
         if isinstance(reachable, dict):
             self._publish_failure(
@@ -567,26 +590,10 @@ class CoordinatorTools:
                     organization_id=resolved_organization_id,
                 )
             ]
-        if (
-            phone is None
-            and email is None
-            and agent_id is None
-            and resolved_organization_id is None
-        ):
+        if phone is None and email is None and agent_id is None:
             self._assistant_cache = assistants
             self._remember_assistants(assistants)
         return assistants
-
-    def list_accessible_organizations(self) -> list[dict[str, Any]] | ToolError:
-        """List organizations the authenticated coordinator user can access."""
-        if self._organization_cache is not None:
-            return self._organization_cache
-        try:
-            organizations = unify.list_organizations(api_key=SESSION_DETAILS.unify_key)
-        except RequestError as exc:
-            return _request_error_to_tool_error(exc)
-        self._organization_cache = organizations
-        return organizations
 
     def list_org_members(
         self,
@@ -781,9 +788,21 @@ class CoordinatorTools:
                 ),
             ],
         )
+        resolved_organization_id = self._resolve_target_organization_id(
+            requested_organization_id=organization_id,
+            require_organization=False,
+            operation_name="pre_seed_colleague",
+        )
+        if _is_tool_error(resolved_organization_id):
+            self._publish_failure(
+                activity_id,
+                title="Could not prepare colleague setup rows",
+                error=resolved_organization_id,
+            )
+            return resolved_organization_id
         reachable = self._assistant_is_reachable(
             target_assistant_id,
-            organization_id=organization_id,
+            organization_id=resolved_organization_id,
         )
         if isinstance(reachable, dict):
             self._publish_failure(
@@ -1597,10 +1616,16 @@ class CoordinatorTools:
         Use this when auditing a colleague's workspace footprint before changing
         access, performing cleanup, or explaining current ownership boundaries.
         """
-
+        resolved_organization_id = self._resolve_target_organization_id(
+            requested_organization_id=organization_id,
+            require_organization=False,
+            operation_name="list_spaces_for_assistant",
+        )
+        if _is_tool_error(resolved_organization_id):
+            return resolved_organization_id
         reachable = self._assistant_is_reachable(
             assistant_id,
-            organization_id=organization_id,
+            organization_id=resolved_organization_id,
         )
         if isinstance(reachable, dict):
             return reachable
@@ -1927,9 +1952,12 @@ class CoordinatorTools:
         *,
         organization_id: int | None = None,
     ) -> bool | ToolError:
-        if organization_id is None and str(agent_id) in self._known_assistant_ids:
+        cache_eligible = (
+            organization_id is None or organization_id == SESSION_DETAILS.org_id
+        )
+        if cache_eligible and str(agent_id) in self._known_assistant_ids:
             return True
-        assistants = self._assistant_cache if organization_id is None else None
+        assistants = self._assistant_cache if cache_eligible else None
         if assistants is None:
             listed = self.list_assistants(
                 agent_id=agent_id,
@@ -1939,7 +1967,7 @@ class CoordinatorTools:
                 return listed
             assistants = listed
         reachable_ids = {str(row.get("agent_id")) for row in assistants}
-        if organization_id is None:
+        if cache_eligible:
             self._known_assistant_ids.update(reachable_ids)
         return str(agent_id) in reachable_ids
 
@@ -2002,25 +2030,6 @@ class CoordinatorTools:
         )
         return assistant_organization_id == organization_id
 
-    @classmethod
-    def _organization_choices(
-        cls,
-        organizations: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        choices: list[dict[str, Any]] = []
-        for organization in organizations:
-            organization_id = cls._coerce_int(organization.get("id"))
-            if organization_id is None:
-                continue
-            choices.append(
-                {
-                    "organization_id": organization_id,
-                    "name": organization.get("name"),
-                    "role_name": organization.get("role_name"),
-                },
-            )
-        return choices
-
     @staticmethod
     def _normalized_organization_role_name(role_name: Any) -> str | None:
         if not isinstance(role_name, str):
@@ -2047,7 +2056,7 @@ class CoordinatorTools:
         self,
         organization_id: int,
     ) -> str | None | ToolError:
-        organizations = self.list_accessible_organizations()
+        organizations = self._accessible_organizations()
         if _is_tool_error(organizations):
             return organizations
         for organization in organizations:
@@ -2055,6 +2064,17 @@ class CoordinatorTools:
                 continue
             return self._organization_role_name(organization)
         return None
+
+    def _accessible_organizations(self) -> list[dict[str, Any]] | ToolError:
+        """Return organizations reachable by the current auth key."""
+        if self._organization_cache is not None:
+            return self._organization_cache
+        try:
+            organizations = unify.list_organizations(api_key=SESSION_DETAILS.unify_key)
+        except RequestError as exc:
+            return _request_error_to_tool_error(exc)
+        self._organization_cache = organizations
+        return organizations
 
     def _require_workspace_admin_role(
         self,
@@ -2088,33 +2108,46 @@ class CoordinatorTools:
         require_organization: bool,
         operation_name: str,
     ) -> int | None | ToolError:
+        active_organization_id = SESSION_DETAILS.org_id
         if requested_organization_id is not None:
-            return requested_organization_id
-        if SESSION_DETAILS.org_id is not None:
-            return SESSION_DETAILS.org_id
-        organizations = self.list_accessible_organizations()
-        if _is_tool_error(organizations):
-            return organizations
-        if not organizations:
-            if require_organization:
+            if active_organization_id is None:
                 return _invalid_argument(
                     message=(
-                        f"`{operation_name}` requires organization context, but no "
-                        "accessible organizations were found."
+                        f"`{operation_name}` cannot target an organization from a personal "
+                        "workspace Coordinator session. Switch to that organization workspace "
+                        "Coordinator and try again."
                     ),
-                    details={"organization_id": requested_organization_id},
+                    details={
+                        "requested_organization_id": requested_organization_id,
+                        "active_organization_id": active_organization_id,
+                    },
                 )
-            return None
-        organization_choices = self._organization_choices(organizations)
-        if len(organization_choices) == 1:
-            return organization_choices[0]["organization_id"]
-        return _invalid_argument(
-            message=(
-                f"`{operation_name}` requires an explicit `organization_id` because "
-                "multiple organizations are accessible."
-            ),
-            details={"organization_choices": organization_choices},
-        )
+            if requested_organization_id != active_organization_id:
+                return _invalid_argument(
+                    message=(
+                        f"`{operation_name}` can only target the active workspace organization "
+                        "in this Coordinator session."
+                    ),
+                    details={
+                        "requested_organization_id": requested_organization_id,
+                        "active_organization_id": active_organization_id,
+                    },
+                )
+            return active_organization_id
+        if active_organization_id is not None:
+            return active_organization_id
+        if require_organization:
+            return _invalid_argument(
+                message=(
+                    f"`{operation_name}` requires an organization workspace Coordinator. "
+                    "Switch to the target organization workspace and try again."
+                ),
+                details={
+                    "requested_organization_id": requested_organization_id,
+                    "active_organization_id": active_organization_id,
+                },
+            )
+        return None
 
     def _clear_assistant_cache(self) -> None:
         self._assistant_cache = None
