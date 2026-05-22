@@ -270,6 +270,7 @@ class _CodeActEntrypointHandle(SteerableToolHandle):  # type: ignore[abstract-me
         self._execution_task = execution_task
         self._completion_event = asyncio.Event()
         self._result_str: Optional[str] = None
+        self._error: Optional[BaseException] = None
         self._stopped = False
         self._on_finally = on_finally
 
@@ -284,6 +285,7 @@ class _CodeActEntrypointHandle(SteerableToolHandle):  # type: ignore[abstract-me
             self._stopped = True
             self._result_str = f"Entrypoint {self._entrypoint_id} was cancelled."
         except Exception as e:
+            self._error = e
             self._result_str = f"Error: {e}"
         finally:
             if self._on_finally is not None:
@@ -355,6 +357,8 @@ class _CodeActEntrypointHandle(SteerableToolHandle):  # type: ignore[abstract-me
 
     async def result(self) -> str:
         await self._completion_event.wait()
+        if self._error is not None:
+            raise self._error
         return self._result_str or ""
 
     async def next_clarification(self) -> dict:
@@ -411,6 +415,32 @@ _DEFAULT_STORAGE_REVIEW_LABEL = "Storing reusable skills"
 _DEFAULT_STORAGE_REVIEW_INSTRUCTIONS = (
     "Review the trajectory and store any reusable functions and compositional guidance."
 )
+MAX_OFFLINE_CERTIFICATION_REVISION_ATTEMPTS = 2
+
+
+def _signature_compatible_kwargs(
+    fn: Callable[..., Any],
+    kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    """Return only the scheduler-supplied kwargs accepted by a callable."""
+
+    signature = inspect.signature(fn)
+    parameters = signature.parameters
+    if any(
+        param.kind is inspect.Parameter.VAR_KEYWORD for param in parameters.values()
+    ):
+        return dict(kwargs)
+    accepted = {
+        name
+        for name, param in parameters.items()
+        if param.kind
+        in {
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        }
+    }
+    return {key: value for key, value in kwargs.items() if key in accepted}
+
 
 _STORAGE_WHAT_CAN_BE_STORED = (
     "## What Can Be Stored\n\n"
@@ -479,6 +509,23 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "wait. Without it, the function waits indefinitely for something "
     "only the user can provide, and the user has no idea they need "
     "to act.\n\n"
+    "### Durable task executor candidates\n\n"
+    "A function intended to become a future TaskScheduler executor must "
+    "preserve the observed live execution chain, not merely produce a "
+    "plausible answer for the same example. Map each live trajectory step "
+    "to the candidate code path that replaces or preserves it. Keep managed "
+    "primitives, helper calls, validation gates, side-effect ordering, "
+    "retries, cleanup, result shape, and failure semantics unless the "
+    "candidate declares and validates an equivalent replacement. If a "
+    "runtime-dependent decision required agentic exploration, preserve that "
+    "agentic substep or leave the task description-driven.\n\n"
+    "Executor candidates may simplify incidental logging, formatting, dead "
+    "exploratory branches, or duplicated setup, but they must not hardcode "
+    "observations from live tool results, remove validation gates, reorder "
+    "dependent side effects, discard recovery branches, or replace managed "
+    "tools with weaker ad hoc mechanisms. Store non-executor helpers and "
+    "guidance freely; offline executor promotion requires separate "
+    "certification.\n\n"
     "### Third-party package dependencies\n\n"
     "If the trajectory used `install_python_packages` and the function "
     "you want to store imports any of those packages (anything beyond "
@@ -835,6 +882,9 @@ def _build_storage_tools(
 
     if task_entrypoint_review:
         attach_entrypoint = task_entrypoint_review.get("attach_entrypoint")
+        promote_entrypoint_offline = task_entrypoint_review.get(
+            "promote_entrypoint_offline",
+        )
         metadata = dict(task_entrypoint_review.get("metadata") or {})
         task_id = metadata.get("task_id")
         instance_id = metadata.get("instance_id")
@@ -843,16 +893,18 @@ def _build_storage_tools(
         async def attach_entrypoint_to_recurring_task(
             function_id: int,
             rationale: str,
+            equivalence_manifest: dict[str, Any] | None = None,
+            anti_oversimplification_checklist: dict[str, Any] | None = None,
         ) -> str:
-            """Attach a stored FunctionManager entrypoint to future offline runs.
+            """Record a stored FunctionManager entrypoint candidate for future runs.
 
             Use this only after you have reviewed the completed trajectory and
             decided that the stored function captures a stable reusable workflow
-            that is safe to run headlessly for future scheduled or triggered
-            instances. Calling this tool means future non-terminal instances
-            will run through the offline function lane instead of the live
-            conversation runtime. Leaving the task description-driven is valid
-            when future runs still need broad planning or tool discovery.
+            that preserves the observed operational contract. Calling this tool
+            records the function as a symbolic executor candidate on future
+            non-terminal instances; it does not promote those instances to
+            offline delivery. Leaving the task description-driven is valid when
+            future runs still need broad planning or tool discovery.
             """
 
             if not callable(attach_entrypoint):
@@ -861,6 +913,12 @@ def _build_storage_tools(
                 attach_entrypoint(
                     function_id=int(function_id),
                     rationale=str(rationale),
+                    certification_metadata={
+                        "equivalence_manifest": equivalence_manifest or {},
+                        "anti_oversimplification_checklist": (
+                            anti_oversimplification_checklist or {}
+                        ),
+                    },
                 ),
             )
 
@@ -868,10 +926,179 @@ def _build_storage_tools(
             f"\n\nCurrent task: {task_name} "
             f"(task_id={task_id}, completed instance_id={instance_id}). "
             "The tool only patches future non-terminal instances; it never "
-            "rewrites the completed run."
+            "rewrites the completed run or flips delivery to offline."
         )
         tools["attach_entrypoint_to_recurring_task"] = (
             attach_entrypoint_to_recurring_task
+        )
+
+        certification_revision_attempts = 0
+
+        async def submit_offline_certification_evidence(
+            function_id: int,
+            certification_evidence: dict[str, Any],
+            promotion_rationale: str | None = None,
+        ) -> str:
+            """Submit evidence for offline promotion of a symbolic task executor.
+
+            Purpose:
+            - Ask the scheduler-owned promotion gate whether a previously
+              recorded FunctionManager entrypoint is safe and equivalent enough
+              for future recurring task instances to run offline.
+            - Submit structured evidence only. This tool does not certify by
+              replaying work.
+
+            Hard semantic rule:
+            - This tool does not execute the entrypoint.
+            - Do not use this tool to execute the entrypoint, replay live task
+              steps, perform a dry-run, send messages, mutate external systems,
+              fetch fresh expensive data, or make verification calls. The tool
+              only passes evidence to the scheduler gate.
+
+            Use this tool only when all of the following are true:
+            - `attach_entrypoint_to_recurring_task(...)` has already recorded
+              the symbolic executor candidate for future non-terminal instances.
+            - You can provide complete evidence for the candidate's input,
+              equivalence, side-effect, idempotency, cost, failure, observability,
+              and managed-primitive contracts.
+            - The candidate preserves the live run's managed primitive surface
+              and operational behavior closely enough for offline delivery.
+
+            Do not use this tool when:
+            - The candidate is broad or still needs live planning, open-ended
+              tool discovery, or user clarification.
+            - Side effects are unclear, unsafe, not idempotent, or not covered
+              by a concrete contract.
+            - Verification would require token-heavy, costly, or effectful
+              replay.
+            - The function changes primitives, ordering, validation, recovery,
+              output shape, failure behavior, or external data sources.
+            - Evidence is incomplete or contradictory.
+
+            Required evidence shape:
+            `certification_evidence` must include:
+            - `risk_classification`: one of `safe_noop`, `read_only`,
+              `idempotent_effectful`, or `unsafe_effectful`.
+            - `input_contract`: required runtime inputs and how future offline
+              runs provide them.
+            - `equivalence_contract`: mapping from the live task steps to the
+              stored function paths, including result shape.
+            - `managed_primitive_contract`: managed surfaces used by the live
+              run and the candidate. It must include `preserved=True` and no
+              `ad_hoc_replacements`.
+            - `side_effect_contract`: side effects, ordering, and duplicate-run
+              behavior.
+            - `idempotency_contract`: why repeated/offline execution is safe or
+              how duplicate effects are prevented.
+            - `cost_contract`: bounded token/network/runtime cost. Include
+              `bounded=True`.
+            - `failure_contract`: preserved blocker, retry, validation, and
+              recovery behavior.
+            - `observability_contract`: what the offline run logs or returns so
+              failures remain diagnosable.
+            - `attestations`: booleans confirming no hardcoded live observations,
+              no removed validation gates, no reordered side effects, no
+              discarded recovery branches, no static runtime assumptions, and no
+              ad hoc replacement of managed primitives.
+
+            Managed primitive preservation rule:
+            - Replacing live primitives with ad hoc logic is not equivalent and
+              is not acceptable. For example, replacing `primitives.web.ask(...)`
+              with custom `urllib` scraping, replacing contact/task/knowledge
+              primitives with direct storage pokes, or bypassing validation and
+              recovery primitives with local shortcuts must fail certification.
+            - Positive pattern: wrap the same primitive sequence with stable
+              parameters, expose only genuinely variable inputs, preserve side
+              effect ordering, keep validation/recovery branches, and leave
+              managed surfaces under their manager-owned primitives.
+            - Antipatterns: hardcoding observations from the live run, flattening
+              a multi-step primitive workflow into one request, using raw
+              HTTP/storage access instead of manager APIs, dropping blocker
+              handling, changing output shape, hiding side effects in helpers, or
+              swapping in cheaper but behaviorally different data sources.
+
+            Feedback and retries:
+            - Rejection returns structured reasons. Use them to revise the stored
+              function candidate or evidence, then resubmit only within the
+              bounded review budget.
+            - This post-run review allows at most two certification evidence
+              submissions. When the budget is exhausted, leave future instances
+              live. The symbolic candidate may remain recorded only if it is
+              still useful as a helper.
+
+            Fail-closed behavior:
+            - Missing, contradictory, unsafe, high-risk, or primitive-changing
+              evidence is rejected. Rejection never promotes offline delivery.
+            """
+
+            nonlocal certification_revision_attempts
+            if not callable(promote_entrypoint_offline):
+                return "No task offline-promotion hook is available."
+            if (
+                certification_revision_attempts
+                >= MAX_OFFLINE_CERTIFICATION_REVISION_ATTEMPTS
+            ):
+                return str(
+                    {
+                        "outcome": "certification_revision_attempts_exhausted",
+                        "task_id": task_id,
+                        "completed_instance_id": instance_id,
+                        "function_id": int(function_id),
+                        "max_revision_attempts": (
+                            MAX_OFFLINE_CERTIFICATION_REVISION_ATTEMPTS
+                        ),
+                        "next_action": (
+                            "Leave future instances live unless a later task "
+                            "run produces a better candidate."
+                        ),
+                    },
+                )
+
+            certification_revision_attempts += 1
+            certification_metadata = {
+                "certification_evidence": certification_evidence,
+                "promotion_rationale": promotion_rationale or "",
+                "certification_attempt": certification_revision_attempts,
+                "max_revision_attempts": (MAX_OFFLINE_CERTIFICATION_REVISION_ATTEMPTS),
+            }
+            certification_result = {
+                "evidence_based": True,
+                "executed_entrypoint": False,
+                "attempt": certification_revision_attempts,
+                "max_revision_attempts": (MAX_OFFLINE_CERTIFICATION_REVISION_ATTEMPTS),
+            }
+            outcome = promote_entrypoint_offline(
+                function_id=int(function_id),
+                certification_metadata=certification_metadata,
+                certification_result=certification_result,
+            )
+            remaining_attempts = max(
+                0,
+                MAX_OFFLINE_CERTIFICATION_REVISION_ATTEMPTS
+                - certification_revision_attempts,
+            )
+            outcome["certification_attempt"] = certification_revision_attempts
+            outcome["remaining_revision_attempts"] = remaining_attempts
+            if outcome.get("outcome") == "certification_rejected":
+                outcome["feedback"] = (
+                    "Use rejection_reasons to revise the candidate function or "
+                    "evidence. Do not execute the candidate through certification."
+                )
+                if remaining_attempts == 0:
+                    outcome["certification_feedback_status"] = (
+                        "revision_attempts_exhausted"
+                    )
+                    outcome["next_action"] = "Keep future task instances live."
+            return str(outcome)
+
+        submit_offline_certification_evidence.__doc__ += (
+            f"\n\nCurrent task: {task_name} "
+            f"(task_id={task_id}, completed instance_id={instance_id}). "
+            "This tool may patch future non-terminal instances to offline "
+            "delivery only after evidence-based certification passes."
+        )
+        tools["submit_offline_certification_evidence"] = (
+            submit_offline_certification_evidence
         )
 
     return tools, storage_active_lines
@@ -1022,13 +1249,39 @@ def _start_storage_check_loop(
             "use focused `reason(...)` calls for bounded semantic substeps "
             "such as summarization, classification, ranking, drafting, or "
             "source selection.\n\n"
-            "If you store a FunctionManager function and decide it is stable "
-            "and headless-safe enough for future runs, call "
+            "If you store a FunctionManager function and decide it is a stable "
+            "candidate for future runs, call "
             "`attach_entrypoint_to_recurring_task(function_id=..., "
-            "rationale=...)`. Calling that tool makes future non-terminal "
-            "instances run offline/headlessly through the stored function. Do "
-            "not call it unless the function has already been persisted and "
-            "you have the numeric function_id.\n\n"
+            "rationale=..., equivalence_manifest=..., "
+            "anti_oversimplification_checklist=...)`. Calling that tool records "
+            "a symbolic executor candidate on future non-terminal instances; it "
+            "does not promote them to offline delivery. Do not call it unless "
+            "the function has already been persisted and you have the numeric "
+            "function_id.\n\n"
+            "Executor candidates require an equivalence manifest. Include: "
+            "required inputs; managed primitives/helpers/managers used; external "
+            "capabilities; side effects and ordering; expected result shape; "
+            "failure semantics; and a live-step to function-code-path mapping. "
+            "The anti-oversimplification checklist must confirm there are no "
+            "hardcoded observations from live tool results unless they are true "
+            "task constants, no removed validation gates, no reordered side "
+            "effects, no discarded recovery branches, and no replacement of "
+            "runtime-dependent decisions with static assumptions. If the "
+            "candidate materially changes primitives, inputs, ordering, or "
+            "failure behavior, store it as a helper/guidance only and do not "
+            "record it as the task executor candidate.\n\n"
+            "Offline promotion is a separate evidence-based certification "
+            "decision. Only call `submit_offline_certification_evidence(...)` "
+            "after the candidate is recorded and you can provide complete "
+            "evidence for equivalence, inputs, side effects, idempotency, cost, "
+            "failure behavior, observability, and managed primitive "
+            "preservation. The certification tool does not execute the "
+            "entrypoint or replay live task steps. Replacing managed primitives "
+            "with ad hoc logic is not equivalent: for example, do not replace "
+            "`primitives.web.ask(...)` with custom scraping or manager-owned "
+            "primitives with raw storage/HTTP shortcuts. Failed certification "
+            "keeps future runs live while preserving the stored artifact for "
+            "reuse.\n\n"
             "Task metadata:\n"
             f"```json\n{metadata_json}\n```\n\n"
         )
@@ -3728,6 +3981,74 @@ class CodeActActor(BaseCodeActActor):
 
         return tools
 
+    async def _repair_symbolic_entrypoint(
+        self,
+        *,
+        entrypoint_id: int,
+        request: str | dict | list[str | dict],
+        entrypoint_kwargs: dict[str, Any],
+        failure: BaseException,
+        repair_context: dict[str, Any] | None,
+    ) -> str:
+        """Run a bounded review loop that can repair a failing symbolic executor."""
+
+        fm = self.function_manager
+        if fm is None:
+            raise RuntimeError(
+                "Cannot repair symbolic entrypoint without FunctionManager.",
+            )
+
+        function_snapshot = fm.filter_functions(
+            filter=f"function_id == {int(entrypoint_id)}",
+            _also_return_metadata=True,
+        )
+        tools = methods_to_tool_dict(
+            fm.search_functions,
+            fm.filter_functions,
+            fm.list_functions,
+            fm.add_functions,
+            fm.delete_function,
+            fm.add_venv,
+            fm.list_venvs,
+            fm.get_venv,
+            fm.update_venv,
+            fm.delete_venv,
+            fm.set_function_venv,
+            fm.get_function_venv,
+            include_class_name=True,
+        )
+        client = new_llm_client(self._model)
+        client.set_system_message(
+            "You are repairing a stored symbolic task executor. The function "
+            "must preserve the task contract, managed primitives, deterministic "
+            "inputs, side-effect ordering, and failure semantics. Prefer updating "
+            "the existing function with overwrite=True. Do not replace managed "
+            "primitives with ad hoc weaker implementations.",
+        )
+        message = (
+            "A symbolic task executor failed certification or execution.\n\n"
+            f"Task request:\n{request}\n\n"
+            "Deterministic entrypoint kwargs:\n"
+            f"```json\n{json.dumps(entrypoint_kwargs, indent=2, default=str)}\n```\n\n"
+            "Function snapshot:\n"
+            f"```json\n{json.dumps(function_snapshot, indent=2, default=str)}\n```\n\n"
+            "Repair context:\n"
+            f"```json\n{json.dumps(repair_context or {}, indent=2, default=str)}\n```\n\n"
+            f"Failure: {type(failure).__name__}: {failure}\n\n"
+            "Repair the stored function if possible, then briefly summarize the "
+            "equivalence rationale and the change made. If it cannot be repaired "
+            "without changing the task contract, say so without promoting it."
+        )
+        handle = start_async_tool_loop(
+            client=client,
+            message=message,
+            tools=tools,
+            loop_id=f"SymbolicEntrypointRepair({entrypoint_id})",
+            max_consecutive_failures=2,
+        )
+        result = await handle.result()
+        return str(result)
+
     @functools.wraps(BaseCodeActActor.act, updated=())
     @log_manager_call(
         "CodeActActor",
@@ -3767,6 +4088,11 @@ class CodeActActor(BaseCodeActActor):
             return f"{(_act_time.perf_counter() - _act_t0) * 1000:.0f}ms"
 
         logger.debug(f"⏱️ [CodeActActor.act +{_act_ms()}] entered")
+
+        entrypoint_repair_attempts = int(
+            kwargs.pop("entrypoint_repair_attempts", 0) or 0,
+        )
+        entrypoint_repair_context = kwargs.pop("entrypoint_repair_context", None)
 
         effective_can_compose = (
             self.can_compose if can_compose is None else bool(can_compose)
@@ -3962,7 +4288,7 @@ class CodeActActor(BaseCodeActActor):
             args = list(entrypoint_args or [])
             kwargs_for_entrypoint = dict(entrypoint_kwargs or {})
 
-            async def _run_entrypoint() -> Any:
+            async def _run_entrypoint_once() -> Any:
                 fm = self.function_manager
                 if fm is None:
                     raise RuntimeError(
@@ -3993,10 +4319,35 @@ class CodeActActor(BaseCodeActActor):
                         f"Entrypoint {entrypoint_id} ({fn_name}) was not injected into the sandbox namespace.",
                     )
 
-                res = fn(*args, **kwargs_for_entrypoint)
+                compatible_kwargs = _signature_compatible_kwargs(
+                    fn,
+                    kwargs_for_entrypoint,
+                )
+                res = fn(*args, **compatible_kwargs)
                 if inspect.isawaitable(res):
                     res = await res
                 return res
+
+            async def _run_entrypoint() -> Any:
+                attempts_remaining = max(0, entrypoint_repair_attempts)
+                while True:
+                    try:
+                        return await _run_entrypoint_once()
+                    except Exception as exc:
+                        if attempts_remaining <= 0:
+                            raise
+                        attempts_remaining -= 1
+                        await self._repair_symbolic_entrypoint(
+                            entrypoint_id=entrypoint_id,
+                            request=request,
+                            entrypoint_kwargs=kwargs_for_entrypoint,
+                            failure=exc,
+                            repair_context=(
+                                entrypoint_repair_context
+                                if isinstance(entrypoint_repair_context, dict)
+                                else None
+                            ),
+                        )
 
             delegate_token = current_task_execution_delegate.set(
                 task_execution_delegate,
