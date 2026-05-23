@@ -480,6 +480,46 @@ def _build_coordinator_knowledge_tool_listing() -> str:
     )
 
 
+def _build_coordinator_onboarding_narration_block() -> str:
+    """Reactive-narration guidance for the Coordinator onboarding flow.
+
+    Orchestra publishes a ``coordinator_onboarding_event`` system event
+    every time a real onboarding milestone lands (workspace OAuth,
+    integration connect, task create, action start, specialist hire)
+    *while the Coordinator is still in onboarding mode*. The
+    notifications bar surfaces each event tagged with subtype + a
+    short human summary; this block tells the brain how to react.
+
+    The list of subtypes is kept in sync with the orchestra-side
+    ``coordinator_onboarding_event_service.SUBTYPE_*`` constants and
+    the wire shape published by the adapters webhook.
+    """
+    return "\n".join(
+        [
+            "Coordinator onboarding narration",
+            "--------------------------------",
+            "While the user is onboarding you, you receive a "
+            "`[CoordinatorOnboarding]` notification whenever an "
+            "onboarding milestone really lands. Treat each notification "
+            "as a cue to send exactly one short acknowledgement.",
+            "Recognised subtypes (carried in the notification body as "
+            "`[onboarding subtype: <name>]`):",
+            "  - `workspace_connected`: workspace OAuth (Google / Microsoft) just succeeded.",
+            "  - `integration_connected`: a new integration secret was saved.",
+            "Rules:",
+            "  1. Acknowledge in one short sentence — name the thing that just happened, "
+            "stay warm, do not re-list the whole checklist.",
+            "  2. Preview the *single* next pending onboarding step so the user has a "
+            "clear handoff. If onboarding is otherwise complete, congratulate and stand down.",
+            "  3. Prefer a spoken line when a voice call is active; otherwise send one chat message.",
+            "  4. Never narrate the same subtype twice in a row — if the previous "
+            "acknowledgement is still in the immediate transcript history, stay silent.",
+            "  5. Do not act on the event (no `act`, no tool calls). Acknowledgement only — "
+            "the user's next message is the trigger for any follow-up work.",
+        ],
+    )
+
+
 def _build_action_steering_tool_listing() -> str:
     """Build the shared action steering tools block for the output format section."""
     return "\n".join(
@@ -1263,11 +1303,20 @@ def build_system_prompt(
     input_format_example = _build_input_format_example()
     coordinator_workspace_tool_listing = ""
     coordinator_knowledge_tool_listing = ""
+    coordinator_onboarding_narration_block = ""
     if is_coordinator and not demo_mode:
         coordinator_workspace_tool_listing = _build_coordinator_workspace_tool_listing(
             is_org_workspace=coordinator_has_org_context,
         )
         coordinator_knowledge_tool_listing = _build_coordinator_knowledge_tool_listing()
+        # Reactive-narration rules for the gradual onboarding flow.
+        # Cheap to build unconditionally for coordinators — orchestra
+        # gates emission on ``Coordinator/State.mode == 'onboarding'``
+        # so the block is harmless when the user is past onboarding;
+        # they simply never see the notification it describes.
+        coordinator_onboarding_narration_block = (
+            _build_coordinator_onboarding_narration_block()
+        )
     action_steering_tool_listing = _build_action_steering_tool_listing()
 
     # Voice call note for role section
@@ -1372,6 +1421,13 @@ Messages from the current turn have **NEW** tag prepended:
                 computer_fast_path=computer_fast_path,
             ),
         )
+
+    # Coordinator-only reactive narration rules for the gradual
+    # onboarding flow. Empty string for non-coordinator sessions and
+    # demo mode (the builder already skipped construction in those
+    # cases) so this becomes a structural no-op there.
+    if coordinator_onboarding_narration_block:
+        parts.add(coordinator_onboarding_narration_block)
 
     # Conversational restraint
     parts.add(_build_base_conversational_restraint_block())
