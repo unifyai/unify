@@ -295,9 +295,16 @@ def test_filter_scope_never_match_when_packages_exist_but_none_enabled(monkeypat
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.requires_orchestra
 def test_register_is_idempotent(monkeypatch):
     """Re-running register_available_integrations doesn't double-process
-    packages already in registered_slugs."""
+    packages already in registered_slugs.
+
+    `register_available_integrations` walks the FunctionManager and
+    GuidanceManager which read the assistant's contexts from Orchestra,
+    so this test needs a live backend even though the function/guidance
+    registration steps themselves are stubbed.
+    """
     calls = {"functions": 0, "guidance": 0}
 
     def fake_register_functions(pkg):
@@ -324,9 +331,13 @@ def test_register_is_idempotent(monkeypatch):
     assert calls == {"functions": 1, "guidance": 1}
 
 
+@pytest.mark.requires_orchestra
 def test_register_per_package_failure_does_not_halt_others(monkeypatch):
     """If one package's functions/guidance step raises, the remaining
-    packages still get processed."""
+    packages still get processed.
+
+    Same Orchestra dependency as `test_register_is_idempotent`.
+    """
 
     def failing_functions(pkg):
         if pkg["slug"] == "broken":
