@@ -88,6 +88,8 @@ Run the whole stack on your own machine. Runtime, persistence backend, LLM clien
 
 **No signup required.** The local installer auto-generates a synthetic API key for the bundled orchestra-core and wires everything together. The only key you bring is one LLM provider key (OpenAI or Anthropic).
 
+**Including live voice calls.** The same install can run the production voice agent locally — you talk to your assistant through your browser, with sub-second interruption handling and the full background-reasoner loop running against your machine. Self-hosted LiveKit is automated (`unity voice setup`); you bring Deepgram + Cartesia/ElevenLabs keys (free tiers exist). See [Live voice](#live-voice-talking-to-the-assistant-in-your-browser) below.
+
 ---
 
 ## Self-host
@@ -141,7 +143,52 @@ If you're evaluating Unity as a runtime, start with **option 2**.
 > email Project Update | Here are the Q3 numbers you asked for...
 ```
 
-Other `unity` subcommands: `unity setup`, `unity status`, `unity stop`, `unity restart`, `unity help`.
+Other `unity` subcommands: `unity setup`, `unity status`, `unity stop`, `unity restart`, `unity help`, `unity voice setup` / `voice stop` / `voice status` (live voice — see below).
+
+### Live voice (talking to the assistant in your browser)
+
+The same install lets you actually **call** your assistant: a real-time voice loop with the production fast-brain (interruption-handling, telephony-aware) running against your local stack. There is no separate "voice deployment" — the sandbox runs the same voice agent your phone would talk to.
+
+The pieces are split between things we automate for you (LiveKit) and BYOK voice-provider keys (Deepgram for STT, Cartesia or ElevenLabs for TTS). LiveKit is fully self-hosted in dev mode — no LiveKit Cloud account needed.
+
+**One-time setup** (after `unity setup` has already run):
+
+```bash
+unity voice setup
+```
+
+This installs `livekit-server` (a single binary), boots it locally in `--dev` mode (`ws://localhost:7880`, dev credentials), and writes `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` to `~/.unity/unity/.env`. It also tells you which voice-provider keys you still need to drop in.
+
+**Voice-provider keys you need to bring** (paid services, both have free tiers/credits):
+
+| Variable | Where to get it |
+|---|---|
+| `DEEPGRAM_API_KEY` | [console.deepgram.com](https://console.deepgram.com) — free tier |
+| `CARTESIA_API_KEY` *or* `ELEVEN_API_KEY` | [play.cartesia.ai](https://play.cartesia.ai) or [elevenlabs.io](https://elevenlabs.io) — free credits |
+
+Add them to `~/.unity/unity/.env`, then:
+
+```bash
+unity --live-voice --project_name Sandbox --overwrite
+```
+
+In the sandbox REPL:
+
+```text
+cm> call         # opens LiveKit Agents Playground in your browser; speak through your mic
+cm> end_call     # tears down the voice agent + room
+```
+
+The first `call` clones [agents-playground](https://github.com/livekit/agents-playground) into `~/.livekit-playground/` and runs `npm install` (one-time; needs Node.js with `npm` or `pnpm`).
+
+**Stopping things:**
+
+```bash
+unity voice stop   # stops local LiveKit
+unity stop         # stops local orchestra-core
+```
+
+For full configuration (voice ID, provider selection, SIP for actual phone numbers), see [`sandboxes/conversation_manager/README.md`](sandboxes/conversation_manager/README.md#voice--live-voice---voice---live-voice).
 
 <details>
 <summary>Skip the local orchestra-core (point at your own deployment)</summary>
