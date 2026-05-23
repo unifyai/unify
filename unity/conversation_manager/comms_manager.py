@@ -56,6 +56,9 @@ from unity.conversation_manager.domains.comms_utils import (
     publish_system_error,
     resolve_slack_user_profile,
 )
+from unity.conversation_manager.domains.coordinator_onboarding import (
+    _coordinator_onboarding_event_from_payload,
+)
 from unity.conversation_manager.domains.inactivity import (
     _inactivity_followup_event_from_payload,
 )
@@ -799,6 +802,10 @@ class CommsManager:
                     "inactivity_followup": lambda r: _inactivity_followup_event_from_payload(
                         event,
                         reason=r,
+                    ),
+                    "coordinator_onboarding_event": lambda r: _coordinator_onboarding_event_from_payload(
+                        event,
+                        message=r,
                     ),
                     "assistant_screen_share_started": lambda r: AssistantScreenShareStarted(
                         reason=r or "User enabled assistant screen sharing.",

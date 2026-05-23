@@ -1416,6 +1416,35 @@ class InactivityFollowup(Event):
 
 
 @dataclass
+class CoordinatorOnboardingEvent(Event):
+    """Orchestra observed a user action that should be narrated in the
+    Coordinator's onboarding conversation.
+
+    Emitted only while the Coordinator is in
+    ``Coordinator/State.mode == 'onboarding'`` (see
+    ``coordinator_onboarding_event_service`` in orchestra) so day-to-day
+    activity stays silent. The five subtypes correspond to the
+    onboarding checklist's real-action milestones: workspace OAuth
+    landed, an integration secret was saved, a task was created, an
+    action started, or a specialist was hired. The brain reacts with a
+    one-line acknowledgement that names the thing that just happened
+    and previews the next pending step — see the coordinator block in
+    ``prompt_builders.build_system_prompt``.
+
+    ``subtype`` is the canonical event taxonomy keyed off
+    ``extra_event_fields.subtype`` on the Pub/Sub payload; ``details``
+    carries optional structured context (secret name, specialist id,
+    …) the brain can include in the acknowledgement when relevant.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:coordinator_onboarding_event"
+
+    subtype: str = ""
+    message: str = ""
+    details: dict = field(default_factory=dict)
+
+
+@dataclass
 class FileSyncComplete(Event):
     """The initial rclone bisync between the container and the managed VM has
     finished.  All files from the assistant's persistent disk are now available
