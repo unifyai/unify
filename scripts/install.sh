@@ -304,6 +304,15 @@ case "\${1:-}" in
             exit 1
         fi
         ;;
+    voice)
+        shift
+        if [ -x "\$UNITY_REPO/scripts/voice.sh" ]; then
+            exec bash "\$UNITY_REPO/scripts/voice.sh" "\$@"
+        else
+            echo "voice.sh not found at \$UNITY_REPO/scripts/voice.sh — run \\\`unity setup\\\` first." >&2
+            exit 1
+        fi
+        ;;
     help|--help|-h)
         cat <<'HELP'
 Unity CLI
@@ -314,7 +323,14 @@ Usage:
   unity stop                         Stop local orchestra-core
   unity status                       Show local orchestra-core status
   unity restart                      Restart local orchestra-core (wipes DB)
+  unity voice setup                  Install + start local LiveKit for --live-voice
+  unity voice stop                   Stop local LiveKit server
+  unity voice status                 Report local LiveKit status
   unity help                         Show this message
+
+For live voice calls (unity --live-voice ...):
+  unity voice setup    one-time + per-boot LiveKit bring-up
+  README "Live voice" section for BYOK voice-provider keys
 
 Any unrecognized first argument is passed through to the sandbox, so
 existing flags like --project_name, --overwrite, --real-comms still work.
