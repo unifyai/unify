@@ -86,18 +86,18 @@ The lowest-friction path is the hosted product at **[console.unify.ai](https://c
 
 Run the whole stack on your own machine. Runtime, persistence backend, LLM client, and Python SDK are all open-source — see [Self-host](#self-host) below.
 
-**No signup required.** The local installer auto-generates a synthetic API key for the bundled Orchestra and wires everything together. The only key you bring is one LLM provider key (OpenAI or Anthropic).
+**No signup required.** The local installer auto-generates a synthetic API key for the bundled orchestra-core and wires everything together. The only key you bring is one LLM provider key (OpenAI or Anthropic).
 
 ---
 
 ## Self-host
 
-By default, Unity's open-core install is fully local: the runtime, the LLM client, and the persistence backend ([Orchestra](https://github.com/unifyai/orchestra), via Docker) all run on your machine. The hosted product at [console.unify.ai](https://console.unify.ai) is optional — Unity does not depend on it for any local feature.
+By default, Unity's open-core install is fully local: the runtime, the LLM client, and the persistence backend ([orchestra-core](https://github.com/unifyai/orchestra-core), via Docker) all run on your machine. orchestra-core is the public single-user kernel of Orchestra; the multi-tenant hosted backend runs as a separate private service and is not required for any local feature. The hosted product at [console.unify.ai](https://console.unify.ai) is optional — Unity does not depend on it.
 
 **Prerequisites:**
 
 - **Python 3.12+** (the installer will fetch it with `uv` if needed)
-- **Docker** (runs the local Orchestra backend)
+- **Docker** (runs the local orchestra-core backend)
 - **PortAudio** for audio support
   - macOS: `brew install portaudio`
   - Ubuntu/Debian: `sudo apt-get install portaudio19-dev python3-dev`
@@ -109,7 +109,7 @@ By default, Unity's open-core install is fully local: the runtime, the LLM clien
 curl -fsSL https://raw.githubusercontent.com/unifyai/unity/main/scripts/install.sh | bash
 ```
 
-The installer clones `unity`, `unify`, `unillm`, and `orchestra` as siblings under `~/.unity/`, installs dependencies, creates a `unity` CLI shim in `~/.local/bin/`, boots a local Orchestra in Docker, **generates a local API key for the bundled Orchestra**, and wires `ORCHESTRA_URL` and that auto-generated key into `~/.unity/unity/.env`. No Unify account or external signup is required.
+The installer clones `unity`, `unify`, `unillm`, and `orchestra-core` as siblings under `~/.unity/`, installs dependencies, creates a `unity` CLI shim in `~/.local/bin/`, boots a local orchestra-core in Docker, **generates a local API key for the bundled orchestra-core**, and wires `ORCHESTRA_URL` and that auto-generated key into `~/.unity/unity/.env`. No Unify account or external signup is required.
 
 Add one model provider key to `~/.unity/unity/.env`:
 
@@ -144,13 +144,13 @@ If you're evaluating Unity as a runtime, start with **option 2**.
 Other `unity` subcommands: `unity setup`, `unity status`, `unity stop`, `unity restart`, `unity help`.
 
 <details>
-<summary>Skip the local Orchestra (point at your own deployment)</summary>
+<summary>Skip the local orchestra-core (point at your own deployment)</summary>
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/unifyai/unity/main/scripts/install.sh | bash -s -- --skip-setup
 ```
 
-That leaves the code installed but doesn't spin up Orchestra. You'll need to point Unity at your own Orchestra deployment (or another team's shared one) via `ORCHESTRA_URL` and a matching API key in `~/.unity/unity/.env`.
+That leaves the code installed but doesn't spin up orchestra-core. You'll need to point Unity at your own Orchestra-compatible deployment (orchestra-core, the private orchestra-platform superset, or another team's shared one) via `ORCHESTRA_URL` and a matching API key in `~/.unity/unity/.env`.
 
 </details>
 
@@ -158,19 +158,20 @@ That leaves the code installed but doesn't spin up Orchestra. You'll need to poi
 <summary>Manual install (no installer script)</summary>
 
 ```bash
-git clone https://github.com/unifyai/unity.git      ~/.unity/unity
-git clone https://github.com/unifyai/unify.git      ~/.unity/unify
-git clone https://github.com/unifyai/unillm.git     ~/.unity/unillm
-git clone https://github.com/unifyai/orchestra.git  ~/.unity/orchestra
+git clone https://github.com/unifyai/unity.git           ~/.unity/unity
+git clone https://github.com/unifyai/unify.git           ~/.unity/unify
+git clone https://github.com/unifyai/unillm.git          ~/.unity/unillm
+git clone https://github.com/unifyai/orchestra-core.git  ~/.unity/orchestra-core
 
 cd ~/.unity/unity
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
 
-cd ~/.unity/orchestra
+cd ~/.unity/orchestra-core
 poetry install
 ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS=0 scripts/local.sh start
-# Copy the ORCHESTRA_URL and UNIFY_KEY it prints into ~/.unity/unity/.env
+# Copy the UNIFY_BASE_URL and UNIFY_KEY it prints into ~/.unity/unity/.env
+# (Unity reads ORCHESTRA_URL, which the installer maps from UNIFY_BASE_URL.)
 ```
 
 </details>
@@ -465,8 +466,8 @@ Unity is one of four MIT-licensed repos that make up the runtime. The installer 
 | Repo | Role |
 |------|------|
 | **unity** (this) | The agent runtime — managers, tool loops, CodeAct, voice, orchestration |
-| **[orchestra](https://github.com/unifyai/orchestra)** | Persistence backend — FastAPI + Postgres + pgvector. Installer spins it up locally in Docker |
-| **[unify](https://github.com/unifyai/unify)** | Python SDK — the client Unity uses to talk to Orchestra |
+| **[orchestra-core](https://github.com/unifyai/orchestra-core)** | Persistence kernel — FastAPI + Postgres + pgvector. Installer spins it up locally in Docker. The hosted superset (orchestra-platform) is private; orchestra-core is the public single-user kernel. |
+| **[unify](https://github.com/unifyai/unify)** | Python SDK — the client Unity uses to talk to orchestra-core (or the private orchestra-platform superset) |
 | **[unillm](https://github.com/unifyai/unillm)** | LLM access layer — OpenAI, Anthropic, or any compatible endpoint |
 
 ---
