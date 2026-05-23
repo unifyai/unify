@@ -3,7 +3,7 @@
 # Unity Installer
 # ============================================================================
 # Installs Unity (https://github.com/unifyai/unity) locally on macOS / Linux /
-# WSL2. Clones unity, unify, unillm, and orchestra as siblings under
+# WSL2. Clones unity, unify, unillm, and orchestra-core as siblings under
 # $UNITY_HOME and editable-installs the Python repos with uv.
 #
 # Quick install:
@@ -14,7 +14,7 @@
 #   --branch NAME     Git branch to install (default: main)
 #   --no-cli          Skip creating the `unity` command shim
 #   --skip-deps       Skip system-dependency checks (PortAudio, etc.)
-#   --skip-setup      Skip the local Orchestra spin-up at the end
+#   --skip-setup      Skip the local orchestra-core spin-up at the end
 #                     (just install the code; run `unity setup` later)
 #   -h, --help        Show this help
 # ============================================================================
@@ -267,7 +267,7 @@ create_cli() {
 set -e
 UNITY_HOME="${UNITY_HOME}"
 UNITY_REPO="${UNITY_REPO}"
-ORCHESTRA_REPO="\$UNITY_HOME/orchestra"
+ORCHESTRA_REPO="\$UNITY_HOME/orchestra-core"
 export UNITY_HOME
 
 if [ ! -d "\$UNITY_REPO" ]; then
@@ -284,7 +284,7 @@ case "\${1:-}" in
         if [ -x "\$ORCHESTRA_REPO/scripts/local.sh" ]; then
             exec bash "\$ORCHESTRA_REPO/scripts/local.sh" stop
         else
-            echo "Orchestra not installed at \$ORCHESTRA_REPO — nothing to stop." >&2
+            echo "orchestra-core not installed at \$ORCHESTRA_REPO — nothing to stop." >&2
             exit 1
         fi
         ;;
@@ -292,7 +292,7 @@ case "\${1:-}" in
         if [ -x "\$ORCHESTRA_REPO/scripts/local.sh" ]; then
             exec bash "\$ORCHESTRA_REPO/scripts/local.sh" status
         else
-            echo "Orchestra not installed at \$ORCHESTRA_REPO." >&2
+            echo "orchestra-core not installed at \$ORCHESTRA_REPO." >&2
             exit 1
         fi
         ;;
@@ -300,7 +300,7 @@ case "\${1:-}" in
         if [ -x "\$ORCHESTRA_REPO/scripts/local.sh" ]; then
             exec bash "\$ORCHESTRA_REPO/scripts/local.sh" restart
         else
-            echo "Orchestra not installed at \$ORCHESTRA_REPO — run \\\`unity setup\\\` first." >&2
+            echo "orchestra-core not installed at \$ORCHESTRA_REPO — run \\\`unity setup\\\` first." >&2
             exit 1
         fi
         ;;
@@ -310,10 +310,10 @@ Unity CLI
 
 Usage:
   unity [--project_name NAME ...]   Launch the ConversationManager sandbox
-  unity setup                        Bootstrap / re-bootstrap local Orchestra
-  unity stop                         Stop local Orchestra
-  unity status                       Show local Orchestra status
-  unity restart                      Restart local Orchestra (wipes DB)
+  unity setup                        Bootstrap / re-bootstrap local orchestra-core
+  unity stop                         Stop local orchestra-core
+  unity status                       Show local orchestra-core status
+  unity restart                      Restart local orchestra-core (wipes DB)
   unity help                         Show this message
 
 Any unrecognized first argument is passed through to the sandbox, so
@@ -343,17 +343,17 @@ EOF
 }
 
 # ----------------------------------------------------------------------------
-# Run setup.sh at the end (clones orchestra, spins up local backend, writes .env)
+# Run setup.sh at the end (clones orchestra-core, spins up local backend, writes .env)
 # ----------------------------------------------------------------------------
 run_setup() {
     [ "$RUN_SETUP" = "false" ] && {
-        log_info "Skipping local Orchestra spin-up (--skip-setup). Run \`unity setup\` later."
+        log_info "Skipping local orchestra-core spin-up (--skip-setup). Run \`unity setup\` later."
         SETUP_OK=skipped
         return 0
     }
 
     if [ ! -x "$UNITY_REPO/scripts/setup.sh" ]; then
-        log_warn "setup.sh not found at $UNITY_REPO/scripts/setup.sh — skipping Orchestra spin-up."
+        log_warn "setup.sh not found at $UNITY_REPO/scripts/setup.sh — skipping orchestra-core spin-up."
         SETUP_OK=failed
         return 0
     fi
@@ -370,7 +370,7 @@ run_setup() {
         SETUP_OK=ok
     else
         SETUP_OK=failed
-        log_warn "Local Orchestra setup didn't complete (exit=$setup_exit)."
+        log_warn "Local orchestra-core setup didn't complete (exit=$setup_exit)."
         log_info "Re-run after fixing the issue:  unity setup"
     fi
 }
@@ -382,7 +382,7 @@ print_next_steps() {
     echo ""
     if [ "${SETUP_OK:-}" = "failed" ]; then
         echo -e "${YELLOW}${BOLD}Installation partially complete.${NC}"
-        echo "  Code is installed; local Orchestra didn't start. See warnings above."
+        echo "  Code is installed; local orchestra-core didn't start. See warnings above."
     else
         echo -e "${GREEN}${BOLD}Installation complete.${NC}"
     fi
@@ -392,9 +392,9 @@ print_next_steps() {
     if [ "${SETUP_OK:-}" = "ok" ]; then
         echo "  1. Add an LLM provider key to $UNITY_REPO/.env"
         echo "     OPENAI_API_KEY or ANTHROPIC_API_KEY"
-        echo "     (ORCHESTRA_URL and UNIFY_KEY are already wired to local Orchestra.)"
+        echo "     (ORCHESTRA_URL and UNIFY_KEY are already wired to local orchestra-core.)"
     else
-        echo "  1. Bootstrap local Orchestra:"
+        echo "  1. Bootstrap local orchestra-core:"
         echo -e "     ${CYAN}\$ unity setup${NC}"
         echo ""
         echo "  2. Add an LLM provider key to $UNITY_REPO/.env"
@@ -406,8 +406,8 @@ print_next_steps() {
         echo -e "     ${CYAN}\$ unity --project_name Sandbox --overwrite${NC}"
         echo ""
         echo "  Also available:"
-        echo -e "     ${CYAN}\$ unity status${NC}    Local Orchestra status"
-        echo -e "     ${CYAN}\$ unity stop${NC}      Stop local Orchestra"
+        echo -e "     ${CYAN}\$ unity status${NC}    Local orchestra-core status"
+        echo -e "     ${CYAN}\$ unity stop${NC}      Stop local orchestra-core"
         echo -e "     ${CYAN}\$ unity help${NC}      Subcommand reference"
     else
         echo "  2. Activate the venv and start the sandbox:"
