@@ -7,6 +7,12 @@ It ensures the shared project and contexts exist, making subsequent
 parallel pytest sessions race-free.
 
 The script is idempotent: calling it multiple times has no adverse effects.
+If Orchestra is unreachable (e.g. CI runner failed to start it, or local dev
+without `unity setup`), the script exits 0 with a clear note — pytest will
+then run, and individual tests handle the missing backend via their own
+`requires_orchestra` marker / `_check_orchestra_available` skip logic in
+`tests/conftest.py`. Crashing here would kill the pytest session before
+any test (including pure unit tests that don't need Orchestra) gets to run.
 
 Usage (internal - typically invoked via parallel_run.sh):
     python3 tests/_prepare_shared_project.py
@@ -17,6 +23,7 @@ import logging
 
 logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
 
+import os
 import sys
 from pathlib import Path
 
@@ -34,6 +41,28 @@ load_dotenv()
 PROJECT = "UnityTests"
 
 
+def _orchestra_reachable() -> bool:
+    """Quick health probe so we can no-op cleanly when the backend is down.
+
+    Mirrors what `tests/conftest.py:_check_orchestra_available` does: a 200,
+    401, or 403 from `<base>/v0/projects` all mean "the server is up". We
+    only no-op on connection-level failures.
+    """
+    base = os.environ.get("ORCHESTRA_URL", "http://localhost:8000")
+    if base.endswith("/v0"):
+        url = f"{base}/projects"
+    else:
+        url = f"{base.rstrip('/')}/v0/projects"
+
+    try:
+        import httpx
+
+        with httpx.Client(timeout=2.0) as client:
+            return client.get(url).status_code in (200, 401, 403)
+    except Exception:
+        return False
+
+
 def prepare_shared_project() -> None:
     """Prepare the shared UnityTests project and Combined context."""
     try:
@@ -45,6 +74,16 @@ def prepare_shared_project() -> None:
         )
         sys.exit(1)
 
+    if not _orchestra_reachable():
+        # No backend to set up against. Pytest itself will skip Orchestra-
+        # requiring tests via `requires_orchestra`; pure unit tests still run.
+        print(
+            "Skipping shared-project prep: Orchestra is not reachable at "
+            f"{os.environ.get('ORCHESTRA_URL', 'http://localhost:8000')}. "
+            "Tests marked `requires_orchestra` will skip; others run as normal.",
+        )
+        return
+
     # 1. Activate/create project (idempotent - does not overwrite if exists)
     try:
         unify.activate(PROJECT, overwrite=False)
@@ -54,8 +93,13 @@ def prepare_shared_project() -> None:
 
     unify.set_user_logging(False)
 
-    # 2. Ensure Combined context with fields (idempotent)
-    unify.create_context("Combined")
+    # 2. Ensure Combined context with fields (idempotent). Wrapped because the
+    # project-activate above may have raced with another worker / partial
+    # connectivity, leaving us in a state where create_context still fails.
+    try:
+        unify.create_context("Combined")
+    except Exception as e:
+        print(f"Note: create_context('Combined') returned: {e}", file=sys.stderr)
 
     # Ensure fields exist (idempotent - create_fields tolerates existing fields)
     try:

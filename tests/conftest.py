@@ -396,6 +396,30 @@ def pytest_sessionstart(session):
     get_tracer()  # Creates TracerProvider with service="unity" if OTEL enabled
 
     # ------------------------------------------------------------------
+    #  Skip Orchestra-dependent setup if Orchestra isn't reachable.
+    #
+    #  Two scenarios produce this state in practice:
+    #   - CI: parallel_run.sh's `local.sh start` failed (e.g. docker
+    #     unavailable, port conflict). The warning is logged but the
+    #     session still launches.
+    #   - Local: developer running `pytest` without `unity setup`.
+    #
+    #  In both cases, crashing here would kill the whole pytest session
+    #  before any test (including pure unit tests that don't need
+    #  Orchestra) gets to run. Bailing out of session setup instead
+    #  leaves the per-test `requires_orchestra` skip logic to do its
+    #  job — Orchestra-needing tests skip, unit tests still run.
+    # ------------------------------------------------------------------
+    if not _check_orchestra_available():
+        print(
+            "\n[unity-conftest] Orchestra not reachable at "
+            f"{os.environ.get('ORCHESTRA_URL', 'http://localhost:8000')}; "
+            "skipping session-level project/context setup. "
+            "Tests marked `requires_orchestra` will skip; others run as normal.\n",
+        )
+        return
+
+    # ------------------------------------------------------------------
     #  Optionally delete the project before starting (clean slate)
     #  Skip in shared project mode (UNIFY_SKIP_SESSION_SETUP) because
     #  parallel_run.sh handles deletion at the script level to avoid
