@@ -179,6 +179,37 @@ check_system_deps() {
             ;;
     esac
 
+    # Docker — required to run the local Orchestra backend on the
+    # install-and-live path. Skip the check entirely when --skip-setup is on,
+    # because in that mode the user explicitly opts out of local Orchestra.
+    if [ "$RUN_SETUP" != "false" ]; then
+        if ! command -v docker >/dev/null 2>&1; then
+            case "$OS" in
+                macos)
+                    hard_missing+=("Docker Desktop  (install: https://www.docker.com/products/docker-desktop/)")
+                    ;;
+                linux)
+                    hard_missing+=("Docker engine  (install: https://docs.docker.com/engine/install/)")
+                    ;;
+                *)
+                    hard_missing+=("Docker  (install: https://docs.docker.com/get-docker/)")
+                    ;;
+            esac
+        elif ! docker info >/dev/null 2>&1; then
+            # Docker installed but daemon not running. Hard fail with a
+            # specific message, because the user already has what they need
+            # and just needs to start it.
+            log_error "Docker is installed but the daemon isn't running."
+            case "$OS" in
+                macos) echo "    Start Docker Desktop, then re-run install.sh." ;;
+                linux) echo "    Start the Docker daemon, then re-run install.sh. (e.g. \`sudo systemctl start docker\`)" ;;
+                *)     echo "    Start Docker, then re-run install.sh." ;;
+            esac
+            echo "    (Bypass with --skip-setup to install the code without starting local Orchestra.)"
+            exit 1
+        fi
+    fi
+
     if [ ${#hard_missing[@]} -gt 0 ]; then
         log_error "Required system packages are missing:"
         for m in "${hard_missing[@]}"; do echo "    - $m"; done
@@ -197,7 +228,8 @@ check_system_deps() {
                 ;;
         esac
         echo ""
-        echo "    (Bypass with --skip-deps at your own risk; uv sync will fail on native extensions.)"
+        echo "    (Bypass with --skip-deps at your own risk; uv sync will fail on native extensions."
+        echo "     Bypass Docker requirement with --skip-setup to install the code only.)"
         exit 1
     fi
 
