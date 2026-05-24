@@ -426,6 +426,104 @@ case "\${1:-}" in
         # -F = follow + retry on rename/truncate (works on macOS BSD tail and GNU tail).
         exec tail -F "\$LOG_FILE"
         ;;
+    doctor)
+        # Diagnose whether the install-and-live setup is in shape to start
+        # the runtime. Each check prints one PASS / WARN / FAIL line plus a
+        # one-liner remediation when applicable. Exit code is 0 if everything
+        # is green, 1 if any FAIL was reported (WARN does not fail).
+        FAIL=0
+        WARN=0
+        GREEN="\$(printf '\\033[0;32m')"; RED="\$(printf '\\033[0;31m')"
+        YELLOW="\$(printf '\\033[0;33m')"; NC="\$(printf '\\033[0m')"
+        BOLD="\$(printf '\\033[1m')"
+        pass() { printf '  %s[PASS]%s %s\\n' "\$GREEN" "\$NC" "\$1"; }
+        warn() { printf '  %s[WARN]%s %s\\n' "\$YELLOW" "\$NC" "\$1"; WARN=\$((WARN+1)); }
+        fail() { printf '  %s[FAIL]%s %s\\n' "\$RED" "\$NC" "\$1"; FAIL=\$((FAIL+1)); }
+        fix()  { printf '         %s→%s %s\\n' "\$YELLOW" "\$NC" "\$1"; }
+
+        printf '%sunity doctor%s\\n' "\$BOLD" "\$NC"
+        printf '════════════════════════════════════════════════════════════\\n'
+
+        printf '\\n%sFilesystem%s\\n' "\$BOLD" "\$NC"
+        [ -d "\$UNITY_REPO" ]                        && pass "unity repo at \$UNITY_REPO"                 || { fail "unity repo missing at \$UNITY_REPO"; fix "Re-run install.sh"; }
+        [ -d "\$UNITY_HOME/unify" ]                  && pass "unify repo at \$UNITY_HOME/unify"           || { warn "unify repo missing at \$UNITY_HOME/unify";   fix "Re-run install.sh"; }
+        [ -d "\$UNITY_HOME/unillm" ]                 && pass "unillm repo at \$UNITY_HOME/unillm"         || { warn "unillm repo missing at \$UNITY_HOME/unillm"; fix "Re-run install.sh"; }
+        [ -d "\$ORCHESTRA_REPO" ]                    && pass "orchestra repo at \$ORCHESTRA_REPO"         || { warn "orchestra repo missing at \$ORCHESTRA_REPO"; fix "Run: unity setup"; }
+        [ -f "\$UNITY_REPO/.env" ]                   && pass ".env at \$UNITY_REPO/.env"                  || { fail ".env missing at \$UNITY_REPO/.env";          fix "Re-run install.sh"; }
+        [ -d "\$UNITY_REPO/.venv" ]                  && pass "Python venv at \$UNITY_REPO/.venv"          || { warn "Python venv missing at \$UNITY_REPO/.venv";  fix "Run: cd \$UNITY_REPO && uv sync"; }
+
+        printf '\\n%sSystem dependencies%s\\n' "\$BOLD" "\$NC"
+        if command -v docker >/dev/null 2>&1; then
+            pass "docker installed (\$(docker --version 2>/dev/null | head -1))"
+            if docker info >/dev/null 2>&1; then
+                pass "docker daemon running"
+            else
+                fail "docker daemon not running"
+                case "\$(uname -s)" in
+                    Darwin*) fix "Start Docker Desktop" ;;
+                    Linux*)  fix "Start the docker daemon (e.g. sudo systemctl start docker)" ;;
+                    *)       fix "Start Docker" ;;
+                esac
+            fi
+        else
+            fail "docker not installed"
+            case "\$(uname -s)" in
+                Darwin*) fix "Install Docker Desktop: https://www.docker.com/products/docker-desktop/" ;;
+                Linux*)  fix "Install Docker engine: https://docs.docker.com/engine/install/" ;;
+                *)       fix "Install Docker: https://docs.docker.com/get-docker/" ;;
+            esac
+        fi
+
+        printf '\\n%sLocal Orchestra%s\\n' "\$BOLD" "\$NC"
+        if [ -x "\$ORCHESTRA_REPO/scripts/local.sh" ]; then
+            if "\$ORCHESTRA_REPO/scripts/local.sh" check >/dev/null 2>&1; then
+                pass "local orchestra reachable (\$(\"\$ORCHESTRA_REPO/scripts/local.sh\" check 2>/dev/null))"
+            else
+                warn "local orchestra not running"
+                fix "Run: unity setup"
+            fi
+        else
+            warn "orchestra local.sh not found"
+            fix "Run: unity setup"
+        fi
+
+        printf '\\n%s.env keys%s\\n' "\$BOLD" "\$NC"
+        if [ -f "\$UNITY_REPO/.env" ]; then
+            ENV_FILE="\$UNITY_REPO/.env"
+            grep -Eq '^UNIFY_KEY=.+'         "\$ENV_FILE" && pass "UNIFY_KEY set"          || { fail "UNIFY_KEY not set";          fix "Run: unity setup (writes a local key)"; }
+            grep -Eq '^ORCHESTRA_URL=.+'     "\$ENV_FILE" && pass "ORCHESTRA_URL set"      || { fail "ORCHESTRA_URL not set";      fix "Run: unity setup"; }
+            if   grep -Eq '^OPENAI_API_KEY=.+'    "\$ENV_FILE"; then pass "OPENAI_API_KEY set"
+            elif grep -Eq '^ANTHROPIC_API_KEY=.+' "\$ENV_FILE"; then pass "ANTHROPIC_API_KEY set"
+            else
+                fail "no LLM provider key set"
+                fix "Add OPENAI_API_KEY=... or ANTHROPIC_API_KEY=... to \$ENV_FILE"
+            fi
+        fi
+
+        printf '\\n%sShell PATH%s\\n' "\$BOLD" "\$NC"
+        SHIM_DIR="\$(dirname "\$(command -v unity 2>/dev/null || echo /none/unity)")"
+        case ":\$PATH:" in
+            *":\$SHIM_DIR:"*)
+                pass "unity on PATH (\$SHIM_DIR)"
+                ;;
+            *)
+                warn "unity not on this shell's PATH"
+                fix "Open a new terminal or source your shell rc"
+                ;;
+        esac
+
+        printf '\\n'
+        if [ "\$FAIL" -gt 0 ]; then
+            printf '%sNot ready:%s %s failure(s), %s warning(s).\\n' "\$RED" "\$NC" "\$FAIL" "\$WARN"
+            exit 1
+        elif [ "\$WARN" -gt 0 ]; then
+            printf '%sUsable:%s 0 failures, %s warning(s).\\n' "\$YELLOW" "\$NC" "\$WARN"
+            exit 0
+        else
+            printf '%sAll green — ready to roll.%s\\n' "\$GREEN" "\$NC"
+            exit 0
+        fi
+        ;;
     voice)
         shift
         if [ -x "\$UNITY_REPO/scripts/voice.sh" ]; then
@@ -455,9 +553,10 @@ Usage:
   unity logs                         Tail the runtime log in a second terminal.
 
   unity setup                        Bootstrap / re-bootstrap local orchestra-core
-  unity stop                         Stop local orchestra-core
+  unity stop                         Stop local orchestra-core (preserves data)
   unity status                       Show local orchestra-core status
-  unity restart                      Restart local orchestra-core (wipes DB)
+  unity restart                      Restart local orchestra-core (preserves data)
+  unity doctor                       Diagnose missing deps, keys, and PATH
 
   unity voice setup                  Install + start local LiveKit for --live-voice
   unity voice stop                   Stop local LiveKit server

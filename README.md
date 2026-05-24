@@ -105,8 +105,9 @@ unity logs                  Tail the runtime log in a second terminal
 unity --live-voice          Start the runtime with live voice calls in the browser
 unity setup                 Bootstrap / re-bootstrap local Orchestra
 unity status                Local Orchestra status
-unity stop                  Stop local Orchestra
-unity restart               Restart local Orchestra (wipes DB)
+unity stop                  Stop local Orchestra (preserves data)
+unity restart               Restart local Orchestra (preserves data)
+unity doctor                Diagnose missing deps, keys, and PATH
 unity voice setup           Install + start local LiveKit
 unity voice stop / status   Stop / report local LiveKit
 unity help                  Subcommand reference
