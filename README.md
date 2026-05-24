@@ -18,39 +18,27 @@
   <img src="assets/hero-architecture.svg" alt="Unity's three-layer architecture: a Fast Brain on a real-time voice/video call with the user, a Slow Brain (ConversationManager) that always stays present, and an Actor (background reasoner) that does the deep work — extending the interaction-model / background-model pattern with a third supervisory tier." width="820">
 </p>
 
-Hop on a call with one. Send a follow-up text. Drop them a calendar invite. They remember who you are next time, what you talked about last week, and what they promised to do about it.
+Hop on a call with one. Send a follow-up text. Drop them a calendar invite. They remember who you are, what you talked about last week, and what they promised to do about it — across chat, voice, phone, video, and screen-share, and across your interjections, corrections, and pauses mid-task.
 
-Most agents stop the moment you talk. They make you wait for a tool call to finish, then re-explain when you change your mind. Unity's teammates stay listening through everything — chat, voice, phone, video, screen-share — and treat your interjections, corrections, and questions as first-class inputs rather than interruptions to recover from.
-
-It's built around long-lived state, not one-shot conversations. Contacts, knowledge, tasks, files, and procedures persist as queryable structure — so the assistant remembers who Sarah is, what the Henderson project is about, and what they committed to on your behalf last Wednesday, regardless of which channel you raised it on. **You install Unity once. It lives on your laptop, accumulates state across every session, and is there when you come back.**
+Contacts, knowledge, tasks, and procedures persist as queryable structure — so the assistant remembers who Sarah is, what the Henderson project is about, and what they committed to on your behalf last Wednesday. **You install Unity once. It lives on your laptop, accumulates state across every session, and is there when you come back.**
 
 ---
 
 ## Install
 
-Runtime: **Python 3.12+**, **Docker** (for the local Orchestra backend), and one LLM provider key (OpenAI or Anthropic). macOS, Linux, or WSL2.
-
-### One command
+**Prerequisites:** Python 3.12+, Docker, and an LLM provider key (OpenAI or Anthropic). macOS, Linux, or WSL2.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/unifyai/unity/main/scripts/install.sh | bash
 ```
 
-The installer clones `unity`, `unify`, `unillm`, and `orchestra-core` as siblings under `~/.unity/`, installs Python dependencies with `uv`, boots a local Orchestra in Docker, generates a local API key for that bundled Orchestra, writes everything into `~/.unity/unity/.env`, creates a `unity` CLI shim in `~/.local/bin/`, and **prompts you for one LLM provider key** (OpenAI or Anthropic) — pasted inline, written straight into your `.env`. No Unify account, no signup. If you skip the key at install time (or you're piping through a non-interactive shell), the installer tells you the one line to add to `.env` manually.
-
-### Two terminals
-
-Open two terminals. That's the daily layout — one for talking to your assistant, one for watching it work.
+The installer prompts you inline for an OpenAI or Anthropic key and writes it into `~/.unity/unity/.env`. **Open a new terminal** (so the installer-added PATH entry takes effect), then run in two:
 
 | Terminal 1 — chat | Terminal 2 — live logs |
 |---|---|
 | `unity` | `unity logs` |
 
-`unity` starts the full system locally: `ConversationManager`, `Actor`, all state managers, and the Orchestra-backed persistence layer. State accumulates in a workspace called **`Assistants`**, which ships with a single default coordinator assistant named **`unity`**.
-
-`unity logs` tails the same runtime as it executes — tool calls, plans, manager events, the lot. It works whether or not the runtime is currently running (it follows the file with `tail -F`, so the moment `unity` starts in Terminal 1, output appears in Terminal 2).
-
-From the chat prompt in Terminal 1:
+That's it. State persists across runs *and* across reboots in the `Assistants` workspace — Ctrl+C, come back tomorrow, `unity` again resumes from where you left off.
 
 ```text
 > Hey, can you help me organize my upcoming week?
@@ -58,26 +46,26 @@ From the chat prompt in Terminal 1:
 > Remind me to call Sarah on Thursday.
 ```
 
-Everything you do is durable. Stop the process with Ctrl+C, come back tomorrow, run `unity` again — the same `Assistants` workspace is still there, and `unity` remembers everything from before.
+<details>
+<summary>What the installer does</summary>
 
-### Persistence across reboots
+Clones `unity`, `unify`, `unillm`, and `orchestra-core` as siblings under `~/.unity/`. Installs Python dependencies with `uv`. Boots a local Orchestra in Docker. Generates a local API key for that bundled Orchestra. Writes `ORCHESTRA_URL`, `UNIFY_KEY`, and your LLM provider key into `~/.unity/unity/.env`. Creates a `unity` CLI shim in `~/.local/bin/` and appends a clearly-marked PATH block to your `~/.zshrc` / `~/.bash_profile` / `~/.bashrc`. No Unify account or signup is required.
 
-All long-lived state — transcripts, contacts, knowledge, tasks, functions, guidance — lives in Orchestra Postgres, which Unity stores in a **Docker named volume** (`orchestra-local-db-data`) with `--restart unless-stopped`. That means the moment the Docker daemon comes back after a reboot, the Postgres container auto-starts and re-attaches the volume; the next `unity` invocation auto-starts the Orchestra FastAPI server against the existing data. No state is lost, no `unity setup` re-run required.
+If you skip the LLM key at install time (or pipe through a non-interactive shell), the installer prints the one line to add to `.env` manually.
 
-The only piece outside Unity's install scope is **whether Docker itself auto-starts at boot**:
+</details>
+
+<details>
+<summary>Persistence across reboots</summary>
+
+All long-lived state — transcripts, contacts, knowledge, tasks, functions, guidance — lives in Orchestra Postgres, which Unity stores in a Docker named volume (`orchestra-local-db-data`) with `--restart unless-stopped`. The moment the Docker daemon comes back after a reboot, the Postgres container auto-starts and re-attaches the volume; the next `unity` invocation auto-starts the Orchestra FastAPI server against the existing data. No state is lost, no `unity setup` re-run required.
+
+The only piece outside Unity's install scope is whether Docker itself auto-starts at boot:
 
 - **macOS** — Docker Desktop ships with *Start Docker Desktop when you log in* enabled by default (Settings → General). Nothing to do.
-- **Linux** — enable the systemd unit once:
+- **Linux** — enable the systemd unit once: `sudo systemctl enable docker`. `unity doctor` flags this when missing.
 
-  ```bash
-  sudo systemctl enable docker
-  ```
-
-  `unity doctor` flags this when missing.
-
-### Adding more assistants beyond the coordinator
-
-The `Assistants` workspace is a fixed home for *all* of your teammates — that's the only workspace Unity uses locally, and it's not a configurable knob. The default coordinator (`unity`) is enough to start with; you can add specialised assistants alongside it later as your needs grow. The coordinator-driven onboarding flow for this lives on the `feature/coordinator` branch and lands shortly; once it does, you'll add assistants from inside a running `unity` session by asking the coordinator to commission one.
+</details>
 
 ---
 
@@ -109,6 +97,12 @@ Add these to `~/.unity/unity/.env` (both providers have free tiers):
 From the chat prompt: `call` opens the LiveKit Agents Playground in your browser — speak through your mic; `end_call` tears the room down. The first `call` clones [agents-playground](https://github.com/livekit/agents-playground) into `~/.livekit-playground/` and runs `npm install` (one-time; needs Node.js).
 
 Stop voice with `unity voice stop`. Full voice configuration (voice ID, provider selection, SIP/phone numbers) lives in [`sandboxes/conversation_manager/README.md`](sandboxes/conversation_manager/README.md).
+
+---
+
+## Adding more assistants beyond the coordinator
+
+The `Assistants` workspace is the fixed home for *all* of your teammates — it's the only workspace Unity uses locally, not a configurable knob. The default coordinator (`unity`) is enough to start with; you can add specialised assistants alongside it later as your needs grow. The coordinator-driven onboarding flow for this lives on the `feature/coordinator` branch and lands shortly; once it does, you'll add assistants from inside a running `unity` session by asking the coordinator to commission one.
 
 ---
 
