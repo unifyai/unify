@@ -426,6 +426,65 @@ case "\${1:-}" in
         # -F = follow + retry on rename/truncate (works on macOS BSD tail and GNU tail).
         exec tail -F "\$LOG_FILE"
         ;;
+    update)
+        # Pull --rebase across the four sibling repos and re-sync the venv.
+        # Per-repo failures are surfaced inline but never abort other repos;
+        # the user can always run \`unity doctor\` afterwards.
+        GREEN="\$(printf '\\033[0;32m')"; RED="\$(printf '\\033[0;31m')"
+        YELLOW="\$(printf '\\033[0;33m')"; NC="\$(printf '\\033[0m')"
+        BOLD="\$(printf '\\033[1m')"
+
+        pull_repo() {
+            local name="\$1" dir="\$2"
+            if [ ! -d "\$dir/.git" ]; then
+                printf '  %s[skip]%s %s — not a git repo at %s\\n' "\$YELLOW" "\$NC" "\$name" "\$dir"
+                return 0
+            fi
+            local branch
+            branch=\$(git -C "\$dir" symbolic-ref --short HEAD 2>/dev/null || echo "")
+            if [ -z "\$branch" ]; then
+                printf '  %s[skip]%s %s — detached HEAD, leaving as-is\\n' "\$YELLOW" "\$NC" "\$name"
+                return 0
+            fi
+            printf '  %s>%s %s (%s)\\n' "\$BOLD" "\$NC" "\$name" "\$branch"
+            local fetch_out
+            if ! fetch_out=\$(git -C "\$dir" fetch --quiet origin "\$branch" 2>&1); then
+                printf '  %s[FAIL]%s   fetch failed:\\n' "\$RED" "\$NC"
+                printf '%s\\n' "\$fetch_out" | sed 's/^/      /'
+                return 0
+            fi
+            local pull_out
+            if pull_out=\$(git -C "\$dir" pull --rebase --quiet origin "\$branch" 2>&1); then
+                local head
+                head=\$(git -C "\$dir" rev-parse --short HEAD 2>/dev/null || echo "?")
+                printf '  %s[ok]%s     now at %s\\n' "\$GREEN" "\$NC" "\$head"
+            else
+                printf '  %s[FAIL]%s   pull --rebase failed:\\n' "\$RED" "\$NC"
+                printf '%s\\n' "\$pull_out" | sed 's/^/      /'
+                return 0
+            fi
+            # Failures are reported via stdout; we always return 0 so set -e
+            # in the shim doesn't abort after the first per-repo failure.
+            return 0
+        }
+
+        printf '%sunity update%s\\n' "\$BOLD" "\$NC"
+        printf '════════════════════════════════════════════════════════════\\n'
+
+        pull_repo unity          "\$UNITY_REPO"
+        pull_repo unify          "\$UNITY_HOME/unify"
+        pull_repo unillm         "\$UNITY_HOME/unillm"
+        pull_repo orchestra-core "\$ORCHESTRA_REPO"
+
+        printf '\\n  %s>%s syncing Python dependencies (uv sync)\\n' "\$BOLD" "\$NC"
+        if (cd "\$UNITY_REPO" && command -v uv >/dev/null 2>&1 && uv sync >/dev/null 2>&1); then
+            printf '  %s[ok]%s     venv synced\\n' "\$GREEN" "\$NC"
+        else
+            printf '  %s[WARN]%s   uv sync skipped or failed — run manually: cd %s && uv sync\\n' "\$YELLOW" "\$NC" "\$UNITY_REPO"
+        fi
+
+        printf '\\n%sDone.%s Run %sunity doctor%s to verify, then %sunity%s to start.\\n' "\$BOLD" "\$NC" "\$BOLD" "\$NC" "\$BOLD" "\$NC"
+        ;;
     doctor)
         # Diagnose whether the install-and-live setup is in shape to start
         # the runtime. Each check prints one PASS / WARN / FAIL line plus a
@@ -557,6 +616,7 @@ Usage:
   unity status                       Show local orchestra-core status
   unity restart                      Restart local orchestra-core (preserves data)
   unity doctor                       Diagnose missing deps, keys, and PATH
+  unity update                       git pull --rebase the four repos + uv sync
 
   unity voice setup                  Install + start local LiveKit for --live-voice
   unity voice stop                   Stop local LiveKit server
