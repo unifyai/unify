@@ -108,6 +108,7 @@ unity status                Local Orchestra status
 unity stop                  Stop local Orchestra (preserves data)
 unity restart               Restart local Orchestra (preserves data)
 unity doctor                Diagnose missing deps, keys, and PATH
+unity update                git pull --rebase the four repos + uv sync
 unity voice setup           Install + start local LiveKit
 unity voice stop / status   Stop / report local LiveKit
 unity help                  Subcommand reference
