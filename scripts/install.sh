@@ -533,6 +533,41 @@ case "\${1:-}" in
             esac
         fi
 
+        printf '\\n%sReboot persistence%s\\n' "\$BOLD" "\$NC"
+        # Postgres data lives in a Docker named volume with --restart
+        # unless-stopped, so the *container* comes back when Docker does.
+        # The remaining question is whether the Docker daemon itself
+        # auto-starts at boot — that's outside Unity's install scope but
+        # determines whether reboot persistence works end-to-end.
+        case "\$(uname -s)" in
+            Darwin*)
+                # macOS: Docker Desktop ships with "Start Docker Desktop when
+                # you log in" enabled by default. Programmatic detection
+                # across Docker Desktop versions is fragile, so just point
+                # the user at the setting and let them verify.
+                pass "macOS: Docker Desktop autostart is enabled by default"
+                fix "Verify in Docker Desktop → Settings → General → \"Start Docker Desktop when you log in\""
+                ;;
+            Linux*)
+                if command -v systemctl >/dev/null 2>&1; then
+                    if systemctl is-enabled docker.service >/dev/null 2>&1; then
+                        pass "docker.service enabled — daemon auto-starts at boot"
+                    else
+                        warn "docker.service is not enabled at boot"
+                        fix "Enable it once with:  sudo systemctl enable docker"
+                        fix "(otherwise Docker won't auto-start after reboot and the Postgres container won't either)"
+                    fi
+                else
+                    warn "systemctl not found — can't verify Docker autostart"
+                    fix "Ensure your init system starts Docker at boot"
+                fi
+                ;;
+            *)
+                warn "unknown OS — can't verify Docker autostart"
+                fix "Ensure Docker is configured to auto-start at boot"
+                ;;
+        esac
+
         printf '\\n%sLocal Orchestra%s\\n' "\$BOLD" "\$NC"
         if [ -x "\$ORCHESTRA_REPO/scripts/local.sh" ]; then
             if "\$ORCHESTRA_REPO/scripts/local.sh" check >/dev/null 2>&1; then

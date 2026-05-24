@@ -60,6 +60,21 @@ From the chat prompt in Terminal 1:
 
 Everything you do is durable. Stop the process with Ctrl+C, come back tomorrow, run `unity` again — the same `Assistants` workspace is still there, and `unity` remembers everything from before.
 
+### Persistence across reboots
+
+All long-lived state — transcripts, contacts, knowledge, tasks, functions, guidance — lives in Orchestra Postgres, which Unity stores in a **Docker named volume** (`orchestra-local-db-data`) with `--restart unless-stopped`. That means the moment the Docker daemon comes back after a reboot, the Postgres container auto-starts and re-attaches the volume; the next `unity` invocation auto-starts the Orchestra FastAPI server against the existing data. No state is lost, no `unity setup` re-run required.
+
+The only piece outside Unity's install scope is **whether Docker itself auto-starts at boot**:
+
+- **macOS** — Docker Desktop ships with *Start Docker Desktop when you log in* enabled by default (Settings → General). Nothing to do.
+- **Linux** — enable the systemd unit once:
+
+  ```bash
+  sudo systemctl enable docker
+  ```
+
+  `unity doctor` flags this when missing.
+
 ### Adding more assistants beyond the coordinator
 
 The `Assistants` workspace is a fixed home for *all* of your teammates — that's the only workspace Unity uses locally, and it's not a configurable knob. The default coordinator (`unity`) is enough to start with; you can add specialised assistants alongside it later as your needs grow. The coordinator-driven onboarding flow for this lives on the `feature/coordinator` branch and lands shortly; once it does, you'll add assistants from inside a running `unity` session by asking the coordinator to commission one.
