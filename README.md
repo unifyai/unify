@@ -79,14 +79,16 @@ The same install can also handle **real voice calls** locally: the production fa
 unity voice setup
 ```
 
-That installs `livekit-server` (a single binary), boots it locally in `--dev` mode, and writes `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` to `~/.unity/unity/.env`. It also tells you which voice-provider keys you still need to drop in.
+That installs `livekit-server` (a single binary, **no LiveKit Cloud account required** — the server runs locally bound to `127.0.0.1`), boots it in `--dev` mode, and writes `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` to `~/.unity/unity/.env`.
 
-Add these to `~/.unity/unity/.env` (both providers have free tiers):
+The only voice-related keys you bring yourself are speech-to-text and text-to-speech. Both providers have free tiers; pick **one** TTS provider:
 
-| Variable | Where to get it |
-|---|---|
-| `DEEPGRAM_API_KEY` | [console.deepgram.com](https://console.deepgram.com) |
-| `CARTESIA_API_KEY` *or* `ELEVEN_API_KEY` | [play.cartesia.ai](https://play.cartesia.ai) or [elevenlabs.io](https://elevenlabs.io) |
+| Variable | Purpose | Where to get it |
+|---|---|---|
+| `DEEPGRAM_API_KEY` | Speech-to-text | [console.deepgram.com](https://console.deepgram.com) — free tier |
+| `CARTESIA_API_KEY` *or* `ELEVEN_API_KEY` | Text-to-speech (pick one) | [play.cartesia.ai](https://play.cartesia.ai) or [elevenlabs.io](https://elevenlabs.io) — free credits |
+
+Add the chosen keys to `~/.unity/unity/.env`.
 
 ### Step 2 — run in two terminals
 
@@ -100,9 +102,13 @@ Stop voice with `unity voice stop`. Full voice configuration (voice ID, provider
 
 ---
 
-## Adding more assistants beyond the coordinator
+## More assistants, later
 
-The `Assistants` workspace is the fixed home for *all* of your teammates — it's the only workspace Unity uses locally, not a configurable knob. The default coordinator (`unity`) is enough to start with; you can add specialised assistants alongside it later as your needs grow. The coordinator-driven onboarding flow for this lives on the `feature/coordinator` branch and lands shortly; once it does, you'll add assistants from inside a running `unity` session by asking the coordinator to commission one.
+The `Assistants` workspace is the fixed home for *all* of your teammates — it's the only workspace Unity uses locally, not a configurable knob.
+
+Today, the workspace ships with **one unnamed default assistant**. There's no naming flow, no voice picker, no photo upload, no profile form — that whole layer (which the hosted product at [console.unify.ai](https://console.unify.ai) exposes deliberately) is intentionally absent from the local install. You just run `unity` and chat.
+
+A coordinator-driven onboarding flow is landing shortly on the `feature/coordinator` branch. Once it merges, the default assistant becomes a named coordinator (`unity`), and you'll be able to add specialised assistants alongside it from inside a running `unity` session — by asking the coordinator to commission one.
 
 ---
 
