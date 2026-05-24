@@ -11,7 +11,9 @@ Thumbs.db
 
 # Secrets / env
 .env
-.env.deprecated*
+.env.*
+!.env.example
+!.env.advanced.example
 *.env
 .secrets.json
 .sensitive_data
@@ -27,10 +29,6 @@ log.txt
 .logs.txt
 logs.txt
 test.py
-.env.latest
-.env.old
-.env.temp
-.env.clean
 dump.rdb
 *venv/
 .venv
