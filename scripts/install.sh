@@ -486,15 +486,67 @@ EOF
     chmod +x "$shim"
     log_success "Installed \`unity\` command at $shim"
 
-    # Check PATH
+    # Check PATH and, if needed, append a clearly-marked Unity block to the
+    # user's shell rc so `unity` works in new shells without any manual edit.
     case ":$PATH:" in
-        *":$CLI_DIR:"*) ;;
+        *":$CLI_DIR:"*)
+            PATH_STATUS=already_on_path
+            ;;
         *)
-            log_warn "$CLI_DIR is not on your PATH."
-            log_info "Add this to your shell profile:"
-            echo "    export PATH=\"$CLI_DIR:\$PATH\""
+            ensure_cli_on_path
             ;;
     esac
+}
+
+# ----------------------------------------------------------------------------
+# Append `export PATH=...` to the user's shell rc (idempotent)
+# ----------------------------------------------------------------------------
+ensure_cli_on_path() {
+    # Pick the rc file appropriate for the user's current shell. Bash + zsh
+    # cover ~all macOS / Linux / WSL2 setups; other shells we leave alone
+    # with a warning so we don't silently scribble into something exotic.
+    local current_shell shell_rc=""
+    current_shell="$(basename "${SHELL:-bash}")"
+    case "$current_shell" in
+        zsh)  shell_rc="$HOME/.zshrc" ;;
+        bash)
+            # macOS: ~/.bash_profile is the login shell rc; Linux: ~/.bashrc.
+            if [ "$OS" = "macos" ] && [ -f "$HOME/.bash_profile" ]; then
+                shell_rc="$HOME/.bash_profile"
+            else
+                shell_rc="$HOME/.bashrc"
+            fi
+            ;;
+        *)
+            log_warn "$CLI_DIR is not on your PATH and your shell ($current_shell) isn't bash/zsh."
+            log_info "Add this line to your shell profile so \`unity\` is on PATH:"
+            echo "    export PATH=\"$CLI_DIR:\$PATH\""
+            PATH_STATUS=needs_manual
+            return 0
+            ;;
+    esac
+
+    # Already injected? Bail out.
+    if [ -f "$shell_rc" ] && grep -Fq "# >>> unity CLI PATH >>>" "$shell_rc" 2>/dev/null; then
+        PATH_STATUS=block_already_present
+        log_info "$CLI_DIR is not on your current PATH, but $shell_rc already has the Unity PATH block."
+        log_info "Open a new terminal or run:  source $shell_rc"
+        return 0
+    fi
+
+    # Append a clearly-marked block so future installs / `unity update` can
+    # detect and update it without touching the rest of the user's rc.
+    {
+        printf '\n# >>> unity CLI PATH >>>\n'
+        printf '# Added by unity installer on %s\n' "$(date +%Y-%m-%d)"
+        printf 'case ":$PATH:" in *":%s:"*) ;; *) export PATH="%s:$PATH" ;; esac\n' "$CLI_DIR" "$CLI_DIR"
+        printf '# <<< unity CLI PATH <<<\n'
+    } >> "$shell_rc"
+
+    PATH_STATUS=appended
+    PATH_RC_FILE="$shell_rc"
+    log_success "Added $CLI_DIR to PATH in $shell_rc"
+    log_info "Open a new terminal or run:  source $shell_rc"
 }
 
 # ----------------------------------------------------------------------------
@@ -581,6 +633,24 @@ print_next_steps() {
         echo -e "     ${BOLD}Terminal 2${NC} — stream the live runtime log"
         echo -e "         ${CYAN}\$ unity logs${NC}"
         echo ""
+        case "${PATH_STATUS:-}" in
+            appended)
+                echo -e "     ${YELLOW}First time only:${NC} the installer added $CLI_DIR to your PATH in"
+                echo "     ${PATH_RC_FILE:-your shell rc}. Open a new terminal (or"
+                echo -e "     run ${CYAN}source ${PATH_RC_FILE:-<rc>}${NC}) so \`unity\` is on PATH."
+                echo ""
+                ;;
+            block_already_present)
+                echo -e "     ${YELLOW}First time only:${NC} \`unity\` isn't on this terminal's PATH yet —"
+                echo "     open a new terminal so the existing shell-rc block takes effect."
+                echo ""
+                ;;
+            needs_manual)
+                echo -e "     ${YELLOW}First time only:${NC} add this to your shell profile so \`unity\` is on PATH:"
+                echo "         export PATH=\"$CLI_DIR:\$PATH\""
+                echo ""
+                ;;
+        esac
         echo "     State persists across runs in the \`Assistants\` workspace."
         echo "     Stop with Ctrl+C in Terminal 1; \`unity\` again picks up where you left off."
         echo ""
