@@ -115,13 +115,25 @@ class ConfigurationManager:
         return self._path
 
     def load_config(self) -> ActorConfig:
-        """Load the last-used configuration from disk, or return safe defaults."""
+        """Load the last-used configuration from disk, or return safe defaults.
+
+        First-run default is `codeact_real` — the install-and-live runtime: real
+        CodeAct actor, real state managers, real computer interface. The
+        installer brings up Orchestra and writes a local API key, so by the
+        time we're picking a config the persistence side of `codeact_real` is
+        already ready; `agent-service` is the only remaining piece, and the
+        sandbox has interactive recovery for missing infrastructure.
+        """
         try:
             if not self._path.exists():
                 LG.info(
-                    "[config] No saved configuration found. Using default: SandboxSimulatedActor",
+                    "[config] No saved configuration found. Using default: CodeActActor + Real Managers + Real Computer Interface",
                 )
-                return ActorConfig(actor_type="simulated", version=1, last_updated=None)
+                return ActorConfig(
+                    actor_type="codeact_real",
+                    version=1,
+                    last_updated=None,
+                )
             raw = self._path.read_text(encoding="utf-8")
             obj = json.loads(raw)
             if not isinstance(obj, dict):
@@ -132,7 +144,11 @@ class ConfigurationManager:
                 "[config] Configuration file corrupted, using default (%s)",
                 exc,
             )
-            return ActorConfig(actor_type="simulated", version=1, last_updated=None)
+            return ActorConfig(
+                actor_type="codeact_real",
+                version=1,
+                last_updated=None,
+            )
 
     def save_config(self, config: ActorConfig) -> None:
         """Persist configuration to disk (atomic best-effort write)."""

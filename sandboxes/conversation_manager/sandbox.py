@@ -300,6 +300,11 @@ async def _main_async() -> None:
     inactivity_shutdown = False
 
     parser = build_cli_parser("ConversationManager sandbox")
+    # CM-specific override: `unity` is the install-and-live entrypoint, so its
+    # default workspace is the fixed `Assistants` project rather than the
+    # generic `Sandbox` default used by the per-manager dev sandboxes. The
+    # `--project_name` flag itself stays available for dev/eval use.
+    parser.set_defaults(project_name="Assistants")
     parser.add_argument(
         "--gui",
         action="store_true",
@@ -449,14 +454,16 @@ async def _main_async() -> None:
 
     def _prompt() -> ActorConfig:
         last_used = cfg_mgr.load_config()
-        print("ConversationManager Sandbox")
+        print("Unity runtime")
         print("═══════════════════════════════════════════════════════════")
         print("")
-        print("Select Actor Configuration:")
+        print("Select runtime mode:")
         print("")
-        print("1. SandboxSimulatedActor (simulated managers, no computer interface)")
-        print("2. CodeActActor + Simulated Managers (mock computer backend)")
-        print("3. CodeActActor + Real Managers + Real Computer Interface")
+        print("1. Simulated actor + simulated managers (no computer interface)")
+        print("2. Real CodeAct actor + simulated managers (mock computer backend)")
+        print(
+            "3. Real CodeAct actor + real managers + real computer interface  [install-and-live]",
+        )
         print("")
         print(
             f"Last used: [{_to_choice(last_used.actor_type)}] {_label(last_used.actor_type)}",

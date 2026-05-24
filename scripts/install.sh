@@ -248,8 +248,89 @@ do_install() {
     # .env scaffolding
     if [ ! -f "$UNITY_REPO/.env" ] && [ -f "$UNITY_REPO/.env.example" ]; then
         cp "$UNITY_REPO/.env.example" "$UNITY_REPO/.env"
-        log_success "Created $UNITY_REPO/.env from .env.example — edit with your API keys"
+        log_success "Created $UNITY_REPO/.env from .env.example"
     fi
+}
+
+# ----------------------------------------------------------------------------
+# Interactive LLM-key capture
+# ----------------------------------------------------------------------------
+# Goal: keep the install-and-live UX to literally one command. If we have a
+# controlling terminal (i.e. the user is interactively running `curl … | bash`
+# rather than CI / a pipeline), ask them inline for one LLM provider key and
+# write it into .env. Otherwise skip silently and rely on the post-install
+# hint to tell them what to add.
+prompt_llm_key() {
+    local env_file="$UNITY_REPO/.env"
+    [ -f "$env_file" ] || return 0
+
+    # Bail out if either the openai or anthropic key already has a value.
+    if grep -Eq '^(OPENAI_API_KEY|ANTHROPIC_API_KEY)=.+' "$env_file"; then
+        LLM_KEY_STATUS=already_set
+        return 0
+    fi
+
+    # Need an interactive terminal we can read from. `curl | bash` keeps the
+    # controlling tty even though stdin is piped, so /dev/tty is the path.
+    if [ ! -r /dev/tty ] || [ ! -w /dev/tty ]; then
+        LLM_KEY_STATUS=skipped_no_tty
+        return 0
+    fi
+
+    echo "" > /dev/tty
+    echo -e "${BOLD}Add one LLM provider key now (or skip and add later to $env_file).${NC}" > /dev/tty
+    echo "  1) OpenAI       (https://platform.openai.com/api-keys)" > /dev/tty
+    echo "  2) Anthropic    (https://console.anthropic.com/)" > /dev/tty
+    echo "  3) Skip — I'll edit .env myself" > /dev/tty
+    local choice=""
+    printf "Choice [1-3, default 3]: " > /dev/tty
+    IFS= read -r choice < /dev/tty || choice=""
+    choice="${choice:-3}"
+
+    local var_name=""
+    case "$choice" in
+        1) var_name="OPENAI_API_KEY" ;;
+        2) var_name="ANTHROPIC_API_KEY" ;;
+        *) LLM_KEY_STATUS=skipped_by_user; return 0 ;;
+    esac
+
+    local key=""
+    printf "Paste %s value (input is hidden): " "$var_name" > /dev/tty
+    # -s: silent (don't echo to terminal). Falls back to plain read on shells
+    # that don't support -s (extremely rare on macOS/Linux/WSL2 bash).
+    if ! IFS= read -rs key < /dev/tty 2>/dev/null; then
+        IFS= read -r key < /dev/tty || key=""
+    fi
+    echo "" > /dev/tty
+    if [ -z "$key" ]; then
+        LLM_KEY_STATUS=skipped_empty
+        return 0
+    fi
+
+    # Write the key into .env. We escape forward slashes for sed and use a
+    # different delimiter (|) so api-key characters don't collide. Then
+    # rewrite the existing empty line in place.
+    local tmp="${env_file}.tmp.$$"
+    awk -v name="$var_name" -v val="$key" '
+        BEGIN { written=0 }
+        {
+            if ($0 ~ "^"name"=") {
+                print name"="val
+                written=1
+            } else {
+                print $0
+            }
+        }
+        END {
+            if (!written) {
+                print ""
+                print name"="val
+            }
+        }
+    ' "$env_file" > "$tmp" && mv "$tmp" "$env_file"
+    LLM_KEY_STATUS=written
+    LLM_KEY_VAR="$var_name"
+    log_success "Wrote $var_name to $env_file"
 }
 
 # ----------------------------------------------------------------------------
@@ -304,6 +385,15 @@ case "\${1:-}" in
             exit 1
         fi
         ;;
+    logs|tail)
+        LOG_FILE="\$UNITY_REPO/.logs_conversation_sandbox.txt"
+        # Ensure the file exists so 'tail' starts cleanly even before the first
+        # 'unity' run has written anything.
+        touch "\$LOG_FILE" 2>/dev/null || true
+        echo "📡 Tailing \$LOG_FILE (Ctrl-C to detach)" >&2
+        # -F = follow + retry on rename/truncate (works on macOS BSD tail and GNU tail).
+        exec tail -F "\$LOG_FILE"
+        ;;
     voice)
         shift
         if [ -x "\$UNITY_REPO/scripts/voice.sh" ]; then
@@ -317,23 +407,40 @@ case "\${1:-}" in
         cat <<'HELP'
 Unity CLI
 
+Two-terminal layout (the recommended way to live with your assistant):
+
+  Terminal 1 (chat):     unity
+  Terminal 2 (logs):     unity logs
+
+The chat terminal is where you talk to the assistant. The logs terminal
+streams everything the runtime is doing in the background — useful for
+seeing tool calls, plans, and reasoning unfold while you work.
+
 Usage:
-  unity [--project_name NAME ...]   Launch the ConversationManager sandbox
+  unity                              Start the full runtime locally (install-and-live).
+                                     State persists in the `Assistants` workspace.
+  unity --live-voice                 Same, with live voice calls in the browser.
+  unity logs                         Tail the runtime log in a second terminal.
+
   unity setup                        Bootstrap / re-bootstrap local orchestra-core
   unity stop                         Stop local orchestra-core
   unity status                       Show local orchestra-core status
   unity restart                      Restart local orchestra-core (wipes DB)
+
   unity voice setup                  Install + start local LiveKit for --live-voice
   unity voice stop                   Stop local LiveKit server
   unity voice status                 Report local LiveKit status
+
   unity help                         Show this message
 
 For live voice calls (unity --live-voice ...):
   unity voice setup    one-time + per-boot LiveKit bring-up
   README "Live voice" section for BYOK voice-provider keys
 
-Any unrecognized first argument is passed through to the sandbox, so
-existing flags like --project_name, --overwrite, --real-comms still work.
+Dev / eval mode (different workspace, simulated managers, real-comms, etc.):
+  see sandboxes/conversation_manager/README.md. Any unrecognized first
+  argument is forwarded to that sandbox, so flags like --project_name,
+  --overwrite, --real-comms still work.
 HELP
         ;;
     *)
@@ -395,6 +502,7 @@ run_setup() {
 # Post-install hints
 # ----------------------------------------------------------------------------
 print_next_steps() {
+    local step=1
     echo ""
     if [ "${SETUP_OK:-}" = "failed" ]; then
         echo -e "${YELLOW}${BOLD}Installation partially complete.${NC}"
@@ -405,31 +513,56 @@ print_next_steps() {
     echo ""
     echo -e "${BOLD}Next steps:${NC}"
     echo ""
-    if [ "${SETUP_OK:-}" = "ok" ]; then
-        echo "  1. Add an LLM provider key to $UNITY_REPO/.env"
-        echo "     OPENAI_API_KEY or ANTHROPIC_API_KEY"
-        echo "     (ORCHESTRA_URL and UNIFY_KEY are already wired to local orchestra-core.)"
-    else
-        echo "  1. Bootstrap local orchestra-core:"
+
+    # ---- Step: finish orchestra-core bootstrap if it didn't complete ----
+    if [ "${SETUP_OK:-}" != "ok" ]; then
+        echo "  $step. Bootstrap local orchestra-core:"
         echo -e "     ${CYAN}\$ unity setup${NC}"
         echo ""
-        echo "  2. Add an LLM provider key to $UNITY_REPO/.env"
-        echo "     OPENAI_API_KEY or ANTHROPIC_API_KEY"
+        step=$((step + 1))
     fi
-    echo ""
+
+    # ---- Step: LLM key, only if we still need one ----
+    case "${LLM_KEY_STATUS:-}" in
+        written)
+            : ;;  # nothing to ask; user already wrote a key during install
+        already_set)
+            : ;;  # something was already in .env, leave it alone
+        *)
+            echo "  $step. Add an LLM provider key to $UNITY_REPO/.env"
+            echo "     OPENAI_API_KEY=... or ANTHROPIC_API_KEY=..."
+            if [ "${SETUP_OK:-}" = "ok" ]; then
+                echo "     (ORCHESTRA_URL and UNIFY_KEY are already wired to local orchestra-core.)"
+            fi
+            echo ""
+            step=$((step + 1))
+            ;;
+    esac
+
+    # ---- Step: the two-terminal flow ----
     if [ "$CREATE_CLI" = "true" ]; then
-        echo "  2. Start the conversation-manager sandbox:"
-        echo -e "     ${CYAN}\$ unity --project_name Sandbox --overwrite${NC}"
+        echo "  $step. Run your assistant in two terminals:"
+        echo ""
+        echo -e "     ${BOLD}Terminal 1${NC} — chat with your assistant"
+        echo -e "         ${CYAN}\$ unity${NC}"
+        echo ""
+        echo -e "     ${BOLD}Terminal 2${NC} — stream the live runtime log"
+        echo -e "         ${CYAN}\$ unity logs${NC}"
+        echo ""
+        echo "     State persists across runs in the \`Assistants\` workspace."
+        echo "     Stop with Ctrl+C in Terminal 1; \`unity\` again picks up where you left off."
         echo ""
         echo "  Also available:"
-        echo -e "     ${CYAN}\$ unity status${NC}    Local orchestra-core status"
-        echo -e "     ${CYAN}\$ unity stop${NC}      Stop local orchestra-core"
-        echo -e "     ${CYAN}\$ unity help${NC}      Subcommand reference"
+        echo -e "     ${CYAN}\$ unity --live-voice${NC}     Talk to your assistant in the browser"
+        echo -e "     ${CYAN}\$ unity voice setup${NC}      One-time local LiveKit bring-up"
+        echo -e "     ${CYAN}\$ unity status${NC}           Local orchestra-core status"
+        echo -e "     ${CYAN}\$ unity stop${NC}             Stop local orchestra-core"
+        echo -e "     ${CYAN}\$ unity help${NC}             Subcommand reference"
     else
-        echo "  2. Activate the venv and start the sandbox:"
+        echo "  $step. Activate the venv and start the runtime:"
         echo "     \$ cd $UNITY_REPO"
         echo -e "     ${CYAN}\$ source .venv/bin/activate${NC}"
-        echo -e "     ${CYAN}\$ python -m sandboxes.conversation_manager.sandbox --project_name Sandbox --overwrite${NC}"
+        echo -e "     ${CYAN}\$ python -m sandboxes.conversation_manager.sandbox${NC}"
     fi
     echo ""
     echo "  Documentation: $UNITY_REPO/README.md"
@@ -449,6 +582,7 @@ main() {
     do_install
     create_cli
     run_setup
+    prompt_llm_key
     print_next_steps
 }
 

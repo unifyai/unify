@@ -20,11 +20,106 @@
 
 Hop on a call with one. Send a follow-up text. Drop them a calendar invite. They remember who you are next time, what you talked about last week, and what they promised to do about it.
 
-Most agents stop the moment you talk. They make you wait for a tool call to finish, then re-explain when you change your mind. Unity's teammates stay listening through everything — chat, voice, phone, video, screen-share — and treat your interjections, corrections, and questions as first-class inputs rather than interruptions to recover from. Whether the assistant is researching flights, drafting an email, or sitting on a live call with a vendor, you can ask *"how's it going?"*, say *"actually do X instead"*, or pause for ten minutes — without losing context.
+Most agents stop the moment you talk. They make you wait for a tool call to finish, then re-explain when you change your mind. Unity's teammates stay listening through everything — chat, voice, phone, video, screen-share — and treat your interjections, corrections, and questions as first-class inputs rather than interruptions to recover from.
 
-It's built around long-lived state, not one-shot conversations. Contacts, projects, files, knowledge, and follow-ups persist as queryable structure — so a teammate remembers who Sarah is, what the Henderson project is about, and what they committed to on your behalf last Wednesday, regardless of which channel you raised it on.
+It's built around long-lived state, not one-shot conversations. Contacts, knowledge, tasks, files, and procedures persist as queryable structure — so the assistant remembers who Sarah is, what the Henderson project is about, and what they committed to on your behalf last Wednesday, regardless of which channel you raised it on. **You install Unity once. It lives on your laptop, accumulates state across every session, and is there when you come back.**
 
-> **Start here:** [console.unify.ai](https://console.unify.ai) — try a teammate in 60 seconds • [Overview](https://docs.unify.ai/basics/overview) • [Quickstart](https://docs.unify.ai/basics/quickstart) • [ARCHITECTURE.md](ARCHITECTURE.md)
+---
+
+## Install
+
+Runtime: **Python 3.12+**, **Docker** (for the local Orchestra backend), and one LLM provider key (OpenAI or Anthropic). macOS, Linux, or WSL2.
+
+### One command
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/unifyai/unity/main/scripts/install.sh | bash
+```
+
+The installer clones `unity`, `unify`, `unillm`, and `orchestra-core` as siblings under `~/.unity/`, installs Python dependencies with `uv`, boots a local Orchestra in Docker, generates a local API key for that bundled Orchestra, writes everything into `~/.unity/unity/.env`, creates a `unity` CLI shim in `~/.local/bin/`, and **prompts you for one LLM provider key** (OpenAI or Anthropic) — pasted inline, written straight into your `.env`. No Unify account, no signup. If you skip the key at install time (or you're piping through a non-interactive shell), the installer tells you the one line to add to `.env` manually.
+
+### Two terminals
+
+Open two terminals. That's the daily layout — one for talking to your assistant, one for watching it work.
+
+| Terminal 1 — chat | Terminal 2 — live logs |
+|---|---|
+| `unity` | `unity logs` |
+
+`unity` starts the full system locally: `ConversationManager`, `Actor`, all state managers, and the Orchestra-backed persistence layer. State accumulates in a workspace called **`Assistants`**, which ships with a single default coordinator assistant named **`unity`**.
+
+`unity logs` tails the same runtime as it executes — tool calls, plans, manager events, the lot. It works whether or not the runtime is currently running (it follows the file with `tail -F`, so the moment `unity` starts in Terminal 1, output appears in Terminal 2).
+
+From the chat prompt in Terminal 1:
+
+```text
+> Hey, can you help me organize my upcoming week?
+> Pull up everything we know about the Henderson account.
+> Remind me to call Sarah on Thursday.
+```
+
+Everything you do is durable. Stop the process with Ctrl+C, come back tomorrow, run `unity` again — the same `Assistants` workspace is still there, and `unity` remembers everything from before.
+
+### Adding more assistants beyond the coordinator
+
+The `Assistants` workspace is a fixed home for *all* of your teammates — that's the only workspace Unity uses locally, and it's not a configurable knob. The default coordinator (`unity`) is enough to start with; you can add specialised assistants alongside it later as your needs grow. The coordinator-driven onboarding flow for this lives on the `feature/coordinator` branch and lands shortly; once it does, you'll add assistants from inside a running `unity` session by asking the coordinator to commission one.
+
+---
+
+## Voice — talking to your assistant in the browser
+
+The same install can also handle **real voice calls** locally: the production fast-brain (interruption-handling, telephony-aware) running against your local stack, with sub-second latency. Two-step setup, same two-terminal flow.
+
+### Step 1 — one-time voice setup
+
+```bash
+unity voice setup
+```
+
+That installs `livekit-server` (a single binary), boots it locally in `--dev` mode, and writes `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` to `~/.unity/unity/.env`. It also tells you which voice-provider keys you still need to drop in.
+
+Add these to `~/.unity/unity/.env` (both providers have free tiers):
+
+| Variable | Where to get it |
+|---|---|
+| `DEEPGRAM_API_KEY` | [console.deepgram.com](https://console.deepgram.com) |
+| `CARTESIA_API_KEY` *or* `ELEVEN_API_KEY` | [play.cartesia.ai](https://play.cartesia.ai) or [elevenlabs.io](https://elevenlabs.io) |
+
+### Step 2 — run in two terminals
+
+| Terminal 1 — chat + voice control | Terminal 2 — live logs |
+|---|---|
+| `unity --live-voice` | `unity logs` |
+
+From the chat prompt: `call` opens the LiveKit Agents Playground in your browser — speak through your mic; `end_call` tears the room down. The first `call` clones [agents-playground](https://github.com/livekit/agents-playground) into `~/.livekit-playground/` and runs `npm install` (one-time; needs Node.js).
+
+Stop voice with `unity voice stop`. Full voice configuration (voice ID, provider selection, SIP/phone numbers) lives in [`sandboxes/conversation_manager/README.md`](sandboxes/conversation_manager/README.md).
+
+---
+
+## Day-to-day commands
+
+```text
+unity                       Start the runtime (full system on your laptop)
+unity logs                  Tail the runtime log in a second terminal
+unity --live-voice          Start the runtime with live voice calls in the browser
+unity setup                 Bootstrap / re-bootstrap local Orchestra
+unity status                Local Orchestra status
+unity stop                  Stop local Orchestra
+unity restart               Restart local Orchestra (wipes DB)
+unity voice setup           Install + start local LiveKit
+unity voice stop / status   Stop / report local LiveKit
+unity help                  Subcommand reference
+```
+
+### Alternatives
+
+- **Hosted product.** If you'd rather skip the install entirely, the hosted product at **[console.unify.ai](https://console.unify.ai)** lets you sign in with Google and chat with a teammate in about a minute — voice, video, telephony, and integrations are turn-key. The hosted backend runs as a separate private service; Unity does not depend on it for any local feature.
+- **Point at your own backend.** `curl … install.sh | bash -s -- --skip-setup` installs the code without spinning up local Orchestra. Then point at your own Orchestra-compatible deployment via `ORCHESTRA_URL` + `UNIFY_KEY` in `~/.unity/unity/.env`.
+- **Manual install.** Clone the four repos (`unity`, `unify`, `unillm`, `orchestra-core`) into `~/.unity/`, `uv sync` in `unity/`, then `scripts/local.sh start` in `orchestra-core/` with `ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS=0`. Copy the printed `UNIFY_BASE_URL` and `UNIFY_KEY` into `~/.unity/unity/.env` as `ORCHESTRA_URL` and `UNIFY_KEY`.
+- **Sandbox / evaluation mode.** The same codebase can run with simulated managers and mock computer backends for isolated component evaluation — see [`sandboxes/conversation_manager/README.md`](sandboxes/conversation_manager/README.md) for `--project_name`, `--overwrite`, `--real-comms` and the per-manager dev sandboxes under `sandboxes/`.
+
+For everything you can put into `.env` beyond the basics — visual caching, Tavily, hosted comms — see `.env.advanced.example`.
 
 ---
 
@@ -71,159 +166,6 @@ Unity        ▸  Three tasks running at once.
 <tr><td><b>⏰ Schedules and triggers in plain English</b></td><td><i>"Every Monday at 9, summarize my unread emails"</i> or <i>"Ping me whenever Alice emails about invoices."</i> Recurring jobs and event triggers are described in natural language, executed by the same agent loop — and can graduate into stored functions after enough successful runs.</td></tr>
 <tr><td><b>🔌 Local-first, fully open</b></td><td>Runtime, persistence backend, LLM client, and Python SDK are all open-source and run locally with one Docker command. Hosted backend optional.</td></tr>
 </table>
-
----
-
-## Try one
-
-There are two paths, depending on whether you want to *meet a teammate* or *run the whole stack yourself*.
-
-### 🌐 Hosted — fastest
-
-The lowest-friction path is the hosted product at **[console.unify.ai](https://console.unify.ai)**. Sign in with Google, get matched with a teammate, and start chatting in about a minute. No install, no Docker, no API keys to manage. Voice, video, telephony, and integrations are all turn-key.
-
-### 💻 Self-host — fully open
-
-Run the whole stack on your own machine. Runtime, persistence backend, LLM client, and Python SDK are all open-source — see [Self-host](#self-host) below.
-
-**No signup required.** The local installer auto-generates a synthetic API key for the bundled orchestra-core and wires everything together. The only key you bring is one LLM provider key (OpenAI or Anthropic).
-
-**Including live voice calls.** The same install can run the production voice agent locally — you talk to your assistant through your browser, with sub-second interruption handling and the full background-reasoner loop running against your machine. Self-hosted LiveKit is automated (`unity voice setup`); you bring Deepgram + Cartesia/ElevenLabs keys (free tiers exist). See [Live voice](#live-voice-talking-to-the-assistant-in-your-browser) below.
-
----
-
-## Self-host
-
-By default, Unity's open-core install is fully local: the runtime, the LLM client, and the persistence backend ([orchestra-core](https://github.com/unifyai/orchestra-core), via Docker) all run on your machine. orchestra-core is the public single-user kernel of Orchestra; the multi-tenant hosted backend runs as a separate private service and is not required for any local feature. The hosted product at [console.unify.ai](https://console.unify.ai) is optional — Unity does not depend on it.
-
-**Prerequisites:**
-
-- **Python 3.12+** (the installer will fetch it with `uv` if needed)
-- **Docker** (runs the local orchestra-core backend)
-- **PortAudio** for audio support
-  - macOS: `brew install portaudio`
-  - Ubuntu/Debian: `sudo apt-get install portaudio19-dev python3-dev`
-- **One LLM provider key** — [OpenAI](https://platform.openai.com/api-keys) or [Anthropic](https://console.anthropic.com/) are the simplest paths
-
-**Install:**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/unifyai/unity/main/scripts/install.sh | bash
-```
-
-The installer clones `unity`, `unify`, `unillm`, and `orchestra-core` as siblings under `~/.unity/`, installs dependencies, creates a `unity` CLI shim in `~/.local/bin/`, boots a local orchestra-core in Docker, **generates a local API key for the bundled orchestra-core**, and wires `ORCHESTRA_URL` and that auto-generated key into `~/.unity/unity/.env`. No Unify account or external signup is required.
-
-Add one model provider key to `~/.unity/unity/.env`:
-
-```bash
-OPENAI_API_KEY=sk-...
-# or
-ANTHROPIC_API_KEY=...
-```
-
-**Run the sandbox:**
-
-```bash
-unity --project_name Sandbox --overwrite
-```
-
-At the configuration prompt:
-
-| Option | What it gives you |
-|------|------|
-| `1` | Top-level orchestration only — useful for isolating the conversation layer |
-| `2` | The full runtime: orchestration + planning + simulated managers |
-| `3` | Option 2 plus desktop/browser control through `agent-service` |
-
-If you're evaluating Unity as a runtime, start with **option 2**.
-
-```text
-> msg Hey, can you help me organize my upcoming week?
-> sms I need to reschedule my meeting with Sarah to Thursday
-> email Project Update | Here are the Q3 numbers you asked for...
-```
-
-Other `unity` subcommands: `unity setup`, `unity status`, `unity stop`, `unity restart`, `unity help`, `unity voice setup` / `voice stop` / `voice status` (live voice — see below).
-
-### Live voice (talking to the assistant in your browser)
-
-The same install lets you actually **call** your assistant: a real-time voice loop with the production fast-brain (interruption-handling, telephony-aware) running against your local stack. There is no separate "voice deployment" — the sandbox runs the same voice agent your phone would talk to.
-
-The pieces are split between things we automate for you (LiveKit) and BYOK voice-provider keys (Deepgram for STT, Cartesia or ElevenLabs for TTS). LiveKit is fully self-hosted in dev mode — no LiveKit Cloud account needed.
-
-**One-time setup** (after `unity setup` has already run):
-
-```bash
-unity voice setup
-```
-
-This installs `livekit-server` (a single binary), boots it locally in `--dev` mode (`ws://localhost:7880`, dev credentials), and writes `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` to `~/.unity/unity/.env`. It also tells you which voice-provider keys you still need to drop in.
-
-**Voice-provider keys you need to bring** (paid services, both have free tiers/credits):
-
-| Variable | Where to get it |
-|---|---|
-| `DEEPGRAM_API_KEY` | [console.deepgram.com](https://console.deepgram.com) — free tier |
-| `CARTESIA_API_KEY` *or* `ELEVEN_API_KEY` | [play.cartesia.ai](https://play.cartesia.ai) or [elevenlabs.io](https://elevenlabs.io) — free credits |
-
-Add them to `~/.unity/unity/.env`, then:
-
-```bash
-unity --live-voice --project_name Sandbox --overwrite
-```
-
-In the sandbox REPL:
-
-```text
-cm> call         # opens LiveKit Agents Playground in your browser; speak through your mic
-cm> end_call     # tears down the voice agent + room
-```
-
-The first `call` clones [agents-playground](https://github.com/livekit/agents-playground) into `~/.livekit-playground/` and runs `npm install` (one-time; needs Node.js with `npm` or `pnpm`).
-
-**Stopping things:**
-
-```bash
-unity voice stop   # stops local LiveKit
-unity stop         # stops local orchestra-core
-```
-
-For full configuration (voice ID, provider selection, SIP for actual phone numbers), see [`sandboxes/conversation_manager/README.md`](sandboxes/conversation_manager/README.md#voice--live-voice---voice---live-voice).
-
-<details>
-<summary>Skip the local orchestra-core (point at your own deployment)</summary>
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/unifyai/unity/main/scripts/install.sh | bash -s -- --skip-setup
-```
-
-That leaves the code installed but doesn't spin up orchestra-core. You'll need to point Unity at your own Orchestra-compatible deployment (orchestra-core, the private orchestra-platform superset, or another team's shared one) via `ORCHESTRA_URL` and a matching API key in `~/.unity/unity/.env`.
-
-</details>
-
-<details>
-<summary>Manual install (no installer script)</summary>
-
-```bash
-git clone https://github.com/unifyai/unity.git           ~/.unity/unity
-git clone https://github.com/unifyai/unify.git           ~/.unity/unify
-git clone https://github.com/unifyai/unillm.git          ~/.unity/unillm
-git clone https://github.com/unifyai/orchestra-core.git  ~/.unity/orchestra-core
-
-cd ~/.unity/unity
-curl -LsSf https://astral.sh/uv/install.sh | sh
-uv sync
-
-cd ~/.unity/orchestra-core
-poetry install
-ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS=0 scripts/local.sh start
-# Copy the UNIFY_BASE_URL and UNIFY_KEY it prints into ~/.unity/unity/.env
-# (Unity reads ORCHESTRA_URL, which the installer maps from UNIFY_BASE_URL.)
-```
-
-</details>
-
-The installer copies `.env.example` to `.env` (intentionally minimal). For voice mode, live calls, hosted comms, LiveKit, Tavily, or visual caching, see `.env.advanced.example` and [`sandboxes/conversation_manager/README.md`](sandboxes/conversation_manager/README.md).
 
 ---
 
@@ -576,8 +518,8 @@ unity/
 │   ├── secret_manager/
 │   ├── events/
 │   └── manager_registry.py
-├── sandboxes/                    # Interactive playgrounds
-│   └── conversation_manager/     # Full ConversationManager sandbox (start here)
+├── sandboxes/                    # Dev / eval playgrounds (one per manager)
+│   └── conversation_manager/     # Backs `unity` for the install-and-live run
 ├── tests/
 ├── agent-service/                # Node.js desktop/browser automation
 └── deploy/                       # Dockerfile, Cloud Build, virtual desktop
