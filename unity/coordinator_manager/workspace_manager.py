@@ -14,8 +14,8 @@ from unity.conversation_manager.domains.coordinator_tools import (
     AssistantCreateConfig,
     AssistantConfigPatch,
     ChecklistItemStatus,
-    CoordinatorPreseedWriteValue,
     COORDINATOR_TOOL_METHOD_NAMES,
+    CoordinatorDelegateIntent,
     CoordinatorTools,
     InviteOrgRoleName,
     SpacePatch,
@@ -226,36 +226,44 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
             role_name=role_name,
         )
 
-    def pre_seed_colleague(
+    def delegate_to_colleague(
         self,
         *,
         target_assistant_id: int,
-        writes: list[CoordinatorPreseedWriteValue],
+        instruction: str,
+        intent: CoordinatorDelegateIntent = "general",
+        dedupe_key: str | None = None,
+        related_context: dict[str, Any] | None = None,
     ) -> dict[str, Any] | ToolError:
-        """Seed colleague-owned setup rows into assistant-private contexts.
+        """Assign asynchronous work to a colleague runtime.
 
-        Use this when setup should belong to a specific colleague's private
-        contexts (for example ``Tasks``, ``Knowledge``, ``Guidance``, or other
-        assistant-owned surfaces). This is the right tool for "this colleague
-        should own this workflow" decisions after confirmation.
+        Use this when a specific colleague should own follow-up work, such as
+        creating a task, adding guidance, recording knowledge, or preparing a
+        function. This dispatches the assignment to the colleague's runtime; the
+        colleague then uses its own manager primitives to perform the work.
 
         Parameters
         ----------
         target_assistant_id : int
-            Assistant id that should own the seeded rows.
-        writes : list[CoordinatorPreseedWriteValue]
-            Relative context + entries batches to persist for this colleague.
-            Each write follows ``{"context": "...", "entries": [...]}``.
-            Allowed contexts are:
-            ``Tasks``, ``Knowledge``, ``Guidance``, ``Data``,
-            ``Functions/<name>``, and ``Dashboards/<name>``.
+            Assistant id that should handle the assignment.
+        instruction : str
+            Plain-English assignment for the colleague.
+        intent : str, optional
+            Assignment category that helps the colleague choose the right manager.
+        dedupe_key : str | None, optional
+            Retry key for avoiding obvious duplicate work.
+        related_context : dict[str, Any] | None, optional
+            Structured context to include in the delegated assignment.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
             return permission_error
-        return self._delegate.pre_seed_colleague(
+        return self._delegate.delegate_to_colleague(
             target_assistant_id=target_assistant_id,
-            writes=writes,
+            instruction=instruction,
+            intent=intent,
+            dedupe_key=dedupe_key,
+            related_context=related_context,
         )
 
     def create_space(

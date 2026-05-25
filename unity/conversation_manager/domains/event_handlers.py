@@ -19,6 +19,9 @@ from unity.conversation_manager.domains.comms_utils import publish_system_error
 from unity.conversation_manager.domains.coordinator_onboarding import (
     _handle_coordinator_onboarding_event,
 )
+from unity.conversation_manager.domains.coordinator_delegate import (
+    _handle_coordinator_delegate_event,
+)
 from unity.conversation_manager.domains.inactivity import (
     _handle_inactivity_followup_event,
 )
@@ -2227,6 +2230,17 @@ async def _(
     **kwargs,
 ):
     if await _handle_inactivity_followup_event(event, cm):
+        await cm.request_llm_run(delay=0)
+
+
+@EventHandler.register(CoordinatorDelegate)
+async def _(
+    event: CoordinatorDelegate,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    if await _handle_coordinator_delegate_event(event, cm):
         await cm.request_llm_run(delay=0)
 
 

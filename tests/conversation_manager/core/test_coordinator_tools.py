@@ -8,9 +8,7 @@ from unify.utils.http import RequestError
 
 from unity.conversation_manager.domains.coordinator_tools import (
     COORDINATOR_TOOL_METHOD_NAMES,
-    CoordinatorPreseedWrite,
     CoordinatorTools,
-    _preseed_write_payload,
 )
 from unity.session_details import SESSION_DETAILS
 
@@ -46,7 +44,7 @@ class TestCoordinatorTools:
             "list_assistants",
             "list_org_members",
             "invite_org_member",
-            "pre_seed_colleague",
+            "delegate_to_colleague",
             "create_space",
             "delete_space",
             "update_space",
@@ -522,37 +520,44 @@ class TestCoordinatorTools:
         assert result["message"] == expected_message
         assert result["details"]["error"] == "boom"
 
-    def test_pre_seed_colleague_forwards_confirmed_writes_after_reachability(
+    def test_delegate_to_colleague_forwards_assignment_after_reachability(
         self,
         monkeypatch,
     ):
         calls = []
-        writes = [
-            {
-                "context": "Tasks",
-                "entries": [{"task_id": 77, "status": "scheduled"}],
-            },
-        ]
 
         monkeypatch.setattr(
             "unity.conversation_manager.domains.coordinator_tools.unify.list_assistants",
             lambda **_: [{"agent_id": 42, "organization_id": 7}],
         )
         monkeypatch.setattr(
-            "unity.conversation_manager.domains.coordinator_tools.unify.pre_seed_colleague",
+            "unity.conversation_manager.domains.coordinator_tools.unify.delegate_to_colleague",
             lambda *args, **kwargs: calls.append((args, kwargs))
             or {"target_assistant_id": 42},
         )
 
-        result = CoordinatorTools(cm=object()).pre_seed_colleague(
+        result = CoordinatorTools(cm=object()).delegate_to_colleague(
             target_assistant_id=42,
-            writes=writes,
+            instruction="Schedule the renewal risk summary tomorrow morning.",
+            intent="schedule_task",
+            dedupe_key="renewal-risk-42",
         )
 
         assert result == {"target_assistant_id": 42}
-        assert calls == [((42, writes), {"api_key": "owner-key"})]
+        assert calls == [
+            (
+                (42,),
+                {
+                    "instruction": "Schedule the renewal risk summary tomorrow morning.",
+                    "intent": "schedule_task",
+                    "dedupe_key": "renewal-risk-42",
+                    "related_context": None,
+                    "api_key": "owner-key",
+                },
+            ),
+        ]
 
-    def test_pre_seed_colleague_rejects_fabricated_assistant_without_sdk_call(
+    def test_delegate_to_colleague_rejects_fabricated_assistant_without_sdk_call(
         self,
         monkeypatch,
     ):
@@ -563,62 +568,41 @@ class TestCoordinatorTools:
             lambda **_: [{"agent_id": 42, "organization_id": 7}],
         )
         monkeypatch.setattr(
-            "unity.conversation_manager.domains.coordinator_tools.unify.pre_seed_colleague",
+            "unity.conversation_manager.domains.coordinator_tools.unify.delegate_to_colleague",
             lambda *args, **kwargs: calls.append((args, kwargs)),
         )
 
-        result = CoordinatorTools(cm=object()).pre_seed_colleague(
+        result = CoordinatorTools(cm=object()).delegate_to_colleague(
             target_assistant_id=99,
-            writes=[{"context": "Knowledge", "entries": [{"content": "nope"}]}],
+            instruction="Remember that the renewal team checks blockers first.",
+            intent="add_knowledge",
         )
 
         assert result["error_kind"] == "not_found"
         assert result["details"] == {"agent_id": 99}
         assert calls == []
 
-    def test_preseed_write_payload_accepts_schema_and_mapping_inputs(self):
-        writes = [
-            CoordinatorPreseedWrite(
-                context="Tasks",
-                entries=[{"task_id": 77, "status": "scheduled"}],
-            ),
-            {"context": "Guidance", "entries": [{"content": "Check billing holds"}]},
-        ]
-
-        assert _preseed_write_payload(writes) == [
-            {
-                "context": "Tasks",
-                "entries": [{"task_id": 77, "status": "scheduled"}],
-            },
-            {"context": "Guidance", "entries": [{"content": "Check billing holds"}]},
-        ]
-
-    def test_pre_seed_colleague_rejects_invalid_context(self, monkeypatch):
+    def test_delegate_to_colleague_rejects_blank_instruction(self, monkeypatch):
         calls = []
         monkeypatch.setattr(
-            "unity.conversation_manager.domains.coordinator_tools.unify.pre_seed_colleague",
+            "unity.conversation_manager.domains.coordinator_tools.unify.delegate_to_colleague",
             lambda *args, **kwargs: calls.append((args, kwargs)),
         )
 
-        result = CoordinatorTools(cm=object()).pre_seed_colleague(
+        result = CoordinatorTools(cm=object()).delegate_to_colleague(
             target_assistant_id=42,
-            writes=[
-                {
-                    "context": "Spaces/Ops",
-                    "entries": [{"content": "should fail before SDK call"}],
-                },
-            ],
+            instruction="  ",
         )
 
         assert result["error_kind"] == "invalid_argument"
         assert calls == []
 
-    def test_pre_seed_colleague_checks_reachability_before_write(
+    def test_delegate_to_colleague_checks_reachability_before_dispatch(
         self,
         monkeypatch,
     ):
         captured = {}
-        seed_calls = []
+        delegate_calls = []
         tools = CoordinatorTools(cm=object())
 
         monkeypatch.setattr(
@@ -627,25 +611,29 @@ class TestCoordinatorTools:
             lambda agent_id: captured.update({"agent_id": agent_id}) or True,
         )
         monkeypatch.setattr(
-            "unity.conversation_manager.domains.coordinator_tools.unify.pre_seed_colleague",
-            lambda *args, **kwargs: seed_calls.append((args, kwargs))
-            or {"status": "seeded"},
+            "unity.conversation_manager.domains.coordinator_tools.unify.delegate_to_colleague",
+            lambda *args, **kwargs: delegate_calls.append((args, kwargs))
+            or {"status": "attached_to_startup"},
         )
 
-        result = tools.pre_seed_colleague(
+        result = tools.delegate_to_colleague(
             target_assistant_id=42,
-            writes=[{"context": "Tasks", "entries": [{"title": "Audit inbox"}]}],
+            instruction="Audit the inbox tomorrow morning.",
+            intent="schedule_task",
         )
 
-        assert result == {"status": "seeded"}
+        assert result == {"status": "attached_to_startup"}
         assert captured == {"agent_id": 42}
-        assert seed_calls == [
+        assert delegate_calls == [
             (
-                (
-                    42,
-                    [{"context": "Tasks", "entries": [{"title": "Audit inbox"}]}],
-                ),
-                {"api_key": "owner-key"},
+                (42,),
+                {
+                    "instruction": "Audit the inbox tomorrow morning.",
+                    "intent": "schedule_task",
+                    "dedupe_key": None,
+                    "related_context": None,
+                    "api_key": "owner-key",
+                },
             ),
         ]
 

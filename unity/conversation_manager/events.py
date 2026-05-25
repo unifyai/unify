@@ -1416,6 +1416,26 @@ class InactivityFollowup(Event):
 
 
 @dataclass
+class CoordinatorDelegate(Event):
+    """A Coordinator assigned asynchronous work to this colleague.
+
+    Communication publishes this either as a ``unity_system_event`` to a hot
+    pod or as a startup wake reason during cold start. The colleague's brain is
+    responsible for carrying out the instruction through its own manager
+    primitives; the Coordinator only receives dispatch-level confirmation.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:coordinator_delegate"
+
+    requested_by_assistant_id: str
+    instruction: str
+    intent: str = "general"
+    dedupe_key: str | None = None
+    related_context: dict[str, Any] | None = None
+    reason: str = ""
+
+
+@dataclass
 class CoordinatorOnboardingEvent(Event):
     """Orchestra observed a user action that should be narrated in the
     Coordinator's onboarding conversation.

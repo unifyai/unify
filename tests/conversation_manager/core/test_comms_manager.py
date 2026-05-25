@@ -60,6 +60,7 @@ from unity.conversation_manager.events import (
     PhoneCallAnswered,
     UnifyMeetReceived,
     AssistantUpdateEvent,
+    CoordinatorDelegate,
     SyncContacts,
     TaskDue,
     PreHireMessage,
@@ -1439,6 +1440,53 @@ class TestSystemEvents:
             )
             assert event.visibility_policy == "silent_by_default"
             assert event.recurrence_hint == "recurring"
+
+    @pytest.mark.asyncio
+    async def test_handle_coordinator_delegate_event(
+        self,
+        broker,
+        mock_session_details,
+        mock_settings,
+    ):
+        """Coordinator delegate system events should map onto the typed channel."""
+
+        from unity.conversation_manager.comms_manager import CommsManager
+
+        cm = CommsManager(broker)
+        cm.loop = asyncio.get_event_loop()
+
+        async with broker.pubsub() as pubsub:
+            await pubsub.psubscribe("app:comms:*")
+
+            message = create_pubsub_message(
+                "unity_system_event",
+                {
+                    "event_type": "coordinator_delegate",
+                    "message": "Coordinator 2071 assigned schedule_task work.",
+                    "requested_by_assistant_id": "2071",
+                    "instruction": "Schedule the renewal summary tomorrow.",
+                    "intent": "schedule_task",
+                    "dedupe_key": "renewal-summary",
+                    "related_context": {"source": "coordinator"},
+                },
+            )
+
+            cm.handle_message(message)
+            await _wait_for_condition(lambda: message._acked)
+
+            msg = await get_message_on_channel(
+                pubsub,
+                "app:comms:coordinator_delegate",
+            )
+            assert msg is not None
+
+            event = Event.from_json(msg["data"])
+            assert isinstance(event, CoordinatorDelegate)
+            assert event.requested_by_assistant_id == "2071"
+            assert event.instruction == "Schedule the renewal summary tomorrow."
+            assert event.intent == "schedule_task"
+            assert event.dedupe_key == "renewal-summary"
+            assert event.related_context == {"source": "coordinator"}
 
     @pytest.mark.asyncio
     async def test_handle_task_due_event_canonicalizes_destination(

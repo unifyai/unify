@@ -18,7 +18,6 @@ from unity.conversation_manager.cm_types.mode import Mode
 from unity.conversation_manager.domains.brain import build_brain_spec
 from unity.conversation_manager.domains.coordinator_tools import (
     COORDINATOR_TOOL_METHOD_NAMES,
-    CoordinatorPreseedWrite,
 )
 from unity.coordinator_manager.workspace_manager import CoordinatorWorkspaceManager
 from unity.function_manager.primitives.registry import get_registry
@@ -418,28 +417,32 @@ class _RecordingTools:
         """List human organization members reachable from Coordinator scope."""
         return list(_AUTHORIZED_HUMANS)
 
-    def pre_seed_colleague(
+    def delegate_to_colleague(
         self,
         *,
         target_assistant_id: int,
-        writes: list[CoordinatorPreseedWrite],
+        instruction: str,
+        intent: str = "general",
+        dedupe_key: str | None = None,
     ) -> dict[str, Any]:
-        """Seed confirmed rows into one colleague's own memory roots.
+        """Assign asynchronous work to one colleague.
 
-        Use this for colleague-owned setup (for example ``Tasks`` or
-        ``Guidance``). Do not use it for shared workspace sources of truth.
+        Use this for colleague-owned follow-up work (for example tasks,
+        guidance, knowledge, functions, or dashboards). Do not use it for shared
+        workspace sources of truth.
 
         Args:
-            target_assistant_id: The colleague assistant that should own the rows.
-            writes: Required context batches shaped as
-                ``{"context": "Tasks", "entries": [{...}]}``. Use relative context
-                names only, such as ``Tasks``, ``Knowledge``, or ``Guidance``. Do
-                not use ``Spaces/...`` paths or shared-space destinations here.
+            target_assistant_id: The colleague assistant that should handle the work.
+            instruction: Plain-English assignment for the colleague.
+            intent: Optional assignment category.
+            dedupe_key: Optional retry key.
         """
 
         return {
             "target_assistant_id": target_assistant_id,
-            "writes": writes,
+            "instruction": instruction,
+            "intent": intent,
+            "dedupe_key": dedupe_key,
         }
 
     def create_space(
@@ -743,7 +746,7 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
                 "create_assistant",
                 "create_space",
                 "add_space_member",
-                "pre_seed_colleague",
+                "delegate_to_colleague",
             },
         ),
     ),
@@ -803,7 +806,7 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
                 "create_assistant",
                 "create_space",
                 "add_space_member",
-                "pre_seed_colleague",
+                "delegate_to_colleague",
             },
         ),
     ),
@@ -890,7 +893,7 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
             "should not create the colleague yet because credential handling and "
             "validation details are still unresolved."
         ),
-        forbidden_tools=frozenset({"create_assistant", "pre_seed_colleague"}),
+        forbidden_tools=frozenset({"create_assistant", "delegate_to_colleague"}),
     ),
     CoordinatorScenario(
         scenario_id="manufacturing-console-orientation",
@@ -1080,7 +1083,7 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
                 "update_space",
                 "add_space_member",
                 "remove_space_member",
-                "pre_seed_colleague",
+                "delegate_to_colleague",
             },
         ),
     ),
@@ -1258,7 +1261,7 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
                 "Revenue Ops is assistant 7002. We already agreed it should own the "
                 "weekday renewal-risk summary and the guidance for checking blocked "
                 "enterprise accounts. Please put that setup on Revenue Ops now with "
-                "a `Tasks` write and a `Guidance` or `Knowledge` write.",
+                "an async assignment that explains the task and guidance work.",
                 new=True,
             ),
         ),
@@ -1267,14 +1270,14 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
             "No shared team space has been requested.",
         ),
         rubric=(
-            "The response should use `pre_seed_colleague` for assistant 7002 with a "
-            "`writes` payload that includes a `Tasks` entry for the weekday summary "
-            "and a guidance or knowledge entry for blocked enterprise accounts. It "
+            "The response should use `delegate_to_colleague` for assistant 7002 "
+            "with a plain-English assignment covering the weekday summary and "
+            "blocked enterprise account guidance. It "
             "should not create a space or route the setup through a shared "
             '`destination="space:<id>"` because the user asked for one colleague to '
             "own the workflow."
         ),
-        required_tools=frozenset({"pre_seed_colleague"}),
+        required_tools=frozenset({"delegate_to_colleague"}),
         forbidden_tools=frozenset(
             {"create_space", "add_space_member"},
         ),
@@ -1305,12 +1308,12 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
             "The response should treat this as shared-space setup, not colleague "
             "owned setup. It should use or describe a destination-aware shared write "
             'such as `destination="space:3103"` for the handoff SOP. It must not call '
-            "`pre_seed_colleague`, because that writes to one colleague's own root."
+            "`delegate_to_colleague`, because the user asked for shared workspace setup."
         ),
         required_tools=frozenset({"act"}),
         forbidden_tools=frozenset(
             {
-                "pre_seed_colleague",
+                "delegate_to_colleague",
                 "create_space",
                 "add_space_member",
             },
@@ -1365,7 +1368,7 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
                 "update_space",
                 "add_space_member",
                 "remove_space_member",
-                "pre_seed_colleague",
+                "delegate_to_colleague",
             },
         ),
     ),
@@ -1414,7 +1417,7 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
                 "update_space",
                 "add_space_member",
                 "remove_space_member",
-                "pre_seed_colleague",
+                "delegate_to_colleague",
             },
         ),
     ),
@@ -1458,7 +1461,7 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
                 "update_space",
                 "add_space_member",
                 "remove_space_member",
-                "pre_seed_colleague",
+                "delegate_to_colleague",
             },
         ),
     ),
@@ -1509,7 +1512,7 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
                 "update_space",
                 "add_space_member",
                 "remove_space_member",
-                "pre_seed_colleague",
+                "delegate_to_colleague",
             },
         ),
     ),
@@ -2021,7 +2024,7 @@ async def test_coordinator_refines_requirements_across_discovery_sequence():
                 "create_assistant",
                 "create_space",
                 "add_space_member",
-                "pre_seed_colleague",
+                "delegate_to_colleague",
             },
         ),
     )
@@ -2072,7 +2075,7 @@ async def test_coordinator_refines_requirements_across_discovery_sequence():
                 "create_assistant",
                 "create_space",
                 "add_space_member",
-                "pre_seed_colleague",
+                "delegate_to_colleague",
             },
         ),
     )
