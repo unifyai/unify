@@ -1870,6 +1870,15 @@ class ConversationManager(metaclass=SingletonABCMeta):
         local_ingress = getattr(self, "_local_comms_ingress", None)
         if local_ingress is not None:
             await local_ingress.stop()
+        activation_materializer = getattr(self, "_activation_materializer", None)
+        if activation_materializer is not None:
+            try:
+                await activation_materializer.stop()
+            except Exception as exc:
+                LOGGER.warning(
+                    f"{DEFAULT_ICON} [ConversationManager] "
+                    f"Failed to stop activation materializer: {exc}",
+                )
         if self.call_manager.has_active_google_meet:
             await self.call_manager.cleanup_google_meet()
         elif self.call_manager.has_active_teams_meet:

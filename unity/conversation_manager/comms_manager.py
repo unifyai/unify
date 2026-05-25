@@ -30,7 +30,7 @@ import json
 import re
 import threading
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from dotenv import load_dotenv
 
@@ -109,8 +109,10 @@ def _already_seen_teams(message_id: str) -> bool:
 
 if TYPE_CHECKING:
     from unity.conversation_manager.in_memory_event_broker import InMemoryEventBroker
+    from unity.gateway.ingress import IngressTransport
 
     EventBroker = InMemoryEventBroker
+    _ = IngressTransport  # silence unused-import on the TYPE_CHECKING branch
 
 
 def _get_subscription_id() -> str:
@@ -184,35 +186,15 @@ def _task_due_event_from_payload(
     *,
     reason: str = "",
 ) -> TaskDue | None:
-    """Build a `TaskDue` event from a comms payload when complete."""
+    """Build a `TaskDue` event from a comms Pub/Sub payload.
 
-    task_id = _coerce_int(payload.get("task_id"))
-    source_task_log_id = _coerce_int(payload.get("source_task_log_id"))
-    activation_revision = str(payload.get("activation_revision") or "")
-    scheduled_for = str(payload.get("scheduled_for") or "")
-    if task_id is None or source_task_log_id is None:
-        return None
-    if not activation_revision or not scheduled_for:
-        return None
-    task_label = str(payload.get("task_label") or "")
-    return TaskDue(
-        task_id=task_id,
-        source_task_log_id=source_task_log_id,
-        activation_revision=activation_revision,
-        scheduled_for=scheduled_for,
-        execution_mode=str(payload.get("execution_mode") or "live"),
-        source_type=str(payload.get("source_type") or "scheduled"),
-        task_label=task_label,
-        task_summary=str(payload.get("task_summary") or ""),
-        visibility_policy=str(payload.get("visibility_policy") or "silent_by_default"),
-        recurrence_hint=str(payload.get("recurrence_hint") or "one_off"),
-        reason=reason
-        or (
-            f"Scheduled task '{task_label}' became due."
-            if task_label
-            else f"Scheduled task {task_id} became due."
-        ),
-    )
+    Thin alias around :meth:`TaskDue.from_dict` kept here to preserve the
+    call-site name `comms_manager` already imports. The Pub/Sub ingress
+    has already gated on ``event_type == "task_due"`` before calling this,
+    so no additional type discriminator check is needed.
+    """
+
+    return TaskDue.from_dict(payload, reason=reason)
 
 
 # Map subscription IDs to their corresponding event types
@@ -403,13 +385,36 @@ class CommsManager:
     them to the internal event broker for ConversationManager to process.
     """
 
-    def __init__(self, event_broker: "EventBroker"):
+    def __init__(
+        self,
+        event_broker: "EventBroker",
+        ingress_transport: "IngressTransport | None" = None,
+        ingress_transport_factory: "Callable[[], IngressTransport | None] | None" = None,
+    ):
         self.subscribers: dict = {}
         self.call_proc = None
         self.credentials = None
         # Store reference to event loop for thread-safe publishing from callbacks
         self.loop = asyncio.get_event_loop()
         self.event_broker: "EventBroker" = event_broker
+        # Optional pluggable inbound transport (unity.gateway.IngressTransport).
+        # When provided, replaces the inline self.subscribe_to_topic Pub/Sub
+        # path. When None (the default for every call site at the time of
+        # this change), the existing inline Pub/Sub subscriber remains active
+        # so behaviour for legacy callers is unchanged. The inline path will
+        # be removed in a later phase once the injected path has soaked in
+        # production. See unity/gateway/PHASES.md.
+        self.ingress_transport: "IngressTransport | None" = ingress_transport
+        # Optional factory for lazy transport construction. Resolved inside
+        # ``_start_inbound_subscription``, which runs *after*
+        # ``_poll_for_assignment`` has set the per-assistant ``agent_id``.
+        # Required for the hosted Pub/Sub path because the subscription ID
+        # is derived from ``agent_id`` and therefore unknown at the moment
+        # ``CommsManager`` is constructed in an idle pod. Wins over
+        # ``ingress_transport`` when both are supplied.
+        self.ingress_transport_factory: (
+            "Callable[[], IngressTransport | None] | None"
+        ) = ingress_transport_factory
 
     def _publish_from_callback(self, channel: str, message: str) -> None:
         """
@@ -1472,6 +1477,55 @@ class CommsManager:
             )
             message.ack()
 
+    async def _start_inbound_subscription(self) -> None:
+        """Start inbound envelope delivery for the current assistant.
+
+        Resolution order:
+
+        1. If ``ingress_transport_factory`` was provided, it is called
+           now (after ``_poll_for_assignment`` has set ``agent_id``) to
+           materialize a transport. Factory may return ``None`` to opt
+           out, in which case the legacy path is used.
+        2. Otherwise, if ``ingress_transport`` was provided directly at
+           construction time, it is used.
+        3. Otherwise the legacy inline Pub/Sub subscriber is started
+           via ``subscribe_to_topic``.
+
+        All three paths produce the same observable behaviour against
+        ``event_broker``.
+        """
+        transport = self.ingress_transport
+        if self.ingress_transport_factory is not None:
+            transport = self.ingress_transport_factory()
+            # Cache the factory-materialized transport so _stop can reach it.
+            self.ingress_transport = transport
+        if transport is not None:
+            await transport.start(self.dispatch_envelope_payload)
+            return
+        self.subscribe_to_topic(_get_subscription_id(), max_messages=10)
+
+    async def _stop_inbound_subscription(self) -> None:
+        """Tear down inbound envelope delivery on shutdown.
+
+        Stops the injected transport (if present) and cancels any
+        streaming-pull futures created by the legacy inline path.
+        Idempotent against both paths.
+        """
+        if self.ingress_transport is not None:
+            try:
+                await self.ingress_transport.stop()
+            except Exception as exc:
+                LOGGER.warning(
+                    f"{ICONS['lifecycle']} ingress_transport.stop raised: {exc}",
+                )
+        for future in self.subscribers.values():
+            try:
+                future.cancel()
+            except Exception as exc:
+                LOGGER.warning(
+                    f"{ICONS['lifecycle']} subscriber future.cancel raised: {exc}",
+                )
+
     def subscribe_to_topic(self, subscription_id: str, max_messages: int | None = None):
         """Subscribe to a specific PubSub topic and process messages."""
         if pubsub_v1 is None:
@@ -1672,7 +1726,7 @@ class CommsManager:
                 )
 
                 SESSION_DETAILS.assistant.agent_id = int(event["assistant_id"])
-                self.subscribe_to_topic(_get_subscription_id(), max_messages=10)
+                await self._start_inbound_subscription()
                 LOGGER.info(
                     f"{DEFAULT_ICON} Assistant inbound subscription established for "
                     f"{job_name}: {_get_subscription_id()}",
@@ -1752,15 +1806,14 @@ class CommsManager:
             asyncio.create_task(self._poll_for_assignment())
             asyncio.create_task(self.send_pings())
         else:
-            self.subscribe_to_topic(_get_subscription_id(), max_messages=10)
+            await self._start_inbound_subscription()
 
         try:
             while True:
                 await asyncio.sleep(1)
         except KeyboardInterrupt:
             LOGGER.debug(f"{ICONS['lifecycle']} Shutting down...")
-            for future in self.subscribers.values():
-                future.cancel()
+            await self._stop_inbound_subscription()
 
     async def send_pings(self):
         """Send periodic pings to keep the event manager alive while waiting for startup."""

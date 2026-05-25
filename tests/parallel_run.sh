@@ -337,16 +337,19 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
           _create_orchestra_log_symlinks
           export ORCHESTRA_URL="$_local_url"
         else
-          # MAIN REPO MODE: Restart to pick up logging config. The restart wipes
-          # the database, which is intentional for test runs to ensure isolation.
+          # MAIN REPO MODE: Purge then start to pick up logging config AND wipe
+          # the database for test isolation. `restart` no longer wipes data
+          # (intentionally, for the install-and-live local UX), so tests use
+          # `purge` to explicitly destroy the named volume + container.
           _original_url="$_local_url"
-          echo "Restarting orchestra to apply logging configuration..."
-          "$_local_orchestra_script" restart >/dev/null 2>&1 || true
+          echo "Purging + starting orchestra to apply logging configuration..."
+          "$_local_orchestra_script" purge >/dev/null 2>&1 || true
+          "$_local_orchestra_script" start >/dev/null 2>&1 || true
           if _local_url=$("$_local_orchestra_script" check 2>/dev/null); then
             echo "Using local orchestra: $_local_url"
             export ORCHESTRA_URL="$_local_url"
           else
-            echo "Warning: Orchestra restart failed, using existing instance (logging may not work)" >&2
+            echo "Warning: Orchestra purge/start failed, using existing instance (logging may not work)" >&2
             export ORCHESTRA_URL="$_original_url"
           fi
           unset _original_url

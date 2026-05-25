@@ -30,6 +30,75 @@ def _get_publisher():
     return _publisher
 
 
+# Optional injected outbound transport (unity.gateway.OutboundTransport).
+# When set, replaces the inline `_get_publisher().publish().result()` path
+# used by the three publish helpers below (send_unify_message,
+# publish_system_error, publish_assistant_desktop_ready). When None (the
+# default for every call site at the time of this change), the existing
+# inline pubsub_v1 publisher remains active so behaviour for legacy
+# callers is unchanged. Wired by unity.conversation_manager.main based
+# on the UNITY_CONVERSATION_OUTBOUND_TRANSPORT setting; see Phase A.bis.7
+# in unity/gateway/PHASES.md.
+_outbound_transport = None  # type: ignore[var-annotated]
+
+
+def set_outbound_transport(transport) -> None:
+    """Configure the outbound transport used by the publish helpers.
+
+    Called once at process startup by main.py. Passing ``None`` keeps
+    the legacy inline Pub/Sub path active.
+    """
+    global _outbound_transport
+    _outbound_transport = transport
+
+
+def get_outbound_transport():
+    """Return the currently configured outbound transport (or ``None``)."""
+    return _outbound_transport
+
+
+def _publish_to_assistant_topic(
+    *,
+    agent_id,
+    thread: str,
+    event: dict,
+    timeout: float | None = None,
+) -> str:
+    """Publish a ``{thread, event}`` envelope to the per-assistant topic.
+
+    Uses the injected OutboundTransport when one is configured via
+    ``set_outbound_transport``; otherwise falls back to the legacy
+    inline pubsub_v1 publisher path. Returns the broker-assigned
+    message id on success. Raises on transport-level failure -- the
+    caller decides whether to log-and-swallow or propagate, matching
+    today's per-site error handling.
+
+    The topic name (``unity-{agent_id}{env_suffix}``) and the
+    ``thread`` attribute are preserved bit-for-bit across both paths,
+    so consumers see identical message shapes regardless of which
+    transport delivered them.
+    """
+    env_suffix = SETTINGS.ENV_SUFFIX if agent_id is not None else ""
+    topic_name = f"unity-{agent_id}{env_suffix}"
+    message_bytes = json.dumps({"thread": thread, "event": event}).encode("utf-8")
+
+    transport = _outbound_transport
+    if transport is not None:
+        return transport.publish(
+            topic_name,
+            message_bytes,
+            thread=thread,
+            timeout=timeout,
+        )
+
+    publisher = _get_publisher()
+    topic_path = publisher.topic_path(SETTINGS.GCP_PROJECT_ID, topic_name)
+    future = publisher.publish(topic_path, message_bytes, thread=thread)
+    if timeout is not None:
+        return future.result(timeout=timeout)
+    return future.result()
+
+
 def _use_local_comms() -> bool:
     enabled = getattr(SETTINGS.conversation, "LOCAL_COMMS_ENABLED", False)
     mode = getattr(SETTINGS.conversation, "LOCAL_COMMS_MODE", "hosted")
@@ -224,30 +293,16 @@ async def send_unify_message(
         )
         return {"success": success}
 
-    env_suffix = SETTINGS.ENV_SUFFIX if agent_id is not None else ""
-    topic_name = f"unity-{agent_id}{env_suffix}"
-    publisher = _get_publisher()
-    topic_path = publisher.topic_path(SETTINGS.GCP_PROJECT_ID, topic_name)
-
-    message_data = {
-        "thread": "unify_message_outbound",
-        "event": event_data,
-    }
     try:
-        # Publish with attributes
-        future = publisher.publish(
-            topic_path,
-            json.dumps(message_data).encode("utf-8"),
+        message_id = _publish_to_assistant_topic(
+            agent_id=agent_id,
             thread="unify_message_outbound",
+            event=event_data,
         )
-        message_id = future.result()
         LOGGER.debug(
             f"{ICONS['comms_outbound']} Unify message published with ID: {message_id}",
         )
-        if message_id:
-            return {"success": True}
-        else:
-            return {"success": False}
+        return {"success": bool(message_id)}
     except Exception as e:
         LOGGER.error(f"{ICONS['comms_outbound']} Error sending unify message: {e}")
         return {"success": False, "error": str(e)}
@@ -290,24 +345,16 @@ def publish_system_error(error_message: str, error_type: str = "unknown") -> Non
             )
         return
 
-    env_suffix = SETTINGS.ENV_SUFFIX if agent_id is not None else ""
-    topic_name = f"unity-{agent_id}{env_suffix}"
     try:
-        publisher = _get_publisher()
-        topic_path = publisher.topic_path(SETTINGS.GCP_PROJECT_ID, topic_name)
-        message_data = {
-            "thread": "system_error",
-            "event": {
+        _publish_to_assistant_topic(
+            agent_id=agent_id,
+            thread="system_error",
+            event={
                 "content": error_message,
                 "error_type": error_type,
             },
-        }
-        future = publisher.publish(
-            topic_path,
-            json.dumps(message_data).encode("utf-8"),
-            thread="system_error",
+            timeout=5,
         )
-        future.result(timeout=5)
         LOGGER.debug(
             f"{ICONS['comms_outbound']} Published system error [{error_type}]: {error_message}",
         )
@@ -383,29 +430,21 @@ async def publish_assistant_desktop_ready(
             )
         return
 
-    env_suffix = SETTINGS.ENV_SUFFIX if agent_id is not None else ""
-    topic_name = f"unity-{agent_id}{env_suffix}"
-    publisher = _get_publisher()
-    topic_path = publisher.topic_path(SETTINGS.GCP_PROJECT_ID, topic_name)
-
-    message_data = {
-        "thread": "assistant_desktop_ready",
-        "event": {
-            "binding_id": binding_id,
-            "desktop_url": desktop_url,
-            "liveview_url": liveview_url,
-            "vm_type": vm_type,
-        },
-    }
     try:
-        future = publisher.publish(
-            topic_path,
-            json.dumps(message_data).encode("utf-8"),
+        _publish_to_assistant_topic(
+            agent_id=agent_id,
             thread="assistant_desktop_ready",
+            event={
+                "binding_id": binding_id,
+                "desktop_url": desktop_url,
+                "liveview_url": liveview_url,
+                "vm_type": vm_type,
+            },
         )
-        future.result()
+        env_suffix = SETTINGS.ENV_SUFFIX if agent_id is not None else ""
         LOGGER.debug(
-            f"{ICONS['comms_outbound']} Published assistant_desktop_ready to {topic_name}",
+            f"{ICONS['comms_outbound']} Published assistant_desktop_ready to "
+            f"unity-{agent_id}{env_suffix}",
         )
     except Exception as e:
         LOGGER.error(

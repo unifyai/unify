@@ -1,5 +1,6 @@
 import json
 import uuid
+from collections.abc import Mapping as _Mapping
 from typing import Optional, Any, ClassVar
 from datetime import datetime
 from dataclasses import dataclass, asdict, field
@@ -7,6 +8,23 @@ from dataclasses import dataclass, asdict, field
 from pydantic import BaseModel
 
 from unity.common.prompt_helpers import now as prompt_now
+
+
+def _coerce_int(value: Any) -> int | None:
+    """Best-effort integer coercion for webhook / activation payloads.
+
+    Lives in events.py because both the Pub/Sub ingress path and the
+    in-process scheduler use it when constructing `TaskDue` from
+    untyped JSON-derived dicts. Returns ``None`` for empty values or
+    anything that won't parse cleanly as an int.
+    """
+
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def custom_dict_factory(kv):
@@ -1201,11 +1219,12 @@ class TaskDue(Event):
     """A scheduled task activation became due for the live assistant.
 
     Communication publishes this payload either directly as a `unity_system_event`
-    or indirectly via `StartupEvent.wake_reasons` during a cold start. Unity uses
-    the activation identity fields to reject stale deliveries before nudging the
-    slow brain to execute the task. The packet also carries compact human-facing
-    wake context so the slow and fast brains do not have to infer meaning from a
-    bare task id alone.
+    or indirectly via `StartupEvent.wake_reasons` during a cold start. The local
+    install's `LocalActivationScheduler` also publishes the same event from an
+    in-process asyncio timer. Unity uses the activation identity fields to
+    reject stale deliveries before nudging the slow brain to execute the task.
+    The packet also carries compact human-facing wake context so the slow and
+    fast brains do not have to infer meaning from a bare task id alone.
     """
 
     topic: ClassVar[str | None] = "app:comms:task_due"
@@ -1221,6 +1240,68 @@ class TaskDue(Event):
     visibility_policy: str = "silent_by_default"
     recurrence_hint: str = "one_off"
     reason: str = ""
+
+    @classmethod
+    def from_dict(
+        cls,
+        payload: Any,
+        *,
+        reason: str = "",
+    ) -> "TaskDue | None":
+        """Build a `TaskDue` from a dict-shaped payload, or return ``None``.
+
+        Centralises the field contract shared by every producer of
+        `TaskDue`:
+
+        - Communication's `unity_system_event` Pub/Sub payload
+          (`ScheduledTaskDuePayload` shape).
+        - Communication's cold-start `wake_reasons` dict shape (the same
+          fields plus a leading ``type`` discriminator the caller is
+          responsible for checking).
+        - The local in-process `LocalActivationScheduler`, which converts
+          a projected `TaskActivationSnapshot` into the same dict shape
+          before calling this method.
+
+        Returns ``None`` when any required identity field
+        (``task_id``, ``source_task_log_id``, ``activation_revision``,
+        ``scheduled_for``) is missing or malformed; the caller decides
+        how to log / drop the event. Callers that dispatch from a
+        heterogeneous wake-reason stream must still type-check the
+        payload (e.g. ``payload.get("type") == "task_due"``) before
+        calling this method.
+        """
+
+        if not isinstance(payload, _Mapping):
+            return None
+        task_id = _coerce_int(payload.get("task_id"))
+        source_task_log_id = _coerce_int(payload.get("source_task_log_id"))
+        activation_revision = str(payload.get("activation_revision") or "")
+        scheduled_for = str(payload.get("scheduled_for") or "")
+        if task_id is None or source_task_log_id is None:
+            return None
+        if not activation_revision or not scheduled_for:
+            return None
+        task_label = str(payload.get("task_label") or "")
+        resolved_reason = reason or (
+            f"Scheduled task '{task_label}' became due."
+            if task_label
+            else f"Scheduled task {task_id} became due."
+        )
+        return cls(
+            task_id=task_id,
+            source_task_log_id=source_task_log_id,
+            activation_revision=activation_revision,
+            scheduled_for=scheduled_for,
+            execution_mode=str(payload.get("execution_mode") or "live"),
+            source_type=str(payload.get("source_type") or "scheduled"),
+            task_label=task_label,
+            task_summary=str(payload.get("task_summary") or ""),
+            visibility_policy=str(
+                payload.get("visibility_policy") or "silent_by_default",
+            ),
+            recurrence_hint=str(payload.get("recurrence_hint") or "one_off"),
+            reason=resolved_reason,
+        )
 
 
 @dataclass
