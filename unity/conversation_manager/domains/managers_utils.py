@@ -2010,6 +2010,31 @@ async def init_conv_manager(
 
             os.environ["UNITY_CM_INITIALIZED"] = "1"
 
+            # Start the in-process activation scheduler (local installs only).
+            # In hosted mode this resolves to ``NoopMaterializer`` and is a
+            # no-op; in local mode it starts the asyncio supervisor that
+            # fires scheduled tasks without going through Communication +
+            # Cloud Tasks. Must run after managers are initialised because
+            # the scheduler reads ``Tasks/Activations`` through the same
+            # storage layer the managers configure.
+            try:
+                from unity.task_scheduler.local_scheduler import build_materializer
+
+                _t0 = perf_counter()
+                cm._activation_materializer = build_materializer(cm)
+                await cm._activation_materializer.start()
+                log_startup_timing(
+                    LOGGER,
+                    "⏱️ [StartupTiming] managers.init_conv_manager.start_local_scheduler duration=%.2fs",
+                    perf_counter() - _t0,
+                )
+            except Exception as exc:
+                LOGGER.warning(
+                    f"{ICONS['managers_worker']} [ManagersWorker] "
+                    f"LocalActivationScheduler failed to start (degraded): {exc}",
+                )
+                cm._activation_materializer = None
+
             # Publish initialization complete event.  The registered
             # InitializationComplete handler pushes a notification and
             # triggers a brain turn so it can follow up on deferred requests.

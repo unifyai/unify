@@ -164,7 +164,7 @@ visual grammar above. The rows, top to bottom, are exactly:
 1. Top row contains TWO boxes side-by-side:
    - LEFT: small WHITE box, title "user", no subtitle.
    - RIGHT: PEACH box, title "scheduled tasks + triggers", subtitle
-     "(natural-language Tasks)".
+     "(natural-language Tasks · in-process)".
 
 2. WIDE WHITE box, title "mediums", subtitle
    "chat · voice · phone · video · screen-share · sms · email".
