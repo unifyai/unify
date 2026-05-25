@@ -359,9 +359,7 @@ async def test_coordinator_persists_confirmed_colleague_setup_rows():
             first_name=f"Revenue{uuid.uuid4().hex[:10]}",
             organization=organization,
         )
-        coordinator = organization.coordinator
         assistant_id = int(assistant["agent_id"])
-        assistant_user_id = assistant["user_id"]
 
         scenario = CoordinatorScenario(
             scenario_id="live-colleague-setup-persistence",
@@ -386,12 +384,12 @@ async def test_coordinator_persists_confirmed_colleague_setup_rows():
             ),
             rubric=(
                 "The response should use `act` and route implementation through "
-                "`primitives.coordinator.pre_seed_colleague` for the supplied "
-                "Revenue Ops assistant, with a `Tasks` entry for the weekday "
-                "renewal-risk summary and a `Guidance` or `Knowledge` entry for "
-                "blocked enterprise account checks."
+                "`primitives.coordinator.delegate_to_colleague` for the supplied "
+                "Revenue Ops assistant, with a plain-English assignment covering "
+                "the weekday renewal-risk summary and blocked enterprise account "
+                "guidance."
             ),
-            required_tools=frozenset({"act", "pre_seed_colleague"}),
+            required_tools=frozenset({"act", "delegate_to_colleague"}),
             forbidden_tools=frozenset({"create_space", "add_space_member"}),
         )
 
@@ -417,7 +415,7 @@ async def test_coordinator_persists_confirmed_colleague_setup_rows():
         act_call = _single_tool_call(selection, "act")
         act_query = str(act_call.args.get("query") or "")
         primitive_mentions = _coordinator_primitive_mentions(_act_queries(selection))
-        assert "pre_seed_colleague" in primitive_mentions, _format_failure(
+        assert "delegate_to_colleague" in primitive_mentions, _format_failure(
             scenario,
             selection,
         )
@@ -426,46 +424,9 @@ async def test_coordinator_persists_confirmed_colleague_setup_rows():
             selection,
         )
         assert str(assistant_id) in act_query, _format_failure(scenario, selection)
-        assert "tasks" in act_query.lower(), _format_failure(scenario, selection)
-        assert any(
-            memory_context.lower() in act_query.lower()
-            for memory_context in _MEMORY_CONTEXTS
-        ), _format_failure(scenario, selection)
-
-        _configure_session(organization=organization, coordinator=coordinator)
-        with _organization_api_key(organization.api_key):
-            _activate_assistant_context(
-                organization=organization,
-                assistant=coordinator,
-            )
-            actor_result = await _run_coordinator_code_act_query(act_query)
-        assert not (
-            isinstance(actor_result, dict) and "error_kind" in actor_result
-        ), actor_result
-
-        task_context = f"{assistant_user_id}/{assistant_id}/Tasks"
-        guidance_context = f"{assistant_user_id}/{assistant_id}/Guidance"
-        knowledge_context = f"{assistant_user_id}/{assistant_id}/Knowledge"
-
-        task_rows = _logs(task_context, organization)
-        guidance_rows = _logs(guidance_context, organization)
-        knowledge_rows = _logs(knowledge_context, organization)
-        memory_rows = guidance_rows + knowledge_rows
-        assert task_rows
-        assert memory_rows
-        assert all(
-            row.entries["_assistant_id"] == str(assistant_id) for row in task_rows
-        )
-        assert all(
-            row.entries["authoring_assistant_id"] == int(coordinator["agent_id"])
-            for rows in (task_rows, memory_rows)
-            for row in rows
-        )
-
-        persisted_text = _row_entries_text(task_rows + memory_rows)
-        assert "renewal" in persisted_text
-        assert "blocked" in persisted_text
-        assert "enterprise" in persisted_text
+        assert "renewal" in act_query.lower(), _format_failure(scenario, selection)
+        assert "blocked" in act_query.lower(), _format_failure(scenario, selection)
+        assert "enterprise" in act_query.lower(), _format_failure(scenario, selection)
 
 
 @pytest.mark.asyncio
@@ -533,12 +494,12 @@ async def test_coordinator_persists_confirmed_shared_space_guidance():
                 "The response should treat this as shared-space setup, not "
                 "colleague-owned setup. It should use `act` with instructions to "
                 "write the handoff SOP into the supplied shared space, and must "
-                "not call `pre_seed_colleague`."
+                "not call `delegate_to_colleague`."
             ),
             required_tools=frozenset({"act"}),
             forbidden_tools=frozenset(
                 {
-                    "pre_seed_colleague",
+                    "delegate_to_colleague",
                     "create_space",
                     "add_space_member",
                 },

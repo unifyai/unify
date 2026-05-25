@@ -66,7 +66,7 @@ def test_workspace_manager_inherits_rich_delegate_docstrings():
 
     methods = (
         "create_assistant",
-        "pre_seed_colleague",
+        "delegate_to_colleague",
         "create_space",
         "add_space_member",
         "commission_colleague_into_workspace",

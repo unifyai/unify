@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 import unify
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from unify.utils.http import RequestError
 
 from unity.common.colleague_cache import (
@@ -35,65 +34,28 @@ if TYPE_CHECKING:
     from unity.conversation_manager.conversation_manager import ConversationManager
 
 
-CoordinatorPreseedContext = Annotated[
-    str,
-    Field(
-        min_length=1,
-        description=(
-            "Allowed roots: Tasks, Knowledge, Guidance, Data, Functions/<name>, "
-            "Dashboards/<name>."
-        ),
-        pattern=r"^(Tasks|Knowledge|Guidance|Data|Functions/.+|Dashboards/.+)$",
-    ),
-]
-
-
-class CoordinatorPreseedWrite(BaseModel):
-    """One colleague-owned context batch that the Coordinator can pre-seed."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    context: CoordinatorPreseedContext
-    entries: list[dict[str, Any]] = Field(
-        ...,
-        min_length=1,
-        description="Rows to write into that context.",
-    )
-
-
-class CoordinatorPreseedWriteInput(TypedDict):
-    """Mapping-shaped write entry accepted by the pre-seed helpers."""
-
-    context: CoordinatorPreseedContext
-    entries: list[dict[str, Any]]
-
-
-CoordinatorPreseedWriteValue = CoordinatorPreseedWrite | CoordinatorPreseedWriteInput
-
-
-def _preseed_write_payload(
-    writes: Sequence[CoordinatorPreseedWriteValue],
-) -> list[dict[str, Any]]:
-    """Return SDK-ready preseed writes from model or mapping inputs.
-
-    Mapping-shaped writes are validated through ``CoordinatorPreseedWrite`` so
-    both call styles enforce the same context contract.
-    """
-    payload: list[dict[str, Any]] = []
-    for write in writes:
-        model_write = (
-            write
-            if isinstance(write, CoordinatorPreseedWrite)
-            else CoordinatorPreseedWrite.model_validate(write)
-        )
-        payload.append(model_write.model_dump())
-    return payload
-
-
 InviteOrgRoleName = Literal["Admin", "Member", "Viewer"]
 _INVITE_ORG_ROLE_NAMES: tuple[InviteOrgRoleName, ...] = ("Admin", "Member", "Viewer")
 _INVITE_ORG_ROLE_BY_NORMALIZED_NAME: dict[str, InviteOrgRoleName] = {
     role_name.lower(): role_name for role_name in _INVITE_ORG_ROLE_NAMES
+}
+CoordinatorDelegateIntent = Literal[
+    "general",
+    "schedule_task",
+    "add_guidance",
+    "add_knowledge",
+    "create_function",
+    "create_dashboard",
+    "data_setup",
+]
+_DELEGATE_INTENT_SURFACES: dict[str, CoordinatorActivitySurface] = {
+    "general": "colleagues",
+    "schedule_task": "tasks",
+    "add_guidance": "guidance",
+    "add_knowledge": "memory",
+    "create_function": "functions",
+    "create_dashboard": "dashboards",
+    "data_setup": "data",
 }
 _WORKSPACE_MUTATION_ROLE_NAMES: tuple[str, ...] = ("owner", "admin")
 
@@ -146,7 +108,7 @@ COORDINATOR_TOOL_METHOD_NAMES: tuple[str, ...] = (
     "list_assistants",
     "list_org_members",
     "invite_org_member",
-    "pre_seed_colleague",
+    "delegate_to_colleague",
     "create_space",
     "delete_space",
     "update_space",
@@ -714,48 +676,43 @@ class CoordinatorTools:
         )
         return result
 
-    def pre_seed_colleague(
+    def delegate_to_colleague(
         self,
         *,
         target_assistant_id: int,
-        writes: list[CoordinatorPreseedWriteValue],
+        instruction: str,
+        intent: CoordinatorDelegateIntent = "general",
+        dedupe_key: str | None = None,
+        related_context: dict[str, Any] | None = None,
     ) -> dict[str, Any] | ToolError:
-        """Seed confirmed rows into one colleague's own memory roots.
+        """Assign asynchronous work to a colleague after user confirmation.
 
-        Use this when setup should belong to a specific colleague's private
-        contexts (for example ``Tasks``, ``Knowledge``, ``Guidance``, or other
-        assistant-owned surfaces). This is the right tool for "this colleague
-        should own this workflow" decisions after confirmation.
+        Use this when a specific colleague should own follow-up work, such as
+        creating a task, adding guidance, recording knowledge, or preparing a
+        function. This dispatches the assignment to the colleague's runtime; the
+        colleague then uses its own manager primitives to perform the work.
 
-        Do not use this for shared team memory. For shared workspace setup, use
-        workspace-oriented writes (for example destination-aware shared actions)
-        rather than colleague-owned roots.
+        This is async and best-effort. After it returns, tell the user that the
+        work was assigned to the colleague, not that the colleague completed it.
 
         Args:
-            target_assistant_id: The colleague assistant that should own the rows.
-            writes: Required context batches shaped as
-                ``{"context": "...", "entries": [{...}]}``.
-                Allowed contexts are:
-                ``Tasks``, ``Knowledge``, ``Guidance``, ``Data``,
-                ``Functions/<name>``, and ``Dashboards/<name>``.
-                Do not use ``Spaces/...`` paths or shared-space destinations.
+            target_assistant_id: The colleague assistant that should handle the work.
+            instruction: Plain-English assignment for the colleague.
+            intent: Optional category that helps the colleague choose the right manager.
+            dedupe_key: Optional retry key for avoiding obvious duplicate work.
+            related_context: Optional structured context to include in the assignment.
         """
-        try:
-            normalized_writes = _preseed_write_payload(writes)
-        except ValidationError as exc:
+        normalized_instruction = self._normalize_optional_text(instruction)
+        if normalized_instruction is None:
             return _invalid_argument(
-                message=(
-                    "Each pre-seed write context must be one of: "
-                    "Tasks, Knowledge, Guidance, Data, Functions/<name>, "
-                    "Dashboards/<name>."
-                ),
-                details={"validation_errors": exc.errors(include_url=False)},
+                message="Delegate instructions must be non-empty.",
+                details={"field": "instruction"},
             )
-        surfaces = _surfaces_for_preseed(normalized_writes)
+        surfaces = [_surface_for_delegate_intent(intent)]
         activity_id = self._publish_activity(
             phase="started",
             stage="implementation",
-            title="Preparing colleague setup rows",
+            title="Assigning work to colleague",
             surfaces=surfaces,
             related_entities=[
                 activity_entity(
@@ -767,12 +724,12 @@ class CoordinatorTools:
         )
         resolved_organization_id = self._resolve_target_organization_id(
             require_organization=False,
-            operation_name="pre_seed_colleague",
+            operation_name="delegate_to_colleague",
         )
         if _is_tool_error(resolved_organization_id):
             self._publish_failure(
                 activity_id,
-                title="Could not prepare colleague setup rows",
+                title="Could not assign work to colleague",
                 error=resolved_organization_id,
             )
             return resolved_organization_id
@@ -782,7 +739,7 @@ class CoordinatorTools:
         if isinstance(reachable, dict):
             self._publish_failure(
                 activity_id,
-                title="Could not prepare colleague setup rows",
+                title="Could not assign work to colleague",
                 error=reachable,
             )
             return reachable
@@ -790,28 +747,31 @@ class CoordinatorTools:
             error = _assistant_not_found(target_assistant_id)
             self._publish_failure(
                 activity_id,
-                title="Could not prepare colleague setup rows",
+                title="Could not assign work to colleague",
                 error=error,
             )
             return error
         try:
-            result = unify.pre_seed_colleague(
+            result = unify.delegate_to_colleague(
                 target_assistant_id,
-                normalized_writes,
+                instruction=normalized_instruction,
+                intent=intent,
+                dedupe_key=dedupe_key,
+                related_context=related_context,
                 api_key=SESSION_DETAILS.unify_key,
             )
         except RequestError as exc:
             error = _request_error_to_tool_error(exc)
             self._publish_failure(
                 activity_id,
-                title="Could not prepare colleague setup rows",
+                title="Could not assign work to colleague",
                 error=error,
             )
             return error
         self._publish_activity(
             phase="completed",
             stage="implementation",
-            title="Prepared colleague setup rows",
+            title="Assigned work to colleague",
             surfaces=surfaces,
             related_entities=[
                 activity_entity(
@@ -2253,30 +2213,10 @@ def _extract_assistant_id(result: dict[str, Any]) -> int | None:
         return None
 
 
-def _surfaces_for_preseed(
-    writes: Sequence[CoordinatorPreseedWriteValue],
-) -> list[CoordinatorActivitySurface]:
-    surfaces: list[CoordinatorActivitySurface] = []
-    for write in writes:
-        context = (
-            write.context
-            if isinstance(write, CoordinatorPreseedWrite)
-            else write.get("context")
-        )
-        context_name = str(context or "").lower()
-        if context_name.startswith("tasks"):
-            surfaces.append("tasks")
-        elif context_name.startswith("knowledge"):
-            surfaces.append("memory")
-        elif context_name.startswith("guidance"):
-            surfaces.append("guidance")
-        elif context_name.startswith("dashboards"):
-            surfaces.append("dashboards")
-        elif context_name.startswith("functions"):
-            surfaces.append("functions")
-        elif context_name.startswith("data"):
-            surfaces.append("data")
-    return list(dict.fromkeys(surfaces or ["memory"]))
+def _surface_for_delegate_intent(intent: str) -> CoordinatorActivitySurface:
+    """Return the activity surface that best matches a colleague assignment."""
+
+    return _DELEGATE_INTENT_SURFACES.get(intent.strip().lower(), "colleagues")
 
 
 def _tool_error_message(error: ToolError) -> str:

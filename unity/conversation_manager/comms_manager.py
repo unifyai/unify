@@ -59,6 +59,9 @@ from unity.conversation_manager.domains.comms_utils import (
 from unity.conversation_manager.domains.coordinator_onboarding import (
     _coordinator_onboarding_event_from_payload,
 )
+from unity.conversation_manager.domains.coordinator_delegate import (
+    _coordinator_delegate_event_from_payload,
+)
 from unity.conversation_manager.domains.inactivity import (
     _inactivity_followup_event_from_payload,
 )
@@ -800,6 +803,10 @@ class CommsManager:
                         reason=r,
                     ),
                     "inactivity_followup": lambda r: _inactivity_followup_event_from_payload(
+                        event,
+                        reason=r,
+                    ),
+                    "coordinator_delegate": lambda r: _coordinator_delegate_event_from_payload(
                         event,
                         reason=r,
                     ),
