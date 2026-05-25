@@ -109,8 +109,10 @@ def _already_seen_teams(message_id: str) -> bool:
 
 if TYPE_CHECKING:
     from unity.conversation_manager.in_memory_event_broker import InMemoryEventBroker
+    from unity.gateway.ingress import IngressTransport
 
     EventBroker = InMemoryEventBroker
+    _ = IngressTransport  # silence unused-import on the TYPE_CHECKING branch
 
 
 def _get_subscription_id() -> str:
@@ -403,13 +405,25 @@ class CommsManager:
     them to the internal event broker for ConversationManager to process.
     """
 
-    def __init__(self, event_broker: "EventBroker"):
+    def __init__(
+        self,
+        event_broker: "EventBroker",
+        ingress_transport: "IngressTransport | None" = None,
+    ):
         self.subscribers: dict = {}
         self.call_proc = None
         self.credentials = None
         # Store reference to event loop for thread-safe publishing from callbacks
         self.loop = asyncio.get_event_loop()
         self.event_broker: "EventBroker" = event_broker
+        # Optional pluggable inbound transport (unity.gateway.IngressTransport).
+        # When provided, replaces the inline self.subscribe_to_topic Pub/Sub
+        # path. When None (the default for every call site at the time of
+        # this change), the existing inline Pub/Sub subscriber remains active
+        # so behaviour for legacy callers is unchanged. The inline path will
+        # be removed in Phase A.bis.5 once the injected path has soaked in
+        # production. See unity/gateway/PHASES.md.
+        self.ingress_transport: "IngressTransport | None" = ingress_transport
 
     def _publish_from_callback(self, channel: str, message: str) -> None:
         """
@@ -1472,6 +1486,42 @@ class CommsManager:
             )
             message.ack()
 
+    async def _start_inbound_subscription(self) -> None:
+        """Start inbound envelope delivery for the current assistant.
+
+        When ``ingress_transport`` was provided at construction, the
+        transport's ``start`` is awaited with ``dispatch_envelope_payload``
+        as the dispatcher. Otherwise the legacy inline Pub/Sub subscriber
+        is started via ``subscribe_to_topic``. Both paths produce the
+        same observable behaviour against ``event_broker``.
+        """
+        if self.ingress_transport is not None:
+            await self.ingress_transport.start(self.dispatch_envelope_payload)
+            return
+        self.subscribe_to_topic(_get_subscription_id(), max_messages=10)
+
+    async def _stop_inbound_subscription(self) -> None:
+        """Tear down inbound envelope delivery on shutdown.
+
+        Stops the injected transport (if present) and cancels any
+        streaming-pull futures created by the legacy inline path.
+        Idempotent against both paths.
+        """
+        if self.ingress_transport is not None:
+            try:
+                await self.ingress_transport.stop()
+            except Exception as exc:
+                LOGGER.warning(
+                    f"{ICONS['lifecycle']} ingress_transport.stop raised: {exc}",
+                )
+        for future in self.subscribers.values():
+            try:
+                future.cancel()
+            except Exception as exc:
+                LOGGER.warning(
+                    f"{ICONS['lifecycle']} subscriber future.cancel raised: {exc}",
+                )
+
     def subscribe_to_topic(self, subscription_id: str, max_messages: int | None = None):
         """Subscribe to a specific PubSub topic and process messages."""
         if pubsub_v1 is None:
@@ -1672,7 +1722,7 @@ class CommsManager:
                 )
 
                 SESSION_DETAILS.assistant.agent_id = int(event["assistant_id"])
-                self.subscribe_to_topic(_get_subscription_id(), max_messages=10)
+                await self._start_inbound_subscription()
                 LOGGER.info(
                     f"{DEFAULT_ICON} Assistant inbound subscription established for "
                     f"{job_name}: {_get_subscription_id()}",
@@ -1752,15 +1802,14 @@ class CommsManager:
             asyncio.create_task(self._poll_for_assignment())
             asyncio.create_task(self.send_pings())
         else:
-            self.subscribe_to_topic(_get_subscription_id(), max_messages=10)
+            await self._start_inbound_subscription()
 
         try:
             while True:
                 await asyncio.sleep(1)
         except KeyboardInterrupt:
             LOGGER.debug(f"{ICONS['lifecycle']} Shutting down...")
-            for future in self.subscribers.values():
-                future.cancel()
+            await self._stop_inbound_subscription()
 
     async def send_pings(self):
         """Send periodic pings to keep the event manager alive while waiting for startup."""
