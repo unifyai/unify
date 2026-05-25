@@ -349,6 +349,46 @@ def _build_coordinator_guidelines(is_coordinator: bool) -> str:
     )
 
 
+def _build_channels_str(
+    *,
+    assistant_has_phone: bool,
+    assistant_has_email: bool,
+    assistant_has_whatsapp: bool = False,
+    assistant_has_discord: bool = False,
+    assistant_has_teams: bool = False,
+    assistant_has_slack: bool = False,
+) -> str:
+    """Build a human-readable comma-separated list of available channels."""
+    available_channels: list[str] = ["unify messages"]
+    if assistant_has_phone:
+        available_channels = ["SMS"] + available_channels + ["calls"]
+    if assistant_has_whatsapp:
+        idx = available_channels.index("SMS") + 1 if "SMS" in available_channels else 0
+        available_channels.insert(idx, "WhatsApp")
+    if assistant_has_email:
+        available_channels.insert(
+            available_channels.index("unify messages"),
+            "emails",
+        )
+    if assistant_has_discord:
+        available_channels.insert(
+            available_channels.index("unify messages"),
+            "Discord",
+        )
+    if assistant_has_slack:
+        available_channels.insert(
+            available_channels.index("unify messages"),
+            "Slack",
+        )
+    if assistant_has_teams:
+        available_channels.insert(
+            available_channels.index("unify messages"),
+            "Teams",
+        )
+    return ", ".join(available_channels)
+
+
+
 def _build_comms_tool_listing(
     assistant_has_phone: bool,
     assistant_has_email: bool,
@@ -531,6 +571,21 @@ def _build_action_steering_tool_listing() -> str:
             "- `answer_clarification_*`: Respond to a question from a running action",
         ],
     )
+
+
+def _build_input_action_recognition_block() -> str:
+    """Build the input-action-recognition micro-section.
+
+    Lives with the Input format section because it is about how to read the
+    ``**NEW** [You @ ...]`` markers in the inbound conversation stream, not
+    about communication restraint.
+    """
+    return """**Recognizing my own actions from the input stream:**
+- `**NEW** [You @ ...]: <message>` = I just sent this message.
+- `**NEW** [You @ ...]: <Sending Call...>` = I just initiated a call.
+- `**NEW** [You @ ...]: <Sending WhatsApp Call...>` = I just placed a WhatsApp call.
+- `**NEW** [You @ ...]: <WhatsApp Call Invite Sent>` = I sent a call invite (permission pending).
+- If I see one of these, the action is DONE — call `wait`, do NOT repeat the action."""
 
 
 def _build_input_format_example() -> str:
@@ -786,14 +841,7 @@ I do NOT need to poll or check on actions - the system will wake me when somethi
 
 **Important: This restraint applies to COMMUNICATION only.**
 - `wait` is preferred over sending more messages
-- `act` is NOT subject to this restraint - call it freely whenever my boss's request requires accessing knowledge, searching records, or taking action
-
-**Recognizing actions I just took**:
-- `**NEW** [You @ ...]: <message>` = I just sent this message
-- `**NEW** [You @ ...]: <Sending Call...>` = I just initiated a call
-- `**NEW** [You @ ...]: <Sending WhatsApp Call...>` = I just placed a WhatsApp call
-- `**NEW** [You @ ...]: <WhatsApp Call Invite Sent>` = I sent a call invite (permission pending)
-- If I see these, the action is DONE - call `wait`, do NOT repeat the action"""
+- `act` is NOT subject to this restraint - call it freely whenever my boss's request requires accessing knowledge, searching records, or taking action"""
 
 
 def _build_action_steering_guidelines_block(*, computer_fast_path: bool) -> str:
@@ -974,6 +1022,57 @@ Examples of questions that should trigger `act`:
 **Screenshot filepaths in act queries.** When screen sharing is active, screenshots appear in the conversation as ``[Screenshots: path/to/file.jpg]`` annotations on messages. The Actor can ONLY access these images via their filepaths — it has no other way to find them. Before writing an ``act`` query that involves visual content, I scan the entire conversation for ALL ``[Screenshots: ...]`` annotations and include every relevant filepath verbatim in the query. This means filepaths from earlier messages too, not just the current turn.
 
 **Skill storage notifications:** After `act` completes, I may see progress events mentioning that skills or reusable functions are being stored for future use. This is an internal housekeeping process — there is no need to relay information about skill storage to my boss unless they specifically ask about how skills are being learned or stored."""
+
+
+def _build_computer_fast_path_block() -> str:
+    """Build the ``web_act`` / ``desktop_act`` fast-path guidance block."""
+    return """Computer fast-path tools
+------------------------
+`web_act` and `desktop_act` give the user an **instant visible response** for single-interaction actions during a screen-share session. They bypass the full `act` pathway and execute directly.
+
+**Critical constraint — one interaction per call.** Each `web_act` or `desktop_act` call executes exactly **one browser/desktop interaction**: one click, one text entry, one scroll, or one navigation. The underlying agent performs a single action and returns. It cannot chain interactions within a single call. A task that *conceptually* feels like "one thing" (e.g. "rename a file" = right-click → click Rename → type name → press Enter) is actually multiple interactions and **will fail or only complete the first step** if sent as a single fast-path call.
+
+**The test:** mentally decompose the task into the physical interactions required (clicks, keystrokes, scrolls). If it requires **more than one**, use `interject_*` or `act` instead. Examples:
+- "Click the Submit button" → 1 interaction → `web_act` ✓
+- "Scroll down on the page" → 1 interaction → `web_act` ✓
+- "Navigate to example.com" → 1 interaction → `web_act` ✓
+- "Add an item to the cart and proceed to checkout" → click Add + click Checkout = 2+ interactions → `interject_*`
+- "Clear the search box and type a new query" → clear + type = 2 interactions → `interject_*`
+- "Open the dropdown, select an option, and confirm" → click open + click option + click confirm = 3 interactions → `interject_*`
+
+**Always pair with `act(persist=True)` when no act session exists.** Fast-path tools have no access to stored functions, guidance, secrets, or multi-step planning. The full `act` pathway provides all of this. Therefore:
+
+- **If NO `act` session is currently in-flight** (check `in_flight_actions`): call `act(persist=True)` **in the same response** as the fast-path tool. The fast path handles the immediate action; the `act` session loads guidance, functions, and skills for subsequent work. The `act` query should describe the session context (e.g. "Desktop session is active with screen sharing. The user is conducting an interactive tutorial. Establish context, load relevant guidance, and stay available for subsequent instructions.").
+- **If an `act` session IS already in-flight:** just use the fast-path tool directly. The in-flight session is automatically interjected with both the request and the result.
+
+**Priority over interject_*:** For single-interaction actions, prefer the fast-path tool — it is faster. The in-flight `act` session stays in sync automatically.
+
+**Route to `interject_*` (not fast paths) when ANY of these apply:**
+- The task requires **more than one browser/desktop interaction** (see decomposition test above)
+- The request involves **credentials, secrets, or stored passwords** (fast paths have no access to Secret Manager or `${SECRET_NAME}` injection)
+- The request references **known procedures, workflows, or guidance** that the in-flight `act` session has loaded
+- The request requires **reasoning about what to do** rather than a single explicit action with a clear target
+- The request involves **extracting or processing data** from the page
+
+If in doubt, `interject_*` is always the safer choice — it reaches the full Actor with access to secrets, guidance, functions, and multi-step planning."""
+
+
+def _build_choosing_fast_path_target_block() -> str:
+    """Build the ``web_act`` vs ``desktop_act`` selection guidance block."""
+    return """Choosing between `web_act` and `desktop_act`
+---------------------------------------------
+**`web_act` is the default for any task that involves a web browser.** This includes opening a browser, navigating to a URL, searching the web, clicking elements on a web page, typing into web forms, scrolling web content, or reading a web page.
+
+**`desktop_act` is only for non-browser native desktop interactions** — terminal commands, file manager operations, native application windows (not browsers), system dialogs, or desktop UI elements outside any browser window.
+
+If uncertain whether the task is browser or desktop work, prefer `web_act`.
+
+**Session lifecycle (`web_act`):**
+- `web_act` without `session_id` always creates a new visible browser session.
+- Pass `session_id` to reuse a session listed in `<active_web_sessions>`.
+- Call `close_web_session(session_id)` when done with a browser session to free resources.
+
+These tools are only available while the desktop is being actively shared."""
 
 
 def _build_persistent_sessions_block(*, computer_fast_path: bool) -> str:
@@ -1298,12 +1397,31 @@ def build_system_prompt(
         else ""
     )
 
-    # Build the full prompt using PromptParts for structured output
+    # Build the full prompt using PromptParts for structured output.
+    #
+    # Section order (1-17):
+    #   1. Setup readiness (when applicable)
+    #   2. Role + Bio (identity)
+    #   3. Accessible shared spaces (where memory lives)
+    #   4. Boss details / Authorized humans (who I'm talking to)
+    #   5. Input format (what I read)
+    #   6. Output format + tools enumeration (what I emit)
+    #   7. Action steering guidelines
+    #   8. Tool-usage decision guides — Uncertainty / Direct specialist tools /
+    #      Act capabilities / Persistent sessions / Computer fast-path
+    #      (in demo mode, the Demo-mode block occupies this slot instead)
+    #   9. Concurrent action and acknowledgment
+    #   10. Conversational restraint
+    #   11. Communication guidelines + Multilingual
+    #   12. Proactive meeting offers (non-voice)
+    #   13. Console knowledge
+    #   14. Onboarding reference (regular assistants only)
+    #   15. Voice calls guide (when on a voice call)
+    #   16. Scenarios
+    #   17. Current time
     parts = PromptParts()
 
-    # Role
-    parts.add(_build_base_role_block(voice_note))
-
+    # 1. Setup readiness.
     if runtime_setup_note:
         parts.add(
             f"""Setup readiness
@@ -1311,35 +1429,19 @@ def build_system_prompt(
 {runtime_setup_note}""",
         )
 
-    # Bio
+    # 2. Role + Bio. The Coordinator bio carries its own role framing inline.
+    if not is_coordinator:
+        parts.add(_build_base_role_block(voice_note))
     parts.add(
         f"""Bio
 ---
 {bio}""",
     )
 
+    # 3. Accessible shared spaces.
     parts.add(build_accessible_spaces_block(space_summaries or []))
 
-    # Onboarding reference (regular assistants only — the Coordinator bio
-    # carries this surface and explicitly disclaims pre-baked Console click
-    # paths in favor of live look-up).
-    if not is_coordinator:
-        desktop_access_faq = _build_desktop_access_faq(user_desktop_control)
-        app_management_faq = _build_base_app_management_faq(workspace_coordinator_name)
-        parts.add(
-            _build_base_onboarding_reference(
-                desktop_access_faq=desktop_access_faq,
-                app_management_faq=app_management_faq,
-            ),
-        )
-        coordinator_reference = _build_workspace_coordinator_deferral_block(
-            workspace_coordinator_name=workspace_coordinator_name,
-            is_org_workspace=is_org_workspace,
-        )
-        if coordinator_reference:
-            parts.add(coordinator_reference)
-
-    # Boss details
+    # 4. Boss details / Authorized humans.
     if coordinator_has_org_context:
         parts.add(
             _build_coordinator_authorized_humans_section(authorized_humans_details),
@@ -1349,7 +1451,9 @@ def build_system_prompt(
     else:
         parts.add(_build_base_boss_details_block(boss_details))
 
-    # Input format
+    # 5. Input format. Action-recognition guidance lives here because it is
+    #    about parsing **NEW** tags out of the input stream.
+    input_action_recognition = _build_input_action_recognition_block()
     parts.add(
         f"""Input format
 ------------
@@ -1363,10 +1467,12 @@ Messages from the current turn have **NEW** tag prepended:
 - **NEW** on incoming messages = a new message I should consider responding to
 - **NEW** on my own messages (from "You") = I just sent this; do NOT send the same content again
 
+{input_action_recognition}
+
 **Attachments:** Multiple mediums support file attachments. When files are attached, they appear inline as `[Attachments: report.pdf ...]`. Whether attachments are present or absent is already visible in the conversation — if a sender mentions an attachment but no `[Attachments: ...]` tag appears, the attachment is missing and I should let them know directly. When attachments ARE present and I need to understand their contents, I should use `act` to query the file details.""",
     )
 
-    # Output format
+    # 6. Output format.
     if demo_mode:
         parts.add(
             _build_demo_output_format(
@@ -1388,12 +1494,53 @@ Messages from the current turn have **NEW** tag prepended:
             ),
         )
 
-    # Action steering guidelines (not applicable in demo mode)
+    # 7. Action steering guidelines (non-demo only).
     if not demo_mode:
         parts.add(
             _build_action_steering_guidelines_block(
                 computer_fast_path=computer_fast_path,
             ),
+        )
+
+    channels_str = _build_channels_str(
+        assistant_has_phone=assistant_has_phone,
+        assistant_has_email=assistant_has_email,
+        assistant_has_whatsapp=assistant_has_whatsapp,
+        assistant_has_discord=assistant_has_discord,
+        assistant_has_teams=assistant_has_teams,
+        assistant_has_slack=assistant_has_slack,
+    )
+
+    # 8. Tool-usage decision guides (or the Demo-mode block in demo mode).
+    if demo_mode:
+        parts.add(
+            _build_demo_mode_block(
+                contact_id=contact_id,
+                channels_str=channels_str,
+                assistant_has_phone=assistant_has_phone,
+            ),
+        )
+    else:
+        parts.add(_build_uncertainty_handling_block())
+        parts.add(_build_direct_specialist_tools_block())
+        parts.add(
+            _build_act_capabilities_block(
+                workspace_coordinator_name=workspace_coordinator_name,
+                user_desktop_control=user_desktop_control,
+            ),
+        )
+        parts.add(
+            _build_persistent_sessions_block(computer_fast_path=computer_fast_path),
+        )
+        if computer_fast_path:
+            parts.add(_build_computer_fast_path_block())
+            parts.add(_build_choosing_fast_path_target_block())
+
+    # 9. Concurrent action and acknowledgment (non-demo only — actions are
+    #    not dispatched at all in demo mode).
+    if not demo_mode:
+        parts.add(
+            _build_base_concurrent_action_ack_block(contact_id=contact_id),
         )
 
     # Coordinator-only reactive narration rules for the gradual
@@ -1403,10 +1550,10 @@ Messages from the current turn have **NEW** tag prepended:
     if coordinator_onboarding_narration_block:
         parts.add(coordinator_onboarding_narration_block)
 
-    # Conversational restraint
+    # 10. Conversational restraint.
     parts.add(_build_base_conversational_restraint_block())
 
-    # Communication guidelines
+    # 11. Communication guidelines + Multilingual.
     phone_guidelines_section = f"\n{phone_guidelines}" if phone_guidelines else ""
     comms_notices_section = (
         (f"\n{missing_phone_notice}" if missing_phone_notice else "")
@@ -1499,33 +1646,6 @@ Messages from the current turn have **NEW** tag prepended:
 - If a contact is in active_conversations but is **missing** the needed detail (e.g. phone number for SMS/call, email for email), you can provide it inline: {examples_str}. The detail will be saved to the contact automatically.
 - **Do not** use inline details to overwrite an existing value — the system will reject it. Use `act` to update the contact first if the stored detail is wrong."""
 
-    available_channels: list[str] = ["unify messages"]
-    if assistant_has_phone:
-        available_channels = ["SMS"] + available_channels + ["calls"]
-    if assistant_has_whatsapp:
-        idx = available_channels.index("SMS") + 1 if "SMS" in available_channels else 0
-        available_channels.insert(idx, "WhatsApp")
-    if assistant_has_email:
-        available_channels.insert(
-            available_channels.index("unify messages"),
-            "emails",
-        )
-    if assistant_has_discord:
-        available_channels.insert(
-            available_channels.index("unify messages"),
-            "Discord",
-        )
-    if assistant_has_slack:
-        available_channels.insert(
-            available_channels.index("unify messages"),
-            "Slack",
-        )
-    if assistant_has_teams:
-        available_channels.insert(
-            available_channels.index("unify messages"),
-            "Teams",
-        )
-    channels_str = ", ".join(available_channels)
     teams_workspace_tool_note = (
         "\n- `create_teams_channel` and `create_teams_meet` are Teams workspace actions and rely on Teams-side identifiers, not contact_id."
         if assistant_has_teams
@@ -1581,95 +1701,38 @@ When contacts communicate in a non-English language, I match their language in m
 **Outbound messages match the recipient's language**, not the sender's. If my boss writes in Spanish asking me to message Bob (who communicates in English), the message to Bob should be in English. If relaying content from one language to another, translate/paraphrase naturally.""",
     )
 
-    if demo_mode:
+    # 12. Proactive meeting offers (non-voice, non-demo only).
+    if not demo_mode and not is_voice_call:
+        parts.add(_build_base_proactive_meeting_offers_block())
+
+    # 13. Console knowledge (non-demo only).
+    if not demo_mode:
+        parts.add(_build_base_console_knowledge_block())
+
+    # 14. Onboarding reference (regular assistants only — the Coordinator bio
+    #     carries this surface and explicitly disclaims pre-baked Console click
+    #     paths in favor of live look-up).
+    if not is_coordinator:
+        desktop_access_faq = _build_desktop_access_faq(user_desktop_control)
+        app_management_faq = _build_base_app_management_faq(workspace_coordinator_name)
         parts.add(
-            _build_demo_mode_block(
-                contact_id=contact_id,
-                channels_str=channels_str,
-                assistant_has_phone=assistant_has_phone,
+            _build_base_onboarding_reference(
+                desktop_access_faq=desktop_access_faq,
+                app_management_faq=app_management_faq,
             ),
         )
-    else:
-        # Normal mode: full act-related sections
-        parts.add(_build_uncertainty_handling_block())
-        parts.add(_build_direct_specialist_tools_block())
-
-        if computer_fast_path:
-            parts.add(
-                """Computer fast-path tools
-------------------------
-`web_act` and `desktop_act` give the user an **instant visible response** for single-interaction actions during a screen-share session. They bypass the full `act` pathway and execute directly.
-
-**Critical constraint — one interaction per call.** Each `web_act` or `desktop_act` call executes exactly **one browser/desktop interaction**: one click, one text entry, one scroll, or one navigation. The underlying agent performs a single action and returns. It cannot chain interactions within a single call. A task that *conceptually* feels like "one thing" (e.g. "rename a file" = right-click → click Rename → type name → press Enter) is actually multiple interactions and **will fail or only complete the first step** if sent as a single fast-path call.
-
-**The test:** mentally decompose the task into the physical interactions required (clicks, keystrokes, scrolls). If it requires **more than one**, use `interject_*` or `act` instead. Examples:
-- "Click the Submit button" → 1 interaction → `web_act` ✓
-- "Scroll down on the page" → 1 interaction → `web_act` ✓
-- "Navigate to example.com" → 1 interaction → `web_act` ✓
-- "Add an item to the cart and proceed to checkout" → click Add + click Checkout = 2+ interactions → `interject_*`
-- "Clear the search box and type a new query" → clear + type = 2 interactions → `interject_*`
-- "Open the dropdown, select an option, and confirm" → click open + click option + click confirm = 3 interactions → `interject_*`
-
-**Always pair with `act(persist=True)` when no act session exists.** Fast-path tools have no access to stored functions, guidance, secrets, or multi-step planning. The full `act` pathway provides all of this. Therefore:
-
-- **If NO `act` session is currently in-flight** (check `in_flight_actions`): call `act(persist=True)` **in the same response** as the fast-path tool. The fast path handles the immediate action; the `act` session loads guidance, functions, and skills for subsequent work. The `act` query should describe the session context (e.g. "Desktop session is active with screen sharing. The user is conducting an interactive tutorial. Establish context, load relevant guidance, and stay available for subsequent instructions.").
-- **If an `act` session IS already in-flight:** just use the fast-path tool directly. The in-flight session is automatically interjected with both the request and the result.
-
-**Priority over interject_*:** For single-interaction actions, prefer the fast-path tool — it is faster. The in-flight `act` session stays in sync automatically.
-
-**Route to `interject_*` (not fast paths) when ANY of these apply:**
-- The task requires **more than one browser/desktop interaction** (see decomposition test above)
-- The request involves **credentials, secrets, or stored passwords** (fast paths have no access to Secret Manager or `${SECRET_NAME}` injection)
-- The request references **known procedures, workflows, or guidance** that the in-flight `act` session has loaded
-- The request requires **reasoning about what to do** rather than a single explicit action with a clear target
-- The request involves **extracting or processing data** from the page
-
-If in doubt, `interject_*` is always the safer choice — it reaches the full Actor with access to secrets, guidance, functions, and multi-step planning.""",
-            )
-
-            parts.add(
-                """Choosing between `web_act` and `desktop_act`
----------------------------------------------
-**`web_act` is the default for any task that involves a web browser.** This includes opening a browser, navigating to a URL, searching the web, clicking elements on a web page, typing into web forms, scrolling web content, or reading a web page.
-
-**`desktop_act` is only for non-browser native desktop interactions** — terminal commands, file manager operations, native application windows (not browsers), system dialogs, or desktop UI elements outside any browser window.
-
-If uncertain whether the task is browser or desktop work, prefer `web_act`.
-
-**Session lifecycle (`web_act`):**
-- `web_act` without `session_id` always creates a new visible browser session.
-- Pass `session_id` to reuse a session listed in `<active_web_sessions>`.
-- Call `close_web_session(session_id)` when done with a browser session to free resources.
-
-These tools are only available while the desktop is being actively shared.""",
-            )
-
-        parts.add(
-            _build_act_capabilities_block(
-                workspace_coordinator_name=workspace_coordinator_name,
-                user_desktop_control=user_desktop_control,
-            ),
+        coordinator_reference = _build_workspace_coordinator_deferral_block(
+            workspace_coordinator_name=workspace_coordinator_name,
+            is_org_workspace=is_org_workspace,
         )
-        parts.add(
-            _build_persistent_sessions_block(computer_fast_path=computer_fast_path),
-        )
+        if coordinator_reference:
+            parts.add(coordinator_reference)
 
-        if not is_voice_call and not is_coordinator:
-            parts.add(_build_base_proactive_meeting_offers_block())
-
-        if not is_coordinator:
-            parts.add(_build_base_console_knowledge_block())
-
-        if not is_coordinator:
-            parts.add(
-                _build_base_concurrent_action_ack_block(contact_id=contact_id),
-            )
-
-    # Add voice calls guide if on a voice call
+    # 15. Voice calls guide (when on a voice call).
     if is_voice_call:
         parts.add(voice_calls_guide)
 
-    # Add scenarios
+    # 16. Scenarios.
     phone_scenarios_section = f"\n{phone_scenarios}" if phone_scenarios else ""
     parts.add(
         f"""Scenarios
@@ -1679,7 +1742,7 @@ These tools are only available while the desktop is being actively shared.""",
 - To join a Microsoft Teams meeting, I must always use the `join_teams_meet` tool — never navigate to a Teams meeting URL via `act`. Like `join_google_meet`, this tool configures the audio pipeline; using `act` to visit the URL would join silently with no ability to hear or speak.""",
     )
 
-    # Add time footer (dynamic content - changes per call)
+    # 17. Current time (dynamic content — changes per call).
     parts.add(f"Current time: {now()}.", static=False)
 
     return parts
