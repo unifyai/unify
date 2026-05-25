@@ -8,9 +8,11 @@ applying the translation rules from
   than ad-hoc ``os.getenv`` calls. Missing credentials fail loud at
   the boundary instead of returning a generic 500 from deep inside
   the Twilio SDK.
-* Twilio client construction is module-local for now; promote to
-  ``unity/gateway/common/twilio.py`` once the second channel
-  (phone or whatsapp) lands and starts duplicating the helper.
+* Twilio client construction goes through
+  ``unity.gateway.common.twilio.build_twilio_client`` /
+  ``build_twilio_wa_client`` (promoted from the original
+  module-local helpers when ``phone/`` became the second channel
+  needing the same surface).
 * No envelope-schema changes -- this channel doesn't publish to the
   per-assistant Pub/Sub topic; it's a synchronous Twilio SMS /
   WhatsApp send.
@@ -32,7 +34,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from unity.gateway.credentials import CredentialNotFoundError, EnvCredentialStore
+from unity.gateway.common.twilio import build_twilio_client, build_twilio_wa_client
+from unity.gateway.credentials import EnvCredentialStore
 
 logger = logging.getLogger("unity.gateway.channels.social")
 
@@ -68,38 +71,6 @@ def _generate_verification_code(length: int = DEFAULT_CODE_LENGTH) -> str:
     return "".join(random.choices(string.digits, k=length))
 
 
-def _build_twilio_client(credentials: EnvCredentialStore):
-    """Construct a Twilio REST client from the SMS credentials.
-
-    Lazy-imported so unit tests that mock the Twilio SDK don't pay
-    the import cost.
-    """
-    from twilio.rest import Client as TwilioClient
-
-    try:
-        sid = credentials.get("TWILIO_ACCOUNT_SID")
-        token = credentials.get("TWILIO_AUTH_TOKEN")
-    except CredentialNotFoundError as exc:
-        raise RuntimeError(
-            "TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN must be set",
-        ) from exc
-    return TwilioClient(sid, token)
-
-
-def _build_twilio_wa_client(credentials: EnvCredentialStore):
-    """Construct a Twilio REST client from the WhatsApp credentials."""
-    from twilio.rest import Client as TwilioClient
-
-    try:
-        sid = credentials.get("TWILIO_WA_ACCOUNT_SID")
-        token = credentials.get("TWILIO_WA_AUTH_TOKEN")
-    except CredentialNotFoundError as exc:
-        raise RuntimeError(
-            "TWILIO_WA_ACCOUNT_SID and TWILIO_WA_AUTH_TOKEN must be set",
-        ) from exc
-    return TwilioClient(sid, token)
-
-
 _messaging_service_sid: str | None = None
 
 
@@ -113,7 +84,7 @@ def _get_messaging_service_sid(credentials: EnvCredentialStore) -> str:
     global _messaging_service_sid
     if _messaging_service_sid is not None:
         return _messaging_service_sid
-    twilio_client = _build_twilio_client(credentials)
+    twilio_client = build_twilio_client(credentials)
     for service in twilio_client.messaging.v1.services.list():
         if service.friendly_name == MESSAGING_SERVICE_NAME:
             _messaging_service_sid = service.sid
@@ -157,7 +128,7 @@ async def send_verification_message(request: VerificationRequest):
 
     if platform == "whatsapp":
         try:
-            twilio_client = _build_twilio_wa_client(credentials)
+            twilio_client = build_twilio_wa_client(credentials)
             twilio_client.messages.create(
                 content_sid="HX66a14c4ec2f4e8a9d1d14ac2fa439a29",
                 content_variables=json.dumps({"1": code}),
@@ -174,7 +145,7 @@ async def send_verification_message(request: VerificationRequest):
     elif platform == "phone":
         message = f"Your Unify verification code is: {code}"
         try:
-            twilio_client = _build_twilio_client(credentials)
+            twilio_client = build_twilio_client(credentials)
             messaging_sid = _get_messaging_service_sid(credentials)
             twilio_client.messages.create(
                 to=identifier,
