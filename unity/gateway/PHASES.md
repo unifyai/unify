@@ -46,53 +46,79 @@ package; nothing else is affected.
 
 ## Phase A.bis — Pub/Sub extraction
 
-**Goal.** Move the Pub/Sub-specific code currently inline in
-`comms_manager.py` into a `PubSubEventBroker` implementation that
-satisfies the Phase A `EventBroker` protocol. Wire selection through a
-`UNITY_EVENT_BROKER` env var (default `inmemory`; hosted sets
-`pubsub`).
+**Goal.** Move the Google Cloud Pub/Sub specifics currently inline in
+`comms_manager.py` (inbound subscriber) and `comms_utils.py` (outbound
+publisher) behind transport-agnostic protocols, so that
+`comms_manager.py` itself becomes free of any `google.cloud` imports.
 
-**Scope.**
+**Design refinement (from Phase A discovery).** The Pub/Sub
+ingress/egress code is **architecturally distinct** from the internal
+`EventBroker` (which is a Redis-like asyncio bus consumed by
+`ConversationManager.wait_for_events()` on `app:comms:*` channels).
+The external transport has different semantics: ack/nack, externally
+delivered envelope JSON, thread-pool callbacks. It gets its own
+protocol — `IngressTransport` — rather than overloading `EventBroker`.
+Outbound publishes get a sibling `OutboundTransport`.
 
-- New `unity/gateway/event_broker_pubsub.py` with `PubSubEventBroker`.
-  Wraps `google.cloud.pubsub_v1` behind the `EventBroker` interface
-  including the existing threading model (Pub/Sub callbacks on the
-  background thread pool marshalled into the asyncio loop via
-  `asyncio.run_coroutine_threadsafe`).
-- Update `unity/conversation_manager/event_broker.py` to switch on
-  `UNITY_EVENT_BROKER`: `inmemory` -> `InMemoryEventBroker`, `pubsub`
-  -> `PubSubEventBroker`.
-- Update `unity/conversation_manager/comms_manager.py` to remove the
-  inline Pub/Sub imports and code paths in favour of broker-only
-  calls. The `events_map` and `dispatch_envelope_payload` stay; only
-  the transport disappears.
-- Update `unity/conversation_manager/settings.py` to expose
-  `UNITY_EVENT_BROKER` as a typed setting (default `inmemory`).
-- Add `tests/gateway/test_event_broker_pubsub.py` exercising
-  `PubSubEventBroker` against a Pub/Sub emulator (or mocked, scoped
-  carefully).
-- Sanity-run the existing `tests/conversation_manager/` suite to
-  confirm the refactor preserves behaviour.
+**Subdivision.** Phase A.bis splits into four small, individually
+testable commits:
+
+1. **A.bis.1 — `IngressTransport` protocol.** Define the protocol in
+   `unity/gateway/ingress.py` with the `EnvelopeDispatcher` callable
+   contract. Purely additive; no behaviour change.
+2. **A.bis.2 — `InMemoryIngressTransport`.** Default implementation
+   that exposes `deliver(payload)` for callers (tests,
+   `LocalCommsIngress`) to inject envelopes synchronously. Additive.
+3. **A.bis.3 — `PubSubIngressTransport`.** Extract the Pub/Sub
+   subscriber code currently at `comms_manager.py:1435-1527` into a
+   standalone implementation satisfying `IngressTransport`. Still
+   additive: `comms_manager.py` keeps its inline copy operational.
+4. **A.bis.4 — Wire injection.** Refactor `CommsManager` to accept
+   an `IngressTransport` via constructor injection. Update
+   `unity/conversation_manager/main.py` to select transport via
+   `UNITY_INGRESS_TRANSPORT` env var (default `inmemory`, hosted sets
+   `pubsub`). Delete the now-dead helpers (`_publish_from_callback`,
+   `_ack_with_latency`) and the inline `subscribe_to_topic` /
+   `handle_message`. Run the full `tests/conversation_manager/` suite
+   to confirm parity.
+
+A subsequent commit in the same phase does the equivalent for
+outbound publishes from `comms_utils.py` (three call sites:
+`send_unify_message`, `publish_system_error`,
+`publish_assistant_desktop_ready`) via an `OutboundTransport`
+protocol with `LocalOutboundTransport` / `PubSubOutboundTransport`.
 
 **Out of scope.**
 
 - No `communication` changes. The hosted code path still reads from
   the same Pub/Sub topics and subscriptions it does today; only the
-  Unity-side broker abstraction changes.
+  Unity-side transport abstraction changes.
+- No envelope-schema changes. The `{thread, publish_timestamp, event}`
+  wire format is preserved bit-for-bit.
 
 **Production impact:** zero at deploy time (Unity is not redeployed
 in this PR). The risk is that the *next* Unity deployment (a future
-Cloud Build of `unity-comms-app` or whatever consumes Unity for the
-hosted session worker image) carries the refactored broker code.
-Mitigated by:
+Cloud Build of any Unity-based image) carries the refactored
+transports. Mitigated by:
 
 - Default env value (`inmemory`) leaves the test suite unchanged.
-- Hosted sets `UNITY_EVENT_BROKER=pubsub` via the existing deploy
+- Hosted sets `UNITY_INGRESS_TRANSPORT=pubsub` via the existing deploy
   envs.
 - Soak in staging for 24h before promoting to production.
 
-**Rollback:** revert the PR. The hosted deployment falls back to the
-inline `pubsub_v1` code path.
+**Rollback:** revert the affected commit(s). Each of A.bis.1-3 is
+independently revertable; A.bis.4 is the only one that touches
+`comms_manager.py` itself.
+
+**Factual corrections from Phase A discovery (apply during A.bis.4):**
+
+- There is no `assistant_topic()` helper. Topic names are inlined as
+  `f"unity-{agent_id}{env_suffix}"`. Subscription IDs are
+  `f"unity-{agent_id}{env_suffix}-sub"`. Both conventions must be
+  preserved by `PubSubIngressTransport` unchanged.
+- `_publish_from_callback` (`comms_manager.py:414-425`) and
+  `_ack_with_latency` (`comms_manager.py:427-432`) are dead code; the
+  refactor removes them.
 
 ---
 

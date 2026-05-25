@@ -45,6 +45,11 @@ from unity.gateway.event_broker import (
     PubSubConnection,
     PubSubMessage,
 )
+from unity.gateway.ingress import (
+    AckCallable,
+    EnvelopeDispatcher,
+    IngressTransport,
+)
 from unity.gateway.envelopes import (
     BaseEnvelope,
     BaseInboundEvent,
@@ -64,14 +69,17 @@ from unity.gateway.secrets import EnvSecretManager, SecretManager
 from unity.gateway.storage import LocalDiskStorage, Storage
 
 __all__ = [
+    "AckCallable",
     "BaseEnvelope",
     "BaseInboundEvent",
     "EmailEnvelope",
     "EmailReceivedEvent",
     "Envelope",
     "EnvSecretManager",
+    "EnvelopeDispatcher",
     "EventBroker",
     "GenericEnvelope",
+    "IngressTransport",
     "LocalDiskStorage",
     "PubSubConnection",
     "PubSubMessage",
