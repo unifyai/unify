@@ -57,6 +57,7 @@ from unity.gateway.outbound_inmemory import (
     InMemoryOutboundTransport,
     PublishedEnvelope,
 )
+from unity.gateway.outbound_pubsub import PubSubOutboundTransport
 from unity.gateway.factory import (
     KNOWN_TRANSPORT_KINDS,
     TRANSPORT_KIND_INMEMORY,
@@ -107,6 +108,7 @@ __all__ = [
     "PubSubConnection",
     "PubSubIngressTransport",
     "PubSubMessage",
+    "PubSubOutboundTransport",
     "SMSEnvelope",
     "SMSReceivedEvent",
     "SecretManager",
