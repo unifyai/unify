@@ -13,9 +13,9 @@ applying the translation rules from
   + ``SETTINGS.ENV_SUFFIX`` -- matches the
   ``f"gmail-notifications{env_suffix}"`` convention in
   ``communication/common/settings.py``.
-* Orchestra lookup helper kept channel-local for now; promote to
-  ``unity/gateway/common/orchestra.py`` once the second channel
-  (likely outlook) needs the same surface.
+* Orchestra lookup helper imported from
+  ``unity.gateway.common.orchestra`` (promoted when outlook became
+  the second channel needing the same surface in Phase B.4.prep).
 * ``print()`` debug calls replaced with structured logger entries.
 
 Wire behaviour (route paths, request/response shapes, status codes,
@@ -33,13 +33,13 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Any
 
-import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 from google.oauth2.credentials import Credentials as OAuthCredentials
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from unity.gateway.common.orchestra import lookup_assistant
 from unity.gateway.credentials import (
     CredentialNotFoundError,
     CredentialStore,
@@ -124,44 +124,6 @@ def get_admin_service(credentials: CredentialStore | None = None) -> Any:
     return build("admin", "directory_v1", credentials=creds)
 
 
-async def _lookup_assistant(
-    user_email: str,
-    credentials: CredentialStore,
-) -> dict:
-    """Fetch the assistant record matching ``user_email`` from Orchestra.
-
-    Kept channel-local until the second channel (likely outlook)
-    needs the same surface; promote to ``unity/gateway/common/
-    orchestra.py`` at that point per channels/README.md.
-    """
-    admin_key = credentials.get_optional("ORCHESTRA_ADMIN_KEY", "")
-    if not admin_key:
-        raise HTTPException(
-            status_code=500,
-            detail="ORCHESTRA_ADMIN_KEY not configured",
-        )
-    orchestra_url = SETTINGS.ORCHESTRA_URL
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{orchestra_url}/admin/assistant",
-            params={"email": user_email},
-            headers={"Authorization": f"Bearer {admin_key}"},
-            timeout=30.0,
-        )
-    if response.status_code != 200:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Assistant not found: {user_email}",
-        )
-    assistants = response.json().get("info", [])
-    if not assistants:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Assistant not found: {user_email}",
-        )
-    return assistants[0]
-
-
 async def get_gmail_service_async(
     sender_email: str,
     credentials: CredentialStore | None = None,
@@ -179,7 +141,7 @@ async def get_gmail_service_async(
     """
     credentials = credentials or EnvCredentialStore()
     try:
-        assistant = await _lookup_assistant(sender_email, credentials)
+        assistant = await lookup_assistant(sender_email, credentials)
     except HTTPException as exc:
         if exc.status_code >= 500:
             raise
