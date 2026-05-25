@@ -15,7 +15,7 @@
 **Open-source virtual teammates that take voice and video calls — and let you interrupt, redirect, or pause them mid-task without restarting.**
 
 <p align="center">
-  <img src="assets/hero-architecture.svg" alt="Unity's three-layer architecture: a Fast Brain on a real-time voice/video call with the user, a Slow Brain (ConversationManager) that always stays present, and an Actor (background reasoner) that does the deep work — extending the interaction-model / background-model pattern with a third supervisory tier." width="820">
+  <img src="assets/hero-architecture.png" alt="Unity's three-layer architecture: a Fast Brain on a real-time voice/video call with the user, a Slow Brain (ConversationManager) that always stays present, and an Actor (background reasoner) that does the deep work — extending the interaction-model / background-model pattern with a third supervisory tier." width="820">
 </p>
 
 Hop on a call with one. Send a follow-up text. Drop them a calendar invite. They remember who you are, what you talked about last week, and what they promised to do about it — across chat, voice, phone, video, and screen-share, and across your interjections, corrections, and pauses mid-task.
@@ -190,28 +190,9 @@ Unity follows the **interaction-model / background-model** split [recently artic
 
 A persistent **interaction loop** (the `ConversationManager`) stays present with the user across every medium. When work needs deeper reasoning than the conversation can produce instantly, it dispatches a **background reasoner** (the `Actor`), which writes Python plans over a back office of typed state managers. Crucially, **every operation in the system returns a live, steerable handle** — and those handles nest. A correction the user makes in chat propagates *down* through the dispatched action, into whatever manager call is currently running.
 
-```mermaid
-flowchart TB
-    classDef interaction fill:#fce7f3,stroke:#be185d,stroke-width:2px,color:#1f2937
-    classDef actor fill:#bbf7d0,stroke:#15803d,stroke-width:2px,color:#1f2937
-    classDef neutral fill:#f9fafb,stroke:#9ca3af,stroke-width:1px,color:#374151
-    classDef accent fill:#1f2937,stroke:#000,stroke-width:1px,color:#fef3c7
-
-    User(["User"]):::neutral
-    Mediums["💬 chat &nbsp;·&nbsp; 📞 voice / phone &nbsp;·&nbsp; 🎥 video / screen-share &nbsp;·&nbsp; ✉️ email · SMS"]:::neutral
-    Broker["⚡ Event Broker"]:::accent
-    CM["<b>ConversationManager</b> · interaction loop (always present)<br/>per-handle steering tools: pause · resume · interject · stop · ask"]:::interaction
-    Actor["<b>Actor</b> · background reasoner<br/>writes Python that composes primitives.*"]:::actor
-    BackOffice["<b>The Back Office</b> · typed state managers, English-language APIs<br/>Contacts · Knowledge · Tasks · Transcripts · Files · Images · Web · Secrets · ⚙️ Functions · 📖 Guidance"]:::neutral
-
-    User ==> Mediums ==> Broker ==> CM
-    CM ==>|"act(...)"| Actor
-    Actor ==>|"primitives.*"| BackOffice
-
-    BackOffice -.->|"SteerableToolHandle"| Actor
-    Actor -.->|"SteerableToolHandle + notifications"| CM
-    CM -.->|"streamed responses"| User
-```
+<p align="center">
+  <img src="assets/architecture-flow.png" alt="Unity's dispatch and steering flow: the user reaches the ConversationManager through mediums (chat, voice, video, email, SMS) and an event broker; the ConversationManager calls act(...) on the Actor, which calls primitives.* on the back office (Contacts, Knowledge, Tasks, Transcripts, Files, Images, Web, Secrets, Functions, Guidance). The steering bus runs the other way: SteerableToolHandles propagate from the back office up through the Actor to the ConversationManager, and streamed responses reach the user." width="820">
+</p>
 
 **Solid arrows** are dispatch flow. **Dotted arrows** are the *steering bus* — every level returns the same `SteerableToolHandle` type, so steering signals propagate down through the call stack while results and notifications propagate up.
 
@@ -219,35 +200,9 @@ flowchart TB
 
 This is the demo no other framework can run. The user's mid-flight redirect doesn't abort the run, doesn't append a second prompt, and doesn't wait for the next tool boundary — it propagates through the live nested call stack as a typed signal.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor User
-    participant CM as ConversationManager
-    participant Ax as Actor
-    participant TM as TranscriptManager
-
-    User->>CM: "find when Sarah last mentioned Berlin"
-    CM->>Ax: act(prompt)
-    activate Ax
-    Ax-->>CM: handle_A (SteerableToolHandle)
-    Note over CM: handle_A stored in<br/>in_flight_actions
-    Ax->>TM: transcripts.ask(...)
-    activate TM
-    TM-->>Ax: handle_B (nested SteerableToolHandle)
-
-    User->>CM: "actually include emails too"
-    Note over CM: slow brain wakes,<br/>picks the steering tool<br/>for handle_A
-    CM->>Ax: handle_A.interject("...also emails")
-    Ax->>TM: handle_B.interject("...also emails")
-    TM-->>Ax: refined results
-    deactivate TM
-    Ax-->>CM: notification (intermediate progress)
-    CM-->>User: "scanning emails too..."
-    Ax-->>CM: handle_A.result
-    deactivate Ax
-    CM-->>User: final answer
-```
+<p align="center">
+  <img src="assets/nested-steering-sequence.png" alt="Sequence diagram showing nested steering: the user asks 'find when Sarah last mentioned Berlin', the ConversationManager calls act(prompt) on the Actor which returns handle_A, the Actor calls transcripts.ask(...) on the TranscriptManager which returns the nested handle_B. Mid-flight the user interjects 'actually include emails too' — the interject signal flows down through handle_A and then through handle_B, the TranscriptManager returns refined results, the Actor notifies the ConversationManager, which streams 'scanning emails too...' back to the user before delivering the final answer." width="820">
+</p>
 
 ---
 
@@ -258,24 +213,9 @@ The clearest way to see what's distinctive about Unity is to draw the same diagr
 <details>
 <summary><b>OpenClaw</b> — channel-first dispatcher + single Pi agent loop</summary>
 
-```mermaid
-flowchart TB
-    classDef agent fill:#bbf7d0,stroke:#15803d,stroke-width:2px,color:#1f2937
-    classDef neutral fill:#f9fafb,stroke:#9ca3af,stroke-width:1px,color:#374151
-    classDef dispatch fill:#fed7aa,stroke:#c2410c,stroke-width:2px,color:#1f2937
-
-    User(["User"]):::neutral
-    Channels["💬 Telegram · Discord · Slack · SMS · Nodes (devices)"]:::neutral
-    Gateway["<b>Gateway daemon</b> · dispatcher<br/>per-session lane (1 active run); steer = abort + redeliver"]:::dispatch
-    PiAgent["<b>Pi embedded agent</b> · single tool-calling loop<br/>no supervising loop runs in parallel"]:::agent
-    Tools["<b>Tools</b> · core + plugin + MCP bridge<br/>core (web · exec · sessions_spawn) · 📞 voice-call plugin (discrete actions: initiate · speak · end) · mcporter → MCP servers"]:::neutral
-    State["<b>State</b> · local-first artefacts<br/>JSONL sessions · workspace files (📖 SKILL.md · SOUL.md · AGENTS.md) · memory plugin (one slot at a time)"]:::neutral
-
-    User ==> Channels ==> Gateway
-    Gateway ==>|"start / abort run"| PiAgent
-    PiAgent ==> Tools
-    PiAgent <==> State
-```
+<p align="center">
+  <img src="assets/openclaw-architecture.png" alt="OpenClaw architecture: the user reaches a Gateway daemon (channel-first dispatcher) through Telegram, Discord, Slack, SMS, or device Nodes; the Gateway starts or aborts runs on a single Pi embedded agent loop, which calls tools (core tools, voice-call plugin, mcporter → MCP servers) and reads/writes local-first state (JSONL sessions, workspace files like SKILL.md / SOUL.md / AGENTS.md, memory plugin). No persistent supervising loop." width="780">
+</p>
 
 OpenClaw is a local-first control plane with a wide channel matrix and a plugin marketplace. The Gateway *dispatches* runs but doesn't supervise them; voice is a plugin tool the agent invokes through discrete actions; steering is implemented as abort-and-redeliver. OpenClaw's `VISION.md` explicitly takes "no agent-hierarchy frameworks (manager-of-managers)" as a non-goal — a deliberate, principled bet in the opposite direction from Unity. If you want a personal-assistant **product** with broad channel coverage, OpenClaw is excellent. If you want a runtime built around mid-task steering and structured long-lived state, Unity is shaped differently.
 
@@ -284,25 +224,9 @@ OpenClaw is a local-first control plane with a wide channel matrix and a plugin 
 <details>
 <summary><b>Hermes Agent</b> — many surfaces, one monolithic loop</summary>
 
-```mermaid
-flowchart TB
-    classDef agent fill:#bbf7d0,stroke:#15803d,stroke-width:2px,color:#1f2937
-    classDef neutral fill:#f9fafb,stroke:#9ca3af,stroke-width:1px,color:#374151
-    classDef trigger fill:#fed7aa,stroke:#c2410c,stroke-width:2px,color:#1f2937
-
-    User(["User"]):::neutral
-    Cron["⏰ cron + webhooks (automation triggers)"]:::trigger
-    Surfaces["💬 CLI · TUI · Gateway (Telegram · Discord · Slack · SMS) · ACP (IDE)"]:::neutral
-    AIAgent["<b>AIAgent</b> · single ~12k-LOC sync tool-calling loop<br/>steer() = inject text into next tool result; interrupt() = thread-scoped abort flag"]:::agent
-    Tools["<b>Tools</b><br/>native tools · execute_code (ephemeral Python against fixed RPC stubs) · TTS / voice_mode / SMS (no live phone call) · delegate_tool · MCP servers"]:::neutral
-    State["<b>State</b><br/>SQLite sessions + FTS5 · MEMORY.md / USER.md workspace files · 📖 SKILL.md library · memory provider plugin (mem0 · honcho · ...)"]:::neutral
-
-    User ==> Surfaces
-    Cron ==> Surfaces
-    Surfaces ==> AIAgent
-    AIAgent ==> Tools
-    AIAgent <==> State
-```
+<p align="center">
+  <img src="assets/hermes-architecture.png" alt="Hermes Agent architecture: the user and cron + webhook automation triggers feed into a wide surfaces row (CLI, TUI, Gateway across Telegram/Discord/Slack/SMS, and ACP for IDEs); surfaces hand off to a single ~12k-LOC AIAgent loop (steer() injects text into the next tool result, interrupt() is a thread-scoped abort flag), which calls tools (native tools, execute_code, TTS / voice_mode / SMS, delegate_tool, MCP servers) and reads/writes state (SQLite sessions + FTS5, MEMORY.md / USER.md workspace files, SKILL.md library, memory provider plugin). No persistent supervising loop." width="780">
+</p>
 
 Hermes pairs a single ~12k-LOC `AIAgent` loop with four surfaces (CLI, TUI, gateway, ACP), a deep markdown skills library, SQLite+FTS5 transcripts, and best-in-class cron / webhook automation. Steering is implemented as text injection into the next tool result; interrupt is a thread-scoped flag. Live telephony isn't in the repo — SMS is, voice is local-only. If you want a polished personal-agent product with a wide messaging surface, broad model support, and mature automation triggers, Hermes is excellent. Unity is making a different bet on what the orchestration layer should look like.
 
