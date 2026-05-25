@@ -1,0 +1,51 @@
+# Slim runtime requirements for `python -m unity.gateway` (the
+# Phase B/C gateway aggregator) in container deploys.
+#
+# Excludes the heavy assistant-runtime deps (pyaudio, browser-use,
+# playwright, spacy, docling, livekit-agents, opencv, pymupdf, etc.)
+# so the comms-app image stays buildable on python:3.12-slim without
+# system-level compilers or audio libs.
+#
+# Use:
+#   pip install --no-deps /path/to/unity   # unity package itself
+#   pip install -r /path/to/unity/requirements-gateway.txt
+#
+# Why a requirements file and not a [gateway] pyproject extra:
+# pip's resolver re-evaluates base deps when installing extras, so
+# `pip install unity[gateway]` still tries to satisfy pyaudio etc.
+# A requirements file lets the Dockerfile install the gateway dep
+# set explicitly without going through unity's full base-deps
+# resolution.
+
+# Web framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+pydantic-core>=2.0.0
+python-dotenv>=1.0.0
+python-multipart>=0.0.22
+
+# HTTP clients
+httpx>=0.25.0
+aiohttp>=3.8.0
+requests>=2.31.0
+
+# GCP (channel publishes + Orchestra + GCS attachments)
+google-auth>=2.17.0
+google-api-python-client==2.70.0
+google-cloud-pubsub>=2.18.0
+google-cloud-storage>=3.4.1
+
+# Microsoft 365 (Outlook, Teams, SharePoint)
+azure-identity>=1.14.0
+msgraph-sdk>=1.0.0
+
+# Comms providers
+twilio>=8.0.0
+# LiveKit api-only (SIP trunk setup); NOT livekit-agents which is the
+# heavy assistant-runtime stack.
+livekit-api>=0.4.0
+
+# Telemetry (used by unity.logger module-level setup)
+opentelemetry-api>=1.20.0
+opentelemetry-sdk>=1.20.0
