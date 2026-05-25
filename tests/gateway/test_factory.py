@@ -19,9 +19,12 @@ from unity.gateway.factory import (
     TRANSPORT_KIND_LEGACY,
     TRANSPORT_KIND_PUBSUB,
     create_ingress_transport_factory,
+    create_outbound_transport,
 )
 from unity.gateway.ingress_inmemory import InMemoryIngressTransport
 from unity.gateway.ingress_pubsub import PubSubIngressTransport
+from unity.gateway.outbound_inmemory import InMemoryOutboundTransport
+from unity.gateway.outbound_pubsub import PubSubOutboundTransport
 
 # ---------------------------------------------------------------------------
 # Default / fallback behaviour -- the production safety net
@@ -159,3 +162,59 @@ def test_pubsub_factory_max_messages_defaults_to_ten() -> None:
     transport = factory()
     assert isinstance(transport, PubSubIngressTransport)
     assert transport._max_messages == 10
+
+
+# ---------------------------------------------------------------------------
+# create_outbound_transport (Phase A.bis.7.5)
+# ---------------------------------------------------------------------------
+
+
+def test_outbound_empty_kind_returns_none() -> None:
+    """Default unset env var must produce no transport -> legacy path."""
+    assert create_outbound_transport(kind="") is None
+
+
+def test_outbound_legacy_kind_returns_none() -> None:
+    assert create_outbound_transport(kind=TRANSPORT_KIND_LEGACY) is None
+
+
+def test_outbound_unknown_kind_returns_none() -> None:
+    """Misspelled env values must not crash; they fall back to legacy."""
+    assert create_outbound_transport(kind="poobsub") is None
+    assert create_outbound_transport(kind="PUBSUB") is None  # case-sensitive
+    assert create_outbound_transport(kind="not-a-real-kind") is None
+
+
+def test_outbound_inmemory_kind_returns_inmemory_transport() -> None:
+    transport = create_outbound_transport(kind=TRANSPORT_KIND_INMEMORY)
+    assert isinstance(transport, InMemoryOutboundTransport)
+
+
+def test_outbound_inmemory_does_not_require_project_id() -> None:
+    """InMemory transport doesn't need a project_id; should accept any."""
+    transport = create_outbound_transport(
+        kind=TRANSPORT_KIND_INMEMORY,
+        project_id="",
+    )
+    assert isinstance(transport, InMemoryOutboundTransport)
+
+
+def test_outbound_pubsub_kind_requires_project_id() -> None:
+    with pytest.raises(ValueError, match="project_id"):
+        create_outbound_transport(kind=TRANSPORT_KIND_PUBSUB, project_id="")
+
+
+def test_outbound_pubsub_kind_returns_pubsub_transport() -> None:
+    transport = create_outbound_transport(
+        kind=TRANSPORT_KIND_PUBSUB,
+        project_id="responsive-city-458413-a2",
+    )
+    assert isinstance(transport, PubSubOutboundTransport)
+    assert transport.project_id == "responsive-city-458413-a2"
+
+
+def test_outbound_returns_fresh_transport_each_call() -> None:
+    """Each call constructs a new transport (no module-level caching)."""
+    t1 = create_outbound_transport(kind=TRANSPORT_KIND_INMEMORY)
+    t2 = create_outbound_transport(kind=TRANSPORT_KIND_INMEMORY)
+    assert t1 is not t2
