@@ -50,6 +50,7 @@ from unity.gateway.ingress import (
     EnvelopeDispatcher,
     IngressTransport,
 )
+from unity.gateway.ingress_inmemory import InMemoryIngressTransport
 from unity.gateway.envelopes import (
     BaseEnvelope,
     BaseInboundEvent,
@@ -79,6 +80,7 @@ __all__ = [
     "EnvelopeDispatcher",
     "EventBroker",
     "GenericEnvelope",
+    "InMemoryIngressTransport",
     "IngressTransport",
     "LocalDiskStorage",
     "PubSubConnection",
