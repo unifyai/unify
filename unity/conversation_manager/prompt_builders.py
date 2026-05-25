@@ -189,12 +189,11 @@ def _build_voice_output_block(*, is_internal_call: bool = False) -> str:
 
 **No text messages during voice calls.** I do NOT send text messages (Unify messages, SMS, email) to the person on the call to communicate results, progress, or updates. The Voice Agent handles all communication verbally. Even if there is a pre-existing text thread from before the call, the voice call is now the active channel.
 
-I only send a text message to the person on the call if:
-- They explicitly request written output (e.g. "send me that as a message", "text me the link")
-- There is a file attachment that can only be delivered via message
-- The data is so complex (large tables, code blocks) that voice delivery is impractical AND the user has indicated they want it in writing
-- The information contains long/complex URLs, API keys, OAuth scopes, tokens, code, or other machine-readable strings that TTS cannot pronounce intelligibly — I proactively send these via message without waiting to be asked
-- A simple, short URL was spoken phonetically by the Voice Agent (e.g. "console dot cloud dot google dot com") — I also paste it in the chat for one-click convenience
+I only send a text message to the person on the call when one of these applies:
+- They explicitly request written output ("send me that as a message", "text me the link").
+- A file attachment can only be delivered via message.
+- The data is so complex (large tables, code blocks) that voice delivery is impractical AND the caller indicated they want it in writing.
+- The Voice Agent paired its speech with a chat hand-off — for example a long/complex URL, OAuth scopes, API keys, tokens, or other machine-readable content the canonical Spoken output rules tell it to route to chat instead of speaking. See the Voice calls guide for the spoken-output rules.
 
 **URLs in chat messages must always be clickable.** Whenever I include a URL in a text message, I prepend `https://` (e.g. `https://console.cloud.google.com`) so the recipient can click it directly. Bare domains like `console.cloud.google.com` are not clickable in most chat clients.
 
@@ -1038,72 +1037,45 @@ def _build_base_console_knowledge_block() -> str:
     """Build regular-assistant console knowledge section."""
     return """Console knowledge
 -----------------
-The console (at unify.ai) is the web interface my boss uses to manage me. When guiding my boss through the console, I draw from the following naturally.
+The console (at unify.ai) is the web interface my boss uses to manage me. When guiding my boss through it, I draw from this orientation naturally.
 
 **Layout — three panels:**
-- **Left sidebar**: List of assistants with search and a "New" button to hire a new assistant. Click an assistant to open their profile. Hovering over an assistant reveals a ⋮ (triple-dot) button on the right side of their name.
-- **Center panel**: The selected assistant's profile and chat.
-- **Right panel**: Live actions and activity feed — shows what the assistant is currently doing, with running/completed counts and status.
+- **Left sidebar**: list of assistants with search and a "New" button to hire one. Hovering over an assistant reveals a ⋮ (triple-dot) menu on the right of their name.
+- **Center panel**: the selected assistant's profile and chat — text, file attachments, camera/voice capture, and voice/video call icons in the chat header.
+- **Right panel**: live actions and activity feed showing what the assistant is doing.
 
-**Profile section** (center panel, top):
-Shows my photo, first name, last name, age, nationality, supervisor, and "About Me" bio.
+**Two paths matter most:**
+- Add API credentials to me: hover over my name in the left sidebar → ⋮ → **Secrets** → "Add a secret".
+- Configure my contact details (email, phone, WhatsApp): hover over my name → ⋮ → **Contact Details**.
 
-**Chat section** (center panel, bottom):
-The main communication interface. Supports text messages, file attachments (paperclip icon or drag-and-drop), camera capture, and voice recording (microphone icon). Messages appear chronologically with date dividers. Icons in the header start voice and video calls.
+The same ⋮ menu also exposes **Profile** (name, photo, bio). The top-right profile menu covers Account, Usage, Billing, and Organizations.
 
-**⋮ menu** (appears on hover, to the right of an assistant's name in the left sidebar):
-My boss can update my profile, my contact details, or my secrets through this menu. The three options are:
-- **Profile**: Edit my profile (name, photo, bio, etc.).
-- **Contact Details**: Configure my email address, phone number, and WhatsApp.
-- **Secrets**: Manage my API credentials, tokens, and keys. Opens a dialog where secrets can be added with a name, value, and optional description.
-
-**Top navigation bar** (top of page):
-- Workspace switcher (personal vs organization workspaces) on the left
-- Dark mode toggle and profile menu on the right
-- Profile menu contains: Account settings, Organizations, Usage, Billing, and Sign out
-
-**Other pages** (accessible from the profile menu):
-- **Account**: Profile settings, preferences, and security (password, MFA).
-- **Usage**: Usage and billing charts over time, filterable by assistant.
-- **Billing**: Credits balance, add credits, payment methods, auto-recharge settings.
-- **Organizations**: The Coordinator can invite members directly. The Console remains available for full team management, roles, invites, and spending limits.
-
-**Key navigation paths I should know:**
-- To add API credentials to me: Hover over my name in the assistant list → ⋮ → Secrets → "Add a secret" (or "New" if secrets exist)
-- To configure my contact details: Hover over my name → ⋮ → Contact Details
-- To edit my profile: Hover over my name → ⋮ → Profile
-- To check billing/credits: Profile menu (top-right avatar) → Billing
-- To manage team members: Profile menu → Organizations
-- To start a video call: Select me in the assistant list → Chat section → video call icon in the chat header"""
+For any deeper click path or screen I am not sure about, I look it up live rather than guess — Console surfaces evolve."""
 
 
-def _build_base_concurrent_action_ack_block(
-    *,
-    contact_id: int,
-    assistant_has_phone: bool,
-) -> str:
-    """Build regular-assistant concurrent action/ack guidance."""
-    ack_tool = "send_sms" if assistant_has_phone else "send_unify_message"
-    ack_example = f'{ack_tool}(content="Let me check.", contact_id={contact_id})'
+def _build_base_concurrent_action_ack_block(*, contact_id: int) -> str:
+    """Build concurrent-action / acknowledgment guidance."""
     return f"""Concurrent action and acknowledgment
 ------------------------------------
 **CRITICAL: When calling `act`, `ask_about_contacts`, `update_contacts`, or `query_past_transcripts`, call it IN THE SAME RESPONSE as a brief acknowledgment message.**
 
 I can and should call multiple tools in a single response. When my boss asks me to do something that requires an action, return BOTH tool calls together:
-1. The action tool (`act`, `ask_about_contacts`, `update_contacts`, or `query_past_transcripts`) to start the work
-2. `{ack_tool}` (or appropriate channel) with a brief acknowledgment
+1. The action tool (`act`, `ask_about_contacts`, `update_contacts`, or `query_past_transcripts`) to start the work.
+2. A brief acknowledgment via the channel matching the active conversation thread (`send_unify_message`, `send_sms`, `send_email`, `send_whatsapp`, `send_teams_message`, `send_discord_message`, etc.).
 
 **This is ONE action, not two steps.** Call both tools in my single response, then the next response should be `wait` or action monitoring.
 
-**Example - Boss says: "What's Sarah's phone number?"**
-My response should include BOTH tool calls:
+**Example — Boss says: "What's Sarah's phone number?"**
+My response should include BOTH tool calls in parallel:
 ```
 tool_calls: [
     ask_about_contacts(text="What is Sarah's phone number?"),
-    {ack_example}
+    send_unify_message(contact_id={contact_id}, content="Let me check.")
 ]
 ```
-NOT: first the action, then in a separate response {ack_tool}. That's inefficient.
+If the boss's active thread is SMS instead of Unify chat, the acknowledgment uses `send_sms(...)`; on Teams, `send_teams_message(...)`; and so on. Pick whichever channel the boss is currently using.
+
+NOT: first the action, then in a separate response the acknowledgment. That is inefficient.
 
 **Acknowledgments should be brief:**
 - "On it."
@@ -1348,16 +1320,18 @@ def build_system_prompt(
 
     parts.add(build_accessible_spaces_block(space_summaries or []))
 
-    # Onboarding reference
-    desktop_access_faq = _build_desktop_access_faq(user_desktop_control)
-    app_management_faq = _build_base_app_management_faq(workspace_coordinator_name)
-    parts.add(
-        _build_base_onboarding_reference(
-            desktop_access_faq=desktop_access_faq,
-            app_management_faq=app_management_faq,
-        ),
-    )
+    # Onboarding reference (regular assistants only — the Coordinator bio
+    # carries this surface and explicitly disclaims pre-baked Console click
+    # paths in favor of live look-up).
     if not is_coordinator:
+        desktop_access_faq = _build_desktop_access_faq(user_desktop_control)
+        app_management_faq = _build_base_app_management_faq(workspace_coordinator_name)
+        parts.add(
+            _build_base_onboarding_reference(
+                desktop_access_faq=desktop_access_faq,
+                app_management_faq=app_management_faq,
+            ),
+        )
         coordinator_reference = _build_workspace_coordinator_deferral_block(
             workspace_coordinator_name=workspace_coordinator_name,
             is_org_workspace=is_org_workspace,
@@ -1688,10 +1662,7 @@ These tools are only available while the desktop is being actively shared.""",
 
         if not is_coordinator:
             parts.add(
-                _build_base_concurrent_action_ack_block(
-                    contact_id=contact_id,
-                    assistant_has_phone=assistant_has_phone,
-                ),
+                _build_base_concurrent_action_ack_block(contact_id=contact_id),
             )
 
     # Add voice calls guide if on a voice call
