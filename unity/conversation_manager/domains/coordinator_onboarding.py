@@ -40,7 +40,17 @@ _NOTIFICATION_TYPE = "CoordinatorOnboarding"
 _SUBTYPE_DEFAULT_MESSAGES: dict[str, str] = {
     "workspace_connected": "The user just connected their workspace to you.",
     "integration_connected": "The user just connected a new integration to you.",
+    "onboarding_session_started": (
+        "The user just opened the onboarding session with you — they are "
+        "waiting for you to open with one short turn."
+    ),
 }
+
+
+# Subtype constants used in branch logic below — kept in sync with
+# the orchestra-side ``SUBTYPE_*`` constants in
+# ``orchestra/services/coordinator_service.py``.
+_SUBTYPE_ONBOARDING_SESSION_STARTED = "onboarding_session_started"
 
 
 def _coordinator_onboarding_event_from_payload(
@@ -101,8 +111,51 @@ def _coordinator_onboarding_notification_text(
     and (c) previews the next pending step. The wording stays
     deliberately terse — extended onboarding guidance lives in the
     system-prompt rule, not the notification.
+
+    The ``onboarding_session_started`` subtype is special: it doesn't
+    narrate a milestone, it asks for the *first* line of the session.
+    The brain must decide intro-vs-recap by looking at whether prior
+    Coordinator messages exist in the transcript — the wording below
+    points it at that signal explicitly so the rule lives where the
+    decision happens.
     """
     body = (event.message or _SUBTYPE_DEFAULT_MESSAGES.get(event.subtype, "")).strip()
+    subtype_hint = f"[onboarding subtype: {event.subtype}]"
+    if event.subtype == _SUBTYPE_ONBOARDING_SESSION_STARTED:
+        medium = ""
+        details = event.details if isinstance(event.details, dict) else {}
+        medium_raw = details.get("medium")
+        if isinstance(medium_raw, str) and medium_raw:
+            medium = medium_raw
+        completed_steps = details.get("completed_step_ids")
+        completed_hint = ""
+        if isinstance(completed_steps, list) and completed_steps:
+            joined = ", ".join(str(item) for item in completed_steps if item)
+            if joined:
+                completed_hint = (
+                    f" The console reports these onboarding steps as already done: "
+                    f"{joined}."
+                )
+        guidance = (
+            "Open the session with exactly one short message. If you have *no* "
+            "prior assistant messages in the transcript history, introduce "
+            "yourself briefly as the user's coordinator assistant, say you'll "
+            "help them get set up, and invite them to start by connecting their "
+            "workspace. If prior assistant messages exist, skip the intro and "
+            "open with a one-sentence recap of what's been done so far plus the "
+            "single next step — do NOT re-introduce yourself."
+        )
+        medium_note = ""
+        if medium == "call":
+            medium_note = (
+                " (Voice call: this notification is informational; the call "
+                "agent generates its own spoken opener. No chat reply needed.)"
+            )
+        elif medium == "chat":
+            medium_note = " (Chat: send exactly one short chat message.)"
+        composed = f"{subtype_hint} {body} {guidance}{completed_hint}{medium_note}"
+        return composed.strip()
+
     guidance = (
         "Acknowledge this in one short sentence to the user, name the thing they "
         "just completed, and preview the next pending onboarding checklist step. "
@@ -110,7 +163,6 @@ def _coordinator_onboarding_notification_text(
         "is active, prefer a single spoken line; otherwise send a single chat "
         "message."
     )
-    subtype_hint = f"[onboarding subtype: {event.subtype}]"
     if not body:
         return f"{subtype_hint} {guidance}"
     return f"{subtype_hint} {body} {guidance}"
@@ -122,9 +174,18 @@ async def _handle_coordinator_onboarding_event(
 ) -> bool:
     """Surface one onboarding event to the brain.
 
-    Returns True so the caller can trigger an LLM run — the brain's
-    next turn composes the acknowledgement and routes it through the
-    existing chat / voice primitives.
+    Returns True when the caller should trigger an LLM run — the
+    brain's next turn composes the acknowledgement and routes it
+    through the existing chat / voice primitives.
+
+    The ``onboarding_session_started`` event with ``medium == 'call'``
+    is the one exception: the voice agent's own sidecar greeting
+    already produces the opener for that branch, so triggering a
+    slow-brain run on top would duplicate the opener (the brain
+    would emit a chat message right as the call is connecting). We
+    still push the notification — keeps the brain aware that the
+    user just opened a session in case it matters for a later turn —
+    but suppress the immediate run.
     """
     cm.notifications_bar.push_notif(
         _NOTIFICATION_TYPE,
@@ -136,4 +197,8 @@ async def _handle_coordinator_onboarding_event(
         "Coordinator onboarding narration requested; "
         "brain will acknowledge subtype=%s." % event.subtype,
     )
+    if event.subtype == _SUBTYPE_ONBOARDING_SESSION_STARTED:
+        details = event.details if isinstance(event.details, dict) else {}
+        if details.get("medium") == "call":
+            return False
     return True

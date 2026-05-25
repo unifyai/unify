@@ -284,14 +284,24 @@ async def send_unify_message(
     if attachment:
         event_data["attachments"] = [attachment]
 
+    message_data = {
+        "thread": "unify_message_outbound",
+        "event": event_data,
+    }
+
+    # The Unify chat surface (Console) always reads outbound messages
+    # from the assistant's Pub/Sub topic, so we must publish there even
+    # when running in ``LOCAL_COMMS_MODE=local``.  The in-memory local
+    # outbox is kept as a best-effort side channel for the local Twilio
+    # / email simulators (and the existing test that pokes at it),
+    # which never consumed Pub/Sub.
     if _use_local_comms():
-        success = await _publish_local_outbox_async(
-            {
-                "thread": "unify_message_outbound",
-                "event": event_data,
-            },
-        )
-        return {"success": success}
+        try:
+            await _publish_local_outbox_async(message_data)
+        except Exception as e:
+            LOGGER.debug(
+                f"{ICONS['comms_outbound']} Local outbox mirror failed (non-fatal): {e}",
+            )
 
     try:
         message_id = _publish_to_assistant_topic(

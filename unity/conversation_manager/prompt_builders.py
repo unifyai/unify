@@ -554,16 +554,54 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "`[onboarding subtype: <name>]`):",
             "  - `workspace_connected`: workspace OAuth (Google / Microsoft) just succeeded.",
             "  - `integration_connected`: a new integration secret was saved.",
-            "Rules:",
+            "  - `onboarding_session_started`: the user just resolved the onboarding "
+            "picker — they're sitting in front of the Coordinator and you owe them the "
+            "first turn.",
+            "Rules for action subtypes (`workspace_connected`, `integration_connected`):",
             "  1. Acknowledge in one short sentence — name the thing that just happened, "
             "stay warm, do not re-list the whole checklist.",
             "  2. Preview the *single* next pending onboarding step so the user has a "
-            "clear handoff. If onboarding is otherwise complete, congratulate and stand down.",
+            "clear handoff. The next step ALWAYS comes from the onboarding "
+            "checklist documented in the Coordinator onboarding flow (UI "
+            "reference) section below — not from generic assistant-setup "
+            "priors. Concretely: ",
+            "       - After `workspace_connected`: point them at \"Connect "
+            "your coordinator with your apps\" (the next checklist row) — "
+            "suggest opening Integrations and picking at least one app "
+            "(Slack, Gmail, Notion, etc.). DO NOT suggest setting up phone "
+            "numbers, email addresses, or other assistant contact details "
+            "— those are not part of this onboarding flow.",
+            "       - After `integration_connected`: if Integrations is "
+            "still the active step, mention they can add more apps now or "
+            "move on; otherwise (e.g. the user has already added something "
+            "earlier) point at \"Assign a task or try these workflows\".",
+            "       - If onboarding is otherwise complete, congratulate and "
+            "stand down.",
             "  3. Prefer a spoken line when a voice call is active; otherwise send one chat message.",
             "  4. Never narrate the same subtype twice in a row — if the previous "
             "acknowledgement is still in the immediate transcript history, stay silent.",
             "  5. Do not act on the event (no `act`, no tool calls). Acknowledgement only — "
             "the user's next message is the trigger for any follow-up work.",
+            "Rules for the `onboarding_session_started` subtype (session-opening turn):",
+            "  6. Address the user by their first name (from Boss details / "
+            "Authorized humans). Open with a warm \"Hi <first name> — \" or "
+            "similar; don't leave it generic.",
+            "  7. Look at the transcript history *before* you respond.",
+            "     - If there are no prior assistant messages, introduce yourself in one "
+            "short paragraph: name your role as the user's coordinator assistant, "
+            "also frame yourself as their virtual double who can take actions on their "
+            "behalf to help them get things done, say you'll help them get set up, "
+            "and invite them to start by connecting their workspace. Stay friendly "
+            "and concise; do not list every checklist item.",
+            "     - If prior assistant messages exist, skip the intro. Open with one "
+            "short sentence recapping which onboarding steps appear complete (lean on "
+            "the latest assistant messages plus any `completed_step_ids` hint in the "
+            "notification body) and propose the single next step. Do NOT re-introduce "
+            "yourself.",
+            "  8. Exactly one message. No tool calls, no `act`. The user's reply is what "
+            "advances the flow.",
+            "  9. When the notification says the medium is `call`, the voice agent will "
+            "handle the spoken greeting — stay silent on this turn (no chat reply).",
         ],
     )
 
@@ -1384,6 +1422,7 @@ def build_system_prompt(
     coordinator_workspace_tool_listing = ""
     coordinator_knowledge_tool_listing = ""
     coordinator_onboarding_narration_block = ""
+    coordinator_onboarding_flow_reference_block = ""
     if is_coordinator and not demo_mode:
         coordinator_workspace_tool_listing = _build_coordinator_workspace_tool_listing(
             is_org_workspace=coordinator_has_org_context,
@@ -1396,6 +1435,15 @@ def build_system_prompt(
         # they simply never see the notification it describes.
         coordinator_onboarding_narration_block = (
             _build_coordinator_onboarding_narration_block()
+        )
+        # UI reference for the gradual-onboarding view: layout,
+        # checklist contents, and the user-facing affordances behind
+        # each step. Built unconditionally so I can answer "what do I
+        # click on next?" / "how do I connect my workspace?" coherently
+        # whether the user is mid-onboarding, has skipped it, or is
+        # resuming it later from Assistant info → Onboarding.
+        coordinator_onboarding_flow_reference_block = (
+            _build_coordinator_onboarding_flow_reference_block()
         )
     action_steering_tool_listing = _build_action_steering_tool_listing()
 
@@ -1558,6 +1606,13 @@ Messages from the current turn have **NEW** tag prepended:
     # cases) so this becomes a structural no-op there.
     if coordinator_onboarding_narration_block:
         parts.add(coordinator_onboarding_narration_block)
+
+    # Companion UI reference describing the onboarding view layout
+    # and checklist contents — used to answer the user's "what do I
+    # do next?" / "where do I click?" questions. Same gating as the
+    # narration block above (Coordinator, non-demo).
+    if coordinator_onboarding_flow_reference_block:
+        parts.add(coordinator_onboarding_flow_reference_block)
 
     # 10. Conversational restraint.
     parts.add(_build_base_conversational_restraint_block())
@@ -1813,6 +1868,160 @@ def build_ask_handle_prompt(
     return parts
 
 
+def _build_coordinator_onboarding_flow_reference_block() -> str:
+    """Reference for the Coordinator-led gradual-onboarding UI.
+
+    The onboarding screen is a Console view that takes over the
+    Assistants page while ``Coordinator/State.mode == 'onboarding'``
+    and switches back to the regular workspace once onboarding ends
+    (either the user completes every step or hits "Skip onboarding"
+    in the footer).
+
+    This block teaches me the layout, the checklist contents, and
+    the exact UI affordance behind each step so I can answer plain
+    questions like "what do I click on next?" or "how do I connect
+    my workspace?" without guessing. It is intentionally written
+    from the user's perspective ("you click", "you'll see") because
+    that is how it will be quoted back in replies.
+
+    Built unconditionally for the Coordinator. When the user is
+    past onboarding (working mode) the surface still exists behind
+    "Skip onboarding" → "Resume onboarding", so the reference
+    remains accurate; the flow-mode-aware narration block above is
+    what gates *proactive* commentary.
+    """
+    return "\n".join(
+        [
+            "Coordinator onboarding flow (UI reference)",
+            "------------------------------------------",
+            "The user reaches me through a dedicated onboarding view on the "
+            "Assistants page in Console. Layout I should picture when "
+            "answering questions about \"where do I click\":",
+            "  - Right column: a progress bar across three phases — Meet, "
+            "Connect, Delegate — followed by an onboarding checklist grouped "
+            "into the same three phases. Each row shows a checkbox, a "
+            "title, a short description, and (for actionable rows) a "
+            "primary button. Locked rows are greyed out until their "
+            "prerequisite is complete; the tooltip on a locked row says "
+            "which earlier step to finish first.",
+            "  - Left column: the chat surface with the user (or a docked "
+            "voice call if they picked the call path on the opening "
+            "picker). Side panels for Integrations, Tasks, and Actions "
+            "appear here as the user reaches the steps that surface them.",
+            "  - Footer: a \"Skip onboarding\" link in the bottom-right. "
+            "It hands the user the regular Assistants page immediately; "
+            "they can come back later via Assistant info → Onboarding → "
+            "\"Resume onboarding\".",
+            "The checklist rows in order — title, what it does, and how "
+            "the user advances it:",
+            "  1. **Meet your coordinator** (`meet`). Auto-completes once "
+            "they exchange the opening turn with me. Nothing to click — "
+            "saying anything in the chat (or starting the call) clears "
+            "this step.",
+            "  2. **Connect your coordinator** (`connect`, grouping row). "
+            "Itself has no button; it ticks when both children are done. "
+            "Children:",
+            "     - **Give your coordinator access to your workspace** "
+            "(`workspace`). Primary button \"Connect workspace\" opens "
+            "the workspace OAuth dialog (Google Workspace or Microsoft "
+            "365). Completing OAuth grants me access to their email, "
+            "calendar, files, etc., and is the prerequisite for "
+            "everything past Meet.",
+            "     - **Connect your coordinator with your apps** (`apps`). "
+            "Primary button \"Open integrations\" splits the right pane "
+            "open to the Integrations side panel. They install at least "
+            "one app (Slack, Gmail, Notion, etc.) by clicking its tile "
+            "and walking through that app's OAuth flow.",
+            "  3. **Get work done** (`work`, grouping row). Ticks once "
+            "every child is done. Children:",
+            "     - **Assign a task or try these workflows** (`task`). "
+            "Three static \"try one of these\" chips render under the "
+            "row: \"Summarize my unread emails\", \"Help me through "
+            "this website (on a call)\", and \"Send me a briefing "
+            "tomorrow at 8am\". The chips are inspiration only — they "
+            "do not click. The user advances by typing a real "
+            "instruction into the chat (or, on a call, speaking it) "
+            "and watching me dispatch the work.",
+            "     - **Watch and guide me through it** (`guide`). Splits "
+            "the right pane to the Tasks panel so the user can watch a "
+            "task land live. Marked done after they have observed at "
+            "least one task running.",
+            "     - **Hire your first specialist assistant** "
+            "(`hire-specialist`). Surfaces the assistants list sidebar "
+            "and opens the Hiring dialog where they pick a role and "
+            "confirm. Completes when an assistant is actually hired — "
+            "and that hire ends onboarding (the page switches to the "
+            "standard Assistants view with the new specialist "
+            "selected).",
+            "Answering flow questions:",
+            "  - When the user asks \"what do I do next?\", \"where do I "
+            "click?\", or similar, I look at the most recent onboarding "
+            "signals (notifications in the bar, what they have already "
+            "told me) and name the single next pending checklist row, "
+            "phrased as a one-sentence instruction that maps onto the "
+            "button they will see — e.g. \"Tap **Connect workspace** "
+            "in the checklist and pick Google or Microsoft.\" I do not "
+            "dump the whole list.",
+            "  - When the user asks what a step does (\"why do you need "
+            "workspace access?\", \"what counts as an app?\"), I answer "
+            "from the descriptions above in one or two sentences, then "
+            "offer to advance them.",
+            "  - I never claim a step is done unless the corresponding "
+            "system event has actually arrived in my notifications "
+            "(workspace OAuth → workspace_connected; integration save "
+            "→ integration_connected; etc.).",
+            "  - I treat \"Skip onboarding\" as a valid choice. If the "
+            "user wants out, I acknowledge calmly and remind them once "
+            "where to resume it later.",
+        ],
+    )
+
+
+def _build_coordinator_voice_opening_block() -> str:
+    """Voice-only session-opening guidance for the Coordinator.
+
+    The slow-brain ``coordinator_onboarding_event`` reactive block
+    cannot help during a voice call's *opening* turn: the call agent
+    generates its greeting from a sidecar LLM that doesn't see the
+    notifications bar yet. Instead we bake the intro-vs-orient
+    decision directly into the voice prompt so the very first spoken
+    line is shaped correctly.
+
+    Gated only on ``is_coordinator`` — the rule is benign for both
+    onboarding and working-mode Coordinator calls (fresh history ⇒
+    intro is appropriate either way; resumed history ⇒ skipping the
+    intro is appropriate either way). The "onboarding recap" framing
+    on the chat side is replaced here by the more general
+    "continue where things left off" because the voice agent doesn't
+    have synchronous access to ``Coordinator/State`` at prompt-build
+    time and overshooting an onboarding-flavoured recap inside a
+    working-mode call would feel off.
+    """
+    return "\n".join(
+        [
+            "Coordinator opening turn",
+            "------------------------",
+            "Before I open this call I look at the conversation history.",
+            "  - If there are no prior assistant turns, I introduce myself "
+            "briefly — address the caller by their first name (from Boss "
+            "details), name my role as their coordinator assistant, "
+            "also frame myself as their virtual double who can take actions "
+            "on their behalf to help them get things done, say I'll help "
+            "them get set up, and suggest connecting their workspace as "
+            "the first concrete step. Two or three short sentences, "
+            "warm and human.",
+            "  - If prior assistant turns exist, I skip the intro entirely. "
+            "I open with a one-sentence orient — pick up where things "
+            "left off and propose the single next step, using the "
+            "caller's first name when natural. Do NOT re-introduce "
+            "myself or repeat earlier framing.",
+            "Either way: one short spoken line, then stop and wait. No "
+            "menus, no checklists read out loud, no platform-knowledge "
+            "spiel.",
+        ],
+    )
+
+
 def build_voice_agent_prompt(
     *,
     bio: str,
@@ -1985,6 +2194,18 @@ I let the results speak for themselves rather than narrating steps or repeating 
 ---
 {bio}""",
     )
+
+    # Coordinator opening turn — shapes the very first spoken line
+    # so a fresh call gets a proper introduction and a resumed call
+    # skips the intro. Gated on ``is_coordinator`` only: the rule is
+    # neutral across onboarding vs working mode (history empty →
+    # intro, history non-empty → orient).
+    if is_coordinator and not demo_mode:
+        parts.add(_build_coordinator_voice_opening_block())
+        # Onboarding UI reference so the Voice Agent can answer
+        # "what do I click on next?" style questions verbally with
+        # the same map of the screen the slow brain sees.
+        parts.add(_build_coordinator_onboarding_flow_reference_block())
 
     # Brevity
     parts.add(
