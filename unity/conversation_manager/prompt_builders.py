@@ -156,27 +156,36 @@ def _build_workspace_coordinator_deferral_block(
     workspace_coordinator_name: str | None,
     is_org_workspace: bool,
 ) -> str:
-    """Build the regular-assistant block that points privileged operations to the Coordinator."""
+    """Build the block that names the user's Coordinator alongside the assistant.
+
+    The Coordinator is a unified stand-in: it can take any request the user
+    would normally bring to me, AND it owns the org-admin / setup surfaces
+    that I do not. This block helps me route shaping-the-team work to it
+    when that is the natural fit, without pretending I cannot help with the
+    everyday request myself.
+    """
     if workspace_coordinator_name is None:
         return ""
 
     scope_label = "organization" if is_org_workspace else "workspace"
-    escalated_operations = [
-        "- create or remove colleagues",
-        "- create or remove team spaces",
-        "- add or remove space members",
+    coordinator_surface = [
+        "- inviting, removing, or changing roles for colleagues",
+        "- creating or removing team spaces and managing who belongs to them",
+        "- placing shared credentials, integrations, or other org-level setup",
     ]
     if is_org_workspace:
-        escalated_operations.append("- invite org members")
-    escalated_operations_block = "\n".join(escalated_operations)
+        coordinator_surface.append(
+            "- organization-wide configuration (members, billing handoffs, spending limits)",
+        )
+    coordinator_surface_block = "\n".join(coordinator_surface)
     return f"""Team Coordinator
 ----------------
-This {scope_label} has a Coordinator named {workspace_coordinator_name}. I handle the request directly unless it needs privileged membership or colleague-shaping operations.
+The user also has a Coordinator named {workspace_coordinator_name} in this {scope_label}. {workspace_coordinator_name} is a unified stand-in: any request the user could bring to me they could also bring to {workspace_coordinator_name}, AND {workspace_coordinator_name} owns the setup and admin surfaces I don't.
 
-Escalate to {workspace_coordinator_name} when the user asks for one of these operations:
-{escalated_operations_block}
+{workspace_coordinator_name} is the natural place for:
+{coordinator_surface_block}
 
-If the request matches that list, I name {workspace_coordinator_name} explicitly and offer a concise summary the user can bring to the Coordinator. Otherwise, I proceed with the request myself."""
+When the user's request fits that list, I propose handing it to {workspace_coordinator_name} explicitly — naming them and offering a concise hand-off summary — rather than fumbling at the boundary myself. For day-to-day work the user brings to me, I handle it directly; I do not redirect them to {workspace_coordinator_name} unnecessarily."""
 
 
 def _build_voice_output_block(*, is_internal_call: bool = False) -> str:
@@ -637,7 +646,7 @@ def _build_base_app_management_faq(workspace_coordinator_name: str | None) -> st
     """Build app-management FAQ text for non-coordinator onboarding."""
     if workspace_coordinator_name:
         return f"""**Q: Can you help me manage my apps and online services?**
-A: Yes. I can walk through app setup and day-to-day usage directly, including live screen-share guidance when helpful. If a credential needs to be shared across the team or org, I can route that handoff to {workspace_coordinator_name}."""
+A: Yes — I can walk through app setup and day-to-day usage directly, including live screen-share guidance when that's easier. If a credential needs to be shared across the team or org (rather than scoped to just me), {workspace_coordinator_name} is the right person to place it, and I'll happily hand that part off."""
     return """**Q: Can you help me manage my apps and online services?**
 A: Yes. The easiest way to get started is for us to share screens — I can walk you through connecting each service step by step. Under the hood, it usually involves sharing API credentials or access tokens with me through a secure page on the console, but you don't need to worry about the details — I'll guide you through the whole thing."""
 
