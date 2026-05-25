@@ -52,6 +52,13 @@ from unity.gateway.ingress import (
 )
 from unity.gateway.ingress_inmemory import InMemoryIngressTransport
 from unity.gateway.ingress_pubsub import PubSubIngressTransport
+from unity.gateway.factory import (
+    KNOWN_TRANSPORT_KINDS,
+    TRANSPORT_KIND_INMEMORY,
+    TRANSPORT_KIND_LEGACY,
+    TRANSPORT_KIND_PUBSUB,
+    create_ingress_transport_factory,
+)
 from unity.gateway.envelopes import (
     BaseEnvelope,
     BaseInboundEvent,
@@ -72,6 +79,11 @@ from unity.gateway.storage import LocalDiskStorage, Storage
 
 __all__ = [
     "AckCallable",
+    "KNOWN_TRANSPORT_KINDS",
+    "TRANSPORT_KIND_INMEMORY",
+    "TRANSPORT_KIND_LEGACY",
+    "TRANSPORT_KIND_PUBSUB",
+    "create_ingress_transport_factory",
     "BaseEnvelope",
     "BaseInboundEvent",
     "EmailEnvelope",
