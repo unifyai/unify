@@ -51,6 +51,7 @@ from unity.gateway.ingress import (
     IngressTransport,
 )
 from unity.gateway.ingress_inmemory import InMemoryIngressTransport
+from unity.gateway.ingress_pubsub import PubSubIngressTransport
 from unity.gateway.envelopes import (
     BaseEnvelope,
     BaseInboundEvent,
@@ -84,6 +85,7 @@ __all__ = [
     "IngressTransport",
     "LocalDiskStorage",
     "PubSubConnection",
+    "PubSubIngressTransport",
     "PubSubMessage",
     "SMSEnvelope",
     "SMSReceivedEvent",
