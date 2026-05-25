@@ -52,6 +52,7 @@ from unity.gateway.ingress import (
 )
 from unity.gateway.ingress_inmemory import InMemoryIngressTransport
 from unity.gateway.ingress_pubsub import PubSubIngressTransport
+from unity.gateway.outbound import OutboundTransport
 from unity.gateway.factory import (
     KNOWN_TRANSPORT_KINDS,
     TRANSPORT_KIND_INMEMORY,
@@ -96,6 +97,7 @@ __all__ = [
     "InMemoryIngressTransport",
     "IngressTransport",
     "LocalDiskStorage",
+    "OutboundTransport",
     "PubSubConnection",
     "PubSubIngressTransport",
     "PubSubMessage",
