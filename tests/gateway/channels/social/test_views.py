@@ -19,11 +19,10 @@ from unity.gateway.channels.social import router
 from unity.gateway.channels.social.views import (
     MESSAGING_SERVICE_NAME,
     VerificationRequest,
-    _build_twilio_client,
-    _build_twilio_wa_client,
     _get_messaging_service_sid,
     _reset_messaging_service_sid_cache,
 )
+from unity.gateway.common.twilio import build_twilio_client, build_twilio_wa_client
 from unity.gateway.credentials import EnvCredentialStore
 
 # ---------------------------------------------------------------------------
@@ -146,7 +145,7 @@ def test_verify_whatsapp_sends_via_twilio_with_expected_args(
 ) -> None:
     fake_wa_client = MagicMock(name="TwilioWaClient")
     with patch(
-        "unity.gateway.channels.social.views._build_twilio_wa_client",
+        "unity.gateway.channels.social.views.build_twilio_wa_client",
         return_value=fake_wa_client,
     ):
         response = client.post(
@@ -184,7 +183,7 @@ def test_verify_whatsapp_propagates_twilio_failure_as_500(
     fake_wa_client = MagicMock(name="TwilioWaClient")
     fake_wa_client.messages.create.side_effect = RuntimeError("twilio down")
     with patch(
-        "unity.gateway.channels.social.views._build_twilio_wa_client",
+        "unity.gateway.channels.social.views.build_twilio_wa_client",
         return_value=fake_wa_client,
     ):
         response = client.post(
@@ -216,7 +215,7 @@ def test_verify_phone_sends_via_twilio_messaging_service(
     fake_client.messaging.v1.services.list.return_value = [fake_service]
 
     with patch(
-        "unity.gateway.channels.social.views._build_twilio_client",
+        "unity.gateway.channels.social.views.build_twilio_client",
         return_value=fake_client,
     ):
         response = client.post(
@@ -248,7 +247,7 @@ def test_verify_phone_propagates_twilio_failure_as_500(
     fake_client.messages.create.side_effect = RuntimeError("twilio down")
 
     with patch(
-        "unity.gateway.channels.social.views._build_twilio_client",
+        "unity.gateway.channels.social.views.build_twilio_client",
         return_value=fake_client,
     ):
         response = client.post(
@@ -272,7 +271,7 @@ def test_verify_phone_raises_when_messaging_service_missing(
     fake_client.messaging.v1.services.list.return_value = [fake_other]
 
     with patch(
-        "unity.gateway.channels.social.views._build_twilio_client",
+        "unity.gateway.channels.social.views.build_twilio_client",
         return_value=fake_client,
     ):
         response = client.post(
@@ -288,7 +287,7 @@ def test_verify_phone_raises_when_messaging_service_missing(
 # ---------------------------------------------------------------------------
 
 
-def test_build_twilio_client_uses_credential_store(
+def testbuild_twilio_client_uses_credential_store(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("TWILIO_ACCOUNT_SID", "ACfromcredentialstore")
@@ -296,14 +295,14 @@ def test_build_twilio_client_uses_credential_store(
     credentials = EnvCredentialStore()
 
     with patch("twilio.rest.Client") as MockClient:
-        _build_twilio_client(credentials)
+        build_twilio_client(credentials)
     MockClient.assert_called_once_with(
         "ACfromcredentialstore",
         "tokenfromcredentialstore",
     )
 
 
-def test_build_twilio_client_raises_when_credentials_missing(
+def testbuild_twilio_client_raises_when_credentials_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("TWILIO_ACCOUNT_SID", raising=False)
@@ -311,10 +310,10 @@ def test_build_twilio_client_raises_when_credentials_missing(
     credentials = EnvCredentialStore()
 
     with pytest.raises(RuntimeError, match="TWILIO_ACCOUNT_SID"):
-        _build_twilio_client(credentials)
+        build_twilio_client(credentials)
 
 
-def test_build_twilio_wa_client_uses_separate_credentials(
+def testbuild_twilio_wa_client_uses_separate_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """WhatsApp credentials are distinct env vars; SMS creds shouldn't satisfy them."""
@@ -325,7 +324,7 @@ def test_build_twilio_wa_client_uses_separate_credentials(
     credentials = EnvCredentialStore()
 
     with pytest.raises(RuntimeError, match="TWILIO_WA_ACCOUNT_SID"):
-        _build_twilio_wa_client(credentials)
+        build_twilio_wa_client(credentials)
 
 
 def test_get_messaging_service_sid_caches_result(
@@ -340,7 +339,7 @@ def test_get_messaging_service_sid_caches_result(
     fake_client.messaging.v1.services.list.return_value = [fake_service]
 
     with patch(
-        "unity.gateway.channels.social.views._build_twilio_client",
+        "unity.gateway.channels.social.views.build_twilio_client",
         return_value=fake_client,
     ):
         sid1 = _get_messaging_service_sid(credentials)
