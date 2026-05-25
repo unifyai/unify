@@ -38,7 +38,7 @@ The installer prompts you inline for an OpenAI or Anthropic key and writes it in
 |---|---|
 | `unity` | `unity logs` |
 
-That's it. State persists across runs *and* across reboots in the `Assistants` workspace — Ctrl+C, come back tomorrow, `unity` again resumes from where you left off.
+That's it. You're chatting with a local assistant called `Unity`. State persists across runs *and* across reboots — Ctrl+C, come back tomorrow, `unity` again resumes from where you left off.
 
 ```text
 > Hey, can you help me organize my upcoming week?
@@ -102,13 +102,11 @@ Stop voice with `unity voice stop`. Full voice configuration (voice ID, provider
 
 ---
 
-## More assistants, later
+## The local assistant
 
-The `Assistants` workspace is the fixed home for *all* of your teammates — it's the only workspace Unity uses locally, not a configurable knob.
+The local install always runs **a single assistant called `Unity`**. There's no naming flow, no voice picker, no photo upload, no profile form, and no way to add more assistants locally — the runtime simply boots with `Unity` and that's who you talk to.
 
-Today, the workspace ships with **one unnamed default assistant**. There's no naming flow, no voice picker, no photo upload, no profile form — that whole layer (which the hosted product at [console.unify.ai](https://console.unify.ai) exposes deliberately) is intentionally absent from the local install. You just run `unity` and chat.
-
-A coordinator-driven onboarding flow is landing shortly on the `feature/coordinator` branch. Once it merges, the default assistant becomes a named coordinator (`unity`), and you'll be able to add specialised assistants alongside it from inside a running `unity` session — by asking the coordinator to commission one.
+That's deliberate. The local deployment exists to demonstrate the runtime's design and to give anyone interested a complete, working starting point to fork or extend. The full multi-assistant product experience — multiple named teammates, custom voices and photos, real telephony, channel integrations, organisations, billing — lives in the hosted product at **[console.unify.ai](https://console.unify.ai)**.
 
 ---
 

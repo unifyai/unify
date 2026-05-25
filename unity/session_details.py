@@ -32,13 +32,16 @@ UNASSIGNED_USER_ID = "default"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Placeholder Contact Details
-# Used in tests/offline mode when no real profile exists.
+# Used in tests/offline mode and the local install when no real assistant
+# profile has been provisioned (the hosted product populates these via
+# StartupEvent; the local install never does, and the local single-assistant
+# experience is intentionally fixed to "Unity").
 # ─────────────────────────────────────────────────────────────────────────────
-PLACEHOLDER_ASSISTANT_FIRST_NAME = "Default"
-PLACEHOLDER_ASSISTANT_SURNAME = "Assistant"
+PLACEHOLDER_ASSISTANT_FIRST_NAME = "Unity"
+PLACEHOLDER_ASSISTANT_SURNAME = ""
 PLACEHOLDER_ASSISTANT_EMAIL = "assistant@unify.ai"
 PLACEHOLDER_ASSISTANT_PHONE = "+10000000000"
-PLACEHOLDER_ASSISTANT_BIO = "Your helpful AI assistant."
+PLACEHOLDER_ASSISTANT_BIO = "Your local Unity assistant."
 PLACEHOLDER_USER_FIRST_NAME = "Default"
 PLACEHOLDER_USER_SURNAME = "User"
 PLACEHOLDER_USER_EMAIL = "user@example.com"
