@@ -186,7 +186,7 @@ Unity        ▸  Three tasks running at once.
 
 ## How it works
 
-Unity is organised around an **interaction loop / background reasoner** split — the same two-tier pattern recently articulated in [Thinking Machines' interaction-models post](https://thinkingmachines.ai/blog/interaction-models/). Thinking Machines puts the split *inside the model* (a single model trained to interact natively); Unity puts it in the harness, so it composes with any LLM you already use.
+Unity is organised around an **interaction loop / background reasoner** split — the same two-tier pattern recently articulated in [Thinking Machines' interaction-models post](https://thinkingmachines.ai/blog/interaction-models/). Thinking Machines puts the split *inside the model* (a single model trained to interact natively); Unity arrives at the same shape at the harness level, using the tools available today. When interaction-native models ship publicly, they would replace Unity's fast/slow-brain split end-to-end.
 
 A persistent **interaction loop** (the `ConversationManager`) stays present with the user across every medium and keeps thinking while work is in flight — it doesn't go silent waiting for a tool to finish. When something needs deeper reasoning than the conversation can produce instantly, it dispatches a **background reasoner** (the `Actor`), which writes Python plans over a back office of typed state managers. Every operation in the system returns a live, steerable handle, and those handles nest: a correction the user makes in chat propagates *down* through the dispatched action, into whatever manager call is currently running.
 
