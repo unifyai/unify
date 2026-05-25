@@ -559,6 +559,41 @@ def get_task_activation(
     return _row_to_activation(rows[0])
 
 
+def list_scheduled_activations(
+    *,
+    assistant_id: str | int | None,
+    limit: int = _DEFAULT_TRIGGER_PAGE_SIZE,
+) -> list[TaskActivationSnapshot]:
+    """List scheduled activations with a future due time for one assistant.
+
+    Filters on the same Orchestra-projected ``Tasks/Activations`` context that
+    feeds trigger matching, but scopes to ``activation_kind == 'scheduled'``
+    rows that carry a ``next_due_at``. Used by the in-process
+    ``LocalActivationScheduler`` to arm its timer wheel on boot and during
+    periodic reconciliation.
+    """
+
+    normalized_assistant_id = _coerce_str(assistant_id)
+    if not normalized_assistant_id:
+        return []
+    filter_clauses = [
+        f"assistant_id == '{normalized_assistant_id}'",
+        "activation_kind == 'scheduled'",
+        "next_due_at != None",
+    ]
+    rows = _activation_store().get_rows(
+        filter=" and ".join(filter_clauses),
+        limit=limit,
+        include_fields=_ACTIVATION_QUERY_FIELDS,
+    )
+    activations: list[TaskActivationSnapshot] = []
+    for row in rows:
+        activation = _row_to_activation(row)
+        if activation is not None:
+            activations.append(activation)
+    return activations
+
+
 def list_trigger_activations(
     *,
     assistant_id: str | int | None,

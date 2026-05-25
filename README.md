@@ -15,16 +15,126 @@
 **Open-source virtual teammates that take voice and video calls — and let you interrupt, redirect, or pause them mid-task without restarting.**
 
 <p align="center">
-  <img src="assets/hero-architecture.svg" alt="Unity's three-layer architecture: a Fast Brain on a real-time voice/video call with the user, a Slow Brain (ConversationManager) that always stays present, and an Actor (background reasoner) that does the deep work — extending the interaction-model / background-model pattern with a third supervisory tier." width="820">
+  <img src="assets/hero-architecture.png" alt="Unity's three-layer architecture: a Fast Brain on a real-time voice/video call with the user, a Slow Brain (ConversationManager) that always stays present, and an Actor (background reasoner) that does the deep work — extending the interaction-model / background-model pattern with a third supervisory tier." width="820">
 </p>
 
-Hop on a call with one. Send a follow-up text. Drop them a calendar invite. They remember who you are next time, what you talked about last week, and what they promised to do about it.
+Hop on a call with one. Send a follow-up text. Drop them a calendar invite. They remember who you are, what you talked about last week, and what they promised to do about it — across chat, voice, phone, video, and screen-share, and across your interjections, corrections, and pauses mid-task.
 
-Most agents stop the moment you talk. They make you wait for a tool call to finish, then re-explain when you change your mind. Unity's teammates stay listening through everything — chat, voice, phone, video, screen-share — and treat your interjections, corrections, and questions as first-class inputs rather than interruptions to recover from. Whether the assistant is researching flights, drafting an email, or sitting on a live call with a vendor, you can ask *"how's it going?"*, say *"actually do X instead"*, or pause for ten minutes — without losing context.
+Contacts, knowledge, tasks, and procedures persist as queryable structure — so the assistant remembers who Sarah is, what the Henderson project is about, and what they committed to on your behalf last Wednesday. **You install Unity once. It lives on your laptop, accumulates state across every session, and is there when you come back.**
 
-It's built around long-lived state, not one-shot conversations. Contacts, projects, files, knowledge, and follow-ups persist as queryable structure — so a teammate remembers who Sarah is, what the Henderson project is about, and what they committed to on your behalf last Wednesday, regardless of which channel you raised it on.
+---
 
-> **Start here:** [console.unify.ai](https://console.unify.ai) — try a teammate in 60 seconds • [Overview](https://docs.unify.ai/basics/overview) • [Quickstart](https://docs.unify.ai/basics/quickstart) • [ARCHITECTURE.md](ARCHITECTURE.md)
+## Install
+
+**Prerequisites:** Python 3.12+, Docker, and an LLM provider key (OpenAI or Anthropic). macOS, Linux, or WSL2.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/unifyai/unity/main/scripts/install.sh | bash
+```
+
+The installer prompts you inline for an OpenAI or Anthropic key and writes it into `~/.unity/unity/.env`. **Open a new terminal** (so the installer-added PATH entry takes effect), then run in two:
+
+| Terminal 1 — chat | Terminal 2 — live logs |
+|---|---|
+| `unity` | `unity logs` |
+
+That's it. You're chatting with a local assistant called `Unity`. State persists across runs *and* across reboots — Ctrl+C, come back tomorrow, `unity` again resumes from where you left off.
+
+```text
+> Hey, can you help me organize my upcoming week?
+> Pull up everything we know about the Henderson account.
+> Remind me to call Sarah on Thursday.
+```
+
+<details>
+<summary>What the installer does</summary>
+
+Clones `unity`, `unify`, `unillm`, and `orchestra-core` as siblings under `~/.unity/`. Installs Python dependencies with `uv`. Boots a local Orchestra in Docker. Generates a local API key for that bundled Orchestra. Writes `ORCHESTRA_URL`, `UNIFY_KEY`, and your LLM provider key into `~/.unity/unity/.env`. Creates a `unity` CLI shim in `~/.local/bin/` and appends a clearly-marked PATH block to your `~/.zshrc` / `~/.bash_profile` / `~/.bashrc`. No Unify account or signup is required.
+
+If you skip the LLM key at install time (or pipe through a non-interactive shell), the installer prints the one line to add to `.env` manually.
+
+</details>
+
+<details>
+<summary>Persistence across reboots</summary>
+
+All long-lived state — transcripts, contacts, knowledge, tasks, functions, guidance — lives in Orchestra Postgres, which Unity stores in a Docker named volume (`orchestra-local-db-data`) with `--restart unless-stopped`. The moment the Docker daemon comes back after a reboot, the Postgres container auto-starts and re-attaches the volume; the next `unity` invocation auto-starts the Orchestra FastAPI server against the existing data. No state is lost, no `unity setup` re-run required.
+
+The only piece outside Unity's install scope is whether Docker itself auto-starts at boot:
+
+- **macOS** — Docker Desktop ships with *Start Docker Desktop when you log in* enabled by default (Settings → General). Nothing to do.
+- **Linux** — enable the systemd unit once: `sudo systemctl enable docker`. `unity doctor` flags this when missing.
+
+</details>
+
+---
+
+## Voice — talking to your assistant in the browser
+
+The same install can also handle **real voice calls** locally: the production fast-brain (interruption-handling, telephony-aware) running against your local stack, with sub-second latency. Two-step setup, same two-terminal flow.
+
+### Step 1 — one-time voice setup
+
+```bash
+unity voice setup
+```
+
+That installs `livekit-server` (a single binary, **no LiveKit Cloud account required** — the server runs locally bound to `127.0.0.1`), boots it in `--dev` mode, and writes `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` to `~/.unity/unity/.env`.
+
+The only voice-related keys you bring yourself are speech-to-text and text-to-speech. Both providers have free tiers; pick **one** TTS provider:
+
+| Variable | Purpose | Where to get it |
+|---|---|---|
+| `DEEPGRAM_API_KEY` | Speech-to-text | [console.deepgram.com](https://console.deepgram.com) — free tier |
+| `CARTESIA_API_KEY` *or* `ELEVEN_API_KEY` | Text-to-speech (pick one) | [play.cartesia.ai](https://play.cartesia.ai) or [elevenlabs.io](https://elevenlabs.io) — free credits |
+
+Add the chosen keys to `~/.unity/unity/.env`.
+
+### Step 2 — run in two terminals
+
+| Terminal 1 — chat + voice control | Terminal 2 — live logs |
+|---|---|
+| `unity --live-voice` | `unity logs` |
+
+From the chat prompt: `call` opens the LiveKit Agents Playground in your browser — speak through your mic; `end_call` tears the room down. The first `call` clones [agents-playground](https://github.com/livekit/agents-playground) into `~/.livekit-playground/` and runs `npm install` (one-time; needs Node.js).
+
+Stop voice with `unity voice stop`. Full voice configuration (voice ID, provider selection, SIP/phone numbers) lives in [`sandboxes/conversation_manager/README.md`](sandboxes/conversation_manager/README.md).
+
+---
+
+## The local assistant
+
+The local install always runs **a single assistant called `Unity`**. There's no naming flow, no voice picker, no photo upload, no profile form, and no way to add more assistants locally — the runtime simply boots with `Unity` and that's who you talk to.
+
+That's deliberate. The local deployment exists to demonstrate the runtime's design and to give anyone interested a complete, working starting point to fork or extend. The full multi-assistant product experience — multiple named teammates, custom voices and photos, real telephony, channel integrations, organisations, billing — lives in the hosted product at **[console.unify.ai](https://console.unify.ai)**.
+
+---
+
+## Day-to-day commands
+
+```text
+unity                       Start the runtime (full system on your laptop)
+unity logs                  Tail the runtime log in a second terminal
+unity --live-voice          Start the runtime with live voice calls in the browser
+unity setup                 Bootstrap / re-bootstrap local Orchestra
+unity status                Local Orchestra status
+unity stop                  Stop local Orchestra (preserves data)
+unity restart               Restart local Orchestra (preserves data)
+unity doctor                Diagnose missing deps, keys, and PATH
+unity update                git pull --rebase the four repos + uv sync
+unity voice setup           Install + start local LiveKit
+unity voice stop / status   Stop / report local LiveKit
+unity help                  Subcommand reference
+```
+
+### Alternatives
+
+- **Hosted product.** If you'd rather skip the install entirely, the hosted product at **[console.unify.ai](https://console.unify.ai)** lets you sign in with Google and chat with a teammate in about a minute — voice, video, telephony, and integrations are turn-key. The hosted backend runs as a separate private service; Unity does not depend on it for any local feature.
+- **Point at your own backend.** `curl … install.sh | bash -s -- --skip-setup` installs the code without spinning up local Orchestra. Then point at your own Orchestra-compatible deployment via `ORCHESTRA_URL` + `UNIFY_KEY` in `~/.unity/unity/.env`.
+- **Manual install.** Clone the four repos (`unity`, `unify`, `unillm`, `orchestra-core`) into `~/.unity/`, `uv sync` in `unity/`, then `scripts/local.sh start` in `orchestra-core/` with `ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS=0`. Copy the printed `UNIFY_BASE_URL` and `UNIFY_KEY` into `~/.unity/unity/.env` as `ORCHESTRA_URL` and `UNIFY_KEY`.
+- **Sandbox / evaluation mode.** The same codebase can run with simulated managers and mock computer backends for isolated component evaluation — see [`sandboxes/conversation_manager/README.md`](sandboxes/conversation_manager/README.md) for `--project_name`, `--overwrite`, `--real-comms` and the per-manager dev sandboxes under `sandboxes/`.
+
+For everything you can put into `.env` beyond the basics — visual caching, Tavily, hosted comms — see `.env.advanced.example`.
 
 ---
 
@@ -74,290 +184,71 @@ Unity        ▸  Three tasks running at once.
 
 ---
 
-## Try one
-
-There are two paths, depending on whether you want to *meet a teammate* or *run the whole stack yourself*.
-
-### 🌐 Hosted — fastest
-
-The lowest-friction path is the hosted product at **[console.unify.ai](https://console.unify.ai)**. Sign in with Google, get matched with a teammate, and start chatting in about a minute. No install, no Docker, no API keys to manage. Voice, video, telephony, and integrations are all turn-key.
-
-### 💻 Self-host — fully open
-
-Run the whole stack on your own machine. Runtime, persistence backend, LLM client, and Python SDK are all open-source — see [Self-host](#self-host) below.
-
-**No signup required.** The local installer auto-generates a synthetic API key for the bundled orchestra-core and wires everything together. The only key you bring is one LLM provider key (OpenAI or Anthropic).
-
-**Including live voice calls.** The same install can run the production voice agent locally — you talk to your assistant through your browser, with sub-second interruption handling and the full background-reasoner loop running against your machine. Self-hosted LiveKit is automated (`unity voice setup`); you bring Deepgram + Cartesia/ElevenLabs keys (free tiers exist). See [Live voice](#live-voice-talking-to-the-assistant-in-your-browser) below.
-
----
-
-## Self-host
-
-By default, Unity's open-core install is fully local: the runtime, the LLM client, and the persistence backend ([orchestra-core](https://github.com/unifyai/orchestra-core), via Docker) all run on your machine. orchestra-core is the public single-user kernel of Orchestra; the multi-tenant hosted backend runs as a separate private service and is not required for any local feature. The hosted product at [console.unify.ai](https://console.unify.ai) is optional — Unity does not depend on it.
-
-**Prerequisites:**
-
-- **Python 3.12+** (the installer will fetch it with `uv` if needed)
-- **Docker** (runs the local orchestra-core backend)
-- **PortAudio** for audio support
-  - macOS: `brew install portaudio`
-  - Ubuntu/Debian: `sudo apt-get install portaudio19-dev python3-dev`
-- **One LLM provider key** — [OpenAI](https://platform.openai.com/api-keys) or [Anthropic](https://console.anthropic.com/) are the simplest paths
-
-**Install:**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/unifyai/unity/main/scripts/install.sh | bash
-```
-
-The installer clones `unity`, `unify`, `unillm`, and `orchestra-core` as siblings under `~/.unity/`, installs dependencies, creates a `unity` CLI shim in `~/.local/bin/`, boots a local orchestra-core in Docker, **generates a local API key for the bundled orchestra-core**, and wires `ORCHESTRA_URL` and that auto-generated key into `~/.unity/unity/.env`. No Unify account or external signup is required.
-
-Add one model provider key to `~/.unity/unity/.env`:
-
-```bash
-OPENAI_API_KEY=sk-...
-# or
-ANTHROPIC_API_KEY=...
-```
-
-**Run the sandbox:**
-
-```bash
-unity --project_name Sandbox --overwrite
-```
-
-At the configuration prompt:
-
-| Option | What it gives you |
-|------|------|
-| `1` | Top-level orchestration only — useful for isolating the conversation layer |
-| `2` | The full runtime: orchestration + planning + simulated managers |
-| `3` | Option 2 plus desktop/browser control through `agent-service` |
-
-If you're evaluating Unity as a runtime, start with **option 2**.
-
-```text
-> msg Hey, can you help me organize my upcoming week?
-> sms I need to reschedule my meeting with Sarah to Thursday
-> email Project Update | Here are the Q3 numbers you asked for...
-```
-
-Other `unity` subcommands: `unity setup`, `unity status`, `unity stop`, `unity restart`, `unity help`, `unity voice setup` / `voice stop` / `voice status` (live voice — see below).
-
-### Live voice (talking to the assistant in your browser)
-
-The same install lets you actually **call** your assistant: a real-time voice loop with the production fast-brain (interruption-handling, telephony-aware) running against your local stack. There is no separate "voice deployment" — the sandbox runs the same voice agent your phone would talk to.
-
-The pieces are split between things we automate for you (LiveKit) and BYOK voice-provider keys (Deepgram for STT, Cartesia or ElevenLabs for TTS). LiveKit is fully self-hosted in dev mode — no LiveKit Cloud account needed.
-
-**One-time setup** (after `unity setup` has already run):
-
-```bash
-unity voice setup
-```
-
-This installs `livekit-server` (a single binary), boots it locally in `--dev` mode (`ws://localhost:7880`, dev credentials), and writes `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` to `~/.unity/unity/.env`. It also tells you which voice-provider keys you still need to drop in.
-
-**Voice-provider keys you need to bring** (paid services, both have free tiers/credits):
-
-| Variable | Where to get it |
-|---|---|
-| `DEEPGRAM_API_KEY` | [console.deepgram.com](https://console.deepgram.com) — free tier |
-| `CARTESIA_API_KEY` *or* `ELEVEN_API_KEY` | [play.cartesia.ai](https://play.cartesia.ai) or [elevenlabs.io](https://elevenlabs.io) — free credits |
-
-Add them to `~/.unity/unity/.env`, then:
-
-```bash
-unity --live-voice --project_name Sandbox --overwrite
-```
-
-In the sandbox REPL:
-
-```text
-cm> call         # opens LiveKit Agents Playground in your browser; speak through your mic
-cm> end_call     # tears down the voice agent + room
-```
-
-The first `call` clones [agents-playground](https://github.com/livekit/agents-playground) into `~/.livekit-playground/` and runs `npm install` (one-time; needs Node.js with `npm` or `pnpm`).
-
-**Stopping things:**
-
-```bash
-unity voice stop   # stops local LiveKit
-unity stop         # stops local orchestra-core
-```
-
-For full configuration (voice ID, provider selection, SIP for actual phone numbers), see [`sandboxes/conversation_manager/README.md`](sandboxes/conversation_manager/README.md#voice--live-voice---voice---live-voice).
-
-<details>
-<summary>Skip the local orchestra-core (point at your own deployment)</summary>
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/unifyai/unity/main/scripts/install.sh | bash -s -- --skip-setup
-```
-
-That leaves the code installed but doesn't spin up orchestra-core. You'll need to point Unity at your own Orchestra-compatible deployment (orchestra-core, the private orchestra-platform superset, or another team's shared one) via `ORCHESTRA_URL` and a matching API key in `~/.unity/unity/.env`.
-
-</details>
-
-<details>
-<summary>Manual install (no installer script)</summary>
-
-```bash
-git clone https://github.com/unifyai/unity.git           ~/.unity/unity
-git clone https://github.com/unifyai/unify.git           ~/.unity/unify
-git clone https://github.com/unifyai/unillm.git          ~/.unity/unillm
-git clone https://github.com/unifyai/orchestra-core.git  ~/.unity/orchestra-core
-
-cd ~/.unity/unity
-curl -LsSf https://astral.sh/uv/install.sh | sh
-uv sync
-
-cd ~/.unity/orchestra-core
-poetry install
-ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS=0 scripts/local.sh start
-# Copy the UNIFY_BASE_URL and UNIFY_KEY it prints into ~/.unity/unity/.env
-# (Unity reads ORCHESTRA_URL, which the installer maps from UNIFY_BASE_URL.)
-```
-
-</details>
-
-The installer copies `.env.example` to `.env` (intentionally minimal). For voice mode, live calls, hosted comms, LiveKit, Tavily, or visual caching, see `.env.advanced.example` and [`sandboxes/conversation_manager/README.md`](sandboxes/conversation_manager/README.md).
-
----
-
 ## How it works
 
-Unity follows the **interaction-model / background-model** split [recently articulated by Thinking Machines](https://thinkingmachines.ai/blog/interaction-models/) — implemented at the harness level, against any LLM you already use.
+Unity is organised around an **interaction loop / background reasoner** split — the same two-tier pattern recently articulated in [Thinking Machines' interaction-models post](https://thinkingmachines.ai/blog/interaction-models/). Thinking Machines puts the split *inside the model* (a single model trained to interact natively); Unity arrives at the same shape at the harness level, using the tools available today. When interaction-native models ship publicly, they would replace Unity's fast/slow-brain split end-to-end.
 
-A persistent **interaction loop** (the `ConversationManager`) stays present with the user across every medium. When work needs deeper reasoning than the conversation can produce instantly, it dispatches a **background reasoner** (the `Actor`), which writes Python plans over a back office of typed state managers. Crucially, **every operation in the system returns a live, steerable handle** — and those handles nest. A correction the user makes in chat propagates *down* through the dispatched action, into whatever manager call is currently running.
+A persistent **interaction loop** (the `ConversationManager`) stays present with the user across every medium and keeps thinking while work is in flight — it doesn't go silent waiting for a tool to finish. When something needs deeper reasoning than the conversation can produce instantly, it dispatches a **background reasoner** (the `Actor`), which writes Python plans over a back office of typed state managers. Every operation in the system returns a live, steerable handle, and those handles nest: a correction the user makes in chat propagates *down* through the dispatched action, into whatever manager call is currently running.
 
-```mermaid
-flowchart TB
-    classDef interaction fill:#fce7f3,stroke:#be185d,stroke-width:2px,color:#1f2937
-    classDef actor fill:#bbf7d0,stroke:#15803d,stroke-width:2px,color:#1f2937
-    classDef neutral fill:#f9fafb,stroke:#9ca3af,stroke-width:1px,color:#374151
-    classDef accent fill:#1f2937,stroke:#000,stroke-width:1px,color:#fef3c7
-
-    User(["User"]):::neutral
-    Mediums["💬 chat &nbsp;·&nbsp; 📞 voice / phone &nbsp;·&nbsp; 🎥 video / screen-share &nbsp;·&nbsp; ✉️ email · SMS"]:::neutral
-    Broker["⚡ Event Broker"]:::accent
-    CM["<b>ConversationManager</b> · interaction loop (always present)<br/>per-handle steering tools: pause · resume · interject · stop · ask"]:::interaction
-    Actor["<b>Actor</b> · background reasoner<br/>writes Python that composes primitives.*"]:::actor
-    BackOffice["<b>The Back Office</b> · typed state managers, English-language APIs<br/>Contacts · Knowledge · Tasks · Transcripts · Files · Images · Web · Secrets · ⚙️ Functions · 📖 Guidance"]:::neutral
-
-    User ==> Mediums ==> Broker ==> CM
-    CM ==>|"act(...)"| Actor
-    Actor ==>|"primitives.*"| BackOffice
-
-    BackOffice -.->|"SteerableToolHandle"| Actor
-    Actor -.->|"SteerableToolHandle + notifications"| CM
-    CM -.->|"streamed responses"| User
-```
+<p align="center">
+  <img src="assets/architecture-flow.png" alt="Unity's dispatch and steering flow: the user reaches the ConversationManager through mediums (chat, voice, video, email, SMS) and an event broker; the ConversationManager calls act(...) on the Actor, which calls primitives.* on the back office (Contacts, Knowledge, Tasks, Transcripts, Files, Images, Web, Secrets, Functions, Guidance). The steering bus runs the other way: SteerableToolHandles propagate from the back office up through the Actor to the ConversationManager, and streamed responses reach the user." width="820">
+</p>
 
 **Solid arrows** are dispatch flow. **Dotted arrows** are the *steering bus* — every level returns the same `SteerableToolHandle` type, so steering signals propagate down through the call stack while results and notifications propagate up.
 
 ### Why this matters: nested steering in action
 
-This is the demo no other framework can run. The user's mid-flight redirect doesn't abort the run, doesn't append a second prompt, and doesn't wait for the next tool boundary — it propagates through the live nested call stack as a typed signal.
+The user's mid-flight redirect doesn't abort the run, doesn't append a second prompt, and doesn't wait for the next tool boundary — it propagates through the live nested call stack as a typed signal that any inner manager loop can choose to act on. This isn't something either of the adjacent open-source agent frameworks expose today.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor User
-    participant CM as ConversationManager
-    participant Ax as Actor
-    participant TM as TranscriptManager
-
-    User->>CM: "find when Sarah last mentioned Berlin"
-    CM->>Ax: act(prompt)
-    activate Ax
-    Ax-->>CM: handle_A (SteerableToolHandle)
-    Note over CM: handle_A stored in<br/>in_flight_actions
-    Ax->>TM: transcripts.ask(...)
-    activate TM
-    TM-->>Ax: handle_B (nested SteerableToolHandle)
-
-    User->>CM: "actually include emails too"
-    Note over CM: slow brain wakes,<br/>picks the steering tool<br/>for handle_A
-    CM->>Ax: handle_A.interject("...also emails")
-    Ax->>TM: handle_B.interject("...also emails")
-    TM-->>Ax: refined results
-    deactivate TM
-    Ax-->>CM: notification (intermediate progress)
-    CM-->>User: "scanning emails too..."
-    Ax-->>CM: handle_A.result
-    deactivate Ax
-    CM-->>User: final answer
-```
+<p align="center">
+  <img src="assets/nested-steering-sequence.png" alt="Sequence diagram showing nested steering: the user asks 'find when Sarah last mentioned Berlin', the ConversationManager calls act(prompt) on the Actor which returns handle_A, the Actor calls transcripts.ask(...) on the TranscriptManager which returns the nested handle_B. Mid-flight the user interjects 'actually include emails too' — the interject signal flows down through handle_A and then through handle_B, the TranscriptManager returns refined results, the Actor notifies the ConversationManager, which streams 'scanning emails too...' back to the user before delivering the final answer." width="820">
+</p>
 
 ---
 
-## How does this compare to other open-source agents?
+## Where Unity sits in the open-source landscape
 
-The clearest way to see what's distinctive about Unity is to draw the same diagram for adjacent projects, using the same visual language. **Pink** means *persistent supervising loop* (only Unity has one). Click to expand.
+OpenClaw and Hermes Agent are excellent — both are mature personal assistants with wide messaging surfaces, large contributor communities, and well-trodden install paths. Unity is making a different architectural bet, and the easiest way to see it is to draw all three using the same visual language: identical panel, identical box and arrow grammar, identical colour semantics. Every visual difference between the three diagrams below maps to a real architectural difference; nothing is stylistic.
+
+The colour palette is locked across all three diagrams and means exactly one thing each:
+
+- **Green** — the agent's tool-calling loop (the loop that actually calls tools to do work). Every assistant has one; every diagram has exactly one green box.
+- **Peach** — an autonomous wake source: a non-user input that can cause the agent to think without a fresh user message. Every assistant has one; the *label* encodes the mechanism (cron + webhooks vs. natural-language scheduled Tasks vs. ...), but the *colour* is universal.
+- **Pink** — a *persistent reasoning loop* above the agent: a layer that keeps reasoning while a dispatched action is in flight, distinct from a persistent process or daemon. This is the only colour whose presence varies across the family — and that's the headline architectural distinction the comparison exists to surface.
+- **White** — passive structural tiers (channels / surfaces / mediums, tools, state, dispatcher daemon).
+
+<details open>
+<summary><b>Unity</b> — persistent reasoning loop above a supervised Actor, with a dual-brain conversation tier</summary>
+
+<p align="center">
+  <img src="assets/unity-architecture.png" alt="Unity architecture: user (white) and scheduled tasks + triggers (peach, natural-language Tasks, fired in-process) → mediums (chat, voice, phone, video, screen-share, sms, email) → a dual-brain conversation tier with the real-time fast brain (voice + video, sub-second) on the left and the ConversationManager / slow brain (a pink-marked persistent reasoning loop that is always present) on the right, coordinating over IPC (SPEAK / NOTIFY · events / context); the slow brain dispatches act(...) into CodeActActor (green tool-calling loop), a separate background-reasoner tier that writes Python plans over typed primitives (contacts, knowledge, tasks, transcripts, files, images, web, secrets, functions, guidance); primitives read and write a back office of typed state managers (ContactManager, KnowledgeManager, TaskScheduler, TranscriptManager, FileManager, ImageManager, WebSearcher, SecretManager, FunctionManager, GuidanceManager) — each manager runs its own tool loop. Drawn in the same shared visual grammar as the OpenClaw and Hermes diagrams below. Architectural deltas vs. the other two: the pink persistent reasoning loop, the dual-brain split at the conversation tier, the separate Actor tier below the slow brain, the typed back office of named managers instead of opaque file storage, and a natural-language autonomous wake source fired in-process by the same single daemon (no Cloud Tasks / K8s required for the local install)." width="780">
+</p>
+
+Unity puts a persistent reasoning loop (`ConversationManager`, pink) *above* the tool-caller, not next to it: the slow brain stays present and keeps reasoning while a dispatched action is in flight. Real-time voice and video are handled by a separate fast brain coordinated over IPC, so the slow brain can deliberate without blocking sub-second turn-taking. Below the slow brain, a separate `CodeActActor` tier writes one Python program per turn over typed `primitives.*` — supervised by the slow brain rather than left to free-run. Long-lived state is a back office of typed managers (contacts, knowledge, tasks, transcripts, ...), each with its own async tool loop and its own steerable handles, instead of opaque session/markdown files. Autonomous wake — recurring schedules and event triggers — is described in natural language and stored as `Task` rows; the local install fires them in-process via an asyncio timer wheel that watches Orchestra-projected activations (no Cloud Tasks, no K8s, same single-daemon shape as OpenClaw and Hermes). Inbound-event triggers (e.g. "whenever Alice emails about invoices") are matched on the comms event stream and remain Unity-unique among the three.
+
+</details>
 
 <details>
 <summary><b>OpenClaw</b> — channel-first dispatcher + single Pi agent loop</summary>
 
-```mermaid
-flowchart TB
-    classDef agent fill:#bbf7d0,stroke:#15803d,stroke-width:2px,color:#1f2937
-    classDef neutral fill:#f9fafb,stroke:#9ca3af,stroke-width:1px,color:#374151
-    classDef dispatch fill:#fed7aa,stroke:#c2410c,stroke-width:2px,color:#1f2937
+<p align="center">
+  <img src="assets/openclaw-architecture.png" alt="OpenClaw architecture: user (white) and cron + webhooks (peach, automation triggers) feed into channels (Telegram, Discord, Slack, SMS, device Nodes); channels hand off to a Gateway daemon (white, channel-first dispatcher with per-session lanes; steer = abort + redeliver) which start/abort runs on a single Pi embedded agent loop (green, single tool-calling loop, no supervising loop); the agent calls tools (core, voice-call plugin, mcporter → MCP servers) and reads/writes local-first state (JSONL sessions, workspace files like SKILL.md / SOUL.md / AGENTS.md, memory plugin). No persistent reasoning loop above the agent. Drawn in the same shared visual grammar as the Hermes and Unity diagrams in this section. Architectural deltas vs. the other two: a dedicated Gateway daemon dispatcher tier between channels and the agent (Unity and Hermes have none); cron + webhook automation implemented as an in-process timer + HTTP server inside the Gateway daemon (same mechanism as Hermes, different from Unity)." width="780">
+</p>
 
-    User(["User"]):::neutral
-    Channels["💬 Telegram · Discord · Slack · SMS · Nodes (devices)"]:::neutral
-    Gateway["<b>Gateway daemon</b> · dispatcher<br/>per-session lane (1 active run); steer = abort + redeliver"]:::dispatch
-    PiAgent["<b>Pi embedded agent</b> · single tool-calling loop<br/>no supervising loop runs in parallel"]:::agent
-    Tools["<b>Tools</b> · core + plugin + MCP bridge<br/>core (web · exec · sessions_spawn) · 📞 voice-call plugin (discrete actions: initiate · speak · end) · mcporter → MCP servers"]:::neutral
-    State["<b>State</b> · local-first artefacts<br/>JSONL sessions · workspace files (📖 SKILL.md · SOUL.md · AGENTS.md) · memory plugin (one slot at a time)"]:::neutral
-
-    User ==> Channels ==> Gateway
-    Gateway ==>|"start / abort run"| PiAgent
-    PiAgent ==> Tools
-    PiAgent <==> State
-```
-
-OpenClaw is a local-first control plane with a wide channel matrix and a plugin marketplace. The Gateway *dispatches* runs but doesn't supervise them; voice is a plugin tool the agent invokes through discrete actions; steering is implemented as abort-and-redeliver. OpenClaw's `VISION.md` explicitly takes "no agent-hierarchy frameworks (manager-of-managers)" as a non-goal — a deliberate, principled bet in the opposite direction from Unity. If you want a personal-assistant **product** with broad channel coverage, OpenClaw is excellent. If you want a runtime built around mid-task steering and structured long-lived state, Unity is shaped differently.
+OpenClaw is a local-first control plane with a wide channel matrix and a plugin marketplace. The Gateway *dispatches* runs onto a single Pi agent loop but doesn't supervise them; voice is a plugin tool the agent invokes through discrete actions. Autonomous wake — cron schedules, HTTP webhook ingress (`/hooks`), and Gmail Pub/Sub — runs as an in-process timer and HTTP server inside the Gateway daemon, dispatching isolated agent turns when due. New messages that arrive during a run are handled at turn boundaries — `interrupt` aborts the run, `steer`/`followup` enqueues for after the run — but there is no in-flight steering mechanism. OpenClaw's `VISION.md` explicitly takes "no agent-hierarchy frameworks (manager-of-managers)" as a non-goal — a principled bet in the opposite direction from Unity. If you want a personal-assistant **product** with broad channel coverage and a thriving plugin ecosystem, OpenClaw is excellent. Unity is shaped for a different brief: a runtime where every action is mid-flight steerable and long-lived state is structured.
 
 </details>
 
 <details>
 <summary><b>Hermes Agent</b> — many surfaces, one monolithic loop</summary>
 
-```mermaid
-flowchart TB
-    classDef agent fill:#bbf7d0,stroke:#15803d,stroke-width:2px,color:#1f2937
-    classDef neutral fill:#f9fafb,stroke:#9ca3af,stroke-width:1px,color:#374151
-    classDef trigger fill:#fed7aa,stroke:#c2410c,stroke-width:2px,color:#1f2937
+<p align="center">
+  <img src="assets/hermes-architecture.png" alt="Hermes Agent architecture: user (white) and cron + webhooks (peach, automation triggers) feed into a wide surfaces row (CLI, TUI, Gateway across Telegram/Discord/Slack/SMS, and ACP for IDEs); surfaces hand off directly to a single ~12k-LOC sync agent-loop infrastructure called AIAgent (green; steer() injects text into the next tool result, interrupt() is a thread-scoped abort flag), which calls tools (native, execute_code, TTS / voice_mode / SMS, delegate_tool, MCP servers) and reads/writes state (SQLite sessions + FTS5, MEMORY.md / USER.md workspace files, SKILL.md library, memory provider plugin). No persistent reasoning loop above the agent. Drawn in the same shared visual grammar as the OpenClaw and Unity diagrams in this section. Architectural deltas vs. the other two: surfaces hand off directly to the agent with no dispatcher tier in between (OpenClaw has one, Unity has none either); cron + webhook automation implemented as a background thread + aiohttp webhook server inside the gateway process (same in-process pattern as OpenClaw, different from Unity)." width="780">
+</p>
 
-    User(["User"]):::neutral
-    Cron["⏰ cron + webhooks (automation triggers)"]:::trigger
-    Surfaces["💬 CLI · TUI · Gateway (Telegram · Discord · Slack · SMS) · ACP (IDE)"]:::neutral
-    AIAgent["<b>AIAgent</b> · single ~12k-LOC sync tool-calling loop<br/>steer() = inject text into next tool result; interrupt() = thread-scoped abort flag"]:::agent
-    Tools["<b>Tools</b><br/>native tools · execute_code (ephemeral Python against fixed RPC stubs) · TTS / voice_mode / SMS (no live phone call) · delegate_tool · MCP servers"]:::neutral
-    State["<b>State</b><br/>SQLite sessions + FTS5 · MEMORY.md / USER.md workspace files · 📖 SKILL.md library · memory provider plugin (mem0 · honcho · ...)"]:::neutral
-
-    User ==> Surfaces
-    Cron ==> Surfaces
-    Surfaces ==> AIAgent
-    AIAgent ==> Tools
-    AIAgent <==> State
-```
-
-Hermes pairs a single ~12k-LOC `AIAgent` loop with four surfaces (CLI, TUI, gateway, ACP), a deep markdown skills library, SQLite+FTS5 transcripts, and best-in-class cron / webhook automation. Steering is implemented as text injection into the next tool result; interrupt is a thread-scoped flag. Live telephony isn't in the repo — SMS is, voice is local-only. If you want a polished personal-agent product with a wide messaging surface, broad model support, and mature automation triggers, Hermes is excellent. Unity is making a different bet on what the orchestration layer should look like.
+Hermes pairs a single sync agent-loop (~12k-LOC across `AIAgent`, the conversation loop, and runtime helpers) with four surfaces (CLI, TUI, gateway, ACP), a deep markdown skills library, SQLite+FTS5 transcripts, and a strong cron + webhook automation subsystem (background thread inside the gateway process for schedules, aiohttp server for HTTP webhook ingress from GitHub/JIRA/Stripe/etc.). Steering is implemented as text injection into the next tool result; interrupt is a thread-scoped flag that propagates to delegated subagents. Live telephony isn't in the repo — SMS is, voice is local-only. If you want a polished personal-agent product with a wide messaging surface, broad model support, and mature automation triggers, Hermes is excellent. Unity is making a different bet on what the orchestration layer should look like — one in which the reasoning loop above the tool-caller is permanent, and steering is a first-class signal that nests through every manager call.
 
 </details>
-
-> **A small bit of history.** This architecture has been running in Unity since 2025 — well ahead of the wider conversation about it. For the record:
->
-> - **`SteerableToolHandle`** (the universal steering protocol) — first commit **September 23, 2025**. That predates OpenClaw's first commit (Nov 24, 2025), Hermes Agent's `interrupt()` (Feb 3, 2026) and `steer()` (Apr 18, 2026).
-> - **`ConversationManager` + dual-brain LiveKit voice** — first commit **November 12, 2025**. That predates OpenClaw's `voice-call` plugin (Jan 11, 2026) by two months.
-> - **The two-tier interaction-loop / background-reasoner pattern** as a whole — operational since November 2025. The Thinking Machines paper that articulated the same architecture was published **May 11, 2026**, six months later.
->
-> We're not claiming foresight; the convergence is just interesting if you find architectural archaeology fun. Repo dates verifiable in `git log`.
 
 ---
 
@@ -576,8 +467,8 @@ unity/
 │   ├── secret_manager/
 │   ├── events/
 │   └── manager_registry.py
-├── sandboxes/                    # Interactive playgrounds
-│   └── conversation_manager/     # Full ConversationManager sandbox (start here)
+├── sandboxes/                    # Dev / eval playgrounds (one per manager)
+│   └── conversation_manager/     # Backs `unity` for the install-and-live run
 ├── tests/
 ├── agent-service/                # Node.js desktop/browser automation
 └── deploy/                       # Dockerfile, Cloud Build, virtual desktop
