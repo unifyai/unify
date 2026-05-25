@@ -38,6 +38,9 @@ dependencies = [
     "textual>=0.40.0",
     "textual-dev>=1.2.0",
     "twilio>=8.0.0",
+    # Microsoft 365 (Outlook + Teams channels in unity.gateway.channels).
+    "azure-identity>=1.14.0",
+    "msgraph-sdk>=1.0.0",
     "uvicorn[standard]>=0.24.0",
     "unify",
     "unillm",
