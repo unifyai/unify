@@ -377,40 +377,18 @@ async def _queue_fast_brain_task_context(
 
 
 def _task_due_event_from_wake_reason(reason: Any) -> TaskDue | None:
-    """Convert one startup wake-reason payload into a typed `TaskDue` event."""
+    """Convert one startup wake-reason payload into a typed `TaskDue` event.
+
+    Cold-start wake reasons are a heterogeneous list of dicts (task_due,
+    inactivity_followup, …) keyed by a leading ``type`` discriminator.
+    Validate the discriminator here, then delegate the actual field
+    extraction to :meth:`TaskDue.from_dict` so all `TaskDue` producers
+    share one builder.
+    """
 
     if not isinstance(reason, dict) or reason.get("type") != "task_due":
         return None
-    task_id = reason.get("task_id")
-    source_task_log_id = reason.get("source_task_log_id")
-    activation_revision = str(reason.get("activation_revision") or "")
-    scheduled_for = str(reason.get("scheduled_for") or "")
-    if task_id is None or source_task_log_id is None:
-        return None
-    if not activation_revision or not scheduled_for:
-        return None
-    try:
-        return TaskDue(
-            task_id=int(task_id),
-            source_task_log_id=int(source_task_log_id),
-            activation_revision=activation_revision,
-            scheduled_for=scheduled_for,
-            execution_mode=str(reason.get("execution_mode") or "live"),
-            source_type=str(reason.get("source_type") or "scheduled"),
-            task_label=str(reason.get("task_label") or ""),
-            task_summary=str(reason.get("task_summary") or ""),
-            visibility_policy=str(
-                reason.get("visibility_policy") or "silent_by_default",
-            ),
-            recurrence_hint=str(reason.get("recurrence_hint") or "one_off"),
-            reason=(
-                f"Scheduled task '{reason['task_label']}' became due."
-                if reason.get("task_label")
-                else f"Scheduled task {task_id} became due."
-            ),
-        )
-    except (TypeError, ValueError):
-        return None
+    return TaskDue.from_dict(reason)
 
 
 async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> bool:
@@ -660,6 +638,84 @@ def _dispatch_offline_trigger_candidate(
     return response.json()
 
 
+async def _dispatch_offline_trigger_candidate_local(
+    *,
+    cm: "ConversationManager",
+    candidate: TaskActivationSnapshot,
+    event: Any,
+    medium: Medium,
+    contact_id: int | None,
+    sender_name: str,
+) -> dict[str, Any]:
+    """Execute one offline trigger candidate via the in-process subprocess lane.
+
+    The local-runtime equivalent of :func:`_dispatch_offline_trigger_candidate`.
+    Instead of POSTing to ``Communication`` and creating a K8s job, the
+    candidate is spawned as a child process running
+    ``unity.task_scheduler.offline_runner`` with the activation context
+    injected through env vars. Returns a status dict shaped like the
+    Communication response so the caller's logging keeps working.
+    """
+
+    materializer = getattr(cm, "_activation_materializer", None)
+    dispatcher = getattr(materializer, "_offline", None) if materializer else None
+    if dispatcher is None:
+        raise RuntimeError(
+            "Local activation scheduler is not initialised; "
+            "cannot dispatch offline trigger locally.",
+        )
+    source_ref = _build_trigger_source_ref(
+        event=event,
+        medium=medium,
+        contact_id=contact_id,
+    )
+    # Repackage the snapshot's trigger metadata via the dispatcher's env
+    # builder. The dispatcher accepts the optional override kwargs so the
+    # subprocess sees the actual triggering inbound (not just the activation
+    # row's default trigger_medium).
+    from unity.task_scheduler.local_scheduler.offline_dispatcher import (
+        _build_local_offline_runner_env,
+    )
+    import asyncio as _asyncio
+    import os as _os
+    import sys as _sys
+
+    env = _build_local_offline_runner_env(
+        candidate,
+        source_type="triggered",
+        source_ref=source_ref,
+        source_medium=medium.value,
+        source_contact_id=contact_id,
+        source_contact_display_name=_sender_display_name(
+            sender_name,
+            contact_id=contact_id,
+        ),
+    )
+    merged_env = {**_os.environ, **env}
+    merged_env.setdefault("PYTHONUNBUFFERED", "1")
+    process = await _asyncio.create_subprocess_exec(
+        _sys.executable,
+        "-m",
+        "unity.task_scheduler.offline_runner",
+        env=merged_env,
+        stdout=_asyncio.subprocess.PIPE,
+        stderr=_asyncio.subprocess.PIPE,
+    )
+    # Adopt the watcher onto the dispatcher's set so cleanup on CM stop
+    # cancels it together with other in-flight scheduler watchers.
+    watcher = _asyncio.create_task(
+        dispatcher._watch(process, candidate, "triggered"),
+    )
+    dispatcher._inflight.add(watcher)
+    watcher.add_done_callback(dispatcher._inflight.discard)
+    return {
+        "success": True,
+        "status": "spawned_local",
+        "execution_mode": "offline",
+        "source_type": "triggered",
+    }
+
+
 async def _surface_trigger_task_candidates(
     *,
     cm: "ConversationManager",
@@ -687,18 +743,31 @@ async def _surface_trigger_task_candidates(
         len(offline_candidates),
     )
     if offline_candidates:
+        from unity.settings import SETTINGS
+
+        use_local_dispatch = bool(SETTINGS.task.LOCAL_SCHEDULER_ENABLED)
         _offline_t0 = perf_counter()
         offline_statuses: list[str] = []
         for candidate in offline_candidates:
             try:
-                result = await asyncio.to_thread(
-                    _dispatch_offline_trigger_candidate,
-                    candidate=candidate,
-                    event=event,
-                    medium=medium,
-                    contact_id=contact_id,
-                    sender_name=sender_name,
-                )
+                if use_local_dispatch:
+                    result = await _dispatch_offline_trigger_candidate_local(
+                        cm=cm,
+                        candidate=candidate,
+                        event=event,
+                        medium=medium,
+                        contact_id=contact_id,
+                        sender_name=sender_name,
+                    )
+                else:
+                    result = await asyncio.to_thread(
+                        _dispatch_offline_trigger_candidate,
+                        candidate=candidate,
+                        event=event,
+                        medium=medium,
+                        contact_id=contact_id,
+                        sender_name=sender_name,
+                    )
                 offline_statuses.append(
                     f"{candidate.task_id}:{result.get('status', 'unknown')}",
                 )

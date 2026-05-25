@@ -186,35 +186,15 @@ def _task_due_event_from_payload(
     *,
     reason: str = "",
 ) -> TaskDue | None:
-    """Build a `TaskDue` event from a comms payload when complete."""
+    """Build a `TaskDue` event from a comms Pub/Sub payload.
 
-    task_id = _coerce_int(payload.get("task_id"))
-    source_task_log_id = _coerce_int(payload.get("source_task_log_id"))
-    activation_revision = str(payload.get("activation_revision") or "")
-    scheduled_for = str(payload.get("scheduled_for") or "")
-    if task_id is None or source_task_log_id is None:
-        return None
-    if not activation_revision or not scheduled_for:
-        return None
-    task_label = str(payload.get("task_label") or "")
-    return TaskDue(
-        task_id=task_id,
-        source_task_log_id=source_task_log_id,
-        activation_revision=activation_revision,
-        scheduled_for=scheduled_for,
-        execution_mode=str(payload.get("execution_mode") or "live"),
-        source_type=str(payload.get("source_type") or "scheduled"),
-        task_label=task_label,
-        task_summary=str(payload.get("task_summary") or ""),
-        visibility_policy=str(payload.get("visibility_policy") or "silent_by_default"),
-        recurrence_hint=str(payload.get("recurrence_hint") or "one_off"),
-        reason=reason
-        or (
-            f"Scheduled task '{task_label}' became due."
-            if task_label
-            else f"Scheduled task {task_id} became due."
-        ),
-    )
+    Thin alias around :meth:`TaskDue.from_dict` kept here to preserve the
+    call-site name `comms_manager` already imports. The Pub/Sub ingress
+    has already gated on ``event_type == "task_due"`` before calling this,
+    so no additional type discriminator check is needed.
+    """
+
+    return TaskDue.from_dict(payload, reason=reason)
 
 
 # Map subscription IDs to their corresponding event types

@@ -2393,6 +2393,10 @@ class TestTriggeredTaskNotifications:
                 "unity.conversation_manager.domains.task_activation._dispatch_offline_trigger_candidate",
                 return_value={"status": "launched"},
             ) as mock_offline_dispatch,
+            patch(
+                "unity.settings.SETTINGS.task.LOCAL_SCHEDULER_ENABLED",
+                False,
+            ),
         ):
             await EventHandler.handle_event(event, mock_cm)
 
@@ -2451,6 +2455,10 @@ class TestTriggeredTaskNotifications:
                 "unity.conversation_manager.domains.task_activation._dispatch_offline_trigger_candidate",
                 return_value={"status": "launched"},
             ) as mock_offline_dispatch,
+            patch(
+                "unity.settings.SETTINGS.task.LOCAL_SCHEDULER_ENABLED",
+                False,
+            ),
         ):
             await EventHandler.handle_event(event, mock_cm)
 
