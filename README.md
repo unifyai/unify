@@ -186,9 +186,9 @@ Unity        ▸  Three tasks running at once.
 
 ## How it works
 
-Unity follows the **interaction-model / background-model** split [recently articulated by Thinking Machines](https://thinkingmachines.ai/blog/interaction-models/) — implemented at the harness level, against any LLM you already use.
+Unity is organised around an **interaction loop / background reasoner** split, implemented at the harness level so it works against any LLM you already use.
 
-A persistent **interaction loop** (the `ConversationManager`) stays present with the user across every medium. When work needs deeper reasoning than the conversation can produce instantly, it dispatches a **background reasoner** (the `Actor`), which writes Python plans over a back office of typed state managers. Crucially, **every operation in the system returns a live, steerable handle** — and those handles nest. A correction the user makes in chat propagates *down* through the dispatched action, into whatever manager call is currently running.
+A persistent **interaction loop** (the `ConversationManager`) stays present with the user across every medium and keeps thinking while work is in flight — it doesn't go silent waiting for a tool to finish. When something needs deeper reasoning than the conversation can produce instantly, it dispatches a **background reasoner** (the `Actor`), which writes Python plans over a back office of typed state managers. Every operation in the system returns a live, steerable handle, and those handles nest: a correction the user makes in chat propagates *down* through the dispatched action, into whatever manager call is currently running.
 
 <p align="center">
   <img src="assets/architecture-flow.png" alt="Unity's dispatch and steering flow: the user reaches the ConversationManager through mediums (chat, voice, video, email, SMS) and an event broker; the ConversationManager calls act(...) on the Actor, which calls primitives.* on the back office (Contacts, Knowledge, Tasks, Transcripts, Files, Images, Web, Secrets, Functions, Guidance). The steering bus runs the other way: SteerableToolHandles propagate from the back office up through the Actor to the ConversationManager, and streamed responses reach the user." width="820">
@@ -198,7 +198,7 @@ A persistent **interaction loop** (the `ConversationManager`) stays present with
 
 ### Why this matters: nested steering in action
 
-This is the demo no other framework can run. The user's mid-flight redirect doesn't abort the run, doesn't append a second prompt, and doesn't wait for the next tool boundary — it propagates through the live nested call stack as a typed signal.
+The user's mid-flight redirect doesn't abort the run, doesn't append a second prompt, and doesn't wait for the next tool boundary — it propagates through the live nested call stack as a typed signal that any inner manager loop can choose to act on. This isn't something either of the adjacent open-source agent frameworks expose today.
 
 <p align="center">
   <img src="assets/nested-steering-sequence.png" alt="Sequence diagram showing nested steering: the user asks 'find when Sarah last mentioned Berlin', the ConversationManager calls act(prompt) on the Actor which returns handle_A, the Actor calls transcripts.ask(...) on the TranscriptManager which returns the nested handle_B. Mid-flight the user interjects 'actually include emails too' — the interject signal flows down through handle_A and then through handle_B, the TranscriptManager returns refined results, the Actor notifies the ConversationManager, which streams 'scanning emails too...' back to the user before delivering the final answer." width="820">
@@ -206,18 +206,18 @@ This is the demo no other framework can run. The user's mid-flight redirect does
 
 ---
 
-## How does this compare to other open-source agents?
+## Where Unity sits in the open-source landscape
 
-The clearest way to see what's distinctive about Unity is to draw the same diagram for adjacent projects, using the same visual language. **Pink** means *persistent supervising loop* (only Unity has one). Click to expand.
+OpenClaw and Hermes Agent are excellent — both are mature personal assistants with wide messaging surfaces, large contributor communities, and well-trodden install paths. Unity is making a different architectural bet, and the easiest way to see it is to draw all three using the same visual language. **Pink** marks a layer that keeps reasoning while a dispatched action is in flight (a *persistent reasoning loop*, distinct from a persistent process or daemon). Click to expand.
 
 <details>
 <summary><b>OpenClaw</b> — channel-first dispatcher + single Pi agent loop</summary>
 
 <p align="center">
-  <img src="assets/openclaw-architecture.png" alt="OpenClaw architecture: the user reaches a Gateway daemon (channel-first dispatcher) through Telegram, Discord, Slack, SMS, or device Nodes; the Gateway starts or aborts runs on a single Pi embedded agent loop, which calls tools (core tools, voice-call plugin, mcporter → MCP servers) and reads/writes local-first state (JSONL sessions, workspace files like SKILL.md / SOUL.md / AGENTS.md, memory plugin). No persistent supervising loop." width="780">
+  <img src="assets/openclaw-architecture.png" alt="OpenClaw architecture: the user reaches a Gateway daemon (channel-first dispatcher) through Telegram, Discord, Slack, SMS, or device Nodes; the Gateway starts or aborts runs on a single Pi embedded agent loop, which calls tools (core tools, voice-call plugin, mcporter → MCP servers) and reads/writes local-first state (JSONL sessions, workspace files like SKILL.md / SOUL.md / AGENTS.md, memory plugin). No persistent reasoning loop above the agent." width="780">
 </p>
 
-OpenClaw is a local-first control plane with a wide channel matrix and a plugin marketplace. The Gateway *dispatches* runs but doesn't supervise them; voice is a plugin tool the agent invokes through discrete actions; steering is implemented as abort-and-redeliver. OpenClaw's `VISION.md` explicitly takes "no agent-hierarchy frameworks (manager-of-managers)" as a non-goal — a deliberate, principled bet in the opposite direction from Unity. If you want a personal-assistant **product** with broad channel coverage, OpenClaw is excellent. If you want a runtime built around mid-task steering and structured long-lived state, Unity is shaped differently.
+OpenClaw is a local-first control plane with a wide channel matrix and a plugin marketplace. The Gateway *dispatches* runs onto a single Pi agent loop but doesn't supervise them; voice is a plugin tool the agent invokes through discrete actions. New messages that arrive during a run are handled at turn boundaries — `interrupt` aborts the run, `steer`/`followup` enqueues for after the run — but there is no in-flight steering mechanism. OpenClaw's `VISION.md` explicitly takes "no agent-hierarchy frameworks (manager-of-managers)" as a non-goal — a principled bet in the opposite direction from Unity. If you want a personal-assistant **product** with broad channel coverage and a thriving plugin ecosystem, OpenClaw is excellent. Unity is shaped for a different brief: a runtime where every action is mid-flight steerable and long-lived state is structured.
 
 </details>
 
@@ -225,10 +225,10 @@ OpenClaw is a local-first control plane with a wide channel matrix and a plugin 
 <summary><b>Hermes Agent</b> — many surfaces, one monolithic loop</summary>
 
 <p align="center">
-  <img src="assets/hermes-architecture.png" alt="Hermes Agent architecture: the user and cron + webhook automation triggers feed into a wide surfaces row (CLI, TUI, Gateway across Telegram/Discord/Slack/SMS, and ACP for IDEs); surfaces hand off to a single ~12k-LOC AIAgent loop (steer() injects text into the next tool result, interrupt() is a thread-scoped abort flag), which calls tools (native tools, execute_code, TTS / voice_mode / SMS, delegate_tool, MCP servers) and reads/writes state (SQLite sessions + FTS5, MEMORY.md / USER.md workspace files, SKILL.md library, memory provider plugin). No persistent supervising loop." width="780">
+  <img src="assets/hermes-architecture.png" alt="Hermes Agent architecture: the user and cron + webhook automation triggers feed into a wide surfaces row (CLI, TUI, Gateway across Telegram/Discord/Slack/SMS, and ACP for IDEs); surfaces hand off to a single ~12k-LOC sync agent-loop infrastructure (steer() injects text into the next tool result, interrupt() is a thread-scoped abort flag), which calls tools (native tools, execute_code, TTS / voice_mode / SMS, delegate_tool, MCP servers) and reads/writes state (SQLite sessions + FTS5, MEMORY.md / USER.md workspace files, SKILL.md library, memory provider plugin). No persistent reasoning loop above the agent." width="780">
 </p>
 
-Hermes pairs a single ~12k-LOC `AIAgent` loop with four surfaces (CLI, TUI, gateway, ACP), a deep markdown skills library, SQLite+FTS5 transcripts, and best-in-class cron / webhook automation. Steering is implemented as text injection into the next tool result; interrupt is a thread-scoped flag. Live telephony isn't in the repo — SMS is, voice is local-only. If you want a polished personal-agent product with a wide messaging surface, broad model support, and mature automation triggers, Hermes is excellent. Unity is making a different bet on what the orchestration layer should look like.
+Hermes pairs a single sync agent-loop (~12k-LOC across `AIAgent`, the conversation loop, and runtime helpers) with four surfaces (CLI, TUI, gateway, ACP), a deep markdown skills library, SQLite+FTS5 transcripts, and best-in-class cron / webhook automation. Steering is implemented as text injection into the next tool result; interrupt is a thread-scoped flag that propagates to delegated subagents. Live telephony isn't in the repo — SMS is, voice is local-only. If you want a polished personal-agent product with a wide messaging surface, broad model support, and mature automation triggers, Hermes is excellent. Unity is making a different bet on what the orchestration layer should look like — one in which the reasoning loop above the tool-caller is permanent, and steering is a first-class signal that nests through every manager call.
 
 </details>
 
