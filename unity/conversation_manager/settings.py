@@ -50,6 +50,11 @@ class ConversationSettings(BaseSettings):
             Unity). ``"pubsub"`` selects ``PubSubIngressTransport`` and is
             the value the hosted deployment will set once Phase C cuts
             over. Override via ``UNITY_CONVERSATION_INGRESS_TRANSPORT``.
+        OUTBOUND_TRANSPORT: Selector for the outbound transport
+            (``unity.gateway.OutboundTransport`` implementation) that
+            the comms_utils publish helpers use. Same value semantics
+            as INGRESS_TRANSPORT. Override via
+            ``UNITY_CONVERSATION_OUTBOUND_TRANSPORT``.
     """
 
     FAST_BRAIN_MODEL: str = "gpt-5.4-mini@openai"
@@ -75,6 +80,7 @@ class ConversationSettings(BaseSettings):
     LOCAL_COMMS_PUBLIC_URL: str = ""
     LOCAL_EMAIL_POLL_INTERVAL: float = 15.0
     INGRESS_TRANSPORT: str = ""
+    OUTBOUND_TRANSPORT: str = ""
 
     model_config = SettingsConfigDict(
         env_prefix="UNITY_CONVERSATION_",

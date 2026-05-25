@@ -21,6 +21,9 @@ from typing import Callable
 from unity.gateway.ingress import IngressTransport
 from unity.gateway.ingress_inmemory import InMemoryIngressTransport
 from unity.gateway.ingress_pubsub import PubSubIngressTransport
+from unity.gateway.outbound import OutboundTransport
+from unity.gateway.outbound_inmemory import InMemoryOutboundTransport
+from unity.gateway.outbound_pubsub import PubSubOutboundTransport
 
 _log = logging.getLogger("unity.gateway.factory")
 
@@ -116,10 +119,62 @@ def create_ingress_transport_factory(
     return None
 
 
+def create_outbound_transport(
+    *,
+    kind: str,
+    project_id: str = "",
+) -> OutboundTransport | None:
+    """Build an OutboundTransport at process startup.
+
+    Returns ``None`` -- meaning "use the legacy inline path in
+    ``comms_utils.py``" -- for ``kind`` values of ``""``, ``"legacy"``,
+    or anything else not in ``KNOWN_TRANSPORT_KINDS``. Logs a warning
+    for the unknown-kind case so misspellings surface in deploy logs.
+
+    Returns:
+
+    - ``InMemoryOutboundTransport`` for ``kind="inmemory"`` -- intended
+      for tests and the future local-process self-hosted path.
+    - ``PubSubOutboundTransport`` for ``kind="pubsub"`` -- intended
+      for the hosted Cloud Run + per-assistant Kubernetes Job
+      topology. ``project_id`` is required.
+
+    Unlike the ingress factory, this returns a transport instance
+    directly (not a callable factory). Outbound transports don't
+    depend on ``SESSION_DETAILS.assistant.agent_id``, so they can be
+    constructed eagerly at process startup.
+    """
+    if not kind or kind == TRANSPORT_KIND_LEGACY:
+        return None
+    if kind not in KNOWN_TRANSPORT_KINDS:
+        _log.warning(
+            "create_outbound_transport: unknown kind %r; "
+            "falling back to legacy. Expected one of %s.",
+            kind,
+            sorted(KNOWN_TRANSPORT_KINDS),
+        )
+        return None
+
+    if kind == TRANSPORT_KIND_INMEMORY:
+        return InMemoryOutboundTransport()
+
+    if kind == TRANSPORT_KIND_PUBSUB:
+        if not project_id:
+            raise ValueError(
+                "create_outbound_transport(kind='pubsub') requires "
+                "project_id to be non-empty",
+            )
+        return PubSubOutboundTransport(project_id=project_id)
+
+    # Unreachable; defensive return so the type checker sees a path.
+    return None
+
+
 __all__ = [
     "KNOWN_TRANSPORT_KINDS",
     "TRANSPORT_KIND_INMEMORY",
     "TRANSPORT_KIND_LEGACY",
     "TRANSPORT_KIND_PUBSUB",
     "create_ingress_transport_factory",
+    "create_outbound_transport",
 ]

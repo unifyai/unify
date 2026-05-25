@@ -302,7 +302,13 @@ async def run_conversation_manager(
         from unity.conversation_manager.comms_manager import (
             _get_subscription_id as _resolve_subscription_id,
         )
-        from unity.gateway.factory import create_ingress_transport_factory
+        from unity.conversation_manager.domains.comms_utils import (
+            set_outbound_transport,
+        )
+        from unity.gateway.factory import (
+            create_ingress_transport_factory,
+            create_outbound_transport,
+        )
 
         ingress_transport_factory = create_ingress_transport_factory(
             kind=SETTINGS.conversation.INGRESS_TRANSPORT,
@@ -310,6 +316,16 @@ async def run_conversation_manager(
             project_id=SETTINGS.GCP_PROJECT_ID,
             max_messages=10,
         )
+        # Outbound transport is constructed eagerly (no agent_id
+        # dependency) and registered as the module-level singleton in
+        # comms_utils. None means "use the legacy inline path";
+        # UNITY_CONVERSATION_OUTBOUND_TRANSPORT=pubsub activates the
+        # extracted PubSubOutboundTransport.
+        outbound_transport = create_outbound_transport(
+            kind=SETTINGS.conversation.OUTBOUND_TRANSPORT,
+            project_id=SETTINGS.GCP_PROJECT_ID,
+        )
+        set_outbound_transport(outbound_transport)
         comms_manager = CommsManager(
             event_broker=event_broker,
             ingress_transport_factory=ingress_transport_factory,

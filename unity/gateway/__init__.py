@@ -64,6 +64,7 @@ from unity.gateway.factory import (
     TRANSPORT_KIND_LEGACY,
     TRANSPORT_KIND_PUBSUB,
     create_ingress_transport_factory,
+    create_outbound_transport,
 )
 from unity.gateway.envelopes import (
     BaseEnvelope,
@@ -90,6 +91,7 @@ __all__ = [
     "TRANSPORT_KIND_LEGACY",
     "TRANSPORT_KIND_PUBSUB",
     "create_ingress_transport_factory",
+    "create_outbound_transport",
     "BaseEnvelope",
     "BaseInboundEvent",
     "EmailEnvelope",
