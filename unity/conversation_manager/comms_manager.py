@@ -30,7 +30,7 @@ import json
 import re
 import threading
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from dotenv import load_dotenv
 
@@ -409,6 +409,7 @@ class CommsManager:
         self,
         event_broker: "EventBroker",
         ingress_transport: "IngressTransport | None" = None,
+        ingress_transport_factory: "Callable[[], IngressTransport | None] | None" = None,
     ):
         self.subscribers: dict = {}
         self.call_proc = None
@@ -421,9 +422,19 @@ class CommsManager:
         # path. When None (the default for every call site at the time of
         # this change), the existing inline Pub/Sub subscriber remains active
         # so behaviour for legacy callers is unchanged. The inline path will
-        # be removed in Phase A.bis.5 once the injected path has soaked in
+        # be removed in a later phase once the injected path has soaked in
         # production. See unity/gateway/PHASES.md.
         self.ingress_transport: "IngressTransport | None" = ingress_transport
+        # Optional factory for lazy transport construction. Resolved inside
+        # ``_start_inbound_subscription``, which runs *after*
+        # ``_poll_for_assignment`` has set the per-assistant ``agent_id``.
+        # Required for the hosted Pub/Sub path because the subscription ID
+        # is derived from ``agent_id`` and therefore unknown at the moment
+        # ``CommsManager`` is constructed in an idle pod. Wins over
+        # ``ingress_transport`` when both are supplied.
+        self.ingress_transport_factory: (
+            "Callable[[], IngressTransport | None] | None"
+        ) = ingress_transport_factory
 
     def _publish_from_callback(self, channel: str, message: str) -> None:
         """
@@ -1489,14 +1500,27 @@ class CommsManager:
     async def _start_inbound_subscription(self) -> None:
         """Start inbound envelope delivery for the current assistant.
 
-        When ``ingress_transport`` was provided at construction, the
-        transport's ``start`` is awaited with ``dispatch_envelope_payload``
-        as the dispatcher. Otherwise the legacy inline Pub/Sub subscriber
-        is started via ``subscribe_to_topic``. Both paths produce the
-        same observable behaviour against ``event_broker``.
+        Resolution order:
+
+        1. If ``ingress_transport_factory`` was provided, it is called
+           now (after ``_poll_for_assignment`` has set ``agent_id``) to
+           materialize a transport. Factory may return ``None`` to opt
+           out, in which case the legacy path is used.
+        2. Otherwise, if ``ingress_transport`` was provided directly at
+           construction time, it is used.
+        3. Otherwise the legacy inline Pub/Sub subscriber is started
+           via ``subscribe_to_topic``.
+
+        All three paths produce the same observable behaviour against
+        ``event_broker``.
         """
-        if self.ingress_transport is not None:
-            await self.ingress_transport.start(self.dispatch_envelope_payload)
+        transport = self.ingress_transport
+        if self.ingress_transport_factory is not None:
+            transport = self.ingress_transport_factory()
+            # Cache the factory-materialized transport so _stop can reach it.
+            self.ingress_transport = transport
+        if transport is not None:
+            await transport.start(self.dispatch_envelope_payload)
             return
         self.subscribe_to_topic(_get_subscription_id(), max_messages=10)
 
