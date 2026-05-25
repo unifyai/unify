@@ -37,6 +37,7 @@ dump.rdb
 .unity_plans
 *.txt
 !requirements.txt
+!requirements-gateway.txt
 parsed_results_output/
 evals/
 magnitude/
@@ -55,6 +56,7 @@ assets/*
 !assets/nested-steering-sequence.png
 !assets/openclaw-architecture.png
 !assets/hermes-architecture.png
+!assets/unity-architecture.png
 discord_messages.md
 .cursor/debug.log
 # ConversationManager sandbox persistent config (project-local)
