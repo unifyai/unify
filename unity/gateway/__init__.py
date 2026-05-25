@@ -53,6 +53,10 @@ from unity.gateway.ingress import (
 from unity.gateway.ingress_inmemory import InMemoryIngressTransport
 from unity.gateway.ingress_pubsub import PubSubIngressTransport
 from unity.gateway.outbound import OutboundTransport
+from unity.gateway.outbound_inmemory import (
+    InMemoryOutboundTransport,
+    PublishedEnvelope,
+)
 from unity.gateway.factory import (
     KNOWN_TRANSPORT_KINDS,
     TRANSPORT_KIND_INMEMORY,
@@ -95,9 +99,11 @@ __all__ = [
     "EventBroker",
     "GenericEnvelope",
     "InMemoryIngressTransport",
+    "InMemoryOutboundTransport",
     "IngressTransport",
     "LocalDiskStorage",
     "OutboundTransport",
+    "PublishedEnvelope",
     "PubSubConnection",
     "PubSubIngressTransport",
     "PubSubMessage",
