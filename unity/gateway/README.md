@@ -63,10 +63,10 @@ unity/gateway/
 │   ├── base.py            # Storage Protocol
 │   ├── local.py           # LocalDiskStorage (default; self-hosted)
 │   └── gcs.py             # GcsStorage stub (Phase B)
-└── secrets/
-    ├── base.py            # SecretManager Protocol
-    ├── env.py             # EnvSecretManager (default; self-hosted)
-    └── gcp.py             # GcpSecretManager stub (Phase B)
+└── credentials/
+    ├── base.py            # CredentialStore Protocol
+    ├── env.py             # EnvCredentialStore (default; self-hosted)
+    └── gcp.py             # GcpCredentialStore stub (Phase B)
 ```
 
 `tests/gateway/` mirrors the structure with focused unit tests for
@@ -105,11 +105,19 @@ unmigrated channels flowing. `KNOWN_THREADS` enumerates the full
 `GcsStorage` is a stub that raises `NotImplementedError` pending Phase B,
 when the first hosted call site needs it wired in.
 
-### Secrets (`secrets/`)
+### Credentials (`credentials/`)
 
-`EnvSecretManager` is the self-hosted default — reads from process
-environment variables, with optional prefix filtering. `GcpSecretManager`
+`EnvCredentialStore` is the self-hosted default — reads from process
+environment variables, with optional prefix filtering. `GcpCredentialStore`
 is a stub pending Phase B.
+
+This package is **distinct from** `unity.secret_manager` -- the
+gateway's `credentials/` holds operator infrastructure credentials
+(e.g. `TWILIO_ACCOUNT_SID`) used by the gateway processes to talk to
+external messaging providers, while `unity.secret_manager` holds
+assistant-owned secrets the assistant uses on the user's behalf.
+The two systems never touch each other and were given distinct names
+to prevent confusion.
 
 ## What is **not** in this package
 

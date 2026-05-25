@@ -81,7 +81,11 @@ from unity.gateway.envelopes import (
     UnitySystemEvent,
     parse_envelope,
 )
-from unity.gateway.secrets import EnvSecretManager, SecretManager
+from unity.gateway.credentials import (
+    CredentialNotFoundError,
+    CredentialStore,
+    EnvCredentialStore,
+)
 from unity.gateway.storage import LocalDiskStorage, Storage
 
 __all__ = [
@@ -95,9 +99,11 @@ __all__ = [
     "BaseEnvelope",
     "BaseInboundEvent",
     "EmailEnvelope",
+    "CredentialNotFoundError",
+    "CredentialStore",
     "EmailReceivedEvent",
     "Envelope",
-    "EnvSecretManager",
+    "EnvCredentialStore",
     "EnvelopeDispatcher",
     "EventBroker",
     "GenericEnvelope",
@@ -113,7 +119,6 @@ __all__ = [
     "PubSubOutboundTransport",
     "SMSEnvelope",
     "SMSReceivedEvent",
-    "SecretManager",
     "Storage",
     "SystemEventEnvelope",
     "UnifyMessageEnvelope",
