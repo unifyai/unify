@@ -23,8 +23,12 @@ impact. Fully reversible.**
   thread types. Full catalogue documented in `KNOWN_THREADS`.
 - `unity/gateway/storage/` — `Storage` protocol, `LocalDiskStorage`
   default, `GcsStorage` stub.
-- `unity/gateway/secrets/` — `SecretManager` protocol,
-  `EnvSecretManager` default, `GcpSecretManager` stub.
+- `unity/gateway/credentials/` — `CredentialStore` protocol,
+  `EnvCredentialStore` default, `GcpCredentialStore` stub.
+  (Renamed from the earlier `secrets/` / `SecretManager` naming so
+  the gateway's operator-infra credentials don't collide with
+  `unity.secret_manager`, which is the assistant's own state-manager
+  for user-on-behalf secrets.)
 - `tests/gateway/` — focused tests for every module above.
 - This document and `README.md`.
 
@@ -306,5 +310,5 @@ The end-state for self-hosted Unity matches both: a single repository
 the user clones, with the gateway surface in `gateway/` (here:
 `unity/gateway/`), a single `serve` command that brings up the
 external-comms HTTP boundary, and an `InMemoryEventBroker` /
-`LocalDiskStorage` / `EnvSecretManager` default that works without any
+`LocalDiskStorage` / `EnvCredentialStore` default that works without any
 cloud account.

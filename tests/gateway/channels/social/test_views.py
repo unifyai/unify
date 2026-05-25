@@ -24,7 +24,7 @@ from unity.gateway.channels.social.views import (
     _get_messaging_service_sid,
     _reset_messaging_service_sid_cache,
 )
-from unity.gateway.secrets import EnvSecretManager
+from unity.gateway.credentials import EnvCredentialStore
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -284,20 +284,23 @@ def test_verify_phone_raises_when_messaging_service_missing(
 
 
 # ---------------------------------------------------------------------------
-# Credential resolution via SecretManager
+# Credential resolution via CredentialStore
 # ---------------------------------------------------------------------------
 
 
-def test_build_twilio_client_uses_secret_manager(
+def test_build_twilio_client_uses_credential_store(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "ACfromsecretmanager")
-    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "tokenfromsecretmanager")
-    secrets = EnvSecretManager()
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "ACfromcredentialstore")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "tokenfromcredentialstore")
+    credentials = EnvCredentialStore()
 
     with patch("twilio.rest.Client") as MockClient:
-        _build_twilio_client(secrets)
-    MockClient.assert_called_once_with("ACfromsecretmanager", "tokenfromsecretmanager")
+        _build_twilio_client(credentials)
+    MockClient.assert_called_once_with(
+        "ACfromcredentialstore",
+        "tokenfromcredentialstore",
+    )
 
 
 def test_build_twilio_client_raises_when_credentials_missing(
@@ -305,10 +308,10 @@ def test_build_twilio_client_raises_when_credentials_missing(
 ) -> None:
     monkeypatch.delenv("TWILIO_ACCOUNT_SID", raising=False)
     monkeypatch.delenv("TWILIO_AUTH_TOKEN", raising=False)
-    secrets = EnvSecretManager()
+    credentials = EnvCredentialStore()
 
     with pytest.raises(RuntimeError, match="TWILIO_ACCOUNT_SID"):
-        _build_twilio_client(secrets)
+        _build_twilio_client(credentials)
 
 
 def test_build_twilio_wa_client_uses_separate_credentials(
@@ -319,17 +322,17 @@ def test_build_twilio_wa_client_uses_separate_credentials(
     monkeypatch.setenv("TWILIO_AUTH_TOKEN", "smstoken")
     monkeypatch.delenv("TWILIO_WA_ACCOUNT_SID", raising=False)
     monkeypatch.delenv("TWILIO_WA_AUTH_TOKEN", raising=False)
-    secrets = EnvSecretManager()
+    credentials = EnvCredentialStore()
 
     with pytest.raises(RuntimeError, match="TWILIO_WA_ACCOUNT_SID"):
-        _build_twilio_wa_client(secrets)
+        _build_twilio_wa_client(credentials)
 
 
 def test_get_messaging_service_sid_caches_result(
     _twilio_credentials: None,
 ) -> None:
     """First lookup hits Twilio; subsequent lookups return cached value."""
-    secrets = EnvSecretManager()
+    credentials = EnvCredentialStore()
     fake_client = MagicMock(name="TwilioClient")
     fake_service = MagicMock()
     fake_service.friendly_name = MESSAGING_SERVICE_NAME
@@ -340,8 +343,8 @@ def test_get_messaging_service_sid_caches_result(
         "unity.gateway.channels.social.views._build_twilio_client",
         return_value=fake_client,
     ):
-        sid1 = _get_messaging_service_sid(secrets)
-        sid2 = _get_messaging_service_sid(secrets)
+        sid1 = _get_messaging_service_sid(credentials)
+        sid2 = _get_messaging_service_sid(credentials)
 
     assert sid1 == sid2 == "MGcached"
     # Twilio listing was only invoked once due to the cache.

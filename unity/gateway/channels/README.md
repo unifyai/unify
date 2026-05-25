@@ -31,8 +31,8 @@ plumbing.
 
 | What in `communication` | Replaced by in `unity.gateway` |
 | --- | --- |
-| `from common.settings import SETTINGS` | `from unity.gateway.secrets import EnvSecretManager` (for credentials) or `from unity.settings import SETTINGS` (for non-credential config) |
-| `os.getenv("TWILIO_ACCOUNT_SID")` style direct env reads | `secrets.get("TWILIO_ACCOUNT_SID")` via an `EnvSecretManager` instance |
+| `from common.settings import SETTINGS` | `from unity.gateway.credentials import EnvCredentialStore` (for transport credentials) or `from unity.settings import SETTINGS` (for non-credential config) |
+| `os.getenv("TWILIO_ACCOUNT_SID")` style direct env reads | `credentials.get("TWILIO_ACCOUNT_SID")` via an `EnvCredentialStore` instance. **Do not** confuse this with `unity.secret_manager` -- the gateway's `CredentialStore` holds operator infrastructure credentials, while `unity.secret_manager` holds assistant-owned user-on-behalf secrets. They are deliberately distinct systems. |
 | `from communication.helpers import get_twilio_client` | Inline helper inside the channel module (promote to `unity/gateway/common/` once two or more channels need it) |
 | `from google.cloud import pubsub_v1` + `publisher.publish(...)` | `from unity.conversation_manager.domains.comms_utils import get_outbound_transport` then `transport.publish(topic, msg_bytes, thread=thread)` — or use `_publish_to_assistant_topic` directly if publishing to the per-assistant topic |
 | Direct envelope dict construction (`{"thread": ..., "event": {...}}`) | Pydantic `XEnvelope(...)` from `unity.gateway.envelopes` when a concrete schema exists; raw dict + `parse_envelope` otherwise. The schema is added to `envelopes.py` as part of the same PR. |
