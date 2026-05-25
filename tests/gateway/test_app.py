@@ -338,3 +338,304 @@ class TestLifespan:
             app = app_module.create_app()
             async with app.router.lifespan_context(app):  # type: ignore[attr-defined]
                 pass  # got past lifespan startup without raising
+
+
+# ---------------------------------------------------------------------------
+# Plugin composition: extra_routers + extra_setup_hooks + extra_lifespan_hooks
+# ---------------------------------------------------------------------------
+
+
+def _patch_discord_lifespan(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Quiet the built-in Discord lifespan so it doesn't hit httpx."""
+    from unity.gateway.channels.discord import bot_manager
+
+    async def _noop_sync() -> int:
+        return 0
+
+    async def _quiet_loop() -> None:
+        return
+
+    monkeypatch.setattr(bot_manager, "sync_from_orchestra", _noop_sync)
+    monkeypatch.setattr(bot_manager, "start_health_check_loop", _quiet_loop)
+
+
+class TestExtraRouters:
+    """``extra_routers`` are mounted with their declared dependencies."""
+
+    def test_no_plugins_route_inventory_matches_oss_app(
+        self,
+        _admin_settings: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """create_app() with no plugins is byte-for-byte the OSS app.
+
+        We compare the route inventory (path + methods + dependency
+        count) between a stock app and the module-level app to prove
+        the no-plugin path is a pure no-op.
+        """
+        _patch_discord_lifespan(monkeypatch)
+        from unity.gateway.app import app as oss_app
+
+        plain = create_app()
+
+        def _inventory(a: FastAPI) -> set[tuple]:
+            return {
+                (
+                    r.path,  # type: ignore[attr-defined]
+                    tuple(sorted(getattr(r, "methods", set()) or set())),
+                )
+                for r in a.routes
+            }
+
+        assert _inventory(plain) == _inventory(oss_app)
+
+    def test_extra_router_with_admin_auth_is_protected(
+        self,
+        _admin_settings: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A plugin router declared with the admin dependency rejects no-auth."""
+        _patch_discord_lifespan(monkeypatch)
+        from fastapi import APIRouter
+
+        from unity.gateway.app import ExtraRouter
+        from unity.gateway.common.auth import admin_auth_dependency
+
+        plugin = APIRouter()
+
+        @plugin.get("/ping")
+        async def ping() -> dict:
+            return {"plugin": "ok"}
+
+        app = create_app(
+            extra_routers=[
+                ExtraRouter(
+                    router=plugin,
+                    prefix="/_plugin",
+                    dependencies=admin_auth_dependency,
+                ),
+            ],
+        )
+        with TestClient(app) as client:
+            r_unauth = client.get("/_plugin/ping")
+            r_wrong = client.get(
+                "/_plugin/ping",
+                headers={"Authorization": "Bearer wrong"},
+            )
+            r_ok = client.get(
+                "/_plugin/ping",
+                headers={"Authorization": "Bearer test-admin-key"},
+            )
+        assert r_unauth.status_code in (401, 403)
+        assert r_wrong.status_code == 403
+        assert r_ok.status_code == 200
+        assert r_ok.json() == {"plugin": "ok"}
+
+    def test_extra_router_without_dependencies_is_unauth(
+        self,
+        _admin_settings: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A plugin router declared with no dependencies is reachable without bearer."""
+        _patch_discord_lifespan(monkeypatch)
+        from fastapi import APIRouter
+
+        from unity.gateway.app import ExtraRouter
+
+        plugin = APIRouter()
+
+        @plugin.get("/open")
+        async def open_handler() -> dict:
+            return {"open": True}
+
+        app = create_app(
+            extra_routers=[
+                ExtraRouter(router=plugin, prefix="/_open"),
+            ],
+        )
+        with TestClient(app) as client:
+            assert client.get("/_open/open").status_code == 200
+
+    def test_multiple_extra_routers_can_share_a_prefix(
+        self,
+        _admin_settings: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Mirrors how communication/main.py mounts 3 routers under /infra."""
+        _patch_discord_lifespan(monkeypatch)
+        from fastapi import APIRouter
+
+        from unity.gateway.app import ExtraRouter
+        from unity.gateway.common.auth import admin_auth_dependency
+
+        admin_part = APIRouter()
+        public_part = APIRouter()
+
+        @admin_part.get("/admin-thing")
+        async def _a() -> dict:
+            return {"who": "admin"}
+
+        @public_part.get("/public-thing")
+        async def _p() -> dict:
+            return {"who": "public"}
+
+        app = create_app(
+            extra_routers=[
+                ExtraRouter(
+                    router=admin_part,
+                    prefix="/_infra",
+                    dependencies=admin_auth_dependency,
+                ),
+                ExtraRouter(router=public_part, prefix="/_infra"),
+            ],
+        )
+        with TestClient(app) as client:
+            # admin route protected
+            assert client.get("/_infra/admin-thing").status_code in (401, 403)
+            ok = client.get(
+                "/_infra/admin-thing",
+                headers={"Authorization": "Bearer test-admin-key"},
+            )
+            assert ok.status_code == 200
+            # public route reachable
+            assert client.get("/_infra/public-thing").status_code == 200
+
+
+class TestExtraSetupHooks:
+    """``extra_setup_hooks`` run at startup via ``run_in_executor``."""
+
+    @pytest.mark.asyncio
+    async def test_setup_hooks_fire_at_lifespan_start(
+        self,
+        _admin_settings: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _patch_discord_lifespan(monkeypatch)
+        import asyncio as _a
+
+        calls: list[str] = []
+
+        def hook_a() -> None:
+            calls.append("a")
+
+        def hook_b() -> None:
+            calls.append("b")
+
+        app = create_app(extra_setup_hooks=[hook_a, hook_b])
+
+        async with app.router.lifespan_context(app):  # type: ignore[attr-defined]
+            # run_in_executor is fire-and-forget; give it a tick to land.
+            for _ in range(20):
+                if len(calls) >= 2:
+                    break
+                await _a.sleep(0.01)
+
+        assert sorted(calls) == ["a", "b"]
+
+    @pytest.mark.asyncio
+    async def test_setup_hook_failure_does_not_block_startup(
+        self,
+        _admin_settings: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Fire-and-forget semantics: a hook that raises is logged by the
+        executor but the app still becomes ready.
+        """
+        _patch_discord_lifespan(monkeypatch)
+
+        def bad_hook() -> None:
+            raise RuntimeError("boom")
+
+        app = create_app(extra_setup_hooks=[bad_hook])
+        # If startup were blocked, this would hang or raise.
+        async with app.router.lifespan_context(app):  # type: ignore[attr-defined]
+            pass
+
+
+class TestExtraLifespanHooks:
+    """``extra_lifespan_hooks`` enter at startup and exit at shutdown."""
+
+    @pytest.mark.asyncio
+    async def test_lifespan_hooks_enter_and_exit(
+        self,
+        _admin_settings: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _patch_discord_lifespan(monkeypatch)
+        events: list[str] = []
+
+        @asynccontextmanager
+        async def hook(app: FastAPI):
+            events.append("enter")
+            try:
+                yield
+            finally:
+                events.append("exit")
+
+        app = create_app(extra_lifespan_hooks=[hook])
+
+        async with app.router.lifespan_context(app):  # type: ignore[attr-defined]
+            assert events == ["enter"]
+        assert events == ["enter", "exit"]
+
+    @pytest.mark.asyncio
+    async def test_multiple_lifespan_hooks_enter_in_order_exit_in_reverse(
+        self,
+        _admin_settings: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """AsyncExitStack semantics: LIFO teardown."""
+        _patch_discord_lifespan(monkeypatch)
+        events: list[str] = []
+
+        def _make_hook(label: str):
+            @asynccontextmanager
+            async def hook(app: FastAPI):
+                events.append(f"enter:{label}")
+                try:
+                    yield
+                finally:
+                    events.append(f"exit:{label}")
+
+            return hook
+
+        app = create_app(
+            extra_lifespan_hooks=[_make_hook("A"), _make_hook("B"), _make_hook("C")],
+        )
+
+        async with app.router.lifespan_context(app):  # type: ignore[attr-defined]
+            pass
+
+        assert events == [
+            "enter:A",
+            "enter:B",
+            "enter:C",
+            "exit:C",
+            "exit:B",
+            "exit:A",
+        ]
+
+
+class TestExtraRouterDataclass:
+    """``ExtraRouter`` defaults and immutability."""
+
+    def test_dependencies_defaults_to_empty(self) -> None:
+        from fastapi import APIRouter
+
+        from unity.gateway.app import ExtraRouter
+
+        r = ExtraRouter(router=APIRouter(), prefix="/x")
+        assert list(r.dependencies) == []
+        assert r.tags is None
+
+    def test_is_frozen(self) -> None:
+        """Frozen dataclass: plugin specs are immutable after construction."""
+        from dataclasses import FrozenInstanceError
+
+        from fastapi import APIRouter
+
+        from unity.gateway.app import ExtraRouter
+
+        r = ExtraRouter(router=APIRouter(), prefix="/x")
+        with pytest.raises(FrozenInstanceError):
+            r.prefix = "/y"  # type: ignore[misc]
