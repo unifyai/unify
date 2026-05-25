@@ -88,6 +88,12 @@ from unity.gateway.credentials import (
 )
 from unity.gateway.storage import LocalDiskStorage, Storage
 
+# The aggregator (app.py) and per-channel routers live deeper in the tree
+# and are not re-exported here -- importing the package should not pay
+# the cost of loading every channel's third-party SDKs (msgraph, twilio,
+# discord helpers, ...). Use ``from unity.gateway.app import app`` or
+# ``python -m unity.gateway`` instead.
+
 __all__ = [
     "AckCallable",
     "KNOWN_TRANSPORT_KINDS",
