@@ -527,10 +527,30 @@ class _LowLevelActionsMixin:
         and any registered ``data-callback`` / SPA-mounted callback) so
         the page's own submit flow accepts the verification.
 
-        Returns once injection succeeds.  This is a deterministic,
-        non-LLM primitive -- callers typically reach for it from their
-        own orchestration code after a prior ``observe()`` call has
-        visually confirmed a CAPTCHA is on screen.
+        Blocks until the page has verifiably progressed past the
+        captcha -- not just until the token is injected.  Concretely the
+        handler waits, after injection, for one of:
+
+        1. ``grecaptcha.getResponse()`` returns the injected token (the
+           widget's own JS API confirming it has internalised the
+           verification).  Up to 5s.
+        2. A network response from ``recaptcha/api2/userverify`` or
+           ``recaptcha/enterprise/userverify`` (Google's server-side
+           verification round-trip).  Up to 15s.
+        3. Playwright's ``networkidle`` (no network requests for 500ms).
+           Up to 15s.
+
+        Whichever signal lands first latches.  This eliminates the need
+        for caller-side ``asyncio.sleep`` after ``solve_captcha`` --
+        the primitive returns only once the page is genuinely in a
+        post-captcha state (or the settle timeout expires, in which
+        case ``settled=False`` is returned and the caller can decide
+        whether to retry, observe anyway, or abort).
+
+        This is a deterministic, non-LLM primitive -- callers typically
+        reach for it from their own orchestration code after a prior
+        ``observe()`` call has visually confirmed a CAPTCHA is on
+        screen.
 
         Cost is on the order of $0.50-2 per 1000 v2 solves and a typical
         solve completes in ~10-30 seconds; ``timeout`` should be left at
@@ -549,14 +569,28 @@ class _LowLevelActionsMixin:
             ``"v2_checkbox"``.
         timeout : float, optional
             Maximum number of seconds the Python wrapper will wait for
-            the agent-service to finish solving.  Default is 240s.
+            the agent-service to finish solving.  Default is 240s --
+            this is the outer envelope (worker solve + injection +
+            settle wait); the individual sub-steps have their own
+            shorter bounds.
 
         Returns
         -------
         dict
             ``{"status": "solved", "solve_time_ms": int, "sitekey": str,
-            "variant": str, "task_id": int}``.  The actual token is
-            never returned and never logged.
+            "variant": str, "task_id": int, "widget_acked": bool,
+            "settled": bool, "settled_via": str}``.
+
+            - ``widget_acked``: whether ``grecaptcha.getResponse()``
+              confirmed the widget accepted the token within 5s.
+            - ``settled``: whether the page progressed past the
+              captcha within the settle-timeout (15s).
+            - ``settled_via``: which signal latched first --
+              ``"userverify"`` (Google's verification network
+              response), ``"networkidle"`` (Playwright network-idle),
+              or ``"timeout"`` (neither, ``settled`` is False).
+
+            The actual token is never returned and never logged.
 
         Raises
         ------
@@ -1229,6 +1263,9 @@ class MockComputerBackend(ComputerBackend):
             "sitekey": "mock",
             "variant": variant or "v2_checkbox",
             "task_id": 0,
+            "widget_acked": True,
+            "settled": True,
+            "settled_via": "networkidle",
         }
 
     async def get_session(self, mode: str) -> "ComputerSession":
@@ -1239,8 +1276,10 @@ class MockComputerBackend(ComputerBackend):
         self,
         mode: str,
         label: str | None = None,
+        storage_state_name: str | None = None,
     ) -> "ComputerSession":
         """Return a new mock session for the given mode."""
+        _ = storage_state_name  # accepted for signature compatibility
         if mode == "desktop":
             raise RuntimeError("Desktop mode is singleton")
         return _MockSession(mode, self)
@@ -1321,6 +1360,9 @@ class _MockSession(_LowLevelActionsMixin):
             "sitekey": "mock",
             "variant": variant or "v2_checkbox",
             "task_id": 0,
+            "widget_acked": True,
+            "settled": True,
+            "settled_via": "networkidle",
         }
 
     async def stop(self) -> None:
@@ -1708,8 +1750,20 @@ class MagnitudeBackend(ComputerBackend):
         self,
         mode: str,
         label: str | None = None,
+        storage_state_name: str | None = None,
     ) -> ComputerSession:
-        """Create a session asynchronously."""
+        """Create a session asynchronously.
+
+        ``storage_state_name`` is forwarded to the agent-service
+        ``/start`` endpoint and from there to magnitude-core's
+        BrowserProvider, which loads
+        ``~/.magnitude/browser_states/<safeName>.json`` (cookies +
+        localStorage + sessionStorage) before any page renders. Used by
+        clients that want a fresh session pre-loaded with a previously-
+        saved authentication state (see ``save_browser_state``).
+        Currently only honoured by the agent-service for
+        ``mode == "web"``.
+        """
         import time as _cs_time
 
         _cs_t0 = _cs_time.perf_counter()
@@ -1719,6 +1773,8 @@ class MagnitudeBackend(ComputerBackend):
             params["label"] = label
         if self._url_mappings:
             params["urlMappings"] = self._url_mappings
+        if storage_state_name:
+            params["storageStateName"] = storage_state_name
         auth_key = SESSION_DETAILS.unify_key
         headers = {"authorization": f"Bearer {auth_key}"}
         use_ssl = self._vm_ssl if mode in ("desktop", "web-vm") else None
@@ -1772,17 +1828,25 @@ class MagnitudeBackend(ComputerBackend):
         self,
         mode: str,
         label: str | None = None,
+        storage_state_name: str | None = None,
     ) -> ComputerSession:
         """Spawn an additional parallel session (web/web-vm only).
 
         Desktop mode is singleton (one mouse, one keyboard) and cannot be
         duplicated.  Use ``get_session("desktop")`` for the single desktop session.
+
+        ``storage_state_name`` (web only): boot the new session with a
+        previously-saved storage state so it starts already-authenticated.
         """
         if mode == "desktop":
             raise RuntimeError(
                 "Desktop mode is singleton -- cannot create additional sessions",
             )
-        session = await self._create_session_async(mode, label=label)
+        session = await self._create_session_async(
+            mode,
+            label=label,
+            storage_state_name=storage_state_name,
+        )
         self._extra_sessions.append(session)
         return session
 

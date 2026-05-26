@@ -631,19 +631,35 @@ const isAgentReady = (req: Request, res: Response, next: Function) => {
   next();
 };
 
-const getLaunchOptions = (headless: boolean, downloadsPath: string | null = null, tracesDir: string | null = null) => {
-  return { launchOptions: {
-    headless: headless,
-    args: [
-      "--disable-blink-features=AutomationControlled",
-      "--disable-features=IsolateOrigins,site-per-process",
-      // "--enable-features=WebRtcV4L2VideoCapture",
-      // "--auto-select-window-capture-source-by-title=Google",
-      '--auto-select-desktop-capture-source="Entire screen"',
-    ],
-    downloadsPath: downloadsPath || undefined,
-    tracesDir: tracesDir || undefined,
-  }}
+const getLaunchOptions = (
+  headless: boolean,
+  downloadsPath: string | null = null,
+  tracesDir: string | null = null,
+  storageStateName: string | null = null,
+) => {
+  // ``storageStateName`` is forwarded to magnitude-core's BrowserProvider,
+  // which loads ~/.magnitude/browser_states/<safeName>.json (cookies +
+  // localStorage + sessionStorage) before any page renders.  Used by
+  // brain.influencers.youtube to keep one operator-supervised Google
+  // login persistent across subsequent headless extraction runs.
+  const opts: any = {
+    launchOptions: {
+      headless: headless,
+      args: [
+        "--disable-blink-features=AutomationControlled",
+        "--disable-features=IsolateOrigins,site-per-process",
+        // "--enable-features=WebRtcV4L2VideoCapture",
+        // "--auto-select-window-capture-source-by-title=Google",
+        '--auto-select-desktop-capture-source="Entire screen"',
+      ],
+      downloadsPath: downloadsPath || undefined,
+      tracesDir: tracesDir || undefined,
+    },
+  };
+  if (storageStateName) {
+    opts.storageStateName = storageStateName;
+  }
+  return opts;
 };
 
 // LLM config resolution with graceful fallbacks. Default route is the
@@ -730,11 +746,20 @@ const startDesktop = async (): Promise<BrowserAgent> => {
   }
 }
 
-const startBrowser = async (headless: boolean, urlMappings?: Record<string, string>): Promise<BrowserAgent> => {
+const startBrowser = async (
+  headless: boolean,
+  urlMappings?: Record<string, string>,
+  storageStateName?: string,
+): Promise<BrowserAgent> => {
   try {
     const agent = await startBrowserAgent({
       url: "https://www.google.com/",
-      browser: getLaunchOptions(headless, defaultBrowserPaths.downloadsPath, defaultBrowserPaths.tracesDir),
+      browser: getLaunchOptions(
+        headless,
+        defaultBrowserPaths.downloadsPath,
+        defaultBrowserPaths.tracesDir,
+        storageStateName ?? null,
+      ),
       narrate: true,
       urlMappings,
       // Route LLM calls through Orchestra/UniLLM proxy for billing/caching,
@@ -1169,7 +1194,12 @@ async function googleMeetPollState(sessionId: string): Promise<void> {
 
 // --- API Endpoints ---
 app.post('/start', async (req: Request, res: Response) => {
-  const { headless, mode, label, urlMappings } = req.body;
+  // ``storageStateName`` is optional. When set, the magnitude
+  // BrowserProvider loads ~/.magnitude/browser_states/<safeName>.json
+  // (cookies + localStorage + sessionStorage) before any page renders so
+  // the new session boots already-authenticated. Currently only honoured
+  // for ``mode === 'web'``.
+  const { headless, mode, label, urlMappings, storageStateName } = req.body;
   if (!mode || !['desktop', 'web', 'web-vm'].includes(mode)) {
     return res.status(400).json({
       error: 'bad_request',
@@ -1207,7 +1237,11 @@ app.post('/start', async (req: Request, res: Response) => {
     } else if (mode === "web-vm") {
       agent = await startBrowserOnVm(mappings);
     } else {
-      agent = await startBrowser(headless ?? false, mappings);
+      agent = await startBrowser(
+        headless ?? false,
+        mappings,
+        typeof storageStateName === 'string' && storageStateName ? storageStateName : undefined,
+      );
     }
     console.log(`[start] agent_created=${Date.now() - t0}ms mode=${mode}`);
 
@@ -2092,65 +2126,100 @@ app.post('/captcha/solve', isAgentReady, async (req: Request, res: Response) => 
       });
     }
 
-    // Inject the token + invoke any registered callbacks.  Done in a
-    // single ``page.evaluate`` so the token is passed in as a function
-    // argument (and lives only on the page side) rather than being
-    // serialized into the evaluation source string.  Returns true if the
-    // textarea was populated OR any callback was successfully invoked.
-    const injectionOk: boolean = await page.evaluate((tkn: string) => {
-      let textareaSet = false;
-      let callbackCalled = false;
+    // Inject the token + invoke any registered callbacks, then poll the
+    // reCAPTCHA widget's own JS API until it acknowledges the token. All
+    // done inside a single ``page.evaluate`` so the token is passed in as
+    // a function argument (and lives only on the page side) rather than
+    // being serialised into the evaluation source string.
+    //
+    // The async polling loop turns the brittle "inject and pray" pattern
+    // into a deterministic widget-level handshake: we know the widget
+    // accepts the token when ``grecaptcha.getResponse()`` returns a
+    // non-empty string. This catches injection failures (token written
+    // but widget rejects it) AND eliminates the need for caller-side
+    // sleeps.
+    //
+    // Returns ``{ injected, widgetAcked }`` where ``injected`` means at
+    // least one textarea or callback received the token, and
+    // ``widgetAcked`` means the widget's own JS API confirms it has
+    // internalised the verification.
+    const injectionResult: { injected: boolean; widgetAcked: boolean } = await page.evaluate(
+      async (tkn: string) => {
+        let textareaSet = false;
+        let callbackCalled = false;
 
-      const textareas = Array.from(
-        document.querySelectorAll('textarea[id^="g-recaptcha-response"], textarea[name="g-recaptcha-response"]'),
-      ) as HTMLTextAreaElement[];
-      for (const ta of textareas) {
-        ta.value = tkn;
-        try { ta.dispatchEvent(new Event('input', { bubbles: true })); } catch { /* best-effort */ }
-        try { ta.dispatchEvent(new Event('change', { bubbles: true })); } catch { /* best-effort */ }
-        textareaSet = true;
-      }
-
-      // Strategy A: data-callback attribute names a window-scoped function.
-      const cbHosts = Array.from(document.querySelectorAll('[data-callback]')) as HTMLElement[];
-      for (const host of cbHosts) {
-        const name = host.getAttribute('data-callback');
-        if (!name) continue;
-        const fn = (window as any)[name];
-        if (typeof fn === 'function') {
-          try { fn(tkn); callbackCalled = true; } catch { /* best-effort */ }
+        const textareas = Array.from(
+          document.querySelectorAll('textarea[id^="g-recaptcha-response"], textarea[name="g-recaptcha-response"]'),
+        ) as HTMLTextAreaElement[];
+        for (const ta of textareas) {
+          ta.value = tkn;
+          try { ta.dispatchEvent(new Event('input', { bubbles: true })); } catch { /* best-effort */ }
+          try { ta.dispatchEvent(new Event('change', { bubbles: true })); } catch { /* best-effort */ }
+          textareaSet = true;
         }
-      }
 
-      // Strategy B: walk window.___grecaptcha_cfg.clients[*] for nested
-      // ``callback`` functions (this is how SPA-mounted widgets register).
-      try {
-        const cfg: any = (window as any).___grecaptcha_cfg;
-        const clients = cfg?.clients;
-        if (clients && typeof clients === 'object') {
-          const walk = (node: any, depth: number): void => {
-            if (!node || depth > 6) return;
-            if (typeof node === 'object') {
-              for (const k of Object.keys(node)) {
-                const v = node[k];
-                if (k === 'callback' && typeof v === 'function') {
-                  try { v(tkn); callbackCalled = true; } catch { /* best-effort */ }
-                } else if (typeof v === 'object' && v !== null) {
-                  walk(v, depth + 1);
-                }
-              }
-            }
-          };
-          for (const clientKey of Object.keys(clients)) {
-            walk(clients[clientKey], 0);
+        // Strategy A: data-callback attribute names a window-scoped function.
+        const cbHosts = Array.from(document.querySelectorAll('[data-callback]')) as HTMLElement[];
+        for (const host of cbHosts) {
+          const name = host.getAttribute('data-callback');
+          if (!name) continue;
+          const fn = (window as any)[name];
+          if (typeof fn === 'function') {
+            try { fn(tkn); callbackCalled = true; } catch { /* best-effort */ }
           }
         }
-      } catch { /* best-effort */ }
 
-      return textareaSet || callbackCalled;
-    }, token);
+        // Strategy B: walk window.___grecaptcha_cfg.clients[*] for nested
+        // ``callback`` functions (this is how SPA-mounted widgets register).
+        try {
+          const cfg: any = (window as any).___grecaptcha_cfg;
+          const clients = cfg?.clients;
+          if (clients && typeof clients === 'object') {
+            const walk = (node: any, depth: number): void => {
+              if (!node || depth > 6) return;
+              if (typeof node === 'object') {
+                for (const k of Object.keys(node)) {
+                  const v = node[k];
+                  if (k === 'callback' && typeof v === 'function') {
+                    try { v(tkn); callbackCalled = true; } catch { /* best-effort */ }
+                  } else if (typeof v === 'object' && v !== null) {
+                    walk(v, depth + 1);
+                  }
+                }
+              }
+            };
+            for (const clientKey of Object.keys(clients)) {
+              walk(clients[clientKey], 0);
+            }
+          }
+        } catch { /* best-effort */ }
 
-    if (!injectionOk) {
+        // Poll the widget's own ``grecaptcha.getResponse()`` until it
+        // returns the injected token (or any non-empty string — some
+        // Enterprise variants normalise the token). 5s ceiling.
+        const widgetDeadline = Date.now() + 5_000;
+        let widgetAcked = false;
+        while (Date.now() < widgetDeadline) {
+          try {
+            const widget = (window as any).grecaptcha;
+            const getResponse = widget && typeof widget.getResponse === 'function' ? widget.getResponse : null;
+            if (getResponse) {
+              const resp = getResponse();
+              if (typeof resp === 'string' && resp.length > 0) {
+                widgetAcked = true;
+                break;
+              }
+            }
+          } catch { /* best-effort */ }
+          await new Promise(r => setTimeout(r, 100));
+        }
+
+        return { injected: textareaSet || callbackCalled, widgetAcked };
+      },
+      token,
+    );
+
+    if (!injectionResult.injected) {
       console.error(`[captcha/solve] injection_failed task_id=${taskId} sitekey=${sitekey}`);
       return res.status(500).json({
         error: 'injection_failed',
@@ -2158,9 +2227,45 @@ app.post('/captcha/solve', isAgentReady, async (req: Request, res: Response) => 
       });
     }
 
+    // Wait for the host page to actually progress past the captcha.
+    // Two race-able signals, both Playwright-native, both bounded so no
+    // misbehaved page can wedge the handler.  ``settled_via`` tells the
+    // caller which signal latched first (or that we timed out).
+    //
+    // - 'userverify' — reCAPTCHA's server-side verification round-trip
+    //   POSTs to ``recaptcha/api2/userverify`` (or the Enterprise
+    //   variant).  Observing that response means Google has accepted
+    //   the token; the host page can now act on it.
+    // - 'networkidle' — Playwright reports the network as idle (no
+    //   requests in flight for 500ms).  Catches the case where the
+    //   verification call already completed before we started
+    //   waiting, plus follow-up XHRs the host page fires after
+    //   verification (e.g. "now fetch the revealed email").
+    const SETTLE_TIMEOUT_MS = 15_000;
+    let settledVia: 'userverify' | 'networkidle' | 'timeout' = 'timeout';
+    try {
+      settledVia = await Promise.race([
+        page.waitForResponse(
+          (r) => /recaptcha\/(api2|enterprise)\/userverify/.test(r.url()),
+          { timeout: SETTLE_TIMEOUT_MS },
+        ).then(() => 'userverify' as const),
+        page.waitForLoadState('networkidle', { timeout: SETTLE_TIMEOUT_MS })
+          .then(() => 'networkidle' as const),
+      ]);
+    } catch {
+      // Both branches timed out — either the host page never went idle
+      // (long-poll SPA) and never triggered userverify (challenge was
+      // already pre-verified, or the page is wedged).  Return
+      // settled=false so the caller can decide; we don't fail the
+      // request because the token + injection are still valid.
+      settledVia = 'timeout';
+    }
+
     const solveTimeMs = Date.now() - t0;
     console.log(
-      `[captcha/solve] solved task_id=${taskId} sitekey=${sitekey} variant=${variant} solve_time_ms=${solveTimeMs}`,
+      `[captcha/solve] solved task_id=${taskId} sitekey=${sitekey} variant=${variant} ` +
+      `solve_time_ms=${solveTimeMs} widget_acked=${injectionResult.widgetAcked} ` +
+      `settled_via=${settledVia}`,
     );
     res.json({
       status: 'solved',
@@ -2168,6 +2273,9 @@ app.post('/captcha/solve', isAgentReady, async (req: Request, res: Response) => 
       sitekey,
       variant,
       task_id: taskId,
+      widget_acked: injectionResult.widgetAcked,
+      settled: settledVia !== 'timeout',
+      settled_via: settledVia,
     });
   } catch (err) {
     console.error(
