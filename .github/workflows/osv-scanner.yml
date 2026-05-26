@@ -1,0 +1,55 @@
+name: OSV-Scanner
+
+# Scans lockfiles (uv.lock, agent-service/package-lock.json) against the OSV
+# vulnerability database. Runs on every PR that touches a lockfile, on push
+# to main/staging, and on a weekly schedule.
+#
+# This is detection-only — OSV-Scanner does NOT open PRs or modify pins.
+# It reports known CVEs in currently-pinned dependency versions so we can
+# decide when and how to patch on our own schedule. Complements the
+# Dependabot "security updates" feature (which fires PRs against pip
+# / npm CVEs) by also covering the read-only scanning surface and
+# uploading findings to the repo Security tab.
+#
+# Uses Google's officially-recommended reusable workflow, pinned by SHA.
+# fail-on-vuln is disabled so the job does not block merges on pre-existing
+# vulnerabilities we may need to patch deliberately.
+
+on:
+  pull_request:
+    branches: [main, staging]
+    paths:
+    - 'uv.lock'
+    - 'pyproject.toml'
+    - 'agent-service/package.json'
+    - 'agent-service/package-lock.json'
+    - '.github/workflows/osv-scanner.yml'
+  push:
+    branches: [main, staging]
+    paths:
+    - 'uv.lock'
+    - 'pyproject.toml'
+    - 'agent-service/package-lock.json'
+  schedule:
+    # Weekly scan against main — catches CVEs published after merge for
+    # deps that haven't changed since.
+  - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+permissions:
+  # Required by the reusable workflow to upload SARIF to the Security tab.
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  scan:
+    name: Scan lockfiles
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@9a498708959aeaef5ef730655706c5a1df1edbc2  # v2.3.8
+    with:
+      # Scan explicit lockfiles rather than recursing, so we only look at
+      # the sources of truth and skip vendored / test / .venv dirs.
+      scan-args: |-
+        --lockfile=uv.lock
+        --lockfile=agent-service/package-lock.json
+      fail-on-vuln: false

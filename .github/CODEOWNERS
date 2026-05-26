@@ -1,0 +1,21 @@
+# CODEOWNERS for unifyai/unity
+#
+# GitHub uses LAST-MATCH-WINS semantics. If you add a more specific rule
+# below, it overrides the global owner — include @unifyai/Engineers on
+# security-sensitive paths even when adding a more specific reviewer,
+# or you can silently remove required review.
+
+# Catch-all: anything not matched below requires Engineers review.
+*                                  @unifyai/Engineers
+
+# Protect the ownership rules and security-sensitive config from drive-by
+# edits — same team, but flagged here so they show up in PR descriptions.
+/.github/CODEOWNERS                @unifyai/Engineers
+/.github/dependabot.yml            @unifyai/Engineers
+/.github/workflows/                @unifyai/Engineers
+/SECURITY.md                       @unifyai/Engineers
+/AGENTS.md                         @unifyai/Engineers
+/ARCHITECTURE.md                   @unifyai/Engineers
+
+# Secret manager is the highest-blast-radius surface in the codebase.
+/unity/secret_manager/             @unifyai/Engineers
