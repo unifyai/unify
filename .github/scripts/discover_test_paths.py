@@ -149,7 +149,13 @@ def discover_all():
             and item.name.endswith(".py")
         ):
             paths.append(str(item))
-        elif item.is_dir() and item.name.startswith("test"):
+        elif item.is_dir() and item.name not in EXCLUDE_DIRS:
+            # Recurse into every non-excluded directory; collect_paths is itself
+            # gated by has_test_files / has_test_subdirs, so non-test dirs are
+            # no-ops. The previous `startswith("test")` filter accidentally
+            # excluded every per-manager test directory (contact_manager/,
+            # knowledge_manager/, actor/, etc.) since they don't carry the
+            # `test_` prefix, collapsing the CI matrix to ~2 entries.
             collect_paths(item, paths)
 
     return paths
