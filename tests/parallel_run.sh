@@ -405,7 +405,8 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
           # keeping it here lets the next CI cycle surface it without a
           # workflow edit.
           echo "----- seed_test_user + api_key contents -----" >&2
-          grep -E "(test user|api[ _]key|Test API|Creating test|Failed to seed|store)" "$_orchestra_start_log" >&2 || true
+          echo "(last 40 lines of orchestra-startup.log)" >&2
+          tail -40 "$_orchestra_start_log" >&2 || true
           _seed_db_container=$(docker ps --filter "publish=${ORCHESTRA_DB_PORT:-5432}" --format "{{.Names}}" 2>/dev/null | head -1)
           if [[ -n "$_seed_db_container" ]]; then
             echo "(api_key rows, redacted to first 8 chars of key)" >&2
