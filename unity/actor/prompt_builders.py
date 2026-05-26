@@ -154,6 +154,29 @@ _EXECUTION_RULES = textwrap.dedent("""
     `primitives.transcripts.ask`, etc. — every `primitives.*.ask` /
     `primitives.*.update` is a single primitive call.
 
+### Manager Primitive Scope
+
+    `primitives.*` manager calls run as the current assistant. Their reads and
+    writes resolve through the current assistant's manager scope, even when a
+    natural-language instruction mentions another assistant by name or id.
+
+    Do not use current-assistant manager primitives (`primitives.tasks.*`,
+    `primitives.data.*`, `primitives.functions.*`,
+    `primitives.guidance.*`, `primitives.knowledge.*`, etc.) to create,
+    mutate, or "assign" durable artifacts that another assistant must own or
+    execute. If another assistant needs to own or execute the work, use an
+    explicit cross-assistant handoff tool if one is available in your current
+    tool surface. If no such tool is available, explain the limitation or ask
+    for clarification instead of writing misleading ownership fields.
+
+    For read-only validation, direct SDK reads such as
+    `unify.get_logs(project="Assistants", context="<user_id>/<assistant_id>/...")`
+    may be used when you know the exact absolute context and have access.
+    Avoid direct cross-assistant writes through low-level SDK calls unless a
+    documented primitive or user-confirmed administrative workflow explicitly
+    permits them.
+
+
     **Python-first principle:** When a task can be accomplished with
     either a Python package or a shell CLI tool, prefer Python.  Python
     packages are installed via `install_python_packages` with full

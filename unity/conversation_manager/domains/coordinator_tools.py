@@ -251,6 +251,14 @@ class CoordinatorTools:
         nationality, and inferred role metadata), then creates the assistant in
         the current organization scope.
 
+        Creating a colleague only provisions its identity. It does not make
+        later ``primitives.tasks.*``, ``primitives.data.*``,
+        ``primitives.functions.*``, or other manager calls execute inside that
+        colleague's contexts. If the new colleague must own follow-up work,
+        create the assistant first, validate its id, then use
+        ``delegate_to_colleague`` so the colleague performs that work with its
+        own primitives.
+
         Prefer ``commission_colleague_into_workspace`` when the same turn should
         also provision a workspace and guaranteed membership in one flow.
         """
@@ -687,10 +695,13 @@ class CoordinatorTools:
     ) -> dict[str, Any] | ToolError:
         """Assign asynchronous work to a colleague after user confirmation.
 
-        Use this when a specific colleague should own follow-up work, such as
-        creating a task, adding guidance, recording knowledge, or preparing a
-        function. This dispatches the assignment to the colleague's runtime; the
-        colleague then uses its own manager primitives to perform the work.
+        Use this when a specific colleague should own or execute follow-up work,
+        such as creating a task, adding guidance, recording knowledge, or
+        preparing a function. Current-assistant manager primitives operate in
+        the coordinator's contexts; they do not become target-owned just because
+        the instruction names another assistant. This dispatches the assignment
+        to the colleague's runtime so the colleague can perform the work with
+        its own primitives.
 
         This is async and best-effort. After it returns, tell the user that the
         work was assigned to the colleague, not that the colleague completed it.
@@ -1225,6 +1236,12 @@ class CoordinatorTools:
         workspace" and the slow-brain should avoid partial primitive sequencing.
         This tool resolves or creates the colleague, resolves or creates the
         workspace, then ensures the colleague is a member.
+
+        Commissioning provisions identity, workspace, and membership only. It
+        does not make later coordinator-side manager primitives operate in the
+        colleague's contexts. If the commissioned colleague must own tasks,
+        guidance, functions, knowledge, or other durable follow-up artifacts,
+        delegate that work to the resolved assistant id after this tool returns.
 
         The response returns per-step status so follow-up messaging can be
         precise (for example ``created`` vs ``reused`` vs ``already_member``).
