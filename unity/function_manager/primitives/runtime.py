@@ -82,10 +82,13 @@ _COMPUTER_METHODS = (
     "go_back",
     "wait_for",
     "save_browser_state",
+    "solve_captcha",
     "execute_actions",
 )
 
-_DESKTOP_METHODS = tuple(name for name in _COMPUTER_METHODS if name != "get_content")
+_DESKTOP_METHODS = tuple(
+    name for name in _COMPUTER_METHODS if name not in ("get_content", "solve_captcha")
+)
 _WEB_SESSION_METHODS = _COMPUTER_METHODS
 
 
@@ -552,6 +555,7 @@ class ComputerPrimitives(metaclass=SingletonABCMeta):
         "go_back",
         "wait_for",
         "save_browser_state",
+        "solve_captcha",
         "execute_actions",
     )
     _PRIMITIVE_METHODS = _DYNAMIC_METHODS + ("get_screenshot",) + _LOW_LEVEL_METHODS
