@@ -235,25 +235,39 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         dedupe_key: str | None = None,
         related_context: dict[str, Any] | None = None,
     ) -> dict[str, Any] | ToolError:
-        """Assign asynchronous work to a colleague runtime.
+        """Assign asynchronous work to a colleague after user confirmation.
 
-        Use this when a specific colleague should own follow-up work, such as
-        creating a task, adding guidance, recording knowledge, or preparing a
-        function. This dispatches the assignment to the colleague's runtime; the
-        colleague then uses its own manager primitives to perform the work.
+        Use this when a specific colleague should own or execute follow-up work,
+        such as creating a task, adding guidance, recording knowledge, preparing a
+        function, sending a message, or other durable follow-up. Current-assistant
+        manager primitives operate through the current assistant's available manager
+        scope, including supported shared-space scope where applicable; they do not
+        become target-assistant-private operations just because the instruction names
+        another assistant. This dispatches the assignment to the colleague's runtime
+        so the colleague can perform the work with its own primitives.
+
+        A successful return is an async delegation receipt, not proof that the
+        colleague has already processed the wake reason, created durable artifacts,
+        or completed the assignment. The response includes ``accepted``,
+        ``completion_status``, ``receipt_type``, and ``message`` fields that explain
+        this contract. Treat ``status``, ``activation_id``, and related dispatch
+        fields as evidence that the assignment was accepted for async processing.
+
+        After it returns, tell the user that the work was assigned to the colleague,
+        not that the colleague completed it.
 
         Parameters
         ----------
         target_assistant_id : int
-            Assistant id that should handle the assignment.
+            The colleague assistant that should handle the work.
         instruction : str
             Plain-English assignment for the colleague.
-        intent : str, optional
-            Assignment category that helps the colleague choose the right manager.
+        intent : CoordinatorDelegateIntent, optional
+            Optional category that helps the colleague choose the right manager.
         dedupe_key : str | None, optional
-            Retry key for avoiding obvious duplicate work.
+            Optional retry key for avoiding obvious duplicate work.
         related_context : dict[str, Any] | None, optional
-            Structured context to include in the delegated assignment.
+            Optional structured context to include in the assignment.
         """
         permission_error = self._require_coordinator_role()
         if permission_error is not None:
