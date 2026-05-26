@@ -387,16 +387,31 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
       unset _db_port _max_wait _waited
 
       echo "Starting local orchestra..."
-      if "$_local_orchestra_script" start >/dev/null 2>&1; then
+      # Capture local.sh stdout+stderr to a log file so CI can surface the
+      # actual failure reason when start fails (orchestra's own server log
+      # at /tmp/orchestra-local-server.log only exists if start_orchestra_server
+      # reached its background-exec line; earlier failures — check_docker,
+      # start_db_container, run_migrations, etc. — leave no breadcrumb without
+      # this file). The "Dump orchestra logs on failure" step in tests.yml
+      # tails this when a job fails.
+      _orchestra_start_log="/tmp/orchestra-startup.log"
+      if "$_local_orchestra_script" start >"$_orchestra_start_log" 2>&1; then
         if _local_url=$("$_local_orchestra_script" check 2>/dev/null); then
           echo "Using local orchestra: $_local_url"
           export ORCHESTRA_URL="$_local_url"
         else
           echo "Warning: Local orchestra started but not responding" >&2
+          echo "----- local.sh start output -----" >&2
+          cat "$_orchestra_start_log" >&2 || true
+          echo "---------------------------------" >&2
         fi
       else
         echo "Warning: Could not start local orchestra" >&2
+        echo "----- local.sh start output -----" >&2
+        cat "$_orchestra_start_log" >&2 || true
+        echo "---------------------------------" >&2
       fi
+      unset _orchestra_start_log
     fi
   else
     echo "Warning: Orchestra script not found at $_local_orchestra_script" >&2
