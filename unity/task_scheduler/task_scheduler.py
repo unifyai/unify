@@ -1967,6 +1967,7 @@ class TaskScheduler(BaseTaskScheduler):
                 "priority",
                 "response_policy",
                 "entrypoint",
+                "offline",
             ):
                 if key in spec:
                     payload[key] = spec[key]

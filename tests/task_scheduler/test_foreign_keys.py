@@ -16,7 +16,6 @@ Note: schedule.next_task and schedule.prev_task FKs are not yet implemented,
 
 from __future__ import annotations
 
-import pytest
 import unify
 from tests.helpers import _handle_project
 from unity.function_manager.function_manager import FunctionManager
@@ -261,23 +260,25 @@ def test_entrypoint_clone_after_set_null():
 
 
 @_handle_project
-def test_offline_task_requires_entrypoint_on_create():
-    """Offline tasks must provide a numeric entrypoint when created."""
+def test_offline_task_can_be_agentic_on_create():
+    """Offline delivery can execute agentically when no entrypoint is set."""
 
     ts = TaskScheduler()
 
-    with pytest.raises(ValueError, match="Offline tasks require a numeric entrypoint"):
-        ts._create_task(
-            name="Offline task",
-            description="Should fail without a function id",
-            status=Status.scheduled,
-            offline=True,
-        )
+    result = ts._create_task(
+        name="Offline task",
+        description="Run in the hidden lane without a function id",
+        offline=True,
+    )
+
+    task = ts._get_task_or_raise(result["details"]["task_id"])
+    assert task.offline is True
+    assert task.entrypoint is None
 
 
 @_handle_project
-def test_offline_task_requires_entrypoint_on_update():
-    """Updating a task into offline mode must preserve a numeric entrypoint."""
+def test_offline_task_can_be_agentic_on_update():
+    """Moving a task offline should not require adding a function id."""
 
     ts = TaskScheduler()
     result = ts._create_task(
@@ -287,5 +288,8 @@ def test_offline_task_requires_entrypoint_on_update():
     )
     task_id = result["details"]["task_id"]
 
-    with pytest.raises(ValueError, match="Offline tasks require a numeric entrypoint"):
-        ts._update_task(task_id=task_id, offline=True)
+    ts._update_task(task_id=task_id, offline=True)
+
+    task = ts._get_task_or_raise(task_id)
+    assert task.offline is True
+    assert task.entrypoint is None

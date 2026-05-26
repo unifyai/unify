@@ -146,6 +146,27 @@ def test_create_tasks_multi_queues_with_start_times():
 
 
 @_handle_project
+def test_create_tasks_preserves_offline_delivery_flag():
+    ts = TaskScheduler()
+
+    out = ts._create_tasks(
+        tasks=[
+            {"name": "Offline A", "description": "a", "offline": True},
+            {"name": "Offline B", "description": "b", "offline": True},
+        ],
+        queue_ordering=[
+            {"order": [0, 1], "queue_head": {"start_at": "2036-01-01T10:00:00+00:00"}},
+        ],
+    )
+
+    assert out["details"]["task_ids"] == [0, 1]
+    rows = sorted(ts._filter_tasks(), key=lambda task: task.task_id)
+    assert [row.offline for row in rows] == [True, True]
+    assert [row.entrypoint for row in rows] == [None, None]
+    assert rows[0].status == Status.scheduled
+
+
+@_handle_project
 def test_task_scheduler_clear():
     ts = TaskScheduler()
 
