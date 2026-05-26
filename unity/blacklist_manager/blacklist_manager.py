@@ -206,7 +206,18 @@ class BlackListManager(BaseBlackListManager):
             raise RuntimeError(
                 f"Multiple blacklist rows found with blacklist_id {blacklist_id}. Data integrity issue.",
             )
-        unify.delete_logs(context=self._ctx, logs=target_ids[0])
+        # unify.delete_logs only removes the log from the supplied context;
+        # if the log is also referenced by aggregation contexts (added there
+        # by `unity_log(add_to_all_context=True)` in create_blacklist_entry),
+        # those references survive a single-context delete. Mirror the create
+        # path's dual-write here so deletes propagate across all 3 contexts.
+        contexts_to_clear: list[str] = [self._ctx]
+        if self.include_in_multi_assistant_table:
+            from ..common.log_utils import _derive_all_contexts
+
+            contexts_to_clear.extend(_derive_all_contexts(self._ctx))
+        for ctx in contexts_to_clear:
+            unify.delete_logs(context=ctx, logs=target_ids[0])
         try:
             self._data_store.delete(blacklist_id)
         except KeyError:
