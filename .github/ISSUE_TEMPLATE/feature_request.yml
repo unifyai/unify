@@ -1,0 +1,74 @@
+name: "✨ Feature request"
+description: Suggest a new capability, manager, primitive, or improvement.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+- type: markdown
+  attributes:
+    value: |
+      Before submitting:
+      - Search [existing issues](https://github.com/unifyai/unity/issues) — someone may have proposed this already.
+      - For new procedural how-tos or executable functions for *your* assistant, consider that `GuidanceManager` and `FunctionManager` are designed to absorb those at runtime, no code change required. Feature requests in this repo are for changes to the runtime itself.
+      - See [`ARCHITECTURE.md`](https://github.com/unifyai/unity/blob/main/ARCHITECTURE.md) for how the manager / primitive boundary works.
+
+- type: textarea
+  id: problem
+  attributes:
+    label: Problem or use case
+    description: What are you trying to do that you can't today? What's the user-facing pain?
+  validations:
+    required: true
+
+- type: textarea
+  id: solution
+  attributes:
+    label: Proposed solution
+    description: |
+      How do you think this should work? Be as concrete as you can — manager API surface, primitive signature, CLI flag, config key.
+  validations:
+    required: true
+
+- type: textarea
+  id: alternatives
+  attributes:
+    label: Alternatives considered
+    description: What other shapes did you consider? Why is the proposed one better?
+
+- type: dropdown
+  id: scope
+  attributes:
+    label: Scope
+    options:
+    - New tool inside an existing manager
+    - New manager (significant — usually needs design discussion first)
+    - New primitive exposed to the Actor
+    - CLI / setup improvement
+    - Voice / fast-brain improvement
+    - Steering / async-tool-loop infrastructure
+    - Observability / event bus
+    - Tests / test infra
+    - Documentation
+    - Other
+  validations:
+    required: true
+
+- type: dropdown
+  id: breaking
+  attributes:
+    label: Is this a breaking change?
+    description: Unity has a zero-backward-compatibility policy — breaking is fine, but flag it.
+    options:
+    - "No"
+    - "Yes — manager API change"
+    - "Yes — event payload / schema change"
+    - "Yes — env var / config change"
+    - "Yes — other"
+  validations:
+    required: true
+
+- type: checkboxes
+  id: pr-ready
+  attributes:
+    label: Contribution
+    options:
+    - label: I'd like to implement this myself and submit a PR
