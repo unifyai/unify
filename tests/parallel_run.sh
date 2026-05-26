@@ -399,25 +399,6 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
         if _local_url=$("$_local_orchestra_script" check 2>/dev/null); then
           echo "Using local orchestra: $_local_url"
           export ORCHESTRA_URL="$_local_url"
-          # Diag: dump seed_test_user section + api_key table contents so any
-          # mismatch between seeded key and the test client's key is
-          # immediately visible. Belongs in tests.yml's failure dump, but
-          # keeping it here lets the next CI cycle surface it without a
-          # workflow edit.
-          echo "----- seed_test_user + api_key contents -----" >&2
-          echo "(last 40 lines of orchestra-startup.log)" >&2
-          tail -40 "$_orchestra_start_log" >&2 || true
-          _seed_db_container=$(docker ps --filter "publish=${ORCHESTRA_DB_PORT:-5432}" --format "{{.Names}}" 2>/dev/null | head -1)
-          if [[ -n "$_seed_db_container" ]]; then
-            echo "(api_key rows, redacted to first 8 chars of key)" >&2
-            docker exec "$_seed_db_container" psql -U orchestra -d orchestra -tAc \
-              "SELECT id, user_id, COALESCE(left(key, 8), 'NULL') || '... (len=' || COALESCE(length(key)::text, '?') || ')' FROM api_key" \
-              >&2 2>&1 || true
-            echo "(UNIFY_KEY in env, redacted: first 8 chars)" >&2
-            echo "  ${UNIFY_KEY:0:8}... (len=${#UNIFY_KEY})" >&2
-          fi
-          echo "---------------------------------------------" >&2
-          unset _seed_db_container
         else
           echo "Warning: Local orchestra started but not responding" >&2
           echo "----- local.sh start output -----" >&2
