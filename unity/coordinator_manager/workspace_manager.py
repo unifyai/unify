@@ -236,7 +236,6 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         related_context: dict[str, Any] | None = None,
     ) -> dict[str, Any] | ToolError:
         """Assign asynchronous work to a colleague after user confirmation.
-
         Use this when a specific colleague should own or execute follow-up work,
         such as creating a task, adding guidance, recording knowledge, preparing a
         function, sending a message, or other durable follow-up. Current-assistant
@@ -244,17 +243,15 @@ class CoordinatorWorkspaceManager(metaclass=SingletonABCMeta):
         scope, including supported shared-space scope where applicable; they do not
         become target-assistant-private operations just because the instruction names
         another assistant. This dispatches the assignment to the colleague's runtime
-        so the colleague can perform the work with its own primitives.
-
-        A successful return is an async delegation receipt, not proof that the
-        colleague has already processed the wake reason, created durable artifacts,
-        or completed the assignment. The response includes ``accepted``,
-        ``completion_status``, ``receipt_type``, and ``message`` fields that explain
-        this contract. Treat ``status``, ``activation_id``, and related dispatch
-        fields as evidence that the assignment was accepted for async processing.
-
-        After it returns, tell the user that the work was assigned to the colleague,
-        not that the colleague completed it.
+        so the colleague can perform the work with its own primitives. A successful
+        return is an async delegation receipt, not proof that the colleague has
+        already processed the wake reason, created durable artifacts, or completed
+        the assignment. The response includes ``accepted``, ``completion_status``,
+        ``receipt_type``, and ``message`` fields that explain this contract. Treat
+        ``status``, ``activation_id``, and related dispatch fields as evidence that
+        the assignment was accepted for async processing. After it returns, tell the
+        user that the work was assigned to the colleague, not that the colleague
+        completed it.
 
         Parameters
         ----------
