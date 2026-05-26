@@ -54,11 +54,23 @@ def _check_orchestra_available() -> bool:
     if hasattr(_check_orchestra_available, "_cached"):
         return _check_orchestra_available._cached
 
-    orchestra_url = os.environ.get("ORCHESTRA_URL", "http://localhost:8000")
+    base = os.environ.get("ORCHESTRA_URL", "http://localhost:8000")
+    # ORCHESTRA_URL may or may not include the `/v0` API prefix — both
+    # `http://127.0.0.1:8000` and `http://127.0.0.1:8000/v0` are valid in
+    # practice (parallel_run.sh exports the latter via local.sh's
+    # cmd_check). Mirror the URL handling in _prepare_shared_project.py
+    # (added in e47d5c648) so we hit `/v0/projects` exactly once. Before
+    # this fix, a `/v0`-suffixed ORCHESTRA_URL would resolve to
+    # `/v0/v0/projects` → 404 → returns False → pytest_sessionstart
+    # silently skipped unity.init() → eval tests crashed downstream with
+    # "EVENT_BUS has not been initialised yet".
+    if base.endswith("/v0"):
+        url = f"{base}/projects"
+    else:
+        url = f"{base.rstrip('/')}/v0/projects"
     try:
         with httpx.Client(timeout=2.0) as client:
-            # Check a known endpoint - /v0/projects works and 404 on root is fine
-            resp = client.get(f"{orchestra_url}/v0/projects")
+            resp = client.get(url)
             # 200 = success, 401/403 = auth required but server is up
             _check_orchestra_available._cached = resp.status_code in (200, 401, 403)
     except Exception:
