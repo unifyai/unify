@@ -1953,6 +1953,230 @@ app.post('/content', isAgentReady, async (req: Request, res: Response) => {
   }
 });
 
+// --- /captcha/solve endpoint: Delegate reCAPTCHA v2 to AntiCaptcha ---
+//
+// Extracts the sitekey from the live page, submits a RecaptchaV2TaskProxyless
+// task to api.anti-captcha.com, polls for the worker-solved token, and
+// injects it back into the page so the page's own submit flow accepts the
+// verification. Returns once injection succeeds.
+//
+// The handler is deterministic and decoupled from magnitude-core's LLM
+// action vocabulary: it is meant to be reached for by orchestration code
+// after a separate ``observe()`` call has visually confirmed that a
+// reCAPTCHA challenge is on screen.
+//
+// The token returned by AntiCaptcha is a Google-signed credential. It is
+// NEVER logged, NEVER persisted, and NEVER echoed in the response body.
+//
+// The ``ANTICAPTCHA_KEY`` must be set in agent-service's own ``.env``; it
+// is never accepted from the request body.
+app.post('/captcha/solve', isAgentReady, async (req: Request, res: Response) => {
+  const { sessionId, variant: variantRaw } = req.body;
+  const variant: 'v2_checkbox' | 'v2_invisible' =
+    variantRaw === 'v2_invisible' ? 'v2_invisible' : 'v2_checkbox';
+
+  const clientKey = process.env.ANTICAPTCHA_KEY;
+  if (!clientKey) {
+    return res.status(503).json({
+      error: 'anticaptcha_key_missing',
+      message: 'ANTICAPTCHA_KEY is not set in the agent-service environment.',
+    });
+  }
+
+  const t0 = Date.now();
+  let sitekey: string | null = null;
+  let taskId: number | null = null;
+
+  try {
+    const session = activeSessions.get(sessionId)!;
+    const page = session.agent.page;
+    const pageUrl: string = page.url();
+
+    sitekey = await page.evaluate(() => {
+      const decode = (raw: string | null): string | null => {
+        if (!raw) return null;
+        try { return decodeURIComponent(raw); } catch { return raw; }
+      };
+      const direct = document.querySelector('[data-sitekey]') as HTMLElement | null;
+      const directKey = direct?.getAttribute('data-sitekey');
+      if (directKey) return directKey;
+      const iframes = Array.from(document.querySelectorAll('iframe')) as HTMLIFrameElement[];
+      const probe = (substr: string): string | null => {
+        for (const f of iframes) {
+          const src = f.getAttribute('src') || '';
+          if (src.includes(substr)) {
+            try {
+              const u = new URL(src, window.location.href);
+              const k = u.searchParams.get('k');
+              if (k) return decode(k);
+            } catch { /* fall through */ }
+          }
+        }
+        return null;
+      };
+      return probe('recaptcha/api2/anchor') || probe('recaptcha/api2/bframe');
+    });
+
+    if (!sitekey) {
+      return res.status(400).json({
+        error: 'no_sitekey',
+        message: 'No reCAPTCHA sitekey was found on the current page.',
+      });
+    }
+
+    const createResp = await fetch('https://api.anti-captcha.com/createTask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        clientKey,
+        task: {
+          type: 'RecaptchaV2TaskProxyless',
+          websiteURL: pageUrl,
+          websiteKey: sitekey,
+          isInvisible: variant === 'v2_invisible',
+        },
+      }),
+    });
+    const createBody: any = await createResp.json().catch(() => ({}));
+    if (!createResp.ok || typeof createBody?.errorId !== 'number' || createBody.errorId !== 0) {
+      console.error(
+        `[captcha/solve] createTask failed sitekey=${sitekey} variant=${variant} ` +
+        `httpStatus=${createResp.status} errorId=${createBody?.errorId} ` +
+        `errorCode=${createBody?.errorCode}`,
+      );
+      return res.status(502).json({
+        error: 'anticaptcha_api_error',
+        message: `createTask failed: ${createBody?.errorCode || 'unknown'} - ${createBody?.errorDescription || ''}`,
+        details: { errorId: createBody?.errorId, errorCode: createBody?.errorCode },
+      });
+    }
+    taskId = createBody.taskId;
+    console.log(`[captcha/solve] task_created task_id=${taskId} sitekey=${sitekey} variant=${variant}`);
+
+    // Poll every 3s for up to 60 attempts (~3 min) for the worker pool to
+    // return a token.  Anti-Captcha's docs recommend an initial 5s wait
+    // before the first poll, but a 3s cadence from t=3s is fine and gives
+    // us slightly faster turnaround on already-queued tasks.
+    let token: string | null = null;
+    for (let attempt = 0; attempt < 60; attempt++) {
+      await sleep(3000);
+      const pollResp = await fetch('https://api.anti-captcha.com/getTaskResult', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientKey, taskId }),
+      });
+      const pollBody: any = await pollResp.json().catch(() => ({}));
+      if (!pollResp.ok || typeof pollBody?.errorId !== 'number' || pollBody.errorId !== 0) {
+        console.error(
+          `[captcha/solve] getTaskResult failed task_id=${taskId} ` +
+          `httpStatus=${pollResp.status} errorId=${pollBody?.errorId} ` +
+          `errorCode=${pollBody?.errorCode}`,
+        );
+        return res.status(502).json({
+          error: 'anticaptcha_api_error',
+          message: `getTaskResult failed: ${pollBody?.errorCode || 'unknown'} - ${pollBody?.errorDescription || ''}`,
+          details: { errorId: pollBody?.errorId, errorCode: pollBody?.errorCode, taskId },
+        });
+      }
+      if (pollBody.status === 'ready') {
+        token = pollBody.solution?.gRecaptchaResponse || null;
+        break;
+      }
+    }
+
+    if (!token) {
+      console.error(`[captcha/solve] solve_timeout task_id=${taskId} sitekey=${sitekey}`);
+      return res.status(504).json({
+        error: 'solve_timeout',
+        message: 'AntiCaptcha worker pool did not return a token within ~3 minutes.',
+      });
+    }
+
+    // Inject the token + invoke any registered callbacks.  Done in a
+    // single ``page.evaluate`` so the token is passed in as a function
+    // argument (and lives only on the page side) rather than being
+    // serialized into the evaluation source string.  Returns true if the
+    // textarea was populated OR any callback was successfully invoked.
+    const injectionOk: boolean = await page.evaluate((tkn: string) => {
+      let textareaSet = false;
+      let callbackCalled = false;
+
+      const textareas = Array.from(
+        document.querySelectorAll('textarea[id^="g-recaptcha-response"], textarea[name="g-recaptcha-response"]'),
+      ) as HTMLTextAreaElement[];
+      for (const ta of textareas) {
+        ta.value = tkn;
+        try { ta.dispatchEvent(new Event('input', { bubbles: true })); } catch { /* best-effort */ }
+        try { ta.dispatchEvent(new Event('change', { bubbles: true })); } catch { /* best-effort */ }
+        textareaSet = true;
+      }
+
+      // Strategy A: data-callback attribute names a window-scoped function.
+      const cbHosts = Array.from(document.querySelectorAll('[data-callback]')) as HTMLElement[];
+      for (const host of cbHosts) {
+        const name = host.getAttribute('data-callback');
+        if (!name) continue;
+        const fn = (window as any)[name];
+        if (typeof fn === 'function') {
+          try { fn(tkn); callbackCalled = true; } catch { /* best-effort */ }
+        }
+      }
+
+      // Strategy B: walk window.___grecaptcha_cfg.clients[*] for nested
+      // ``callback`` functions (this is how SPA-mounted widgets register).
+      try {
+        const cfg: any = (window as any).___grecaptcha_cfg;
+        const clients = cfg?.clients;
+        if (clients && typeof clients === 'object') {
+          const walk = (node: any, depth: number): void => {
+            if (!node || depth > 6) return;
+            if (typeof node === 'object') {
+              for (const k of Object.keys(node)) {
+                const v = node[k];
+                if (k === 'callback' && typeof v === 'function') {
+                  try { v(tkn); callbackCalled = true; } catch { /* best-effort */ }
+                } else if (typeof v === 'object' && v !== null) {
+                  walk(v, depth + 1);
+                }
+              }
+            }
+          };
+          for (const clientKey of Object.keys(clients)) {
+            walk(clients[clientKey], 0);
+          }
+        }
+      } catch { /* best-effort */ }
+
+      return textareaSet || callbackCalled;
+    }, token);
+
+    if (!injectionOk) {
+      console.error(`[captcha/solve] injection_failed task_id=${taskId} sitekey=${sitekey}`);
+      return res.status(500).json({
+        error: 'injection_failed',
+        message: 'Token retrieved but no textarea or callback was found on the page to receive it.',
+      });
+    }
+
+    const solveTimeMs = Date.now() - t0;
+    console.log(
+      `[captcha/solve] solved task_id=${taskId} sitekey=${sitekey} variant=${variant} solve_time_ms=${solveTimeMs}`,
+    );
+    res.json({
+      status: 'solved',
+      solve_time_ms: solveTimeMs,
+      sitekey,
+      variant,
+      task_id: taskId,
+    });
+  } catch (err) {
+    console.error(
+      `[captcha/solve] unexpected error task_id=${taskId} sitekey=${sitekey}: ${err instanceof Error ? err.message : err}`,
+    );
+    handleAgentError(err, res, 'captcha_solve_failed');
+  }
+});
+
 app.post('/stop', async (req: Request, res: Response) => {
   const { sessionId } = req.body;
   if (!sessionId) {

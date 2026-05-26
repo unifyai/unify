@@ -283,6 +283,38 @@ class TestWebSessionHandle:
         await session.stop()  # should not raise
 
     @pytest.mark.asyncio
+    async def test_handle_solve_captcha_exposed(self):
+        """``solve_captcha`` must be auto-wired onto every web-session handle.
+
+        This is the safety net: if a future runtime.py refactor drops the
+        primitive from ``_COMPUTER_METHODS`` / ``_LOW_LEVEL_METHODS``, the
+        reflection-based binding silently disappears and only this test
+        catches it before downstream callers do.
+        """
+        cp = _make_primitives()
+        session = await cp.web.new_session()
+        assert callable(getattr(session, "solve_captcha", None))
+
+    @pytest.mark.asyncio
+    async def test_handle_solve_captcha_default_variant(self):
+        cp = _make_primitives()
+        session = await cp.web.new_session()
+        result = await session.solve_captcha()
+        assert result["status"] == "solved"
+        assert result["variant"] == "v2_checkbox"
+        assert result["sitekey"] == "mock"
+        assert result["task_id"] == 0
+        assert result["solve_time_ms"] == 0
+
+    @pytest.mark.asyncio
+    async def test_handle_solve_captcha_invisible_variant(self):
+        cp = _make_primitives()
+        session = await cp.web.new_session()
+        result = await session.solve_captcha(variant="v2_invisible")
+        assert result["status"] == "solved"
+        assert result["variant"] == "v2_invisible"
+
+    @pytest.mark.asyncio
     async def test_visible_true_default(self):
         """new_session() defaults to visible=True."""
         cp = _make_primitives()

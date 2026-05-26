@@ -511,6 +511,66 @@ class _LowLevelActionsMixin:
             [{"variant": "browser:state:save", "name": name}],
         )
 
+    async def solve_captcha(
+        self,
+        variant: str | None = None,
+        timeout: float = 240.0,
+    ) -> dict:
+        """
+        Solve the reCAPTCHA v2 challenge visible on the current page.
+
+        Delegates the challenge to the AntiCaptcha worker pool: a real
+        worker views the reCAPTCHA in a separate browser populated with
+        the sitekey + page URL, solves it, and returns a Google-signed
+        ``g-recaptcha-response`` token.  The token is then injected back
+        into the live page (both the ``g-recaptcha-response`` textarea
+        and any registered ``data-callback`` / SPA-mounted callback) so
+        the page's own submit flow accepts the verification.
+
+        Returns once injection succeeds.  This is a deterministic,
+        non-LLM primitive -- callers typically reach for it from their
+        own orchestration code after a prior ``observe()`` call has
+        visually confirmed a CAPTCHA is on screen.
+
+        Cost is on the order of $0.50-2 per 1000 v2 solves and a typical
+        solve completes in ~10-30 seconds; ``timeout`` should be left at
+        its default unless a particular workflow needs a tighter bound.
+
+        Requires ``ANTICAPTCHA_KEY`` to be set in the agent-service
+        environment.  hCaptcha, Turnstile, FunCaptcha, GeeTest, and
+        reCAPTCHA v3 / Enterprise are NOT supported.
+
+        Parameters
+        ----------
+        variant : str, optional
+            Either ``"v2_checkbox"`` (default) or ``"v2_invisible"``.
+            Hints whether the page renders the checkbox widget or the
+            invisible variant.  When omitted, the handler assumes
+            ``"v2_checkbox"``.
+        timeout : float, optional
+            Maximum number of seconds the Python wrapper will wait for
+            the agent-service to finish solving.  Default is 240s.
+
+        Returns
+        -------
+        dict
+            ``{"status": "solved", "solve_time_ms": int, "sitekey": str,
+            "variant": str, "task_id": int}``.  The actual token is
+            never returned and never logged.
+
+        Raises
+        ------
+        ComputerAgentError
+            On any failure mode reported by the agent-service:
+            ``no_sitekey`` (no reCAPTCHA detected on the page),
+            ``anticaptcha_key_missing`` (server has no API key),
+            ``anticaptcha_api_error`` (AntiCaptcha rejected the task or
+            polling), ``solve_timeout`` (worker pool did not return in
+            time), or ``injection_failed`` (token retrieved but no
+            textarea or callback was found to receive it).
+        """
+        raise NotImplementedError
+
     async def execute_actions(self, actions: list[dict]) -> dict:
         """
         Execute one or more low-level browser actions directly.
@@ -1156,6 +1216,21 @@ class MockComputerBackend(ComputerBackend):
         self._seq += 1
         return {"status": "ok", "screenshot": self._screenshot}
 
+    async def solve_captcha(
+        self,
+        variant: str | None = None,
+        timeout: float = 240.0,
+    ) -> dict:
+        """Canned successful solve for mock backend."""
+        self._seq += 1
+        return {
+            "status": "solved",
+            "solve_time_ms": 0,
+            "sitekey": "mock",
+            "variant": variant or "v2_checkbox",
+            "task_id": 0,
+        }
+
     async def get_session(self, mode: str) -> "ComputerSession":
         """Return a mock session for the given mode."""
         return _MockSession(mode, self)
@@ -1235,6 +1310,19 @@ class _MockSession(_LowLevelActionsMixin):
     async def execute_actions(self, actions: list[dict]) -> dict:
         return {"status": "ok", "screenshot": self._backend._screenshot}
 
+    async def solve_captcha(
+        self,
+        variant: str | None = None,
+        timeout: float = 240.0,
+    ) -> dict:
+        return {
+            "status": "solved",
+            "solve_time_ms": 0,
+            "sitekey": "mock",
+            "variant": variant or "v2_checkbox",
+            "task_id": 0,
+        }
+
     async def stop(self) -> None:
         pass
 
@@ -1266,6 +1354,8 @@ class ComputerSession(_LowLevelActionsMixin):
         method: str,
         endpoint: str,
         payload: dict | None = None,
+        *,
+        timeout: float = 1000.0,
     ) -> Any:
         import time as _rq_time
 
@@ -1291,7 +1381,7 @@ class ComputerSession(_LowLevelActionsMixin):
                         url,
                         json=payload,
                         headers=headers,
-                        timeout=1000,
+                        timeout=timeout,
                         ssl=self._ssl,
                     ) as resp:
                         _rq_ms = (_rq_time.perf_counter() - _rq_t0) * 1000
@@ -1469,6 +1559,31 @@ class ComputerSession(_LowLevelActionsMixin):
     async def execute_actions(self, actions: list[dict]) -> dict:
         """Execute low-level actions directly via the agent-service."""
         return await self._request("POST", "/execute-actions", {"actions": actions})
+
+    async def solve_captcha(
+        self,
+        variant: str | None = None,
+        timeout: float = 240.0,
+    ) -> dict:
+        """Delegate the on-page reCAPTCHA v2 to the AntiCaptcha worker pool.
+
+        Posts to the agent-service ``/captcha/solve`` handler, which
+        extracts the sitekey via ``page.evaluate``, drives the
+        AntiCaptcha createTask / getTaskResult REST API, and injects
+        the returned Google-signed token back into the live page.
+
+        Failure modes surface as ``ComputerAgentError`` (see the
+        abstract docstring on ``_LowLevelActionsMixin.solve_captcha``).
+        """
+        payload: dict[str, Any] = {}
+        if variant is not None:
+            payload["variant"] = variant
+        return await self._request(
+            "POST",
+            "/captcha/solve",
+            payload,
+            timeout=timeout,
+        )
 
     async def stop(self) -> None:
         """Stop this session on the agent-service."""
