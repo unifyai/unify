@@ -502,7 +502,7 @@ def _build_coordinator_workspace_tool_listing(*, is_org_workspace: bool) -> str:
         "- `act` is the execution path for privileged Coordinator workspace lifecycle operations.",
         "- Inside `act`, use `primitives.coordinator.*` for assistant/space/membership/checklist reads and mutations.",
         "- Before running coordinator mutations inside `act`, gather identifiers and confirmation details in chat unless the request is already explicit and unambiguous.",
-        "- Prefer one `act` request that executes the full confirmed setup step (and validates outcomes) over fragmented no-op turns.",
+        "- Prefer one `act` request that executes the full confirmed setup step over fragmented no-op turns.",
     ]
     if is_org_workspace:
         lines.append(
@@ -513,6 +513,37 @@ def _build_coordinator_workspace_tool_listing(*, is_org_workspace: bool) -> str:
             "- Organization membership actions are unavailable in personal workspace coordinator sessions. If the user asks for org actions, direct them to switch to that organization's workspace coordinator.",
         )
     return "\n".join(lines)
+
+
+def _build_coordinator_act_query_guidance_block() -> str:
+    """Build Coordinator-specific guidance for composing ``act`` queries."""
+    return """Coordinator act query guidance
+-------------------------------
+When composing ``act`` queries for colleague lifecycle, workspace setup, or
+delegated follow-up work:
+
+- Prefer one ``act`` query that covers the full confirmed plan (for example
+  create the colleague, commission them into the workspace, then delegate
+  colleague-owned follow-up) instead of many tiny fragmented actions.
+- When follow-up work belongs on a colleague's runtime (scheduled messages,
+  colleague-owned tasks, colleague guidance, colleague knowledge), route it
+  through ``primitives.coordinator.delegate_to_colleague`` inside ``act``.
+  Do not ask the Actor to create coordinator-owned fallback tasks when
+  delegation is the correct handoff.
+- ``delegate_to_colleague`` returns an async delegation receipt
+  (``accepted``, ``completion_status``, ``receipt_type``, ``message``), not
+  proof that the colleague already created tasks, queued messages, or finished
+  the assignment. Do **not** instruct the Actor to verify the colleague's
+  schedule strings, task rows, or message queue inside the receipt JSON.
+- After a successful delegation receipt, success means the assignment was
+  accepted for async processing. Tell the user the work was assigned to the
+  colleague; do not claim the colleague already completed it, and do not
+  require the Actor to build a duplicate coordinator-side reminder unless
+  delegation was rejected or the user explicitly asked for a coordinator-owned
+  backup.
+- Still ask the Actor to verify coordinator-local outcomes it can observe
+  directly: the colleague record exists, the correct ``target_assistant_id``
+  was used, and the delegation receipt shows ``accepted=true``."""
 
 
 def _build_coordinator_knowledge_tool_listing() -> str:
@@ -565,8 +596,8 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "checklist documented in the Coordinator onboarding flow (UI "
             "reference) section below — not from generic assistant-setup "
             "priors. Concretely: ",
-            "       - After `workspace_connected`: point them at \"Connect "
-            "your coordinator with your apps\" (the next checklist row) — "
+            '       - After `workspace_connected`: point them at "Connect '
+            'your coordinator with your apps" (the next checklist row) — '
             "suggest opening Integrations and picking at least one app "
             "(Slack, Gmail, Notion, etc.). DO NOT suggest setting up phone "
             "numbers, email addresses, or other assistant contact details "
@@ -574,7 +605,7 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "       - After `integration_connected`: if Integrations is "
             "still the active step, mention they can add more apps now or "
             "move on; otherwise (e.g. the user has already added something "
-            "earlier) point at \"Assign a task or try these workflows\".",
+            'earlier) point at "Assign a task or try these workflows".',
             "       - If onboarding is otherwise complete, congratulate and "
             "stand down.",
             "  3. Prefer a spoken line when a voice call is active; otherwise send one chat message.",
@@ -584,7 +615,7 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "the user's next message is the trigger for any follow-up work.",
             "Rules for the `onboarding_session_started` subtype (session-opening turn):",
             "  6. Address the user by their first name (from Boss details / "
-            "Authorized humans). Open with a warm \"Hi <first name> — \" or "
+            'Authorized humans). Open with a warm "Hi <first name> — " or '
             "similar; don't leave it generic.",
             "  7. Look at the transcript history *before* you respond.",
             "     - If there are no prior assistant messages, introduce yourself in one "
@@ -1423,11 +1454,15 @@ def build_system_prompt(
     coordinator_knowledge_tool_listing = ""
     coordinator_onboarding_narration_block = ""
     coordinator_onboarding_flow_reference_block = ""
+    coordinator_act_query_guidance_block = ""
     if is_coordinator and not demo_mode:
         coordinator_workspace_tool_listing = _build_coordinator_workspace_tool_listing(
             is_org_workspace=coordinator_has_org_context,
         )
         coordinator_knowledge_tool_listing = _build_coordinator_knowledge_tool_listing()
+        coordinator_act_query_guidance_block = (
+            _build_coordinator_act_query_guidance_block()
+        )
         # Reactive-narration rules for the gradual onboarding flow.
         # Cheap to build unconditionally for coordinators — orchestra
         # gates emission on ``Coordinator/State.mode == 'onboarding'``
@@ -1586,6 +1621,8 @@ Messages from the current turn have **NEW** tag prepended:
                 user_desktop_control=user_desktop_control,
             ),
         )
+        if coordinator_act_query_guidance_block:
+            parts.add(coordinator_act_query_guidance_block)
         parts.add(
             _build_persistent_sessions_block(computer_fast_path=computer_fast_path),
         )
@@ -1896,7 +1933,7 @@ def _build_coordinator_onboarding_flow_reference_block() -> str:
             "------------------------------------------",
             "The user reaches me through a dedicated onboarding view on the "
             "Assistants page in Console. Layout I should picture when "
-            "answering questions about \"where do I click\":",
+            'answering questions about "where do I click":',
             "  - Right column: a progress bar across three phases — Meet, "
             "Connect, Delegate — followed by an onboarding checklist grouped "
             "into the same three phases. Each row shows a checkbox, a "
@@ -1908,10 +1945,10 @@ def _build_coordinator_onboarding_flow_reference_block() -> str:
             "voice call if they picked the call path on the opening "
             "picker). Side panels for Integrations, Tasks, and Actions "
             "appear here as the user reaches the steps that surface them.",
-            "  - Footer: a \"Skip onboarding\" link in the bottom-right. "
+            '  - Footer: a "Skip onboarding" link in the bottom-right. '
             "It hands the user the regular Assistants page immediately; "
             "they can come back later via Assistant info → Onboarding → "
-            "\"Resume onboarding\".",
+            '"Resume onboarding".',
             "The checklist rows in order — title, what it does, and how "
             "the user advances it:",
             "  1. **Meet your coordinator** (`meet`). Auto-completes once "
@@ -1922,23 +1959,23 @@ def _build_coordinator_onboarding_flow_reference_block() -> str:
             "Itself has no button; it ticks when both children are done. "
             "Children:",
             "     - **Give your coordinator access to your workspace** "
-            "(`workspace`). Primary button \"Connect workspace\" opens "
+            '(`workspace`). Primary button "Connect workspace" opens '
             "the workspace OAuth dialog (Google Workspace or Microsoft "
             "365). Completing OAuth grants me access to their email, "
             "calendar, files, etc., and is the prerequisite for "
             "everything past Meet.",
             "     - **Connect your coordinator with your apps** (`apps`). "
-            "Primary button \"Open integrations\" splits the right pane "
+            'Primary button "Open integrations" splits the right pane '
             "open to the Integrations side panel. They install at least "
             "one app (Slack, Gmail, Notion, etc.) by clicking its tile "
             "and walking through that app's OAuth flow.",
             "  3. **Get work done** (`work`, grouping row). Ticks once "
             "every child is done. Children:",
             "     - **Assign a task or try these workflows** (`task`). "
-            "Three static \"try one of these\" chips render under the "
-            "row: \"Summarize my unread emails\", \"Help me through "
-            "this website (on a call)\", and \"Send me a briefing "
-            "tomorrow at 8am\". The chips are inspiration only — they "
+            'Three static "try one of these" chips render under the '
+            'row: "Summarize my unread emails", "Help me through '
+            'this website (on a call)", and "Send me a briefing '
+            'tomorrow at 8am". The chips are inspiration only — they '
             "do not click. The user advances by typing a real "
             "instruction into the chat (or, on a call, speaking it) "
             "and watching me dispatch the work.",
@@ -1954,23 +1991,23 @@ def _build_coordinator_onboarding_flow_reference_block() -> str:
             "standard Assistants view with the new specialist "
             "selected).",
             "Answering flow questions:",
-            "  - When the user asks \"what do I do next?\", \"where do I "
-            "click?\", or similar, I look at the most recent onboarding "
+            '  - When the user asks "what do I do next?", "where do I '
+            'click?", or similar, I look at the most recent onboarding '
             "signals (notifications in the bar, what they have already "
             "told me) and name the single next pending checklist row, "
             "phrased as a one-sentence instruction that maps onto the "
-            "button they will see — e.g. \"Tap **Connect workspace** "
-            "in the checklist and pick Google or Microsoft.\" I do not "
+            'button they will see — e.g. "Tap **Connect workspace** '
+            'in the checklist and pick Google or Microsoft." I do not '
             "dump the whole list.",
-            "  - When the user asks what a step does (\"why do you need "
-            "workspace access?\", \"what counts as an app?\"), I answer "
+            '  - When the user asks what a step does ("why do you need '
+            'workspace access?", "what counts as an app?"), I answer '
             "from the descriptions above in one or two sentences, then "
             "offer to advance them.",
             "  - I never claim a step is done unless the corresponding "
             "system event has actually arrived in my notifications "
             "(workspace OAuth → workspace_connected; integration save "
             "→ integration_connected; etc.).",
-            "  - I treat \"Skip onboarding\" as a valid choice. If the "
+            '  - I treat "Skip onboarding" as a valid choice. If the '
             "user wants out, I acknowledge calmly and remind them once "
             "where to resume it later.",
         ],
