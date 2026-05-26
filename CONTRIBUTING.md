@@ -60,6 +60,43 @@ The full test suite requires org-level secrets (API keys, backend access). Fork 
 - **English as API.** Managers communicate through natural-language interfaces. The Actor orchestrates through English-language primitives.
 - **Real LLMs in tests.** We never mock the LLM client. Responses are cached for speed, not faked.
 
+See [`VISION.md`](VISION.md) for the bets the project is making — including the things it deliberately *isn't* trying to be. Most "why isn't there a PR for X?" questions are explained by that document.
+
+## Maintainers
+
+Unity is maintained by [Unify](https://unify.ai). The current maintainer team (in commit-count order, deduplicated via [`.mailmap`](.mailmap)):
+
+- **Daniel Lenton** ([@djl11](https://github.com/djl11)) — project lead
+- **Yusha Arif** ([@YushaArif99](https://github.com/YushaArif99))
+- **Ved Patwardhan** ([@vedpatwardhan](https://github.com/vedpatwardhan))
+- **JG** ([@juliagsy](https://github.com/juliagsy))
+- **Haris Mahmood** ([@hmahmood24](https://github.com/hmahmood24))
+- **Mostafa Hany** ([@CatB1t](https://github.com/CatB1t))
+- **Yasser** ([@Infrared1029](https://github.com/Infrared1029))
+- **Nassim Berrada** ([@nassimberrada](https://github.com/nassimberrada))
+
+### Area familiarity
+
+The repository's [`.github/CODEOWNERS`](.github/CODEOWNERS) is the canonical routing file — anything not matched by a specific rule requires `@unifyai/Engineers` review.
+
+For PRs that touch a specific subsystem, the table below is a rough guide to who has the deepest familiarity (derived from commit history; team members rotate and overlap). You don't need to tag a reviewer manually — opening a PR is enough, we'll route. The list is a hint for when a fast review matters.
+
+| Area | Reviewers (rough) |
+|---|---|
+| `unity/actor/` (CodeAct Actor) | @YushaArif99, @djl11 |
+| `unity/conversation_manager/` (slow + fast brain) | @djl11, @vedpatwardhan, @juliagsy |
+| `unity/task_scheduler/` | @djl11 |
+| `unity/contact_manager/`, `unity/knowledge_manager/`, `unity/transcript_manager/` | @djl11 |
+| `unity/file_manager/` (parsing) | @hmahmood24, @djl11 |
+| `unity/function_manager/`, `unity/web_searcher/` | @djl11, @YushaArif99, @juliagsy |
+| `unity/secret_manager/` | @djl11 (high-blast-radius — see CODEOWNERS) |
+| `unity/gateway/`, `unity/comms/` | @djl11 |
+| `agent-service/` (TypeScript browser-use service) | @juliagsy, @YushaArif99 |
+| `scripts/install.sh`, `scripts/setup.sh`, `scripts/voice.sh` | @djl11 |
+| `tests/conftest.py`, `tests/parallel_run.sh` | @djl11, @CatB1t |
+
 ## Questions?
 
-Open a [Discussion](https://github.com/unifyai/unity/discussions) or join our [Discord](https://discord.com/invite/sXyFF8tDtm).
+- **Architectural questions** — [GitHub Discussions](https://github.com/unifyai/unity/discussions)
+- **Quick questions / chat** — [Discord](https://discord.com/invite/sXyFF8tDtm)
+- **Security** — see [`SECURITY.md`](SECURITY.md); do not open public issues for security vulnerabilities.
