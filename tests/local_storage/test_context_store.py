@@ -33,6 +33,7 @@ def test_ensure_creates_and_idempotent(monkeypatch):
         auto_counting=None,
         description=None,
         foreign_keys=None,
+        project=None,
     ):
         calls["create_context"] += 1
         # Basic argument sanity
