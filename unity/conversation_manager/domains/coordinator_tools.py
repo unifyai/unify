@@ -696,15 +696,23 @@ class CoordinatorTools:
         """Assign asynchronous work to a colleague after user confirmation.
 
         Use this when a specific colleague should own or execute follow-up work,
-        such as creating a task, adding guidance, recording knowledge, or
-        preparing a function. Current-assistant manager primitives operate in
-        the coordinator's contexts; they do not become target-owned just because
-        the instruction names another assistant. This dispatches the assignment
-        to the colleague's runtime so the colleague can perform the work with
-        its own primitives.
+        such as creating a task, adding guidance, recording knowledge, preparing a
+        function, sending a message, or other durable follow-up. Current-assistant
+        manager primitives operate through the current assistant's available manager
+        scope, including supported shared-space scope where applicable; they do not
+        become target-assistant-private operations just because the instruction names
+        another assistant. This dispatches the assignment to the colleague's runtime
+        so the colleague can perform the work with its own primitives.
 
-        This is async and best-effort. After it returns, tell the user that the
-        work was assigned to the colleague, not that the colleague completed it.
+        A successful return is an async delegation receipt, not proof that the
+        colleague has already processed the wake reason, created durable artifacts,
+        or completed the assignment. The response includes ``accepted``,
+        ``completion_status``, ``receipt_type``, and ``message`` fields that explain
+        this contract. Treat ``status``, ``activation_id``, and related dispatch
+        fields as evidence that the assignment was accepted for async processing.
+
+        After it returns, tell the user that the work was assigned to the colleague,
+        not that the colleague completed it.
 
         Args:
             target_assistant_id: The colleague assistant that should handle the work.
