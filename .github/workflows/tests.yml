@@ -764,6 +764,49 @@ jobs:
         uv run playwright install --with-deps
 
     # =========================================================================
+    # HuggingFace model cache (only for tests/file_manager/managers/ matrix
+    # entries — those exercise docling's PDF pipeline, which downloads the
+    # docling-project/docling-models weights on first use). Without a stable
+    # cache, every CI run does a fresh multi-GB download into
+    # /tmp/unity_test_home/.cache/huggingface (set by tests/conftest.py's
+    # HOME isolation), and the chunked-download temp dirs race with each
+    # other across parallel pytest workers → "[Errno 2] No such file or
+    # directory: '.../tmp_<uuid>'" mid-download → pdf_backend parse failure
+    # → test_parse_multiple_mixed + test_filter_by_content_id_dict fail.
+    #
+    # Caching ~/.cache/huggingface (the original $HOME location) makes
+    # unity/tests/conftest.py:pytest_configure() honor its HF_HOME-preserve
+    # branch (which only fires when ~/.cache/huggingface exists on the
+    # original HOME), pointing the test process at the warm cache instead
+    # of a fresh /tmp dir. After the first successful CI run populates the
+    # cache, subsequent runs are race-free for these tests.
+    # =========================================================================
+    - name: Cache HuggingFace models (file_manager tests)
+      if: contains(matrix.test_path, 'file_manager/managers')
+      id: hf-cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/huggingface
+        # Key version (v1) — bump if docling/HF model set changes and we
+        # want to force a fresh download across all CI runs.
+        key: huggingface-docling-${{ runner.os }}-v1
+        restore-keys: |
+          huggingface-docling-${{ runner.os }}-
+
+    - name: Pre-download docling models (cache miss)
+      if: contains(matrix.test_path, 'file_manager/managers') && steps.hf-cache.outputs.cache-hit != 'true'
+      run: |
+        # First-time download into the cached path. Running once here,
+        # serialized before the test matrix forks, eliminates the parallel
+        # download race that breaks tests in the cold-cache case.
+        mkdir -p ~/.cache/huggingface
+        uv run python -c "
+        from docling.document_converter import DocumentConverter
+        DocumentConverter()  # triggers model download into ~/.cache/huggingface
+        print('docling models warmed')
+        "
+
+    # =========================================================================
     # Agent-service setup (only for tests/agent_service/ matrix entries)
     # Installs Node.js, clones magnitude, builds magnitude-core, and installs
     # agent-service npm deps + Patchright browser binaries.
