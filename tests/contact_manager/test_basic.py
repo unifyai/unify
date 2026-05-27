@@ -158,19 +158,27 @@ def test_timezone():
     c = cm.filter_contacts(filter=f"contact_id == {cid}")["contacts"][0]
     assert c.timezone == "America/New_York"
 
-    # Invalid timezones are silently coerced to None + warning-logged
-    # (deliberate design choice from 45bef21fd, 2026-03-19: console-supplied
-    # deprecated IANA aliases like "Asia/Calcutta" used to ValueError out
-    # through orchestra → adapters → ConversationManager, breaking init.
-    # Now the Contact.timezone Pydantic validator catches ZoneInfo
-    # exceptions and falls back to None instead of raising). This test
-    # originally expected the raise (from eece18bde, 2025-11-21) but the
-    # production intent changed; keep the test honest about that.
+    # Invalid timezones are silently no-ops on update (deliberate design
+    # from 45bef21fd, 2026-03-19: console-supplied deprecated IANA aliases
+    # like "Asia/Calcutta" used to ValueError through orchestra → adapters
+    # → ConversationManager, breaking init. The Contact.timezone Pydantic
+    # validator now catches ZoneInfo exceptions and returns None instead
+    # of raising). Because update_contact() treats None-valued fields as
+    # "don't change", the invalid-TZ value is normalized to None by the
+    # validator and then dropped from the update payload — so the
+    # previously-set valid timezone stays in place. The original test
+    # (eece18bde, 2025-11-21) expected a raise; we instead verify the
+    # post-fix behavior: invalid input doesn't crash AND doesn't clobber
+    # the existing value. (e3633cd6e earlier today asserted `is None`
+    # which would only be true if no prior valid TZ existed; the test
+    # sets America/New_York first, so the correct assertion is the
+    # previous-value-preserved behavior.)
     cm.update_contact(contact_id=cid, timezone="Invalid/Timezone")
     c = cm.filter_contacts(filter=f"contact_id == {cid}")["contacts"][0]
-    assert (
-        c.timezone is None
-    ), f"Invalid TZ should be coerced to None, got {c.timezone!r}"
+    assert c.timezone == "America/New_York", (
+        f"Invalid TZ update should be a no-op (validator-coerced to None, "
+        f"treated as 'no change'), got {c.timezone!r}"
+    )
 
 
 # ────────────────────────────────────────────────────────────────────────────
