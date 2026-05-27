@@ -247,6 +247,35 @@ def stub_external_deps(monkeypatch):
         _static_now,
     )
 
+    # --- DateTime stub for production wall-clock comparisons ---------------
+    # task_scheduler.task_scheduler uses `datetime.now(timezone.utc)`
+    # directly (not prompt_helpers.now) to decide whether a
+    # schedule.start_at lands in the future. With prompt_helpers.now stubbed
+    # to 2025-06-13 (so cached LLM responses are deterministic), the LLM
+    # generates start_at values relative to 2025-06-13 — e.g. "next Monday"
+    # → 2025-06-16. But production then compares those LLM-generated
+    # timestamps against the real wall-clock, which is now ~12 months in
+    # the future. Result: tasks the LLM intends as future-scheduled get
+    # status=primed instead of status=scheduled. Patch
+    # task_scheduler.datetime so the two time sources agree under test.
+    #
+    # NOTE: the production class is `from datetime import datetime`, so we
+    # patch the imported name on the module. A subclass-with-overridden-
+    # now() shim is needed because only `.now()` should be overridden —
+    # the rest of the datetime API (datetime.combine, datetime.strptime,
+    # etc., as used in repeat-pattern math) must keep working.
+    class _StubbedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return _FIXED_DATETIME
+            return _FIXED_DATETIME.astimezone(tz)
+
+    monkeypatch.setattr(
+        "unity.task_scheduler.task_scheduler.datetime",
+        _StubbedDatetime,
+    )
+
     def _static_perf_counter() -> float:
         return 1000.0
 
