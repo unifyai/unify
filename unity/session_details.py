@@ -38,7 +38,11 @@ UNASSIGNED_USER_ID = "default"
 # experience is intentionally fixed to "Unity").
 # ─────────────────────────────────────────────────────────────────────────────
 PLACEHOLDER_ASSISTANT_FIRST_NAME = "Unity"
-PLACEHOLDER_ASSISTANT_SURNAME = ""
+PLACEHOLDER_ASSISTANT_SURNAME = None  # Contact.surname is Optional[str] with a
+# UNICODE_NAME_RE pattern; empty string fails the pattern and Pydantic coerces
+# to None anyway. Keep the placeholder honest about the actual value contacts
+# end up with — anything else triggers stale-equality bugs in tests like
+# tests/contact_manager/test_sync.py::test_dummy_assistant.
 PLACEHOLDER_ASSISTANT_EMAIL = "assistant@unify.ai"
 PLACEHOLDER_ASSISTANT_PHONE = "+10000000000"
 PLACEHOLDER_ASSISTANT_BIO = "Your local Unity assistant."

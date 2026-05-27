@@ -158,12 +158,19 @@ def test_timezone():
     c = cm.filter_contacts(filter=f"contact_id == {cid}")["contacts"][0]
     assert c.timezone == "America/New_York"
 
-    # Try invalid timezone
-    try:
-        cm.update_contact(contact_id=cid, timezone="Invalid/Timezone")
-        assert False, "Should have raised ValueError for invalid timezone"
-    except ValueError:
-        pass
+    # Invalid timezones are silently coerced to None + warning-logged
+    # (deliberate design choice from 45bef21fd, 2026-03-19: console-supplied
+    # deprecated IANA aliases like "Asia/Calcutta" used to ValueError out
+    # through orchestra → adapters → ConversationManager, breaking init.
+    # Now the Contact.timezone Pydantic validator catches ZoneInfo
+    # exceptions and falls back to None instead of raising). This test
+    # originally expected the raise (from eece18bde, 2025-11-21) but the
+    # production intent changed; keep the test honest about that.
+    cm.update_contact(contact_id=cid, timezone="Invalid/Timezone")
+    c = cm.filter_contacts(filter=f"contact_id == {cid}")["contacts"][0]
+    assert (
+        c.timezone is None
+    ), f"Invalid TZ should be coerced to None, got {c.timezone!r}"
 
 
 # ────────────────────────────────────────────────────────────────────────────
