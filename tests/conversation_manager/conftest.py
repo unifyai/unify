@@ -176,6 +176,29 @@ def pytest_configure(config):
     os.environ["TEST"] = "true"
     os.environ["UNITY_CONVERSATION_JOB_NAME"] = "test_job"
 
+    # Configure the assistant identity for flows tests.
+    #
+    # unity/conversation_manager/prompt_builders.py:_build_comms_tool_listing
+    # exposes `send_email` / `send_sms` / `send_whatsapp` to the LLM
+    # ONLY when the corresponding assistant.{email,number,whatsapp_number}
+    # is non-empty (gating added 2026-03-03 in d71f8dc9d0). With
+    # SESSION_DETAILS.assistant.email / .number defaulting to "", flows
+    # tests like test_email_to_email / test_sms_to_sms ended up with
+    # only `send_unify_message` exposed — the LLM correctly chose the
+    # only available tool, producing UnifyMessageSent instead of the
+    # expected EmailSent/SMSSent and breaking the test's
+    # assert_has_one(EmailSent) / SMSSent checks.
+    #
+    # Populate via env vars so SessionDetails.populate_from_env() (called
+    # by the CM process under `apply_test_mocks=True`) picks them up.
+    # Mirror the email_address / phone_number values that TEST_CONTACTS
+    # use for the user so the flow looks coherent in any prompt
+    # rendering. The provider stays "google_workspace" (the default)
+    # because the gate only checks email non-emptiness.
+    os.environ.setdefault("ASSISTANT_EMAIL", "assistant@test.example.com")
+    os.environ.setdefault("ASSISTANT_NUMBER", "+15550001000")
+    os.environ.setdefault("ASSISTANT_WHATSAPP_NUMBER", "+15550001000")
+
 
 # =============================================================================
 # ConversationManager Fixtures (Direct Handler Testing)
