@@ -30,55 +30,83 @@ def _build_prompt_in_subprocess(method: str, test_context: str) -> str:
 
     The test_context is passed via environment variable to ensure the subprocess
     uses an isolated context rather than the shared default context.
+
+    Prompt round-trip goes via a temporary file rather than stdout: the
+    SecretManager init path emits a "[integrations] assistant secret sync
+    complete reason=secret_manager_init" log line (added 2026-05-08 in
+    243b136d65 alongside the new integration_status module) that goes to
+    stdout. That line contains a wall-clock timestamp which would
+    legitimately differ between the two subprocess invocations, breaking
+    the equality check with noise that has nothing to do with the prompt
+    itself. The file hand-off insulates the comparison from any future
+    stdout/stderr-bound log emissions in the init path too.
     """
     assert method in {"ask", "update"}
-    code = textwrap.dedent(
-        f"""
-        import os, sys
-        sys.path.insert(0, os.getcwd())
-        import unify
-        # Activate the test project before setting context
-        project_name = os.environ.get("UNITY_TEST_PROJECT_NAME", "UnityTests")
-        unify.activate(project_name, overwrite=False)
-        # Set test-specific context before creating SecretManager to avoid races
-        test_ctx = os.environ.get("_TEST_CONTEXT")
-        if test_ctx:
-            unify.set_context(test_ctx, relative=False)
-        # Install the same static timestamp override used by pytest's autouse fixture,
-        # but inside this fresh process so the time footer is deterministic.
-        import unity.common.prompt_helpers as _ph
-        from datetime import datetime, timezone
-        def _static_now(time_only: bool = False):
-            dt = datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc)
-            label = "UTC"
-            if time_only:
-                return dt.strftime("%I:%M %p ") + label
-            return dt.strftime("%A, %B %d, %Y at %I:%M %p ") + label
-        _ph.now = _static_now
-        from unity.secret_manager.secret_manager import SecretManager
-        from unity.secret_manager.prompt_builders import build_ask_prompt, build_update_prompt
+    import tempfile
 
-        sm = SecretManager()
-        if "{method}" == "ask":
-            tools = dict(sm.get_tools("ask"))
-            prompt = build_ask_prompt(tools=tools).flatten()
-        else:
-            tools = dict(sm.get_tools("update"))
-            prompt = build_update_prompt(tools=tools).flatten()
-        sys.stdout.write(prompt)
-        """,
-    )
-    env = os.environ.copy()
-    env["_TEST_CONTEXT"] = test_context
-    proc = subprocess.run(
-        [sys.executable, "-c", code],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=True,
-        env=env,
-    )
-    return proc.stdout
+    with tempfile.NamedTemporaryFile(
+        mode="r",
+        suffix=".prompt.txt",
+        delete=False,
+    ) as out_file:
+        out_path = out_file.name
+    try:
+        code = textwrap.dedent(
+            f"""
+            import os, sys
+            sys.path.insert(0, os.getcwd())
+            import unify
+            # Activate the test project before setting context
+            project_name = os.environ.get("UNITY_TEST_PROJECT_NAME", "UnityTests")
+            unify.activate(project_name, overwrite=False)
+            # Set test-specific context before creating SecretManager to avoid races
+            test_ctx = os.environ.get("_TEST_CONTEXT")
+            if test_ctx:
+                unify.set_context(test_ctx, relative=False)
+            # Install the same static timestamp override used by pytest's autouse fixture,
+            # but inside this fresh process so the time footer is deterministic.
+            import unity.common.prompt_helpers as _ph
+            from datetime import datetime, timezone
+            def _static_now(time_only: bool = False):
+                dt = datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc)
+                label = "UTC"
+                if time_only:
+                    return dt.strftime("%I:%M %p ") + label
+                return dt.strftime("%A, %B %d, %Y at %I:%M %p ") + label
+            _ph.now = _static_now
+            from unity.secret_manager.secret_manager import SecretManager
+            from unity.secret_manager.prompt_builders import build_ask_prompt, build_update_prompt
+
+            sm = SecretManager()
+            if "{method}" == "ask":
+                tools = dict(sm.get_tools("ask"))
+                prompt = build_ask_prompt(tools=tools).flatten()
+            else:
+                tools = dict(sm.get_tools("update"))
+                prompt = build_update_prompt(tools=tools).flatten()
+            out_path = os.environ["_PROMPT_OUT_PATH"]
+            with open(out_path, "w", encoding="utf-8") as _f:
+                _f.write(prompt)
+            """,
+        )
+        env = os.environ.copy()
+        env["_TEST_CONTEXT"] = test_context
+        env["_PROMPT_OUT_PATH"] = out_path
+        subprocess.run(
+            [sys.executable, "-c", code],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+            env=env,
+        )
+        with open(out_path, "r", encoding="utf-8") as f:
+            return f.read()
+    finally:
+        try:
+            os.unlink(out_path)
+        except OSError:
+            pass
 
 
 @_handle_project
