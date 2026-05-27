@@ -635,22 +635,38 @@ class GuidanceManager(BaseGuidanceManager):
 
     # ─────────────────────────── Functions helpers ───────────────────────────
     def _functions_context(self) -> str:
-        # FunctionManager stores user-defined function metadata in
-        # Functions/Meta (per the 2025-12-03 d4f123318 refactor that split
-        # the old flat "Functions" context into Functions/Meta,
-        # Functions/Primitives, Functions/VirtualEnvs, Functions/Compositional).
+        # FunctionManager stores user-defined functions in
+        # Functions/Compositional (per the 2025-12-03 d4f123318 refactor
+        # that split the old flat "Functions" context into
+        # Functions/Compositional [user functions],
+        # Functions/Primitives [system action primitives],
+        # Functions/VirtualEnvs [venv configs], and
+        # Functions/Meta [primitives sync state]).
+        #
         # GuidanceManager's helper here was authored 2025-10-01 (4330db6635)
-        # before that split and was never updated, so it queries the parent
-        # "Functions" path which doesn't exist — every call to
-        # _get_functions_for_guidance was 404ing. Hidden from CI by the
-        # discover_test_paths.py matrix bug until today's matrix-fix
-        # surfaced it (tests/guidance_manager/test_functions.py).
-        # Note: this only resolves user-defined functions; if guidance is
-        # ever attached to an action primitive (Functions/Primitives), a
-        # separate lookup path will be needed.
+        # before that split and was never updated, so it queried the flat
+        # parent "Functions" path which no longer exists — every call to
+        # _get_functions_for_guidance was 404ing. 803bb416a (today, morning
+        # fix) re-pointed at "Functions/Meta" based on a misreading of the
+        # sub-context split; that context does exist but holds primitives
+        # sync state rather than user functions, so the queries succeeded
+        # but returned 0 rows (guidance_manager test_functions returned an
+        # empty set instead of {"alpha", "beta"}).
+        # This commit corrects the target to Functions/Compositional —
+        # where add_functions actually writes user-defined rows (see
+        # unity/function_manager/function_manager.py:1924,2296,2307,2314).
+        #
+        # Note: only resolves user-defined functions. Guidance attached to
+        # action primitives (Functions/Primitives) needs a separate lookup
+        # path — neither the test suite nor any current call site exercises
+        # that case, so deferred.
         ctxs = unify.get_active_context()
         read_ctx = ctxs.get("read")
-        return f"{read_ctx}/Functions/Meta" if read_ctx else "Functions/Meta"
+        return (
+            f"{read_ctx}/Functions/Compositional"
+            if read_ctx
+            else "Functions/Compositional"
+        )
 
     def _get_functions_for_guidance(
         self,
