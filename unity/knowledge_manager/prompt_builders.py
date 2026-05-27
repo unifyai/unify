@@ -200,8 +200,8 @@ Anti-patterns to avoid
   protected core columns (e.g. `phone_number` / `email_address` on Contacts).
   When the request is "add/set X for entity Y" (e.g. "Add Jane Doe's phone
   number +15559998877"), use `{update_rows_fname}({{row_id: {{field: value}}}})`
-  against the resolved `row_id` — first locate Jane via `{ask_fname}`, then
-  apply the value with `{update_rows_fname}`.
+  against the resolved `row_id` — first locate Jane via a filter/search step,
+  then apply the value with `{update_rows_fname}`.
 • Avoid delete+create when a simple rename will do.
 • Avoid duplicated denormalised strings across tables—introduce a key and normalise.
 • Avoid mixed-type columns—split into well-typed columns.
