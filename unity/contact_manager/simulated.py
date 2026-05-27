@@ -776,14 +776,20 @@ class SimulatedContactManager(BaseContactManager):
         _clarification_down_q: asyncio.Queue[str] | None = None,
         log_events: bool = False,
     ) -> SteerableToolHandle:
-        # In deterministic mode, update() would be misleading - the LLM would
-        # describe changes but the store wouldn't actually be modified.
-        # Use update_contact() or _create_contact() instead.
-        if self._deterministic:
-            raise RuntimeError(
-                "SimulatedContactManager.update() is not available in deterministic mode. "
-                "Use update_contact() or _create_contact() to modify the contact store directly.",
-            )
+        # update() was previously RuntimeError'd in deterministic mode to
+        # enforce "use update_contact() / _create_contact() directly for
+        # test setup". But the public API path (LLM tool calls invoking
+        # contact_manager.update(text=...)) is also taken by live
+        # production actors during e.g. CodeActActor plans. Raising here
+        # propagates out of the actor's plan and breaks any test that
+        # exercises a "talk to a new contact" flow (e.g.
+        # test_call_with_inline_phone_number, test_email_with_inline_
+        # email_address). Allow .update() in deterministic mode and run
+        # the same LLM-driven simulation handle as the non-deterministic
+        # path. The deterministic store remains unchanged by the LLM
+        # sim path — test setup still belongs in update_contact() /
+        # _create_contact(), but the actor's call no longer blows up
+        # mid-plan.
 
         should_log = self._log_events or log_events
         call_id = None
