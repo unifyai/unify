@@ -391,16 +391,88 @@ class ParallelRunner:
         # Use the actual socket name (respects user overrides via env parameter)
         socket_name = actual_socket
 
-        # Find new sessions - filter by our specific socket to avoid cross-test interference
-        time.sleep(0.3)  # Brief pause for sessions to register
-        current_sessions = {
+        # Find sessions that were created during this run.
+        #
+        # Why parse stdout instead of polling live tmux state:
+        # parallel_run.sh schedules a `sleep 10 && kill-session` in the
+        # background for any session whose test passes. For fast tests
+        # (under ~10s) the kill fires near or after subprocess.run()
+        # returns, racing the post-subprocess polling. A 0.3s sleep is
+        # nowhere near enough to be reliable — and bumping it to 10s+
+        # would dominate fixture runtime.
+        #
+        # The parallel_run.sh stdout reliably prints "  - r ⏳ <name>"
+        # for every session it created, BEFORE waiting on them. Parsing
+        # that gives an authoritative "what was created" list independent
+        # of subsequent lifecycle timing. We then still consult live
+        # tmux state to recover the current display name (with the final
+        # status prefix: p ✅ / f ❌ / r ⏳) for any still-alive session,
+        # so the returned list matches the historical behavior — but for
+        # sessions that already died we synthesize the post-completion
+        # display name from the exit_code+passed/failed sections in
+        # stdout.
+        creating_re = re.compile(r"^\s*-\s*r\s*⏳\s*(\S.*)$", re.MULTILINE)
+        created_base_names = creating_re.findall(stdout)
+        # Dedup while preserving order
+        seen = set()
+        created_base_names = [
+            n for n in created_base_names if not (n in seen or seen.add(n))
+        ]
+
+        # Live tmux query — useful for sessions still alive.
+        live_sessions = {
             (s.socket, s.name) for s in list_tmux_sessions(socket=socket_name)
         }
         filtered_existing = {
             (sock, name) for sock, name in existing_sessions if sock == socket_name
         }
-        new_session_tuples = list(current_sessions - filtered_existing)
-        new_sessions = [name for _, name in new_session_tuples]
+        live_new = list(live_sessions - filtered_existing)
+
+        def _strip_status_prefix(n: str) -> str:
+            for pfx in ("p ✅ ", "f ❌ ", "r ⏳ "):
+                if n.startswith(pfx):
+                    return n[len(pfx) :]
+            return n
+
+        live_base_to_full = {_strip_status_prefix(name): name for _, name in live_new}
+
+        # Determine pass/fail status for sessions already killed: scan the
+        # stdout's PASSED / FAILED rollup blocks.
+        passed_re = re.compile(
+            r"✅\s*PASSED\s*\(\d+\s*tests?\):(.*?)(?=\n\n|\n[^\s]|\Z)",
+            re.DOTALL,
+        )
+        failed_re = re.compile(
+            r"❌\s*FAILED\s*\(\d+\s*tests?\):(.*?)(?=\n\n|\n[^\s]|\Z)",
+            re.DOTALL,
+        )
+        passed_names: set[str] = set()
+        for block in passed_re.findall(stdout):
+            for line in block.splitlines():
+                parts = line.split()
+                if parts and parts[-1] not in {"test", "----"}:
+                    # Last whitespace-separated token is the session base name
+                    passed_names.add(parts[-1])
+        failed_names: set[str] = set()
+        for block in failed_re.findall(stdout):
+            for line in block.splitlines():
+                parts = line.split()
+                if parts and parts[-1] not in {"test", "----"}:
+                    failed_names.add(parts[-1])
+
+        new_sessions: list[str] = []
+        new_session_tuples: list[tuple[str, str]] = []
+        for base in created_base_names:
+            if base in live_base_to_full:
+                full = live_base_to_full[base]
+            elif base in passed_names:
+                full = f"p ✅ {base}"
+            elif base in failed_names:
+                full = f"f ❌ {base}"
+            else:
+                full = f"r ⏳ {base}"
+            new_sessions.append(full)
+            new_session_tuples.append((socket_name, full))
         self._created_sessions.extend(new_session_tuples)
 
         # If wait_for_completion requested, wait for sessions using adaptive timeout
@@ -421,22 +493,43 @@ class ParallelRunner:
                 no_progress_timeout=completion_timeout,
             )
 
-        # Parse log subdir from script output (format: "📁 Test logs for THIS run: logs/pytest/{subdir}/")
-        # This is more robust than trying to predict the datetime-prefixed name
+        # Parse log subdir from script output. The script's banner format
+        # has drifted: it used to print "📁 Test logs for THIS run:
+        # logs/pytest/{subdir}/" but now prints "📁 pytest logs:
+        # logs/pytest/{subdir}/" (the broader log block lists multiple
+        # categories: pytest logs, OTel traces, etc.). Accept both forms
+        # so old/new parallel_run.sh layouts both work.
         log_subdir = None
         log_subdir_match = re.search(
-            r"Test logs for THIS run: logs/pytest/([^/]+)/",
+            r"(?:Test logs for THIS run|pytest logs):\s*logs/pytest/([^/\s]+)/",
             stdout,
         )
         if log_subdir_match:
             log_subdir = log_subdir_match.group(1)
 
-        # Find new log files in the parsed log directory
+        # Find new log files in the parsed log directory. Filter out non-
+        # per-test files like duration_summary.txt — parallel_run.sh now
+        # writes that aggregated summary into the same dir as per-test
+        # logs, but tests asserting "log_files == N tests" only care about
+        # per-test outputs. Anything matching our session naming convention
+        # (no extra _aggregator suffixes) counts; everything else (summary
+        # files, stats, etc.) is excluded.
+        _EXCLUDED_LOG_BASENAMES = frozenset(
+            {
+                "duration_summary.txt",
+                "cache_stats.txt",
+                "stats_summary.txt",
+            },
+        )
         new_logs = []
         if log_subdir:
             logs_dir = PYTEST_LOGS_DIR / log_subdir
             if logs_dir.exists():
-                new_logs = list(logs_dir.glob("*.txt"))
+                new_logs = [
+                    p
+                    for p in logs_dir.glob("*.txt")
+                    if p.name not in _EXCLUDED_LOG_BASENAMES
+                ]
 
         return RunResult(
             exit_code=exit_code,
