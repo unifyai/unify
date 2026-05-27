@@ -338,14 +338,28 @@ def test_method_to_schema_preserves_wrapped_execute_code_signature():
 
 
 # --------------------------------------------------------------------------- #
-#  PRIVATE OPTIONAL ARGUMENTS ARE NOT EXPOSED                                 #
+#  PRIVATE ARGUMENTS ARE NEVER EXPOSED                                        #
 # --------------------------------------------------------------------------- #
 def test_schema_hides_private_optionals() -> None:
     """
-    *Optional* parameters whose names begin with an underscore (``_``)
-    must **not** appear in the schema that is presented to the LLM.
-    Required private parameters, however, *must* stay visible or the
-    tool would become impossible to call – and their docs should stay too.
+    Parameters whose names begin with an underscore (``_``) must **not**
+    appear in the schema presented to the LLM — regardless of whether
+    they are required or optional. The leading underscore is the
+    convention for "internal plumbing", and tools meant to be LLM-callable
+    must not make any underscored parameter required.
+
+    Note on history: an earlier version of this test (2025-11-25,
+    49abe0cd70) asserted that *required* private params should stay
+    visible, on the grounds that "otherwise the tool would become
+    impossible to call". But the production schema generator in
+    unity/common/llm_helpers.py:method_to_schema (50812d1661,
+    2025-06-03) has consistently stripped all underscored params
+    without any required/optional split, and no real tool in the
+    codebase declares a required underscored param — the convention
+    enforces itself. The earlier test assertion was hidden by the
+    discover_test_paths.py matrix bug (2026-01-26, 499de17cc) until
+    today's matrix fix surfaced the contradiction. Updated here to
+    encode the actual design contract.
     """
 
     # ── 1. optional private argument should be hidden ─────────────────────
@@ -375,7 +389,7 @@ def test_schema_hides_private_optionals() -> None:
     # required list unchanged
     assert "a" in required and "b" not in required
 
-    # ── 2. required private argument should be kept ───────────────────────
+    # ── 2. required private argument is ALSO hidden (uniform rule) ────────
     def tool_with_required_private(x: int, _hidden: str) -> str:
         """
         Echo tool.
@@ -385,7 +399,9 @@ def test_schema_hides_private_optionals() -> None:
         x : int
             Multiplier.
         _hidden : str
-            Mandatory private value (must stay visible).
+            Mandatory private value — internal plumbing, also stripped
+            from the LLM-visible schema. Tools must not depend on the
+            LLM providing this; supply it from the call site.
         """
         return _hidden * x
 
@@ -394,10 +410,10 @@ def test_schema_hides_private_optionals() -> None:
     required2 = schema2["function"]["parameters"]["required"]
     desc2 = schema2["function"]["description"]
 
-    # the *required* private parameter is still exposed …
-    assert "_hidden" in props2 and "_hidden" in required2
-    # … and its doc-line is still present
-    assert "_hidden" in desc2
+    # _hidden must NOT be exposed (uniform "_ = stripped" rule)
+    assert "_hidden" not in props2 and "_hidden" not in required2
+    # and its doc-line should also be pruned (consistent with optional case)
+    assert "_hidden" not in desc2
 
 
 # --------------------------------------------------------------------------- #
