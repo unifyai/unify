@@ -23,6 +23,32 @@ from unity.manager_registry import ManagerRegistry
 pytestmark = [pytest.mark.integration, pytest.mark.eval]
 
 
+@pytest.fixture(autouse=True)
+def _mark_environment_ready(initialized_cm_codeact):
+    """Set vm_ready + file_sync_complete on every test in this module.
+
+    Without these flags, the brain prompt tells the LLM "files are still
+    syncing" and the model defers to a "I'll get back to you once sync
+    finishes" reply instead of dispatching an actor. That's correct
+    production behavior — but every test in this file assumes the file
+    environment is ready and asserts on actor-completion artifacts
+    (e.g. get_actor_started_event(...) → AssertionError "Expected at
+    least one ActorHandleStarted event").
+
+    Two tests previously set these flags inline manually (test_file_
+    missing_path_returns_helpful_error, test_downloaded_attachment_
+    readable_by_actor). The other 8 in this file didn't, so they failed
+    deterministically — masked from CI for months by the matrix-discovery
+    bug, surfaced today.
+
+    Autouse fixture is the right scope: every test in this file
+    exercises file-flow paths that require both flags. Moves the setup
+    to one place; removes the redundant inline assignments below.
+    """
+    initialized_cm_codeact.cm.vm_ready = True
+    initialized_cm_codeact.cm.file_sync_complete = True
+
+
 @pytest.mark.asyncio
 @pytest.mark.timeout(300)
 @_handle_project
@@ -78,8 +104,8 @@ async def test_file_read_csv_extracts_names(initialized_cm_codeact, test_files):
 async def test_file_missing_path_returns_helpful_error(initialized_cm_codeact):
     """Missing file path is handled gracefully (no crash; returns a helpful error)."""
     cm = initialized_cm_codeact
-    cm.cm.vm_ready = True
-    cm.cm.file_sync_complete = True
+    # vm_ready + file_sync_complete are now set by the module-level
+    # _mark_environment_ready autouse fixture; no need to set inline.
 
     result = await cm.step_until_wait(
         SMSReceived(
@@ -149,8 +175,8 @@ async def test_downloaded_attachment_readable_by_actor(initialized_cm_codeact):
     file (open(), primitives.files.*, etc.) — it only checks the answer.
     """
     cm = initialized_cm_codeact
-    cm.cm.vm_ready = True
-    cm.cm.file_sync_complete = True
+    # vm_ready + file_sync_complete are now set by the module-level
+    # _mark_environment_ready autouse fixture; no need to set inline.
 
     # Simulate an attachment download: save a .txt file with known content.
     fm = ManagerRegistry.get_file_manager()
