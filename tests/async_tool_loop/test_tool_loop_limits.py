@@ -186,13 +186,29 @@ async def test_prunes_over_quota_tool_calls(llm_config, monkeypatch):
     # Tool ran exactly twice
     assert counter["n"] == 2
 
-    # The first assistant message with tool_calls was pruned to two entries
-    first_asst_with_calls = next(
+    # The first assistant message with `short_tool` requests should be
+    # pruned to two entries. Filter on tool name because the loop's
+    # auto-exposed infrastructure tools (e.g. compress_context) may
+    # produce their own assistant messages we want to skip when
+    # looking for "the message with the short_tool calls".
+    first_asst_with_short_tool = next(
         m
         for m in client.messages
-        if m.get("role") == "assistant" and m.get("tool_calls")
+        if m.get("role") == "assistant"
+        and m.get("tool_calls")
+        and any(
+            tc.get("function", {}).get("name") == "short_tool" for tc in m["tool_calls"]
+        )
     )
-    assert len(first_asst_with_calls["tool_calls"]) == 2
+    short_tool_entries = [
+        tc
+        for tc in first_asst_with_short_tool["tool_calls"]
+        if tc.get("function", {}).get("name") == "short_tool"
+    ]
+    assert len(short_tool_entries) == 2, (
+        f"Expected short_tool to be pruned to 2 entries in the first "
+        f"assistant message that requested it, got {len(short_tool_entries)}"
+    )
     assert all(
         tc.get("function", {}).get("name") == "short_tool"
         for tc in first_asst_with_calls["tool_calls"]
@@ -246,11 +262,23 @@ async def test_prunes_over_quota_serial_calls(llm_config, monkeypatch):
     assert counter["n"] == 2
 
     # Across all assistant messages, only two tool_calls remain after pruning
-    total_calls = 0
+    # Count only `short_tool` calls — the tool under test. The async tool
+    # loop auto-exposes infrastructure tools like `compress_context` for
+    # context-window management, and LLMs (Claude-Opus especially) sometimes
+    # request them mid-conversation. Those calls aren't subject to
+    # short_tool's max_total_calls=2 quota and shouldn't count toward
+    # this test's pruning assertion — which is specifically verifying that
+    # the quota'd tool was pruned, not that the loop emitted no other
+    # tool calls at all.
+    short_tool_calls = 0
     for m in client.messages:
         if m.get("role") == "assistant" and m.get("tool_calls"):
-            total_calls += len(m["tool_calls"])
-    assert total_calls == 2
+            for tc in m["tool_calls"]:
+                if tc.get("function", {}).get("name") == "short_tool":
+                    short_tool_calls += 1
+    assert (
+        short_tool_calls == 2
+    ), f"Expected short_tool to be pruned to 2 calls, got {short_tool_calls}"
 
 
 # helper factory: returns an async tool that notes cancellation -------------
