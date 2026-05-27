@@ -635,9 +635,22 @@ class GuidanceManager(BaseGuidanceManager):
 
     # ─────────────────────────── Functions helpers ───────────────────────────
     def _functions_context(self) -> str:
+        # FunctionManager stores user-defined function metadata in
+        # Functions/Meta (per the 2025-12-03 d4f123318 refactor that split
+        # the old flat "Functions" context into Functions/Meta,
+        # Functions/Primitives, Functions/VirtualEnvs, Functions/Compositional).
+        # GuidanceManager's helper here was authored 2025-10-01 (4330db6635)
+        # before that split and was never updated, so it queries the parent
+        # "Functions" path which doesn't exist — every call to
+        # _get_functions_for_guidance was 404ing. Hidden from CI by the
+        # discover_test_paths.py matrix bug until today's matrix-fix
+        # surfaced it (tests/guidance_manager/test_functions.py).
+        # Note: this only resolves user-defined functions; if guidance is
+        # ever attached to an action primitive (Functions/Primitives), a
+        # separate lookup path will be needed.
         ctxs = unify.get_active_context()
         read_ctx = ctxs.get("read")
-        return f"{read_ctx}/Functions" if read_ctx else "Functions"
+        return f"{read_ctx}/Functions/Meta" if read_ctx else "Functions/Meta"
 
     def _get_functions_for_guidance(
         self,
