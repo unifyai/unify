@@ -1501,9 +1501,14 @@ class TestPreHireChatLogging:
             },
         )
 
-        # Should not raise exception
+        # Should not raise exception. handle_message schedules the ack
+        # asynchronously via asyncio.run_coroutine_threadsafe, so we have
+        # to poll for it rather than assert synchronously (same fix as
+        # test_handle_missing_contact_in_sms in TestErrorHandling — and
+        # the same pattern as the SMS/email happy-path tests above).
         cm.handle_message(message)
-        assert message._acked
+        acked = await _wait_for_condition(lambda: message._acked)
+        assert acked, "Expected pre-hire chat with empty body to be acked"
 
 
 # =============================================================================
@@ -1590,10 +1595,16 @@ class TestErrorHandling:
             },
         )
 
-        # Should raise StopIteration due to contact not found
-        # The exception is caught and message is acked
+        # Should raise StopIteration due to contact not found.
+        # handle_message schedules the actual contact-lookup + ack on the
+        # event loop via asyncio.run_coroutine_threadsafe, so the ack
+        # happens asynchronously. Poll for it instead of asserting
+        # immediately (same pattern as the other handle_message tests in
+        # this file — e.g. test_handle_sms_message uses
+        # `await _wait_for_condition(lambda: message._acked)`).
         cm.handle_message(message)
-        assert message._acked
+        acked = await _wait_for_condition(lambda: message._acked)
+        assert acked, "Expected message to be acked after contact lookup failed"
 
 
 # =============================================================================
