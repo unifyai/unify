@@ -4584,38 +4584,47 @@ class FunctionManager(BaseFunctionManager):
                     "Install uv (recommended) or ensure it is available on PATH.",
                 )
 
-            # Use `--directory` (uv's own chdir) instead of relying on
-            # subprocess `cwd=`. The CI failure mode "Failed to sync venv 0:
-            # Current directory does not exist" came from uv reading its
-            # process cwd before it had a chance to use the `cwd=` we
-            # passed: under parallel pytest runs on the GHA runner, some
-            # other tmux session's working directory had been deleted out
-            # from under the shared process tree, so the child process
-            # inherited an unlinked cwd inode. `cwd=` triggers an
-            # `os.chdir(venv_dir)` in the child AFTER fork, but uv's
-            # workspace-discovery `std::env::current_dir()` call ran first
-            # in some uv build paths and returned ENOENT. `--directory`
-            # tells uv to switch itself to venv_dir before any
-            # cwd-dependent work, sidestepping the race entirely.
+            # Two-step venv setup:
+            #   1. `uv venv --directory <dir>` creates the .venv at a known
+            #      layout (<dir>/.venv/bin/python). Explicit creation
+            #      guarantees the python symlink exists regardless of
+            #      whether uv's sync would otherwise skip .venv creation
+            #      for zero-dep projects (observed on Linux CI: a "sync
+            #      complete" in 69ms followed by FileNotFoundError when
+            #      reading <dir>/.venv/bin/python — uv had not actually
+            #      created the venv).
+            #   2. `uv sync --directory <dir>` installs the project + deps
+            #      into the now-existing .venv.
             #
-            # We also explicitly pass `cwd=str(venv_dir)` as belt-and-
-            # suspenders — fast path for setups where parent cwd is fine.
-            process = await asyncio.create_subprocess_exec(
-                uv_bin,
-                "sync",
-                "--directory",
-                str(venv_dir),
-                cwd=str(venv_dir),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await process.communicate()
-
-            if process.returncode != 0:
-                error_msg = stderr.decode() if stderr else stdout.decode()
-                raise RuntimeError(
-                    f"Failed to sync venv {venv_id}: {error_msg}",
+            # `--directory <DIR>` (uv's own chdir) is used instead of
+            # relying on subprocess `cwd=`. The original `cwd=` approach
+            # was failing intermittently on Linux CI with "Current
+            # directory does not exist" — under parallel pytest runs
+            # some other tmux session's working directory had been
+            # rmtree'd, leaving the shared process tree with an unlinked
+            # cwd inode. uv's workspace-discovery `std::env::current_dir()`
+            # call hit that stale inode before the child's `cwd=` chdir
+            # took effect on some uv build paths. `--directory` tells uv
+            # to switch itself to venv_dir before any cwd-dependent work,
+            # sidestepping the race entirely. `cwd=` is also passed as
+            # belt-and-suspenders for healthy systems.
+            for uv_step in (("venv",), ("sync",)):
+                process = await asyncio.create_subprocess_exec(
+                    uv_bin,
+                    *uv_step,
+                    "--directory",
+                    str(venv_dir),
+                    cwd=str(venv_dir),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
+                stdout, stderr = await process.communicate()
+
+                if process.returncode != 0:
+                    error_msg = stderr.decode() if stderr else stdout.decode()
+                    raise RuntimeError(
+                        f"Failed to '{uv_step[0]}' venv {venv_id}: {error_msg}",
+                    )
 
             logger.info(f"Venv {venv_id}: sync complete")
 
