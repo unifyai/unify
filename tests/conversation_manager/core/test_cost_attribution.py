@@ -512,6 +512,11 @@ class TestRequestLlmRunMetadata:
         cm._pending_llm_requests = []
         cm._pending_llm_request_meta = []
         cm._session_logger = MagicMock()
+        # ConversationManager.ready_for_brain is set in __init__ (line 146)
+        # so MagicMock(spec=...) doesn't pick it up. request_llm_run reads
+        # it at conversation_manager.py:1028; without an explicit mock value
+        # the read raises AttributeError on the spec'd mock.
+        cm.ready_for_brain = True
 
         await ConversationManager.request_llm_run(cm, delay=0)
 
