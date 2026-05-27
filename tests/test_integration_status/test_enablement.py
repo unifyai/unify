@@ -315,10 +315,18 @@ def test_register_is_idempotent(monkeypatch):
         calls["guidance"] += 1
         return 0
 
+    # Provide the required secret in keyset so the package actually
+    # registers on the first call — otherwise production's secret-gate
+    # (added in 243b136d65 on 2026-05-08, 40 min after this test landed)
+    # short-circuits with `skipped_no_secrets` and neither the function
+    # nor the guidance step runs, making calls=={0,0} and breaking the
+    # idempotency assertion. This test's intent is to verify the
+    # second call is a no-op, not to verify the secret-gate (that's
+    # covered by test_required_secret_missing_disables_package).
     _stub_packages_and_keyset(
         monkeypatch,
         packages=[_pkg(slug="hubspot", label="HubSpot", required=["X"])],
-        keyset=set(),
+        keyset={"X"},
     )
     monkeypatch.setattr(IS, "_register_functions", fake_register_functions)
     monkeypatch.setattr(IS, "_register_guidance", fake_register_guidance)
