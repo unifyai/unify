@@ -1349,11 +1349,10 @@ async def e2e_config():
 
     SESSION_DETAILS.populate(
         user_id=config.test_user_id,
-        assistant_id=str(config.test_agent_id),
+        agent_id=config.test_agent_id,
         user_first_name="Test",
         user_surname="User",
     )
-    SESSION_DETAILS.assistant.agent_id = config.test_agent_id
 
     yield config
 
@@ -2033,7 +2032,7 @@ class TestE2ESpendingLimits:
 
             SESSION_DETAILS.populate(
                 user_id=e2e_config.test_user_id,
-                assistant_id=str(e2e_config.test_agent_id),
+                agent_id=e2e_config.test_agent_id,
                 user_first_name="Test",
                 user_surname="User",
                 org_id=org_id,
@@ -2062,7 +2061,7 @@ class TestE2ESpendingLimits:
 
             SESSION_DETAILS.populate(
                 user_id=e2e_config.test_user_id,
-                assistant_id=str(e2e_config.test_agent_id),
+                agent_id=e2e_config.test_agent_id,
                 user_first_name="Test",
                 user_surname="User",
             )
