@@ -4584,9 +4584,27 @@ class FunctionManager(BaseFunctionManager):
                     "Install uv (recommended) or ensure it is available on PATH.",
                 )
 
+            # Use `--directory` (uv's own chdir) instead of relying on
+            # subprocess `cwd=`. The CI failure mode "Failed to sync venv 0:
+            # Current directory does not exist" came from uv reading its
+            # process cwd before it had a chance to use the `cwd=` we
+            # passed: under parallel pytest runs on the GHA runner, some
+            # other tmux session's working directory had been deleted out
+            # from under the shared process tree, so the child process
+            # inherited an unlinked cwd inode. `cwd=` triggers an
+            # `os.chdir(venv_dir)` in the child AFTER fork, but uv's
+            # workspace-discovery `std::env::current_dir()` call ran first
+            # in some uv build paths and returned ENOENT. `--directory`
+            # tells uv to switch itself to venv_dir before any
+            # cwd-dependent work, sidestepping the race entirely.
+            #
+            # We also explicitly pass `cwd=str(venv_dir)` as belt-and-
+            # suspenders — fast path for setups where parent cwd is fine.
             process = await asyncio.create_subprocess_exec(
                 uv_bin,
                 "sync",
+                "--directory",
+                str(venv_dir),
                 cwd=str(venv_dir),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
