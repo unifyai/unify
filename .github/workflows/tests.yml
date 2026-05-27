@@ -830,17 +830,26 @@ jobs:
     - name: Build magnitude packages and install agent-service (agent-service tests)
       if: contains(matrix.test_path, 'agent_service')
       run: |
-        # Build magnitude-core (agent-service depends on it via file: reference)
-        cd magnitude/packages/magnitude-core
+        # Build magnitude as a TURBOREPO MONOREPO from its root.
+        #
+        # Previously this step did `cd magnitude/packages/magnitude-core;
+        # npm install` which fails with `sh: 1: turbo: not found` —
+        # because magnitude's root package.json declares
+        # `"postinstall": "turbo run build"` and `turbo` is a root-level
+        # devDep (`turbo: ^2.4.4`). Installing in a workspace subdir
+        # triggers the root postinstall hook BEFORE the root has
+        # downloaded its own devDeps, so the postinstall can't find
+        # turbo on PATH.
+        #
+        # Installing from the monorepo root with npm workspaces:
+        #   1. Downloads root devDeps including turbo
+        #   2. Resolves & installs all workspace packages
+        #   3. Runs the root postinstall (`turbo run build`) which now
+        #      finds turbo via node_modules/.bin and builds all
+        #      packages in the right dependency order
+        cd magnitude
         npm install
-        npm run build
-        echo "✓ magnitude-core built"
-
-        # Build magnitude-extract
-        cd ../magnitude-extract
-        npm install
-        npm run build
-        echo "✓ magnitude-extract built"
+        echo "✓ magnitude monorepo installed + built via turbo postinstall"
 
         # Install agent-service dependencies
         cd ${{ github.workspace }}/agent-service
