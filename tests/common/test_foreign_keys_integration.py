@@ -853,7 +853,15 @@ def test_delete_exchange_cascades_messages():
         },
     )
 
-    # Log more messages in same exchange
+    # Log more messages in same exchange. Use synchronous=True so all 5
+    # messages are committed before the assertion below — otherwise the
+    # default async path races with the get_logs query (orchestra commits
+    # log writes out-of-order under default fire-and-forget). The original
+    # form of this test (2025-11-25 in 49abe0cd70) presumably leaned on
+    # slow-enough CI for the race to settle, but with the rest of the
+    # matrix freshly restored (today's matrix-discovery fix) the tighter
+    # timing exposes it. Synchronous logging is the documented escape
+    # hatch on log_messages exactly for this kind of test ordering.
     for i in range(2, 6):
         tm.log_messages(
             {
@@ -864,6 +872,7 @@ def test_delete_exchange_cascades_messages():
                 "timestamp": datetime.now(),
                 "exchange_id": exchange_id,
             },
+            synchronous=True,
         )
 
     # Verify 5 messages in exchange
