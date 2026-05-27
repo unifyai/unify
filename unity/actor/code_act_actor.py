@@ -687,7 +687,15 @@ _STORAGE_BASE_INSTRUCTIONS = (
     "Most trajectories will only warrant function changes, if "
     "anything at all. Add guidance only when a multi-step "
     "composition is genuinely non-obvious.\n"
-    "4. When done (or if there is nothing worth changing), respond "
+    "4. **Delete superseded functions when you add a generalization.** "
+    "When you store a new function that subsumes existing narrower "
+    "variants (e.g. you add `greet(name, style)` while the store already "
+    "has `greet_formal(name)` + `greet_casual(name)`), call "
+    "`FunctionManager_delete_function` on the now-redundant entries by "
+    "their `function_id` — leaving them in the library defeats the "
+    "point of merging. The same applies to outright duplicates and to "
+    "narrow special cases that the new function correctly handles.\n"
+    "5. When done (or if there is nothing worth changing), respond "
     "with a brief summary of what you did (or that nothing was needed)."
 )
 
