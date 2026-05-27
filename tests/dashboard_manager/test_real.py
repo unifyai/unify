@@ -35,21 +35,39 @@ def _fresh_dm() -> DashboardManager:
 
 
 def _seed_binding_contexts(*names: str) -> None:
-    """Ensure each Data/* context referenced by FilterBinding tests exists.
+    """Ensure each Data/* context referenced by FilterBinding tests exists
+    UNDER the current test's active-context prefix.
 
     DashboardManager's tile_ops.resolve_binding_contexts() resolves each
-    FilterBinding.context against unify.get_contexts(prefix=base). If the
-    referenced context doesn't exist, the create_tile call raises
-    ValueError("No context found matching '<path>'"). These tests were
-    added in 2343b54ad (2026-04-06) without a corresponding seed step,
-    so the bindings always pointed at non-existent contexts; the failure
-    was masked from CI by the discover_test_paths.py matrix bug
-    (effective 2026-01-26) until today's matrix-fix surfaced it.
+    FilterBinding.context against unify.get_contexts(prefix=base) where
+    base is the test's active write/read context (e.g.
+    `tests/dashboard_manager/test_real/<test_name>/default/0`). A bare
+    `unify.create_context("Data/monthly_stats")` lands at GLOBAL scope
+    and won't appear in the prefix-filtered lookup — so the binding
+    resolver still raises ValueError("No context found matching ...").
+    Prepend the active write context (falling back to read context, then
+    no prefix) so the seeded context lives in the same scope the
+    resolver will search.
+
+    Bug history: 2343b54ad (2026-04-06, Haris) added these tests without
+    any seed step. 5a59805ac (today, my morning fix) added this helper
+    but seeded at global scope, which didn't fix the failure — the
+    contexts were created but at the wrong scope. This update
+    finally lands them where resolve_binding_contexts() will find them.
     """
     import unify
 
+    try:
+        ctxs = unify.get_active_context()
+    except Exception:
+        ctxs = None
+    base_ctx = ""
+    if isinstance(ctxs, dict):
+        base_ctx = ctxs.get("write") or ctxs.get("read") or ""
+
     for name in names:
-        unify.create_context(name)  # exist_ok=True default
+        scoped = f"{base_ctx}/{name}" if base_ctx else name
+        unify.create_context(scoped)  # exist_ok=True default
 
 
 # ────────────────────────────────────────────────────────────────────────────
