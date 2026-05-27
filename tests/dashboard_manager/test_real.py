@@ -34,6 +34,24 @@ def _fresh_dm() -> DashboardManager:
     return DashboardManager()
 
 
+def _seed_binding_contexts(*names: str) -> None:
+    """Ensure each Data/* context referenced by FilterBinding tests exists.
+
+    DashboardManager's tile_ops.resolve_binding_contexts() resolves each
+    FilterBinding.context against unify.get_contexts(prefix=base). If the
+    referenced context doesn't exist, the create_tile call raises
+    ValueError("No context found matching '<path>'"). These tests were
+    added in 2343b54ad (2026-04-06) without a corresponding seed step,
+    so the bindings always pointed at non-existent contexts; the failure
+    was masked from CI by the discover_test_paths.py matrix bug
+    (effective 2026-01-26) until today's matrix-fix surfaced it.
+    """
+    import unify
+
+    for name in names:
+        unify.create_context(name)  # exist_ok=True default
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # Tile CRUD
 # ────────────────────────────────────────────────────────────────────────────
@@ -61,6 +79,7 @@ def test_create_tile_basic():
 def test_create_tile_with_data_bindings():
     """create_tile should accept data_bindings for live-data tiles."""
     dm = _fresh_dm()
+    _seed_binding_contexts("Data/monthly_stats", "Data/revenue")
 
     result = dm.create_tile(
         "<div id='chart'>Loading...</div>",
@@ -203,6 +222,7 @@ def test_list_tiles_with_limit():
 def test_create_tile_with_on_data():
     """create_tile with on_data should store on_data_script and data_bindings_json."""
     dm = _fresh_dm()
+    _seed_binding_contexts("Data/monthly_stats")
 
     result = dm.create_tile(
         "<div id='tbl'>Loading...</div>",
@@ -233,6 +253,7 @@ def test_create_tile_with_on_data():
 def test_update_tile_with_on_data():
     """update_tile should update on_data_script field."""
     dm = _fresh_dm()
+    _seed_binding_contexts("Data/monthly_stats")
 
     created = dm.create_tile(
         "<div id='v'>Loading...</div>",
