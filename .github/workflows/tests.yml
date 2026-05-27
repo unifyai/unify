@@ -827,6 +827,19 @@ jobs:
         token: ${{ secrets.CLONE_TOKEN }}
         fetch-depth: 1
 
+    - name: Install bun (agent-service tests, magnitude packageManager dep)
+      if: contains(matrix.test_path, 'agent_service')
+      run: |
+        # magnitude's root package.json declares
+        # "packageManager": "bun@1.2.8^". Turbo (run by the monorepo's
+        # postinstall script) reads packageManager to pick which package
+        # manager to invoke for workspace builds. Without bun on PATH,
+        # turbo dies with:
+        #   "Unable to find package manager binary: cannot find binary path"
+        # Install bun globally via npm so turbo's lookup succeeds.
+        npm install -g bun
+        bun --version
+
     - name: Build magnitude packages and install agent-service (agent-service tests)
       if: contains(matrix.test_path, 'agent_service')
       run: |
