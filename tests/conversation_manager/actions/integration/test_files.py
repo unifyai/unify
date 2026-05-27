@@ -107,6 +107,10 @@ async def test_file_missing_path_returns_helpful_error(initialized_cm_codeact):
         "doesn't exist",
         "cannot access",
         "can't access",
+        # Passive voice — the LLM produced "the file ... cannot be accessed"
+        # which the active-voice "cannot access" substring doesn't catch.
+        "cannot be accessed",
+        "can't be accessed",
         "cannot find",
         "can't find",
         "couldn't find",
@@ -120,6 +124,10 @@ async def test_file_missing_path_returns_helpful_error(initialized_cm_codeact):
         "no file at",
         "no such file",
         "missing",
+        # The LLM also describes path violations as "outside ... workspace"
+        # which is semantically the same thing as "missing" from the
+        # assistant's perspective (it can't access the path).
+        "outside",
     )
     _final_lower = final.lower()
     assert any(p in _final_lower for p in _missing_file_vocab), (
