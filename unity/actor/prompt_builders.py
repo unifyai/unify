@@ -128,6 +128,32 @@ _EXECUTION_RULES = textwrap.dedent("""
     do so. Only reach for `execute_code` when you genuinely need to
     compose multiple steps or write conditional/iterative logic.
 
+    **Common antipattern — DO NOT do this:**
+
+    ```python
+    # ❌ WRONG: wrapping a single primitive in execute_code just to
+    #          call it and print the result.
+    handle = await primitives.knowledge.ask(query="...")
+    result = await handle.result()
+    print(result)
+    ```
+
+    That is a single primitive call. Use:
+
+    ```
+    execute_function(function_name="primitives.knowledge.ask",
+                     call_kwargs={"query": "..."})
+    ```
+
+    The `print()`, the `await handle.result()`, and the temporary
+    variable do **not** count as "multi-step composition" — they are
+    boilerplate. Wrapping a single primitive in `execute_code` strips
+    the outer loop's ability to steer the handle (ask/stop/pause/
+    resume) because the handle is shadowed by the `print()`. The same
+    applies to `primitives.web.ask`, `primitives.contacts.ask`,
+    `primitives.transcripts.ask`, etc. — every `primitives.*.ask` /
+    `primitives.*.update` is a single primitive call.
+
     **Python-first principle:** When a task can be accomplished with
     either a Python package or a shell CLI tool, prefer Python.  Python
     packages are installed via `install_python_packages` with full
