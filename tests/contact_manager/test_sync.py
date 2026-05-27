@@ -67,7 +67,7 @@ def test_real_assistant(monkeypatch):
         SESSION_DETAILS,
         "assistant",
         AssistantDetails(
-            id="123",
+            agent_id=123,
             first_name="Alice",
             surname="Smith",
             number="+15551234567",
