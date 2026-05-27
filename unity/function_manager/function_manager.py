@@ -4560,8 +4560,6 @@ class FunctionManager(BaseFunctionManager):
             venv_dir.mkdir(parents=True, exist_ok=True)
             pyproject_path.write_text(venv_content)
 
-            # Run uv sync
-            logger.info(f"Venv {venv_id}: running 'uv sync'...")
             import asyncio
             import shutil as _shutil
             import sys as _sys
@@ -4585,46 +4583,83 @@ class FunctionManager(BaseFunctionManager):
                 )
 
             # Two-step venv setup:
-            #   1. `uv venv --directory <dir>` creates the .venv at a known
-            #      layout (<dir>/.venv/bin/python). Explicit creation
-            #      guarantees the python symlink exists regardless of
-            #      whether uv's sync would otherwise skip .venv creation
-            #      for zero-dep projects (observed on Linux CI: a "sync
-            #      complete" in 69ms followed by FileNotFoundError when
-            #      reading <dir>/.venv/bin/python — uv had not actually
-            #      created the venv).
-            #   2. `uv sync --directory <dir>` installs the project + deps
-            #      into the now-existing .venv.
             #
-            # `--directory <DIR>` (uv's own chdir) is used instead of
-            # relying on subprocess `cwd=`. The original `cwd=` approach
-            # was failing intermittently on Linux CI with "Current
-            # directory does not exist" — under parallel pytest runs
-            # some other tmux session's working directory had been
-            # rmtree'd, leaving the shared process tree with an unlinked
-            # cwd inode. uv's workspace-discovery `std::env::current_dir()`
-            # call hit that stale inode before the child's `cwd=` chdir
-            # took effect on some uv build paths. `--directory` tells uv
-            # to switch itself to venv_dir before any cwd-dependent work,
-            # sidestepping the race entirely. `cwd=` is also passed as
-            # belt-and-suspenders for healthy systems.
-            for uv_step in (("venv",), ("sync",)):
+            #   1. `uv venv <venv_dir>/.venv` — creates the .venv at the
+            #      EXACT path Python will later import from. Passing the
+            #      explicit target path (rather than relying on
+            #      `--directory` + uv's "current project" discovery) is
+            #      defensive: an earlier `--directory <venv_dir>` form
+            #      returned exit code 0 on Linux CI but produced no
+            #      `.venv/bin/python`, causing a downstream
+            #      FileNotFoundError in subprocess.create_subprocess_exec.
+            #      Naming the target path leaves no ambiguity.
+            #
+            #   2. `uv sync --directory <venv_dir>` installs project +
+            #      deps into the freshly-created `.venv`. uv discovers
+            #      the .venv automatically when run from the project
+            #      directory.
+            #
+            # The original `cwd=str(venv_dir)` race ("Current directory
+            # does not exist" when a sibling tmux session rmtree'd a
+            # shared parent's cwd inode) is avoided here too: cwd is set
+            # to the just-mkdir'd venv_dir, AND uv's --directory flag is
+            # passed to make uv chdir before any cwd-dependent work.
+            venv_target = venv_dir / ".venv"
+            uv_steps: list[tuple[str, list[str]]] = [
+                (
+                    "venv",
+                    [
+                        uv_bin,
+                        "venv",
+                        str(venv_target),
+                        "--directory",
+                        str(venv_dir),
+                    ],
+                ),
+                (
+                    "sync",
+                    [
+                        uv_bin,
+                        "sync",
+                        "--directory",
+                        str(venv_dir),
+                    ],
+                ),
+            ]
+            for label, cmd in uv_steps:
+                logger.info(f"Venv {venv_id}: running 'uv {label}'...")
                 process = await asyncio.create_subprocess_exec(
-                    uv_bin,
-                    *uv_step,
-                    "--directory",
-                    str(venv_dir),
+                    *cmd,
                     cwd=str(venv_dir),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
                 stdout, stderr = await process.communicate()
+                logger.info(
+                    f"Venv {venv_id}: 'uv {label}' rc={process.returncode}; "
+                    f"stdout={stdout.decode().strip()!r}; "
+                    f"stderr={stderr.decode().strip()!r}",
+                )
 
                 if process.returncode != 0:
                     error_msg = stderr.decode() if stderr else stdout.decode()
                     raise RuntimeError(
-                        f"Failed to '{uv_step[0]}' venv {venv_id}: {error_msg}",
+                        f"Failed to 'uv {label}' venv {venv_id}: {error_msg}",
                     )
+
+            # Verify the venv layout we expect actually exists.
+            # uv has been observed to return 0 from `uv venv` without
+            # materializing the .venv (CI race / disk pressure / etc.) —
+            # fail loud HERE with a focused error rather than later when
+            # subprocess.create_subprocess_exec tries to invoke
+            # `.venv/bin/python` and bubbles a generic FileNotFoundError.
+            if not python_path.exists():
+                raise RuntimeError(
+                    f"Failed to materialize venv {venv_id}: "
+                    f"expected python at {python_path} but it does not "
+                    f"exist after `uv venv` + `uv sync` both returned 0. "
+                    f"venv_dir={venv_dir} venv_target={venv_target}",
+                )
 
             logger.info(f"Venv {venv_id}: sync complete")
 
