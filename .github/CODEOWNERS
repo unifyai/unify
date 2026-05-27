@@ -1,21 +1,23 @@
 # CODEOWNERS for unifyai/unity
 #
-# GitHub uses LAST-MATCH-WINS semantics. If you add a more specific rule
-# below, it overrides the global owner — include @unifyai/Engineers on
-# security-sensitive paths even when adding a more specific reviewer,
-# or you can silently remove required review.
+# GitHub uses LAST-MATCH-WINS semantics. The per-path overrides below
+# flag security-sensitive paths in PR descriptions; the reviewer set
+# remains the default pair (the two founding engineers).
+#
+# Either approval satisfies branch protection. GitHub auto-excludes
+# the PR author from the request list, so when one of them opens a
+# PR the other becomes the implicit required reviewer.
 
-# Catch-all: anything not matched below requires Engineers review.
-*                                  @unifyai/Engineers
+# Default reviewers — the two founding engineers.
+*                                  @YushaArif99 @hmahmood24
 
-# Protect the ownership rules and security-sensitive config from drive-by
-# edits — same team, but flagged here so they show up in PR descriptions.
-/.github/CODEOWNERS                @unifyai/Engineers
-/.github/dependabot.yml            @unifyai/Engineers
-/.github/workflows/                @unifyai/Engineers
-/SECURITY.md                       @unifyai/Engineers
-/AGENTS.md                         @unifyai/Engineers
-/ARCHITECTURE.md                   @unifyai/Engineers
+# Security-sensitive config — flagged so it shows up in PR descriptions.
+/.github/CODEOWNERS                @YushaArif99 @hmahmood24
+/.github/dependabot.yml            @YushaArif99 @hmahmood24
+/.github/workflows/                @YushaArif99 @hmahmood24
+/SECURITY.md                       @YushaArif99 @hmahmood24
+/AGENTS.md                         @YushaArif99 @hmahmood24
+/ARCHITECTURE.md                   @YushaArif99 @hmahmood24
 
 # Secret manager is the highest-blast-radius surface in the codebase.
-/unity/secret_manager/             @unifyai/Engineers
+/unity/secret_manager/             @YushaArif99 @hmahmood24
