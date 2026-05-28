@@ -56,11 +56,17 @@ EXCLUDE_DIRS = {
 # substantially.
 SPLIT_DIRS: dict[str, list[list[str]]] = {
     "tests/task_scheduler": [
-        # Group A — the heaviest single file, lives alone so the other
-        # groups can finish well within timeout while it grinds.
+        # Group A — the heaviest single file (23 funcs heavily
+        # parametrized into many tens of LLM-eval cases). Lives
+        # alone; verified PASSING after the first split landed.
         ["test_execute.py"],
-        # Group B — the next-heaviest files, both LLM-eval-heavy.
-        ["test_active_queue.py", "test_active_task.py"],
+        # Group B1 — test_active_queue.py (20 funcs, also
+        # parametrized). Split out from test_active_task because the
+        # combined Group B was hitting ~90min walls; isolating
+        # test_active_queue gives each half its own 130min budget.
+        ["test_active_queue.py"],
+        # Group B2 — test_active_task.py (9 funcs).
+        ["test_active_task.py"],
         # Group C — the remaining smaller files (~50 LLM calls
         # combined, comfortable for one job).
         [
@@ -75,6 +81,42 @@ SPLIT_DIRS: dict[str, list[list[str]]] = {
             "test_foreign_keys.py",
             "test_info.py",
             "test_integration_contacts.py",
+        ],
+    ],
+    "tests/function_manager/python": [
+        # 193 collected tests across 15 files; many do real venv
+        # subprocess work and venv create+sync per test. The single
+        # cluster was running 90+ minutes and approaching the 130min
+        # job timeout. Split by execution-mode + state-mode families
+        # so related tests stay grouped (they share fixtures and
+        # naturally share venv lifecycle).
+        #
+        # Group A — execution-environment + venv lifecycle (heaviest
+        # subprocess-per-test category, currently the slowest):
+        [
+            "test_execution_env.py",
+            "test_venv_execution.py",
+            "test_venv_persistent_connections.py",
+            "test_venv_process_cleanup.py",
+            "test_venv_rpc.py",
+            "test_venv_rpc_e2e.py",
+        ],
+        # Group B — in-process proxy / state-mode families:
+        [
+            "test_in_process_state_modes.py",
+            "test_in_process_proxy_state_modes.py",
+            "test_inspect_execution_states.py",
+            "test_state_modes.py",
+            "test_venv_proxy_state_modes.py",
+        ],
+        # Group C — execute_function + multi-session + helpers:
+        [
+            "test_execute_function_primitives.py",
+            "test_execute_function_venv_override.py",
+            "test_multi_session.py",
+            "test_reason_helper.py",
+            "test_remote_windows.py",
+            "test_steerable_compositional.py",
         ],
     ],
 }
