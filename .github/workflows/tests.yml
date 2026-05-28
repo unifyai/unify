@@ -46,6 +46,23 @@ on:
     branches:
     - '**'    # All branches
 
+# Cancel in-progress runs for the same PR / branch when a newer commit
+# lands. Without this, every push during active development queues a
+# fresh ~67-job matrix while the previous matrices still occupy runner
+# capacity, leading to "The runner has received a shutdown signal"
+# cancellations on the older runs and starvation on the newer ones.
+# Pushing 10 commits in quick succession produced ~670 queued jobs
+# against finite runner slots, which both delayed the latest matrix and
+# poisoned the matrix-by-matrix net-delta investigation with spurious
+# infrastructure-cancellation failures.
+#
+# Group key is the workflow + ref so simultaneous PRs on different
+# branches still run in parallel (different keys), but pushes to the
+# SAME PR/branch supersede each other.
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # Determine if tests should run based on trigger and commit/PR message
   should-run-tests:
