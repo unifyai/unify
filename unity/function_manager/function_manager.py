@@ -4813,8 +4813,24 @@ class FunctionManager(BaseFunctionManager):
         # a structured error rather than letting subprocess raise
         # FileNotFoundError with no surrounding state.
         if not python_path.exists():
-            parent_listing = "<not present>"
+            # Walk up the path tree and note which components exist.
+            # If a high-level ancestor (e.g. `~/.unity/venvs/`) is
+            # missing, the culprit is something rmtree-ing the
+            # `unity/Local/.unity/` tree as a whole. If only the venv-
+            # id leaf is missing, suspect per-test cleanup.
+            ancestor_status: list[str] = []
+            cursor: Path | None = python_path
+            while cursor is not None and str(cursor) not in ("/", ""):
+                ancestor_status.append(
+                    f"{cursor.exists()}={cursor}",
+                )
+                next_cursor = cursor.parent
+                if next_cursor == cursor:
+                    break
+                cursor = next_cursor
+
             venv_dir = python_path.parent.parent.parent
+            parent_listing = "<not present>"
             if venv_dir.exists():
                 try:
                     parent_listing = ", ".join(
@@ -4822,12 +4838,43 @@ class FunctionManager(BaseFunctionManager):
                     )
                 except OSError as e:
                     parent_listing = f"<iterdir failed: {e}>"
+
+            # The grandparent (the safe_ctx-keyed dir containing venv
+            # ids) is the most informative — if THAT is gone too, the
+            # whole venvs/<ctx>/ subtree was wiped. If it exists with
+            # OTHER venv-id subdirs, only THIS venv-id was wiped.
+            gp_listing = "<not present>"
+            gp = venv_dir.parent
+            if gp.exists():
+                try:
+                    gp_listing = ", ".join(sorted(p.name for p in gp.iterdir()))
+                except OSError as e:
+                    gp_listing = f"<iterdir failed: {e}>"
+
+            try:
+                import os as _os_diag
+
+                cwd_str = _os_diag.getcwd()
+            except Exception as e:
+                cwd_str = f"<getcwd failed: {e}>"
+
+            import os as _os_diag2
+
+            home_str = _os_diag2.environ.get("HOME", "<unset>")
+            pid_str = _os_diag2.getpid()
+
             raise RuntimeError(
                 f"execute_in_venv: venv python disappeared between "
                 f"prepare_venv() (which verified existence) and "
-                f"create_subprocess_exec(). python_path={python_path} "
-                f"venv_dir={venv_dir} venv_dir.exists()={venv_dir.exists()} "
-                f"venv_dir contents=[{parent_listing}] venv_id={venv_id}",
+                f"create_subprocess_exec(). "
+                f"venv_id={venv_id} pid={pid_str} cwd={cwd_str} "
+                f"HOME={home_str}\n"
+                f"  python_path={python_path}\n"
+                f"  venv_dir={venv_dir} exists={venv_dir.exists()}\n"
+                f"  venv_dir contents=[{parent_listing}]\n"
+                f"  grandparent={gp} exists={gp.exists()}\n"
+                f"  grandparent contents=[{gp_listing}]\n"
+                f"  ancestor existence (deepest first): {ancestor_status}",
             )
 
         process = await asyncio.create_subprocess_exec(
