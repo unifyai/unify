@@ -4623,6 +4623,17 @@ class FunctionManager(BaseFunctionManager):
                         "sync",
                         "--directory",
                         str(venv_dir),
+                        # The synthetic pyproject.toml we generate is
+                        # NOT a real installable package — it only
+                        # declares `dependencies = [...]`. Without
+                        # this flag uv tries to install the project
+                        # itself in editable mode, fails to find a
+                        # build backend / sdist, and raises
+                        # "Distribution not found at: file:///.../<venv_dir>".
+                        # We only want the *dependencies* installed
+                        # into the venv; the project itself is just
+                        # a manifest.
+                        "--no-install-project",
                     ],
                 ),
             ]
