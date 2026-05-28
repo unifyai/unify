@@ -24,6 +24,33 @@ try to create system contacts simultaneously.
 from __future__ import annotations
 
 import os
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CRITICAL: environment-variable setup MUST happen at module top, *before*
+# any `tests.helpers` import (which transitively imports unity modules that
+# instantiate `SETTINGS = ProductionSettings()` at import time).
+# Pydantic's BaseSettings reads env vars once at instantiation; if SETTINGS
+# is already constructed when pytest_configure() later sets these vars, the
+# overrides are silently ignored and prompts/feature flags fall back to
+# production defaults. Tests like
+# test_can_you_use_my_computer / test_email_to_email then fail because the
+# system prompt branches on the wrong flag value
+# (USER_DESKTOP_CONTROL_ENABLED defaults False, send_email tool gated by
+# empty ASSISTANT_EMAIL, etc.).
+#
+# pytest_configure() below still reassigns these defensively in case a
+# downstream test reimports SETTINGS, but the authoritative point of
+# truth is *here*, before any unity import in this conftest.
+# ─────────────────────────────────────────────────────────────────────────────
+os.environ.setdefault(
+    "UNITY_CONVERSATION_USER_DESKTOP_CONTROL_ENABLED",
+    "true",
+)
+os.environ.setdefault("ASSISTANT_EMAIL", "assistant@test.example.com")
+os.environ.setdefault("ASSISTANT_NUMBER", "+15550001000")
+os.environ.setdefault("ASSISTANT_WHATSAPP_NUMBER", "+15550001000")
+os.environ.setdefault("UNITY_CONVERSATION_JOB_NAME", "test_job")
+
 from unittest.mock import patch
 
 import pytest
