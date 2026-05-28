@@ -664,6 +664,7 @@ class ContactManager(BaseContactManager):
                     r"\s*phone_number\s*==\s*(['\"])\S.*?\1\s*",
                     r"\s*whatsapp_number\s*==\s*(['\"])\S.*?\1\s*",
                     r"\s*discord_id\s*==\s*(['\"])\S.*?\1\s*",
+                    r"\s*slack_user_id\s*==\s*(['\"])\S.*?\1\s*",
                 )
                 if any(re.fullmatch(p, filter) for p in unique_eq_patterns):
                     eff_limit = min(eff_limit, 1)
