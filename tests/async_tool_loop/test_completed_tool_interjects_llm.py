@@ -128,6 +128,15 @@ async def test_wait_called_and_pruned_when_other_tool_is_very_slow(
         interrupt_llm_with_interjections=True,
     )
 
+    # The async-tool-loop `wait` log emission goes through Unity's
+    # `unity` logger (unity/logger.py:LOGGER), which is configured with
+    # `propagate=False` since 5ed695ffe (2026-02-20 "Consolidate logging
+    # into unity.logger as single authority"). That means pytest's
+    # caplog — which captures the root logger by default — does NOT see
+    # the Unity log messages. Subscribe caplog explicitly to the
+    # "unity" logger so `_wait_for_wait_tool_log` actually finds the
+    # "Assistant chose `wait`" emission.
+    caplog.set_level(logging.INFO, logger="unity")
     caplog.set_level(logging.INFO)
     caplog.clear()
 
