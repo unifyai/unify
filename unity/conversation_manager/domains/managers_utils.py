@@ -67,6 +67,7 @@ def _get_sender_name(contact: dict | None) -> str:
         or contact.get("phone_number", "")
         or contact.get("email_address", "")
         or contact.get("discord_id", "")
+        or contact.get("slack_user_id", "")
         or "Unknown"
     )
 
@@ -114,6 +115,10 @@ _MESSAGE_PRODUCING_EVENTS = {
     "DiscordMessageSent",
     "DiscordChannelMessageReceived",
     "DiscordChannelMessageSent",
+    "SlackMessageReceived",
+    "SlackMessageSent",
+    "SlackChannelMessageReceived",
+    "SlackChannelMessageSent",
     "TeamsMessageReceived",
     "TeamsMessageSent",
     "TeamsChannelMessageReceived",
@@ -313,6 +318,62 @@ async def hydrate_global_thread(cm: "ConversationManager") -> None:
                     message_content=cm_event.content,
                     role="assistant",
                     timestamp=ts,
+                )
+
+            # --- Slack Messages ---
+            case "SlackMessageReceived":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.SLACK_MESSAGE,
+                    message_content=cm_event.content,
+                    role="user",
+                    timestamp=ts,
+                    attachments=getattr(cm_event, "attachments", None),
+                    team_id=getattr(cm_event, "team_id", None),
+                    channel_id=getattr(cm_event, "channel_id", None),
+                    thread_ts=getattr(cm_event, "thread_ts", None),
+                    message_id=getattr(cm_event, "message_id", None),
+                    routing_metadata=getattr(cm_event, "routing_metadata", None),
+                )
+            case "SlackMessageSent":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.SLACK_MESSAGE,
+                    message_content=cm_event.content,
+                    role="assistant",
+                    timestamp=ts,
+                    team_id=getattr(cm_event, "team_id", None),
+                    channel_id=getattr(cm_event, "channel_id", None),
+                    thread_ts=getattr(cm_event, "thread_ts", None),
+                )
+            case "SlackChannelMessageReceived":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.SLACK_CHANNEL_MESSAGE,
+                    message_content=cm_event.content,
+                    role="user",
+                    timestamp=ts,
+                    attachments=getattr(cm_event, "attachments", None),
+                    team_id=getattr(cm_event, "team_id", None),
+                    channel_id=getattr(cm_event, "channel_id", None),
+                    thread_ts=getattr(cm_event, "thread_ts", None),
+                    message_id=getattr(cm_event, "message_id", None),
+                    routing_metadata=getattr(cm_event, "routing_metadata", None),
+                )
+            case "SlackChannelMessageSent":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.SLACK_CHANNEL_MESSAGE,
+                    message_content=cm_event.content,
+                    role="assistant",
+                    timestamp=ts,
+                    team_id=getattr(cm_event, "team_id", None),
+                    channel_id=getattr(cm_event, "channel_id", None),
+                    thread_ts=getattr(cm_event, "thread_ts", None),
                 )
 
             # --- Teams Messages ---
@@ -879,6 +940,12 @@ async def log_message(
             Medium.DISCORD_CHANNEL_MESSAGE
             if "channel" in event_name
             else Medium.DISCORD_MESSAGE
+        )
+    elif "slack" in event_name:
+        medium = (
+            Medium.SLACK_CHANNEL_MESSAGE
+            if "channel" in event_name
+            else Medium.SLACK_MESSAGE
         )
     elif "teams" in event_name:
         medium = (

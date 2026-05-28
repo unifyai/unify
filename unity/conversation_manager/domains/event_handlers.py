@@ -1463,6 +1463,10 @@ def _push_email_to_all_contacts(
         DiscordMessageSent,
         DiscordChannelMessageReceived,
         DiscordChannelMessageSent,
+        SlackMessageReceived,
+        SlackMessageSent,
+        SlackChannelMessageReceived,
+        SlackChannelMessageSent,
         TeamsMessageReceived,
         TeamsMessageSent,
         TeamsChannelMessageReceived,
@@ -1480,7 +1484,9 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
     channel_id = None
     team_id = None
     thread_id = None
+    thread_ts = None
     message_id = None
+    routing_metadata = None
 
     # Get contact info from ContactManager, fallback to event.contact
     # Note: event.contact may be empty dict for emails to external addresses
@@ -1729,6 +1735,64 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
                 "discord_channel_message_received",
                 f"Discord channel from {sender_name}: {event.content}",
             )
+        case SlackMessageSent():
+            medium = Medium.SLACK_MESSAGE
+            message_content = event.content
+            team_id = getattr(event, "team_id", "") or None
+            channel_id = getattr(event, "channel_id", "") or None
+            thread_ts = getattr(event, "thread_ts", "") or None
+            notif_content = f"Slack DM sent to {sender_name}"
+            role = "assistant"
+            event_trace = getattr(cm, "_current_event_trace", None) or {}
+            cm._session_logger.info(
+                "slack_message_sent",
+                f"Slack DM to {sender_name}: {event.content}",
+            )
+        case SlackMessageReceived():
+            medium = Medium.SLACK_MESSAGE
+            message_content = event.content
+            attachments = event.attachments
+            team_id = getattr(event, "team_id", "") or None
+            channel_id = getattr(event, "channel_id", "") or None
+            thread_ts = getattr(event, "thread_ts", "") or None
+            message_id = getattr(event, "message_id", "") or None
+            routing_metadata = getattr(event, "routing_metadata", None) or None
+            notif_content = f"Slack DM from {sender_name}"
+            role = "user"
+            event_trace = getattr(cm, "_current_event_trace", None) or {}
+            cm._session_logger.info(
+                "slack_message_received",
+                f"Slack DM from {sender_name}: {event.content}",
+            )
+        case SlackChannelMessageSent():
+            medium = Medium.SLACK_CHANNEL_MESSAGE
+            message_content = event.content
+            team_id = getattr(event, "team_id", "") or None
+            channel_id = getattr(event, "channel_id", "") or None
+            thread_ts = getattr(event, "thread_ts", "") or None
+            notif_content = "Slack channel message sent"
+            role = "assistant"
+            event_trace = getattr(cm, "_current_event_trace", None) or {}
+            cm._session_logger.info(
+                "slack_channel_message_sent",
+                f"Slack channel message: {event.content}",
+            )
+        case SlackChannelMessageReceived():
+            medium = Medium.SLACK_CHANNEL_MESSAGE
+            message_content = event.content
+            attachments = event.attachments
+            team_id = getattr(event, "team_id", "") or None
+            channel_id = getattr(event, "channel_id", "") or None
+            thread_ts = getattr(event, "thread_ts", "") or None
+            message_id = getattr(event, "message_id", "") or None
+            routing_metadata = getattr(event, "routing_metadata", None) or None
+            notif_content = f"Slack channel message from {sender_name}"
+            role = "user"
+            event_trace = getattr(cm, "_current_event_trace", None) or {}
+            cm._session_logger.info(
+                "slack_channel_message_received",
+                f"Slack channel from {sender_name}: {event.content}",
+            )
         case TeamsMessageSent():
             medium = Medium.TEAMS_MESSAGE
             message_content = event.content
@@ -1798,7 +1862,9 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             channel_id=channel_id,
             team_id=team_id,
             thread_id=thread_id,
+            thread_ts=thread_ts,
             message_id=message_id,
+            routing_metadata=routing_metadata,
         )
     cm.notifications_bar.push_notif("comms", notif_content, event.timestamp)
     if role == "user":
