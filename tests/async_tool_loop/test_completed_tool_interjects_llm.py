@@ -131,30 +131,39 @@ async def test_wait_called_and_pruned_when_other_tool_is_very_slow(
     # The async-tool-loop `wait` log emission goes through Unity's
     # `unity` logger (unity/logger.py:LOGGER), which is configured with
     # `propagate=False` since 5ed695ffe (2026-02-20 "Consolidate logging
-    # into unity.logger as single authority"). That means pytest's
-    # caplog — which captures the root logger by default — does NOT see
-    # the Unity log messages. Subscribe caplog explicitly to the
-    # "unity" logger so `_wait_for_wait_tool_log` actually finds the
-    # "Assistant chose `wait`" emission.
+    # into unity.logger as single authority"). pytest's `caplog`
+    # attaches its handler to the ROOT logger only; `set_level(level,
+    # logger=name)` adjusts the named logger's level but does NOT
+    # attach a handler to it. With propagate=False, no record ever
+    # reaches the root handler, so caplog never sees it. Attach
+    # caplog's handler directly to the "unity" logger for the duration
+    # of this test so `_wait_for_wait_tool_log` actually finds the
+    # "Assistant chose `wait`" emission. Remove it in the finally
+    # block so the handler doesn't leak across tests.
+    _unity_logger = logging.getLogger("unity")
+    _unity_logger.addHandler(caplog.handler)
     caplog.set_level(logging.INFO, logger="unity")
     caplog.set_level(logging.INFO)
     caplog.clear()
 
-    # Wait for fast_task result to be processed
-    await _wait_for_tool_result(client, "fast_task", min_results=1)
+    try:
+        # Wait for fast_task result to be processed
+        await _wait_for_tool_result(client, "fast_task", min_results=1)
 
-    # Wait for the LLM to call `wait` after seeing the partial result.
-    # We watch the log rather than client.messages because `wait` calls are
-    # intentionally pruned from the transcript to avoid clutter.
-    # This avoids race conditions with fixed delays that might not be long
-    # enough for uncached LLM responses.
-    await _wait_for_wait_tool_log(caplog, timeout=120.0)
+        # Wait for the LLM to call `wait` after seeing the partial result.
+        # We watch the log rather than client.messages because `wait` calls are
+        # intentionally pruned from the transcript to avoid clutter.
+        # This avoids race conditions with fixed delays that might not be long
+        # enough for uncached LLM responses.
+        await _wait_for_wait_tool_log(caplog, timeout=120.0)
 
-    # Now release the gate so very_slow_task can complete
-    very_slow_gate.set()
+        # Now release the gate so very_slow_task can complete
+        very_slow_gate.set()
 
-    # Wait for the loop to complete
-    await handle.result()
+        # Wait for the loop to complete
+        await handle.result()
+    finally:
+        _unity_logger.removeHandler(caplog.handler)
 
     # ── Assertions ───────────────────────────────────────────────────────
 
