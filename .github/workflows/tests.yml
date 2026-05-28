@@ -874,7 +874,17 @@ jobs:
         npm install
         echo "✓ agent-service dependencies installed"
 
-        # Install Patchright browser (Chromium) for Level 2 round-trip tests
+        # Install Patchright browser (Chromium) for Level 2 round-trip tests.
+        #
+        # `patchright` is declared as a magnitude root-level devDep
+        # (magnitude/package.json: "patchright": "^1.52.5") — NOT as an
+        # agent-service dep — so the binary lives at
+        # magnitude/node_modules/.bin/patchright. Running `npx
+        # patchright install chromium` from agent-service/ resolves npx
+        # against agent-service/node_modules and exits 127
+        # ("sh: 1: patchright: not found"). Run it from magnitude/ where
+        # patchright is actually installed.
+        cd ${{ github.workspace }}/magnitude
         npx patchright install chromium
         echo "✓ Patchright Chromium installed"
 
