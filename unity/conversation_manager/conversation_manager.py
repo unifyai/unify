@@ -110,6 +110,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
         assistant_whatsapp_number: str = "",
         assistant_discord_bot_id: str = "",
         assistant_email_provider: str = "",
+        assistant_slack_bot_user_id: str = "",
+        assistant_is_coordinator: bool = False,
         assistant_job_title: str = "",
         past_events: list | None = None,
         conv_context_length: int = 50,
@@ -135,6 +137,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.assistant_email = assistant_email
         self.assistant_whatsapp_number = assistant_whatsapp_number
         self.assistant_discord_bot_id = assistant_discord_bot_id
+        self.assistant_slack_bot_user_id = assistant_slack_bot_user_id
+        self.is_coordinator = assistant_is_coordinator
         self.assistant_email_provider = assistant_email_provider
         self.user_first_name = user_first_name
         self.user_surname = user_surname
@@ -1776,6 +1780,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
         )
         self.assistant_whatsapp_number = payload.get("assistant_whatsapp_number", "")
         self.assistant_discord_bot_id = payload.get("assistant_discord_bot_id", "")
+        self.assistant_slack_bot_user_id = payload.get(
+            "assistant_slack_bot_user_id",
+            "",
+        )
+        self.is_coordinator = bool(payload.get("assistant_is_coordinator", False))
         self.user_first_name = payload["user_first_name"]
         self.user_surname = payload["user_surname"]
         self.user_number = payload["user_number"]
@@ -1809,6 +1818,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
             assistant_email_provider=self.assistant_email_provider,
             assistant_whatsapp_number=self.assistant_whatsapp_number,
             assistant_discord_bot_id=self.assistant_discord_bot_id,
+            assistant_slack_bot_user_id=self.assistant_slack_bot_user_id,
+            assistant_is_coordinator=self.is_coordinator,
             user_id=self.user_id,
             user_first_name=self.user_first_name,
             user_surname=self.user_surname,

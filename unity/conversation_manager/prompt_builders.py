@@ -209,12 +209,55 @@ def _build_whatsapp_number_change_notice(assistant_has_whatsapp: bool) -> str:
     return """- My WhatsApp number may occasionally change due to automatic routing updates. If someone mentions receiving a "number changed" notification, I should confirm my current WhatsApp number and reassure them it was a routine update."""
 
 
+def _build_slack_guidelines(assistant_has_slack: bool) -> str:
+    """Slack-specific addressing/threading conventions."""
+    if not assistant_has_slack:
+        return ""
+    return (
+        "- **Slack addressing & threads:** In channels, my workspace bot is "
+        "shared across all assistants in the org. The user picks me by "
+        "@mentioning the bot **and** my first name as a routing token "
+        "(e.g. `@app sara please book…`) when starting a thread. Replies "
+        "inside that thread automatically reach the same assistant — the "
+        "boss does not need to repeat the token. To reply, call "
+        "`send_slack_channel_message` with the inbound message's "
+        "`team_id`, `channel_id`, and `thread_ts` (all surfaced on the "
+        "inbound line). DMs are simpler: every DM with a Slack user is "
+        "permanently routed to one assistant; reply with "
+        "`send_slack_message` using the inbound `team_id` (and "
+        "`thread_ts` only if the boss wants a threaded reply)."
+    )
+
+
+def _build_coordinator_guidelines(is_coordinator: bool) -> str:
+    """Extra guidance for the org's coordinator assistant."""
+    if not is_coordinator:
+        return ""
+    return (
+        "- **Coordinator role:** I am the org's coordinator. When a Slack "
+        "message is routed to me as a fallback (no token matched, or the "
+        "token was ambiguous), the inbound message will include a "
+        "`[Routing: …]` annotation explaining why. In that case:\n"
+        "  - If the boss seems to have meant a different assistant (e.g. "
+        "ambiguous token, misspelt name), name the candidate(s) from the "
+        "`known org assistants` hint and ask which one they meant — then "
+        "still attempt a helpful reply with whatever I can do from the "
+        "coordinator seat.\n"
+        "  - If the boss is asking general/admin questions about the org, "
+        "answer them directly.\n"
+        "  - Never claim to be a different assistant — I am the "
+        "coordinator stepping in."
+    )
+
+
 def _build_comms_tool_listing(
     assistant_has_phone: bool,
     assistant_has_email: bool,
     assistant_has_whatsapp: bool = False,
     assistant_has_discord: bool = False,
+    assistant_has_slack: bool = False,
     assistant_has_teams: bool = False,
+    is_coordinator: bool = False,
 ) -> str:
     """Build the communication tools block for the output format section."""
     lines: list[str] = []
@@ -228,6 +271,20 @@ def _build_comms_tool_listing(
     if assistant_has_discord:
         lines.append(
             "- `send_discord_message`: Send a Discord message to a contact (use when the inbound thread is `discord_message`)",
+        )
+    if assistant_has_slack:
+        lines.append(
+            "- `send_slack_message`: Send a Slack DM to a contact. Pass "
+            '`team_id` (from the inbound `[team_id="…"]` annotation) so the '
+            "right workspace bot token is used; pass `thread_ts` to reply "
+            "inside an existing DM thread. Use when the inbound thread is "
+            "`slack_message`.",
+        )
+        lines.append(
+            "- `send_slack_channel_message`: Post into a Slack channel. Pass "
+            "`team_id` and `channel_id` from the inbound annotation; pass "
+            "`thread_ts` to reply inside an existing thread. Use when the "
+            "inbound thread is `slack_channel_message`.",
         )
     if assistant_has_teams:
         lines.append(
@@ -337,7 +394,9 @@ def build_system_prompt(
     assistant_has_email: bool = True,
     assistant_has_whatsapp: bool = False,
     assistant_has_discord: bool = False,
+    assistant_has_slack: bool = False,
     assistant_has_teams: bool = False,
+    is_coordinator: bool = False,
     user_desktop_control: bool = False,
     runtime_setup_note: str | None = None,
 ) -> PromptParts:
@@ -395,12 +454,16 @@ def build_system_prompt(
     whatsapp_change_notice = _build_whatsapp_number_change_notice(
         assistant_has_whatsapp,
     )
+    slack_guidelines = _build_slack_guidelines(assistant_has_slack)
+    coordinator_guidelines = _build_coordinator_guidelines(is_coordinator)
     comms_tool_listing = _build_comms_tool_listing(
         assistant_has_phone,
         assistant_has_email,
         assistant_has_whatsapp,
         assistant_has_discord,
+        assistant_has_slack,
         assistant_has_teams,
+        is_coordinator,
     )
     sms_call_note = (
         " I can send SMS while on a call, but I cannot make a new call"
@@ -715,6 +778,8 @@ I do NOT need to poll or check on actions - the system will wake me when somethi
         (f"\n{missing_phone_notice}" if missing_phone_notice else "")
         + (f"\n{missing_email_notice}" if missing_email_notice else "")
         + (f"\n{whatsapp_change_notice}" if whatsapp_change_notice else "")
+        + (f"\n{slack_guidelines}" if slack_guidelines else "")
+        + (f"\n{coordinator_guidelines}" if coordinator_guidelines else "")
     )
 
     available_tool_names = ["send_unify_message", "send_api_response"]
@@ -745,6 +810,10 @@ I do NOT need to poll or check on actions - the system will wake me when somethi
             available_tool_names.index("send_unify_message"),
             "send_discord_message",
         )
+    if assistant_has_slack:
+        idx = available_tool_names.index("send_unify_message")
+        available_tool_names.insert(idx, "send_slack_message")
+        available_tool_names.insert(idx + 1, "send_slack_channel_message")
     if assistant_has_teams:
         idx = available_tool_names.index("send_unify_message")
         available_tool_names.insert(idx, "send_teams_message")
@@ -768,6 +837,10 @@ I do NOT need to poll or check on actions - the system will wake me when somethi
     if assistant_has_discord:
         inline_detail_examples.append(
             '`send_discord_message(contact_id=5, content="Hi", discord_id="123456789")`',
+        )
+    if assistant_has_slack:
+        inline_detail_examples.append(
+            '`send_slack_message(contact_id=5, content="Hi", team_id="T01ABC", slack_user_id="U01ABC234")`',
         )
     if assistant_has_teams:
         inline_detail_examples.append(
@@ -802,6 +875,11 @@ I do NOT need to poll or check on actions - the system will wake me when somethi
         available_channels.insert(
             available_channels.index("unify messages"),
             "Discord",
+        )
+    if assistant_has_slack:
+        available_channels.insert(
+            available_channels.index("unify messages"),
+            "Slack",
         )
     if assistant_has_teams:
         available_channels.insert(
