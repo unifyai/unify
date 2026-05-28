@@ -1281,11 +1281,52 @@ class E2ETestConfig:
 
 
 @pytest_asyncio.fixture
-async def e2e_config():
-    """Set up e2e test environment with seeded assistant and user."""
+async def e2e_config(request):
+    """Set up e2e test environment with a per-test ephemeral assistant.
+
+    The previous version of this fixture reused a single shared
+    SpendingTest Assistant across every test in the session via a
+    find-by-name lookup, then attempted to "reset" state in teardown
+    by PATCHing monthly_spending_cap=None. The reset is fundamentally
+    fragile:
+
+      1. Cumulative spend (current_spend) is NOT reset by the PATCH —
+         only the cap. Once any test makes a real LLM call, the
+         assistant carries that spend for the rest of the session.
+
+      2. Several tests in this file (test_limit_exceeded_blocks_llm_call,
+         test_assistant_limit_check, etc.) read the *current* cap
+         before setting it to 0 then restore-to-original. If two
+         restores race or the original was already 0 from a previous
+         leak, cap stays 0 silently.
+
+      3. The reset PATCH itself is best-effort with bare-except; any
+         transient Orchestra hiccup leaves the cap unreset and no
+         signal of the failure.
+
+    Concrete symptom: test_limit_check_callback_allows_under_limit was
+    failing with `cap=0.0, current_spend=10.0` on `entity_id='1'` —
+    the cap-0 and the $10 of spend both leaked in from earlier tests
+    in the file, despite the teardown PATCH "restoring" the cap.
+
+    Fix: each test gets its OWN freshly-created assistant with a
+    UUID-suffixed name, then deletes it in teardown. No shared
+    state, no race-prone reset logic, no cumulative-spend
+    accumulation.
+    """
+    import uuid
+
     config = E2ETestConfig.from_env()
     headers = {"Authorization": f"Bearer {config.api_key}"}
     admin_headers = {"Authorization": f"Bearer {config.admin_key}"}
+
+    # Per-test unique suffix so concurrent or sequential tests can't
+    # collide on assistant identity. Test-name slug + short UUID gives
+    # both human-readability (when listing assistants) and uniqueness.
+    test_node_slug = (
+        getattr(request.node, "name", "unknown")[:32].replace("[", "_").replace("]", "")
+    )
+    unique_suffix = uuid.uuid4().hex[:8]
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         # Seed test user (required for user spend endpoint tests).
@@ -1314,40 +1355,35 @@ async def e2e_config():
                 if "id" in user_data:
                     config.test_user_id = user_data["id"]
 
-        # Seed test assistant
-        # Check if assistant exists
-        response = await client.get(f"{config.base_url}/assistant", headers=headers)
-        if response.status_code == 200:
-            assistants = response.json().get("info", [])
-            for asst in assistants:
-                if (
-                    asst.get("first_name") == config.test_assistant_first_name
-                    and asst.get("surname") == config.test_assistant_surname
-                ):
-                    config.test_agent_id = asst.get("agent_id")
-                    break
-
-        # Create if not exists
-        if not config.test_agent_id:
-            response = await client.post(
-                f"{config.base_url}/assistant",
-                headers=headers,
-                json={
-                    "first_name": config.test_assistant_first_name,
-                    "surname": config.test_assistant_surname,
-                    "monthly_spending_cap": 25.0,
-                    "create_infra": False,
-                },
+        # Always create a fresh assistant for THIS test. Name includes
+        # the test node + a UUID so we never reuse another test's
+        # state. monthly_spending_cap=25.0 matches AssistantCreate's
+        # validation (ge=1.0; 25 is a comfortable default; tests that
+        # want a different cap PATCH it themselves).
+        response = await client.post(
+            f"{config.base_url}/assistant",
+            headers=headers,
+            json={
+                "first_name": config.test_assistant_first_name,
+                "surname": f"{config.test_assistant_surname}_{test_node_slug}_{unique_suffix}",
+                "monthly_spending_cap": 25.0,
+                "create_infra": False,
+            },
+        )
+        if response.status_code not in (200, 201):
+            raise RuntimeError(
+                f"Failed to create per-test assistant for {test_node_slug}: "
+                f"{response.status_code} {response.text}",
             )
-            if response.status_code in (200, 201):
-                config.test_agent_id = response.json().get("agent_id")
+        config.test_agent_id = response.json().get("agent_id")
+        if not config.test_agent_id:
+            raise RuntimeError(
+                f"Assistant create succeeded but response did not include "
+                f"agent_id: {response.json()}",
+            )
 
     # Populate SESSION_DETAILS
     from unity.session_details import SESSION_DETAILS
-
-    # Derive context names from assistant name
-    def to_context_name(name: str) -> str:
-        return "".join(c for c in name.title() if c.isalnum())
 
     SESSION_DETAILS.populate(
         user_id=config.test_user_id,
@@ -1358,35 +1394,27 @@ async def e2e_config():
 
     yield config
 
-    # Cleanup: reset assistant spending cap to NULL (no limit) to ensure
-    # clean state for the next test in this session.
-    #
-    # Previously this was wrapped in
-    #   asyncio.get_event_loop().run_until_complete(reset_spending_cap())
-    # which fails silently inside a pytest-asyncio fixture (the event
-    # loop is already running, so run_until_complete raises
-    # RuntimeError, swallowed by `except Exception: pass`). That meant
-    # one test setting cap=0 (test_assistant_limit_check) would leave
-    # the next test (test_limit_check_callback_allows_under_limit)
-    # seeing assistant_limit=0, causing AssertionError when the
-    # callback correctly returned allowed=False.
-    #
-    # Since this fixture is async (yields inside an async function), we
-    # can just `await` the cleanup directly.
+    # Teardown: DELETE the assistant entirely. No cap-reset / spend-
+    # reset gymnastics — the row is gone, so neither cap nor spend
+    # can leak into the next test.
     if config.test_agent_id:
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                await client.patch(
-                    f"{config.base_url}/assistant/{config.test_agent_id}/config",
+                await client.delete(
+                    f"{config.base_url}/assistant/{config.test_agent_id}",
                     headers={"Authorization": f"Bearer {config.api_key}"},
-                    json={"monthly_spending_cap": None},
                 )
         except Exception:
-            # Best-effort cleanup: don't fail teardown if Orchestra
-            # is briefly unreachable, just log via assert-free path.
+            # Best-effort cleanup: don't fail teardown if Orchestra is
+            # briefly unreachable. The next test's per-test create
+            # gives it a fresh assistant either way; the only cost of
+            # a missed delete is one extra row left in the DB until
+            # local.sh recreates it (CI: never reused; local: cleaned
+            # on next `local.sh restart`).
             pass
 
-    # Cleanup: reset SESSION_DETAILS
+    # Cleanup: reset SESSION_DETAILS so the next test starts with no
+    # leaked agent_id / user_id / etc.
     SESSION_DETAILS.reset()
 
 
