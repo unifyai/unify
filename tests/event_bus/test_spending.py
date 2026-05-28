@@ -1288,10 +1288,12 @@ async def e2e_config():
     admin_headers = {"Authorization": f"Bearer {config.admin_key}"}
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        # Seed test user (required for user spend endpoint tests)
-        # Check if user exists first
+        # Seed test user (required for user spend endpoint tests).
+        # Orchestra exposes `/user/spend` (auth-token-identified), not
+        # `/user/{id}/spend`. Use it for the existence probe so we don't
+        # always go down the "create user" branch unnecessarily.
         response = await client.get(
-            f"{config.base_url}/user/{config.test_user_id}/spend",
+            f"{config.base_url}/user/spend",
             headers=admin_headers,
             params={"month": "2026-01"},
         )
@@ -1847,9 +1849,15 @@ class TestE2ESpendingLimits:
         headers = {"Authorization": f"Bearer {e2e_config.admin_key}"}
         current_month = datetime.now().strftime("%Y-%m")
 
+        # Orchestra exposes the endpoint as `/user/spend` (the active user
+        # is identified by the auth token), NOT `/user/{user_id}/spend` —
+        # the path-param form was the original test guess and 404s
+        # against the current production router. See
+        # orchestra/web/api/users/views.py:get_user_spend
+        # (router.get("/user/spend")).
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(
-                f"{e2e_config.base_url}/user/{e2e_config.test_user_id}/spend",
+                f"{e2e_config.base_url}/user/spend",
                 headers=headers,
                 params={"month": current_month},
             )
