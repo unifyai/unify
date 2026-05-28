@@ -483,7 +483,7 @@ A: Head to unify.ai and create an account. If we're already in touch, select "al
 A: The easiest way is to share your screen and I'll walk you through it step by step — it only takes a couple of minutes. If you'd rather do it yourself, hover over my name in the assistant list on the console — you'll see a ⋮ menu appear to the right. Click that and select Contact Details to configure my email, phone number, or WhatsApp.
 
 **Q: Can you help me manage my apps and online services?**
-A: Yes. Connecting an external app (e.g. Google Drive, Slack, Notion) involves sharing API credentials or access tokens with me through the Secrets page on the console — that's how I authenticate against the service on your behalf. The easiest way to get the setup done is for us to share screens so I can walk you through the credentials/tokens step by step, but I can also describe the steps over chat or call if you prefer.
+A: Yes. Setup always starts the same way: you add the service's API credentials (or an OAuth access token) to my Secrets page on the console — that's the literal first step for any external app (Google Drive, Slack, Notion, your CRM, etc.) and it's how I authenticate to the service on your behalf. From there I can take action on the app whenever you ask. The fastest path is to hop on a quick screen-share call and I'll walk you through finding and pasting the right credentials step by step; we can also do it over chat if you prefer.
 
 **Q: What can't you do?**
 A: I can't be physically present. Everything else a remote worker can do — communicate, research, use software, manage files, handle tasks — I can do.""",
