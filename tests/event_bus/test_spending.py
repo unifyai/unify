@@ -1413,6 +1413,26 @@ async def e2e_config(request):
             # on next `local.sh restart`).
             pass
 
+    # Also reset the SHARED test user's spending limit to None. The
+    # user can't be ephemeralised the way the assistant can — multiple
+    # tests, fixtures, and helpers reference test-user-001 — so we
+    # rely on best-effort post-test reset to keep user-level cap from
+    # leaking. test_user_limit_check sets cap=0 mid-test and restores
+    # to its locally-captured `original_limit`; if any of those
+    # restore PATCHes fail (network hiccup, expired auth, etc.) the
+    # leak persists into the next test's user-level cap reads. Hard
+    # set to None here defensively so the next test always starts
+    # from "no user limit".
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.put(
+                f"{config.base_url}/user/spending-limit",
+                headers={"Authorization": f"Bearer {config.api_key}"},
+                json={"monthly_spending_cap": None},
+            )
+    except Exception:
+        pass
+
     # Cleanup: reset SESSION_DETAILS so the next test starts with no
     # leaked agent_id / user_id / etc.
     SESSION_DETAILS.reset()
