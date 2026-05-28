@@ -1358,21 +1358,33 @@ async def e2e_config():
 
     yield config
 
-    # Cleanup: reset assistant spending cap to NULL (no limit) to ensure clean state
+    # Cleanup: reset assistant spending cap to NULL (no limit) to ensure
+    # clean state for the next test in this session.
+    #
+    # Previously this was wrapped in
+    #   asyncio.get_event_loop().run_until_complete(reset_spending_cap())
+    # which fails silently inside a pytest-asyncio fixture (the event
+    # loop is already running, so run_until_complete raises
+    # RuntimeError, swallowed by `except Exception: pass`). That meant
+    # one test setting cap=0 (test_assistant_limit_check) would leave
+    # the next test (test_limit_check_callback_allows_under_limit)
+    # seeing assistant_limit=0, causing AssertionError when the
+    # callback correctly returned allowed=False.
+    #
+    # Since this fixture is async (yields inside an async function), we
+    # can just `await` the cleanup directly.
     if config.test_agent_id:
-
-        async def reset_spending_cap():
+        try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 await client.patch(
                     f"{config.base_url}/assistant/{config.test_agent_id}/config",
                     headers={"Authorization": f"Bearer {config.api_key}"},
                     json={"monthly_spending_cap": None},
                 )
-
-        try:
-            asyncio.get_event_loop().run_until_complete(reset_spending_cap())
         except Exception:
-            pass  # Best effort cleanup
+            # Best-effort cleanup: don't fail teardown if Orchestra
+            # is briefly unreachable, just log via assert-free path.
+            pass
 
     # Cleanup: reset SESSION_DETAILS
     SESSION_DETAILS.reset()
