@@ -34,6 +34,52 @@ EXCLUDE_DIRS = {
 }
 
 
+# Directories whose tests take longer than a single CI job's 130-min
+# timeout (i.e. parallel_run.sh can't drain them within the wall-clock
+# budget). Each entry maps the directory path → a list of "bundled"
+# test-file groups, where each group becomes its own matrix entry. Files
+# within a group are run together as a single space-separated
+# parallel_run.sh argument (same format as a Mixed-dir bundle).
+#
+# Why explicit chunking instead of a generic "split if > N files"
+# heuristic: the runtime of a test cluster correlates with LLM-eval
+# count, not file count. test_execute.py has 23 functions but most are
+# parametrized into many tens of cases, each making real LLM calls — a
+# generic "split into N file chunks" would not isolate it. The manual
+# breakdown below keeps the heavy file alone and groups smaller files
+# together.
+#
+# Add an entry here when a cluster starts hitting the job timeout and
+# the natural fix is "split it across more matrix slots". Removing or
+# editing entries reshapes the matrix; bumps to the GitHub Actions
+# concurrency directive may also be needed if the matrix grows
+# substantially.
+SPLIT_DIRS: dict[str, list[list[str]]] = {
+    "tests/task_scheduler": [
+        # Group A — the heaviest single file, lives alone so the other
+        # groups can finish well within timeout while it grinds.
+        ["test_execute.py"],
+        # Group B — the next-heaviest files, both LLM-eval-heavy.
+        ["test_active_queue.py", "test_active_task.py"],
+        # Group C — the remaining smaller files (~50 LLM calls
+        # combined, comfortable for one job).
+        [
+            "test_all_ctx.py",
+            "test_ask.py",
+            "test_cancel.py",
+            "test_contexts.py",
+            "test_creation_deletion.py",
+            "test_embedding.py",
+            "test_event_logging.py",
+            "test_failure_recovery.py",
+            "test_foreign_keys.py",
+            "test_info.py",
+            "test_integration_contacts.py",
+        ],
+    ],
+}
+
+
 def has_test_files(directory):
     """Check if directory has test_*.py files directly in it."""
     return any(
@@ -68,6 +114,25 @@ def get_direct_test_files(directory):
 def collect_paths(directory, paths):
     """Recursively collect test paths using Option A algorithm."""
     if not directory.is_dir():
+        return
+
+    # Apply explicit split-config first: if this directory is registered
+    # in SPLIT_DIRS, emit one matrix entry per pre-defined file group
+    # rather than the single leaf-bundle the default algorithm would
+    # produce.
+    dir_key = str(directory)
+    if dir_key in SPLIT_DIRS:
+        for group in SPLIT_DIRS[dir_key]:
+            files = [directory / fname for fname in group]
+            missing = [f for f in files if not f.exists()]
+            if missing:
+                raise RuntimeError(
+                    f"SPLIT_DIRS entry for {dir_key} references files "
+                    f"that do not exist: {[str(m) for m in missing]}. "
+                    f"Update SPLIT_DIRS in discover_test_paths.py or "
+                    f"restore the files.",
+                )
+            paths.append(" ".join(str(f) for f in files))
         return
 
     has_files = has_test_files(directory)
@@ -110,6 +175,24 @@ def expand_path(path_str):
 
     # Directory: apply leaf discovery
     if path.is_dir():
+        # SPLIT_DIRS override (see top-of-module rationale): emit one
+        # matrix entry per pre-defined file group so a too-large cluster
+        # fits in the per-job timeout budget.
+        dir_key = str(path)
+        if dir_key in SPLIT_DIRS:
+            for group in SPLIT_DIRS[dir_key]:
+                files = [path / fname for fname in group]
+                missing = [f for f in files if not f.exists()]
+                if missing:
+                    raise RuntimeError(
+                        f"SPLIT_DIRS entry for {dir_key} references files "
+                        f"that do not exist: {[str(m) for m in missing]}. "
+                        f"Update SPLIT_DIRS in discover_test_paths.py or "
+                        f"restore the files.",
+                    )
+                paths.append(" ".join(str(f) for f in files))
+            return paths
+
         # Check if this directory itself is a leaf or needs expansion
         has_files = has_test_files(path)
         has_subdirs = has_test_subdirs(path)
