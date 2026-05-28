@@ -1,11 +1,18 @@
 from .mode import Mode, VALID_MODES
-from .medium import Medium, MediumInfo, MEDIUM_REGISTRY, VALID_MEDIA
+from .medium import (
+    MEDIUM_REGISTRY,
+    MEDIUM_TO_CONTACT_FIELD,
+    Medium,
+    MediumInfo,
+    VALID_MEDIA,
+)
 from .screenshot import ScreenshotEntry
 
 __all__ = [
+    "MEDIUM_REGISTRY",
+    "MEDIUM_TO_CONTACT_FIELD",
     "Medium",
     "MediumInfo",
-    "MEDIUM_REGISTRY",
     "Mode",
     "ScreenshotEntry",
     "VALID_MEDIA",
