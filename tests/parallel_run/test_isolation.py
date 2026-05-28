@@ -144,24 +144,21 @@ class TestSocketNaming:
         ), f"Expected same socket, got {result1.socket} and {result2.socket}"
 
 
-class TestObserveOutputFormat:
-    """Tests for the Observe section output format."""
-
-    def test_output_shows_watch_helper(self, runner):
-        """Output should mention the watch_tests.sh helper."""
-        result = runner.run(
-            runner.fixture_path("test_always_pass.py"),
-        )
-
-        assert (
-            "watch_tests.sh" in result.stdout
-        ), "Output should mention watch_tests.sh helper"
-
-    def test_output_shows_socket_specific_commands(self, runner):
-        """Output should show socket-specific tmux commands."""
-        result = runner.run(
-            runner.fixture_path("test_always_pass.py"),
-        )
-
-        # Should show how to list/attach with the specific socket
-        assert "tmux -L" in result.stdout, "Output should show tmux -L socket commands"
+# NOTE: TestObserveOutputFormat (test_output_shows_watch_helper /
+# test_output_shows_socket_specific_commands) was deleted intentionally.
+# Both tests asserted that parallel_run.sh's output contained an "Observe"
+# section listing the watch_tests.sh helper and a tmux -L socket-specific
+# attach command. That section existed back when the runner was
+# non-blocking by default and the user was expected to observe progress in
+# another shell.
+#
+# Commit 65bd78f9d (2025-12-26 "refactor(parallel_run.sh): make blocking
+# default, replace --wait with --timeout") made blocking the only mode and
+# removed the Observe section as part of that simplification — pass/fail
+# results now stream inline as tests complete, so there is no separate
+# observe pane to advertise. The two assertions have been failing ever
+# since but were masked by the discover_test_paths.py matrix bug.
+#
+# The tests do not represent a contract worth restoring (the Observe
+# section was a hint about a workflow that no longer exists). Remove
+# rather than soften.
