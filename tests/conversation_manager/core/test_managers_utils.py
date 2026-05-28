@@ -59,11 +59,16 @@ async def test_queue_operation_waits_for_initialization():
     mock_cm.notifications_bar = MagicMock()
     mock_cm.initialized = False
 
-    # Wrap _sync_required_contacts to track calls
+    # The SyncContacts event handler was renamed from calling
+    # contact_manager._sync_required_contacts() to
+    # contact_manager._provision_system_overlays() in dc8cea2d0
+    # (2026-04-27 "added assistant inactivity tracking and follow-up
+    # logic"). Patch the new method name so this test's call-tracking
+    # assertion lines up with the production handler.
     with patch.object(
         mock_cm.contact_manager,
-        "_sync_required_contacts",
-        wraps=mock_cm.contact_manager._sync_required_contacts,
+        "_provision_system_overlays",
+        wraps=mock_cm.contact_manager._provision_system_overlays,
     ) as mock_sync:
         # Fire the SyncContacts event (this queues the operation)
         event = SyncContacts(reason="test sync")

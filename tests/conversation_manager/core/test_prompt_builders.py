@@ -150,7 +150,20 @@ class TestExternalAppIntegration:
     def test_onboarding_has_app_integration_qa(self):
         prompt = _build()
         assert "Can you help me manage my apps and online services?" in prompt
-        assert "secure page on the console" in prompt
+        # The Q&A was rewritten in 4a5b7f867 (2026-05-27 "voice_prompt:
+        # mention credentials in app-integration Q&A") to be more direct
+        # about how integration setup actually works. The old answer
+        # said "...sharing API credentials or access tokens with me
+        # through a secure page on the console, but you don't need to
+        # worry about the details — I'll guide you through the whole
+        # thing." which deflected to "screen share" without surfacing
+        # the actual mechanism. The new answer names the Secrets page
+        # explicitly: "...through the Secrets page on the console —
+        # that's how I authenticate against the service on your behalf."
+        # Update the assertion to match: "Secrets page on the console"
+        # (the actually-named UI surface) and keep the
+        # "API credentials or access tokens" mention.
+        assert "Secrets page on the console" in prompt
         assert "API credentials or access tokens" in prompt
 
     def test_act_capabilities_has_external_apps_bullet(self):

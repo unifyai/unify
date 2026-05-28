@@ -488,6 +488,14 @@ class TestRequestLlmRunMetadata:
         cm._pending_llm_requests = []
         cm._pending_llm_request_meta = []
         cm._session_logger = MagicMock()
+        # request_llm_run() now consults cm.ready_for_brain to decide
+        # whether to schedule the LLM run vs queue for later. MagicMock(
+        # spec=ConversationManager) doesn't auto-populate instance
+        # attributes (only methods), so accessing `cm.ready_for_brain`
+        # raises AttributeError. Set it explicitly to True — the test
+        # is exercising the "request lands and meta is captured" path
+        # which assumes brain is ready.
+        cm.ready_for_brain = True
 
         await ConversationManager.request_llm_run(
             cm,
