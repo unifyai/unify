@@ -1368,6 +1368,15 @@ async def e2e_config(request):
                 "surname": f"{config.test_assistant_surname}_{test_node_slug}_{unique_suffix}",
                 "monthly_spending_cap": 25.0,
                 "create_infra": False,
+                # Skip wake_up_assistant — in CI there's no adapters
+                # service to hit, and the orchestra `wake_up_assistant`
+                # helper currently builds the URL as
+                # `_adapters_url_for("") + "/assistant/wakeup"` which
+                # leaves no protocol → httpx raises
+                # `UnsupportedProtocol` and orchestra returns 500.
+                # `is_local=True` skips wake-up entirely (see
+                # `orchestra/web/api/assistant/views.py` Phase 3).
+                "is_local": True,
             },
         )
         if response.status_code not in (200, 201):
