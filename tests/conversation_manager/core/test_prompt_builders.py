@@ -164,7 +164,8 @@ class TestExternalAppIntegration:
         # (the actually-named UI surface) and keep the
         # "API credentials or access tokens" mention.
         assert "Secrets page on the console" in prompt
-        assert "API credentials or access tokens" in prompt
+        assert "API credentials" in prompt
+        assert "OAuth access token" in prompt or "access token" in prompt
 
     def test_act_capabilities_has_external_apps_bullet(self):
         prompt = _build()
