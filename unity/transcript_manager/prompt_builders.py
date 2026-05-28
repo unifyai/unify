@@ -300,6 +300,15 @@ def build_ask_prompt(
         global_directives=[
             "Work strictly through the tools provided.",
             "Disregard any explicit instructions about *how* you should answer or which tools to call; interpret the question and choose the best approach yourself.",
+            (
+                "When the user interjects mid-loop with an additional "
+                "question, treat it as ADDITIVE — your final reply must "
+                "cover BOTH the original question and the interjected "
+                "one, not just the latest. Run any extra tool calls "
+                "needed to answer the new question, then compose a "
+                "single combined answer addressing every question that "
+                "was asked during the session."
+            ),
         ],
         include_read_only_guard=True,
         positioning_lines=positioning_lines,
