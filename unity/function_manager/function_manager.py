@@ -4806,6 +4806,30 @@ class FunctionManager(BaseFunctionManager):
         # with a single os.killpg() call.
         # Note: start_new_session is not supported on Windows
         use_process_group = sys.platform != "win32"
+
+        # Diagnostic: prepare_venv just returned this python_path and
+        # verified .exists() before returning. If the file is GONE by
+        # the time we get here (CI race / external rmtree), bail with
+        # a structured error rather than letting subprocess raise
+        # FileNotFoundError with no surrounding state.
+        if not python_path.exists():
+            parent_listing = "<not present>"
+            venv_dir = python_path.parent.parent.parent
+            if venv_dir.exists():
+                try:
+                    parent_listing = ", ".join(
+                        sorted(p.name for p in venv_dir.iterdir()),
+                    )
+                except OSError as e:
+                    parent_listing = f"<iterdir failed: {e}>"
+            raise RuntimeError(
+                f"execute_in_venv: venv python disappeared between "
+                f"prepare_venv() (which verified existence) and "
+                f"create_subprocess_exec(). python_path={python_path} "
+                f"venv_dir={venv_dir} venv_dir.exists()={venv_dir.exists()} "
+                f"venv_dir contents=[{parent_listing}] venv_id={venv_id}",
+            )
+
         process = await asyncio.create_subprocess_exec(
             str(python_path),
             str(runner_path),
