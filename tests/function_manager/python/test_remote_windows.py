@@ -73,7 +73,7 @@ def mock_session_details_windows(monkeypatch):
     from unity.session_details import SESSION_DETAILS
 
     monkeypatch.setattr(SESSION_DETAILS.assistant, "desktop_mode", "windows")
-    monkeypatch.setattr(SESSION_DETAILS.assistant, "id", "test-assistant")
+    monkeypatch.setattr(SESSION_DETAILS.assistant, "agent_id", 999_001)
     monkeypatch.setattr(
         SESSION_DETAILS.assistant,
         "desktop_url",
@@ -90,7 +90,7 @@ def mock_session_details_ubuntu(monkeypatch):
     from unity.session_details import SESSION_DETAILS
 
     monkeypatch.setattr(SESSION_DETAILS.assistant, "desktop_mode", "ubuntu")
-    monkeypatch.setattr(SESSION_DETAILS.assistant, "id", "test-assistant-ubuntu")
+    monkeypatch.setattr(SESSION_DETAILS.assistant, "agent_id", 999_002)
     monkeypatch.setattr(
         SESSION_DETAILS.assistant,
         "desktop_url",
