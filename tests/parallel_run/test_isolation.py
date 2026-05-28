@@ -24,15 +24,31 @@ class TestSocketIsolation:
     """Tests for socket-based isolation."""
 
     def test_output_includes_socket_name(self, runner):
-        """Script output should include the socket name used."""
+        """Script output should include the socket name used.
+
+        The explicit "socket: <name>" line was part of the removed
+        Observe section (65bd78f9d, 2025-12-26). The socket name is
+        still surfaced — embedded in the log-directory path the runner
+        prints (e.g. `logs/pytest/2026-05-28T08-53-55_unity_test_153907/`)
+        and exposed on RunResult.socket. Assert presence via either
+        path so the test is robust to output reformatting that doesn't
+        affect the actual socket-name surfacing contract.
+        """
         result = runner.run(
             runner.fixture_path("test_always_pass.py"),
             wait_for_completion=True,
         )
 
         assert result.exit_code == 0
-        # Output should mention the socket
-        assert "socket:" in result.stdout.lower() or "socket" in result.stdout
+        # The socket name should appear somewhere in stdout (currently
+        # embedded in the printed log-directory path) OR be extracted
+        # onto RunResult.socket — both indicate the runner surfaced it.
+        assert (
+            result.socket and result.socket in result.stdout
+        ) or "socket:" in result.stdout.lower(), (
+            f"socket name should be surfaced; result.socket={result.socket!r}, "
+            f"stdout snippet={result.stdout[:300]!r}"
+        )
 
     def test_socket_name_in_result(self, runner):
         """RunResult should have the socket name extracted."""
