@@ -425,6 +425,18 @@ def build_update_prompt(
             "",
             "Recurring and triggered workflows",
             "---------------------------------",
+            f"• **Pass schedule/repeat in the SAME `{create_task_fname}` call.** "
+            f"If the request mentions a time, cadence, or recurrence "
+            f'(e.g. "every Monday", "weekly", "tomorrow at 9", '
+            f'"first run Monday 12:00 UTC, repeat weekly"), include '
+            f"`schedule={{'start_at': <iso8601>}}` and (for "
+            f"recurrence) `repeat=[...]` in the create call. "
+            f"Do **not** create the task with only "
+            f"name+description and then describe the schedule in your "
+            f"reply — the task will be stored as `primed` (immediately "
+            f"runnable, no schedule) and the schedule you described "
+            f"will not exist. Verify with `{ask_fname}(text=...)` if "
+            f"unsure.",
             '• For requests like "do this every Monday" or "send this report daily", create a live scheduled task with `schedule.start_at` for the first run and `repeat` for the cadence.',
             "• For requests like \"whenever Alice emails about invoices\", create a live triggerable task with `trigger` and status 'triggerable'. Use contact lookup first when the trigger references a person.",
             "• A scheduled/triggered live task may have `entrypoint=None`. This is the normal default for newly described natural-language workflows: execution will wake a contained actor run that interprets the description.",
