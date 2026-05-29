@@ -53,6 +53,7 @@ from unity.conversation_manager.domains.comms_utils import (
     add_email_attachments,
     add_unify_message_attachments,
     publish_system_error,
+    resolve_slack_user_profile,
 )
 from unity.conversation_manager.domains.inactivity import (
     _inactivity_followup_event_from_payload,
@@ -343,6 +344,89 @@ def _get_or_create_unknown_contact(
         except Exception as e:
             LOGGER.error(f"{DEFAULT_ICON} Error in _get_or_create_unknown_contact: {e}")
             return None
+
+
+def _normalize_name(name: str) -> str:
+    """Lower-case + strip punctuation/diacritics for tolerant name compares."""
+    if not name:
+        return ""
+    import unicodedata as _ud
+
+    decomposed = _ud.normalize("NFKD", name)
+    stripped = "".join(c for c in decomposed if not _ud.combining(c))
+    cleaned = re.sub(r"[^\w\s]", " ", stripped).lower()
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _match_contact_by_name(name: str, contacts: list[dict]) -> dict | None:
+    """Return the unique contact whose name matches ``name``, else None.
+
+    Tries both ``"First Surname"`` and ``"Surname First"`` orderings (locale
+    differences). More than one match is treated as ambiguous — we refuse
+    rather than risk routing to the wrong contact.
+    """
+    target = _normalize_name(name)
+    if not target:
+        return None
+    matches = [
+        c
+        for c in contacts
+        if target
+        in (
+            _normalize_name(
+                f"{c.get('first_name', '') or ''} {c.get('surname', '') or ''}",
+            ),
+            _normalize_name(
+                f"{c.get('surname', '') or ''} {c.get('first_name', '') or ''}",
+            ),
+        )
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _persist_slack_user_id(contact_id: int, slack_user_id: str) -> None:
+    """Attach ``slack_user_id`` to an existing contact so future inbound
+    Slack messages from this user match it directly."""
+    from unity.manager_registry import ManagerRegistry
+
+    try:
+        ManagerRegistry.get_contact_manager().update_contact(
+            contact_id=contact_id,
+            slack_user_id=slack_user_id,
+        )
+    except Exception as e:
+        LOGGER.error(
+            f"{DEFAULT_ICON} Failed to persist slack_user_id on contact {contact_id}: {e}",
+        )
+
+
+def _create_slack_contact(slack_user_id: str, profile: dict) -> dict | None:
+    """Create a respondable contact for an addressed Slack sender.
+
+    Used when an explicit ``@app`` mention arrives from a user we can't
+    match to an existing contact — the mention is a clear intent to
+    converse, so the contact is created with ``should_respond=True``.
+    """
+    from unity.manager_registry import ManagerRegistry
+
+    try:
+        cm = ManagerRegistry.get_contact_manager()
+        full_name = (
+            profile.get("real_name") or profile.get("display_name") or ""
+        ).strip()
+        first_name, _, surname = full_name.partition(" ")
+        outcome = cm._create_contact(
+            first_name=first_name or None,
+            surname=surname or None,
+            email_address=(profile.get("email") or None),
+            should_respond=True,
+            slack_user_id=slack_user_id,
+        )
+        new_id = outcome["details"]["contact_id"]
+        return cm.get_contact_info(new_id).get(new_id)
+    except Exception as e:
+        LOGGER.error(f"{DEFAULT_ICON} Error creating Slack contact: {e}")
+        return None
 
 
 def _resolve_teams_participants(
@@ -1107,11 +1191,61 @@ class CommsManager:
                         None,
                     )
                     is_new_unknown = False
+
+                    # First inbound from this Slack user: look up their Slack
+                    # profile and match an existing contact by email (then
+                    # name), persisting slack_user_id so subsequent messages
+                    # match directly. Breaks the bootstrap deadlock where a
+                    # contact's slack_user_id is only ever set after a message
+                    # is processed.
+                    profile: dict = {}
                     if contact is None:
-                        contact = _get_or_create_unknown_contact(
-                            medium_for_blacklist,
-                            sender_slack_user_id,
+                        profile = await resolve_slack_user_profile(
+                            team_id=team_id,
+                            slack_user_id=sender_slack_user_id,
                         )
+                        email = (profile.get("email") or "").strip().lower()
+                        matched = None
+                        if email:
+                            matched = next(
+                                (
+                                    c
+                                    for c in contacts
+                                    if (c.get("email_address") or "").lower() == email
+                                ),
+                                None,
+                            )
+                        if matched is None:
+                            for nm in (
+                                profile.get("real_name"),
+                                profile.get("display_name"),
+                            ):
+                                matched = _match_contact_by_name(nm or "", contacts)
+                                if matched is not None:
+                                    break
+                        if matched is not None:
+                            _persist_slack_user_id(
+                                matched["contact_id"],
+                                sender_slack_user_id,
+                            )
+                            matched["slack_user_id"] = sender_slack_user_id
+                            contact = matched
+
+                    # Still unresolved: an explicit ``@app`` mention is a clear
+                    # intent to converse, so create a respondable contact keyed
+                    # by the Slack user id. Otherwise fall back to the gated,
+                    # silent unknown-contact policy.
+                    if contact is None:
+                        if routing_metadata.get("reason") == "token_addressed":
+                            contact = _create_slack_contact(
+                                sender_slack_user_id,
+                                profile,
+                            )
+                        else:
+                            contact = _get_or_create_unknown_contact(
+                                medium_for_blacklist,
+                                sender_slack_user_id,
+                            )
                         is_new_unknown = contact is not None
 
                     if contact is None:

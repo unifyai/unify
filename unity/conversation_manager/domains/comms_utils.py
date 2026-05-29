@@ -661,6 +661,33 @@ async def send_slack_message(
             return result
 
 
+async def resolve_slack_user_profile(
+    *,
+    team_id: str,
+    slack_user_id: str,
+) -> dict:
+    """Look up a Slack user's profile via the Communication gateway.
+
+    Returns ``{slack_user_id, email, real_name, display_name, tz}`` (any
+    value may be ``None``), or an empty dict on failure. Callers treat a
+    missing/empty result as "unresolved" and fall back to other
+    resolution strategies. ``email`` is only present when the workspace
+    bot has the ``users:read.email`` scope; names need only ``users:read``.
+    """
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{SETTINGS.conversation.COMMS_URL}/slack/user-info",
+            headers=headers,
+            json={"team_id": team_id, "slack_user_id": slack_user_id},
+        ) as response:
+            try:
+                response.raise_for_status()
+            except Exception as e:
+                LOGGER.error(f"{ICONS['comms_outbound']} Slack user-info failed: {e}")
+                return {}
+            return await response.json()
+
+
 async def send_teams_message(
     chat_id: str | None = None,
     team_id: str | None = None,
