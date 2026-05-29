@@ -433,15 +433,24 @@ def _create_slack_contact(slack_user_id: str, profile: dict) -> dict | None:
     if found is not None:
         return found
 
+    full_name = (profile.get("real_name") or profile.get("display_name") or "").strip()
+    email = (profile.get("email") or "").strip()
+
+    # Never mint a nameless, email-less orphan: it would capture this
+    # slack_user_id and permanently shadow the real contact (the fast
+    # slack_user_id match would resolve to the orphan and skip the
+    # email/name match). Without any identifying detail, leave it
+    # unresolved so a later attempt (once the profile lookup succeeds)
+    # can bind the sender to the right existing contact by email/name.
+    if not full_name and not email:
+        return None
+
     try:
-        full_name = (
-            profile.get("real_name") or profile.get("display_name") or ""
-        ).strip()
         first_name, _, surname = full_name.partition(" ")
         outcome = cm._create_contact(
             first_name=first_name or None,
             surname=surname or None,
-            email_address=(profile.get("email") or None),
+            email_address=(email or None),
             should_respond=True,
             slack_user_id=slack_user_id,
         )

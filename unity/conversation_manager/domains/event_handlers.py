@@ -203,6 +203,23 @@ def _get_sender_name(contact: dict | None, fallback: str = "Unknown") -> str:
     return name or fallback
 
 
+def _adopt_slack_bot_user_id(cm: "ConversationManager", event) -> None:
+    """Enable Slack send capability from an inbound Slack event.
+
+    Slack's ``bot_user_id`` is workspace-scoped (it lives on the
+    ``slack_installs`` row), not on the assistant record, so the
+    per-assistant ``assistant_slack_bot_user_id`` is never populated at
+    session bootstrap. The brain gates the ``send_slack_message`` /
+    ``send_slack_channel_message`` tools (and the Slack reply guidelines)
+    on that flag, so without it the assistant can never reply on Slack.
+    Adopt the workspace bot id from the inbound event so this session's
+    subsequent brain run exposes the Slack tools.
+    """
+    inbound_bot_user_id = getattr(event, "bot_user_id", "") or ""
+    if inbound_bot_user_id and not getattr(cm, "assistant_slack_bot_user_id", ""):
+        cm.assistant_slack_bot_user_id = inbound_bot_user_id
+
+
 def _active_voice_thread_medium(cm: "ConversationManager") -> Medium:
     """Return the active voice thread that should receive call-context messages."""
 
@@ -1759,6 +1776,7 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             routing_metadata = getattr(event, "routing_metadata", None) or None
             notif_content = f"Slack DM from {sender_name}"
             role = "user"
+            _adopt_slack_bot_user_id(cm, event)
             event_trace = getattr(cm, "_current_event_trace", None) or {}
             cm._session_logger.info(
                 "slack_message_received",
@@ -1788,6 +1806,7 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             routing_metadata = getattr(event, "routing_metadata", None) or None
             notif_content = f"Slack channel message from {sender_name}"
             role = "user"
+            _adopt_slack_bot_user_id(cm, event)
             event_trace = getattr(cm, "_current_event_trace", None) or {}
             cm._session_logger.info(
                 "slack_channel_message_received",
