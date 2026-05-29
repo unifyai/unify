@@ -222,9 +222,13 @@ def _build_slack_guidelines(assistant_has_slack: bool) -> str:
         "boss does not need to repeat the token. To reply, call "
         "`send_slack_channel_message` with the inbound message's "
         "`team_id`, `channel_id`, and `thread_ts` (all surfaced on the "
-        "inbound line). DMs are simpler: every DM with a Slack user is "
-        "permanently routed to one assistant; reply with "
-        "`send_slack_message` using the inbound `team_id` (and "
+        "inbound line). **Always pass the surfaced `thread_ts` for channel "
+        "replies** so the answer lands in a thread under the original "
+        "message rather than as a new top-level channel post; for a "
+        "top-level @mention the surfaced `thread_ts` is the original "
+        "message's own id, which starts the thread. DMs are simpler: every "
+        "DM with a Slack user is permanently routed to one assistant; reply "
+        "with `send_slack_message` using the inbound `team_id` (and "
         "`thread_ts` only if the boss wants a threaded reply)."
     )
 
@@ -282,9 +286,11 @@ def _build_comms_tool_listing(
         )
         lines.append(
             "- `send_slack_channel_message`: Post into a Slack channel. Pass "
-            "`team_id` and `channel_id` from the inbound annotation; pass "
-            "`thread_ts` to reply inside an existing thread. Use when the "
-            "inbound thread is `slack_channel_message`.",
+            "`team_id` and `channel_id` from the inbound annotation; always "
+            "pass the surfaced `thread_ts` so the reply threads under the "
+            "original message (for a top-level @mention it is that message's "
+            "own id and starts the thread). Use when the inbound thread is "
+            "`slack_channel_message`.",
         )
     if assistant_has_teams:
         lines.append(

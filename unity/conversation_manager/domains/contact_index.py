@@ -132,6 +132,7 @@ class SlackMessage(CommsMessage):
     team_id: str = ""
     channel_id: str = ""
     thread_ts: str = ""
+    event_ts: str = ""
     message_id: str = ""
     attachments: list[dict] = field(default_factory=list)
     routing_metadata: dict = field(default_factory=dict)
@@ -154,6 +155,7 @@ class SlackChannelMessage(CommsMessage):
     team_id: str = ""
     channel_id: str = ""
     thread_ts: str = ""
+    event_ts: str = ""
     message_id: str = ""
     attachments: list[dict] = field(default_factory=list)
     routing_metadata: dict = field(default_factory=dict)
@@ -512,6 +514,7 @@ class ContactIndex:
         team_id: str | None = None,
         thread_id: str | None = None,
         thread_ts: str | None = None,
+        event_ts: str | None = None,
         message_id: str | None = None,
         routing_metadata: dict | None = None,
     ) -> "GlobalThreadEntry":
@@ -599,6 +602,7 @@ class ContactIndex:
                 team_id=team_id or "",
                 channel_id=channel_id or "",
                 thread_ts=thread_ts or "",
+                event_ts=event_ts or "",
                 message_id=message_id or "",
                 attachments=attachments or [],
                 routing_metadata=routing_metadata or {},
@@ -612,6 +616,7 @@ class ContactIndex:
                 team_id=team_id or "",
                 channel_id=channel_id or "",
                 thread_ts=thread_ts or "",
+                event_ts=event_ts or "",
                 message_id=message_id or "",
                 attachments=attachments or [],
                 routing_metadata=routing_metadata or {},
@@ -663,6 +668,7 @@ class ContactIndex:
         team_id: str | None = None,
         thread_id: str | None = None,
         thread_ts: str | None = None,
+        event_ts: str | None = None,
         message_id: str | None = None,
         routing_metadata: dict | None = None,
     ) -> int:
@@ -692,6 +698,7 @@ class ContactIndex:
             team_id=team_id,
             thread_id=thread_id,
             thread_ts=thread_ts,
+            event_ts=event_ts,
             message_id=message_id,
             routing_metadata=routing_metadata,
         )
