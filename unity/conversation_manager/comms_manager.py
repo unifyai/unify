@@ -108,23 +108,27 @@ def _already_seen_teams(message_id: str) -> bool:
     return False
 
 
-# In-memory dedup for Slack ``event_id``s. Slack's Events API may redeliver
-# events when an ack is missed within ~3s; the canonical recommendation is to
-# dedup on ``event_id`` for a few minutes.
+# In-memory dedup for inbound Slack messages. Two redelivery sources exist:
+# (1) the Events API replays an event when an ack is missed within ~3s, and
+# (2) a single channel mention is delivered twice -- once as ``app_mention``
+# and once as ``message`` -- with *distinct* ``event_id``s but the *same*
+# ``client_msg_id``. Keying on the stable message identity (client_msg_id,
+# falling back to ts) collapses both cases; keying on ``event_id`` would miss
+# the app_mention/message pair.
 _seen_slack_ids: dict[str, float] = {}
 _SLACK_DEDUP_TTL = 300.0
 
 
-def _already_seen_slack(event_id: str) -> bool:
-    """Return True if this Slack event_id was already processed recently."""
+def _already_seen_slack(message_key: str) -> bool:
+    """Return True if this Slack message key was already processed recently."""
     now = time.time()
     cutoff = now - _SLACK_DEDUP_TTL
     expired = [k for k, t in _seen_slack_ids.items() if t < cutoff]
     for k in expired:
         del _seen_slack_ids[k]
-    if event_id in _seen_slack_ids:
+    if message_key in _seen_slack_ids:
         return True
-    _seen_slack_ids[event_id] = now
+    _seen_slack_ids[message_key] = now
     return False
 
 
@@ -409,8 +413,27 @@ def _create_slack_contact(slack_user_id: str, profile: dict) -> dict | None:
     """
     from unity.manager_registry import ManagerRegistry
 
+    cm = ManagerRegistry.get_contact_manager()
+
+    def _existing_by_slack_id() -> dict | None:
+        result = cm.filter_contacts(
+            filter=f"slack_user_id == '{slack_user_id}'",
+            limit=1,
+        )
+        existing = result.get("contacts", [])
+        if not existing:
+            return None
+        c = existing[0]
+        return c.model_dump() if hasattr(c, "model_dump") else c
+
+    # Another in-flight event (the app_mention/message pair) or a prior
+    # session may already own this slack_user_id. Reuse it rather than
+    # racing into a duplicate insert.
+    found = _existing_by_slack_id()
+    if found is not None:
+        return found
+
     try:
-        cm = ManagerRegistry.get_contact_manager()
         full_name = (
             profile.get("real_name") or profile.get("display_name") or ""
         ).strip()
@@ -425,6 +448,11 @@ def _create_slack_contact(slack_user_id: str, profile: dict) -> dict | None:
         new_id = outcome["details"]["contact_id"]
         return cm.get_contact_info(new_id).get(new_id)
     except Exception as e:
+        # Lost a create race on the unique slack_user_id constraint — the
+        # winner's row is now queryable, so resolve to it instead of dropping.
+        found = _existing_by_slack_id()
+        if found is not None:
+            return found
         LOGGER.error(f"{DEFAULT_ICON} Error creating Slack contact: {e}")
         return None
 
@@ -1151,7 +1179,6 @@ class CommsManager:
 
                 if thread == "slack":
                     sender_slack_user_id = event.get("sender_slack_user_id", "")
-                    event_id = event.get("event_id") or event.get("message_id", "")
                     is_channel = event.get("is_channel", False)
                     team_id = event.get("team_id", "")
                     channel_id = event.get("channel_id", "")
@@ -1162,9 +1189,15 @@ class CommsManager:
                     attachments = event.get("attachments") or []
                     routing_metadata = event.get("routing_metadata") or {}
 
-                    if event_id and _already_seen_slack(event_id):
+                    # Dedup on the stable message identity (client_msg_id/ts,
+                    # carried as ``message_id``) so the app_mention + message
+                    # pair for one channel mention collapses to a single
+                    # processed event. Fall back to ``event_id`` only when no
+                    # message id is present.
+                    dedup_key = message_id or event.get("event_id", "")
+                    if dedup_key and _already_seen_slack(dedup_key):
                         LOGGER.debug(
-                            f"{DEFAULT_ICON} Skipping duplicate Slack event {event_id}",
+                            f"{DEFAULT_ICON} Skipping duplicate Slack message {dedup_key}",
                         )
                         ack_now()
                         return
