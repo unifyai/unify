@@ -1619,8 +1619,14 @@ class Renderer:
                 id_bits.append(f'team_id="{message.team_id}"')
             if message.channel_id:
                 id_bits.append(f'channel_id="{message.channel_id}"')
-            if message.thread_ts:
-                id_bits.append(f'thread_ts="{message.thread_ts}"')
+            # For channel messages, fall back to the message's own ts so a
+            # top-level @mention starts a thread when replied to; DMs only
+            # carry thread_ts when the conversation is already threaded.
+            effective_thread_ts = message.thread_ts
+            if isinstance(message, SlackChannelMessage) and not effective_thread_ts:
+                effective_thread_ts = getattr(message, "event_ts", "")
+            if effective_thread_ts:
+                id_bits.append(f'thread_ts="{effective_thread_ts}"')
             ids_line = f" [{' '.join(id_bits)}]" if id_bits else ""
 
             # Surface Orchestra-side routing context so the assistant

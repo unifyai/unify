@@ -1502,6 +1502,7 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
     team_id = None
     thread_id = None
     thread_ts = None
+    event_ts = None
     message_id = None
     routing_metadata = None
 
@@ -1772,6 +1773,7 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             team_id = getattr(event, "team_id", "") or None
             channel_id = getattr(event, "channel_id", "") or None
             thread_ts = getattr(event, "thread_ts", "") or None
+            event_ts = getattr(event, "event_ts", "") or None
             message_id = getattr(event, "message_id", "") or None
             routing_metadata = getattr(event, "routing_metadata", None) or None
             notif_content = f"Slack DM from {sender_name}"
@@ -1802,6 +1804,7 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             team_id = getattr(event, "team_id", "") or None
             channel_id = getattr(event, "channel_id", "") or None
             thread_ts = getattr(event, "thread_ts", "") or None
+            event_ts = getattr(event, "event_ts", "") or None
             message_id = getattr(event, "message_id", "") or None
             routing_metadata = getattr(event, "routing_metadata", None) or None
             notif_content = f"Slack channel message from {sender_name}"
@@ -1882,6 +1885,7 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             team_id=team_id,
             thread_id=thread_id,
             thread_ts=thread_ts,
+            event_ts=event_ts,
             message_id=message_id,
             routing_metadata=routing_metadata,
         )

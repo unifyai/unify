@@ -1531,8 +1531,12 @@ class CommsPrimitives:
         """Post an assistant-owned message into a Slack channel.
 
         Use this when the assistant should speak in a shared Slack channel
-        rather than DM one person. Set ``thread_ts`` to reply inside an
-        existing thread; omit it to post at the channel root. The optional
+        rather than DM one person. When replying to an inbound channel
+        message, pass the ``thread_ts`` surfaced on the inbound line so the
+        reply lands in a thread under that message; for a top-level
+        @mention the surfaced value is the original message's own id, which
+        starts the thread. Omit ``thread_ts`` only to deliberately post a
+        fresh message at the channel root. The optional
         ``contact_id`` does not change where the message is sent; it only
         provides a contact anchor for transcript ownership and response-
         policy checks when the channel post is associated with a particular
@@ -1550,7 +1554,9 @@ class CommsPrimitives:
         team_id : str
             Slack workspace ID (used to resolve the bot token server-side).
         thread_ts : str | None, optional
-            Slack thread timestamp to reply inside an existing thread.
+            Slack thread timestamp to reply inside a thread. Pass the value
+            surfaced on the inbound message line to keep channel replies
+            threaded under the original message.
         contact_id : int | str | None, optional
             Optional contact anchor for transcript ownership and response-
             policy checks.
