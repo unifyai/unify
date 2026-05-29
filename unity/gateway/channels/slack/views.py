@@ -9,6 +9,9 @@ key. Mounted under ``/slack`` by ``unity.gateway.app``:
 * ``POST /send``    -- outbound DM, channel post, or threaded reply
   via ``chat.postMessage``. Resolves the workspace bot token from
   Orchestra by ``team_id``.
+* ``POST /user-info`` -- look up a Slack user's profile (email + real /
+  display name) via ``users.info``, so the inbound pipeline can resolve
+  an unknown sender to an existing contact on first message.
 * ``GET  /status``  -- list installs known to Orchestra (debug /
   health check).
 
@@ -44,11 +47,15 @@ def _admin_headers() -> dict:
 
 
 async def _resolve_bot_token(team_id: str) -> str:
-    """Return the workspace bot token for ``team_id`` (admin auth)."""
+    """Return the workspace bot token for ``team_id`` (admin auth).
+
+    Orchestra's install read endpoint keys on ``slack_team_id`` and only
+    returns the bot token when ``include_token=true`` is requested.
+    """
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{SETTINGS.ORCHESTRA_URL}/admin/slack/install",
-            params={"team_id": team_id},
+            params={"slack_team_id": team_id, "include_token": True},
             headers=_admin_headers(),
             timeout=10.0,
         )
@@ -188,6 +195,55 @@ async def send_slack_message(request: Request):
         "success": True,
         "message_ts": msg_data.get("ts"),
         "channel_id": channel_id,
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /user-info
+# ---------------------------------------------------------------------------
+
+
+@auth_router.post("/user-info")
+async def slack_user_info(request: Request):
+    """Resolve a Slack user's profile via ``users.info``.
+
+    Body::
+
+        {"team_id": str, "slack_user_id": str}
+
+    Returns ``{slack_user_id, email, real_name, display_name, tz}``.
+    ``email`` is only populated when the workspace bot has the
+    ``users:read.email`` scope; ``real_name`` / ``display_name`` need
+    only ``users:read``. The inbound pipeline uses these to match an
+    unknown sender to an existing contact (by email, then by name).
+    """
+    data = await request.json()
+    team_id = data["team_id"]
+    slack_user_id = data["slack_user_id"]
+
+    bot_token = await _resolve_bot_token(team_id)
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{SLACK_API_BASE}/users.info",
+            params={"user": slack_user_id},
+            headers={"Authorization": f"Bearer {bot_token}"},
+            timeout=10.0,
+        )
+    payload = resp.json()
+    if not payload.get("ok"):
+        raise HTTPException(
+            status_code=502,
+            detail=f"users.info failed: {payload.get('error')}",
+        )
+
+    user = payload.get("user") or {}
+    profile = user.get("profile") or {}
+    return {
+        "slack_user_id": slack_user_id,
+        "email": profile.get("email") or None,
+        "real_name": user.get("real_name") or profile.get("real_name") or None,
+        "display_name": profile.get("display_name") or None,
+        "tz": user.get("tz") or None,
     }
 
 
