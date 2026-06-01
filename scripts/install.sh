@@ -642,7 +642,7 @@ seeing tool calls, plans, and reasoning unfold while you work.
 
 Usage:
   unity                              Start the full runtime locally (install-and-live).
-                                     State persists in the `Assistants` workspace.
+                                     State persists in the 'Assistants' workspace.
   unity --live-voice                 Same, with live voice calls in the browser.
   unity logs                         Tail the runtime log in a second terminal.
 
