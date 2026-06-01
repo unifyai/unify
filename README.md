@@ -356,6 +356,22 @@ Hermes pairs a single ~12k-LOC sync agent-loop with four surfaces (CLI, TUI, gat
 
 </details>
 
+### Bring their skills with you — importing into the GuidanceManager
+
+OpenClaw and Hermes Agent both represent skills as `SKILL.md` files (the [agentskills.io](https://agentskills.io) standard: YAML frontmatter + a markdown body, with optional bundled `scripts/`). That maps almost one-to-one onto a `GuidanceManager` entry, so either skill library can be imported off-the-shelf as guidance:
+
+```bash
+# Dry run (the default): print what would be imported, write nothing
+.venv/bin/python -m scripts.skill_migration.openclaw_to_guidance
+.venv/bin/python -m scripts.skill_migration.hermes_to_guidance
+
+# Import for real (titles are namespaced "[openclaw] …" / "[hermes] …")
+.venv/bin/python -m scripts.skill_migration.openclaw_to_guidance --execute
+.venv/bin/python -m scripts.skill_migration.hermes_to_guidance  --execute
+```
+
+Each script looks for a sibling checkout (`../openclaw`, `../hermes-agent`) by default; pass `--repo-root` to point elsewhere. A skill's `description` and markdown body become the guidance `content`, and any bundled `scripts/` are inlined verbatim as a textual reference — a deliberately faithful, no-magic transfer. Promoting that inlined code into a runnable `FunctionManager` function (and linking it back via `function_ids`) is a separate, deliberate step. Re-runs skip titles that already exist; pass `--conflict overwrite` to update them in place instead.
+
 ---
 
 ## Steering in practice — six things a single agent loop can't do
