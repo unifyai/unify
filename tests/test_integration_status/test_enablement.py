@@ -126,15 +126,43 @@ def test_required_secret_missing_disables_package(monkeypatch):
     assert IS.get_enabled_integrations() == {}
 
 
-def test_no_required_secrets_means_always_enabled(monkeypatch):
-    """Packages with no declared required secrets are read-only / always-on
-    and should be enabled unconditionally."""
+def test_optional_only_package_requires_optional_secret(monkeypatch):
+    _stub_packages_and_keyset(
+        monkeypatch,
+        packages=[
+            _pkg(
+                slug="github",
+                label="GitHub",
+                required=[],
+                optional=["GITHUB_TOKEN"],
+            ),
+        ],
+        keyset=set(),
+    )
+    assert IS.get_enabled_integrations() == {}
+
+    _stub_packages_and_keyset(
+        monkeypatch,
+        packages=[
+            _pkg(
+                slug="github",
+                label="GitHub",
+                required=[],
+                optional=["GITHUB_TOKEN"],
+            ),
+        ],
+        keyset={"GITHUB_TOKEN"},
+    )
+    assert "github" in IS.get_enabled_integrations()
+
+
+def test_package_without_any_secret_is_not_globally_enabled(monkeypatch):
     _stub_packages_and_keyset(
         monkeypatch,
         packages=[_pkg(slug="public_data", label="Public Data", required=[])],
         keyset=set(),
     )
-    assert "public_data" in IS.get_enabled_integrations()
+    assert IS.get_enabled_integrations() == {}
 
 
 def test_multi_secret_AND_requires_all_present(monkeypatch):
@@ -268,6 +296,22 @@ def test_summary_no_inactive_section_when_all_active(monkeypatch):
     assert "Inactive" not in summary
 
 
+def test_summary_omits_unconfigured_optional_only_package(monkeypatch):
+    _stub_packages_and_keyset(
+        monkeypatch,
+        packages=[
+            _pkg(
+                slug="github",
+                label="GitHub",
+                required=[],
+                optional=["GITHUB_TOKEN"],
+            ),
+        ],
+        keyset=set(),
+    )
+    assert IS.enabled_summary_for_prompt() == ""
+
+
 # ---------------------------------------------------------------------------
 # build_guidance_filter_scope — guidance gating
 # ---------------------------------------------------------------------------
@@ -355,10 +399,10 @@ def test_register_per_package_failure_does_not_halt_others(monkeypatch):
     _stub_packages_and_keyset(
         monkeypatch,
         packages=[
-            _pkg(slug="broken", label="Broken", required=[]),
-            _pkg(slug="hubspot", label="HubSpot", required=[]),
+            _pkg(slug="broken", label="Broken", required=["BROKEN_TOKEN"]),
+            _pkg(slug="hubspot", label="HubSpot", required=["HUBSPOT_TOKEN"]),
         ],
-        keyset=set(),
+        keyset={"BROKEN_TOKEN", "HUBSPOT_TOKEN"},
     )
     monkeypatch.setattr(IS, "_register_functions", failing_functions)
     monkeypatch.setattr(IS, "_register_guidance", lambda pkg: 0)

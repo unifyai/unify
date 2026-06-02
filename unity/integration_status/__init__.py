@@ -4,10 +4,10 @@ Two orthogonal mechanisms, deliberately decoupled from secret transport
 (:mod:`unity.secret_manager`).
 
 1. **Registration (startup, mechanism 1).**
-   :func:`register_available_integrations` walks every package manifest under
-   unity-deploy's package roots and registers each one's functions + guidance
-   with the runtime managers.  Synchronous, main-thread, idempotent.  Called
-   once from :mod:`unity.__init__` after :meth:`ContextRegistry.setup`.
+   :func:`register_available_integrations` registers functions + guidance for
+   configured package manifests under unity-deploy's package roots.
+   Synchronous, main-thread, idempotent.  Called once from :mod:`unity.__init__`
+   after :meth:`ContextRegistry.setup`.
 
 2. **Enablement (read-only, mechanism 2).**
    :func:`get_enabled_integrations` is a pure query that returns which
@@ -122,23 +122,36 @@ def _read_local_secret_keyset() -> set[str]:
     return keyset
 
 
+def _package_is_enabled(pkg: dict, keyset: set[str]) -> bool:
+    """Return whether a discovered package is configured for this assistant."""
+    required = set(pkg.get("required_secrets", []))
+    optional = set(pkg.get("optional_secrets", []))
+
+    if required:
+        return required.issubset(keyset)
+    if optional:
+        return bool(optional & keyset)
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Mechanism 1 — Startup registration
 # ---------------------------------------------------------------------------
 
 
 def register_available_integrations() -> None:
-    """Walk disk packages and register each ENABLED one's functions +
+    """Walk disk packages and register each configured package's functions +
     guidance with the runtime managers.
 
-    **Gated by enablement.**  Only packages whose required secrets are
-    present in the local ``/Secrets`` keyset are registered — this
+    **Gated by assistant-local configuration.**  Only packages whose required
+    secrets are present in the local ``/Secrets`` keyset are registered; if a
+    package has no required secrets, at least one optional secret must be
+    present.  This
     prevents every package on disk from polluting FunctionManager /
     GuidanceManager for assistants that never opted into them (e.g. an
     assistant whose deployment declares only HubSpot shouldn't pick up
     Matterport, Webex, etc. tools just because their packages happen to
-    be on disk).  Packages with no declared required secrets are
-    always-on and are registered unconditionally.
+    be on disk).
 
     Deployment-declared packages whose secrets aren't pasted yet are
     still loaded by the deploy seed via ``_sync_functions`` /
@@ -193,12 +206,7 @@ def register_available_integrations() -> None:
         if slug in already_registered:
             continue
 
-        required = set(pkg.get("required_secrets", []))
-        # A package with required_secrets is registered only when the
-        # user has configured every one of them.  Packages with NO
-        # required secrets (always-on / read-only) are registered
-        # unconditionally.
-        if required and not required.issubset(keyset):
+        if not _package_is_enabled(pkg, keyset):
             skipped_no_secrets.append(slug)
             continue
 
@@ -395,16 +403,16 @@ def _register_guidance(pkg: dict) -> int:
 
 def get_enabled_integrations() -> dict[str, dict]:
     """Return ``{slug: package_metadata}`` for every disk-discovered package
-    whose required secrets are currently in the assistant's local
-    ``/Secrets`` context.
+    configured in the assistant's local ``/Secrets`` context.
 
     Pure function — reads disk discovery (process-cached in
     :mod:`unity.integration_status.discovery`) plus the local Secrets
     keyset.  Costs ~1ms.  No caching that can go stale; callers get fresh
     state every call.
 
-    A package with no required secrets is considered enabled
-    unconditionally (rare; useful for read-only or always-on packages).
+    Packages with required secrets need all required secrets present.  Packages
+    with only optional secrets need at least one optional secret present.
+    Packages with no secrets are not globally enabled.
     """
     try:
         from unity.integration_status.discovery import discover_available_packages
@@ -417,8 +425,7 @@ def get_enabled_integrations() -> dict[str, dict]:
         slug = pkg.get("slug") or ""
         if not slug:
             continue
-        required = set(pkg.get("required_secrets", []))
-        if not required or required.issubset(keyset):
+        if _package_is_enabled(pkg, keyset):
             enabled[slug] = pkg
     return enabled
 
@@ -617,10 +624,10 @@ def enabled_summary_for_prompt() -> str:
                 )
         else:
             required = set(pkg.get("required_secrets", []))
+            if not required:
+                continue
             missing_required = sorted(required - keyset)
-            missing_str = (
-                ", ".join(missing_required) if missing_required else "(see manifest)"
-            )
+            missing_str = ", ".join(missing_required)
             inactive_lines.append(
                 f"- {label} — needs {missing_str}.",
             )
