@@ -88,7 +88,13 @@ class TestDirectory:
         """Running on a directory should discover all test_*.py files."""
         result = runner.run(fixtures_dir, wait_for_completion=True)
 
-        assert result.exit_code == 0, f"Script failed: {result.stderr}"
+        # fixtures/ contains both test_always_pass.py AND test_always_fail.py,
+        # so running the whole directory yields exit_code=1 by design (the
+        # always-fail fixtures are intentionally failing). The semantic
+        # this test asserts is "directory discovery walked the whole tree
+        # and launched ≥7 sessions", not "every test passed". Don't gate
+        # on exit_code==0.
+        assert result.exit_code in (0, 1), f"unexpected exit_code: {result.exit_code}"
 
         # Should find multiple test files in fixtures dir
         # fixtures/ contains: test_always_pass.py, test_always_fail.py,

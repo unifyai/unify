@@ -15,6 +15,11 @@ class AnnotatedImageRef(BaseModel):
     Pair a `RawImageRef` with a context-specific annotation describing relevance.
     """
 
+    # extra="forbid" — see RawImageRef for rationale. Mirrors the
+    # strict-schema convention for image-ref types so orchestra's
+    # jsonschema validation rejects typo'd keys.
+    model_config = {"extra": "forbid"}
+
     raw_image_ref: RawImageRef = Field(
         description="Reference to the underlying raw image",
     )

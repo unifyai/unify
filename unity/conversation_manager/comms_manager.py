@@ -53,6 +53,7 @@ from unity.conversation_manager.domains.comms_utils import (
     add_email_attachments,
     add_unify_message_attachments,
     publish_system_error,
+    resolve_slack_user_profile,
 )
 from unity.conversation_manager.domains.inactivity import (
     _inactivity_followup_event_from_payload,
@@ -61,7 +62,7 @@ from unity.conversation_manager.events import *
 from unity.conversation_manager.metrics import pubsub_e2e_latency
 from unity.session_details import SESSION_DETAILS
 from unity.contact_manager.types.contact import UNASSIGNED
-from unity.conversation_manager.cm_types import Medium
+from unity.conversation_manager.cm_types import MEDIUM_TO_CONTACT_FIELD, Medium
 
 load_dotenv()
 
@@ -104,6 +105,30 @@ def _already_seen_teams(message_id: str) -> bool:
     if message_id in _seen_teams_ids:
         return True
     _seen_teams_ids[message_id] = now
+    return False
+
+
+# In-memory dedup for inbound Slack messages. Two redelivery sources exist:
+# (1) the Events API replays an event when an ack is missed within ~3s, and
+# (2) a single channel mention is delivered twice -- once as ``app_mention``
+# and once as ``message`` -- with *distinct* ``event_id``s but the *same*
+# ``client_msg_id``. Keying on the stable message identity (client_msg_id,
+# falling back to ts) collapses both cases; keying on ``event_id`` would miss
+# the app_mention/message pair.
+_seen_slack_ids: dict[str, float] = {}
+_SLACK_DEDUP_TTL = 300.0
+
+
+def _already_seen_slack(message_key: str) -> bool:
+    """Return True if this Slack message key was already processed recently."""
+    now = time.time()
+    cutoff = now - _SLACK_DEDUP_TTL
+    expired = [k for k, t in _seen_slack_ids.items() if t < cutoff]
+    for k in expired:
+        del _seen_slack_ids[k]
+    if message_key in _seen_slack_ids:
+        return True
+    _seen_slack_ids[message_key] = now
     return False
 
 
@@ -205,6 +230,7 @@ events_map: dict[str, Event] = {
     "unify_message": UnifyMessageReceived,
     "api_message": ApiMessageReceived,
     "discord": DiscordMessageReceived,
+    "slack": SlackMessageReceived,
     "teams_chat": TeamsMessageReceived,
     "teams_channel": TeamsChannelMessageReceived,
 }
@@ -285,19 +311,12 @@ def _get_or_create_unknown_contact(
         try:
             cm = ManagerRegistry.get_contact_manager()
 
-            # Determine which field to search/set based on medium
-            if medium == "whatsapp_message":
-                field_name = "whatsapp_number"
-            elif medium in ("sms_message", "phone_call"):
-                field_name = "phone_number"
-            elif medium == "email":
-                field_name = "email_address"
-            elif medium in ("discord_message", "discord_channel_message"):
-                field_name = "discord_id"
-            elif medium in ("teams_message", "teams_channel_message"):
-                field_name = "email_address"
-            else:
-                # For unify_message, we don't have external contact details
+            try:
+                medium_enum = Medium(medium)
+            except ValueError:
+                return None
+            field_name = MEDIUM_TO_CONTACT_FIELD.get(medium_enum)
+            if not field_name:
                 return None
 
             # Check if contact already exists
@@ -329,6 +348,122 @@ def _get_or_create_unknown_contact(
         except Exception as e:
             LOGGER.error(f"{DEFAULT_ICON} Error in _get_or_create_unknown_contact: {e}")
             return None
+
+
+def _normalize_name(name: str) -> str:
+    """Lower-case + strip punctuation/diacritics for tolerant name compares."""
+    if not name:
+        return ""
+    import unicodedata as _ud
+
+    decomposed = _ud.normalize("NFKD", name)
+    stripped = "".join(c for c in decomposed if not _ud.combining(c))
+    cleaned = re.sub(r"[^\w\s]", " ", stripped).lower()
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _match_contact_by_name(name: str, contacts: list[dict]) -> dict | None:
+    """Return the unique contact whose name matches ``name``, else None.
+
+    Tries both ``"First Surname"`` and ``"Surname First"`` orderings (locale
+    differences). More than one match is treated as ambiguous — we refuse
+    rather than risk routing to the wrong contact.
+    """
+    target = _normalize_name(name)
+    if not target:
+        return None
+    matches = [
+        c
+        for c in contacts
+        if target
+        in (
+            _normalize_name(
+                f"{c.get('first_name', '') or ''} {c.get('surname', '') or ''}",
+            ),
+            _normalize_name(
+                f"{c.get('surname', '') or ''} {c.get('first_name', '') or ''}",
+            ),
+        )
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _persist_slack_user_id(contact_id: int, slack_user_id: str) -> None:
+    """Attach ``slack_user_id`` to an existing contact so future inbound
+    Slack messages from this user match it directly."""
+    from unity.manager_registry import ManagerRegistry
+
+    try:
+        ManagerRegistry.get_contact_manager().update_contact(
+            contact_id=contact_id,
+            slack_user_id=slack_user_id,
+        )
+    except Exception as e:
+        LOGGER.error(
+            f"{DEFAULT_ICON} Failed to persist slack_user_id on contact {contact_id}: {e}",
+        )
+
+
+def _create_slack_contact(slack_user_id: str, profile: dict) -> dict | None:
+    """Create a respondable contact for an addressed Slack sender.
+
+    Used when an explicit ``@app`` mention arrives from a user we can't
+    match to an existing contact — the mention is a clear intent to
+    converse, so the contact is created with ``should_respond=True``.
+    """
+    from unity.manager_registry import ManagerRegistry
+
+    cm = ManagerRegistry.get_contact_manager()
+
+    def _existing_by_slack_id() -> dict | None:
+        result = cm.filter_contacts(
+            filter=f"slack_user_id == '{slack_user_id}'",
+            limit=1,
+        )
+        existing = result.get("contacts", [])
+        if not existing:
+            return None
+        c = existing[0]
+        return c.model_dump() if hasattr(c, "model_dump") else c
+
+    # Another in-flight event (the app_mention/message pair) or a prior
+    # session may already own this slack_user_id. Reuse it rather than
+    # racing into a duplicate insert.
+    found = _existing_by_slack_id()
+    if found is not None:
+        return found
+
+    full_name = (profile.get("real_name") or profile.get("display_name") or "").strip()
+    email = (profile.get("email") or "").strip()
+
+    # Never mint a nameless, email-less orphan: it would capture this
+    # slack_user_id and permanently shadow the real contact (the fast
+    # slack_user_id match would resolve to the orphan and skip the
+    # email/name match). Without any identifying detail, leave it
+    # unresolved so a later attempt (once the profile lookup succeeds)
+    # can bind the sender to the right existing contact by email/name.
+    if not full_name and not email:
+        return None
+
+    try:
+        first_name, _, surname = full_name.partition(" ")
+        outcome = cm._create_contact(
+            first_name=first_name or None,
+            surname=surname or None,
+            email_address=(email or None),
+            should_respond=True,
+            slack_user_id=slack_user_id,
+        )
+        new_id = outcome["details"]["contact_id"]
+        return cm.get_contact_info(new_id).get(new_id)
+    except Exception as e:
+        # Lost a create race on the unique slack_user_id constraint — the
+        # winner's row is now queryable, so resolve to it instead of dropping.
+        found = _existing_by_slack_id()
+        if found is not None:
+            return found
+        LOGGER.error(f"{DEFAULT_ICON} Error creating Slack contact: {e}")
+        return None
 
 
 def _resolve_teams_participants(
@@ -567,6 +702,13 @@ class CommsManager:
                     "assistant_discord_bot_id": event.get(
                         "assistant_discord_bot_id",
                         "",
+                    ),
+                    "assistant_slack_bot_user_id": event.get(
+                        "assistant_slack_bot_user_id",
+                        "",
+                    ),
+                    "assistant_is_coordinator": bool(
+                        event.get("assistant_is_coordinator", False),
                     ),
                     "user_first_name": event["user_first_name"],
                     "user_surname": event["user_surname"],
@@ -1026,6 +1168,158 @@ class CommsManager:
                                 message_id=message_id,
                                 attachments=attachments,
                             ).to_json(),
+                        )
+
+                    if attachments:
+                        schedule(add_unify_message_attachments(attachments))
+
+                    if is_new_unknown:
+                        await publish(
+                            "app:comms:unknown_contact_created",
+                            UnknownContactCreated(
+                                contact=contact,
+                                medium=medium_for_blacklist,
+                                message_preview=content[:100] if content else "",
+                            ).to_json(),
+                        )
+
+                    ack_now()
+                    return
+
+                if thread == "slack":
+                    sender_slack_user_id = event.get("sender_slack_user_id", "")
+                    is_channel = event.get("is_channel", False)
+                    team_id = event.get("team_id", "")
+                    channel_id = event.get("channel_id", "")
+                    bot_user_id = event.get("bot_user_id", "")
+                    event_ts = event.get("event_ts", "")
+                    thread_ts = event.get("thread_ts", "")
+                    message_id = event.get("message_id", "")
+                    attachments = event.get("attachments") or []
+                    routing_metadata = event.get("routing_metadata") or {}
+
+                    # Dedup on the stable message identity (client_msg_id/ts,
+                    # carried as ``message_id``) so the app_mention + message
+                    # pair for one channel mention collapses to a single
+                    # processed event. Fall back to ``event_id`` only when no
+                    # message id is present.
+                    dedup_key = message_id or event.get("event_id", "")
+                    if dedup_key and _already_seen_slack(dedup_key):
+                        LOGGER.debug(
+                            f"{DEFAULT_ICON} Skipping duplicate Slack message {dedup_key}",
+                        )
+                        ack_now()
+                        return
+
+                    medium_for_blacklist = (
+                        Medium.SLACK_CHANNEL_MESSAGE
+                        if is_channel
+                        else Medium.SLACK_MESSAGE
+                    )
+
+                    if _is_blacklisted(medium_for_blacklist, sender_slack_user_id):
+                        LOGGER.debug(
+                            f"{DEFAULT_ICON} Ignoring blacklisted Slack from: {sender_slack_user_id}",
+                        )
+                        ack_now()
+                        return
+
+                    contact = next(
+                        (
+                            c
+                            for c in contacts
+                            if c.get("slack_user_id") == sender_slack_user_id
+                        ),
+                        None,
+                    )
+                    is_new_unknown = False
+
+                    # First inbound from this Slack user: look up their Slack
+                    # profile and match an existing contact by email (then
+                    # name), persisting slack_user_id so subsequent messages
+                    # match directly. Breaks the bootstrap deadlock where a
+                    # contact's slack_user_id is only ever set after a message
+                    # is processed.
+                    profile: dict = {}
+                    if contact is None:
+                        profile = await resolve_slack_user_profile(
+                            team_id=team_id,
+                            slack_user_id=sender_slack_user_id,
+                        )
+                        email = (profile.get("email") or "").strip().lower()
+                        matched = None
+                        if email:
+                            matched = next(
+                                (
+                                    c
+                                    for c in contacts
+                                    if (c.get("email_address") or "").lower() == email
+                                ),
+                                None,
+                            )
+                        if matched is None:
+                            for nm in (
+                                profile.get("real_name"),
+                                profile.get("display_name"),
+                            ):
+                                matched = _match_contact_by_name(nm or "", contacts)
+                                if matched is not None:
+                                    break
+                        if matched is not None:
+                            _persist_slack_user_id(
+                                matched["contact_id"],
+                                sender_slack_user_id,
+                            )
+                            matched["slack_user_id"] = sender_slack_user_id
+                            contact = matched
+
+                    # Still unresolved: an explicit ``@app`` mention is a clear
+                    # intent to converse, so create a respondable contact keyed
+                    # by the Slack user id. Otherwise fall back to the gated,
+                    # silent unknown-contact policy.
+                    if contact is None:
+                        if routing_metadata.get("reason") == "token_addressed":
+                            contact = _create_slack_contact(
+                                sender_slack_user_id,
+                                profile,
+                            )
+                        else:
+                            contact = _get_or_create_unknown_contact(
+                                medium_for_blacklist,
+                                sender_slack_user_id,
+                            )
+                        is_new_unknown = contact is not None
+
+                    if contact is None:
+                        LOGGER.error(
+                            f"{DEFAULT_ICON} Failed to resolve contact for Slack from: {sender_slack_user_id}",
+                        )
+                        ack_now()
+                        return
+
+                    common_kwargs = dict(
+                        contact=contact,
+                        content=content,
+                        team_id=team_id,
+                        channel_id=channel_id,
+                        bot_user_id=bot_user_id,
+                        event_ts=event_ts,
+                        thread_ts=thread_ts,
+                        message_id=message_id,
+                        attachments=attachments,
+                        routing_metadata=routing_metadata,
+                    )
+
+                    if is_channel:
+                        slack_event = SlackChannelMessageReceived(**common_kwargs)
+                        await publish(
+                            "app:comms:slack_channel_message",
+                            slack_event.to_json(),
+                        )
+                    else:
+                        await publish(
+                            "app:comms:slack_message",
+                            events_map[thread](**common_kwargs).to_json(),
                         )
 
                     if attachments:
@@ -1758,6 +2052,13 @@ class CommsManager:
                     "assistant_discord_bot_id": event.get(
                         "assistant_discord_bot_id",
                         "",
+                    ),
+                    "assistant_slack_bot_user_id": event.get(
+                        "assistant_slack_bot_user_id",
+                        "",
+                    ),
+                    "assistant_is_coordinator": bool(
+                        event.get("assistant_is_coordinator", False),
                     ),
                     "user_first_name": event["user_first_name"],
                     "user_surname": event["user_surname"],

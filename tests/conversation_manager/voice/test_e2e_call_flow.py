@@ -860,10 +860,18 @@ class TestIPCBidirectionalCommunication:
                 stderr=subprocess.PIPE,
             )
 
-            # Wait for ready
+            # Wait for ready — widened from 5s to 15s and surface subprocess
+            # output on failure. The original 5s budget was likely tight
+            # enough on slow CI runners that interpreter startup + import
+            # graph + socket-connect could fall behind, and the bare
+            # AssertionError silently discarded subprocess stdout/stderr
+            # so failures gave no signal about the actual cause.
             ready_received = False
-            for _ in range(50):
+            for _ in range(150):
                 await asyncio.sleep(0.1)
+                # Bail early if the subprocess crashed during boot
+                if subprocess_proc.poll() is not None:
+                    break
                 for channel, _ in events_from_subprocess:
                     if channel == "app:call:ready":
                         ready_received = True
@@ -871,7 +879,26 @@ class TestIPCBidirectionalCommunication:
                 if ready_received:
                     break
 
-            assert ready_received, "Subprocess never signaled ready"
+            if not ready_received:
+                rc = subprocess_proc.poll()
+                try:
+                    if rc is not None:
+                        out_b, err_b = subprocess_proc.communicate(timeout=2)
+                    else:
+                        # Process still alive — gather a sample without
+                        # killing it (kill happens in finally)
+                        out_b, err_b = b"", b""
+                except Exception:
+                    out_b, err_b = b"", b""
+                out = (out_b or b"").decode("utf-8", "replace")[-2000:]
+                err = (err_b or b"").decode("utf-8", "replace")[-2000:]
+                raise AssertionError(
+                    "Subprocess never signaled ready (rc="
+                    f"{rc!r}). channels seen so far: "
+                    f"{[c for c, _ in events_from_subprocess]}\n"
+                    f"--- subprocess stdout (tail) ---\n{out}\n"
+                    f"--- subprocess stderr (tail) ---\n{err}",
+                )
 
             # Send guidance (subprocess will ack and exit after first one)
             await event_broker.publish(

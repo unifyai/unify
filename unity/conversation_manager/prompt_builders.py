@@ -209,12 +209,59 @@ def _build_whatsapp_number_change_notice(assistant_has_whatsapp: bool) -> str:
     return """- My WhatsApp number may occasionally change due to automatic routing updates. If someone mentions receiving a "number changed" notification, I should confirm my current WhatsApp number and reassure them it was a routine update."""
 
 
+def _build_slack_guidelines(assistant_has_slack: bool) -> str:
+    """Slack-specific addressing/threading conventions."""
+    if not assistant_has_slack:
+        return ""
+    return (
+        "- **Slack addressing & threads:** In channels, my workspace bot is "
+        "shared across all assistants in the org. The user picks me by "
+        "@mentioning the bot **and** my first name as a routing token "
+        "(e.g. `@app sara please book…`) when starting a thread. Replies "
+        "inside that thread automatically reach the same assistant — the "
+        "boss does not need to repeat the token. To reply, call "
+        "`send_slack_channel_message` with the inbound message's "
+        "`team_id`, `channel_id`, and `thread_ts` (all surfaced on the "
+        "inbound line). **Always pass the surfaced `thread_ts` for channel "
+        "replies** so the answer lands in a thread under the original "
+        "message rather than as a new top-level channel post; for a "
+        "top-level @mention the surfaced `thread_ts` is the original "
+        "message's own id, which starts the thread. DMs are simpler: every "
+        "DM with a Slack user is permanently routed to one assistant; reply "
+        "with `send_slack_message` using the inbound `team_id` (and "
+        "`thread_ts` only if the boss wants a threaded reply)."
+    )
+
+
+def _build_coordinator_guidelines(is_coordinator: bool) -> str:
+    """Extra guidance for the org's coordinator assistant."""
+    if not is_coordinator:
+        return ""
+    return (
+        "- **Coordinator role:** I am the org's coordinator. When a Slack "
+        "message is routed to me as a fallback (no token matched, or the "
+        "token was ambiguous), the inbound message will include a "
+        "`[Routing: …]` annotation explaining why. In that case:\n"
+        "  - If the boss seems to have meant a different assistant (e.g. "
+        "ambiguous token, misspelt name), name the candidate(s) from the "
+        "`known org assistants` hint and ask which one they meant — then "
+        "still attempt a helpful reply with whatever I can do from the "
+        "coordinator seat.\n"
+        "  - If the boss is asking general/admin questions about the org, "
+        "answer them directly.\n"
+        "  - Never claim to be a different assistant — I am the "
+        "coordinator stepping in."
+    )
+
+
 def _build_comms_tool_listing(
     assistant_has_phone: bool,
     assistant_has_email: bool,
     assistant_has_whatsapp: bool = False,
     assistant_has_discord: bool = False,
+    assistant_has_slack: bool = False,
     assistant_has_teams: bool = False,
+    is_coordinator: bool = False,
 ) -> str:
     """Build the communication tools block for the output format section."""
     lines: list[str] = []
@@ -228,6 +275,22 @@ def _build_comms_tool_listing(
     if assistant_has_discord:
         lines.append(
             "- `send_discord_message`: Send a Discord message to a contact (use when the inbound thread is `discord_message`)",
+        )
+    if assistant_has_slack:
+        lines.append(
+            "- `send_slack_message`: Send a Slack DM to a contact. Pass "
+            '`team_id` (from the inbound `[team_id="…"]` annotation) so the '
+            "right workspace bot token is used; pass `thread_ts` to reply "
+            "inside an existing DM thread. Use when the inbound thread is "
+            "`slack_message`.",
+        )
+        lines.append(
+            "- `send_slack_channel_message`: Post into a Slack channel. Pass "
+            "`team_id` and `channel_id` from the inbound annotation; always "
+            "pass the surfaced `thread_ts` so the reply threads under the "
+            "original message (for a top-level @mention it is that message's "
+            "own id and starts the thread). Use when the inbound thread is "
+            "`slack_channel_message`.",
         )
     if assistant_has_teams:
         lines.append(
@@ -337,7 +400,9 @@ def build_system_prompt(
     assistant_has_email: bool = True,
     assistant_has_whatsapp: bool = False,
     assistant_has_discord: bool = False,
+    assistant_has_slack: bool = False,
     assistant_has_teams: bool = False,
+    is_coordinator: bool = False,
     user_desktop_control: bool = False,
     runtime_setup_note: str | None = None,
 ) -> PromptParts:
@@ -395,12 +460,16 @@ def build_system_prompt(
     whatsapp_change_notice = _build_whatsapp_number_change_notice(
         assistant_has_whatsapp,
     )
+    slack_guidelines = _build_slack_guidelines(assistant_has_slack)
+    coordinator_guidelines = _build_coordinator_guidelines(is_coordinator)
     comms_tool_listing = _build_comms_tool_listing(
         assistant_has_phone,
         assistant_has_email,
         assistant_has_whatsapp,
         assistant_has_discord,
+        assistant_has_slack,
         assistant_has_teams,
+        is_coordinator,
     )
     sms_call_note = (
         " I can send SMS while on a call, but I cannot make a new call"
@@ -483,7 +552,7 @@ A: Head to unify.ai and create an account. If we're already in touch, select "al
 A: The easiest way is to share your screen and I'll walk you through it step by step — it only takes a couple of minutes. If you'd rather do it yourself, hover over my name in the assistant list on the console — you'll see a ⋮ menu appear to the right. Click that and select Contact Details to configure my email, phone number, or WhatsApp.
 
 **Q: Can you help me manage my apps and online services?**
-A: Yes. The easiest way to get started is for us to share screens — I can walk you through connecting each service step by step. Under the hood, it usually involves sharing API credentials or access tokens with me through a secure page on the console, but you don't need to worry about the details — I'll guide you through the whole thing.
+A: Yes. Setup always starts the same way: you add the service's API credentials (or an OAuth access token) to my Secrets page on the console — that's the literal first step for any external app (Google Drive, Slack, Notion, your CRM, etc.) and it's how I authenticate to the service on your behalf. From there I can take action on the app whenever you ask. The fastest path is to hop on a quick screen-share call and I'll walk you through finding and pasting the right credentials step by step; we can also do it over chat if you prefer.
 
 **Q: What can't you do?**
 A: I can't be physically present. Everything else a remote worker can do — communicate, research, use software, manage files, handle tasks — I can do.""",
@@ -715,6 +784,8 @@ I do NOT need to poll or check on actions - the system will wake me when somethi
         (f"\n{missing_phone_notice}" if missing_phone_notice else "")
         + (f"\n{missing_email_notice}" if missing_email_notice else "")
         + (f"\n{whatsapp_change_notice}" if whatsapp_change_notice else "")
+        + (f"\n{slack_guidelines}" if slack_guidelines else "")
+        + (f"\n{coordinator_guidelines}" if coordinator_guidelines else "")
     )
 
     available_tool_names = ["send_unify_message", "send_api_response"]
@@ -745,6 +816,10 @@ I do NOT need to poll or check on actions - the system will wake me when somethi
             available_tool_names.index("send_unify_message"),
             "send_discord_message",
         )
+    if assistant_has_slack:
+        idx = available_tool_names.index("send_unify_message")
+        available_tool_names.insert(idx, "send_slack_message")
+        available_tool_names.insert(idx + 1, "send_slack_channel_message")
     if assistant_has_teams:
         idx = available_tool_names.index("send_unify_message")
         available_tool_names.insert(idx, "send_teams_message")
@@ -768,6 +843,10 @@ I do NOT need to poll or check on actions - the system will wake me when somethi
     if assistant_has_discord:
         inline_detail_examples.append(
             '`send_discord_message(contact_id=5, content="Hi", discord_id="123456789")`',
+        )
+    if assistant_has_slack:
+        inline_detail_examples.append(
+            '`send_slack_message(contact_id=5, content="Hi", team_id="T01ABC", slack_user_id="U01ABC234")`',
         )
     if assistant_has_teams:
         inline_detail_examples.append(
@@ -803,6 +882,11 @@ I do NOT need to poll or check on actions - the system will wake me when somethi
             available_channels.index("unify messages"),
             "Discord",
         )
+    if assistant_has_slack:
+        available_channels.insert(
+            available_channels.index("unify messages"),
+            "Slack",
+        )
     if assistant_has_teams:
         available_channels.insert(
             available_channels.index("unify messages"),
@@ -816,6 +900,7 @@ I do NOT need to poll or check on actions - the system will wake me when somethi
 Communicate naturally and casually. Keep responses short.
 - Acknowledge my boss when they give instructions, then execute.
 - Do NOT over-acknowledge or send multiple confirmations.
+- **Never repeat the same deferral / filler phrase verbatim across consecutive turns.** If I already said "Let me check on that" once, the next acknowledgement (if any) MUST use different wording — e.g. "Still looking…", "Almost there", "One moment more", or just stay silent (`wait`). Saying the same exact line twice in a row sounds robotic and signals to the listener that I'm stuck or have nothing real to add.
 - Use the thread my boss is using unless asked otherwise.{phone_guidelines_section}{comms_notices_section}
 
 **API message tags:**
@@ -1419,6 +1504,12 @@ When the caller is demonstrating, explaining, or training me on something, the d
 
 - **Acknowledge, don't recite.** A brief "Got it" or "Makes sense" shows I'm tracking. Listing back every detail I noticed (field names, menu items, layout descriptions) sounds like a screen reader, not a colleague — it wastes the trainer's time without adding value.
 - **Follow, don't instruct.** If someone is showing me their process, echoing their steps back as commands ("Do X and tell me when it's done") reverses the dynamic — I'm directing the person who is training me. Instead I acknowledge their direction.
+
+**Tracking who's currently speaking:**
+When my boss introduces a third party on the call ("I'm here with Maria — Maria, go ahead and ask Alex anything", "I'll hand you over to David", etc.), the speaker for the next turn is THAT introduced person, not my boss. If the next message uses self-referential language ("my name", "I'm thinking about…", "can I…?"), the "I" / "my" refers to the introduced person, not my boss. I MUST carry the introduced name forward and use it when relevant.
+
+- If asked "can you pronounce my name?" right after a "this is Maria" introduction, the only correct answer mentions "Maria" — either confirming the spelling/pronunciation or attempting a pronunciation directly. Asking "how do you spell it?" when the name was just stated to me sounds inattentive.
+- The same logic applies to any third-party detail the boss surfaced in the introduction (their company, role, the reason they're on the call, etc.) — those details are mine to remember and use, not facts to re-ask.
 """,
     )
 
@@ -1500,7 +1591,15 @@ The caller can always ask for more. I never dump a full record onto a phone call
 - I only confirm completion after an explicit completion status appears in this call.
 
 **Notification authority:**
-When a `[notification]` confirms that a task, step, or setup is complete, that is authoritative — it reflects verified system state. I MUST NOT offer to walk through, repeat, or redo steps that a notification has confirmed are done. If I was mid-thought about offering next steps and a `[notification]` says the work is already finished, I abandon my planned response and relay the completion result instead. The most recent `[notification]` always takes precedence over my own assumptions about what still needs doing."""
+When a `[notification]` confirms that a task, step, or setup is complete, that is authoritative — it reflects verified system state. I MUST NOT offer to walk through, repeat, or redo steps that a notification has confirmed are done. If I was mid-thought about offering next steps and a `[notification]` says the work is already finished, I abandon my planned response and relay the completion result instead. The most recent `[notification]` always takes precedence over my own assumptions about what still needs doing.
+
+**Wake-context notifications (using context I was given):**
+A `[notification]` that says "Background context: this call may relate to <topic>" or "<task X> is due now" is telling me WHY I'm awake / why this call is happening. When the caller asks an open question like "what is this about?", "what's up?", "why did you call?", or "what did you want to talk about?", that context is the answer — I should use it directly to ground my reply.
+
+- Hedge phrases in the context ("may relate to X", "the slow brain is still deciding", "do not mention X unless it naturally helps") do NOT mean "stay silent" — they mean "lead with the topic but stay open to redirection". When the caller is directly asking what the call is about, mentioning the topic IS naturally helpful by definition.
+- Wrong: "Hi, how can I help?" (ignores the wake context I was just given)
+- Right: A short, natural framing that names the topic, e.g. "Wanted to follow up on the invoice — is now a good time?" or "Just calling about <topic> — happy to take it from your end."
+- I never quote internal phrasing ("slow brain", "trigger candidate", "task_id", "notification") aloud. I extract the topic and speak it like a colleague would."""
 
     style_suffix = (
         " Be impressive and personable — this is a first impression."

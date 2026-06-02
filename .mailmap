@@ -1,0 +1,40 @@
+# .mailmap — canonical author mapping for git shortlog / git log / GitHub.
+#
+# Format: Canonical Name <canonical@email>  <commit@email>
+# See: https://git-scm.com/docs/gitmailmap
+#
+# Goals:
+# 1. `git shortlog -sn` shows deduplicated contributor counts
+# 2. GitHub attributes commits to the correct profile
+# 3. Contributors with personal + work emails get a single credit row
+#
+# Convention: prefer the GitHub noreply address as canonical where
+# available so GitHub can link commits back to the contributor's
+# profile page.
+
+# Daniel Lenton — work email + university email + lowercase username
+Daniel Lenton <dan@unify.ai> djl11 <dan@unify.ai>
+Daniel Lenton <dan@unify.ai> Daniel Lenton <daniel.lenton11@imperial.ac.uk>
+
+# Haris Mahmood — personal gmail + GitHub noreply
+Haris Mahmood <70361308+hmahmood24@users.noreply.github.com> Haris Mahmood <hmahmood.bee16@gmail.com>
+
+# Yusha Arif — also commits as "YushaArif99" via personal gmail
+Yusha Arif <101613943+YushaArif99@users.noreply.github.com> YushaArif99 <yushaa799@gmail.com>
+
+# JG (juliagsy) — display name differs across commits; both via GitHub noreply
+JG <67888047+juliagsy@users.noreply.github.com> juliagsy <67888047+juliagsy@users.noreply.github.com>
+
+# Nassim Berrada — alternate-case username
+Nassim Berrada <112006029+nassimberrada@users.noreply.github.com> nassimberrada <112006029+nassimberrada@users.noreply.github.com>
+
+# Ved Patwardhan — personal gmail + GitHub noreply
+Ved Patwardhan <54766411+vedpatwardhan@users.noreply.github.com> vedpatwardhan <vedpat3@gmail.com>
+
+# Mostafa Hany — commits historically as "CatB1t" via personal gmail
+Mostafa Hany <71686115+CatB1t@users.noreply.github.com> CatB1t <skytedits@gmail.com>
+
+# Yasser (GitHub: Infrared1029) — personal outlook under multiple display names
+Yasser <60873139+Infrared1029@users.noreply.github.com> Infrared1029 <60873139+Infrared1029@users.noreply.github.com>
+Yasser <60873139+Infrared1029@users.noreply.github.com> infrared1029 <yasserfawzi1029@outlook.com>
+Yasser <60873139+Infrared1029@users.noreply.github.com> Yasser <yasserfawzi1029@outlook.com>

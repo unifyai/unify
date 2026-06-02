@@ -38,7 +38,11 @@ UNASSIGNED_USER_ID = "default"
 # experience is intentionally fixed to "Unity").
 # ─────────────────────────────────────────────────────────────────────────────
 PLACEHOLDER_ASSISTANT_FIRST_NAME = "Unity"
-PLACEHOLDER_ASSISTANT_SURNAME = ""
+PLACEHOLDER_ASSISTANT_SURNAME = None  # Contact.surname is Optional[str] with a
+# UNICODE_NAME_RE pattern; empty string fails the pattern and Pydantic coerces
+# to None anyway. Keep the placeholder honest about the actual value contacts
+# end up with — anything else triggers stale-equality bugs in tests like
+# tests/contact_manager/test_sync.py::test_dummy_assistant.
 PLACEHOLDER_ASSISTANT_EMAIL = "assistant@unify.ai"
 PLACEHOLDER_ASSISTANT_PHONE = "+10000000000"
 PLACEHOLDER_ASSISTANT_BIO = "Your local Unity assistant."
@@ -78,6 +82,8 @@ class AssistantDetails:
     email_provider: str = "google_workspace"
     whatsapp_number: str = ""
     discord_bot_id: str = ""
+    slack_bot_user_id: str = ""
+    is_coordinator: bool = False
     contact_id: int = 0  # Contact ID in Contacts table
     desktop_mode: str = "ubuntu"  # "ubuntu" or "windows" - determines VM type
     desktop_url: str | None = None  # URL for managed VM desktop access
@@ -284,6 +290,8 @@ class SessionDetails:
         assistant_email_provider: str = "google_workspace",
         assistant_whatsapp_number: str = "",
         assistant_discord_bot_id: str = "",
+        assistant_slack_bot_user_id: str = "",
+        assistant_is_coordinator: bool = False,
         assistant_contact_id: int = 0,
         user_id: str = "",
         user_first_name: str = "",
@@ -319,6 +327,8 @@ class SessionDetails:
         self.assistant.email_provider = assistant_email_provider
         self.assistant.whatsapp_number = assistant_whatsapp_number
         self.assistant.discord_bot_id = assistant_discord_bot_id
+        self.assistant.slack_bot_user_id = assistant_slack_bot_user_id
+        self.assistant.is_coordinator = assistant_is_coordinator
         self.assistant.contact_id = assistant_contact_id
         self.assistant.binding_id = binding_id
         self.assistant.desktop_mode = desktop_mode
@@ -370,6 +380,11 @@ class SessionDetails:
         os.environ["ASSISTANT_EMAIL"] = self.assistant.email
         os.environ["ASSISTANT_EMAIL_PROVIDER"] = self.assistant.email_provider
         os.environ["ASSISTANT_WHATSAPP_NUMBER"] = self.assistant.whatsapp_number
+        os.environ["ASSISTANT_DISCORD_BOT_ID"] = self.assistant.discord_bot_id
+        os.environ["ASSISTANT_SLACK_BOT_USER_ID"] = self.assistant.slack_bot_user_id
+        os.environ["ASSISTANT_IS_COORDINATOR"] = (
+            "1" if self.assistant.is_coordinator else "0"
+        )
         os.environ["ASSISTANT_DESKTOP_MODE"] = self.assistant.desktop_mode
         os.environ["ASSISTANT_DESKTOP_URL"] = self.assistant.desktop_url or ""
         os.environ["ASSISTANT_USER_DESKTOP_MODE"] = (
@@ -436,6 +451,10 @@ class SessionDetails:
             self.assistant.whatsapp_number = val
         if val := os.environ.get("ASSISTANT_DISCORD_BOT_ID"):
             self.assistant.discord_bot_id = val
+        if val := os.environ.get("ASSISTANT_IS_COORDINATOR"):
+            self.assistant.is_coordinator = val == "1"
+        if val := os.environ.get("ASSISTANT_SLACK_BOT_USER_ID"):
+            self.assistant.slack_bot_user_id = val
         if val := os.environ.get("ASSISTANT_CONTACT_ID"):
             try:
                 self.assistant.contact_id = int(val)

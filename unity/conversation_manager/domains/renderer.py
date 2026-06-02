@@ -24,6 +24,8 @@ from unity.conversation_manager.domains.contact_index import (
     EmailMessage,
     UnifyMessage,
     WhatsAppMessage,
+    SlackMessage,
+    SlackChannelMessage,
     TeamsMessage,
     TeamsChannelMessage,
     GuidanceMessage,
@@ -1311,6 +1313,8 @@ class Renderer:
             | EmailMessage
             | UnifyMessage
             | WhatsAppMessage
+            | SlackMessage
+            | SlackChannelMessage
             | TeamsMessage
             | TeamsChannelMessage
             | ApiMessage
@@ -1563,6 +1567,99 @@ class Renderer:
             return (
                 f"{new_marker}[{message.name} @ {timestamp_str}]: "
                 f"{message.content}{ids_line}{attachments_line}{tz_block_line}"
+            )
+
+        if isinstance(message, (SlackMessage, SlackChannelMessage)):
+            attachments_line = ""
+            if message.attachments:
+
+                def _slack_att_detail(att, is_self: bool) -> str:
+                    if isinstance(att, dict):
+                        fname = att.get(
+                            "filename",
+                            f"attachment_{att.get('id', 'unknown')}",
+                        )
+                        att_id = att.get("id")
+                        id_part = f"id: {att_id}, " if att_id else ""
+                        if is_self:
+                            fpath = att.get("filepath")
+                            if fpath:
+                                return f"{fname} ({id_part}attached from {fpath})"
+                            return (
+                                f"{fname} ({id_part}attached)"
+                                if id_part
+                                else f"{fname} (attached)"
+                            )
+                        return f"{fname} ({id_part}auto-downloaded to Attachments/{att_id}_{fname})"
+                    return (
+                        f"{att} (attached)" if is_self else f"{att} (auto-downloaded)"
+                    )
+
+                attachment_details = [
+                    _slack_att_detail(att, message.name == "You")
+                    for att in message.attachments
+                ]
+                attachments_line = f" [Attachments: {', '.join(attachment_details)}]"
+
+            tz_block_line = ""
+            if contact_name:
+                tz_block = _get_message_timezone_block(
+                    contact_name,
+                    contact_timezone,
+                    assistant_timezone,
+                )
+                if tz_block:
+                    tz_block_line = f"\n{tz_block}"
+
+            # Surface team_id, channel_id, thread_ts so the LLM can reply into
+            # the same DM/channel thread via send_slack_message(...) /
+            # send_slack_channel_message(...).
+            id_bits: list[str] = []
+            if message.team_id:
+                id_bits.append(f'team_id="{message.team_id}"')
+            if message.channel_id:
+                id_bits.append(f'channel_id="{message.channel_id}"')
+            # For channel messages, fall back to the message's own ts so a
+            # top-level @mention starts a thread when replied to; DMs only
+            # carry thread_ts when the conversation is already threaded.
+            effective_thread_ts = message.thread_ts
+            if isinstance(message, SlackChannelMessage) and not effective_thread_ts:
+                effective_thread_ts = getattr(message, "event_ts", "")
+            if effective_thread_ts:
+                id_bits.append(f'thread_ts="{effective_thread_ts}"')
+            ids_line = f" [{' '.join(id_bits)}]" if id_bits else ""
+
+            # Surface Orchestra-side routing context so the assistant
+            # understands why it received the message (token addressing,
+            # coordinator fallback, ambiguous token, etc.).
+            routing_line = ""
+            if message.routing_metadata:
+                hints: list[str] = []
+                via_token = message.routing_metadata.get("via_token")
+                if via_token:
+                    hints.append(f"addressed via token '{via_token}'")
+                if message.routing_metadata.get("coordinator_fallback"):
+                    hints.append(
+                        "coordinator fallback (no token matched; reply as coordinator)",
+                    )
+                ambiguous = message.routing_metadata.get("ambiguous_token")
+                if ambiguous:
+                    hints.append(f"ambiguous token '{ambiguous}'")
+                known = message.routing_metadata.get("known_assistants") or []
+                if known:
+                    formatted = ", ".join(
+                        f"{a.get('first_name','?')} (id={a.get('agent_id','?')})"
+                        for a in known
+                    )
+                    hints.append(f"known org assistants: {formatted}")
+                if message.routing_metadata.get("thread_inherited"):
+                    hints.append("inherited routing from existing thread")
+                if hints:
+                    routing_line = f"\n[Routing: {'; '.join(hints)}]"
+
+            return (
+                f"{new_marker}[{message.name} @ {timestamp_str}]: "
+                f"{message.content}{ids_line}{attachments_line}{tz_block_line}{routing_line}"
             )
 
         if isinstance(message, ApiMessage):

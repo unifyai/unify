@@ -75,6 +75,7 @@ def build_contact_update_prompt(
         "Some contacts have no `first_name` or `surname` because they represent an organisation or service rather than a specific person.  The `bio` will describe the entity.  When you encounter such a contact:",
         "\u2022 Do **not** populate `first_name` / `surname` with the name of whoever happens to answer or sign off \u2014 they are a transient representative, not the contact\u2019s identity.",
         "\u2022 You may still update other fields (email, phone, bio details) if the transcript reveals useful information about the organisation or service.",
+        "\u2022 Do **not** create a **new** contact for a transient representative either.  E.g. if 'Sarah from Acme Corp billing' answers the line for an existing 'Acme Corp billing support line' service contact, that is one inbound conversation tied to the existing service contact \u2014 not grounds for a separate 'Sarah' contact record.  Update the service contact's bio / rolling_summary with the relevant facts instead.",
         "Conversely, if a contact has no name simply because the person\u2019s name is not yet known, **do** populate the name as soon as the transcript reveals it.",
         "",
         "Work **only** via the tools given.  First figure out what changed (if anything), then call the appropriate update tool(s).",

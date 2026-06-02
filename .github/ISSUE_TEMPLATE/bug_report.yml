@@ -1,0 +1,123 @@
+name: "🐛 Bug report"
+description: Something is broken, crashing, or behaving incorrectly.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+- type: markdown
+  attributes:
+    value: |
+      Thanks for taking the time to file a bug report.
+
+      Before submitting:
+      - Search [existing issues](https://github.com/unifyai/unity/issues) to avoid duplicates.
+      - Try `unity update` and confirm the bug still reproduces.
+      - If this is install-related, run `unity doctor` and include its output below.
+
+- type: textarea
+  id: description
+  attributes:
+    label: What's wrong?
+    description: A clear description of the bug. Include error messages, tracebacks, or screenshots if relevant.
+    placeholder: |
+      What happened? What did you expect to happen instead?
+  validations:
+    required: true
+
+- type: textarea
+  id: reproduction
+  attributes:
+    label: Steps to reproduce
+    description: Minimal steps to trigger the bug. The more specific, the faster we can fix it.
+    placeholder: |
+      1. `unity` from a fresh terminal
+      2. Send the message "..."
+      3. Observe ...
+  validations:
+    required: true
+
+- type: textarea
+  id: expected
+  attributes:
+    label: Expected behavior
+  validations:
+    required: true
+
+- type: textarea
+  id: actual
+  attributes:
+    label: Actual behavior
+    description: Include the full error output if available.
+  validations:
+    required: true
+
+- type: dropdown
+  id: surface
+  attributes:
+    label: Affected surface
+    multiple: true
+    options:
+    - CLI (`unity`)
+    - Voice (`unity --live-voice`)
+    - Installer / setup (`scripts/install.sh`, `unity setup`, `unity doctor`)
+    - Local Orchestra (Docker / Postgres)
+    - Tests (`tests/parallel_run.sh`)
+    - A specific state manager (Contact / Knowledge / Task / Transcript / Guidance / Function / File / Image / Web / Secret / Blacklist / Data)
+    - Actor / CodeAct execution
+    - ConversationManager / steering / interjection
+    - Event bus / observability
+    - Gateway / external comms
+    - Other (specify below)
+  validations:
+    required: true
+
+- type: input
+  id: os
+  attributes:
+    label: Operating system
+    placeholder: macOS 15.2 / Ubuntu 24.04 / Windows 11 WSL2
+  validations:
+    required: true
+
+- type: input
+  id: python
+  attributes:
+    label: Python version
+    description: Output of `.venv/bin/python --version`
+    placeholder: "3.12.7"
+
+- type: input
+  id: unity-commit
+  attributes:
+    label: Unity commit
+    description: Output of `git rev-parse --short HEAD` in the unity repo.
+    placeholder: "aaabf3d4"
+
+- type: textarea
+  id: doctor
+  attributes:
+    label: "`unity doctor` output (recommended)"
+    description: |
+      Paste the full output of `unity doctor`. This catches the majority of install / environment bugs without back-and-forth.
+    render: shell
+
+- type: textarea
+  id: logs
+  attributes:
+    label: Additional logs / traceback
+    description: |
+      Relevant log lines from `logs/unity/`, `logs/orchestra/`, or pytest output if applicable.
+    render: shell
+
+- type: textarea
+  id: root-cause
+  attributes:
+    label: Root-cause analysis (optional)
+    description: |
+      If you've dug in, share file paths, line numbers, and snippets. This dramatically speeds up fixes.
+
+- type: checkboxes
+  id: pr-ready
+  attributes:
+    label: Are you willing to submit a PR?
+    options:
+    - label: I'd like to fix this myself and submit a PR

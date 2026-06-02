@@ -83,6 +83,7 @@ class Contact(BaseModel):
         "phone_number": "phone",
         "whatsapp_number": "wa",
         "discord_id": "disc",
+        "slack_user_id": "slack",
         "bio": "bio",
         "job_title": "jt",
         "rolling_summary": "rs",
@@ -134,6 +135,12 @@ class Contact(BaseModel):
         default=None,
         description="Discord user snowflake ID (digits only)",
         pattern=r"^[0-9]+$",
+        json_schema_extra={"unique": True},
+    )
+    slack_user_id: Optional[str] = Field(
+        default=None,
+        description="Slack user ID (workspace-scoped, e.g. 'U01ABC234' — letters and digits, optionally underscore-separated)",
+        pattern=r"^[A-Z0-9][A-Z0-9_]*$",
         json_schema_extra={"unique": True},
     )
     bio: Optional[str] = Field(
@@ -203,6 +210,7 @@ class Contact(BaseModel):
         "phone_number",
         "whatsapp_number",
         "discord_id",
+        "slack_user_id",
         "bio",
         "job_title",
         "rolling_summary",

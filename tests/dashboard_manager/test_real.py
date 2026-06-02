@@ -34,6 +34,42 @@ def _fresh_dm() -> DashboardManager:
     return DashboardManager()
 
 
+def _seed_binding_contexts(*names: str) -> None:
+    """Ensure each Data/* context referenced by FilterBinding tests exists
+    UNDER the current test's active-context prefix.
+
+    DashboardManager's tile_ops.resolve_binding_contexts() resolves each
+    FilterBinding.context against unify.get_contexts(prefix=base) where
+    base is the test's active write/read context (e.g.
+    `tests/dashboard_manager/test_real/<test_name>/default/0`). A bare
+    `unify.create_context("Data/monthly_stats")` lands at GLOBAL scope
+    and won't appear in the prefix-filtered lookup — so the binding
+    resolver still raises ValueError("No context found matching ...").
+    Prepend the active write context (falling back to read context, then
+    no prefix) so the seeded context lives in the same scope the
+    resolver will search.
+
+    Bug history: 2343b54ad (2026-04-06, Haris) added these tests without
+    any seed step. 5a59805ac (today, my morning fix) added this helper
+    but seeded at global scope, which didn't fix the failure — the
+    contexts were created but at the wrong scope. This update
+    finally lands them where resolve_binding_contexts() will find them.
+    """
+    import unify
+
+    try:
+        ctxs = unify.get_active_context()
+    except Exception:
+        ctxs = None
+    base_ctx = ""
+    if isinstance(ctxs, dict):
+        base_ctx = ctxs.get("write") or ctxs.get("read") or ""
+
+    for name in names:
+        scoped = f"{base_ctx}/{name}" if base_ctx else name
+        unify.create_context(scoped)  # exist_ok=True default
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # Tile CRUD
 # ────────────────────────────────────────────────────────────────────────────
@@ -61,6 +97,7 @@ def test_create_tile_basic():
 def test_create_tile_with_data_bindings():
     """create_tile should accept data_bindings for live-data tiles."""
     dm = _fresh_dm()
+    _seed_binding_contexts("Data/monthly_stats", "Data/revenue")
 
     result = dm.create_tile(
         "<div id='chart'>Loading...</div>",
@@ -203,6 +240,7 @@ def test_list_tiles_with_limit():
 def test_create_tile_with_on_data():
     """create_tile with on_data should store on_data_script and data_bindings_json."""
     dm = _fresh_dm()
+    _seed_binding_contexts("Data/monthly_stats")
 
     result = dm.create_tile(
         "<div id='tbl'>Loading...</div>",
@@ -233,6 +271,7 @@ def test_create_tile_with_on_data():
 def test_update_tile_with_on_data():
     """update_tile should update on_data_script field."""
     dm = _fresh_dm()
+    _seed_binding_contexts("Data/monthly_stats")
 
     created = dm.create_tile(
         "<div id='v'>Loading...</div>",

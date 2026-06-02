@@ -191,7 +191,10 @@ class BlackListManager(BaseBlackListManager):
         *,
         blacklist_id: int,
     ) -> Dict[str, Any]:
-        # Resolve target log id
+        # Resolve target log id in the primary context (for the "not found"
+        # / "multiple rows" sanity checks; aggregation contexts are queried
+        # separately below since they hold independent log ids — see the
+        # cascade loop comment).
         target_ids = unify.get_logs(
             context=self._ctx,
             filter=f"blacklist_id == {int(blacklist_id)}",
@@ -206,7 +209,27 @@ class BlackListManager(BaseBlackListManager):
             raise RuntimeError(
                 f"Multiple blacklist rows found with blacklist_id {blacklist_id}. Data integrity issue.",
             )
-        unify.delete_logs(context=self._ctx, logs=target_ids[0])
+        # create_blacklist_entry uses unity_log(add_to_all_context=True),
+        # which (per current orchestra semantics) creates a separate log
+        # row in each aggregation context, each with its own log id. A
+        # single-context delete using the primary log id therefore leaves
+        # the aggregation copies behind — visible to filter_blacklist /
+        # any get_logs against the All/* contexts. Resolve and delete
+        # per-context so the cascade fully propagates regardless of
+        # whether orchestra later moves to true reference semantics.
+        contexts_to_clear: list[str] = [self._ctx]
+        if self.include_in_multi_assistant_table:
+            from ..common.log_utils import _derive_all_contexts
+
+            contexts_to_clear.extend(_derive_all_contexts(self._ctx))
+        for ctx in contexts_to_clear:
+            ids_in_ctx = unify.get_logs(
+                context=ctx,
+                filter=f"blacklist_id == {int(blacklist_id)}",
+                return_ids_only=True,
+            )
+            for log_id in ids_in_ctx:
+                unify.delete_logs(context=ctx, logs=log_id)
         try:
             self._data_store.delete(blacklist_id)
         except KeyError:

@@ -24,15 +24,31 @@ class TestSocketIsolation:
     """Tests for socket-based isolation."""
 
     def test_output_includes_socket_name(self, runner):
-        """Script output should include the socket name used."""
+        """Script output should include the socket name used.
+
+        The explicit "socket: <name>" line was part of the removed
+        Observe section (65bd78f9d, 2025-12-26). The socket name is
+        still surfaced — embedded in the log-directory path the runner
+        prints (e.g. `logs/pytest/2026-05-28T08-53-55_unity_test_153907/`)
+        and exposed on RunResult.socket. Assert presence via either
+        path so the test is robust to output reformatting that doesn't
+        affect the actual socket-name surfacing contract.
+        """
         result = runner.run(
             runner.fixture_path("test_always_pass.py"),
             wait_for_completion=True,
         )
 
         assert result.exit_code == 0
-        # Output should mention the socket
-        assert "socket:" in result.stdout.lower() or "socket" in result.stdout
+        # The socket name should appear somewhere in stdout (currently
+        # embedded in the printed log-directory path) OR be extracted
+        # onto RunResult.socket — both indicate the runner surfaced it.
+        assert (
+            result.socket and result.socket in result.stdout
+        ) or "socket:" in result.stdout.lower(), (
+            f"socket name should be surfaced; result.socket={result.socket!r}, "
+            f"stdout snippet={result.stdout[:300]!r}"
+        )
 
     def test_socket_name_in_result(self, runner):
         """RunResult should have the socket name extracted."""
@@ -144,24 +160,21 @@ class TestSocketNaming:
         ), f"Expected same socket, got {result1.socket} and {result2.socket}"
 
 
-class TestObserveOutputFormat:
-    """Tests for the Observe section output format."""
-
-    def test_output_shows_watch_helper(self, runner):
-        """Output should mention the watch_tests.sh helper."""
-        result = runner.run(
-            runner.fixture_path("test_always_pass.py"),
-        )
-
-        assert (
-            "watch_tests.sh" in result.stdout
-        ), "Output should mention watch_tests.sh helper"
-
-    def test_output_shows_socket_specific_commands(self, runner):
-        """Output should show socket-specific tmux commands."""
-        result = runner.run(
-            runner.fixture_path("test_always_pass.py"),
-        )
-
-        # Should show how to list/attach with the specific socket
-        assert "tmux -L" in result.stdout, "Output should show tmux -L socket commands"
+# NOTE: TestObserveOutputFormat (test_output_shows_watch_helper /
+# test_output_shows_socket_specific_commands) was deleted intentionally.
+# Both tests asserted that parallel_run.sh's output contained an "Observe"
+# section listing the watch_tests.sh helper and a tmux -L socket-specific
+# attach command. That section existed back when the runner was
+# non-blocking by default and the user was expected to observe progress in
+# another shell.
+#
+# Commit 65bd78f9d (2025-12-26 "refactor(parallel_run.sh): make blocking
+# default, replace --wait with --timeout") made blocking the only mode and
+# removed the Observe section as part of that simplification — pass/fail
+# results now stream inline as tests complete, so there is no separate
+# observe pane to advertise. The two assertions have been failing ever
+# since but were masked by the discover_test_paths.py matrix bug.
+#
+# The tests do not represent a contract worth restoring (the Observe
+# section was a hint about a workflow that no longer exists). Remove
+# rather than soften.

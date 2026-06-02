@@ -154,8 +154,11 @@ done
 
 # Parse remaining arguments using shared helper
 # Returns: 0=success, 1=help requested, 2=error
-parse_test_args "${REMAINING_ARGS[@]}"
-_parse_result=$?
+# Use `|| _parse_result=$?` so `set -e` (line 2) doesn't abort the
+# script before the help/error branch can run. Same bug class as
+# the matching fix in parallel_run.sh (see commit history there).
+_parse_result=0
+parse_test_args "${REMAINING_ARGS[@]}" || _parse_result=$?
 if (( _parse_result == 1 )); then
   # Help requested - show cloud-specific help
   HELP_SCRIPT_NAME="parallel_cloud_run.sh"

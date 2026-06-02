@@ -188,15 +188,26 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 
 # Parse arguments using shared helper
 # Returns: 0=success, 1=help requested, 2=error
-parse_test_args "$@"
-_parse_result=$?
+#
+# IMPORTANT: capture exit code via `|| _parse_result=$?` rather than
+# `parse_test_args "$@"; _parse_result=$?` — the latter aborts under
+# `set -e` (line 2) before the assignment runs, swallowing the help
+# / error exit and producing a silent exit-1. This was the bug behind
+# all 15 tests/parallel_run/test_flags.py failures in TestHelpFlag /
+# TestPytestPassthrough / TestTagsFlag / TestTimeoutFlag / TestEnvFlag
+# — introduced 2026-01-17 in 70ae69790 when the flag handling was
+# extracted from inline `exit 2` calls into a function returning
+# non-zero. Hidden from CI 9 days later by the discover_test_paths.py
+# matrix bug (effective 2026-01-26 in 499de17cc).
+_parse_result=0
+parse_test_args "$@" || _parse_result=$?
 if (( _parse_result == 1 )); then
   # Help requested
   HELP_SCRIPT_NAME="parallel_run.sh"
   print_help
   exit 0
 elif (( _parse_result == 2 )); then
-  # Error (already printed)
+  # Error (already printed by parse_test_args)
   exit 2
 fi
 unset _parse_result
@@ -387,16 +398,31 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
       unset _db_port _max_wait _waited
 
       echo "Starting local orchestra..."
-      if "$_local_orchestra_script" start >/dev/null 2>&1; then
+      # Capture local.sh stdout+stderr to a log file so CI can surface the
+      # actual failure reason when start fails (orchestra's own server log
+      # at /tmp/orchestra-local-server.log only exists if start_orchestra_server
+      # reached its background-exec line; earlier failures — check_docker,
+      # start_db_container, run_migrations, etc. — leave no breadcrumb without
+      # this file). The "Dump orchestra logs on failure" step in tests.yml
+      # tails this when a job fails.
+      _orchestra_start_log="/tmp/orchestra-startup.log"
+      if "$_local_orchestra_script" start >"$_orchestra_start_log" 2>&1; then
         if _local_url=$("$_local_orchestra_script" check 2>/dev/null); then
           echo "Using local orchestra: $_local_url"
           export ORCHESTRA_URL="$_local_url"
         else
           echo "Warning: Local orchestra started but not responding" >&2
+          echo "----- local.sh start output -----" >&2
+          cat "$_orchestra_start_log" >&2 || true
+          echo "---------------------------------" >&2
         fi
       else
         echo "Warning: Could not start local orchestra" >&2
+        echo "----- local.sh start output -----" >&2
+        cat "$_orchestra_start_log" >&2 || true
+        echo "---------------------------------" >&2
       fi
+      unset _orchestra_start_log
     fi
   else
     echo "Warning: Orchestra script not found at $_local_orchestra_script" >&2

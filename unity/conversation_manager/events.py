@@ -565,6 +565,83 @@ class DiscordChannelMessageSent(Event):
 
 
 @dataclass
+class SlackMessageReceived(Event):
+    """A direct message received from a user via a Slack app.
+
+    ``routing_metadata`` carries Orchestra-side routing context (whether
+    the route was created via token addressing, whether the assistant is
+    the coordinator handling a misroute, etc.) and is surfaced to the
+    assistant via the renderer.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:slack_message"
+    content_logged: ClassVar[bool] = True
+
+    contact: dict
+    content: str
+    team_id: str = ""
+    channel_id: str = ""
+    bot_user_id: str = ""
+    event_ts: str = ""
+    thread_ts: str = ""
+    message_id: str = ""
+    attachments: list[dict] = field(default_factory=list)
+    routing_metadata: dict = field(default_factory=dict)
+
+
+@dataclass
+class SlackChannelMessageReceived(Event):
+    """A message received in a Slack channel via @mention of the app.
+
+    ``routing_metadata`` carries Orchestra-side routing context (token
+    used, thread inheritance, coordinator fallback, ambiguous-token
+    fan-out hints) and is surfaced to the assistant via the renderer.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:slack_channel_message"
+    content_logged: ClassVar[bool] = True
+
+    contact: dict
+    content: str
+    team_id: str = ""
+    channel_id: str = ""
+    bot_user_id: str = ""
+    event_ts: str = ""
+    thread_ts: str = ""
+    message_id: str = ""
+    attachments: list[dict] = field(default_factory=list)
+    routing_metadata: dict = field(default_factory=dict)
+
+
+@dataclass
+class SlackMessageSent(Event):
+    """A direct message sent to a Slack user via the app."""
+
+    topic: ClassVar[str | None] = "app:comms:slack_message_sent"
+    content_logged: ClassVar[bool] = True
+
+    contact: dict
+    content: str
+    team_id: str = ""
+    channel_id: str = ""
+    thread_ts: str = ""
+
+
+@dataclass
+class SlackChannelMessageSent(Event):
+    """A message sent to a Slack channel via the app."""
+
+    topic: ClassVar[str | None] = "app:comms:slack_channel_message_sent"
+    content_logged: ClassVar[bool] = True
+
+    contact: dict
+    content: str
+    team_id: str = ""
+    channel_id: str = ""
+    thread_ts: str = ""
+
+
+@dataclass
 class TeamsMessageReceived(Event):
     """A message received in a Microsoft Teams chat (1:1, group, or meeting)."""
 
@@ -925,6 +1002,8 @@ class _SessionConfigBase(Event):
     voice_provider: str = "cartesia"
     assistant_whatsapp_number: str = ""
     assistant_discord_bot_id: str = ""
+    assistant_slack_bot_user_id: str = ""
+    assistant_is_coordinator: bool = False
     assistant_timezone: str = (
         ""  # IANA timezone identifier; default empty for backward compat
     )

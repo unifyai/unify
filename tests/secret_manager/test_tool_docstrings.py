@@ -38,46 +38,72 @@ def _build_tools_schema_in_subprocess(method: str, test_context: str) -> str:
 
     The test_context is passed via environment variable to ensure the subprocess
     uses an isolated context rather than the shared default context.
+
+    Round-trip the JSON via a temp file rather than stdout. SecretManager
+    init now emits "[integrations] assistant secret sync complete
+    reason=secret_manager_init" (added 2026-05-08 in 243b136d65) on every
+    instantiation, and that log line goes to stdout with a wall-clock
+    timestamp. The cross-session comparison would see the log line at
+    index 0 with different timestamps each invocation and fail spuriously.
+    Same fix as 51b90d1fb (sibling test_sys_msgs.py).
     """
     assert method in {"ask", "update"}
-    code = textwrap.dedent(
-        f"""
-		import os, sys, json
-		sys.path.insert(0, os.getcwd())
-		import unify
-		# Activate the test project before setting context
-		project_name = os.environ.get("UNITY_TEST_PROJECT_NAME", "UnityTests")
-		unify.activate(project_name, overwrite=False)
-		# Set test-specific context before creating SecretManager to avoid races
-		test_ctx = os.environ.get("_TEST_CONTEXT")
-		if test_ctx:
-			unify.set_context(test_ctx, relative=False)
-		from unity.common.llm_helpers import method_to_schema
-		def _unwrap_callable(tool):
-			return getattr(tool, "fn", tool)
-		from unity.secret_manager.secret_manager import SecretManager
-		sm = SecretManager()
-		tools = sm.get_tools("{method}")
-		if not tools:
-			raise AssertionError("SecretManager.{method} should expose at least one tool")
-		mapping = {{
-			name: method_to_schema(_unwrap_callable(value), name)
-			for name, value in tools.items()
-		}}
-		sys.stdout.write(json.dumps(mapping, sort_keys=True, indent=2))
-		""",
-    )
-    env = os.environ.copy()
-    env["_TEST_CONTEXT"] = test_context
-    proc = subprocess.run(
-        [sys.executable, "-c", code],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=True,
-        env=env,
-    )
-    return proc.stdout
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(
+        mode="r",
+        suffix=".tools_schema.json",
+        delete=False,
+    ) as out_file:
+        out_path = out_file.name
+    try:
+        code = textwrap.dedent(
+            f"""
+            import os, sys, json
+            sys.path.insert(0, os.getcwd())
+            import unify
+            # Activate the test project before setting context
+            project_name = os.environ.get("UNITY_TEST_PROJECT_NAME", "UnityTests")
+            unify.activate(project_name, overwrite=False)
+            # Set test-specific context before creating SecretManager to avoid races
+            test_ctx = os.environ.get("_TEST_CONTEXT")
+            if test_ctx:
+                unify.set_context(test_ctx, relative=False)
+            from unity.common.llm_helpers import method_to_schema
+            def _unwrap_callable(tool):
+                return getattr(tool, "fn", tool)
+            from unity.secret_manager.secret_manager import SecretManager
+            sm = SecretManager()
+            tools = sm.get_tools("{method}")
+            if not tools:
+                raise AssertionError("SecretManager.{method} should expose at least one tool")
+            mapping = {{
+                name: method_to_schema(_unwrap_callable(value), name)
+                for name, value in tools.items()
+            }}
+            out_path = os.environ["_TOOL_SCHEMA_OUT_PATH"]
+            with open(out_path, "w", encoding="utf-8") as _f:
+                _f.write(json.dumps(mapping, sort_keys=True, indent=2))
+            """,
+        )
+        env = os.environ.copy()
+        env["_TEST_CONTEXT"] = test_context
+        env["_TOOL_SCHEMA_OUT_PATH"] = out_path
+        subprocess.run(
+            [sys.executable, "-c", code],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+            env=env,
+        )
+        with open(out_path, "r", encoding="utf-8") as f:
+            return f.read()
+    finally:
+        try:
+            os.unlink(out_path)
+        except OSError:
+            pass
 
 
 @_handle_project

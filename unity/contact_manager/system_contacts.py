@@ -104,6 +104,7 @@ def _resolve_user_details(self) -> Dict[str, Any]:
         "phone_number": data.get("phone_number"),
         "whatsapp_number": data.get("whatsapp_number"),
         "discord_id": data.get("discord_id"),
+        "slack_user_id": data.get("slack_user_id"),
     }
     user_info.update({k: v for k, v in mapped.items() if v is not None})
 
@@ -152,6 +153,9 @@ def provision_assistant_contact(self, assistant_log) -> None:
             "discord_id": (
                 ast.discord_bot_id if populated and ast.discord_bot_id else None
             ),
+            "slack_user_id": (
+                ast.slack_bot_user_id if populated and ast.slack_bot_user_id else None
+            ),
             "bio": ast.about if populated else PLACEHOLDER_ASSISTANT_BIO,
             "job_title": (ast.job_title or None) if populated else None,
             "timezone": (ast.timezone or "UTC") if populated else "UTC",
@@ -171,6 +175,9 @@ def provision_assistant_contact(self, assistant_log) -> None:
             fetched_discord = (
                 ast.discord_bot_id if populated and ast.discord_bot_id else None
             )
+            fetched_slack = (
+                ast.slack_bot_user_id if populated and ast.slack_bot_user_id else None
+            )
             fetched_first_name = ast.first_name if populated else None
             fetched_surname = ast.surname if populated else None
             fetched_job_title = (ast.job_title or None) if populated else None
@@ -187,6 +194,9 @@ def provision_assistant_contact(self, assistant_log) -> None:
             needs_discord = (
                 fetched_discord and entries.get("discord_id") != fetched_discord
             )
+            needs_slack = (
+                fetched_slack and entries.get("slack_user_id") != fetched_slack
+            )
             needs_is_system = entries.get("is_system") is not True
             needs_first_name = (
                 fetched_first_name and entries.get("first_name") != fetched_first_name
@@ -202,6 +212,7 @@ def provision_assistant_contact(self, assistant_log) -> None:
                 or needs_phone
                 or needs_whatsapp
                 or needs_discord
+                or needs_slack
                 or needs_is_system
                 or needs_first_name
                 or needs_surname
@@ -222,6 +233,8 @@ def provision_assistant_contact(self, assistant_log) -> None:
                     update_kwargs["whatsapp_number"] = fetched_whatsapp
                 if needs_discord:
                     update_kwargs["discord_id"] = fetched_discord
+                if needs_slack:
+                    update_kwargs["slack_user_id"] = fetched_slack
                 if needs_is_system:
                     update_kwargs["is_system"] = True
                 if needs_first_name:
@@ -312,6 +325,7 @@ def provision_user_contact(self, user_log) -> None:
             "phone_number": user_info.get("phone_number"),
             "whatsapp_number": user_info.get("whatsapp_number"),
             "discord_id": user_info.get("discord_id"),
+            "slack_user_id": user_info.get("slack_user_id"),
             "bio": user_info.get("bio"),
             "response_policy": self.USER_MANAGER_RESPONSE_POLICY,
         },
@@ -337,6 +351,7 @@ def provision_user_contact(self, user_log) -> None:
             "phone_number",
             "whatsapp_number",
             "discord_id",
+            "slack_user_id",
         }
     }
     if extra_fields:
@@ -350,6 +365,7 @@ def provision_user_contact(self, user_log) -> None:
             fetched_phone = user_info.get("phone_number")
             fetched_whatsapp = user_info.get("whatsapp_number")
             fetched_discord = user_info.get("discord_id")
+            fetched_slack = user_info.get("slack_user_id")
 
             needs_timezone = fetched_tz and entries.get("timezone") != fetched_tz
             needs_bio = fetched_bio and entries.get("bio") != fetched_bio
@@ -360,6 +376,9 @@ def provision_user_contact(self, user_log) -> None:
             needs_discord = (
                 fetched_discord and entries.get("discord_id") != fetched_discord
             )
+            needs_slack = (
+                fetched_slack and entries.get("slack_user_id") != fetched_slack
+            )
             needs_is_system = entries.get("is_system") is not True
 
             if (
@@ -368,6 +387,7 @@ def provision_user_contact(self, user_log) -> None:
                 or needs_phone
                 or needs_whatsapp
                 or needs_discord
+                or needs_slack
                 or needs_is_system
             ):
                 update_kwargs: Dict[str, Any] = {
@@ -384,6 +404,8 @@ def provision_user_contact(self, user_log) -> None:
                     update_kwargs["whatsapp_number"] = fetched_whatsapp
                 if needs_discord:
                     update_kwargs["discord_id"] = fetched_discord
+                if needs_slack:
+                    update_kwargs["slack_user_id"] = fetched_slack
                 if needs_is_system:
                     update_kwargs["is_system"] = True
                 self.update_contact(**update_kwargs)

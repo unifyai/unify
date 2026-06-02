@@ -37,8 +37,8 @@ import time
 
 import aiohttp
 import httpx
-from google.cloud import pubsub_v1
 
+from unity.gateway.common.pubsub import already_published, get_pubsub_client
 from unity.settings import SETTINGS
 
 logger = logging.getLogger("unity.gateway.channels.discord.gateway")
@@ -54,11 +54,6 @@ BOT_INTENTS = INTENTS_DIRECT_MESSAGES | INTENTS_GUILD_MESSAGES | INTENTS_MESSAGE
 FATAL_CLOSE_CODES = {4004, 4010, 4011, 4013, 4014}
 FRESH_IDENTIFY_CODES = {4003, 4007, 4009}
 
-_pubsub_client: pubsub_v1.PublisherClient | None = None
-
-_seen_message_ids: dict[str, float] = {}
-_DEDUP_TTL = 300.0
-
 
 def _admin_token() -> str:
     """Resolve the Orchestra admin bearer token (SecretStr-safe)."""
@@ -72,30 +67,6 @@ def _assistant_topic(assistant_id: str) -> str:
     names line up across services.
     """
     return f"unity-{assistant_id}{SETTINGS.ENV_SUFFIX}"
-
-
-def _already_published(message_id: str) -> bool:
-    """Return True if this message_id was already published recently.
-
-    Tiny in-process dedup window guards against Discord redelivering
-    the same MESSAGE_CREATE after a transient reconnect.
-    """
-    now = time.time()
-    cutoff = now - _DEDUP_TTL
-    expired = [k for k, t in _seen_message_ids.items() if t < cutoff]
-    for k in expired:
-        del _seen_message_ids[k]
-    if message_id in _seen_message_ids:
-        return True
-    _seen_message_ids[message_id] = now
-    return False
-
-
-def _get_pubsub_client() -> pubsub_v1.PublisherClient:
-    global _pubsub_client
-    if _pubsub_client is None:
-        _pubsub_client = pubsub_v1.PublisherClient()
-    return _pubsub_client
 
 
 async def _resolve_discord_route(bot_id: str, sender: str) -> dict | None:
@@ -153,6 +124,7 @@ def _default_contacts(assistant_data: dict) -> list[dict]:
             "phone_number": assistant_data.get("phone") or "",
             "whatsapp_number": assistant_data.get("assistant_whatsapp_number") or "",
             "discord_id": assistant_data.get("assistant_discord_bot_id") or "",
+            "slack_user_id": assistant_data.get("assistant_slack_bot_user_id") or "",
             "bio": "",
             "rolling_summary": "",
             "should_respond": False,
@@ -166,6 +138,7 @@ def _default_contacts(assistant_data: dict) -> list[dict]:
             "phone_number": assistant_data.get("user_phone") or "",
             "whatsapp_number": assistant_data.get("user_whatsapp_number") or "",
             "discord_id": assistant_data.get("user_discord_id") or "",
+            "slack_user_id": assistant_data.get("user_slack_user_id") or "",
             "bio": "",
             "rolling_summary": "",
             "should_respond": True,
@@ -303,7 +276,7 @@ def _publish_to_pubsub(
     contacts: list[dict] | None = None,
 ) -> None:
     """Publish an inbound Discord message to the assistant's Pub/Sub topic."""
-    client = _get_pubsub_client()
+    client = get_pubsub_client()
     topic_path = client.topic_path(
         SETTINGS.GCP_PROJECT_ID,
         _assistant_topic(assistant_id),
@@ -617,7 +590,7 @@ class GatewayConnection:
             asyncio.create_task(_ensure_job_running(assistant_data))
             contacts = await _fetch_contacts(assistant_data)
 
-        if _already_published(message_id):
+        if already_published("discord", message_id):
             logger.debug(
                 "bot %s: skipping duplicate MESSAGE_CREATE %s",
                 self.bot_id,

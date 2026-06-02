@@ -84,6 +84,20 @@ class TestWorkerAgentName:
 
 
 class TestPersistentWorkerStartup:
+    # All tests in this class exercise the LivekitCallManager
+    # start_persistent_worker() path which short-circuits with `return`
+    # when LIVEKIT_URL is not set in env (production-side guard so the
+    # worker is never spawned in non-livekit pods). In CI/local without
+    # LIVEKIT_URL set, every test in this class would silently skip the
+    # subprocess spawn and the `mock_run.assert_called_once()` assertions
+    # would fail with "Called 0 times". Setting LIVEKIT_URL to a non-
+    # empty sentinel via autouse monkeypatch lets the production path
+    # proceed (the mocked run_script is then exercised normally — no
+    # actual livekit connection is made because run_script is patched).
+    @pytest.fixture(autouse=True)
+    def _stub_livekit_url(self, monkeypatch):
+        monkeypatch.setenv("LIVEKIT_URL", "wss://livekit.test.invalid")
+
     @pytest.mark.asyncio
     async def test_start_persistent_worker_spawns_process(self, call_manager):
         with patch(

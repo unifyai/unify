@@ -300,6 +300,42 @@ class ConversationManagerBrainActionTools:
             contact_id=contact_id,
         )
 
+    @wraps(CommsPrimitives.send_slack_message)
+    async def send_slack_message(
+        self,
+        *,
+        contact_id: int | str,
+        content: str,
+        team_id: str,
+        slack_user_id: str | None = None,
+        thread_ts: str | None = None,
+    ) -> dict[str, Any]:
+        return await self._comms.send_slack_message(
+            contact_id=contact_id,
+            content=content,
+            team_id=team_id,
+            slack_user_id=slack_user_id,
+            thread_ts=thread_ts,
+        )
+
+    @wraps(CommsPrimitives.send_slack_channel_message)
+    async def send_slack_channel_message(
+        self,
+        *,
+        channel_id: str,
+        content: str,
+        team_id: str,
+        thread_ts: str | None = None,
+        contact_id: int | str | None = None,
+    ) -> dict[str, Any]:
+        return await self._comms.send_slack_channel_message(
+            channel_id=channel_id,
+            content=content,
+            team_id=team_id,
+            thread_ts=thread_ts,
+            contact_id=contact_id,
+        )
+
     @wraps(CommsPrimitives.send_teams_message)
     async def send_teams_message(
         self,
@@ -1519,6 +1555,9 @@ class ConversationManagerBrainActionTools:
         if self._cm.assistant_discord_bot_id:
             tools["send_discord_message"] = self.send_discord_message
             tools["send_discord_channel_message"] = self.send_discord_channel_message
+        if self._cm.assistant_slack_bot_user_id:
+            tools["send_slack_message"] = self.send_slack_message
+            tools["send_slack_channel_message"] = self.send_slack_channel_message
         if self._cm.assistant_has_teams:
             tools["send_teams_message"] = self.send_teams_message
             tools["create_teams_channel"] = self.create_teams_channel
