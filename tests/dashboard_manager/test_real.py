@@ -17,9 +17,12 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from unity.dashboard_manager.dashboard_manager import DashboardManager
 from unity.dashboard_manager.types.dashboard import TilePosition
 from unity.dashboard_manager.types.tile import FilterBinding
+from unity.function_manager.primitives import Primitives
 from unity.manager_registry import ManagerRegistry
 from tests.helpers import _handle_project
 
@@ -32,6 +35,68 @@ def _fresh_dm() -> DashboardManager:
     """Create a fresh DashboardManager instance (clears registry singleton)."""
     ManagerRegistry.clear()
     return DashboardManager()
+
+
+def _active_base_context() -> str:
+    import unify
+
+    ctxs = unify.get_active_context()
+    return ctxs["write"] or ctxs["read"]
+
+
+def _context_names(prefix: str) -> set[str]:
+    import unify
+
+    contexts = unify.get_contexts(prefix=prefix)
+    if isinstance(contexts, dict):
+        return set(contexts.keys())
+    return {c["name"] if isinstance(c, dict) else str(c) for c in (contexts or [])}
+
+
+def _assert_dashboard_context_names(dm: DashboardManager) -> tuple[str, str]:
+    base_ctx = _active_base_context()
+    expected_tiles = f"{base_ctx}/Dashboards/Tiles"
+    expected_layouts = f"{base_ctx}/Dashboards/Layouts"
+    leaked_tiles = f"{base_ctx}/Data/Dashboards/Tiles"
+    leaked_layouts = f"{base_ctx}/Data/Dashboards/Layouts"
+
+    assert dm._tiles_ctx == expected_tiles
+    assert dm._layouts_ctx == expected_layouts
+    assert "/Data/Dashboards/" not in dm._tiles_ctx
+    assert "/Data/Dashboards/" not in dm._layouts_ctx
+
+    contexts = _context_names(base_ctx)
+    assert expected_tiles in contexts
+    assert expected_layouts in contexts
+    assert leaked_tiles not in contexts
+    assert leaked_layouts not in contexts
+    return expected_tiles, expected_layouts
+
+
+def _assert_tile_stored_in_expected_context(
+    dm: DashboardManager,
+    token: str,
+) -> None:
+    expected_tiles, _ = _assert_dashboard_context_names(dm)
+    rows = dm._get_dm().filter(
+        expected_tiles,
+        filter=f"token == '{token}'",
+        limit=1,
+    )
+    assert rows and rows[0]["token"] == token
+
+
+def _assert_dashboard_stored_in_expected_context(
+    dm: DashboardManager,
+    token: str,
+) -> None:
+    _, expected_layouts = _assert_dashboard_context_names(dm)
+    rows = dm._get_dm().filter(
+        expected_layouts,
+        filter=f"token == '{token}'",
+        limit=1,
+    )
+    assert rows and rows[0]["token"] == token
 
 
 def _seed_binding_contexts(*names: str) -> None:
@@ -91,6 +156,7 @@ def test_create_tile_basic():
     assert len(result.token) == 12
     assert result.title == "Test Tile"
     assert "/tile/view/" in result.url
+    _assert_tile_stored_in_expected_context(dm, result.token)
 
 
 @_handle_project
@@ -323,6 +389,9 @@ def test_create_dashboard_basic():
     assert result.title == "Test Dashboard"
     assert "/dashboard/view/" in result.url
     assert len(result.tiles) == 2
+    _assert_tile_stored_in_expected_context(dm, t1.token)
+    _assert_tile_stored_in_expected_context(dm, t2.token)
+    _assert_dashboard_stored_in_expected_context(dm, result.token)
 
 
 @_handle_project
@@ -508,3 +577,27 @@ def test_full_dashboard_lifecycle():
 
     dm.delete_dashboard(dashboard.token)
     assert dm.get_dashboard(dashboard.token) is None
+
+
+@pytest.mark.asyncio
+@_handle_project
+async def test_primitives_dashboard_creation_uses_dashboard_contexts():
+    """Primitive dashboard calls should store artifacts outside Data/*."""
+    ManagerRegistry.clear()
+    primitives = Primitives()
+
+    tile = await primitives.dashboards.create_tile(
+        "<h1>Primitive Tile</h1>",
+        title="Primitive Tile",
+    )
+    assert tile.succeeded, f"create_tile failed: {tile.error}"
+
+    dashboard = await primitives.dashboards.create_dashboard(
+        "Primitive Dashboard",
+        tiles=[TilePosition(tile_token=tile.token, x=0, y=0, w=12, h=4)],
+    )
+    assert dashboard.succeeded, f"create_dashboard failed: {dashboard.error}"
+
+    dm = primitives.dashboards._wrapped_manager
+    _assert_tile_stored_in_expected_context(dm, tile.token)
+    _assert_dashboard_stored_in_expected_context(dm, dashboard.token)

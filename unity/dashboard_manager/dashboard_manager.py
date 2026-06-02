@@ -82,6 +82,26 @@ def _build_dashboard_url(token: str) -> str:
     return f"{console_url}/dashboard/view/{token}"
 
 
+def _require_dashboard_context(context: Optional[str], suffix: str) -> str:
+    if not context:
+        raise RuntimeError(f"Dashboard context {suffix!r} could not be resolved")
+    expected = f"Dashboards/{suffix}"
+    if context == expected or "/" not in context:
+        raise RuntimeError(
+            f"Dashboard context {suffix!r} is not fully qualified: {context}",
+        )
+    if not context.endswith(f"/{expected}"):
+        raise RuntimeError(
+            f"Dashboard context {suffix!r} resolved outside Dashboards namespace: "
+            f"{context}",
+        )
+    if context.startswith("Data/Dashboards/") or "/Data/Dashboards/" in context:
+        raise RuntimeError(
+            f"Dashboard context {suffix!r} resolved under Data namespace: {context}",
+        )
+    return context
+
+
 class DashboardManager(BaseDashboardManager):
     """Concrete DashboardManager backed by Unify contexts and Orchestra tokens."""
 
@@ -114,17 +134,17 @@ class DashboardManager(BaseDashboardManager):
     def __init__(self) -> None:
         super().__init__()
         self.include_in_multi_assistant_table = True
-        try:
-            self._tiles_ctx = ContextRegistry.get_context(self, "Dashboards/Tiles")
-        except Exception:
-            self._tiles_ctx = "Dashboards/Tiles"
-        try:
-            self._layouts_ctx = ContextRegistry.get_context(
+        self._tiles_ctx = _require_dashboard_context(
+            ContextRegistry.get_context(self, "Dashboards/Tiles"),
+            "Tiles",
+        )
+        self._layouts_ctx = _require_dashboard_context(
+            ContextRegistry.get_context(
                 self,
                 "Dashboards/Layouts",
-            )
-        except Exception:
-            self._layouts_ctx = "Dashboards/Layouts"
+            ),
+            "Layouts",
+        )
         logger.debug(
             "DashboardManager initialized: tiles=%s layouts=%s",
             self._tiles_ctx,
