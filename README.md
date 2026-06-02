@@ -382,7 +382,7 @@ The architectural bet above isn't abstract. Because *every* operation — at eve
 <summary><b>1. Course-correct a task that's running three loops deep — live</b></summary>
 
 <p align="center">
-  <img src="assets/demo-course-correct.png" alt="A correction injected at the top of a four-level nested stack (ConversationManager → Actor → TaskScheduler → ContactManager) propagates straight down through every running loop to the innermost ContactManager, redirecting it in place — captioned 'live redirect, no restart'." width="760">
+  <img src="assets/demo-course-correct-technical.png" alt="A technical flow diagram showing a correction injected at the top of a four-level nested stack (ConversationManager → Actor → TaskScheduler → ContactManager) propagating straight down to the innermost ContactManager while each loop remains running — captioned 'live redirect, no restart'." width="760">
 </p>
 
 Kick off work that nests `ConversationManager → Actor → TaskScheduler → ContactManager`. Halfway through, say *"use their work email, not personal."* The correction travels **down the live call stack** into the innermost loop and changes its behaviour — no restart, no second prompt appended, no waiting for the next tool boundary. A monolithic loop can only hard-interrupt the child and start it over from scratch.
@@ -393,7 +393,7 @@ Kick off work that nests `ConversationManager → Actor → TaskScheduler → Co
 <summary><b>2. Ask a busy task what it's doing — without disturbing it</b></summary>
 
 <p align="center">
-  <img src="assets/demo-live-introspection.png" alt="A running task loop on the left is queried by a read-only magnifying-glass probe on the right via a non-intrusive dotted line; the probe receives a live status card ('step 3 of 5: scanning emails') while the loop keeps spinning — captioned 'introspect a live task, zero disruption'." width="760">
+  <img src="assets/demo-live-introspection-technical.png" alt="A technical flow diagram where a running task loop is queried by a read-only probe over a non-intrusive dotted line and returns a live status card ('step 3 of 5: scanning emails') while continuing to run — captioned 'introspect a live task, zero disruption'." width="760">
 </p>
 
 `handle.ask("what step are you on and why?")` spins up a **read-only inspection loop** over the task's in-flight transcript and returns an answer while the task keeps running — recursing into deeper nested handles if you want detail. You're interrogating live reasoning mid-flight, not polling a status string the agent remembered to update.
@@ -404,7 +404,7 @@ Kick off work that nests `ConversationManager → Actor → TaskScheduler → Co
 <summary><b>3. Freeze a nested operation, look inside, resume exactly where it left off</b></summary>
 
 <p align="center">
-  <img src="assets/demo-pause-resume.png" alt="A timeline of one nested operation in three states left to right: running (green, spinning), paused (frozen, icy blue, pause icon, being inspected by a lens), and resumed (green, spinning again from the same point) — captioned 'pause · inspect · resume'." width="760">
+  <img src="assets/demo-pause-resume-technical.png" alt="A technical timeline of one nested operation in three states left to right: running, paused for inspection, and resumed from the same point — captioned 'pause · inspect · resume'." width="760">
 </p>
 
 `pause()` halts new reasoning at the current point — propagating across the whole nested stack — while you inspect intermediate state or interject a constraint. `resume()` picks up from exactly where it stopped. An interrupt-only model can *stop*, but it can't freeze-and-continue.
@@ -415,7 +415,7 @@ Kick off work that nests `ConversationManager → Actor → TaskScheduler → Co
 <summary><b>4. Run three tasks at once and steer each one differently</b></summary>
 
 <p align="center">
-  <img src="assets/demo-concurrent-steering.png" alt="A magenta 'orchestrator' node that keeps reasoning holds three control handles fanning down to three parallel green task loops; the left loop is paused, the middle receives an interjected new constraint, the right is stopped — captioned 'three tasks at once, each steered independently'." width="760">
+  <img src="assets/demo-concurrent-steering-technical.png" alt="A technical flow diagram where an orchestrator that keeps reasoning holds three independent control handles to parallel task loops; one is paused, one receives an interjected constraint, and one is stopped — captioned 'three tasks at once, each steered independently'." width="760">
 </p>
 
 Hold a live handle to each of several concurrent actions. **Pause** one, **interject** a new constraint into another, **stop** a third — all while the orchestrator keeps reasoning and the rest run untouched. Each gets its own dynamically-generated steering tools on the orchestrator's surface. Delegation that blocks the parent until a child returns offers no per-task live control.
@@ -426,7 +426,7 @@ Hold a live handle to each of several concurrent actions. **Pause** one, **inter
 <summary><b>5. Surface a clarification from the innermost loop — and route the answer back down</b></summary>
 
 <p align="center">
-  <img src="assets/demo-clarification-bubbling.png" alt="A vertical stack (user → ConversationManager → Actor → ContactManager); a question 'which Sarah? two matches' bubbles up the left side from the innermost ContactManager to the user, and the answer 'the one in Berlin' flows back down the right side to the innermost loop — captioned 'a clarification from the depths, and the answer back down'." width="760">
+  <img src="assets/demo-clarification-bubbling-technical.png" alt="A technical flow diagram with a vertical stack (user → ConversationManager → Actor → ContactManager); a question 'which Sarah? two matches' bubbles up from the innermost ContactManager to the user, and the answer 'the one in Berlin' routes back down to the innermost loop — captioned 'clarification up, answer back down'." width="760">
 </p>
 
 When an inner manager hits genuine ambiguity, its clarification **bubbles up through every intervening layer** to you; your answer flows back **down** to the loop that asked, and the original deep operation completes — without unwinding the stack. A single-level clarification primitive can't surface a question from three orchestration layers down.
@@ -437,7 +437,7 @@ When an inner manager hits genuine ambiguity, its clarification **bubbles up thr
 <summary><b>6. Stop one branch of a fan-out without touching its siblings</b></summary>
 
 <p align="center">
-  <img src="assets/demo-stop-one-branch.png" alt="A magenta 'parent task' fans out into three sibling branches; the middle branch is dimmed with an X and labelled 'stopped (with reason)' while the left and right branches keep spinning, labelled 'still running' — captioned 'stop one branch, the rest keep running'." width="760">
+  <img src="assets/demo-stop-one-branch-technical.png" alt="A technical flow diagram where a parent task fans out into three sibling branches; the middle branch is stopped with a recorded reason while the left and right branches remain running — captioned 'stop one branch, the rest keep running'." width="760">
 </p>
 
 `stop()` a single nested branch — with a reason that's recorded as a synthetic tool call in the transcript — while its sibling branches carry on. A thread-scoped abort flag is all-or-nothing across a subtree; here the cut is surgical.
