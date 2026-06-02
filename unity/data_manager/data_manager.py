@@ -64,6 +64,7 @@ logger = logging.getLogger(__name__)
 # Known absolute prefixes that indicate a path should not be resolved
 _ABSOLUTE_PREFIXES = (
     "Data/",
+    "Dashboards/",
     "Files/",
     "FileRecords/",
     "Contacts",
@@ -107,13 +108,7 @@ class DataManager(BaseDataManager):
         # contexts, and DM tables default to auto_counting={"row_id": None}.
         self.include_in_multi_assistant_table = False
 
-        # Resolve owned base context via ContextRegistry
-        # This gives us the fully-qualified path like "User/Assistant/Data"
-        try:
-            self._base_ctx = ContextRegistry.get_context(self, "Data")
-        except Exception:
-            # Fallback for tests or offline scenarios
-            self._base_ctx = "Data"
+        self._base_ctx = ContextRegistry.get_context(self, "Data")
 
         logger.debug("DataManager initialized with base context: %s", self._base_ctx)
 

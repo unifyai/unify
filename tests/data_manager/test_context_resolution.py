@@ -9,6 +9,9 @@ DataManager handles multiple context types:
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
+import pytest
 
 from unity.data_manager.simulated import SimulatedDataManager
 from unity.common.context_registry import ContextRegistry
@@ -94,6 +97,8 @@ def test_fully_qualified_foreign_path_not_double_prefixed():
         "org123/42/Transcripts",
         "org123/42/Exchanges",
         "org123/42/BlackList",
+        "org123/42/Dashboards/Tiles",
+        "org123/42/Dashboards/Layouts",
     ]
     for ctx in foreign_contexts:
         resolved = dm._resolve_context(ctx)
@@ -101,6 +106,28 @@ def test_fully_qualified_foreign_path_not_double_prefixed():
             f"Expected '{ctx}' to be returned as-is, "
             f"got '{resolved}' (double-prefixed with base context)"
         )
+
+
+def test_dashboard_short_paths_are_not_data_prefixed():
+    from unity.data_manager.data_manager import DataManager
+
+    dm = DataManager.__new__(DataManager)
+    dm._base_ctx = "org123/42/Data"
+
+    assert dm._resolve_context("Dashboards/Tiles") == "Dashboards/Tiles"
+    assert dm._resolve_context("Dashboards/Layouts") == "Dashboards/Layouts"
+
+
+def test_data_manager_constructor_fails_when_context_resolution_fails():
+    from unity.data_manager.data_manager import DataManager
+
+    with patch.object(
+        ContextRegistry,
+        "get_context",
+        side_effect=RuntimeError("context unavailable"),
+    ):
+        with pytest.raises(RuntimeError, match="context unavailable"):
+            DataManager()
 
 
 def test_context_resolution_for_reduce():
@@ -156,6 +183,8 @@ def test_context_registry_get_known_base_contexts():
     # Should include Data and potentially others
     assert isinstance(bases, list)
     assert "Data" in bases
+    assert "Dashboards/Tiles" in bases
+    assert "Dashboards/Layouts" in bases
 
 
 # ────────────────────────────────────────────────────────────────────────────
