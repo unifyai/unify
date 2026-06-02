@@ -41,6 +41,8 @@ class Medium(StrEnum):
     API_MESSAGE = "api_message"
     DISCORD_MESSAGE = "discord_message"
     DISCORD_CHANNEL_MESSAGE = "discord_channel_message"
+    SLACK_MESSAGE = "slack_message"
+    SLACK_CHANNEL_MESSAGE = "slack_channel_message"
     TEAMS_MESSAGE = "teams_message"
     TEAMS_CHANNEL_MESSAGE = "teams_channel_message"
 
@@ -122,6 +124,16 @@ MEDIUM_REGISTRY: dict[Medium, MediumInfo] = {
         description="A message in a Discord guild channel, triggered by @mentioning the bot.",
         mode=Mode.TEXT,
     ),
+    Medium.SLACK_MESSAGE: MediumInfo(
+        value=Medium.SLACK_MESSAGE,
+        description="A direct message sent via a Slack app.",
+        mode=Mode.TEXT,
+    ),
+    Medium.SLACK_CHANNEL_MESSAGE: MediumInfo(
+        value=Medium.SLACK_CHANNEL_MESSAGE,
+        description="A message in a Slack channel, triggered by @mentioning the app.",
+        mode=Mode.TEXT,
+    ),
     Medium.TEAMS_MESSAGE: MediumInfo(
         value=Medium.TEAMS_MESSAGE,
         description="A message in a Microsoft Teams chat (1:1, group, or meeting chat).",
@@ -136,3 +148,26 @@ MEDIUM_REGISTRY: dict[Medium, MediumInfo] = {
 
 # Export valid values for validation/random selection
 VALID_MEDIA: tuple[str, ...] = tuple(m.value for m in Medium)
+
+
+# Maps each external Medium to the Contact field that uniquely identifies a
+# sender on that medium. Used by inbound resolvers (e.g. CommsManager) to
+# look up or create contacts from raw webhook details without re-deriving
+# the mapping at every call site.
+#
+# Internal-only mediums (UNIFY_*, GOOGLE_MEET, API_MESSAGE) have no external
+# contact identifier and are intentionally absent.
+MEDIUM_TO_CONTACT_FIELD: dict[Medium, str] = {
+    Medium.SMS_MESSAGE: "phone_number",
+    Medium.PHONE_CALL: "phone_number",
+    Medium.WHATSAPP_MESSAGE: "whatsapp_number",
+    Medium.WHATSAPP_CALL: "whatsapp_number",
+    Medium.EMAIL: "email_address",
+    Medium.DISCORD_MESSAGE: "discord_id",
+    Medium.DISCORD_CHANNEL_MESSAGE: "discord_id",
+    Medium.SLACK_MESSAGE: "slack_user_id",
+    Medium.SLACK_CHANNEL_MESSAGE: "slack_user_id",
+    Medium.TEAMS_MESSAGE: "email_address",
+    Medium.TEAMS_CHANNEL_MESSAGE: "email_address",
+    Medium.TEAMS_MEET: "email_address",
+}

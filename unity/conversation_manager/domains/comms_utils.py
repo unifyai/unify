@@ -598,6 +598,96 @@ async def send_discord_message(
             return result
 
 
+async def send_slack_message(
+    *,
+    team_id: str,
+    channel_id: str | None = None,
+    user_id: str | None = None,
+    body: str = "",
+    thread_ts: str | None = None,
+) -> dict:
+    """Send a Slack message via the Communication service.
+
+    Supports two modes:
+
+    - **DM**: pass ``user_id`` (Slack user ID). Communication opens a
+      DM conversation with the user on behalf of the workspace's bot
+      token and posts the message.
+    - **Channel post / threaded reply**: pass ``channel_id``
+      (and optionally ``thread_ts`` to reply inside an existing thread).
+
+    The workspace bot token is resolved server-side from ``team_id``;
+    the assistant never sees it.
+
+    Args:
+        team_id: Slack workspace ID (used to resolve the bot token).
+        channel_id: Slack channel ID (for channel posts / threaded replies).
+        user_id: Slack user ID (for DMs).
+        body: The text content to send.
+        thread_ts: Slack thread timestamp (omit for top-level posts).
+
+    Returns:
+        dict with ``success`` and optionally ``message_ts`` / ``channel_id``.
+    """
+    agent_id = SESSION_DETAILS.assistant.agent_id
+    if agent_id is None:
+        return {"success": False}
+
+    payload: dict = {
+        "team_id": team_id,
+        "body": body,
+        "assistant_id": agent_id,
+    }
+    if user_id:
+        payload["user_id"] = user_id
+    if channel_id:
+        payload["channel_id"] = channel_id
+    if thread_ts:
+        payload["thread_ts"] = thread_ts
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{SETTINGS.conversation.COMMS_URL}/slack/send",
+            headers=headers,
+            json=payload,
+        ) as response:
+            try:
+                response.raise_for_status()
+            except Exception as e:
+                LOGGER.error(f"{ICONS['comms_outbound']} Slack send failed: {e}")
+                return {"success": False}
+            result = await response.json()
+            result["success"] = True
+            return result
+
+
+async def resolve_slack_user_profile(
+    *,
+    team_id: str,
+    slack_user_id: str,
+) -> dict:
+    """Look up a Slack user's profile via the Communication gateway.
+
+    Returns ``{slack_user_id, email, real_name, display_name, tz}`` (any
+    value may be ``None``), or an empty dict on failure. Callers treat a
+    missing/empty result as "unresolved" and fall back to other
+    resolution strategies. ``email`` is only present when the workspace
+    bot has the ``users:read.email`` scope; names need only ``users:read``.
+    """
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{SETTINGS.conversation.COMMS_URL}/slack/user-info",
+            headers=headers,
+            json={"team_id": team_id, "slack_user_id": slack_user_id},
+        ) as response:
+            try:
+                response.raise_for_status()
+            except Exception as e:
+                LOGGER.error(f"{ICONS['comms_outbound']} Slack user-info failed: {e}")
+                return {}
+            return await response.json()
+
+
 async def send_teams_message(
     chat_id: str | None = None,
     team_id: str | None = None,

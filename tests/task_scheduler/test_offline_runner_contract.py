@@ -9,7 +9,7 @@ breaks for that topology.
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timezone
+from datetime import datetime, timezone  # noqa: F401  (timezone used by golden ref)
 
 import pytest
 
@@ -260,3 +260,343 @@ class TestNormalizeRunKeyComponent:
     def test_empty_input_returns_assistant_fallback(self):
         assert normalize_run_key_component("") == "assistant"
         assert normalize_run_key_component("---") == "assistant"
+
+
+# --------------------------------------------------------------------------- #
+# Equivalence with Communication's pre-refactor _build_offline_runner_env     #
+# --------------------------------------------------------------------------- #
+#                                                                             #
+# These tests pin the property that motivates the existence of the shared    #
+# contract: for any given request + activation + assistant_data + run_key,   #
+# the original Communication-side function and the new shared+hosted-layer   #
+# composition produce identical env dicts. If they ever diverged, the same   #
+# task would execute differently across topologies. These tests reproduce    #
+# the field shape exactly so any drift fails loudly here, in Unity's test    #
+# suite, before reaching Communication's deployment.                         #
+# --------------------------------------------------------------------------- #
+
+
+class _FakeOfflineRequest:
+    """Stand-in for ``OfflineTaskDispatchRequest`` for equivalence testing."""
+
+    def __init__(self, **kwargs):
+        self.assistant_id = kwargs.get("assistant_id", "assistant-123")
+        self.task_id = kwargs.get("task_id", 101)
+        self.source_task_log_id = kwargs.get("source_task_log_id", 555)
+        self.activation_revision = kwargs.get("activation_revision", "rev-1")
+        self.source_type = kwargs.get("source_type", "scheduled")
+        self.execution_mode = kwargs.get("execution_mode", "offline")
+        self.entrypoint = kwargs.get("entrypoint")
+        self.scheduled_for = kwargs.get("scheduled_for")
+        self.source_ref = kwargs.get("source_ref")
+        self.source_medium = kwargs.get("source_medium")
+        self.source_contact_id = kwargs.get("source_contact_id")
+
+
+def _original_communication_env_builder(
+    *,
+    request,
+    activation: dict,
+    assistant_data: dict,
+    run_key: str,
+    job_name: str,
+) -> dict[str, str]:
+    """Verbatim copy of Communication's pre-refactor _build_offline_runner_env.
+
+    Used as a golden reference: every assertion below confirms the new
+    shared+hosted-layer composition produces exactly the same dict.
+    """
+
+    team_ids = assistant_data.get("team_ids") or []
+    task_request = (
+        str(activation.get("task_description") or "").strip()
+        or str(activation.get("task_name") or "").strip()
+        or f"Execute task {request.task_id}"
+    )
+    entrypoint = activation.get("entrypoint") or request.entrypoint
+
+    def _request_scheduled_for_iso(req):
+        if req.scheduled_for is None:
+            return None
+        return req.scheduled_for.astimezone(timezone.utc).isoformat()
+
+    return {
+        "UNITY_OFFLINE_TASK_MODE": "actor",
+        "EVENTBUS_PUBLISHING_ENABLED": "false",
+        "EVENTBUS_PUBSUB_STREAMING": "false",
+        "UNITY_OFFLINE_TASK_RUN_KEY": run_key,
+        "UNITY_OFFLINE_TASK_JOB_NAME": job_name,
+        "UNITY_OFFLINE_TASK_ID": str(request.task_id),
+        "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID": str(request.source_task_log_id),
+        "UNITY_OFFLINE_TASK_ACTIVATION_REVISION": request.activation_revision,
+        "UNITY_OFFLINE_TASK_FUNCTION_ID": str(int(entrypoint)) if entrypoint else "",
+        "UNITY_OFFLINE_TASK_REQUEST": task_request,
+        "UNITY_OFFLINE_TASK_NAME": str(activation.get("task_name") or ""),
+        "UNITY_OFFLINE_TASK_DESCRIPTION": str(activation.get("task_description") or ""),
+        "UNITY_OFFLINE_TASK_SOURCE_TYPE": request.source_type,
+        "UNITY_OFFLINE_TASK_SCHEDULED_FOR": _request_scheduled_for_iso(request) or "",
+        "UNITY_OFFLINE_TASK_SOURCE_REF": request.source_ref or "",
+        "UNITY_OFFLINE_TASK_SOURCE_MEDIUM": (
+            request.source_medium or str(activation.get("trigger_medium") or "")
+        ),
+        "UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID": (
+            str(request.source_contact_id)
+            if request.source_contact_id is not None
+            else ""
+        ),
+        "UNIFY_KEY": str(assistant_data.get("api_key") or ""),
+        "ASSISTANT_ID": str(assistant_data.get("assistant_id") or request.assistant_id),
+        "ASSISTANT_FIRST_NAME": str(assistant_data.get("assistant_first_name") or ""),
+        "ASSISTANT_SURNAME": str(assistant_data.get("assistant_surname") or ""),
+        "ASSISTANT_AGE": str(assistant_data.get("assistant_age") or ""),
+        "ASSISTANT_NATIONALITY": str(assistant_data.get("assistant_nationality") or ""),
+        "ASSISTANT_TIMEZONE": str(assistant_data.get("assistant_timezone") or "UTC"),
+        "ASSISTANT_ABOUT": str(assistant_data.get("assistant_about") or ""),
+        "ASSISTANT_JOB_TITLE": str(assistant_data.get("assistant_job_title") or ""),
+        "ASSISTANT_NUMBER": str(assistant_data.get("assistant_number") or ""),
+        "ASSISTANT_EMAIL": str(assistant_data.get("assistant_email") or ""),
+        "ASSISTANT_WHATSAPP_NUMBER": str(
+            assistant_data.get("assistant_whatsapp_number") or "",
+        ),
+        "ASSISTANT_DESKTOP_MODE": "none",
+        "ASSISTANT_USER_DESKTOP_MODE": "",
+        "ASSISTANT_USER_DESKTOP_FILESYS_SYNC": "False",
+        "ASSISTANT_USER_DESKTOP_URL": "",
+        "USER_ID": str(assistant_data.get("user_id") or ""),
+        "USER_FIRST_NAME": str(assistant_data.get("user_first_name") or ""),
+        "USER_SURNAME": str(assistant_data.get("user_surname") or ""),
+        "USER_NUMBER": str(assistant_data.get("user_number") or ""),
+        "USER_EMAIL": str(assistant_data.get("user_email") or ""),
+        "USER_WHATSAPP_NUMBER": str(assistant_data.get("user_whatsapp_number") or ""),
+        "VOICE_PROVIDER": str(assistant_data.get("voice_provider") or "cartesia"),
+        "VOICE_ID": str(assistant_data.get("voice_id") or ""),
+        "VOICE_MODE": "tts",
+        "TEAM_IDS": ",".join(str(team_id) for team_id in team_ids),
+        "ORG_ID": (
+            str(assistant_data.get("org_id"))
+            if assistant_data.get("org_id") is not None
+            else ""
+        ),
+    }
+
+
+def _new_communication_env_builder(
+    *,
+    request,
+    activation: dict,
+    assistant_data: dict,
+    run_key: str,
+    job_name: str,
+) -> dict[str, str]:
+    """Reproduces Communication's NEW _build_offline_runner_env composition.
+
+    Layer 1: shared Unity contract. Layer 2: hosted-only assistant identity.
+    Mirrors the refactored Communication function exactly.
+    """
+
+    entrypoint = activation.get("entrypoint") or request.entrypoint
+    env = build_offline_runner_env(
+        assistant_id=(str(assistant_data.get("assistant_id") or request.assistant_id)),
+        task_id=request.task_id,
+        source_task_log_id=request.source_task_log_id,
+        activation_revision=request.activation_revision,
+        source_type=request.source_type,
+        run_key=run_key,
+        task_name=str(activation.get("task_name") or ""),
+        task_description=str(activation.get("task_description") or ""),
+        scheduled_for=request.scheduled_for,
+        source_ref=request.source_ref,
+        source_medium=(
+            request.source_medium or str(activation.get("trigger_medium") or "")
+        ),
+        source_contact_id=request.source_contact_id,
+        entrypoint=entrypoint,
+        job_name=job_name,
+    )
+    team_ids = assistant_data.get("team_ids") or []
+    env.update(
+        {
+            "UNIFY_KEY": str(assistant_data.get("api_key") or ""),
+            "ASSISTANT_FIRST_NAME": str(
+                assistant_data.get("assistant_first_name") or "",
+            ),
+            "ASSISTANT_SURNAME": str(assistant_data.get("assistant_surname") or ""),
+            "ASSISTANT_AGE": str(assistant_data.get("assistant_age") or ""),
+            "ASSISTANT_NATIONALITY": str(
+                assistant_data.get("assistant_nationality") or "",
+            ),
+            "ASSISTANT_TIMEZONE": str(
+                assistant_data.get("assistant_timezone") or "UTC",
+            ),
+            "ASSISTANT_ABOUT": str(assistant_data.get("assistant_about") or ""),
+            "ASSISTANT_JOB_TITLE": str(
+                assistant_data.get("assistant_job_title") or "",
+            ),
+            "ASSISTANT_NUMBER": str(assistant_data.get("assistant_number") or ""),
+            "ASSISTANT_EMAIL": str(assistant_data.get("assistant_email") or ""),
+            "ASSISTANT_WHATSAPP_NUMBER": str(
+                assistant_data.get("assistant_whatsapp_number") or "",
+            ),
+            "ASSISTANT_DESKTOP_MODE": "none",
+            "ASSISTANT_USER_DESKTOP_MODE": "",
+            "ASSISTANT_USER_DESKTOP_FILESYS_SYNC": "False",
+            "ASSISTANT_USER_DESKTOP_URL": "",
+            "USER_ID": str(assistant_data.get("user_id") or ""),
+            "USER_FIRST_NAME": str(assistant_data.get("user_first_name") or ""),
+            "USER_SURNAME": str(assistant_data.get("user_surname") or ""),
+            "USER_NUMBER": str(assistant_data.get("user_number") or ""),
+            "USER_EMAIL": str(assistant_data.get("user_email") or ""),
+            "USER_WHATSAPP_NUMBER": str(
+                assistant_data.get("user_whatsapp_number") or "",
+            ),
+            "VOICE_PROVIDER": str(
+                assistant_data.get("voice_provider") or "cartesia",
+            ),
+            "VOICE_ID": str(assistant_data.get("voice_id") or ""),
+            "VOICE_MODE": "tts",
+            "TEAM_IDS": ",".join(str(team_id) for team_id in team_ids),
+            "ORG_ID": (
+                str(assistant_data.get("org_id"))
+                if assistant_data.get("org_id") is not None
+                else ""
+            ),
+        },
+    )
+    return env
+
+
+class TestCommunicationEnvBuilderEquivalence:
+    """The new shared+hosted composition matches the old monolithic builder."""
+
+    @staticmethod
+    def _scenario(**overrides):
+        from datetime import datetime as _dt
+
+        request_kwargs = {
+            "assistant_id": "assistant-123",
+            "task_id": 101,
+            "source_task_log_id": 555,
+            "activation_revision": "rev-1",
+            "source_type": "scheduled",
+            "scheduled_for": _dt(2026, 4, 10, 9, 0, 0, tzinfo=timezone.utc),
+        }
+        request_kwargs.update(overrides.get("request", {}))
+        request = _FakeOfflineRequest(**request_kwargs)
+        activation = {
+            "task_name": "Daily summary",
+            "task_description": "Send the daily summary email.",
+            "entrypoint": None,
+            **overrides.get("activation", {}),
+        }
+        assistant_data = {
+            "assistant_id": "assistant-123",
+            "api_key": "key-abc",
+            "assistant_first_name": "Ada",
+            "assistant_surname": "Lovelace",
+            "assistant_age": 35,
+            "assistant_nationality": "UK",
+            "assistant_timezone": "Europe/London",
+            "assistant_about": "I write programs.",
+            "assistant_job_title": "Mathematician",
+            "assistant_number": "+44-7000000000",
+            "assistant_email": "ada@example.com",
+            "assistant_whatsapp_number": "+44-7000000001",
+            "user_id": "user-7",
+            "user_first_name": "Alice",
+            "user_surname": "Smith",
+            "user_number": "+15555555555",
+            "user_email": "alice@example.com",
+            "user_whatsapp_number": "+15555555556",
+            "voice_provider": "cartesia",
+            "voice_id": "voice-xyz",
+            "team_ids": [1, 2, 3],
+            "org_id": 42,
+            **overrides.get("assistant_data", {}),
+        }
+        return request, activation, assistant_data
+
+    def test_scheduled_attempt_envs_match_field_for_field(self):
+        request, activation, assistant_data = self._scenario()
+        old = _original_communication_env_builder(
+            request=request,
+            activation=activation,
+            assistant_data=assistant_data,
+            run_key="offline:scheduled:assistant-123:101:rev:once",
+            job_name="unity-offline-abc",
+        )
+        new = _new_communication_env_builder(
+            request=request,
+            activation=activation,
+            assistant_data=assistant_data,
+            run_key="offline:scheduled:assistant-123:101:rev:once",
+            job_name="unity-offline-abc",
+        )
+        assert new == old
+
+    def test_triggered_attempt_envs_match_field_for_field(self):
+        request, activation, assistant_data = self._scenario(
+            request={
+                "source_type": "triggered",
+                "scheduled_for": None,
+                "source_medium": "sms_message",
+                "source_ref": "message-xyz",
+                "source_contact_id": 77,
+            },
+            activation={"trigger_medium": "sms_message"},
+        )
+        old = _original_communication_env_builder(
+            request=request,
+            activation=activation,
+            assistant_data=assistant_data,
+            run_key="offline:triggered:assistant-123:101:rev:contact-77",
+            job_name="unity-offline-xyz",
+        )
+        new = _new_communication_env_builder(
+            request=request,
+            activation=activation,
+            assistant_data=assistant_data,
+            run_key="offline:triggered:assistant-123:101:rev:contact-77",
+            job_name="unity-offline-xyz",
+        )
+        assert new == old
+
+    def test_entrypoint_override_envs_match(self):
+        request, activation, assistant_data = self._scenario(
+            request={"entrypoint": 999},
+            activation={"entrypoint": 777},  # activation wins
+        )
+        old = _original_communication_env_builder(
+            request=request,
+            activation=activation,
+            assistant_data=assistant_data,
+            run_key="k",
+            job_name="j",
+        )
+        new = _new_communication_env_builder(
+            request=request,
+            activation=activation,
+            assistant_data=assistant_data,
+            run_key="k",
+            job_name="j",
+        )
+        assert new == old
+        assert old["UNITY_OFFLINE_TASK_FUNCTION_ID"] == "777"
+
+    def test_missing_assistant_identity_envs_match(self):
+        request, activation, _ = self._scenario()
+        sparse = {"assistant_id": "assistant-123"}
+        old = _original_communication_env_builder(
+            request=request,
+            activation=activation,
+            assistant_data=sparse,
+            run_key="k",
+            job_name="j",
+        )
+        new = _new_communication_env_builder(
+            request=request,
+            activation=activation,
+            assistant_data=sparse,
+            run_key="k",
+            job_name="j",
+        )
+        assert new == old

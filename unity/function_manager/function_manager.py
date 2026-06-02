@@ -4560,8 +4560,6 @@ class FunctionManager(BaseFunctionManager):
             venv_dir.mkdir(parents=True, exist_ok=True)
             pyproject_path.write_text(venv_content)
 
-            # Run uv sync
-            logger.info(f"Venv {venv_id}: running 'uv sync'...")
             import asyncio
             import shutil as _shutil
             import sys as _sys
@@ -4584,19 +4582,94 @@ class FunctionManager(BaseFunctionManager):
                     "Install uv (recommended) or ensure it is available on PATH.",
                 )
 
-            process = await asyncio.create_subprocess_exec(
-                uv_bin,
-                "sync",
-                cwd=str(venv_dir),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await process.communicate()
+            # Two-step venv setup:
+            #
+            #   1. `uv venv <venv_dir>/.venv` — creates the .venv at the
+            #      EXACT path Python will later import from. Passing the
+            #      explicit target path (rather than relying on
+            #      `--directory` + uv's "current project" discovery) is
+            #      defensive: an earlier `--directory <venv_dir>` form
+            #      returned exit code 0 on Linux CI but produced no
+            #      `.venv/bin/python`, causing a downstream
+            #      FileNotFoundError in subprocess.create_subprocess_exec.
+            #      Naming the target path leaves no ambiguity.
+            #
+            #   2. `uv sync --directory <venv_dir>` installs project +
+            #      deps into the freshly-created `.venv`. uv discovers
+            #      the .venv automatically when run from the project
+            #      directory.
+            #
+            # The original `cwd=str(venv_dir)` race ("Current directory
+            # does not exist" when a sibling tmux session rmtree'd a
+            # shared parent's cwd inode) is avoided here too: cwd is set
+            # to the just-mkdir'd venv_dir, AND uv's --directory flag is
+            # passed to make uv chdir before any cwd-dependent work.
+            venv_target = venv_dir / ".venv"
+            uv_steps: list[tuple[str, list[str]]] = [
+                (
+                    "venv",
+                    [
+                        uv_bin,
+                        "venv",
+                        str(venv_target),
+                        "--directory",
+                        str(venv_dir),
+                    ],
+                ),
+                (
+                    "sync",
+                    [
+                        uv_bin,
+                        "sync",
+                        "--directory",
+                        str(venv_dir),
+                        # The synthetic pyproject.toml we generate is
+                        # NOT a real installable package — it only
+                        # declares `dependencies = [...]`. Without
+                        # this flag uv tries to install the project
+                        # itself in editable mode, fails to find a
+                        # build backend / sdist, and raises
+                        # "Distribution not found at: file:///.../<venv_dir>".
+                        # We only want the *dependencies* installed
+                        # into the venv; the project itself is just
+                        # a manifest.
+                        "--no-install-project",
+                    ],
+                ),
+            ]
+            for label, cmd in uv_steps:
+                logger.info(f"Venv {venv_id}: running 'uv {label}'...")
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    cwd=str(venv_dir),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await process.communicate()
+                logger.info(
+                    f"Venv {venv_id}: 'uv {label}' rc={process.returncode}; "
+                    f"stdout={stdout.decode().strip()!r}; "
+                    f"stderr={stderr.decode().strip()!r}",
+                )
 
-            if process.returncode != 0:
-                error_msg = stderr.decode() if stderr else stdout.decode()
+                if process.returncode != 0:
+                    error_msg = stderr.decode() if stderr else stdout.decode()
+                    raise RuntimeError(
+                        f"Failed to 'uv {label}' venv {venv_id}: {error_msg}",
+                    )
+
+            # Verify the venv layout we expect actually exists.
+            # uv has been observed to return 0 from `uv venv` without
+            # materializing the .venv (CI race / disk pressure / etc.) —
+            # fail loud HERE with a focused error rather than later when
+            # subprocess.create_subprocess_exec tries to invoke
+            # `.venv/bin/python` and bubbles a generic FileNotFoundError.
+            if not python_path.exists():
                 raise RuntimeError(
-                    f"Failed to sync venv {venv_id}: {error_msg}",
+                    f"Failed to materialize venv {venv_id}: "
+                    f"expected python at {python_path} but it does not "
+                    f"exist after `uv venv` + `uv sync` both returned 0. "
+                    f"venv_dir={venv_dir} venv_target={venv_target}",
                 )
 
             logger.info(f"Venv {venv_id}: sync complete")
@@ -4744,6 +4817,77 @@ class FunctionManager(BaseFunctionManager):
         # with a single os.killpg() call.
         # Note: start_new_session is not supported on Windows
         use_process_group = sys.platform != "win32"
+
+        # Diagnostic: prepare_venv just returned this python_path and
+        # verified .exists() before returning. If the file is GONE by
+        # the time we get here (CI race / external rmtree), bail with
+        # a structured error rather than letting subprocess raise
+        # FileNotFoundError with no surrounding state.
+        if not python_path.exists():
+            # Walk up the path tree and note which components exist.
+            # If a high-level ancestor (e.g. `~/.unity/venvs/`) is
+            # missing, the culprit is something rmtree-ing the
+            # `unity/Local/.unity/` tree as a whole. If only the venv-
+            # id leaf is missing, suspect per-test cleanup.
+            ancestor_status: list[str] = []
+            cursor: Path | None = python_path
+            while cursor is not None and str(cursor) not in ("/", ""):
+                ancestor_status.append(
+                    f"{cursor.exists()}={cursor}",
+                )
+                next_cursor = cursor.parent
+                if next_cursor == cursor:
+                    break
+                cursor = next_cursor
+
+            venv_dir = python_path.parent.parent.parent
+            parent_listing = "<not present>"
+            if venv_dir.exists():
+                try:
+                    parent_listing = ", ".join(
+                        sorted(p.name for p in venv_dir.iterdir()),
+                    )
+                except OSError as e:
+                    parent_listing = f"<iterdir failed: {e}>"
+
+            # The grandparent (the safe_ctx-keyed dir containing venv
+            # ids) is the most informative — if THAT is gone too, the
+            # whole venvs/<ctx>/ subtree was wiped. If it exists with
+            # OTHER venv-id subdirs, only THIS venv-id was wiped.
+            gp_listing = "<not present>"
+            gp = venv_dir.parent
+            if gp.exists():
+                try:
+                    gp_listing = ", ".join(sorted(p.name for p in gp.iterdir()))
+                except OSError as e:
+                    gp_listing = f"<iterdir failed: {e}>"
+
+            try:
+                import os as _os_diag
+
+                cwd_str = _os_diag.getcwd()
+            except Exception as e:
+                cwd_str = f"<getcwd failed: {e}>"
+
+            import os as _os_diag2
+
+            home_str = _os_diag2.environ.get("HOME", "<unset>")
+            pid_str = _os_diag2.getpid()
+
+            raise RuntimeError(
+                f"execute_in_venv: venv python disappeared between "
+                f"prepare_venv() (which verified existence) and "
+                f"create_subprocess_exec(). "
+                f"venv_id={venv_id} pid={pid_str} cwd={cwd_str} "
+                f"HOME={home_str}\n"
+                f"  python_path={python_path}\n"
+                f"  venv_dir={venv_dir} exists={venv_dir.exists()}\n"
+                f"  venv_dir contents=[{parent_listing}]\n"
+                f"  grandparent={gp} exists={gp.exists()}\n"
+                f"  grandparent contents=[{gp_listing}]\n"
+                f"  ancestor existence (deepest first): {ancestor_status}",
+            )
+
         process = await asyncio.create_subprocess_exec(
             str(python_path),
             str(runner_path),

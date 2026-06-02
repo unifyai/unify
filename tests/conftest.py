@@ -54,11 +54,23 @@ def _check_orchestra_available() -> bool:
     if hasattr(_check_orchestra_available, "_cached"):
         return _check_orchestra_available._cached
 
-    orchestra_url = os.environ.get("ORCHESTRA_URL", "http://localhost:8000")
+    base = os.environ.get("ORCHESTRA_URL", "http://localhost:8000")
+    # ORCHESTRA_URL may or may not include the `/v0` API prefix — both
+    # `http://127.0.0.1:8000` and `http://127.0.0.1:8000/v0` are valid in
+    # practice (parallel_run.sh exports the latter via local.sh's
+    # cmd_check). Mirror the URL handling in _prepare_shared_project.py
+    # (added in e47d5c648) so we hit `/v0/projects` exactly once. Before
+    # this fix, a `/v0`-suffixed ORCHESTRA_URL would resolve to
+    # `/v0/v0/projects` → 404 → returns False → pytest_sessionstart
+    # silently skipped unity.init() → eval tests crashed downstream with
+    # "EVENT_BUS has not been initialised yet".
+    if base.endswith("/v0"):
+        url = f"{base}/projects"
+    else:
+        url = f"{base.rstrip('/')}/v0/projects"
     try:
         with httpx.Client(timeout=2.0) as client:
-            # Check a known endpoint - /v0/projects works and 404 on root is fine
-            resp = client.get(f"{orchestra_url}/v0/projects")
+            resp = client.get(url)
             # 200 = success, 401/403 = auth required but server is up
             _check_orchestra_available._cached = resp.status_code in (200, 401, 403)
     except Exception:
@@ -233,6 +245,35 @@ def stub_external_deps(monkeypatch):
     monkeypatch.setattr(
         "unity.conversation_manager.conversation_manager.prompt_now",
         _static_now,
+    )
+
+    # --- DateTime stub for production wall-clock comparisons ---------------
+    # task_scheduler.task_scheduler uses `datetime.now(timezone.utc)`
+    # directly (not prompt_helpers.now) to decide whether a
+    # schedule.start_at lands in the future. With prompt_helpers.now stubbed
+    # to 2025-06-13 (so cached LLM responses are deterministic), the LLM
+    # generates start_at values relative to 2025-06-13 — e.g. "next Monday"
+    # → 2025-06-16. But production then compares those LLM-generated
+    # timestamps against the real wall-clock, which is now ~12 months in
+    # the future. Result: tasks the LLM intends as future-scheduled get
+    # status=primed instead of status=scheduled. Patch
+    # task_scheduler.datetime so the two time sources agree under test.
+    #
+    # NOTE: the production class is `from datetime import datetime`, so we
+    # patch the imported name on the module. A subclass-with-overridden-
+    # now() shim is needed because only `.now()` should be overridden —
+    # the rest of the datetime API (datetime.combine, datetime.strptime,
+    # etc., as used in repeat-pattern math) must keep working.
+    class _StubbedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return _FIXED_DATETIME
+            return _FIXED_DATETIME.astimezone(tz)
+
+    monkeypatch.setattr(
+        "unity.task_scheduler.task_scheduler.datetime",
+        _StubbedDatetime,
     )
 
     def _static_perf_counter() -> float:
@@ -543,18 +584,36 @@ def pytest_sessionfinish(session, exitstatus):
 
 
 def pytest_unconfigure(config):
-    """Restore HOME (and HF_HOME if we set it) and clean up the temporary test home directory."""
-    import shutil
+    """Restore HOME (and HF_HOME if we set it).
 
-    test_home = os.environ.get("HOME", "")
+    We deliberately do NOT rmtree `/tmp/unity_test_home` here. The path
+    is shared across every parallel pytest session that
+    ``parallel_run.sh`` spawns (deterministic so LLM cache keys
+    embedding ``~/Unity/Local`` stay stable). Wiping it on this
+    session's exit also wipes the in-flight venvs (FunctionManager
+    creates them under ``$HOME/Unity/Local/.unity/venvs/<ctx>/<id>/``)
+    that other still-running pytest sessions are about to invoke —
+    producing the "venv python disappeared between prepare_venv() and
+    create_subprocess_exec()" RuntimeError that the function_manager/
+    python cluster was hitting reliably on every CI matrix run.
+
+    Diagnostic confirming the race: the failure dump showed
+    ancestor existence "False" all the way up to ``/tmp/`` —
+    i.e. the whole ``unity_test_home/`` tree was gone between
+    prepare_venv's verification and the subsequent subprocess
+    invocation, ruling out a leaf-only cleanup.
+
+    The directory accumulates on the CI runner across this session
+    only — the runner is ephemeral, so it's reclaimed when the runner
+    shuts down. On local dev machines users can ``rm -rf
+    /tmp/unity_test_home`` manually when they want a clean slate.
+    """
     if _original_home is None:
         os.environ.pop("HOME", None)
     else:
         os.environ["HOME"] = _original_home
     if _hf_home_set_by_us:
         os.environ.pop("HF_HOME", None)
-    if test_home.endswith("/unity_test_home"):
-        shutil.rmtree(test_home, ignore_errors=True)
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):

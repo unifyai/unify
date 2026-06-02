@@ -46,6 +46,27 @@ on:
     branches:
     - '**'    # All branches
 
+# Cancel in-progress runs for the same source branch when a newer
+# commit lands. Without this:
+#   1. Every push during active development queues a fresh ~67-job
+#      matrix while previous matrices still occupy runner capacity,
+#      leading to "runner has received a shutdown signal" cancellations
+#      on older runs and starvation on newer ones.
+#   2. A staging push triggers BOTH a `push`-event run AND (when the
+#      perpetual staging→main PR exists, which it usually does)
+#      a `pull_request`-event run for the same commit. Without a
+#      shared concurrency key these double up, also doubling credit
+#      usage.
+#
+# Group key uses `github.head_ref` (PR source branch) when available,
+# falling back to `github.ref_name` (branch name on a direct push).
+# Both event types on the same source branch therefore share a group
+# and supersede each other — exactly one matrix runs per commit per
+# branch. Different branches still parallelise.
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   # Determine if tests should run based on trigger and commit/PR message
   should-run-tests:
@@ -764,6 +785,54 @@ jobs:
         uv run playwright install --with-deps
 
     # =========================================================================
+    # HuggingFace model cache (any tests under tests/file_manager/ —
+    # both `managers/` and `file_parser/` exercise docling's PDF pipeline,
+    # which downloads the docling-project/docling-models weights on first
+    # use). Without a stable cache, every CI run does a fresh multi-GB
+    # download into /tmp/unity_test_home/.cache/huggingface (set by
+    # tests/conftest.py's HOME isolation), and the chunked-download temp
+    # dirs race with each other across parallel pytest workers →
+    # "[Errno 2] No such file or directory: '.../tmp_<uuid>'" mid-
+    # download → pdf_backend parse failure. Originally observed in
+    # file_manager/managers (test_parse_multiple_mixed,
+    # test_filter_by_content_id_dict); same race subsequently surfaced
+    # in file_manager/file_parser (test_document_formats_have_text_
+    # summary_metadata_and_structure[*.pdf-pdf-pdf_backend]). Broaden
+    # the gate so any matrix entry under tests/file_manager/ is covered.
+    #
+    # Caching ~/.cache/huggingface (the original $HOME location) makes
+    # unity/tests/conftest.py:pytest_configure() honor its HF_HOME-preserve
+    # branch (which only fires when ~/.cache/huggingface exists on the
+    # original HOME), pointing the test process at the warm cache instead
+    # of a fresh /tmp dir. After the first successful CI run populates the
+    # cache, subsequent runs are race-free for these tests.
+    # =========================================================================
+    - name: Cache HuggingFace models (file_manager tests)
+      if: contains(matrix.test_path, 'file_manager/')
+      id: hf-cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/huggingface
+        # Key version (v1) — bump if docling/HF model set changes and we
+        # want to force a fresh download across all CI runs.
+        key: huggingface-docling-${{ runner.os }}-v1
+        restore-keys: |
+          huggingface-docling-${{ runner.os }}-
+
+    - name: Pre-download docling models (cache miss)
+      if: contains(matrix.test_path, 'file_manager/') && steps.hf-cache.outputs.cache-hit != 'true'
+      run: |
+        # First-time download into the cached path. Running once here,
+        # serialized before the test matrix forks, eliminates the parallel
+        # download race that breaks tests in the cold-cache case.
+        mkdir -p ~/.cache/huggingface
+        uv run python -c "
+        from docling.document_converter import DocumentConverter
+        DocumentConverter()  # triggers model download into ~/.cache/huggingface
+        print('docling models warmed')
+        "
+
+    # =========================================================================
     # Agent-service setup (only for tests/agent_service/ matrix entries)
     # Installs Node.js, clones magnitude, builds magnitude-core, and installs
     # agent-service npm deps + Patchright browser binaries.
@@ -784,27 +853,59 @@ jobs:
         token: ${{ secrets.CLONE_TOKEN }}
         fetch-depth: 1
 
+    - name: Install bun (agent-service tests, magnitude packageManager dep)
+      if: contains(matrix.test_path, 'agent_service')
+      run: |
+        # magnitude's root package.json declares
+        # "packageManager": "bun@1.2.8^". Turbo (run by the monorepo's
+        # postinstall script) reads packageManager to pick which package
+        # manager to invoke for workspace builds. Without bun on PATH,
+        # turbo dies with:
+        #   "Unable to find package manager binary: cannot find binary path"
+        # Install bun globally via npm so turbo's lookup succeeds.
+        npm install -g bun
+        bun --version
+
     - name: Build magnitude packages and install agent-service (agent-service tests)
       if: contains(matrix.test_path, 'agent_service')
       run: |
-        # Build magnitude-core (agent-service depends on it via file: reference)
-        cd magnitude/packages/magnitude-core
+        # Build magnitude as a TURBOREPO MONOREPO from its root.
+        #
+        # Previously this step did `cd magnitude/packages/magnitude-core;
+        # npm install` which fails with `sh: 1: turbo: not found` —
+        # because magnitude's root package.json declares
+        # `"postinstall": "turbo run build"` and `turbo` is a root-level
+        # devDep (`turbo: ^2.4.4`). Installing in a workspace subdir
+        # triggers the root postinstall hook BEFORE the root has
+        # downloaded its own devDeps, so the postinstall can't find
+        # turbo on PATH.
+        #
+        # Installing from the monorepo root with npm workspaces:
+        #   1. Downloads root devDeps including turbo
+        #   2. Resolves & installs all workspace packages
+        #   3. Runs the root postinstall (`turbo run build`) which now
+        #      finds turbo via node_modules/.bin and builds all
+        #      packages in the right dependency order
+        cd magnitude
         npm install
-        npm run build
-        echo "✓ magnitude-core built"
-
-        # Build magnitude-extract
-        cd ../magnitude-extract
-        npm install
-        npm run build
-        echo "✓ magnitude-extract built"
+        echo "✓ magnitude monorepo installed + built via turbo postinstall"
 
         # Install agent-service dependencies
         cd ${{ github.workspace }}/agent-service
         npm install
         echo "✓ agent-service dependencies installed"
 
-        # Install Patchright browser (Chromium) for Level 2 round-trip tests
+        # Install Patchright browser (Chromium) for Level 2 round-trip tests.
+        #
+        # `patchright` is declared as a magnitude root-level devDep
+        # (magnitude/package.json: "patchright": "^1.52.5") — NOT as an
+        # agent-service dep — so the binary lives at
+        # magnitude/node_modules/.bin/patchright. Running `npx
+        # patchright install chromium` from agent-service/ resolves npx
+        # against agent-service/node_modules and exits 127
+        # ("sh: 1: patchright: not found"). Run it from magnitude/ where
+        # patchright is actually installed.
+        cd ${{ github.workspace }}/magnitude
         npx patchright install chromium
         echo "✓ Patchright Chromium installed"
 

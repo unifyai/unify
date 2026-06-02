@@ -203,6 +203,23 @@ def _get_sender_name(contact: dict | None, fallback: str = "Unknown") -> str:
     return name or fallback
 
 
+def _adopt_slack_bot_user_id(cm: "ConversationManager", event) -> None:
+    """Enable Slack send capability from an inbound Slack event.
+
+    Slack's ``bot_user_id`` is workspace-scoped (it lives on the
+    ``slack_installs`` row), not on the assistant record, so the
+    per-assistant ``assistant_slack_bot_user_id`` is never populated at
+    session bootstrap. The brain gates the ``send_slack_message`` /
+    ``send_slack_channel_message`` tools (and the Slack reply guidelines)
+    on that flag, so without it the assistant can never reply on Slack.
+    Adopt the workspace bot id from the inbound event so this session's
+    subsequent brain run exposes the Slack tools.
+    """
+    inbound_bot_user_id = getattr(event, "bot_user_id", "") or ""
+    if inbound_bot_user_id and not getattr(cm, "assistant_slack_bot_user_id", ""):
+        cm.assistant_slack_bot_user_id = inbound_bot_user_id
+
+
 def _active_voice_thread_medium(cm: "ConversationManager") -> Medium:
     """Return the active voice thread that should receive call-context messages."""
 
@@ -1463,6 +1480,10 @@ def _push_email_to_all_contacts(
         DiscordMessageSent,
         DiscordChannelMessageReceived,
         DiscordChannelMessageSent,
+        SlackMessageReceived,
+        SlackMessageSent,
+        SlackChannelMessageReceived,
+        SlackChannelMessageSent,
         TeamsMessageReceived,
         TeamsMessageSent,
         TeamsChannelMessageReceived,
@@ -1480,7 +1501,10 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
     channel_id = None
     team_id = None
     thread_id = None
+    thread_ts = None
+    event_ts = None
     message_id = None
+    routing_metadata = None
 
     # Get contact info from ContactManager, fallback to event.contact
     # Note: event.contact may be empty dict for emails to external addresses
@@ -1729,6 +1753,68 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
                 "discord_channel_message_received",
                 f"Discord channel from {sender_name}: {event.content}",
             )
+        case SlackMessageSent():
+            medium = Medium.SLACK_MESSAGE
+            message_content = event.content
+            team_id = getattr(event, "team_id", "") or None
+            channel_id = getattr(event, "channel_id", "") or None
+            thread_ts = getattr(event, "thread_ts", "") or None
+            notif_content = f"Slack DM sent to {sender_name}"
+            role = "assistant"
+            event_trace = getattr(cm, "_current_event_trace", None) or {}
+            cm._session_logger.info(
+                "slack_message_sent",
+                f"Slack DM to {sender_name}: {event.content}",
+            )
+        case SlackMessageReceived():
+            medium = Medium.SLACK_MESSAGE
+            message_content = event.content
+            attachments = event.attachments
+            team_id = getattr(event, "team_id", "") or None
+            channel_id = getattr(event, "channel_id", "") or None
+            thread_ts = getattr(event, "thread_ts", "") or None
+            event_ts = getattr(event, "event_ts", "") or None
+            message_id = getattr(event, "message_id", "") or None
+            routing_metadata = getattr(event, "routing_metadata", None) or None
+            notif_content = f"Slack DM from {sender_name}"
+            role = "user"
+            _adopt_slack_bot_user_id(cm, event)
+            event_trace = getattr(cm, "_current_event_trace", None) or {}
+            cm._session_logger.info(
+                "slack_message_received",
+                f"Slack DM from {sender_name}: {event.content}",
+            )
+        case SlackChannelMessageSent():
+            medium = Medium.SLACK_CHANNEL_MESSAGE
+            message_content = event.content
+            team_id = getattr(event, "team_id", "") or None
+            channel_id = getattr(event, "channel_id", "") or None
+            thread_ts = getattr(event, "thread_ts", "") or None
+            notif_content = "Slack channel message sent"
+            role = "assistant"
+            event_trace = getattr(cm, "_current_event_trace", None) or {}
+            cm._session_logger.info(
+                "slack_channel_message_sent",
+                f"Slack channel message: {event.content}",
+            )
+        case SlackChannelMessageReceived():
+            medium = Medium.SLACK_CHANNEL_MESSAGE
+            message_content = event.content
+            attachments = event.attachments
+            team_id = getattr(event, "team_id", "") or None
+            channel_id = getattr(event, "channel_id", "") or None
+            thread_ts = getattr(event, "thread_ts", "") or None
+            event_ts = getattr(event, "event_ts", "") or None
+            message_id = getattr(event, "message_id", "") or None
+            routing_metadata = getattr(event, "routing_metadata", None) or None
+            notif_content = f"Slack channel message from {sender_name}"
+            role = "user"
+            _adopt_slack_bot_user_id(cm, event)
+            event_trace = getattr(cm, "_current_event_trace", None) or {}
+            cm._session_logger.info(
+                "slack_channel_message_received",
+                f"Slack channel from {sender_name}: {event.content}",
+            )
         case TeamsMessageSent():
             medium = Medium.TEAMS_MESSAGE
             message_content = event.content
@@ -1798,7 +1884,10 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             channel_id=channel_id,
             team_id=team_id,
             thread_id=thread_id,
+            thread_ts=thread_ts,
+            event_ts=event_ts,
             message_id=message_id,
+            routing_metadata=routing_metadata,
         )
     cm.notifications_bar.push_notif("comms", notif_content, event.timestamp)
     if role == "user":
@@ -2224,7 +2313,7 @@ async def _(
 
     async def _sync_contacts():
         try:
-            await asyncio.to_thread(cm.contact_manager._provision_system_overlays)
+            await asyncio.to_thread(cm.contact_manager._sync_required_contacts)
             cm._session_logger.info("state_update", "Contacts synced successfully")
         except Exception as e:
             cm._session_logger.error("state_update", f"Error syncing contacts: {e}")

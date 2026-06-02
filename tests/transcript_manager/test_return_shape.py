@@ -20,6 +20,11 @@ _EXPECTED_FWD = {
     "exchange_id": "xid",
     "images": "imgs",
     "attachments": "atts",
+    # "metadata" was added to Message in unity/transcript_manager/types/
+    # message.py (SHORTHAND_MAP entry "metadata": "meta") for medium-
+    # specific metadata like email_id on email replies. Test constants
+    # need to track Message.SHORTHAND_MAP whenever new fields land.
+    "metadata": "meta",
 }
 
 _EXPECTED_INV = {v: k for k, v in _EXPECTED_FWD.items()}

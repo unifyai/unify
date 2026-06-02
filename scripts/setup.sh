@@ -15,7 +15,7 @@
 # Environment (all optional):
 #   UNITY_HOME              Install root (default: ~/.unity)
 #   ORCHESTRA_PORT          Orchestra FastAPI port (default: 8000)
-#   ORCHESTRA_DB_PORT       Postgres port (default: 5432)
+#   ORCHESTRA_DB_PORT       Postgres port (default: 55432)
 #   UNITY_SKIP_ORCHESTRA    If "1", skip the orchestra-core spin-up (env only)
 # ============================================================================
 
@@ -29,7 +29,7 @@ ORCHESTRA_REPO="${UNITY_HOME}/orchestra-core"
 # below and warn so users on older installs know they can clean it up.
 LEGACY_ORCHESTRA_REPO="${UNITY_HOME}/orchestra"
 ORCHESTRA_PORT="${ORCHESTRA_PORT:-8000}"
-ORCHESTRA_DB_PORT="${ORCHESTRA_DB_PORT:-5432}"
+ORCHESTRA_DB_PORT="${ORCHESTRA_DB_PORT:-55432}"
 
 # Ensure user-local tool dirs are on PATH. `uv` and tools `uv` installs
 # (e.g. poetry) land here, and in a fresh shell they may not be picked up.
@@ -229,6 +229,17 @@ install_orchestra_deps() {
 # --- orchestra-core spin-up ------------------------------------------------
 start_local_orchestra() {
     log_info "Starting local orchestra-core (Docker Postgres+pgvector + FastAPI)..."
+
+    if command -v lsof >/dev/null 2>&1 && lsof -i ":${ORCHESTRA_DB_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
+        local db_container
+        db_container=$(docker ps --filter "publish=${ORCHESTRA_DB_PORT}" --format "{{.Names}}" 2>/dev/null | head -1)
+        if [ "$db_container" != "orchestra-core-pg" ]; then
+            log_error "Postgres port ${ORCHESTRA_DB_PORT} is already in use."
+            log_info "Stop the process using it, or re-run with a different port:"
+            log_info "  ORCHESTRA_DB_PORT=55433 unity setup"
+            return 1
+        fi
+    fi
 
     # Disable auto-shutdown: local installs should stay up until `unity stop`
     export ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS=0

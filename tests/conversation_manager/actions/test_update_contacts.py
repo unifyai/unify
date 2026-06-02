@@ -61,10 +61,32 @@ def _assert_contact_update_triggered(
     query = evt.query.lower()
     rf_keys = " ".join((evt.response_format or {}).keys()).lower()
     searchable = f"{query} {rf_keys}"
+    # Also build a digits-only view so phone-number substrings like
+    # "8005551234" match even when the LLM produces "800-555-1234",
+    # "(800) 555-1234", or "+1 800 555 1234" — semantic equivalence
+    # without forcing the test to enumerate every formatting variant.
+    import re as _re
+
+    searchable_digits = _re.sub(r"\D", "", searchable)
     for substr in expected_substrings:
-        assert substr.lower() in searchable, (
+        sl = substr.lower()
+        substr_digits = _re.sub(r"\D", "", sl)
+        # Match either as a literal substring (text) or as a digit-only
+        # substring (phone numbers, account numbers, etc.) — at least
+        # one form must hit. We require >= 4 digits before applying the
+        # digit-form match so short-token substrings like "ok" don't
+        # collide with "okok" via the empty-digit-string degenerate case.
+        if sl in searchable:
+            continue
+        if (
+            substr_digits
+            and len(substr_digits) >= 4
+            and substr_digits in searchable_digits
+        ):
+            continue
+        raise AssertionError(
             f"Expected '{substr}' in update_contacts query or response_format keys, "
-            f"got query: {query}, response_format keys: {rf_keys}"
+            f"got query: {query}, response_format keys: {rf_keys}",
         )
 
 

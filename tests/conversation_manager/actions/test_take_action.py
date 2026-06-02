@@ -346,6 +346,12 @@ async def test_find_and_action_triggers_act(initialized_cm):
     Natural scenario: Boss wants information found and acted upon.
     """
     cm = initialized_cm
+    # Mark the file/VM environment ready so the brain doesn't defer with
+    # "files are still loading, I'll check once sync finishes" — that's
+    # the correct prod behavior but it suppresses act() dispatch, which
+    # the assertion below requires.
+    cm.cm.vm_ready = True
+    cm.cm.file_sync_complete = True
 
     result = await cm.step_until_wait(
         SMSReceived(

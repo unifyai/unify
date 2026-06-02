@@ -1,0 +1,83 @@
+name: CodeQL
+
+# Static analysis via GitHub CodeQL. Findings are uploaded to the
+# repository Security tab. Complements OSV-Scanner (which covers
+# dependency CVEs) by scanning Unity's own source code for common
+# vulnerability patterns — SQL injection, path traversal, command
+# injection, hard-coded credentials, etc.
+#
+# Languages scoped to Unity's actual surface:
+#   - python                — the unity/ package
+#   - javascript-typescript — the agent-service/ subproject
+#   - actions               — the .github/workflows/ pipeline itself
+#
+# CodeQL is free for public repositories on standard GitHub-hosted
+# runners; no extra secrets or self-hosted infrastructure required.
+
+on:
+  push:
+    branches: [main, staging]
+    paths-ignore:
+    - '**/*.md'
+    - 'docs/**'
+    - 'site/**'
+    - 'assets/**'
+    - 'sandboxes/**/README.md'
+  pull_request:
+    branches: [main, staging]
+    paths-ignore:
+    - '**/*.md'
+    - 'docs/**'
+    - 'site/**'
+    - 'assets/**'
+    - 'sandboxes/**/README.md'
+  schedule:
+      # Weekly scan against staging — catches new CodeQL queries and
+      # CVE-class findings for code paths that haven't changed since
+      # the last push event.
+  - cron: '23 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - language: python
+          build-mode: none
+        - language: javascript-typescript
+          build-mode: none
+        - language: actions
+          build-mode: none
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v6
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v3
+      with:
+        languages: ${{ matrix.language }}
+        build-mode: ${{ matrix.build-mode }}
+          # security-extended adds high-precision queries beyond the
+          # default suite; still gated by precision/severity so noise
+          # stays manageable on a small codebase.
+        queries: security-extended
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+      with:
+        category: '/language:${{ matrix.language }}'

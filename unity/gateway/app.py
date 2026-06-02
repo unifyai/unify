@@ -1,10 +1,10 @@
 """FastAPI aggregator for ``unity.gateway`` channels.
 
 Mirrors the channel-mounting topology from
-``communication/main.py`` for the 10 channels migrated in Phase B:
+``communication/main.py`` for the channels migrated in Phase B:
 
   social, phone, gmail, outlook, email, whatsapp, teams,
-  sharepoint, unillm, discord
+  sharepoint, unillm, discord, slack
 
 Mount points and auth shapes are byte-for-byte identical to the
 source so existing callers (Unity admin clients, the Twilio /
@@ -50,6 +50,7 @@ from unity.gateway.channels.phone import (
     unauth_router as phone_unauth_router,
 )
 from unity.gateway.channels.sharepoint import router as sharepoint_router
+from unity.gateway.channels.slack import auth_router as slack_auth_router
 from unity.gateway.channels.social import router as social_router
 from unity.gateway.channels.teams import router as teams_router
 from unity.gateway.channels.unillm import router as unillm_router
@@ -251,8 +252,13 @@ def create_app(
         prefix="/discord",
         dependencies=admin_auth_dependency,
     )
+    app.include_router(
+        slack_auth_router,
+        prefix="/slack",
+        dependencies=admin_auth_dependency,
+    )
 
-    # Built-in unauth channels (webhooks from Twilio that can't carry our bearer).
+    # Built-in unauth channels (webhooks from third-parties that can't carry our bearer).
     app.include_router(phone_unauth_router, prefix="/phone")
     app.include_router(whatsapp_unauth_router, prefix="/whatsapp")
 

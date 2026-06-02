@@ -82,10 +82,13 @@ _COMPUTER_METHODS = (
     "go_back",
     "wait_for",
     "save_browser_state",
+    "solve_captcha",
     "execute_actions",
 )
 
-_DESKTOP_METHODS = tuple(name for name in _COMPUTER_METHODS if name != "get_content")
+_DESKTOP_METHODS = tuple(
+    name for name in _COMPUTER_METHODS if name not in ("get_content", "solve_captcha")
+)
 _WEB_SESSION_METHODS = _COMPUTER_METHODS
 
 
@@ -360,7 +363,12 @@ class _WebSessionFactory:
         self._handles: list[WebSessionHandle] = []
         self._next_id: int = 0
 
-    async def new_session(self, visible: bool = True) -> WebSessionHandle:
+    async def new_session(
+        self,
+        visible: bool = True,
+        *,
+        storage_state_name: str | None = None,
+    ) -> WebSessionHandle:
         """Create a new independent browser session.
 
         Each call spawns a fresh Chromium process with its own browsing
@@ -377,6 +385,14 @@ class _WebSessionFactory:
 
             If False, the browser runs headless on the host machine for
             fast background lookups where visibility is unnecessary.
+        storage_state_name : str, optional
+            Name of a previously-saved browser-state file (created via
+            ``session.save_browser_state(name)``). When provided, the new
+            Chromium context boots with the persisted cookies +
+            localStorage + sessionStorage already populated, so the
+            session starts in an authenticated state. Only honoured for
+            ``visible=False`` (i.e. ``mode='web'``); the web-vm path on
+            the managed VM has its own auth flow.
 
         Returns
         -------
@@ -389,7 +405,11 @@ class _WebSessionFactory:
         self._next_id += 1
         label = f"Web {sid}"
         mode = "web-vm" if visible else "web"
-        session = await self._owner.backend.create_session(mode, label=label)
+        session = await self._owner.backend.create_session(
+            mode,
+            label=label,
+            storage_state_name=storage_state_name,
+        )
         handle = WebSessionHandle(session, self._owner, session_id=sid)
         self._handles.append(handle)
         return handle
@@ -552,6 +572,7 @@ class ComputerPrimitives(metaclass=SingletonABCMeta):
         "go_back",
         "wait_for",
         "save_browser_state",
+        "solve_captcha",
         "execute_actions",
     )
     _PRIMITIVE_METHODS = _DYNAMIC_METHODS + ("get_screenshot",) + _LOW_LEVEL_METHODS

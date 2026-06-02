@@ -17,6 +17,16 @@ class RawImageRef(BaseModel):
     an FK ``SET NULL`` deletion.
     """
 
+    # extra="forbid" so the Pydantic-generated JSON schema sets
+    # `additionalProperties: false`. Orchestra's jsonschema validator
+    # (orchestra/web/api/log/utils/type_utils.py:validate_value_against_pydantic_schema)
+    # then correctly rejects unknown keys (e.g. "image_idx" instead of
+    # "image_id"). Without this, extra keys silently pass — the
+    # tests/image_manager/test_types backend-schema enforcement tests
+    # rely on this. Image refs are pure data pointers; extras are
+    # almost certainly typos, not extensions.
+    model_config = {"extra": "forbid"}
+
     image_id: Optional[int] = Field(
         default=None,
         description=(
