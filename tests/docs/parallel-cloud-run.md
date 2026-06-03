@@ -136,7 +136,7 @@ The script automatically loads your local `.env` file and passes it securely to 
 This means CI runs can use your personal non-secret settings without exposing secret values:
 
 - `UNIFY_KEY` — your API key (masked)
-- `OPENAI_CI_API_KEY`, `ANTHROPIC_API_KEY`, etc. (masked repository provider keys)
+- `OPENAI_CI_API_KEY`, `ANTHROPIC_CI_API_KEY`, etc. (masked repository provider keys)
 - `ORCHESTRA_URL`, model settings, etc. (visible, non-sensitive)
 
 **What appears in logs:**
@@ -148,7 +148,7 @@ This means CI runs can use your personal non-secret settings without exposing se
 
 Normal CI rejects explicit `UNILLM_CACHE` overrides and removes local LLM provider keys/cache settings from uploaded `.env` content. Cache writes and uncached evals belong in the protected **LLM Cache Refresh** workflow.
 
-The OpenAI key used by CI must come from a dedicated OpenAI project with hard daily and monthly budget caps. Do not put production key material in the CI `OPENAI_CI_API_KEY` secret.
+Provider keys used by CI must come from dedicated budget-limited CI scopes: an OpenAI project for `OPENAI_CI_API_KEY` and an Anthropic workspace for `ANTHROPIC_CI_API_KEY`. Do not put production key material in CI secrets.
 
 ---
 
