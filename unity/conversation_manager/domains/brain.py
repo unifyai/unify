@@ -229,6 +229,21 @@ def build_brain_spec(
     is_internal_call = cm.mode.is_voice and bool(
         (cm.get_active_contact() or {}).get("is_system", False),
     )
+    authorized_humans: list[dict] | None = None
+    workspace_coordinator_name: str | None = None
+    if cm.initialized:
+        from unity.coordinator_manager.coordinator_manager import (
+            CoordinatorOnboardingManager,
+        )
+
+        coordinator_manager = CoordinatorOnboardingManager()
+        if SESSION_DETAILS.is_coordinator and SESSION_DETAILS.org_id is not None:
+            authorized_humans = coordinator_manager.get_org_members()
+        elif not SESSION_DETAILS.is_coordinator:
+            workspace_coordinator_name = (
+                coordinator_manager.get_workspace_coordinator_name()
+            )
+
     _active_contact_ms = _mark_step()
     # Prepend the assistant's job title / specialization (if set) to the bio
     # so the voice-call system prompt also reflects what the assistant is
@@ -260,10 +275,13 @@ def build_brain_spec(
         assistant_has_discord=bool(cm.assistant_discord_bot_id),
         assistant_has_slack=bool(cm.assistant_slack_bot_user_id),
         assistant_has_teams=bool(cm.assistant_has_teams),
-        is_coordinator=bool(getattr(cm, "is_coordinator", False)),
         user_desktop_control=SETTINGS.conversation.USER_DESKTOP_CONTROL_ENABLED,
         runtime_setup_note=runtime_setup_note,
         space_summaries=getattr(cm, "space_summaries", []),
+        is_coordinator=SESSION_DETAILS.is_coordinator,
+        authorized_humans=authorized_humans,
+        workspace_coordinator_name=workspace_coordinator_name,
+        is_org_workspace=SESSION_DETAILS.org_id is not None,
     )
     _system_prompt_ms = _mark_step()
 

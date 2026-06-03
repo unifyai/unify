@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from time import perf_counter
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from unity.common._async_tool.utils import get_handle_paused_state
 from unity.common.prompt_helpers import get_assistant_timezone
@@ -586,6 +586,7 @@ class Renderer:
         in_flight_actions: dict = None,
         completed_actions: dict = None,
         last_snapshot: datetime = None,
+        recent_tool_executions: list[dict[str, Any]] | None = None,
         max_pinned_notifications: int = 50,
         max_contact_medium_messages: int = 25,
         max_action_history_events: int = 20,
@@ -598,6 +599,7 @@ class Renderer:
         google_meet_active: bool = False,
         teams_meet_active: bool = False,
         active_web_sessions: list | None = None,
+        coordinator_checklist: list[dict[str, Any]] | None = None,
         managers_initialized: bool = True,
         vm_ready: bool = True,
         file_sync_complete: bool = True,
@@ -645,6 +647,11 @@ class Renderer:
         web_sessions_render = self.render_active_web_sessions(
             active_web_sessions or [],
         )
+        coordinator_render = ""
+        if SESSION_DETAILS.is_coordinator:
+            coordinator_render = self.render_coordinator_goal_state(
+                coordinator_checklist=coordinator_checklist,
+            )
         _web_sessions_ms = _mark_step()
 
         notif_render = self.render_notification_bar(
@@ -666,6 +673,9 @@ class Renderer:
             max_history=max_completed_action_history_events,
         )
         _completed_ms = _mark_step()
+        recent_tools_render = self.render_recent_tool_executions(
+            recent_tool_executions,
+        )
         convs_render = self.render_active_conversations(
             contact_index,
             last_snapshot=last_snapshot,
@@ -680,9 +690,11 @@ class Renderer:
                 infra_render,
                 meet_render,
                 web_sessions_render,
+                coordinator_render,
                 notif_render,
                 actions_render,
                 completed_render,
+                recent_tools_render,
                 convs_render,
             ]
             if s
@@ -726,6 +738,33 @@ class Renderer:
         )
 
         return snapshot_state
+
+    @staticmethod
+    def render_coordinator_goal_state(
+        *,
+        coordinator_checklist: list[dict[str, Any]] | None = None,
+    ) -> str:
+        """Render the Coordinator's onboarding goal state for the slow brain."""
+
+        if not coordinator_checklist:
+            return ""
+
+        lines = ["<coordinator_goal>", "checklist:"]
+        for item in coordinator_checklist:
+            item_id = item.get("item_id", "?")
+            title = item.get("title", "")
+            status = item.get("status", "pending")
+            kind = item.get("kind")
+            description = item.get("description")
+            line = f"- [{status}] #{item_id}: {title}"
+            if kind:
+                line += f" ({kind})"
+            lines.append(line)
+            if description:
+                lines.append(f"  {description}")
+
+        lines.append("</coordinator_goal>")
+        return "\n".join(lines)
 
     @staticmethod
     def render_infrastructure_state(
@@ -1067,6 +1106,30 @@ class Renderer:
                     )
 
         out += "</in_flight_actions>"
+        return out
+
+    def render_recent_tool_executions(
+        self,
+        recent_tool_executions: list[dict[str, Any]] | None,
+        max_items: int = 12,
+    ) -> str:
+        """Render a bounded summary of recently executed tools."""
+        out = "<recent_tool_executions>\n"
+        if not recent_tool_executions:
+            out += "No recent tool executions.\n"
+            out += "</recent_tool_executions>"
+            return out
+
+        for entry in recent_tool_executions[-max_items:]:
+            tool_name = str(entry.get("tool_name") or "unknown")
+            generation = str(entry.get("generation") or "?")
+            origin_event = str(entry.get("origin_event_name") or "-")
+            args_preview = str(entry.get("args_preview") or "{}")
+            result_preview = str(entry.get("result_preview") or "null")
+            out += f"- generation={generation} origin={origin_event} tool={tool_name}\n"
+            out += f"  args={args_preview}\n"
+            out += f"  result={result_preview}\n"
+        out += "</recent_tool_executions>"
         return out
 
     def render_active_conversations(
@@ -1812,19 +1875,37 @@ class Renderer:
                 short_name = derive_short_name(query)
                 handle_actions = handle_data.get("handle_actions", [])
 
-                # Extract result from the act_completed event
-                result = None
+                # Extract terminal status from the most recent completion marker.
+                terminal_event = None
                 for a in reversed(handle_actions):
-                    if a.get("action_name") == "act_completed":
-                        result = a.get("query", "")
+                    if a.get("action_name") in {"act_completed", "act_failed"}:
+                        terminal_event = a
                         break
 
                 action_type = handle_data.get("action_type", "act")
-                out += f"<action id='{handle_id}' short_name='{short_name}' status='completed' type='{action_type}'>\n"
+                action_status = (
+                    "failed"
+                    if terminal_event is not None
+                    and terminal_event.get("success") is False
+                    else "completed"
+                )
+                out += f"<action id='{handle_id}' short_name='{short_name}' status='{action_status}' type='{action_type}'>\n"
                 out += f"<original_request>{query}</original_request>\n"
 
-                if result is not None:
-                    out += f"<result>{result}</result>\n"
+                if terminal_event is not None:
+                    if terminal_event.get("success") is False:
+                        error_text = terminal_event.get("error") or terminal_event.get(
+                            "query",
+                            "",
+                        )
+                        if error_text:
+                            out += f"<error>{error_text}</error>\n"
+                    else:
+                        result = terminal_event.get(
+                            "result",
+                            terminal_event.get("query", ""),
+                        )
+                        out += f"<result>{result}</result>\n"
 
                 out += self._render_action_history(
                     handle_actions,

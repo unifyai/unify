@@ -16,6 +16,12 @@ from unity.conversation_manager import assistant_jobs
 from unity.conversation_manager.events import *
 from unity.conversation_manager.domains import managers_utils
 from unity.conversation_manager.domains.comms_utils import publish_system_error
+from unity.conversation_manager.domains.coordinator_onboarding import (
+    _handle_coordinator_onboarding_event,
+)
+from unity.conversation_manager.domains.coordinator_delegate import (
+    _handle_coordinator_delegate_event,
+)
 from unity.conversation_manager.domains.inactivity import (
     _handle_inactivity_followup_event,
 )
@@ -2227,6 +2233,33 @@ async def _(
         await cm.request_llm_run(delay=0)
 
 
+@EventHandler.register(CoordinatorDelegate)
+async def _(
+    event: CoordinatorDelegate,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    if await _handle_coordinator_delegate_event(event, cm):
+        await cm.request_llm_run(delay=0)
+
+
+@EventHandler.register(CoordinatorOnboardingEvent)
+async def _(
+    event: CoordinatorOnboardingEvent,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    # Same shape as the inactivity handler: drop the event into the
+    # notifications bar via the domain helper and trigger an
+    # immediate LLM run so the brain composes the acknowledgement
+    # while the user's action is still in the foreground (a delayed
+    # narration during onboarding reads as stale).
+    if await _handle_coordinator_onboarding_event(event, cm):
+        await cm.request_llm_run(delay=0)
+
+
 @EventHandler.register(NotificationUnpinnedEvent)
 async def _(
     event: NotificationUnpinnedEvent,
@@ -2244,19 +2277,25 @@ async def _(
 
 @EventHandler.register(ActorResult)
 async def _(event: ActorResult, cm: "ConversationManager", *args, **kwargs):
-    action_data = cm.in_flight_actions.get(event.handle_id, {})
-
-    # Log completion in handle_actions before moving to completed_actions.
     from unity.common.prompt_helpers import now as prompt_now
 
+    action_data = cm.in_flight_actions.get(event.handle_id, {})
+    action_type = event.action_type or action_data.get("action_type") or "act"
+    completion_entry = {
+        "action_name": "act_completed" if event.success else "act_failed",
+        "query": event.result if event.success else (event.error or event.result),
+        "timestamp": prompt_now(),
+        "success": bool(event.success),
+        "action_type": action_type,
+    }
+    if event.result is not None:
+        completion_entry["result"] = event.result
+    if event.error:
+        completion_entry["error"] = event.error
+
+    # Log completion in handle_actions before moving to completed_actions.
     if action_data and "handle_actions" in action_data:
-        action_data["handle_actions"].append(
-            {
-                "action_name": "act_completed",
-                "query": event.result,
-                "timestamp": prompt_now(),
-            },
-        )
+        action_data["handle_actions"].append(completion_entry)
 
     # Move to completed_actions (preserves handle for post-completion ask queries)
     completed = cm.in_flight_actions.pop(event.handle_id, None)

@@ -22,6 +22,7 @@ import json
 import time as _time
 import pytest
 from dataclasses import dataclass
+from types import SimpleNamespace
 from unittest.mock import Mock, MagicMock, patch
 
 from unity.conversation_manager.in_memory_event_broker import (
@@ -59,6 +60,7 @@ from unity.conversation_manager.events import (
     PhoneCallAnswered,
     UnifyMeetReceived,
     AssistantUpdateEvent,
+    CoordinatorDelegate,
     SyncContacts,
     TaskDue,
     PreHireMessage,
@@ -173,6 +175,7 @@ def mock_settings():
     with patch("unity.conversation_manager.comms_manager.SETTINGS") as mock:
         mock.DEPLOY_ENV = "production"
         mock.ENV_SUFFIX = ""
+        mock.conversation.JOB_NAME = "unity-job-test"
         yield mock
 
 
@@ -980,6 +983,140 @@ class TestStartupEvents:
             assert isinstance(event, AssistantUpdateEvent)
             assert event.assistant_first_name == "Updated"
             assert event.assistant_surname == "Assistant"
+            assert event.is_coordinator is False
+
+    @pytest.mark.asyncio
+    async def test_assistant_update_propagates_coordinator_role(
+        self,
+        broker,
+        mock_session_details,
+        mock_settings,
+    ):
+        """assistant_update carries the Coordinator role flag."""
+        from unity.conversation_manager.comms_manager import CommsManager
+
+        cm = CommsManager(broker)
+        cm.loop = asyncio.get_event_loop()
+
+        async with broker.pubsub() as pubsub:
+            await pubsub.psubscribe("app:comms:*")
+
+            message = create_pubsub_message(
+                "assistant_update",
+                {
+                    "api_key": "key",
+                    "assistant_id": "1",
+                    "user_id": "user_1",
+                    "assistant_first_name": "Coord",
+                    "assistant_surname": "Inator",
+                    "assistant_age": "25",
+                    "assistant_nationality": "US",
+                    "assistant_about": "test",
+                    "assistant_number": "+15555551234",
+                    "assistant_email": "coord@unify.ai",
+                    "user_first_name": "Test",
+                    "user_surname": "User",
+                    "user_number": "+15555550000",
+                    "user_email": "user@test.com",
+                    "voice_provider": "cartesia",
+                    "voice_id": "voice_1",
+                    "is_coordinator": True,
+                },
+            )
+
+            cm.handle_message(message)
+            await _wait_for_condition(lambda: message._acked)
+
+            msg = await pubsub.get_message(timeout=1.0, ignore_subscribe_messages=True)
+            assert msg is not None
+
+            event = Event.from_json(msg["data"])
+            assert isinstance(event, AssistantUpdateEvent)
+            assert event.is_coordinator is True
+
+    @pytest.mark.asyncio
+    async def test_bootstrap_startup_propagates_coordinator_role(
+        self,
+        broker,
+        mock_session_details,
+        mock_settings,
+    ):
+        """AssistantSession bootstrap payload carries the Coordinator role flag."""
+        from unity.conversation_manager.comms_manager import CommsManager
+        from unity.conversation_manager.events import StartupEvent
+
+        startup_payload = {
+            "api_key": "key",
+            "assistant_id": "7",
+            "user_id": "user_7",
+            "assistant_first_name": "Coord",
+            "assistant_surname": "Inator",
+            "assistant_age": "25",
+            "assistant_nationality": "US",
+            "assistant_timezone": "UTC",
+            "assistant_about": "test",
+            "assistant_number": "+15555551234",
+            "assistant_email": "coord@unify.ai",
+            "user_first_name": "Test",
+            "user_surname": "User",
+            "user_number": "+15555550000",
+            "user_email": "user@test.com",
+            "voice_provider": "cartesia",
+            "voice_id": "voice_1",
+            "is_coordinator": True,
+        }
+
+        cm = CommsManager(broker)
+        cm.subscribe_to_topic = MagicMock()
+
+        async with broker.pubsub() as pubsub:
+            await pubsub.psubscribe("app:comms:*")
+
+            with (
+                patch(
+                    "unity.conversation_manager.comms_manager.wait_for_assistant_session_name",
+                    return_value="session-a",
+                ),
+                patch(
+                    "unity.conversation_manager.comms_manager.read_job_assignment_record",
+                    return_value=SimpleNamespace(
+                        session_name="session-a",
+                        binding_id="binding-a",
+                    ),
+                ),
+                patch(
+                    "unity.conversation_manager.comms_manager.read_assistant_session",
+                    return_value={
+                        "spec": {
+                            "assistantId": "7",
+                            "activationId": "activation-a",
+                            "startupSecretRef": "secret-a",
+                        },
+                        "status": {"binding": {"id": "binding-a"}},
+                    },
+                ),
+                patch(
+                    "unity.conversation_manager.comms_manager.read_session_bootstrap_secret_record",
+                    return_value=SimpleNamespace(
+                        name="secret-a",
+                        payload=startup_payload,
+                        owner_session_name="session-a",
+                        owner_activation_id="activation-a",
+                    ),
+                ),
+                patch(
+                    "unity.conversation_manager.comms_manager.mark_job_container_ready",
+                ),
+            ):
+                await cm._poll_for_assignment()
+
+            msg = await pubsub.get_message(timeout=1.0, ignore_subscribe_messages=True)
+            assert msg is not None
+            assert msg["channel"] == "app:comms:startup"
+
+            event = Event.from_json(msg["data"])
+            assert isinstance(event, StartupEvent)
+            assert event.is_coordinator is True
 
     @pytest.mark.asyncio
     async def test_assistant_update_propagates_email_provider(
@@ -1303,6 +1440,130 @@ class TestSystemEvents:
             )
             assert event.visibility_policy == "silent_by_default"
             assert event.recurrence_hint == "recurring"
+
+    @pytest.mark.asyncio
+    async def test_handle_coordinator_delegate_event(
+        self,
+        broker,
+        mock_session_details,
+        mock_settings,
+    ):
+        """Coordinator delegate system events should map onto the typed channel."""
+
+        from unity.conversation_manager.comms_manager import CommsManager
+
+        cm = CommsManager(broker)
+        cm.loop = asyncio.get_event_loop()
+
+        async with broker.pubsub() as pubsub:
+            await pubsub.psubscribe("app:comms:*")
+
+            message = create_pubsub_message(
+                "unity_system_event",
+                {
+                    "event_type": "coordinator_delegate",
+                    "message": "Coordinator 2071 assigned schedule_task work.",
+                    "requested_by_assistant_id": "2071",
+                    "instruction": "Schedule the renewal summary tomorrow.",
+                    "intent": "schedule_task",
+                    "dedupe_key": "renewal-summary",
+                    "related_context": {"source": "coordinator"},
+                },
+            )
+
+            cm.handle_message(message)
+            await _wait_for_condition(lambda: message._acked)
+
+            msg = await get_message_on_channel(
+                pubsub,
+                "app:comms:coordinator_delegate",
+            )
+            assert msg is not None
+
+            event = Event.from_json(msg["data"])
+            assert isinstance(event, CoordinatorDelegate)
+            assert event.requested_by_assistant_id == "2071"
+            assert event.instruction == "Schedule the renewal summary tomorrow."
+            assert event.intent == "schedule_task"
+            assert event.dedupe_key == "renewal-summary"
+            assert event.related_context == {"source": "coordinator"}
+
+    @pytest.mark.asyncio
+    async def test_handle_task_due_event_canonicalizes_destination(
+        self,
+        broker,
+        mock_session_details,
+        mock_settings,
+    ):
+        """task_due destinations are normalized to canonical space:<id> labels."""
+
+        from unity.conversation_manager.comms_manager import CommsManager
+
+        cm = CommsManager(broker)
+        cm.loop = asyncio.get_event_loop()
+
+        async with broker.pubsub() as pubsub:
+            await pubsub.psubscribe("app:comms:*")
+
+            message = create_pubsub_message(
+                "unity_system_event",
+                {
+                    "event_type": "task_due",
+                    "task_id": 101,
+                    "source_task_log_id": 555,
+                    "activation_revision": "rev-1",
+                    "scheduled_for": "2026-04-10T09:00:00+00:00",
+                    "destination": "space:007",
+                },
+            )
+
+            cm.handle_message(message)
+            await _wait_for_condition(lambda: message._acked)
+
+            msg = await get_message_on_channel(pubsub, "app:comms:task_due")
+            assert msg is not None
+            event = Event.from_json(msg["data"])
+            assert isinstance(event, TaskDue)
+            assert event.destination == "space:7"
+
+    @pytest.mark.asyncio
+    async def test_handle_task_due_event_drops_invalid_destination(
+        self,
+        broker,
+        mock_session_details,
+        mock_settings,
+    ):
+        """task_due payloads with non-canonical destinations are ignored."""
+
+        from unity.conversation_manager.comms_manager import CommsManager
+
+        cm = CommsManager(broker)
+        cm.loop = asyncio.get_event_loop()
+
+        async with broker.pubsub() as pubsub:
+            await pubsub.psubscribe("app:comms:*")
+
+            message = create_pubsub_message(
+                "unity_system_event",
+                {
+                    "event_type": "task_due",
+                    "task_id": 101,
+                    "source_task_log_id": 555,
+                    "activation_revision": "rev-1",
+                    "scheduled_for": "2026-04-10T09:00:00+00:00",
+                    "destination": "org_default",
+                },
+            )
+
+            cm.handle_message(message)
+            await _wait_for_condition(lambda: message._acked)
+
+            msg = await get_message_on_channel(
+                pubsub,
+                "app:comms:task_due",
+                timeout=0.2,
+            )
+            assert msg is None
 
 
 # =============================================================================
