@@ -25,9 +25,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from livekit import agents
-from livekit.agents.cli import proto
 from livekit.agents.cli.log import setup_logging
-from livekit.agents.worker import Worker
+from livekit.agents.worker import AgentServer
 
 from unity.conversation_manager.medium_scripts.call import (
     entrypoint,
@@ -68,26 +67,26 @@ def _prewarm_and_signal(ctx=None):
         pass
 
 
-def _run_worker_with_registration_signal(args: proto.CliArgs) -> None:
-    """Run the LiveKit worker and signal when it has registered with the server."""
-    setup_logging(args.log_level, args.devmode, args.console)
-    args.opts.validate_config(args.devmode)
+def _run_worker_with_registration_signal(
+    opts: agents.WorkerOptions,
+    *,
+    log_level: str,
+    devmode: bool,
+    register: bool,
+) -> None:
+    """Run the LiveKit agent server and signal when it has registered."""
+    setup_logging(log_level, devmode, console=False)
+    opts.validate_config(devmode)
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    server = AgentServer.from_server_options(opts)
 
-    worker = Worker(
-        args.opts,
-        devmode=args.devmode,
-        register=args.register,
-        loop=loop,
-    )
-
-    @worker.once("worker_registered")
+    @server.once("worker_registered")
     def _on_worker_registered(*_args) -> None:
         _touch_registered_file()
 
-    loop.set_debug(args.asyncio_debug)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.set_debug(False)
     loop.slow_callback_duration = 0.1
 
     try:
@@ -103,7 +102,7 @@ def _run_worker_with_registration_signal(args: proto.CliArgs) -> None:
 
     async def _worker_run() -> None:
         try:
-            await worker.run()
+            await server.run(devmode=devmode, unregistered=not register)
         except Exception:
             from livekit.agents.log import logger
 
@@ -117,11 +116,9 @@ def _run_worker_with_registration_signal(args: proto.CliArgs) -> None:
             pass
 
         try:
-            if not args.devmode:
-                loop.run_until_complete(
-                    worker.drain(timeout=args.opts.drain_timeout),
-                )
-            loop.run_until_complete(worker.aclose())
+            if not devmode:
+                loop.run_until_complete(server.drain(timeout=opts.drain_timeout))
+            loop.run_until_complete(server.aclose())
         except KeyboardInterrupt:
             from livekit.agents.log import logger
 
@@ -151,15 +148,12 @@ def main() -> None:
     )
     opts.drain_timeout = 0
 
-    args = proto.CliArgs(
-        opts=opts,
+    _run_worker_with_registration_signal(
+        opts,
         log_level=log_level,
         devmode=True,
-        asyncio_debug=False,
-        watch=False,
         register=True,
     )
-    _run_worker_with_registration_signal(args)
 
 
 if __name__ == "__main__":
