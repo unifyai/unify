@@ -8,15 +8,11 @@ Trigger CI tests on GitHub Actions with the current local code state—even if c
 # Run specific tests on CI
 parallel_cloud_run.sh tests/contact_manager
 
-# Run all tests on CI
-parallel_cloud_run.sh .
-
 # Run multiple folders
 parallel_cloud_run.sh tests/actor tests/contact_manager
-
-# Override a .env setting
-parallel_cloud_run.sh --env UNILLM_CACHE=false tests/
 ```
+
+Normal cloud runs are for targeted, cached validation. The GitHub workflow rejects full-suite discovery and `UNILLM_CACHE` overrides unless you use the protected **LLM Cache Refresh** workflow with explicit confirmations.
 
 The script automatically:
 - **Loads your `.env`** and passes settings securely to CI (sensitive values masked in logs)
@@ -111,7 +107,7 @@ parallel_cloud_run.sh [--env KEY=VALUE ...] [test_paths...]
 | Argument | Description |
 |----------|-------------|
 | `--env KEY=VALUE` | Override an environment variable (repeatable) |
-| `test_paths` | Paths to test (default: `.` for all tests) |
+| `test_paths` | Paths to test; omit only if you intend the workflow to reject broad discovery |
 
 **Examples:**
 
@@ -125,14 +121,11 @@ parallel_cloud_run.sh tests/actor tests/contact_manager
 # Specific test file
 parallel_cloud_run.sh tests/actor/code_act.py
 
-# All tests
-parallel_cloud_run.sh .
-parallel_cloud_run.sh   # equivalent
-
 # Override settings
-parallel_cloud_run.sh --env UNILLM_CACHE=false tests/
-parallel_cloud_run.sh --env UNILLM_CACHE=false --env UNIFY_MODEL=gpt-4o tests/
+parallel_cloud_run.sh --env UNIFY_MODEL=gpt-5.2@openai tests/contact_manager
 ```
+
+Do not use `parallel_cloud_run.sh` for full-suite, uncached, or repeated LLM evals. Use `llm-cache-refresh.yml` for intentional paid LLM runs.
 
 ---
 
@@ -140,11 +133,11 @@ parallel_cloud_run.sh --env UNILLM_CACHE=false --env UNIFY_MODEL=gpt-4o tests/
 
 The script automatically loads your local `.env` file and passes it securely to CI. The content is base64-encoded in transit and sensitive values (like API keys) are automatically masked in logs using GitHub's secret masking.
 
-This means CI runs use your personal settings without exposing secrets:
+This means CI runs can use your personal non-secret settings without exposing secret values:
 
 - `UNIFY_KEY` — your API key (masked)
-- `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc. (masked)
-- `ORCHESTRA_URL`, `UNILLM_CACHE`, etc. (visible, non-sensitive)
+- `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc. (masked repository provider keys)
+- `ORCHESTRA_URL`, model settings, etc. (visible, non-sensitive)
 
 **What appears in logs:**
 - ✅ Explicit `--env` overrides you pass on the command line
@@ -153,11 +146,9 @@ This means CI runs use your personal settings without exposing secrets:
 
 **Override order**: `.env` values are sourced first on the runner, then explicit `--env` args take precedence.
 
-```bash
-# .env has UNILLM_CACHE=true, but this overrides it to false
-# Only the explicit override is visible in CI logs
-parallel_cloud_run.sh --env UNILLM_CACHE=false tests/
-```
+Normal CI rejects explicit `UNILLM_CACHE` overrides and removes local LLM provider keys/cache settings from uploaded `.env` content. Cache writes and uncached evals belong in the protected **LLM Cache Refresh** workflow.
+
+The OpenAI key used by CI must come from a dedicated OpenAI project with hard daily and monthly budget caps. Do not put production key material in the CI `OPENAI_API_KEY` secret.
 
 ---
 

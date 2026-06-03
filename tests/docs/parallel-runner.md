@@ -171,15 +171,17 @@ parallel_run --timeout 300 tests/slow_suite/
 The `-e/--env KEY=VALUE` flag sets environment variables for all pytest sessions:
 
 ```bash
-# Single override
-parallel_run --env UNILLM_CACHE=false tests
+# Local-only cache bypass for a narrow eval
+parallel_run --env UNILLM_CACHE=false tests/contact_manager/test_ask.py
 
 # Multiple overrides (flag can be repeated)
-parallel_run -e UNILLM_CACHE=false -e UNIFY_DELETE_CONTEXT_ON_EXIT=true tests
+parallel_run -e UNIFY_MODEL=gpt-5.2@openai -e UNIFY_DELETE_CONTEXT_ON_EXIT=true tests/contact_manager
 
 # Use isolated random projects (each session gets its own project)
 parallel_run --env UNIFY_TESTS_RAND_PROJ=true --env UNIFY_TESTS_DELETE_PROJ_ON_EXIT=true tests
 ```
+
+Do not use `UNILLM_CACHE=false` in normal cloud CI. GitHub Actions test runs use `UNILLM_CACHE=read-only` and reject cache overrides so cache misses fail closed. Use the protected **LLM Cache Refresh** workflow for paid cache refreshes or uncached eval sampling.
 
 ### Available Variables
 
@@ -230,14 +232,13 @@ This matches files like `test_contact_tool_docstrings.py`, `test_guidance_tool_d
 
 ## Statistical Sampling (`--repeat`)
 
-The `--repeat N` flag runs each test target N times. **The primary use case is for eval tests with `UNILLM_CACHE=false`**:
+The `--repeat N` flag runs each test target N times. Use it with narrow local evals or the protected **LLM Cache Refresh** workflow:
 
 ```bash
-# Run a specific eval test 10 times without caching
+# Run a specific local eval test 10 times without caching
 parallel_run --env UNILLM_CACHE=false --repeat 10 --eval-only tests/contact_manager/test_ask.py
 
-# Run all eval tests 5 times each
-parallel_run --env UNILLM_CACHE=false --repeat 5 --eval-only tests
+# Avoid broad uncached repeat runs; they multiply paid LLM calls.
 ```
 
 **Use cases:**
@@ -324,7 +325,7 @@ parallel_run --tags "experiment-1" tests
 
 # Combine options
 parallel_run --eval-only tests/contact_manager
-parallel_run --env UNILLM_CACHE=false --eval-only tests/contact_manager
+parallel_run --env UNILLM_CACHE=false --eval-only tests/contact_manager/test_ask.py
 ```
 
 ---
