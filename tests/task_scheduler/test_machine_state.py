@@ -6,6 +6,7 @@ from unity.task_scheduler.machine_state import (
     TaskActivationSnapshot,
     TaskOutboundOperationProvenance,
     TaskRunProvenance,
+    build_activation_key,
     build_task_activation_context_name,
     build_task_outbound_operation_key,
     build_task_run_key,
@@ -76,6 +77,31 @@ def test_validate_task_due_activation_rejects_revision_mismatch(monkeypatch):
     assert stale_reason == "activation_revision_mismatch"
 
 
+def test_validate_task_due_activation_rejects_invalid_destination():
+    current_activation, stale_reason = validate_task_due_activation(
+        assistant_id="42",
+        task_id=101,
+        activation_revision="rev-1",
+        source_task_log_id=555,
+        scheduled_for="2026-04-10T09:00:00+00:00",
+        destination="org_default",
+    )
+
+    assert current_activation is None
+    assert stale_reason == "invalid_destination"
+
+
+def test_build_activation_key_ignores_invalid_destination_labels():
+    assert (
+        build_activation_key(
+            assistant_id="42",
+            task_id=101,
+            destination="org_default",
+        )
+        == "42:101"
+    )
+
+
 def test_validate_task_due_activation_rejects_departed_space(monkeypatch):
     activation = TaskActivationSnapshot(
         assistant_id="42",
@@ -106,6 +132,42 @@ def test_validate_task_due_activation_rejects_departed_space(monkeypatch):
 
     assert current_activation is None
     assert stale_reason == "destination_membership_revoked"
+
+
+def test_get_task_activation_queries_for_null_personal_destination(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def _fake_get_logs(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr("unity.task_scheduler.storage.unify.get_logs", _fake_get_logs)
+    monkeypatch.setattr(machine_state.SESSION_DETAILS.user, "id", "user-1")
+    monkeypatch.setattr(machine_state.SESSION_DETAILS.assistant, "agent_id", 2069)
+
+    activation = get_task_activation(
+        assistant_id="2069",
+        task_id=0,
+        destination=None,
+    )
+
+    assert activation is None
+    assert captured["filter"] == "activation_key == '2069:0'"
+    assert captured["project"] == TASK_MACHINE_STATE_PROJECT
+    assert captured["context"] == build_task_activation_context_name(
+        user_context="user-1",
+        assistant_context="2069",
+    )
+
+
+def test_get_task_activation_skips_query_for_invalid_destination():
+    activation = get_task_activation(
+        assistant_id="2069",
+        task_id=0,
+        destination="org_default",
+    )
+
+    assert activation is None
 
 
 def test_get_task_activation_queries_assistants_machine_state_project(monkeypatch):

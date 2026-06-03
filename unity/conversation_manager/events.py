@@ -1022,6 +1022,7 @@ class _SessionConfigBase(Event):
     team_ids: list[int] = field(default_factory=list)
     space_ids: list[int] = field(default_factory=list)
     space_summaries: list[dict[str, Any]] = field(default_factory=list)
+    is_coordinator: bool = False
     update_kind: str = "general"
     wake_reasons: list[dict[str, Any]] = field(default_factory=list)
     # Demo assistant metadata ID. If set, this is a demo session.
@@ -1366,6 +1367,12 @@ class TaskDue(Event):
             return None
         if not activation_revision or not scheduled_for:
             return None
+        try:
+            destination = ContextRegistry.canonical_destination(
+                payload.get("destination"),
+            )
+        except ValueError:
+            return None
         task_label = str(payload.get("task_label") or "")
         resolved_reason = reason or (
             f"Scheduled task '{task_label}' became due."
@@ -1377,6 +1384,7 @@ class TaskDue(Event):
             source_task_log_id=source_task_log_id,
             activation_revision=activation_revision,
             scheduled_for=scheduled_for,
+            destination=destination,
             execution_mode=str(payload.get("execution_mode") or "live"),
             source_type=str(payload.get("source_type") or "scheduled"),
             task_label=task_label,
@@ -1405,6 +1413,55 @@ class InactivityFollowup(Event):
     topic: ClassVar[str | None] = "app:comms:inactivity_followup"
 
     reason: str = ""
+
+
+@dataclass
+class CoordinatorDelegate(Event):
+    """A Coordinator assigned asynchronous work to this colleague.
+
+    Communication publishes this either as a ``unity_system_event`` to a hot
+    pod or as a startup wake reason during cold start. The colleague's brain is
+    responsible for carrying out the instruction through its own manager
+    primitives; the Coordinator only receives dispatch-level confirmation.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:coordinator_delegate"
+
+    requested_by_assistant_id: str
+    instruction: str
+    intent: str = "general"
+    dedupe_key: str | None = None
+    related_context: dict[str, Any] | None = None
+    reason: str = ""
+
+
+@dataclass
+class CoordinatorOnboardingEvent(Event):
+    """Orchestra observed a user action that should be narrated in the
+    Coordinator's onboarding conversation.
+
+    Emitted only while the Coordinator is in
+    ``Coordinator/State.mode == 'onboarding'`` (see
+    ``coordinator_onboarding_event_service`` in orchestra) so day-to-day
+    activity stays silent. The five subtypes correspond to the
+    onboarding checklist's real-action milestones: workspace OAuth
+    landed, an integration secret was saved, a task was created, an
+    action started, or a specialist was hired. The brain reacts with a
+    one-line acknowledgement that names the thing that just happened
+    and previews the next pending step — see the coordinator block in
+    ``prompt_builders.build_system_prompt``.
+
+    ``subtype`` is the canonical event taxonomy keyed off
+    ``extra_event_fields.subtype`` on the Pub/Sub payload; ``details``
+    carries optional structured context (secret name, specialist id,
+    …) the brain can include in the acknowledgement when relevant.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:coordinator_onboarding_event"
+
+    subtype: str = ""
+    message: str = ""
+    details: dict = field(default_factory=dict)
 
 
 @dataclass

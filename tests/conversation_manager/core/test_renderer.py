@@ -31,6 +31,7 @@ from unity.conversation_manager.domains.renderer import (
     compute_snapshot_diff,
     _get_assistant_email_role,
 )
+from unity.session_details import SESSION_DETAILS
 
 pytestmark = pytest.mark.no_unify_context
 
@@ -228,6 +229,65 @@ class TestGetAssistantEmailRole:
             mock_session.assistant.email = None
             result = _get_assistant_email_role(email)
             assert result is None
+
+
+class TestCoordinatorGoalRendering:
+    """Coordinator goal rendering is a focused state block."""
+
+    def teardown_method(self):
+        SESSION_DETAILS.reset()
+
+    def test_empty_state_renders_no_block(self, renderer):
+        assert renderer.render_coordinator_goal_state() == ""
+
+    def test_checklist_render_goal_block(self, renderer):
+        rendered = renderer.render_coordinator_goal_state(
+            coordinator_checklist=[
+                {
+                    "item_id": 1,
+                    "title": "Create support assistant",
+                    "description": "Owner approved support coverage.",
+                    "kind": "assistant",
+                    "status": "pending",
+                },
+            ],
+        )
+
+        assert rendered.startswith("<coordinator_goal>")
+        assert "checklist:" in rendered
+        assert "- [pending] #1: Create support assistant (assistant)" in rendered
+        assert "Owner approved support coverage." in rendered
+        assert rendered.endswith("</coordinator_goal>")
+        stale_tag = "<coordinator_goal_" + "state>"
+        assert stale_tag not in rendered
+
+    def test_render_state_gates_goal_block_to_coordinators(self, renderer):
+        snapshot = renderer.render_state(
+            ContactIndex(),
+            coordinator_checklist=[
+                {
+                    "item_id": 1,
+                    "title": "Create support assistant",
+                    "status": "pending",
+                },
+            ],
+        )
+
+        assert "<coordinator_goal>" not in snapshot.full_render
+
+        SESSION_DETAILS.is_coordinator = True
+        coordinator_snapshot = renderer.render_state(
+            ContactIndex(),
+            coordinator_checklist=[
+                {
+                    "item_id": 1,
+                    "title": "Create support assistant",
+                    "status": "pending",
+                },
+            ],
+        )
+
+        assert "<coordinator_goal>" in coordinator_snapshot.full_render
 
 
 # =============================================================================
@@ -832,6 +892,34 @@ class TestRenderStateWithTracking:
         assert "America/New_York" in result.full_render
         assert "America/Los_Angeles" in result.full_render
 
+    def test_render_state_includes_recent_tool_executions(
+        self,
+        renderer,
+        contact_index,
+        notification_bar,
+    ):
+        last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
+
+        result = renderer.render_state(
+            contact_index,
+            notification_bar,
+            in_flight_actions={},
+            recent_tool_executions=[
+                {
+                    "generation": 2,
+                    "origin_event_name": "SMSSent",
+                    "tool_name": "create_space",
+                    "args_preview": '{"name":"Ops HQ"}',
+                    "result_preview": '{"space_id":11}',
+                },
+            ],
+            last_snapshot=last_snapshot,
+        )
+
+        assert "<recent_tool_executions>" in result.full_render
+        assert "tool=create_space" in result.full_render
+        assert "origin=SMSSent" in result.full_render
+
     def test_tracks_notifications(self, renderer, contact_index, notification_bar):
         """Notifications are tracked with identity."""
         ts1 = datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc)
@@ -1093,6 +1181,29 @@ class TestRenderCompletedActions:
         assert "id='1'" in result
         assert "Search for engineering contacts" in result
         assert "Create a task for follow-up" in result
+
+    def test_failed_completed_action_renders_error_state(self, renderer):
+        """Failed actions render explicit failed status and error text."""
+        completed_actions = {
+            0: {
+                "handle": MagicMock(),
+                "query": "Run coordinator membership repair",
+                "action_type": "act",
+                "handle_actions": [
+                    {
+                        "action_name": "act_failed",
+                        "query": "Coordinator role required",
+                        "success": False,
+                        "error": "Coordinator role required",
+                    },
+                ],
+            },
+        }
+
+        result = renderer.render_completed_actions(completed_actions)
+
+        assert "status='failed'" in result
+        assert "<error>Coordinator role required</error>" in result
 
     def test_render_state_includes_completed_actions(
         self,

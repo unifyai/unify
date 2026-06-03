@@ -247,6 +247,31 @@ async def run_conversation_manager(
     # Create conversation manager
     cm = create_conversation_manager(event_broker, stop_event, project_name)
 
+    # Honour an explicit inactivity-timeout override so local dev (where
+    # there is no orchestrator to spin a fresh container back up once
+    # this one exits) can keep the process alive long enough for a
+    # human-paced session.  ``UNITY_INACTIVITY_TIMEOUT_SECONDS=0``
+    # disables the inactivity shutdown entirely.
+    _inactivity_override = os.environ.get("UNITY_INACTIVITY_TIMEOUT_SECONDS")
+    if _inactivity_override:
+        try:
+            override_seconds = int(_inactivity_override)
+        except (TypeError, ValueError):
+            override_seconds = None
+        if override_seconds is not None:
+            if override_seconds <= 0:
+                cm.inactivity_timeout = float("inf")
+                LOGGER.info(
+                    f"{ICONS['lifecycle']} Inactivity shutdown disabled "
+                    "via UNITY_INACTIVITY_TIMEOUT_SECONDS=0",
+                )
+            else:
+                cm.inactivity_timeout = override_seconds
+                LOGGER.info(
+                    f"{ICONS['lifecycle']} Inactivity timeout overridden to "
+                    f"{override_seconds}s via UNITY_INACTIVITY_TIMEOUT_SECONDS",
+                )
+
     # Apply test mocks if requested
     should_apply_mocks = (
         apply_test_mocks if apply_test_mocks is not None else SETTINGS.TEST
@@ -341,6 +366,18 @@ async def run_conversation_manager(
             local_ingress = LocalCommsIngress(comms_manager)
             cm._local_comms_ingress = local_ingress
             await local_ingress.start()
+            # Also subscribe to the assistant's Pub/Sub topic when one is
+            # known up-front (typical for local dev where ASSISTANT_ID is
+            # set via env).  Orchestra/Adapters still publish inbound
+            # webhooks (e.g. ``unity_system_event`` for coordinator
+            # onboarding narration, ``unify_message`` for chat) to
+            # Pub/Sub, so the local ingress alone isn't enough — without
+            # this subscription those events would never reach the
+            # ConversationManager.  The hosted path takes the ``else``
+            # branch below which subscribes after the StartupEvent
+            # assignment instead.
+            if SESSION_DETAILS.assistant.agent_id is not None:
+                asyncio.create_task(comms_manager.start())
         else:
             asyncio.create_task(comms_manager.start())
 

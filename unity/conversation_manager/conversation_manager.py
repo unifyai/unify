@@ -1,6 +1,8 @@
 import asyncio
-from typing import Any, Optional
 import contextlib
+import json
+from datetime import datetime
+from typing import Any, Optional
 
 from unity.logger import LOGGER
 from unity.common.hierarchical_logger import DEFAULT_ICON
@@ -50,6 +52,31 @@ from unity.conversation_manager.domains.proactive_speech import ProactiveSpeech
 from unity.conversation_manager.medium_scripts.common import FastBrainLogger
 
 MAX_CONV_MANAGER_MSGS = 50
+RECENT_TOOL_EXECUTIONS_LIMIT = 20
+RECENT_TOOL_PREVIEW_CHARS = 500
+COMMISSIONING_MUTATION_TOOL_NAMES = frozenset(
+    {
+        "act",
+    },
+)
+COMMISSIONING_OUTBOUND_FOLLOWUP_EVENTS = frozenset(
+    {
+        "SMSSent",
+        "WhatsAppMessageSent",
+        "EmailSent",
+        "UnifyMessageSent",
+        "ApiMessageSent",
+        "DiscordMessageSent",
+        "DiscordChannelMessageSent",
+        "TeamsMessageSent",
+        "TeamsChannelMessageSent",
+    },
+)
+ACT_FOLLOWUP_ARGUMENT_DEFAULTS: dict[str, Any] = {
+    "response_format": None,
+    "persist": False,
+    "include_conversation_context": True,
+}
 
 
 def _render_action_context(
@@ -222,6 +249,13 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # global message_id (persistent backend TM id), populated by
         # log_message() for post-hoc screenshot image updates.
         self._local_to_global_message_ids: dict[int, int] = {}
+        # Per-destination transcript message ids for fanout writes.
+        self._local_to_global_message_ids_by_destination: dict[
+            int,
+            dict[str | None, int],
+        ] = {}
+        # Primary destination used when one id is needed for compatibility paths.
+        self._local_message_destinations: dict[int, str | None] = {}
 
         # mapping from conference_name/room_name to exchange_id, populated
         # at call/meet end so the async RecordingReady handler can resolve
@@ -249,6 +283,9 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self._llm_run_seq: int = 0
         self._llm_gen: int = 0
         self._outbound_suppress_gen: int = -1
+        self._active_llm_trace_meta: dict[str, Any] | None = None
+        self._recent_tool_executions: list[dict[str, Any]] = []
+        self._recent_commissioning_successes: dict[str, int] = {}
 
         # WhatsApp messages that were sent via greeting template (outside 24h
         # window). When the contact replies, the brain is notified so it can
@@ -290,6 +327,116 @@ class ConversationManager(metaclass=SingletonABCMeta):
             n for i, n in enumerate(notifs) if n.pinned or i >= snap_n
         ]
 
+    @staticmethod
+    def _tool_result_is_error(result: Any) -> bool:
+        return isinstance(result, dict) and "error_kind" in result
+
+    @staticmethod
+    def _preview_value(
+        value: Any,
+        *,
+        max_chars: int = RECENT_TOOL_PREVIEW_CHARS,
+    ) -> str:
+        try:
+            rendered = json.dumps(value, sort_keys=True, default=str)
+        except Exception:
+            rendered = repr(value)
+        if len(rendered) <= max_chars:
+            return rendered
+        return rendered[: max_chars - 3] + "..."
+
+    @staticmethod
+    def _normalize_followup_tool_args(
+        tool_name: str,
+        tool_args: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        normalized = dict(tool_args or {})
+        if tool_name == "act":
+            for key, default_value in ACT_FOLLOWUP_ARGUMENT_DEFAULTS.items():
+                normalized.setdefault(key, default_value)
+        return normalized
+
+    @classmethod
+    def _commissioning_tool_fingerprint(
+        cls,
+        tool_name: str,
+        tool_args: dict[str, Any] | None,
+    ) -> str:
+        stable_args = json.dumps(
+            cls._normalize_followup_tool_args(tool_name, tool_args),
+            sort_keys=True,
+            default=str,
+        )
+        return f"{tool_name}:{stable_args}"
+
+    def _is_immediate_commissioning_followup(self, origin_event_name: str) -> bool:
+        return origin_event_name in COMMISSIONING_OUTBOUND_FOLLOWUP_EVENTS
+
+    def suppress_duplicate_commissioning_tool(
+        self,
+        *,
+        tool_name: str,
+        tool_args: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        """Suppress immediate duplicate commissioning calls from outbound follow-ups."""
+        if tool_name not in COMMISSIONING_MUTATION_TOOL_NAMES:
+            return None
+        trace_meta = self._active_llm_trace_meta or {}
+        origin_event_name = str(trace_meta.get("origin_event_name") or "")
+        if not self._is_immediate_commissioning_followup(origin_event_name):
+            return None
+        fingerprint = self._commissioning_tool_fingerprint(tool_name, tool_args)
+        last_success_gen = self._recent_commissioning_successes.get(fingerprint)
+        if last_success_gen != self._llm_gen - 1:
+            return None
+        return {
+            "error_kind": "duplicate_suppressed",
+            "message": (
+                "Skipped duplicate commissioning tool call from immediate outbound "
+                "follow-up event."
+            ),
+            "details": {
+                "tool_name": tool_name,
+                "origin_event_name": origin_event_name,
+            },
+        }
+
+    def _record_recent_tool_executions(
+        self,
+        *,
+        tools: list[Any],
+        trace_meta: dict[str, Any],
+    ) -> None:
+        origin_event_name = str(trace_meta.get("origin_event_name") or "")
+        for tool_exec in tools:
+            tool_name = str(getattr(tool_exec, "name", ""))
+            tool_args = getattr(tool_exec, "args", {}) or {}
+            tool_result = getattr(tool_exec, "result", None)
+            self._recent_tool_executions.append(
+                {
+                    "generation": self._llm_gen,
+                    "origin_event_name": origin_event_name,
+                    "tool_name": tool_name,
+                    "args_preview": self._preview_value(tool_args),
+                    "result_preview": self._preview_value(tool_result),
+                },
+            )
+            if (
+                tool_name in COMMISSIONING_MUTATION_TOOL_NAMES
+                and not self._tool_result_is_error(tool_result)
+            ):
+                fingerprint = self._commissioning_tool_fingerprint(tool_name, tool_args)
+                self._recent_commissioning_successes[fingerprint] = self._llm_gen
+        if len(self._recent_tool_executions) > RECENT_TOOL_EXECUTIONS_LIMIT:
+            self._recent_tool_executions = self._recent_tool_executions[
+                -RECENT_TOOL_EXECUTIONS_LIMIT:
+            ]
+        for fingerprint, generation in list(
+            self._recent_commissioning_successes.items(),
+        ):
+            if generation < self._llm_gen - 1:
+                del self._recent_commissioning_successes[fingerprint]
+
     @property
     def assistant_has_teams(self) -> bool:
         """True when Microsoft Teams capabilities are available to this assistant.
@@ -326,6 +473,40 @@ class ConversationManager(metaclass=SingletonABCMeta):
         ``act(persist=True)`` session when one isn't already running.
         """
         return self.assistant_screen_share_active
+
+    def get_coordinator_goal_context(
+        self,
+    ) -> list[dict[str, Any]] | None:
+        """Return Coordinator onboarding checklist rows for prompt rendering."""
+
+        if not self.initialized:
+            return None
+        if not SESSION_DETAILS.is_coordinator:
+            return None
+
+        from unity.coordinator_manager.coordinator_manager import (
+            CoordinatorOnboardingManager,
+        )
+        from unity.common.context_registry import ContextRegistry
+        from unity.conversation_manager.domains.managers_utils import (
+            ensure_runtime_context,
+        )
+
+        ensure_runtime_context()
+        manager = CoordinatorOnboardingManager()
+        try:
+            checklist = manager.get_checklist()
+            if not checklist:
+                return None
+            return checklist
+        except Exception as exc:
+            if ContextRegistry.is_missing_base_context_error(exc):
+                LOGGER.warning(
+                    "Coordinator context unavailable during prompt render; "
+                    "continuing without onboarding checklist.",
+                )
+                return None
+            raise
 
     def get_active_contact(self) -> dict | None:
         """Get the contact for the current active call, or fall back to the boss contact."""
@@ -462,8 +643,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         # 1. Register with ImageManager to get persistent image_ids.
         image_ids: list[int] = []
+        image_ids_by_destination: dict[str | None, list[int]] = {}
+        implicit_destinations: list[str | None] = [None]
         try:
             from unity.manager_registry import ManagerRegistry
+            from unity.common.context_registry import ContextRegistry
 
             image_manager = ManagerRegistry.get_image_manager()
             items = [
@@ -474,11 +658,17 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 }
                 for entry, path in zip(screenshots, screenshot_paths)
             ]
-            image_ids = await asyncio.to_thread(
-                image_manager.add_images,
-                items,
-                synchronous=True,
-            )
+            implicit_destinations = ContextRegistry.implicit_shared_destinations()
+            for destination in implicit_destinations:
+                destination_image_ids = await asyncio.to_thread(
+                    image_manager.add_images,
+                    items,
+                    synchronous=True,
+                    destination=destination,
+                )
+                image_ids_by_destination[destination] = destination_image_ids
+            primary_destination = implicit_destinations[0]
+            image_ids = image_ids_by_destination.get(primary_destination, [])
         except Exception as e:
             self._session_logger.warning(
                 "screenshot_registration",
@@ -487,7 +677,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             return
 
         # 2. Annotate CM Message objects with image_ids and build TM refs.
-        msg_to_image_refs: dict[int, list[dict]] = {}
+        msg_to_image_refs: dict[tuple[int, str | None], list[dict]] = {}
         for i, (entry, _path) in enumerate(zip(screenshots, screenshot_paths)):
             if entry.local_message_id is None or i >= len(image_ids):
                 continue
@@ -504,23 +694,48 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     break
 
             label = source_labels.get(entry.source, "Screenshot")
-            msg_to_image_refs.setdefault(mid, []).append(
-                {
-                    "raw_image_ref": {"image_id": img_id},
-                    "annotation": f"{label} -- '{entry.utterance}'",
-                },
-            )
+            for destination, destination_image_ids in image_ids_by_destination.items():
+                if i >= len(destination_image_ids):
+                    continue
+                msg_to_image_refs.setdefault((mid, destination), []).append(
+                    {
+                        "raw_image_ref": {"image_id": destination_image_ids[i]},
+                        "annotation": f"{label} -- '{entry.utterance}'",
+                    },
+                )
 
         # 3. Post-hoc update TM messages with AnnotatedImageRefs.
         if msg_to_image_refs and self.transcript_manager is not None:
-            for local_mid, refs in msg_to_image_refs.items():
-                tm_msg_id = self._local_to_global_message_ids.get(local_mid)
+            for (local_mid, destination), refs in msg_to_image_refs.items():
+                destination_map = self._local_to_global_message_ids_by_destination.get(
+                    local_mid,
+                    {},
+                )
+                tm_msg_id = destination_map.get(destination)
+                effective_destination = destination
+                if tm_msg_id is None:
+                    if destination is not None:
+                        self._session_logger.warning(
+                            "screenshot_tm_update",
+                            (
+                                "Skipping screenshot transcript update for "
+                                f"local_mid={local_mid}, destination={destination!r}: "
+                                "destination message mapping missing."
+                            ),
+                        )
+                        continue
+                    tm_msg_id = self._local_to_global_message_ids.get(local_mid)
+                    effective_destination = self._local_message_destinations.get(
+                        local_mid,
+                        destination,
+                    )
                 if tm_msg_id is not None:
                     try:
                         await asyncio.to_thread(
                             self.transcript_manager.update_message_images,
                             tm_msg_id,
                             refs,
+                            destination=effective_destination,
                         )
                     except Exception as e:
                         self._session_logger.warning(
@@ -1239,12 +1454,14 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         _t0 = _rl_time.perf_counter()
         _has_desktop = SESSION_DETAILS.assistant.desktop_mode in ("ubuntu", "windows")
+        coordinator_checklist = self.get_coordinator_goal_context()
         snapshot_state = self.prompt_renderer.render_state(
             self.contact_index,
             self.notifications_bar,
             self.in_flight_actions,
             self.completed_actions,
             self.last_snapshot,
+            recent_tool_executions=self._recent_tool_executions,
             assistant_screen_share_active=self.assistant_screen_share_active,
             user_screen_share_active=self.user_screen_share_active,
             user_webcam_active=self.user_webcam_active,
@@ -1252,6 +1469,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             google_meet_active=self.call_manager.has_active_google_meet,
             teams_meet_active=self.call_manager.has_active_teams_meet,
             active_web_sessions=web_sessions,
+            coordinator_checklist=coordinator_checklist,
             managers_initialized=self.initialized,
             vm_ready=self.vm_ready,
             file_sync_complete=self.file_sync_complete,
@@ -1437,6 +1655,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             len(tools),
             len(messages),
         )
+        self._active_llm_trace_meta = trace_meta
         try:
             result = await single_shot_tool_decision(
                 client,
@@ -1452,6 +1671,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 },
             )
         finally:
+            self._active_llm_trace_meta = None
             if hasattr(client, "_pending_thinking_log"):
                 client._pending_thinking_log.emit_fallback()
             _EVENT_SOURCE.reset(_source_token)
@@ -1466,6 +1686,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
             _rl_ms(),
             run_id,
             tool_names,
+        )
+        self._record_recent_tool_executions(
+            tools=result.tools,
+            trace_meta=trace_meta or {},
         )
 
         # Extract structured output (thoughts)
@@ -1804,6 +2028,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.team_ids: list[int] = payload.get("team_ids") or []
         self.space_ids: list[int] = payload.get("space_ids") or []
         space_summaries = payload.get("space_summaries") or []
+        is_coordinator = payload.get("is_coordinator", False)
         # Set API key on SESSION_DETAILS for runtime access
         if payload.get("api_key"):
             SESSION_DETAILS.unify_key = payload["api_key"]
@@ -1844,6 +2069,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             user_desktop_mode=self.user_desktop_mode,
             user_desktop_filesys_sync=self.user_desktop_filesys_sync,
             user_desktop_url=self.user_desktop_url,
+            is_coordinator=is_coordinator,
         )
         self.space_summaries = SESSION_DETAILS.space_summaries
         # Export to env vars for subprocess inheritance
@@ -1874,6 +2100,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             voice_id=self.voice_id,
             assistant_name=f"{self.assistant_first_name} {self.assistant_surname}".strip(),
             job_name=self.job_name,
+            is_coordinator=SESSION_DETAILS.is_coordinator,
         )
 
     async def store_chat_history(self):
@@ -2083,18 +2310,21 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 "ubuntu",
                 "windows",
             )
+            coordinator_checklist = self.get_coordinator_goal_context()
             snapshot_state = self.prompt_renderer.render_state(
                 self.contact_index,
                 self.notifications_bar,
                 self.in_flight_actions,
                 self.completed_actions,
                 self.last_snapshot,
+                recent_tool_executions=self._recent_tool_executions,
                 assistant_screen_share_active=self.assistant_screen_share_active,
                 user_screen_share_active=self.user_screen_share_active,
                 user_webcam_active=self.user_webcam_active,
                 user_remote_control_active=self.user_remote_control_active,
                 google_meet_active=self.call_manager.has_active_google_meet,
                 teams_meet_active=self.call_manager.has_active_teams_meet,
+                coordinator_checklist=coordinator_checklist,
                 vm_ready=self.vm_ready,
                 file_sync_complete=self.file_sync_complete,
                 has_desktop=_has_desktop,

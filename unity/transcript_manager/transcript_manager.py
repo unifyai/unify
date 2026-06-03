@@ -9,6 +9,8 @@ from typing import List, Dict, Optional, Type, Union, Any, Callable, Literal
 
 import unify
 from pydantic import BaseModel
+from ..common.authorship import stamp_authoring_assistant_id
+from ..common.colleague_cache import ColleagueNameCache
 from ..common.embed_utils import ensure_vector_column
 from ..common.log_utils import log as unity_log, _inject_private_fields, _add_to_all
 from ..contact_manager.base import BaseContactManager
@@ -169,6 +171,7 @@ class TranscriptManager(BaseTranscriptManager):
 
         self._transcripts_ctx = ContextRegistry.get_context(self, TRANSCRIPTS_TABLE)
         self._exchanges_ctx = ContextRegistry.get_context(self, EXCHANGES_TABLE)
+        self._colleague_name_cache = ColleagueNameCache()
         self._image_destinations_by_id: dict[int, str] = {}
 
         # Image support: lazy-safe image manager and image-aware tools
@@ -396,6 +399,7 @@ class TranscriptManager(BaseTranscriptManager):
     def clear(self) -> None:
 
         _storage_clear(self)
+        self._colleague_name_cache.clear()
 
     # (Optional) Public programmatic helpers (non-LLM)
     def log_messages(
@@ -433,7 +437,7 @@ class TranscriptManager(BaseTranscriptManager):
             messages may be logged asynchronously in any order.
         destination : str | None, default None
             Internal routing destination for the transcript rows. Omitted means
-            personal. Session synthesis owns this value for implicit writes.
+            personal.
 
         Notes
         -----
@@ -616,6 +620,7 @@ class TranscriptManager(BaseTranscriptManager):
                     **entries,
                     new=True,
                     mutable=True,
+                    stamp_authoring=True,
                     add_to_all_context=self._should_add_to_all_context(
                         transcripts_context,
                     ),
@@ -635,7 +640,9 @@ class TranscriptManager(BaseTranscriptManager):
             else:
                 # Async path: fire-and-forget, don't block on network I/O
                 # Inject private fields (same as sync path via unity_log)
-                entries_with_private = _inject_private_fields(entries)
+                entries_with_private = _inject_private_fields(
+                    stamp_authoring_assistant_id(entries),
+                )
                 entries_with_private["explicit_types"] = {
                     key: {"mutable": True}
                     for key in entries_with_private
@@ -827,6 +834,7 @@ class TranscriptManager(BaseTranscriptManager):
                 **state["entries"],
                 new=True,
                 mutable=True,
+                stamp_authoring=True,
                 add_to_all_context=state["add_to_all"],
             )
             state["handled"] = True
@@ -1510,6 +1518,7 @@ class TranscriptManager(BaseTranscriptManager):
                 medium="",
                 new=True,
                 mutable=True,
+                stamp_authoring=True,
                 add_to_all_context=self._should_add_to_all_context(context),
             )
 
@@ -1555,7 +1564,6 @@ class TranscriptManager(BaseTranscriptManager):
         """Log the first message of a brand-new exchange and set initial metadata.
 
         Returns (exchange_id, message_id) for the newly created exchange and message.
-        The destination is managed internally by session synthesis for implicit writes.
         """
         try:
             transcripts_context = self._transcripts_context_for_destination(destination)
@@ -1627,6 +1635,7 @@ class TranscriptManager(BaseTranscriptManager):
             medium=str(payload.get("medium", "")),
             new=True,
             mutable=True,
+            stamp_authoring=True,
             add_to_all_context=self._should_add_to_all_context(exchanges_context),
         )
 
@@ -1651,6 +1660,7 @@ class TranscriptManager(BaseTranscriptManager):
             **entries,
             new=True,
             mutable=True,
+            stamp_authoring=True,
             add_to_all_context=self._should_add_to_all_context(transcripts_context),
         )
 
@@ -1800,6 +1810,14 @@ class TranscriptManager(BaseTranscriptManager):
     # Formatting helper: single contacts table + messages
     def _format_contacts_and_messages(self, messages: List[Message]) -> Dict[str, Any]:
         return _format_contacts_and_messages_impl(self, messages)
+
+    def _resolve_authoring_assistant_name(
+        self,
+        authoring_assistant_id: int | None,
+    ) -> str | None:
+        """Resolve authoring assistant ids into stable human-readable labels."""
+
+        return self._colleague_name_cache.resolve(authoring_assistant_id)
 
     # Misc small utilities (kept last)
     @classmethod

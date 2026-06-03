@@ -473,6 +473,10 @@ async def _consume_startup_wake_reasons(cm: "ConversationManager") -> None:
         _handle_inactivity_followup_event,
         _inactivity_followup_event_from_wake_reason,
     )
+    from unity.conversation_manager.domains.coordinator_delegate import (
+        _coordinator_delegate_event_from_wake_reason,
+        _handle_coordinator_delegate_event,
+    )
 
     wake_reasons = list(getattr(cm, "_startup_wake_reasons", []) or [])
     cm._startup_wake_reasons = []
@@ -491,6 +495,13 @@ async def _consume_startup_wake_reasons(cm: "ConversationManager") -> None:
         inactivity_event = _inactivity_followup_event_from_wake_reason(wake_reason)
         if inactivity_event is not None:
             await _handle_inactivity_followup_event(inactivity_event, cm)
+            continue
+
+        coordinator_delegate_event = _coordinator_delegate_event_from_wake_reason(
+            wake_reason,
+        )
+        if coordinator_delegate_event is not None:
+            await _handle_coordinator_delegate_event(coordinator_delegate_event, cm)
             continue
 
         cm._session_logger.info(

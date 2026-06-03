@@ -10,8 +10,13 @@ The warm child process runs ``call.entrypoint``, reads per-call config from
 child exits and the pool automatically pre-warms a replacement.
 """
 
+from __future__ import annotations
+
+import asyncio
 import os
+import signal
 import sys
+import threading
 
 os.environ["UNITY_TERMINAL_LOG"] = "true"
 
@@ -20,6 +25,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from livekit import agents
+from livekit.agents.cli import proto
+from livekit.agents.cli.log import setup_logging
+from livekit.agents.worker import Worker
 
 from unity.conversation_manager.medium_scripts.call import (
     entrypoint,
@@ -30,16 +38,97 @@ from unity.conversation_manager.medium_scripts.common import FastBrainLogger
 _log = FastBrainLogger()
 
 WORKER_READY_PATH = "/tmp/unity_worker_ready"
+WORKER_REGISTERED_PATH = "/tmp/unity_worker_registered"
+
+
+def clear_worker_signal_files() -> None:
+    """Remove readiness/registration markers (parent or child may call)."""
+    for path in (WORKER_READY_PATH, WORKER_REGISTERED_PATH):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
+
+def _touch_registered_file() -> None:
+    try:
+        with open(WORKER_REGISTERED_PATH, "w", encoding="utf-8") as f:
+            f.write("")
+    except OSError:
+        pass
 
 
 def _prewarm_and_signal(ctx=None):
     """Run the standard prewarm, then touch a ready-file so the parent knows."""
     _base_prewarm(ctx)
     try:
-        with open(WORKER_READY_PATH, "w") as f:
+        with open(WORKER_READY_PATH, "w", encoding="utf-8") as f:
             f.write("")
     except OSError:
         pass
+
+
+def _run_worker_with_registration_signal(args: proto.CliArgs) -> None:
+    """Run the LiveKit worker and signal when it has registered with the server."""
+    setup_logging(args.log_level, args.devmode, args.console)
+    args.opts.validate_config(args.devmode)
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    worker = Worker(
+        args.opts,
+        devmode=args.devmode,
+        register=args.register,
+        loop=loop,
+    )
+
+    @worker.once("worker_registered")
+    def _on_worker_registered(*_args) -> None:
+        _touch_registered_file()
+
+    loop.set_debug(args.asyncio_debug)
+    loop.slow_callback_duration = 0.1
+
+    try:
+
+        def _signal_handler() -> None:
+            raise KeyboardInterrupt
+
+        if threading.current_thread() is threading.main_thread():
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(sig, _signal_handler)
+    except NotImplementedError:
+        pass
+
+    async def _worker_run() -> None:
+        try:
+            await worker.run()
+        except Exception:
+            from livekit.agents.log import logger
+
+            logger.exception("worker failed")
+
+    try:
+        main_task = loop.create_task(_worker_run(), name="agent_runner")
+        try:
+            loop.run_until_complete(main_task)
+        except KeyboardInterrupt:
+            pass
+
+        try:
+            if not args.devmode:
+                loop.run_until_complete(
+                    worker.drain(timeout=args.opts.drain_timeout),
+                )
+            loop.run_until_complete(worker.aclose())
+        except KeyboardInterrupt:
+            from livekit.agents.log import logger
+
+            logger.warning("exiting forcefully")
+            os._exit(1)
+    finally:
+        loop.close()
 
 
 def main() -> None:
@@ -47,25 +136,30 @@ def main() -> None:
         print(f"Usage: {sys.argv[0]} dev <agent_name>")
         sys.exit(1)
 
-    # Extract agent_name before LiveKit's Click CLI parses sys.argv.
     agent_name = sys.argv.pop(2)
     _log.dispatch(f"Starting persistent worker: {agent_name}")
 
-    # Remove stale ready-file so the parent waits for a fresh signal.
-    try:
-        os.remove(WORKER_READY_PATH)
-    except FileNotFoundError:
-        pass
+    clear_worker_signal_files()
 
-    agents.cli.run_app(
-        agents.WorkerOptions(
-            entrypoint_fnc=entrypoint,
-            agent_name=agent_name,
-            prewarm_fnc=_prewarm_and_signal,
-            num_idle_processes=1,
-            initialize_process_timeout=60,
-        ),
+    log_level = os.environ.get("UNITY_VOICE_WORKER_LOG_LEVEL", "INFO")
+    opts = agents.WorkerOptions(
+        entrypoint_fnc=entrypoint,
+        agent_name=agent_name,
+        prewarm_fnc=_prewarm_and_signal,
+        num_idle_processes=1,
+        initialize_process_timeout=60,
     )
+    opts.drain_timeout = 0
+
+    args = proto.CliArgs(
+        opts=opts,
+        log_level=log_level,
+        devmode=True,
+        asyncio_debug=False,
+        watch=False,
+        register=True,
+    )
+    _run_worker_with_registration_signal(args)
 
 
 if __name__ == "__main__":

@@ -40,6 +40,7 @@ except ImportError:  # pragma: no cover - exercised in local-only installs
     pubsub_v1 = None
 
 from unity.logger import LOGGER
+from unity.common.context_registry import ContextRegistry
 from unity.common.hierarchical_logger import DEFAULT_ICON, ICONS
 from unity.settings import SETTINGS
 from unity.deploy_runtime import (
@@ -54,6 +55,12 @@ from unity.conversation_manager.domains.comms_utils import (
     add_unify_message_attachments,
     publish_system_error,
     resolve_slack_user_profile,
+)
+from unity.conversation_manager.domains.coordinator_onboarding import (
+    _coordinator_onboarding_event_from_payload,
+)
+from unity.conversation_manager.domains.coordinator_delegate import (
+    _coordinator_delegate_event_from_payload,
 )
 from unity.conversation_manager.domains.inactivity import (
     _inactivity_followup_event_from_payload,
@@ -744,6 +751,7 @@ class CommsManager:
                     "team_ids": event.get("team_ids") or [],
                     "space_ids": event.get("space_ids") or [],
                     "space_summaries": event.get("space_summaries") or [],
+                    "is_coordinator": event.get("is_coordinator", False),
                     "update_kind": event.get("update_kind", "general"),
                     "demo_id": event.get("demo_id"),
                 }
@@ -797,6 +805,14 @@ class CommsManager:
                     "inactivity_followup": lambda r: _inactivity_followup_event_from_payload(
                         event,
                         reason=r,
+                    ),
+                    "coordinator_delegate": lambda r: _coordinator_delegate_event_from_payload(
+                        event,
+                        reason=r,
+                    ),
+                    "coordinator_onboarding_event": lambda r: _coordinator_onboarding_event_from_payload(
+                        event,
+                        message=r,
                     ),
                     "assistant_screen_share_started": lambda r: AssistantScreenShareStarted(
                         reason=r or "User enabled assistant screen sharing.",
@@ -2105,6 +2121,7 @@ class CommsManager:
                     "team_ids": event.get("team_ids") or [],
                     "space_ids": event.get("space_ids") or [],
                     "space_summaries": event.get("space_summaries") or [],
+                    "is_coordinator": event.get("is_coordinator", False),
                     "wake_reasons": event.get("wake_reasons") or [],
                     "demo_id": event.get("demo_id"),
                 }
