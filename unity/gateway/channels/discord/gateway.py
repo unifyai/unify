@@ -44,6 +44,11 @@ from unity.settings import SETTINGS
 
 logger = logging.getLogger("unity.gateway.channels.discord.gateway")
 
+
+def _log_field(value: object) -> str:
+    return str(value).replace("\r", "").replace("\n", "")
+
+
 DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json"
 DISCORD_API_BASE = "https://discord.com/api/v10"
 
@@ -419,7 +424,11 @@ class GatewayConnection:
 
         hello = await asyncio.wait_for(self._ws.receive_json(), timeout=30.0)
         if hello.get("op") != 10:
-            logger.error("bot %s: expected HELLO (op 10), got %s", self.bot_id, hello)
+            logger.error(
+                "bot %s: expected HELLO (op 10), got op=%s",
+                _log_field(self.bot_id),
+                _log_field(hello.get("op")),
+            )
             await self._ws.close(code=1000)
             raise ConnectionError(
                 f"Bot {self.bot_id}: did not receive HELLO, "
@@ -475,7 +484,7 @@ class GatewayConnection:
             if not self._heartbeat_acked:
                 logger.warning(
                     "bot %s: heartbeat not ACKed, reconnecting",
-                    self.bot_id,
+                    _log_field(self.bot_id),
                 )
                 await self._reconnect()
                 return
@@ -497,14 +506,14 @@ class GatewayConnection:
                 close_code = self._ws.close_code
                 logger.warning(
                     "bot %s: WebSocket closed (code=%s)",
-                    self.bot_id,
-                    close_code,
+                    _log_field(self.bot_id),
+                    _log_field(close_code),
                 )
                 if close_code in FATAL_CLOSE_CODES:
                     logger.error(
                         "bot %s: fatal close code %s, not reconnecting",
-                        self.bot_id,
-                        close_code,
+                        _log_field(self.bot_id),
+                        _log_field(close_code),
                     )
                     self._running = False
                     self._fatal_close_code = close_code
@@ -538,7 +547,7 @@ class GatewayConnection:
             return
 
         if op == 7:
-            logger.info("bot %s: received RECONNECT", self.bot_id)
+            logger.info("bot %s: received RECONNECT", _log_field(self.bot_id))
             await self._reconnect()
             return
 
@@ -546,8 +555,8 @@ class GatewayConnection:
             resumable = bool(d)
             logger.info(
                 "bot %s: INVALID_SESSION (resumable=%s)",
-                self.bot_id,
-                resumable,
+                _log_field(self.bot_id),
+                _log_field(resumable),
             )
             await asyncio.sleep(2)
             if not resumable:
@@ -563,11 +572,11 @@ class GatewayConnection:
                 self._bot_user_id = d["user"]["id"]
                 logger.info(
                     "bot %s: READY (session=%s)",
-                    self.bot_id,
-                    self._session_id,
+                    _log_field(self.bot_id),
+                    _log_field(self._session_id),
                 )
             elif t == "RESUMED":
-                logger.info("bot %s: RESUMED", self.bot_id)
+                logger.info("bot %s: RESUMED", _log_field(self.bot_id))
             elif t == "MESSAGE_CREATE":
                 asyncio.create_task(self._handle_message(d))
 
@@ -643,8 +652,8 @@ class GatewayConnection:
         if already_published("discord", message_id):
             logger.debug(
                 "bot %s: skipping duplicate MESSAGE_CREATE %s",
-                self.bot_id,
-                message_id,
+                _log_field(self.bot_id),
+                _log_field(message_id),
             )
             return
 
@@ -682,15 +691,15 @@ class GatewayConnection:
                     await self._connect(resume=resume)
                     logger.info(
                         "bot %s: reconnected (resume=%s)",
-                        self.bot_id,
-                        resume,
+                        _log_field(self.bot_id),
+                        _log_field(resume),
                     )
                     return
                 except Exception:
                     logger.exception(
                         "bot %s: reconnect failed, retrying in %ss",
-                        self.bot_id,
-                        backoff,
+                        _log_field(self.bot_id),
+                        _log_field(backoff),
                     )
                     await asyncio.sleep(backoff)
                     backoff = min(backoff * 2, 60.0)

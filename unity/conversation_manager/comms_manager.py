@@ -40,7 +40,6 @@ except ImportError:  # pragma: no cover - exercised in local-only installs
     pubsub_v1 = None
 
 from unity.logger import LOGGER
-from unity.common.context_registry import ContextRegistry
 from unity.common.hierarchical_logger import DEFAULT_ICON, ICONS
 from unity.settings import SETTINGS
 from unity.deploy_runtime import (
@@ -1991,17 +1990,19 @@ class CommsManager:
                     continue
                 if job_assignment.binding_id != session_binding_id:
                     LOGGER.info(
-                        f"{DEFAULT_ICON} Ignoring stale assignment on {job_name}: "
-                        f"job binding {job_assignment.binding_id} != "
-                        f"session binding {session_binding_id}",
+                        "%s Ignoring stale assignment on %r: binding mismatch",
+                        DEFAULT_ICON,
+                        job_name,
                     )
                     await asyncio.sleep(5)
                     continue
                 LOGGER.info(
-                    f"{DEFAULT_ICON} Assignment session loaded for {job_name}: "
-                    f"phase={(session_status.get('phase') or '')}, "
-                    f"secret={secret_name}, "
-                    f"binding_id={session_binding_id}",
+                    "%s Assignment session loaded: phase=%r secret_present=%s "
+                    "binding_present=%s",
+                    DEFAULT_ICON,
+                    session_status.get("phase") or "",
+                    bool(secret_name),
+                    bool(session_binding_id),
                 )
 
                 secret_record = await asyncio.to_thread(
