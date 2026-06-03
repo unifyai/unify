@@ -118,6 +118,27 @@ def test_dashboard_short_paths_are_not_data_prefixed():
     assert dm._resolve_context("Dashboards/Layouts") == "Dashboards/Layouts"
 
 
+def test_shared_space_path_not_double_prefixed():
+    """Spaces/* contexts are absolute roots, not Data/* children."""
+    from unity.data_manager.data_manager import DataManager
+
+    dm = DataManager.__new__(DataManager)
+    dm._base_ctx = "org123/42/Data"
+
+    assert (
+        dm._resolve_context("Spaces/7/Dashboards/Tiles") == "Spaces/7/Dashboards/Tiles"
+    )
+
+
+def test_simulated_shared_space_path_not_double_prefixed():
+    """SimulatedDataManager follows the same Spaces/* absolute-root contract."""
+    dm = SimulatedDataManager()
+
+    assert (
+        dm._resolve_context("Spaces/7/Dashboards/Tiles") == "Spaces/7/Dashboards/Tiles"
+    )
+
+
 def test_data_manager_constructor_fails_when_context_resolution_fails():
     from unity.data_manager.data_manager import DataManager
 
@@ -235,7 +256,7 @@ def test_get_context_uses_stashed_base_after_clear():
         with patch("unity.common.context_registry.create_fields"):
             ContextRegistry.setup()
 
-    cached = ContextRegistry._registry.get(("FileManager", "FileRecords"))
+    cached = ContextRegistry._registry.get(("FileManager", "FileRecords", "Personal"))
     assert cached == f"{base}/FileRecords"
 
     # clear() resets _registry, _setup_complete, and _base_context

@@ -330,7 +330,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
     def get_active_contact(self) -> dict | None:
         """Get the contact for the current active call, or fall back to the boss contact."""
         return self.call_manager.call_contact or self.contact_index.get_contact(
-            contact_id=1,
+            contact_id=SESSION_DETAILS.boss_contact_id,
         )
 
     async def capture_assistant_screenshot(
@@ -1778,6 +1778,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "assistant_email_provider",
             "google_workspace",
         )
+        self.self_contact_id = int(payload["self_contact_id"])
+        self.boss_contact_id = int(payload["boss_contact_id"])
         self.assistant_whatsapp_number = payload.get("assistant_whatsapp_number", "")
         self.assistant_discord_bot_id = payload.get("assistant_discord_bot_id", "")
         self.assistant_slack_bot_user_id = payload.get(
@@ -1800,6 +1802,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.org_id: int | None = payload.get("org_id")
         self.org_name: str = payload.get("org_name", "")
         self.team_ids: list[int] = payload.get("team_ids") or []
+        self.space_ids: list[int] = payload.get("space_ids") or []
+        space_summaries = payload.get("space_summaries") or []
         # Set API key on SESSION_DETAILS for runtime access
         if payload.get("api_key"):
             SESSION_DETAILS.unify_key = payload["api_key"]
@@ -1816,6 +1820,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             assistant_number=self.assistant_number,
             assistant_email=self.assistant_email,
             assistant_email_provider=self.assistant_email_provider,
+            assistant_self_contact_id=self.self_contact_id,
             assistant_whatsapp_number=self.assistant_whatsapp_number,
             assistant_discord_bot_id=self.assistant_discord_bot_id,
             assistant_slack_bot_user_id=self.assistant_slack_bot_user_id,
@@ -1826,9 +1831,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
             user_number=self.user_number,
             user_email=self.user_email,
             user_whatsapp_number=self.user_whatsapp_number,
+            user_boss_contact_id=self.boss_contact_id,
             org_id=self.org_id,
             org_name=self.org_name,
             team_ids=self.team_ids,
+            space_ids=self.space_ids,
+            space_summaries=space_summaries,
             voice_provider=self.voice_provider,
             voice_id=self.voice_id,
             binding_id=self.binding_id,
@@ -1837,6 +1845,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             user_desktop_filesys_sync=self.user_desktop_filesys_sync,
             user_desktop_url=self.user_desktop_url,
         )
+        self.space_summaries = SESSION_DETAILS.space_summaries
         # Export to env vars for subprocess inheritance
         SESSION_DETAILS.export_to_env()
 
