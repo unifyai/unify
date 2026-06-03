@@ -34,6 +34,11 @@ from unity.settings import SETTINGS
 
 logger = logging.getLogger("unity.gateway.channels.slack.views")
 
+
+def _log_field(value: object) -> str:
+    return str(value).replace("\r", "").replace("\n", "")
+
+
 auth_router = APIRouter()
 
 SLACK_API_BASE = "https://slack.com/api"
@@ -186,10 +191,10 @@ async def send_slack_message(request: Request):
             detail=f"chat.postMessage failed: {msg_data.get('error')}",
         )
     logger.info(
-        "sent Slack message to %r on team %r (ts=%r)",
-        channel_id,
-        team_id,
-        msg_data.get("ts"),
+        "sent Slack message to %s on team %s (ts=%s)",
+        _log_field(channel_id),
+        _log_field(team_id),
+        _log_field(msg_data.get("ts")),
     )
     return {
         "success": True,
