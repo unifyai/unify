@@ -147,7 +147,7 @@ class TestCoordinatorPrompt:
         prompt = _build(is_coordinator=True, is_org_workspace=False)
 
         assert "Boss details" in prompt
-        assert "Authorized humans" not in prompt
+        assert "Authorized humans\n-----------------" not in prompt
         assert "Organization membership actions are unavailable" in prompt
         assert "switch to that organization's workspace coordinator" in prompt
         assert "list_accessible_organizations" not in prompt
@@ -156,11 +156,13 @@ class TestCoordinatorPrompt:
         prompt = _build(workspace_coordinator_name="Avery Coordinator")
 
         assert "Team Coordinator" in prompt
-        assert "Escalate to Avery Coordinator" in prompt
-        assert "create or remove colleagues" in prompt
-        assert "create or remove team spaces" in prompt
-        assert "add or remove space members" in prompt
-        assert "invite org members" in prompt
+        assert "I propose handing it to Avery Coordinator explicitly" in prompt
+        assert "inviting, removing, or changing roles for colleagues" in prompt
+        assert "creating or removing team spaces" in prompt
+        assert (
+            "placing shared credentials, integrations, or other org-level setup"
+            in prompt
+        )
         assert "I cannot forward it automatically" not in prompt
 
     def test_coordinator_reference_block_is_absent_without_name_or_on_coordinator(self):
@@ -197,9 +199,11 @@ class TestCoordinatorPrompt:
         assert "Intent vs verified outcomes" in base_prompt
         assert "Intent vs verified outcomes" in coordinator_prompt
         assert "Console knowledge" in base_prompt
-        assert "Console knowledge" not in coordinator_prompt
+        assert "Console knowledge" in coordinator_prompt
         assert "Concurrent action and acknowledgment" in base_prompt
-        assert "Concurrent action and acknowledgment" not in coordinator_prompt
+        assert "Concurrent action and acknowledgment" in coordinator_prompt
+        assert "Onboarding reference" in base_prompt
+        assert "Onboarding reference" not in coordinator_prompt
 
 
 class TestPromptSectionOwnershipMatrix:
@@ -274,11 +278,14 @@ class TestPromptSectionOwnershipMatrix:
                     "**Coordinator workspace tools:**",
                     "Authorized humans\n-----------------",
                     "Act capabilities\n----------------",
+                    "Concurrent action and acknowledgment\n------------------------------------",
+                    "Console knowledge\n-----------------",
+                    "Proactive meeting offers\n------------------------",
                 ),
                 "absent": (
                     "Team Coordinator\n----------------",
                     "Demo mode\n---------",
-                    "Concurrent action and acknowledgment\n------------------------------------",
+                    "Onboarding reference\n--------------------",
                 ),
             },
             {
@@ -310,10 +317,13 @@ class TestPromptSectionOwnershipMatrix:
                     "Boss details\n------------",
                     "Organization membership actions are unavailable",
                     "switch to that organization's workspace coordinator",
+                    "Console knowledge\n-----------------",
+                    "Proactive meeting offers\n------------------------",
                 ),
                 "absent": (
                     "Authorized humans\n-----------------",
                     "Team Coordinator\n----------------",
+                    "Onboarding reference\n--------------------",
                 ),
             },
         )
@@ -466,7 +476,6 @@ class TestExternalAppIntegration:
         assert "Can you help me manage my apps and online services?" in prompt
         assert "secure page on the console" in prompt
         assert "API credentials or access tokens" in prompt
-        assert "⋮ → Secrets" in prompt
         assert "service's Python SDK" in prompt
 
     def test_act_capabilities_has_external_apps_bullet(self):
@@ -483,8 +492,8 @@ class TestExternalAppIntegration:
 
         assert "I can walk through app setup and day-to-day usage directly" in prompt
         assert (
-            "If a credential needs to be shared across the team or org, I can route "
-            "that handoff to Avery Coordinator."
+            "If a credential needs to be shared across the team or org (rather than "
+            "scoped to just me), Avery Coordinator is the right person to place it"
         ) in prompt
         assert "Avery Coordinator owns that setup" not in prompt
         assert "I cannot forward it automatically" not in prompt
@@ -513,7 +522,7 @@ class TestProactiveMeetingOffers:
 
     def test_proactive_meeting_absent_for_coordinator(self):
         prompt = _build(is_coordinator=True)
-        assert "Proactive meeting offers" not in prompt
+        assert "Proactive meeting offers" in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -532,9 +541,9 @@ class TestConsoleKnowledge:
 
     def test_console_knowledge_has_navigation_paths(self):
         prompt = _build()
-        assert "Hover over my name in the assistant list → ⋮ → Secrets" in prompt
-        assert "⋮ → Secrets" in prompt
-        assert "Profile menu" in prompt
+        assert "hover over my name in the left sidebar → ⋮ → **Secrets**" in prompt
+        assert "⋮ → **Secrets**" in prompt
+        assert "top-right profile menu" in prompt
 
     def test_console_knowledge_absent_in_demo_mode(self):
         prompt = _build(demo_mode=True)
