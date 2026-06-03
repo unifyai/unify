@@ -34,6 +34,7 @@ import platform
 import random
 import re
 import time
+from typing import Any
 
 import aiohttp
 import httpx
@@ -277,10 +278,22 @@ def _publish_to_pubsub(
 ) -> None:
     """Publish an inbound Discord message to the assistant's Pub/Sub topic."""
     client = get_pubsub_client()
-    topic_path = client.topic_path(
-        SETTINGS.GCP_PROJECT_ID,
-        _assistant_topic(assistant_id),
-    )
+    project_id = SETTINGS.GCP_PROJECT_ID
+    topic_name = _assistant_topic(assistant_id)
+    kind = "channel message" if is_channel else "DM"
+
+    if not project_id:
+        logger.error(
+            "cannot publish Discord %s from %s to assistant %s: GCP_PROJECT_ID "
+            "is not set (topic=%s); message dropped",
+            kind,
+            sender_discord_id,
+            assistant_id,
+            topic_name,
+        )
+        return
+
+    topic_path = client.topic_path(project_id, topic_name)
     payload = {
         "thread": "discord",
         "publish_timestamp": time.time(),
@@ -297,18 +310,55 @@ def _publish_to_pubsub(
             "attachments": attachments or [],
         },
     }
-    client.publish(
+
+    logger.info(
+        "publishing Discord %s from %s to assistant %s (topic=%s, contacts=%d, "
+        "msg=%s)",
+        kind,
+        sender_discord_id,
+        assistant_id,
+        topic_path,
+        len(contacts or []),
+        message_id,
+    )
+
+    future = client.publish(
         topic_path,
         json.dumps(payload).encode("utf-8"),
         thread="inbound",
     )
-    kind = "channel message" if is_channel else "DM"
-    logger.info(
-        "published Discord %s from %s to assistant %s",
-        kind,
-        sender_discord_id,
-        assistant_id,
-    )
+
+    def _log_publish_result(completed: Any) -> None:
+        """Surface the publish outcome so failures are not swallowed.
+
+        The Pub/Sub future resolves on a background thread; a swallowed
+        exception here previously made a failed publish indistinguishable
+        from a successful one in the logs.
+        """
+        try:
+            pubsub_message_id = completed.result()
+        except Exception:
+            logger.exception(
+                "failed to publish Discord %s from %s to assistant %s (topic=%s, "
+                "msg=%s)",
+                kind,
+                sender_discord_id,
+                assistant_id,
+                topic_path,
+                message_id,
+            )
+            return
+        logger.info(
+            "published Discord %s from %s to assistant %s (topic=%s, "
+            "pubsub_message_id=%s)",
+            kind,
+            sender_discord_id,
+            assistant_id,
+            topic_path,
+            pubsub_message_id,
+        )
+
+    future.add_done_callback(_log_publish_result)
 
 
 class GatewayConnection:
