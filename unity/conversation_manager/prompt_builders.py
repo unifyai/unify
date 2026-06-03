@@ -397,7 +397,6 @@ def _build_channels_str(
     return ", ".join(available_channels)
 
 
-
 def _build_comms_tool_listing(
     assistant_has_phone: bool,
     assistant_has_email: bool,
