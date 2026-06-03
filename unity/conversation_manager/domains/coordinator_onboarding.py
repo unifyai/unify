@@ -159,9 +159,11 @@ def _coordinator_onboarding_notification_text(
     guidance = (
         "Acknowledge this in one short sentence to the user, name the thing they "
         "just completed, and preview the next pending onboarding checklist step. "
-        "Stay celebratory but brief — do not re-list every prior step. If a call "
-        "is active, prefer a single spoken line; otherwise send a single chat "
-        "message."
+        "Stay celebratory but brief — do not re-list every prior step. If a voice "
+        "call is active you MUST speak it by calling "
+        'guide_voice_agent(should_speak=True, response_text="...") — do not send a '
+        "chat message during a call (it is silent to the caller). Otherwise send a "
+        "single chat message."
     )
     if not body:
         return f"{subtype_hint} {guidance}"

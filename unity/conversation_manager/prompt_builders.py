@@ -607,11 +607,19 @@ def _build_coordinator_onboarding_narration_block() -> str:
             'earlier) point at "Assign a task or try these workflows".',
             "       - If onboarding is otherwise complete, congratulate and "
             "stand down.",
-            "  3. Prefer a spoken line when a voice call is active; otherwise send one chat message.",
+            "  3. Deliver the acknowledgement on whichever channel is live. When a "
+            "voice call is active you MUST speak it by calling "
+            '`guide_voice_agent(should_speak=True, response_text="...")` with the '
+            "acknowledgement as the verbatim spoken line — do NOT send a chat "
+            "message during a call (a chat message is silent to the caller, which "
+            "is why workspace/app connections currently go unmentioned on calls). "
+            "When no call is active, send exactly one short chat message instead.",
             "  4. Never narrate the same subtype twice in a row — if the previous "
             "acknowledgement is still in the immediate transcript history, stay silent.",
-            "  5. Do not act on the event (no `act`, no tool calls). Acknowledgement only — "
-            "the user's next message is the trigger for any follow-up work.",
+            "  5. Do not *act* on the event — no `act`, no work/task/integration "
+            "tools. The one exception is `guide_voice_agent`, which you call only to "
+            "speak the acknowledgement on a live call per rule 3. Acknowledgement "
+            "only — the user's next message is the trigger for any follow-up work.",
             "Rules for the `onboarding_session_started` subtype (session-opening turn):",
             "  6. Address the user by their first name (from Boss details / "
             'Authorized humans). Open with a warm "Hi <first name> — " or '
