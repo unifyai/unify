@@ -630,7 +630,7 @@ jobs:
       # API credentials
       # ORCHESTRA_URL: if repo variable set, use remote; otherwise local orchestra sets it
       ORCHESTRA_URL: ${{ vars.ORCHESTRA_URL }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_CI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       # Communication service URL (set via repository variables)
       UNITY_COMMS_URL: ${{ vars.UNITY_COMMS_URL }}

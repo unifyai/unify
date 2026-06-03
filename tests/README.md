@@ -472,7 +472,7 @@ Understanding how env vars flow from `.env` to your test process avoids subtle "
 1. `parallel_cloud_run.sh` base64-encodes your local `.env` and sends it as a workflow input.
 2. The CI runner decodes it back to `.env`, then `parallel_run.sh` sources it (same as local).
 3. CI also sets **job-level env vars** from GitHub secrets/repo variables (API keys, GCP config, etc.). These are always present regardless of `.env` content.
-4. LLM provider secrets in CI must contain budget-limited project keys. The `OPENAI_API_KEY` repository secret used by CI must belong to a dedicated CI OpenAI project with hard daily and monthly caps.
+4. LLM provider secrets in CI must contain budget-limited project keys. The `OPENAI_CI_API_KEY` repository secret used by CI must belong to a dedicated CI OpenAI project with hard daily and monthly caps.
 5. **Commit-triggered tests** (`[run-tests]` in commit message) do **not** send any `.env` — they rely entirely on the job-level env vars.
 
 Normal CI sets `UNILLM_CACHE=read-only`, rejects explicit cache overrides in `parallel_run_args`, and removes local LLM provider keys/cache settings from pasted `.env` content. Cache writes and uncached evals must use the protected **LLM Cache Refresh** workflow.
