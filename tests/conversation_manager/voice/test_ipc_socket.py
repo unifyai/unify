@@ -79,6 +79,28 @@ class TestCallEventSocketServer:
         await server.stop()
 
     @pytest.mark.asyncio
+    async def test_has_connected_clients_reflects_live_connection_state(
+        self,
+        mock_event_broker,
+    ):
+        """Connected-client property tracks IPC attach and detach."""
+        server = CallEventSocketServer(mock_event_broker, forward_channels=[])
+        assert server.has_connected_clients is False
+
+        socket_path = await server.start()
+        client = CallEventSocketClient(socket_path)
+        await client.send_event("test:channel", '{"ping": true}')
+        await _wait_for_condition(lambda: server.has_connected_clients)
+
+        assert server.has_connected_clients is True
+
+        await client.close()
+        await _wait_for_condition(lambda: not server.has_connected_clients)
+        assert server.has_connected_clients is False
+
+        await server.stop()
+
+    @pytest.mark.asyncio
     async def test_on_event_callback_called(self, mock_event_broker):
         """Custom on_event callback is called instead of publishing to broker."""
         received_events = []
