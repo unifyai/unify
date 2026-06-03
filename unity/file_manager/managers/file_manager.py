@@ -202,7 +202,7 @@ class FileManager(BaseFileManager):
             unique_keys={"file_id": "int"},
             auto_counting={"file_id": None},
             description=(
-                "FileRecords index for a single filesystem; per-file content lives under Files/<alias>/<safe_filepath>/Tables/<table>."
+                "FileRecords index for a single filesystem; per-file content lives under Files/{alias}/{safe_filepath}/Tables/{table}."
             ),
             fields=model_to_fields(FileRecord),
         )
