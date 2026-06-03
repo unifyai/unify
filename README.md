@@ -63,7 +63,7 @@ That's it. You're chatting with a local assistant called `Unity`. State persists
 <details>
 <summary>What the installer does</summary>
 
-Clones `unity`, `unify`, `unillm`, and `orchestra-core` as siblings under `~/.unity/`. Installs Python dependencies with `uv`. Boots a local Orchestra in Docker. Generates a local API key for that bundled Orchestra. Writes `ORCHESTRA_URL`, `UNIFY_KEY`, and your LLM provider key into `~/.unity/unity/.env`. Creates a `unity` CLI shim in `~/.local/bin/` and appends a clearly-marked PATH block to your `~/.zshrc` / `~/.bash_profile` / `~/.bashrc`. No Unify account or signup is required.
+Clones `unity`, `unify`, `unillm`, and `orchestra` as siblings under `~/.unity/`. Installs Python dependencies with `uv`. Boots a local Orchestra in Docker. Generates a local API key for that bundled Orchestra. Writes `ORCHESTRA_URL`, `UNIFY_KEY`, and your LLM provider key into `~/.unity/unity/.env`. Creates a `unity` CLI shim in `~/.local/bin/` and appends a clearly-marked PATH block to your `~/.zshrc` / `~/.bash_profile` / `~/.bashrc`. No Unify account or signup is required.
 
 If you skip the LLM key at install time (or pipe through a non-interactive shell), the installer prints the one line to add to `.env` manually.
 
@@ -453,7 +453,7 @@ Unity is one of four MIT-licensed repos that make up the runtime. The installer 
 | Repo | Role |
 |------|------|
 | **unity** (this) | Agent runtime — managers, tool loops, CodeAct, voice, orchestration |
-| **[orchestra-core](https://github.com/unifyai/orchestra-core)** | Persistence kernel — FastAPI + Postgres + pgvector; spun up locally in Docker by the installer |
+| **[orchestra](https://github.com/unifyai/orchestra)** | Persistence backend — FastAPI + Postgres + pgvector; spun up locally in Docker by the installer |
 | **[unify](https://github.com/unifyai/unify)** | Python SDK — how Unity talks to Orchestra |
 | **[unillm](https://github.com/unifyai/unillm)** | LLM access layer — OpenAI, Anthropic, or any compatible endpoint |
 

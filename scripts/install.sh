@@ -3,7 +3,7 @@
 # Unity Installer
 # ============================================================================
 # Installs Unity (https://github.com/unifyai/unity) locally on macOS / Linux /
-# WSL2. Clones unity, unify, unillm, and orchestra-core as siblings under
+# WSL2. Clones unity, unify, unillm, and orchestra as siblings under
 # $UNITY_HOME and editable-installs the Python repos with uv.
 #
 # Quick install:
@@ -14,7 +14,7 @@
 #   --branch NAME     Git branch to install (default: main)
 #   --no-cli          Skip creating the `unity` command shim
 #   --skip-deps       Skip system-dependency checks (PortAudio, etc.)
-#   --skip-setup      Skip the local orchestra-core spin-up at the end
+#   --skip-setup      Skip the local orchestra spin-up at the end
 #                     (just install the code; run `unity setup` later)
 #   -h, --help        Show this help
 # ============================================================================
@@ -380,7 +380,7 @@ create_cli() {
 set -e
 UNITY_HOME="${UNITY_HOME}"
 UNITY_REPO="${UNITY_REPO}"
-ORCHESTRA_REPO="\$UNITY_HOME/orchestra-core"
+ORCHESTRA_REPO="\$UNITY_HOME/orchestra"
 export UNITY_HOME
 
 if [ ! -d "\$UNITY_REPO" ]; then
@@ -397,7 +397,7 @@ case "\${1:-}" in
         if [ -x "\$ORCHESTRA_REPO/scripts/local.sh" ]; then
             exec bash "\$ORCHESTRA_REPO/scripts/local.sh" stop
         else
-            echo "orchestra-core not installed at \$ORCHESTRA_REPO — nothing to stop." >&2
+            echo "orchestra not installed at \$ORCHESTRA_REPO — nothing to stop." >&2
             exit 1
         fi
         ;;
@@ -405,7 +405,7 @@ case "\${1:-}" in
         if [ -x "\$ORCHESTRA_REPO/scripts/local.sh" ]; then
             exec bash "\$ORCHESTRA_REPO/scripts/local.sh" status
         else
-            echo "orchestra-core not installed at \$ORCHESTRA_REPO." >&2
+            echo "orchestra not installed at \$ORCHESTRA_REPO." >&2
             exit 1
         fi
         ;;
@@ -413,7 +413,7 @@ case "\${1:-}" in
         if [ -x "\$ORCHESTRA_REPO/scripts/local.sh" ]; then
             exec bash "\$ORCHESTRA_REPO/scripts/local.sh" restart
         else
-            echo "orchestra-core not installed at \$ORCHESTRA_REPO — run \\\`unity setup\\\` first." >&2
+            echo "orchestra not installed at \$ORCHESTRA_REPO — run \\\`unity setup\\\` first." >&2
             exit 1
         fi
         ;;
@@ -474,7 +474,7 @@ case "\${1:-}" in
         pull_repo unity          "\$UNITY_REPO"
         pull_repo unify          "\$UNITY_HOME/unify"
         pull_repo unillm         "\$UNITY_HOME/unillm"
-        pull_repo orchestra-core "\$ORCHESTRA_REPO"
+        pull_repo orchestra "\$ORCHESTRA_REPO"
 
         printf '\\n  %s>%s syncing Python dependencies (uv sync)\\n' "\$BOLD" "\$NC"
         if (cd "\$UNITY_REPO" && command -v uv >/dev/null 2>&1 && uv sync >/dev/null 2>&1); then
@@ -646,10 +646,10 @@ Usage:
   unity --live-voice                 Same, with live voice calls in the browser.
   unity logs                         Tail the runtime log in a second terminal.
 
-  unity setup                        Bootstrap / re-bootstrap local orchestra-core
-  unity stop                         Stop local orchestra-core (preserves data)
-  unity status                       Show local orchestra-core status
-  unity restart                      Restart local orchestra-core (preserves data)
+  unity setup                        Bootstrap / re-bootstrap local orchestra
+  unity stop                         Stop local orchestra (preserves data)
+  unity status                       Show local orchestra status
+  unity restart                      Restart local orchestra (preserves data)
   unity doctor                       Diagnose missing deps, keys, and PATH
   unity update                       git pull --rebase the four repos + uv sync
 
@@ -744,17 +744,17 @@ ensure_cli_on_path() {
 }
 
 # ----------------------------------------------------------------------------
-# Run setup.sh at the end (clones orchestra-core, spins up local backend, writes .env)
+# Run setup.sh at the end (clones orchestra, spins up local backend, writes .env)
 # ----------------------------------------------------------------------------
 run_setup() {
     [ "$RUN_SETUP" = "false" ] && {
-        log_info "Skipping local orchestra-core spin-up (--skip-setup). Run \`unity setup\` later."
+        log_info "Skipping local orchestra spin-up (--skip-setup). Run \`unity setup\` later."
         SETUP_OK=skipped
         return 0
     }
 
     if [ ! -x "$UNITY_REPO/scripts/setup.sh" ]; then
-        log_warn "setup.sh not found at $UNITY_REPO/scripts/setup.sh — skipping orchestra-core spin-up."
+        log_warn "setup.sh not found at $UNITY_REPO/scripts/setup.sh — skipping orchestra spin-up."
         SETUP_OK=failed
         return 0
     fi
@@ -771,7 +771,7 @@ run_setup() {
         SETUP_OK=ok
     else
         SETUP_OK=failed
-        log_warn "Local orchestra-core setup didn't complete (exit=$setup_exit)."
+        log_warn "Local orchestra setup didn't complete (exit=$setup_exit)."
         log_info "Re-run after fixing the issue:  unity setup"
     fi
 }
@@ -784,7 +784,7 @@ print_next_steps() {
     echo ""
     if [ "${SETUP_OK:-}" = "failed" ]; then
         echo -e "${YELLOW}${BOLD}Installation partially complete.${NC}"
-        echo "  Code is installed; local orchestra-core didn't start. See warnings above."
+        echo "  Code is installed; local orchestra didn't start. See warnings above."
     else
         echo -e "${GREEN}${BOLD}Installation complete.${NC}"
     fi
@@ -792,9 +792,9 @@ print_next_steps() {
     echo -e "${BOLD}Next steps:${NC}"
     echo ""
 
-    # ---- Step: finish orchestra-core bootstrap if it didn't complete ----
+    # ---- Step: finish orchestra bootstrap if it didn't complete ----
     if [ "${SETUP_OK:-}" != "ok" ]; then
-        echo "  $step. Bootstrap local orchestra-core:"
+        echo "  $step. Bootstrap local orchestra:"
         echo -e "     ${CYAN}\$ unity setup${NC}"
         echo ""
         step=$((step + 1))
@@ -810,7 +810,7 @@ print_next_steps() {
             echo "  $step. Add an LLM provider key to $UNITY_REPO/.env"
             echo "     OPENAI_API_KEY=... or ANTHROPIC_API_KEY=..."
             if [ "${SETUP_OK:-}" = "ok" ]; then
-                echo "     (ORCHESTRA_URL and UNIFY_KEY are already wired to local orchestra-core.)"
+                echo "     (ORCHESTRA_URL and UNIFY_KEY are already wired to local orchestra.)"
             fi
             echo ""
             step=$((step + 1))
@@ -851,8 +851,8 @@ print_next_steps() {
         echo "  Also available:"
         echo -e "     ${CYAN}\$ unity --live-voice${NC}     Talk to your assistant in the browser"
         echo -e "     ${CYAN}\$ unity voice setup${NC}      One-time local LiveKit bring-up"
-        echo -e "     ${CYAN}\$ unity status${NC}           Local orchestra-core status"
-        echo -e "     ${CYAN}\$ unity stop${NC}             Stop local orchestra-core"
+        echo -e "     ${CYAN}\$ unity status${NC}           Local orchestra status"
+        echo -e "     ${CYAN}\$ unity stop${NC}             Stop local orchestra"
         echo -e "     ${CYAN}\$ unity help${NC}             Subcommand reference"
     else
         echo "  $step. Activate the venv and start the runtime:"

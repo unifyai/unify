@@ -13,7 +13,7 @@ Unity implements an AI assistant's brain as a **distributed back office**. A cen
 Sibling repos consumed via editable installs (see `[tool.uv.sources]` in `pyproject.toml`):
 - **`unify`** — Python SDK wrapping the Orchestra REST API
 - **`unillm`** — LLM client with caching, provider normalization, observability
-- **`orchestra-core`** — backend API + Postgres (started locally via Docker)
+- **`orchestra`** — backend API + Postgres (started locally via Docker)
 
 ---
 
