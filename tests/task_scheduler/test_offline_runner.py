@@ -1,6 +1,5 @@
 """Tests for the headless offline task runner."""
 
-
 import pytest
 
 
@@ -178,11 +177,6 @@ def test_offline_delegate_runs_agentic_task_through_actor(monkeypatch):
     assert captured["closed"] is True
 
 
-assert updates[0][2]["state"] == "running"
-    assert updates[1][2]["state"] == "failed"
-    assert updates[1][2]["error"] == "boom"
-
-
 def test_load_config_from_env_canonicalizes_destination(monkeypatch):
     """Offline env destination labels are normalized before execution."""
 
@@ -206,4 +200,3 @@ def test_load_config_from_env_rejects_invalid_destination(monkeypatch):
 
     with pytest.raises(RuntimeError, match="Invalid TASK_DESTINATION"):
         offline_runner._load_config_from_env()
-
