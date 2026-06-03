@@ -63,7 +63,7 @@ def ensure_vector_for_source(context: str, source_expr: str) -> str:
             derived_expr=None,
         )
     else:
-        expr_hash = hashlib.sha1(source_expr.encode("utf-8")).hexdigest()[:10]
+        expr_hash = hashlib.sha256(source_expr.encode("utf-8")).hexdigest()[:10]
         source_column_name = f"_expr_{expr_hash}"
         embed_column_name = f"{source_column_name}_emb"
         sanitized_expr = wrap_str_placeholders(source_expr)
@@ -335,7 +335,7 @@ def fetch_top_k_by_terms(
     canonical = "|".join(f"{i}:{col}=>{txt}" for i, (col, txt) in enumerate(terms))
     import hashlib as _hashlib
 
-    sum_hash = _hashlib.sha1(canonical.encode("utf-8")).hexdigest()[:12]
+    sum_hash = _hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
     sum_key = ensure_mean_cosine_column_piecewise(context, terms, sum_hash)
 
     if allowed_fields is not None:

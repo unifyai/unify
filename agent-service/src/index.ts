@@ -546,7 +546,14 @@ async function ensureDemoSites(urlMappings: Record<string, string>): Promise<Rec
     }
 
     const localhostUrl = `http://localhost:${port}`;
-    resolved[originalUrl] = localhostUrl;
+    let mappingKey: string;
+    try {
+      mappingKey = new URL(originalUrl).href;
+    } catch {
+      console.warn(`[demo-sites] Skipping invalid URL mapping for ${dirName}`);
+      continue;
+    }
+    resolved[mappingKey] = localhostUrl;
 
     // /etc/hosts + Caddy setup so the real domain resolves to the demo site
     try {

@@ -419,7 +419,11 @@ class GatewayConnection:
 
         hello = await asyncio.wait_for(self._ws.receive_json(), timeout=30.0)
         if hello.get("op") != 10:
-            logger.error("bot %s: expected HELLO (op 10), got %s", self.bot_id, hello)
+            logger.error(
+                "bot %r: expected HELLO (op 10), got op=%r",
+                self.bot_id,
+                hello.get("op"),
+            )
             await self._ws.close(code=1000)
             raise ConnectionError(
                 f"Bot {self.bot_id}: did not receive HELLO, "
@@ -474,7 +478,7 @@ class GatewayConnection:
             await asyncio.sleep(self._heartbeat_interval)
             if not self._heartbeat_acked:
                 logger.warning(
-                    "bot %s: heartbeat not ACKed, reconnecting",
+                    "bot %r: heartbeat not ACKed, reconnecting",
                     self.bot_id,
                 )
                 await self._reconnect()
@@ -496,13 +500,13 @@ class GatewayConnection:
             ):
                 close_code = self._ws.close_code
                 logger.warning(
-                    "bot %s: WebSocket closed (code=%s)",
+                    "bot %r: WebSocket closed (code=%r)",
                     self.bot_id,
                     close_code,
                 )
                 if close_code in FATAL_CLOSE_CODES:
                     logger.error(
-                        "bot %s: fatal close code %s, not reconnecting",
+                        "bot %r: fatal close code %r, not reconnecting",
                         self.bot_id,
                         close_code,
                     )
@@ -538,14 +542,14 @@ class GatewayConnection:
             return
 
         if op == 7:
-            logger.info("bot %s: received RECONNECT", self.bot_id)
+            logger.info("bot %r: received RECONNECT", self.bot_id)
             await self._reconnect()
             return
 
         if op == 9:
             resumable = bool(d)
             logger.info(
-                "bot %s: INVALID_SESSION (resumable=%s)",
+                "bot %r: INVALID_SESSION (resumable=%r)",
                 self.bot_id,
                 resumable,
             )
@@ -562,12 +566,12 @@ class GatewayConnection:
                 self._resume_url = d.get("resume_gateway_url")
                 self._bot_user_id = d["user"]["id"]
                 logger.info(
-                    "bot %s: READY (session=%s)",
+                    "bot %r: READY (session=%r)",
                     self.bot_id,
                     self._session_id,
                 )
             elif t == "RESUMED":
-                logger.info("bot %s: RESUMED", self.bot_id)
+                logger.info("bot %r: RESUMED", self.bot_id)
             elif t == "MESSAGE_CREATE":
                 asyncio.create_task(self._handle_message(d))
 
@@ -642,7 +646,7 @@ class GatewayConnection:
 
         if already_published("discord", message_id):
             logger.debug(
-                "bot %s: skipping duplicate MESSAGE_CREATE %s",
+                "bot %r: skipping duplicate MESSAGE_CREATE %r",
                 self.bot_id,
                 message_id,
             )
@@ -681,14 +685,14 @@ class GatewayConnection:
                 try:
                     await self._connect(resume=resume)
                     logger.info(
-                        "bot %s: reconnected (resume=%s)",
+                        "bot %r: reconnected (resume=%r)",
                         self.bot_id,
                         resume,
                     )
                     return
                 except Exception:
                     logger.exception(
-                        "bot %s: reconnect failed, retrying in %ss",
+                        "bot %r: reconnect failed, retrying in %ss",
                         self.bot_id,
                         backoff,
                     )
