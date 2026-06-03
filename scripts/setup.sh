@@ -2,11 +2,10 @@
 # ============================================================================
 # Unity setup — local backend bootstrap
 # ============================================================================
-# Spins up a local orchestra-core instance (Postgres+pgvector in Docker +
+# Spins up a local orchestra instance (Postgres+pgvector in Docker +
 # FastAPI server) and wires Unity's .env to use it. Idempotent: safe to
-# re-run. orchestra-core is the public single-user kernel of Orchestra; the
-# multi-tenant private orchestra-platform repo is NOT what local installs
-# pull, since it requires repo access this open-source flow doesn't have.
+# re-run. The unified orchestra repo provides the local backend used by
+# open-source installs.
 #
 # Usually called automatically by scripts/install.sh; re-run directly via
 # `unity setup` if you need to re-bootstrap (e.g., Docker wasn't running the
@@ -16,7 +15,7 @@
 #   UNITY_HOME              Install root (default: ~/.unity)
 #   ORCHESTRA_PORT          Orchestra FastAPI port (default: 8000)
 #   ORCHESTRA_DB_PORT       Postgres port (default: 55432)
-#   UNITY_SKIP_ORCHESTRA    If "1", skip the orchestra-core spin-up (env only)
+#   UNITY_SKIP_ORCHESTRA    If "1", skip the orchestra spin-up (env only)
 # ============================================================================
 
 set -e
@@ -24,10 +23,7 @@ set -e
 # --- Config ---------------------------------------------------------------
 UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
 UNITY_REPO="${UNITY_HOME}/unity"
-ORCHESTRA_REPO="${UNITY_HOME}/orchestra-core"
-# Legacy install path from before the orchestra-core split. We detect this
-# below and warn so users on older installs know they can clean it up.
-LEGACY_ORCHESTRA_REPO="${UNITY_HOME}/orchestra"
+ORCHESTRA_REPO="${UNITY_HOME}/orchestra"
 ORCHESTRA_PORT="${ORCHESTRA_PORT:-8000}"
 ORCHESTRA_DB_PORT="${ORCHESTRA_DB_PORT:-55432}"
 
@@ -54,7 +50,7 @@ detect_os() {
 
 install_docker_interactive() {
     local os; os="$(detect_os)"
-    log_warn "Docker is not installed (required for local orchestra-core)."
+    log_warn "Docker is not installed (required for local orchestra)."
     case "$os" in
         macos)
             echo "  On macOS, install Docker Desktop:"
@@ -114,7 +110,7 @@ ensure_docker() {
     log_success "Docker: $(docker --version 2>/dev/null | head -1)"
 }
 
-# --- Poetry (for orchestra-core) ------------------------------------------
+# --- Poetry (for orchestra) -----------------------------------------------
 ensure_poetry() {
     if command -v poetry >/dev/null 2>&1; then
         log_success "poetry: $(poetry --version 2>/dev/null)"
@@ -136,30 +132,23 @@ ensure_poetry() {
     log_success "poetry installed: $(poetry --version 2>/dev/null)"
 }
 
-# --- orchestra-core clone + install ---------------------------------------
+# --- orchestra clone + install --------------------------------------------
 ensure_orchestra_repo() {
-    if [ -d "$LEGACY_ORCHESTRA_REPO/.git" ] && [ ! -d "$ORCHESTRA_REPO/.git" ]; then
-        log_warn "Found legacy ${LEGACY_ORCHESTRA_REPO} (private orchestra repo, pre-split)."
-        log_info "  Setup now uses orchestra-core (the public kernel) instead."
-        log_info "  After this completes successfully, you can remove the old repo:"
-        log_info "    rm -rf ${LEGACY_ORCHESTRA_REPO}"
-    fi
-
     if [ -d "$ORCHESTRA_REPO/.git" ]; then
-        log_info "Updating orchestra-core at $ORCHESTRA_REPO..."
+        log_info "Updating orchestra at $ORCHESTRA_REPO..."
         git -C "$ORCHESTRA_REPO" fetch --quiet origin main
         git -C "$ORCHESTRA_REPO" checkout --quiet main 2>/dev/null || log_warn "Couldn't checkout main (uncommitted changes?)"
-        git -C "$ORCHESTRA_REPO" pull --quiet --ff-only origin main 2>/dev/null || log_warn "Non-ff pull skipped in orchestra-core; leaving as-is."
+        git -C "$ORCHESTRA_REPO" pull --quiet --ff-only origin main 2>/dev/null || log_warn "Non-ff pull skipped in orchestra; leaving as-is."
     else
-        log_info "Cloning unifyai/orchestra-core into $ORCHESTRA_REPO..."
+        log_info "Cloning unifyai/orchestra into $ORCHESTRA_REPO..."
         mkdir -p "$UNITY_HOME"
-        git clone --quiet --branch main https://github.com/unifyai/orchestra-core.git "$ORCHESTRA_REPO"
+        git clone --quiet --branch main https://github.com/unifyai/orchestra.git "$ORCHESTRA_REPO"
     fi
-    log_success "orchestra-core: $(git -C "$ORCHESTRA_REPO" rev-parse --short HEAD)"
+    log_success "orchestra: $(git -C "$ORCHESTRA_REPO" rev-parse --short HEAD)"
 }
 
 # --- Python 3.12 selection for poetry --------------------------------------
-# orchestra-core pins itself to ~3.12 because several core deps (asyncpg,
+# orchestra pins itself to ~3.12 because several backend deps (asyncpg,
 # tiktoken, ...) ship no Python 3.13 wheels. Locate a 3.12 interpreter
 # ourselves and tell poetry to use it explicitly, so users on a 3.13-default
 # system don't get surprise build errors.
@@ -172,7 +161,7 @@ find_python312() {
             echo "$uv_py"
             return 0
         fi
-        log_info "Installing Python 3.12 via uv (orchestra-core requires it)..."
+        log_info "Installing Python 3.12 via uv (orchestra requires it)..."
         uv python install 3.12 >/dev/null 2>&1 || true
         uv_py=$(uv python find 3.12 2>/dev/null || true)
         if [ -n "$uv_py" ] && [ -x "$uv_py" ]; then
@@ -189,12 +178,12 @@ find_python312() {
 }
 
 install_orchestra_deps() {
-    log_info "Installing orchestra-core dependencies via poetry (first-time: a few minutes)..."
+    log_info "Installing orchestra dependencies via poetry (first-time: a few minutes)..."
 
     local py312
     py312="$(find_python312)" || {
         log_error "Couldn't locate a Python 3.12 interpreter."
-        log_info "orchestra-core requires Python 3.12.x. Install one with:"
+        log_info "orchestra requires Python 3.12.x. Install one with:"
         log_info "  uv python install 3.12        (uv was installed by install.sh)"
         log_info "  brew install python@3.12      (macOS via Homebrew)"
         log_info "  sudo apt-get install python3.12 python3.12-venv   (Debian/Ubuntu)"
@@ -212,7 +201,7 @@ install_orchestra_deps() {
     install_log="$(mktemp)"
     if (cd "$ORCHESTRA_REPO" && poetry install --no-interaction) >"$install_log" 2>&1; then
         rm -f "$install_log"
-        log_success "orchestra-core dependencies installed"
+        log_success "orchestra dependencies installed"
     else
         log_error "poetry install failed in $ORCHESTRA_REPO"
         echo ""
@@ -226,14 +215,14 @@ install_orchestra_deps() {
     fi
 }
 
-# --- orchestra-core spin-up ------------------------------------------------
+# --- orchestra spin-up -----------------------------------------------------
 start_local_orchestra() {
-    log_info "Starting local orchestra-core (Docker Postgres+pgvector + FastAPI)..."
+    log_info "Starting local orchestra (Docker Postgres+pgvector + FastAPI)..."
 
     if command -v lsof >/dev/null 2>&1 && lsof -i ":${ORCHESTRA_DB_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
         local db_container
         db_container=$(docker ps --filter "publish=${ORCHESTRA_DB_PORT}" --format "{{.Names}}" 2>/dev/null | head -1)
-        if [ "$db_container" != "orchestra-core-pg" ]; then
+        if [ "$db_container" != "orchestra-local-db" ]; then
             log_error "Postgres port ${ORCHESTRA_DB_PORT} is already in use."
             log_info "Stop the process using it, or re-run with a different port:"
             log_info "  ORCHESTRA_DB_PORT=55433 unity setup"
@@ -247,7 +236,7 @@ start_local_orchestra() {
     export ORCHESTRA_DB_PORT
     export ORCHESTRA_REPO_PATH="$ORCHESTRA_REPO"
 
-    # Run orchestra-core's local.sh; tee to terminal AND a log file so we can
+    # Run orchestra's local.sh; tee to terminal AND a log file so we can
     # parse the final `export UNIFY_BASE_URL=... / UNIFY_KEY=...` lines out of
     # it.
     local tmp_log
@@ -257,7 +246,7 @@ start_local_orchestra() {
 
     if (( start_exit != 0 )); then
         rm -f "$tmp_log"
-        log_error "orchestra-core failed to start (local.sh exit=$start_exit). See output above."
+        log_error "orchestra failed to start (local.sh exit=$start_exit). See output above."
         log_info "Common causes: port $ORCHESTRA_PORT / $ORCHESTRA_DB_PORT in use, Docker daemon not running."
         log_info "Re-run with:  unity setup"
         return 1
@@ -269,7 +258,7 @@ start_local_orchestra() {
     rm -f "$tmp_log"
 
     if [ -z "$env_block" ]; then
-        log_error "orchestra-core started but didn't emit UNIFY_BASE_URL / UNIFY_KEY lines."
+        log_error "orchestra started but didn't emit UNIFY_BASE_URL / UNIFY_KEY lines."
         return 1
     fi
 
@@ -277,17 +266,17 @@ start_local_orchestra() {
     eval "$env_block"
 
     # Sanity: refuse non-local URLs. The expected output is a 127.0.0.1 /
-    # localhost URL since orchestra-core's local.sh has no remote-fallback
+    # localhost URL since orchestra's local.sh has no remote-fallback
     # path; anything else means a downstream change broke the contract.
     case "${UNIFY_BASE_URL:-}" in
         http://127.0.0.1:*|http://localhost:*) ;;
         *)
-            log_error "orchestra-core emitted a non-local URL (${UNIFY_BASE_URL:-empty}). Refusing to wire."
+            log_error "orchestra emitted a non-local URL (${UNIFY_BASE_URL:-empty}). Refusing to wire."
             return 1
             ;;
     esac
 
-    log_success "orchestra-core URL: ${UNIFY_BASE_URL}"
+    log_success "orchestra URL: ${UNIFY_BASE_URL}"
     log_success "Local UNIFY_KEY:    ${UNIFY_KEY}"
 }
 
@@ -336,7 +325,7 @@ PYEOF
 # --- Main -----------------------------------------------------------------
 main() {
     echo ""
-    echo -e "${BOLD}Unity setup${NC} — bootstrapping local orchestra-core"
+    echo -e "${BOLD}Unity setup${NC} — bootstrapping local orchestra"
     echo ""
 
     if [ ! -d "$UNITY_REPO" ]; then
@@ -345,7 +334,7 @@ main() {
     fi
 
     if [ "${UNITY_SKIP_ORCHESTRA:-0}" = "1" ]; then
-        log_warn "UNITY_SKIP_ORCHESTRA=1 — skipping orchestra-core spin-up."
+        log_warn "UNITY_SKIP_ORCHESTRA=1 — skipping orchestra spin-up."
         log_info "Set ORCHESTRA_URL + UNIFY_KEY manually in $UNITY_REPO/.env to point at a remote backend."
         exit 0
     fi
@@ -360,7 +349,7 @@ main() {
     echo ""
     echo -e "${GREEN}${BOLD}Setup complete.${NC}"
     echo ""
-    echo "  orchestra-core is running at $UNIFY_BASE_URL"
+    echo "  orchestra is running at $UNIFY_BASE_URL"
     echo "  Stop it any time with:  unity stop"
     echo ""
     echo "  Next: add an LLM key to $UNITY_REPO/.env, then run  ${CYAN}unity${NC}"

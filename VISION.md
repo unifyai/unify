@@ -115,7 +115,7 @@ are downstream forks worth not breaking; today, it doesn't.
 ### Not committed to its current LLM-client / Python-SDK / backend split
 
 Unity is the *cognitive core* — the brain. It currently depends on three
-sibling repos (`unify`, `unillm`, `orchestra-core`) for storage, LLM
+sibling repos (`unify`, `unillm`, `orchestra`) for storage, LLM
 inference, and the persistence backend respectively. Those splits exist
 to keep concerns separate, not because the boundaries are sacred. If a
 better-shaped open-source LLM client or persistence layer arrives, Unity
@@ -126,7 +126,7 @@ should adopt it.
 ## What's open, what's not
 
 The local install is the full local runtime. Everything Unity needs to run
-on a laptop — runtime, persistence backend (`orchestra-core`), LLM client
+on a laptop — runtime, persistence backend (`orchestra`), LLM client
 (`unillm`), Python SDK (`unify`) — is MIT-licensed and on GitHub.
 
 The hosted product at [console.unify.ai](https://console.unify.ai) wraps

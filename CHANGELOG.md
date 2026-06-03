@@ -18,7 +18,7 @@ first tag they'll be regrouped under a `[0.1.0]` entry.
 ### Added
 
 - **Local install** — `scripts/install.sh` one-liner that clones the four
-  required repos (`unity`, `unify`, `unillm`, `orchestra-core`), boots the
+  required repos (`unity`, `unify`, `unillm`, `orchestra`), boots the
   local Orchestra in Docker, writes `~/.unity/unity/.env`, and creates a
   `unity` CLI shim. No Unify account or signup required.
 - **Local voice** — `unity voice setup` installs a `livekit-server`
@@ -45,8 +45,8 @@ first tag they'll be regrouped under a `[0.1.0]` entry.
 - **`.env` template split** — `.env.example` covers everything needed
   for the default local install; `.env.advanced.example` documents
   optional integrations (Tavily, hosted comms, visual caching, etc.).
-- **Local Orchestra integration** — migrated to the public
-  `orchestra-core` split so the entire local stack is open-source.
+- **Local Orchestra integration** — uses the public unified `orchestra`
+  backend so the entire local stack is open-source.
 
 ### Security
 

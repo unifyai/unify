@@ -131,7 +131,7 @@ That is on the operator; Unity does not ship one.
 
 ### 2.6 Bundled Orchestra Postgres
 
-The local install runs `orchestra-core` as a Docker container with a named
+The local install runs `orchestra` as a Docker container with a named
 volume, bound to `127.0.0.1`. The API key for it is generated locally and
 written to `~/.unity/unity/.env`. There is **no multi-tenant isolation**;
 the container is a single-tenant database that holds everything the
@@ -166,7 +166,7 @@ interface, that's an explicit operator choice and is unsupported.
 - **Anything in [console.unify.ai](https://console.unify.ai)** or the
   hosted Unify product — report against the hosted endpoint with the same
   channels.
-- **Anything in the sibling repos** (`unify`, `unillm`, `orchestra-core`)
+- **Anything in the sibling repos** (`unify`, `unillm`, `orchestra`)
   — report against those repos directly.
 - **Operator-chosen exposures** — running Unity with the Orchestra port
   bound to non-loopback, or with `.env` written world-readable, or
