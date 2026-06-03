@@ -1505,6 +1505,8 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
     event_ts = None
     message_id = None
     routing_metadata = None
+    guild_id = None
+    bot_id = None
 
     # Get contact info from ContactManager, fallback to event.contact
     # Note: event.contact may be empty dict for emails to external addresses
@@ -1735,6 +1737,8 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
         case DiscordChannelMessageSent():
             medium = Medium.DISCORD_CHANNEL_MESSAGE
             message_content = event.content
+            channel_id = getattr(event, "channel_id", "") or None
+            guild_id = getattr(event, "guild_id", "") or None
             notif_content = "Discord channel message sent"
             role = "assistant"
             event_trace = getattr(cm, "_current_event_trace", None) or {}
@@ -1746,6 +1750,10 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             medium = Medium.DISCORD_CHANNEL_MESSAGE
             message_content = event.content
             attachments = event.attachments
+            channel_id = getattr(event, "channel_id", "") or None
+            guild_id = getattr(event, "guild_id", "") or None
+            bot_id = getattr(event, "bot_id", "") or None
+            message_id = getattr(event, "message_id", "") or None
             notif_content = f"Discord channel message from {sender_name}"
             role = "user"
             event_trace = getattr(cm, "_current_event_trace", None) or {}
@@ -1888,6 +1896,8 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             event_ts=event_ts,
             message_id=message_id,
             routing_metadata=routing_metadata,
+            guild_id=guild_id,
+            bot_id=bot_id,
         )
     cm.notifications_bar.push_notif("comms", notif_content, event.timestamp)
     if role == "user":

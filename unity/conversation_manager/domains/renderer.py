@@ -26,6 +26,7 @@ from unity.conversation_manager.domains.contact_index import (
     WhatsAppMessage,
     SlackMessage,
     SlackChannelMessage,
+    DiscordChannelMessage,
     TeamsMessage,
     TeamsChannelMessage,
     GuidanceMessage,
@@ -1315,6 +1316,7 @@ class Renderer:
             | WhatsAppMessage
             | SlackMessage
             | SlackChannelMessage
+            | DiscordChannelMessage
             | TeamsMessage
             | TeamsChannelMessage
             | ApiMessage
@@ -1660,6 +1662,62 @@ class Renderer:
             return (
                 f"{new_marker}[{message.name} @ {timestamp_str}]: "
                 f"{message.content}{ids_line}{attachments_line}{tz_block_line}{routing_line}"
+            )
+
+        if isinstance(message, DiscordChannelMessage):
+            attachments_line = ""
+            if message.attachments:
+
+                def _discord_att_detail(att, is_self: bool) -> str:
+                    if isinstance(att, dict):
+                        fname = att.get(
+                            "filename",
+                            f"attachment_{att.get('id', 'unknown')}",
+                        )
+                        att_id = att.get("id")
+                        id_part = f"id: {att_id}, " if att_id else ""
+                        if is_self:
+                            fpath = att.get("filepath")
+                            if fpath:
+                                return f"{fname} ({id_part}attached from {fpath})"
+                            return (
+                                f"{fname} ({id_part}attached)"
+                                if id_part
+                                else f"{fname} (attached)"
+                            )
+                        return f"{fname} ({id_part}auto-downloaded to Attachments/{att_id}_{fname})"
+                    return (
+                        f"{att} (attached)" if is_self else f"{att} (auto-downloaded)"
+                    )
+
+                attachment_details = [
+                    _discord_att_detail(att, message.name == "You")
+                    for att in message.attachments
+                ]
+                attachments_line = f" [Attachments: {', '.join(attachment_details)}]"
+
+            tz_block_line = ""
+            if contact_name:
+                tz_block = _get_message_timezone_block(
+                    contact_name,
+                    contact_timezone,
+                    assistant_timezone,
+                )
+                if tz_block:
+                    tz_block_line = f"\n{tz_block}"
+
+            # Surface channel_id / guild_id so the LLM can reply into the same
+            # channel via send_discord_channel_message(channel_id="...").
+            id_bits: list[str] = []
+            if message.channel_id:
+                id_bits.append(f'channel_id="{message.channel_id}"')
+            if message.guild_id:
+                id_bits.append(f'guild_id="{message.guild_id}"')
+            ids_line = f" [{' '.join(id_bits)}]" if id_bits else ""
+
+            return (
+                f"{new_marker}[{message.name} @ {timestamp_str}]: "
+                f"{message.content}{ids_line}{attachments_line}{tz_block_line}"
             )
 
         if isinstance(message, ApiMessage):

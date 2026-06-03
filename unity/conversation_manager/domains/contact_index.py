@@ -162,6 +162,26 @@ class SlackChannelMessage(CommsMessage):
 
 
 @dataclass
+class DiscordChannelMessage(CommsMessage):
+    """A Discord guild channel message (bot @mention or in-channel reply).
+
+    ``channel_id`` is the Discord channel the message belongs to and the
+    target for replies via ``send_discord_channel_message``; ``guild_id``
+    identifies the server. ``bot_id`` is the pool bot that received/sent it.
+    """
+
+    name: str
+    content: str
+    timestamp: datetime
+    role: str  # "user" or "assistant"
+    channel_id: str = ""
+    guild_id: str = ""
+    bot_id: str = ""
+    message_id: str = ""
+    attachments: list[dict] = field(default_factory=list)
+
+
+@dataclass
 class TeamsChannelMessage(CommsMessage):
     """A Microsoft Teams channel message.
 
@@ -517,6 +537,8 @@ class ContactIndex:
         event_ts: str | None = None,
         message_id: str | None = None,
         routing_metadata: dict | None = None,
+        guild_id: str | None = None,
+        bot_id: str | None = None,
     ) -> "GlobalThreadEntry":
         """
         Build a GlobalThreadEntry without appending it to the global thread.
@@ -621,6 +643,18 @@ class ContactIndex:
                 attachments=attachments or [],
                 routing_metadata=routing_metadata or {},
             )
+        elif thread_name == Medium.DISCORD_CHANNEL_MESSAGE:
+            message = DiscordChannelMessage(
+                name=name,
+                content=message_content or "",
+                timestamp=timestamp,
+                role=role,
+                channel_id=channel_id or "",
+                guild_id=guild_id or "",
+                bot_id=bot_id or "",
+                message_id=message_id or "",
+                attachments=attachments or [],
+            )
         elif thread_name == Medium.API_MESSAGE:
             message = ApiMessage(
                 name=name,
@@ -671,6 +705,8 @@ class ContactIndex:
         event_ts: str | None = None,
         message_id: str | None = None,
         routing_metadata: dict | None = None,
+        guild_id: str | None = None,
+        bot_id: str | None = None,
     ) -> int:
         """
         Build a message and append it to the shared global thread.
@@ -701,6 +737,8 @@ class ContactIndex:
             event_ts=event_ts,
             message_id=message_id,
             routing_metadata=routing_metadata,
+            guild_id=guild_id,
+            bot_id=bot_id,
         )
         self.global_thread.append(entry)
         msg = entry.message
