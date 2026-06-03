@@ -1425,7 +1425,6 @@ def build_system_prompt(
     user_desktop_control: bool = False,
     runtime_setup_note: str | None = None,
     space_summaries: list[SpaceSummary] | None = None,
-    is_coordinator: bool = False,
     authorized_humans: list[dict[str, Any]] | None = None,
     org_coordinator_name: str | None = None,
 ) -> PromptParts:
