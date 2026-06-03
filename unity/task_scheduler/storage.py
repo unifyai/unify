@@ -974,22 +974,37 @@ class LocalTaskView:
             fields=["task_id"],
         )
         by_tid_to_log_id: Dict[int, int] = {}
-        for lg in logs or []:
-            task_id = lg.entries.get("task_id")
-            log_id = lg.id
+        for log in logs or []:
+            task_id = log.entries.get("task_id")
+            log_id = log.id
             if task_id is not None and log_id is not None:
-                by_tid_to_log_id[task_id] = log_id
+                by_tid_to_log_id[int(task_id)] = int(log_id)
 
-        log_ids: List[int] = []
-        entries_list: List[Dict[str, Any]] = []
-        for task_id in target_tids:
-            log_id = by_tid_to_log_id.get(task_id)
-            if log_id is not None:
-                log_ids.append(log_id)
-                entries_list.append(entries_by_tid[task_id])
+        missing_tids = [
+            task_id for task_id in target_tids if task_id not in by_tid_to_log_id
+        ]
+        if missing_tids:
+            fallback_log_ids = self.get_log_ids_by_task_ids(task_ids=missing_tids)
+            fallback_logs = self.get_rows_by_log_ids(
+                log_ids=[int(log_id) for log_id in fallback_log_ids],
+            )
+            for log in fallback_logs:
+                task_id = log.entries.get("task_id")
+                log_id = log.id
+                if task_id is not None and log_id is not None:
+                    by_tid_to_log_id[int(task_id)] = int(log_id)
 
-        if not log_ids:
-            return {"detail": "No matching task_ids resolved"}
+        unresolved = [
+            task_id for task_id in target_tids if task_id not in by_tid_to_log_id
+        ]
+        if unresolved:
+            raise ValueError(f"No matching task_ids resolved: {unresolved}")
+
+        log_ids = [by_tid_to_log_id[task_id] for task_id in target_tids]
+
+        entries_list: List[Dict[str, Any]] = [
+            entries_by_tid[task_id] for task_id in target_tids
+        ]
 
         return self.write_entries(logs=log_ids, entries=entries_list)
 
