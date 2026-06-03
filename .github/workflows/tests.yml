@@ -20,6 +20,11 @@ on:
         required: false
         type: string
         default: "."
+      confirm_full_matrix:
+        description: "Type FULL_MATRIX_OK to allow test_path='.' or a large matrix"
+        required: false
+        type: string
+        default: ""
       env_file_content:
         description: "env_file: paste .env contents (sensitive values masked)"
         required: false
@@ -113,7 +118,8 @@ jobs:
           fi
         }
 
-        # workflow_dispatch always runs tests
+        # workflow_dispatch always runs tests, but the discover job enforces
+        # cost-policy guardrails before any matrix jobs are created.
         if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
           echo "run_tests=true" >> "$GITHUB_OUTPUT"
           echo "parallel_run_cmd=" >> "$GITHUB_OUTPUT"
@@ -147,11 +153,12 @@ jobs:
 
         # For pull_request events, check PR title
         if [[ "$EVENT_NAME" == "pull_request" ]]; then
-          # Auto-run full suite for staging → main PRs (no tags required)
+          # Staging → main PRs run only a tiny smoke path by default. The full
+          # LLM matrix must be triggered manually with confirm_full_matrix.
           if [[ "$PR_BASE_REF" == "main" && "$PR_HEAD_REF" == "staging" ]]; then
             echo "run_tests=true" >> "$GITHUB_OUTPUT"
-            echo "parallel_run_cmd=" >> "$GITHUB_OUTPUT"
-            echo "Tests auto-triggered: staging → main PR"
+            echo "parallel_run_cmd=tests/common/test_production_settings.py" >> "$GITHUB_OUTPUT"
+            echo "Smoke tests auto-triggered: staging → main PR"
             exit 0
           fi
 
@@ -223,6 +230,19 @@ jobs:
         PARALLEL_CMD="${{ needs.should-run-tests.outputs.parallel_run_cmd }}"
         INPUT_PATH="${{ inputs.test_path }}"
         INPUT_ARGS="${{ inputs.parallel_run_args }}"
+        CONFIRM_FULL_MATRIX="${{ inputs.confirm_full_matrix }}"
+        EVENT_NAME="${{ github.event_name }}"
+        MAX_NORMAL_MATRIX=12
+        ENV_FILE_CONTENT_RAW="${{ inputs.env_file_content }}"
+        ENV_FILE_CONTENT=""
+
+        if [[ -n "$ENV_FILE_CONTENT_RAW" ]]; then
+          if DECODED=$(echo "$ENV_FILE_CONTENT_RAW" | base64 -d 2>/dev/null) && [[ "$DECODED" == *$'\n'* || "$DECODED" == *"="* ]]; then
+            ENV_FILE_CONTENT="$DECODED"
+          else
+            ENV_FILE_CONTENT="$ENV_FILE_CONTENT_RAW"
+          fi
+        fi
 
         # Initialize
         declare -a RAW_PATHS=()
@@ -235,11 +255,11 @@ jobs:
           echo "Parsing [parallel_run.sh $PARALLEL_CMD]" >&2
           LAST_FLAG=""
           for token in $PARALLEL_CMD; do
-            if [[ "$token" == --* ]]; then
+            if [[ "$token" == -* ]]; then
               # It's a flag - collect it and its value if needed
               FLAGS+=("$token")
               LAST_FLAG="$token"
-            elif [[ "$LAST_FLAG" == "--env" || "$LAST_FLAG" == "--tags" || "$LAST_FLAG" == "-j" || "$LAST_FLAG" == "--jobs" || "$LAST_FLAG" == "-t" || "$LAST_FLAG" == "--timeout" ]]; then
+            elif [[ "$LAST_FLAG" == "--env" || "$LAST_FLAG" == "-e" || "$LAST_FLAG" == "--tags" || "$LAST_FLAG" == "-j" || "$LAST_FLAG" == "--jobs" || "$LAST_FLAG" == "-t" || "$LAST_FLAG" == "--timeout" || "$LAST_FLAG" == "--repeat" ]]; then
               # Previous token was a flag that takes a value
               FLAGS+=("$token")
               LAST_FLAG=""
@@ -288,6 +308,67 @@ jobs:
           exit 1
         fi
 
+        cost_policy_fail() {
+          echo "" >&2
+          echo "Refusing to create an expensive LLM test matrix." >&2
+          echo "Reason: $1" >&2
+          echo "" >&2
+          echo "Safe options:" >&2
+          echo "  - Target a narrow path, e.g. [parallel_run.sh tests/contact_manager/test_ask.py]" >&2
+          echo "  - For a full matrix, use workflow_dispatch with test_path='.' and confirm_full_matrix='FULL_MATRIX_OK'." >&2
+          echo "  - For uncached/cache-refresh evals, use the protected LLM Cache Refresh workflow." >&2
+          exit 1
+        }
+
+        full_matrix_confirmed=false
+        if [[ "$EVENT_NAME" == "workflow_dispatch" && "$CONFIRM_FULL_MATRIX" == "FULL_MATRIX_OK" ]]; then
+          full_matrix_confirmed=true
+        fi
+
+        if (( ${#RAW_PATHS[@]} == 0 )) && ! $full_matrix_confirmed; then
+          cost_policy_fail "no explicit test path was provided, which would discover the full suite"
+        fi
+
+        if (( ${#PATHS[@]} > MAX_NORMAL_MATRIX )) && ! $full_matrix_confirmed; then
+          cost_policy_fail "requested paths expand to ${#PATHS[@]} matrix jobs (limit: $MAX_NORMAL_MATRIX)"
+        fi
+
+        check_cost_sensitive_flags() {
+          local -n _flags_ref=$1
+          local i flag next_val
+          for i in "${!_flags_ref[@]}"; do
+            flag="${_flags_ref[$i]}"
+            next_val="${_flags_ref[$((i+1))]:-}"
+            case "$flag" in
+              --env|-e)
+                case "$next_val" in
+                  UNILLM_CACHE=read-only)
+                    ;;
+                  UNILLM_CACHE=*)
+                    cost_policy_fail "normal CI may not override UNILLM_CACHE (got '$next_val')"
+                    ;;
+                esac
+                ;;
+              --repeat)
+                if [[ "$next_val" =~ ^[0-9]+$ && "$next_val" -gt 1 ]]; then
+                  cost_policy_fail "normal CI may not use --repeat $next_val"
+                fi
+                ;;
+              --repeat=*)
+                repeat_value="${flag#--repeat=}"
+                if [[ "$repeat_value" =~ ^[0-9]+$ && "$repeat_value" -gt 1 ]]; then
+                  cost_policy_fail "normal CI may not use --repeat $repeat_value"
+                fi
+                ;;
+              --env=UNILLM_CACHE=*|-e=UNILLM_CACHE=*)
+                cost_policy_fail "normal CI may not override UNILLM_CACHE (got '$flag')"
+                ;;
+            esac
+          done
+        }
+
+        check_cost_sensitive_flags FLAGS
+
         json=$(printf '%s\n' "${PATHS[@]}" | python3 -c 'import sys,json; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')
         echo "test_dirs=$json" >> "$GITHUB_OUTPUT"
         echo "Matrix paths: $json" >&2
@@ -330,15 +411,8 @@ jobs:
 
         # Parse env_file_content for project management flags only
         # (actual env vars are written to .env in pytest job, not passed as --env args)
-        ENV_FILE_CONTENT_RAW="${{ inputs.env_file_content }}"
         if [[ -n "$ENV_FILE_CONTENT_RAW" ]]; then
           echo "Parsing env_file_content for project management flags..." >&2
-          # Try to decode as base64; if it fails or produces garbage, assume raw content
-          if DECODED=$(echo "$ENV_FILE_CONTENT_RAW" | base64 -d 2>/dev/null) && [[ "$DECODED" == *$'\n'* || "$DECODED" == *"="* ]]; then
-            ENV_FILE_CONTENT="$DECODED"
-          else
-            ENV_FILE_CONTENT="$ENV_FILE_CONTENT_RAW"
-          fi
           if [[ -n "$ENV_FILE_CONTENT" ]]; then
             while IFS= read -r line || [[ -n "$line" ]]; do
               # Skip empty lines and comments
@@ -548,8 +622,9 @@ jobs:
       UNIFY_TESTS_RAND_PROJ: "false"              # Shared project mode
       UNIFY_TESTS_DELETE_PROJ_ON_START: "false"   # Handled by setup job at workflow level
       UNIFY_TESTS_DELETE_PROJ_ON_EXIT: "false"    # Keep project after tests
-      # LLM response caching (owned by unillm, read from env)
-      UNILLM_CACHE: "true"
+      # Normal CI must fail closed on cache misses. Real LLM cache refreshes
+      # are isolated in the protected LLM Cache Refresh workflow.
+      UNILLM_CACHE: "read-only"
       # Local orchestra path (cloned into workspace, not sibling directory)
       ORCHESTRA_REPO_PATH: ${{ github.workspace }}/orchestra
       # API credentials
@@ -624,12 +699,47 @@ jobs:
 
         # Try to decode as base64; if it fails or produces binary garbage, assume raw content
         if DECODED=$(echo "$CONTENT" | base64 -d 2>/dev/null) && [[ "$DECODED" == *$'\n'* || "$DECODED" == *"="* ]]; then
-          echo "$DECODED" > .env
+          ENV_CONTENT="$DECODED"
           echo "✓ Decoded base64 env_file_content"
         else
-          echo "$CONTENT" > .env
+          ENV_CONTENT="$CONTENT"
           echo "✓ Using raw env_file_content"
         fi
+
+        # Normal CI owns cache mode and provider credentials at job level.
+        # Filter any local developer values before parallel_run.sh sources .env.
+        printf '%s\n' "$ENV_CONTENT" > .env.raw
+        python3 << 'PYEOF'
+        from pathlib import Path
+        import sys
+
+        blocked = {
+            "UNILLM_CACHE",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "OPENROUTER_API_KEY",
+            "GROQ_API_KEY",
+            "MISTRAL_API_KEY",
+            "GOOGLE_API_KEY",
+            "GEMINI_API_KEY",
+        }
+
+        output = []
+        for line in Path(".env.raw").read_text().splitlines(keepends=True):
+            stripped = line.lstrip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                key = stripped.split("=", 1)[0].strip()
+                if key in blocked:
+                    print(
+                        f"Removed {key} from env_file_content; CI uses guarded job-level values.",
+                        file=sys.stderr,
+                    )
+                    continue
+            output.append(line)
+
+        Path(".env").write_text("".join(output))
+        PYEOF
+        rm .env.raw
 
         # Mask values for sensitive variable names (these patterns catch most secrets)
         # Sensitive patterns: *_KEY, *_SECRET, *_PASSWORD, *_TOKEN, *_CREDENTIAL*, *_API_*
@@ -1252,32 +1362,6 @@ jobs:
     name: Consolidate and store cache
     runs-on: ubuntu-latest
     needs: [should-run-tests, pytest, cleanup]
-    if: always() && needs.should-run-tests.outputs.run_tests == 'true'
+    if: false
     steps:
-    - uses: actions/checkout@v4
-
-    - name: Restore existing consolidated cache
-      id: cache-restore
-      uses: actions/cache/restore@v4
-      with:
-        path: .cache.ndjson
-        key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
-        restore-keys: |
-          cache-ndjson-${{ runner.os }}-
-
-    - name: Download cache artifacts from current run
-      uses: actions/download-artifact@v4
-      with:
-        pattern: cache-diff-*
-        path: cache-artifacts
-
-    - name: Consolidate .cache.ndjson files
-      run: |
-        python3 .github/scripts/consolidate_cache.py \
-          --artifacts-dir cache-artifacts
-
-    - name: Store consolidated cache
-      uses: actions/cache/save@v4
-      with:
-        path: .cache.ndjson
-        key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+    - run: echo "Normal CI runs with UNILLM_CACHE=read-only and never writes the shared cache."
