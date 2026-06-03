@@ -604,7 +604,10 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "       - After `integration_connected`: if Integrations is "
             "still the active step, mention they can add more apps now or "
             "move on; otherwise (e.g. the user has already added something "
-            'earlier) point at "Assign a task or try these workflows".',
+            'earlier) point at "Ask your coordinator to do something now" — '
+            "invite them to hand off a one-off job right now (e.g. "
+            '"summarize my unread emails") and watch it run. Do NOT lead '
+            "with scheduling a task — that's a later, separate step.",
             "       - If onboarding is otherwise complete, congratulate and "
             "stand down.",
             "  3. Deliver the acknowledgement on whichever channel is live. When a "
@@ -1976,27 +1979,36 @@ def _build_coordinator_onboarding_flow_reference_block() -> str:
             "open to the Integrations side panel. They install at least "
             "one app (Slack, Gmail, Notion, etc.) by clicking its tile "
             "and walking through that app's OAuth flow.",
-            "  3. **Get work done** (`work`, grouping row). Ticks once "
-            "every child is done. Children:",
-            "     - **Assign a task or try these workflows** (`task`). "
-            'Three static "try one of these" chips render under the '
-            'row: "Summarize my unread emails", "Help me through '
-            'this website (on a call)", and "Send me a briefing '
-            'tomorrow at 8am". The chips are inspiration only — they '
-            "do not click. The user advances by typing a real "
-            "instruction into the chat (or, on a call, speaking it) "
-            "and watching me dispatch the work.",
-            "     - **Watch and guide me through it** (`guide`). Splits "
-            "the right pane to the Tasks panel so the user can watch a "
-            "task land live. Marked done after they have observed at "
-            "least one task running.",
+            "  3. **Get work done** (`work`, grouping row). Children, in "
+            "order:",
+            "     - **Ask your coordinator to do something now** (`act`). "
+            "This is point-in-time work: the user hands me a one-off job "
+            "that runs immediately, and watches it execute live in the "
+            'Actions panel (which opens automatically). Three static "try '
+            'one of these" chips render under the row: "Summarize my '
+            'unread emails", "Help me through this website (on a call)", '
+            "and \"Catch me up on today's news\". The chips are "
+            "inspiration only — they do not click. The step completes the "
+            "moment a real action starts running — NOT when a scheduled "
+            "task is created. The user advances by typing (or, on a call, "
+            "speaking) a real instruction and watching me dispatch it.",
+            "     - **Schedule a task for later** (`schedule`). This is "
+            "time- or event-bound work — a *Task* in the product sense: "
+            "it lands in the Tasks panel (which opens automatically) and "
+            'recurs or fires on a trigger. Three chips render: "Send me a '
+            'briefing tomorrow at 8am", "Every Friday, recap my week", '
+            'and "When I get an email from my boss, alert me". The step '
+            "completes when a scheduled task actually lands in the Tasks "
+            "list. Scheduling is encouraged but optional — the user can "
+            "hire a specialist without it.",
             "     - **Hire your first specialist assistant** "
-            "(`hire-specialist`). Surfaces the assistants list sidebar "
-            "and opens the Hiring dialog where they pick a role and "
-            "confirm. Completes when an assistant is actually hired — "
-            "and that hire ends onboarding (the page switches to the "
-            "standard Assistants view with the new specialist "
-            "selected).",
+            "(`hire-specialist`). Becomes available once the `act` step "
+            "is done (it does NOT require scheduling a task first). "
+            "Surfaces the assistants list sidebar and opens the Hiring "
+            "dialog where they pick a role and confirm. Completes when an "
+            "assistant is actually hired — and that hire ends onboarding "
+            "(the page switches to the standard Assistants view with the "
+            "new specialist selected).",
             "Answering flow questions:",
             '  - When the user asks "what do I do next?", "where do I '
             'click?", or similar, I look at the most recent onboarding '
