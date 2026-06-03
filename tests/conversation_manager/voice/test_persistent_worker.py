@@ -9,11 +9,23 @@ Covers:
 - Fallback to legacy subprocess when worker is not running
 """
 
+import asyncio
 import json
 import os
+import time as _time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+
+async def _wait_for_condition(predicate, *, timeout: float = 5.0, poll: float = 0.01):
+    start = _time.perf_counter()
+    while _time.perf_counter() - start < timeout:
+        if predicate():
+            return True
+        await asyncio.sleep(poll)
+    return False
+
 
 from unity.conversation_manager.domains.call_manager import (
     CallConfig,
@@ -173,6 +185,10 @@ class TestJobDispatch:
         mock_lk.agent_dispatch.create_dispatch = AsyncMock(return_value=mock_dispatch)
         mock_lk.aclose = AsyncMock()
 
+        from unity.conversation_manager.medium_scripts.worker import (
+            WORKER_REGISTERED_PATH,
+        )
+
         with (
             patch(
                 "unity.conversation_manager.domains.call_manager.LiveKitAPI",
@@ -185,6 +201,8 @@ class TestJobDispatch:
                 return_value="/tmp/test.sock",
             ),
         ):
+            with open(WORKER_REGISTERED_PATH, "w", encoding="utf-8"):
+                pass
             await call_manager._dispatch_job(
                 "unity_42_phone",
                 "phone",
@@ -328,6 +346,7 @@ class TestActiveCallGuard:
         boss_contact,
     ):
         call_manager._active_job = True
+        call_manager._call_proc = MagicMock()
 
         with patch.object(
             call_manager,
@@ -351,6 +370,129 @@ class TestActiveCallGuard:
         ) as mock_run:
             await call_manager.start_call(sample_contact, boss_contact)
             mock_run.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Worker registration gate
+# ---------------------------------------------------------------------------
+
+
+class TestWorkerReadiness:
+    @pytest.mark.asyncio
+    async def test_wait_for_worker_registered_unblocks_when_signal_file_appears(
+        self,
+        call_manager,
+        tmp_path,
+    ):
+        from unity.conversation_manager.medium_scripts import worker as worker_mod
+
+        registered_path = tmp_path / "unity_worker_registered"
+        mock_worker = MagicMock()
+        mock_worker.poll.return_value = None
+        call_manager._worker_proc = mock_worker
+
+        async def _touch_later() -> None:
+            await asyncio.sleep(0.05)
+            registered_path.write_text("", encoding="utf-8")
+
+        with patch.object(worker_mod, "WORKER_REGISTERED_PATH", str(registered_path)):
+            wait_task = asyncio.create_task(
+                call_manager._wait_for_worker_registered(timeout=2.0),
+            )
+            touch_task = asyncio.create_task(_touch_later())
+            await asyncio.wait([wait_task, touch_task], timeout=3.0)
+            await wait_task
+
+        assert registered_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Stale dispatch recovery
+# ---------------------------------------------------------------------------
+
+
+class TestStaleDispatchClearing:
+    @pytest.mark.asyncio
+    async def test_start_call_clears_orphaned_dispatch_and_proceeds(
+        self,
+        call_manager,
+        sample_contact,
+        boss_contact,
+    ):
+        from unity.conversation_manager.medium_scripts.worker import (
+            WORKER_REGISTERED_PATH,
+        )
+
+        from unity.conversation_manager.in_memory_event_broker import (
+            InMemoryEventBroker,
+        )
+
+        call_manager.set_event_broker(InMemoryEventBroker())
+        call_manager._active_job = True
+        mock_worker = MagicMock()
+        mock_worker.poll.return_value = None
+        call_manager._worker_proc = mock_worker
+
+        mock_dispatch = MagicMock()
+        mock_dispatch.id = "dispatch_stale_recovery"
+        mock_lk = AsyncMock()
+        mock_lk.agent_dispatch.create_dispatch = AsyncMock(return_value=mock_dispatch)
+        mock_lk.aclose = AsyncMock()
+
+        with (
+            patch(
+                "unity.conversation_manager.domains.call_manager.LiveKitAPI",
+                return_value=mock_lk,
+            ),
+            patch.object(
+                call_manager,
+                "_ensure_socket_server",
+                new_callable=AsyncMock,
+                return_value="/tmp/test.sock",
+            ),
+        ):
+            with open(WORKER_REGISTERED_PATH, "w", encoding="utf-8"):
+                pass
+            await call_manager.start_call(sample_contact, boss_contact)
+
+        mock_lk.agent_dispatch.create_dispatch.assert_called_once()
+        assert call_manager._active_job is True
+
+    @pytest.mark.asyncio
+    async def test_clear_stale_dispatch_state_preserves_active_job_when_ipc_client_connected(
+        self,
+        call_manager,
+    ):
+        from unity.conversation_manager.in_memory_event_broker import (
+            InMemoryEventBroker,
+        )
+
+        broker = InMemoryEventBroker()
+        call_manager.set_event_broker(broker)
+        await call_manager._ensure_socket_server()
+        assert call_manager._socket_server is not None
+
+        socket_path = call_manager._socket_server.socket_path
+        assert socket_path is not None
+
+        from unity.conversation_manager.domains.ipc_socket import (
+            CallEventSocketClient,
+        )
+
+        client = CallEventSocketClient(socket_path)
+        await client.send_event("test:ping", '{"ok": true}')
+        await _wait_for_condition(
+            lambda: call_manager._socket_server is not None
+            and call_manager._socket_server.has_connected_clients,
+        )
+
+        call_manager._active_job = True
+        assert call_manager._clear_stale_dispatch_state() is False
+        assert call_manager._active_job is True
+
+        await client.close()
+        if call_manager._socket_server:
+            await call_manager._socket_server.stop()
 
 
 # ---------------------------------------------------------------------------
