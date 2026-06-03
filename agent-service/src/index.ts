@@ -17,6 +17,7 @@ import { randomUUID } from 'crypto';
 import { ChildProcess, spawn, execSync } from 'child_process';
 import multer from 'multer';
 import { jsonSchemaToZod } from './jsonSchemaToZod';
+import { getLlmConfig } from './llmConfig';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -546,7 +547,14 @@ async function ensureDemoSites(urlMappings: Record<string, string>): Promise<Rec
     }
 
     const localhostUrl = `http://localhost:${port}`;
-    resolved[originalUrl] = localhostUrl;
+    let mappingKey: string;
+    try {
+      mappingKey = new URL(originalUrl).href;
+    } catch {
+      console.warn(`[demo-sites] Skipping invalid URL mapping for ${dirName}`);
+      continue;
+    }
+    resolved[mappingKey] = localhostUrl;
 
     // /etc/hosts + Caddy setup so the real domain resolves to the demo site
     try {
@@ -662,62 +670,6 @@ const getLaunchOptions = (
   return opts;
 };
 
-// LLM config resolution with graceful fallbacks. Default route is the
-// Unity Comms unillm proxy (when UNITY_COMMS_URL is set). When that
-// proxy isn't available (e.g. running agent-service standalone outside
-// a full Unity stack), fall back to Anthropic or OpenAI direct using
-// the corresponding API key from env.
-const getLlmConfig = (): any => {
-  if (process.env.UNITY_COMMS_URL) {
-    return {
-      provider: 'openai-generic' as const,
-      options: {
-        model: 'claude-4.6-sonnet@anthropic',
-        baseUrl: `${process.env.UNITY_COMMS_URL}/unillm`,
-        headers: {
-          'Authorization': `Bearer ${process.env.UNIFY_KEY}`,
-        },
-        temperature: 0.2,
-      }
-    };
-  }
-  // Prefer Anthropic for computer-use: Claude is significantly more
-  // accurate at vision-grounded action planning than GPT-4o.
-  if (process.env.ANTHROPIC_API_KEY) {
-    // Anthropic ships an OpenAI-compatible endpoint that speaks the
-    // same Chat Completions wire format, so we keep provider as
-    // 'openai-generic' and point at the compat path.
-    return {
-      provider: 'openai-generic' as const,
-      options: {
-        model: 'claude-sonnet-4-5',
-        baseUrl: 'https://api.anthropic.com/v1',
-        headers: {
-          'Authorization': `Bearer ${process.env.ANTHROPIC_API_KEY}`,
-        },
-        temperature: 0.2,
-      }
-    };
-  }
-  if (process.env.OPENAI_API_KEY) {
-    return {
-      provider: 'openai-generic' as const,
-      options: {
-        model: 'gpt-4o',
-        baseUrl: 'https://api.openai.com/v1',
-        headers: {
-          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-        },
-        temperature: 0.2,
-      }
-    };
-  }
-  throw new Error(
-    'No LLM provider configured: set UNITY_COMMS_URL (preferred), or ' +
-    'ANTHROPIC_API_KEY or OPENAI_API_KEY for direct provider fallback.'
-  );
-};
-
 const startDesktop = async (): Promise<BrowserAgent> => {
   try {
     const encodedPassword = encodeURIComponent(process.env.UNIFY_KEY || '');
@@ -728,8 +680,6 @@ const startDesktop = async (): Promise<BrowserAgent> => {
       browser: getLaunchOptions(true),
       prompt: "You're controlling a noVNC virtual desktop page. Do not navigate to other page and use mouse and keyboard to control the browser and apps within the virtual desktop. There may be a terminal (xterm) app launched in the desktop for use.",
       narrate: true,
-      // Route LLM calls through Orchestra/UniLLM proxy for billing/caching,
-      // with fallback to direct OpenAI/Anthropic when UNITY_COMMS_URL is unset.
       llm: getLlmConfig()
     });
     agent.context.setDefaultNavigationTimeout(90000);
@@ -762,8 +712,6 @@ const startBrowser = async (
       ),
       narrate: true,
       urlMappings,
-      // Route LLM calls through Orchestra/UniLLM proxy for billing/caching,
-      // with fallback to direct OpenAI/Anthropic when UNITY_COMMS_URL is unset.
       llm: getLlmConfig()
     });
     agent.context.setDefaultNavigationTimeout(90000);

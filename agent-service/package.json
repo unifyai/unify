@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node -r ts-node/register tests/jsonSchemaToZod.test.ts",
+    "test": "for test in tests/*.test.ts; do node -r ts-node/register \"$test\" || exit 1; done",
     "start": "ts-node src/index.ts"
   },
   "keywords": [],

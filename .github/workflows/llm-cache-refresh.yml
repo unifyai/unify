@@ -41,6 +41,9 @@ on:
         type: string
         default: ""
 
+permissions:
+  contents: read
+
 concurrency:
   group: llm-cache-refresh-${{ github.ref_name }}
   cancel-in-progress: true
@@ -58,8 +61,8 @@ jobs:
       UNILLM_CACHE: ${{ inputs.cache_mode == 'uncached-eval' && 'false' || 'true' }}
       ORCHESTRA_REPO_PATH: ${{ github.workspace }}/orchestra
       ORCHESTRA_URL: ${{ vars.ORCHESTRA_URL }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_CI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_CI_API_KEY }}
       UNITY_COMMS_URL: ${{ vars.UNITY_COMMS_URL }}
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
       GCP_LOCATION: ${{ vars.GCP_LOCATION }}
@@ -136,7 +139,7 @@ jobs:
         fetch-depth: 1
 
     - name: Authenticate to Google Cloud
-      uses: google-github-actions/auth@v2
+      uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed  # v2.1.13
       with:
         credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
 
@@ -146,7 +149,7 @@ jobs:
         python-version: '3.12'
 
     - name: Cache apt packages
-      uses: awalsh128/cache-apt-pkgs-action@latest
+      uses: awalsh128/cache-apt-pkgs-action@2c09a5e66da6c8016428a2172bd76e5e4f14bb17  # latest
       with:
         packages: >-
           tmux zsh portaudio19-dev libnss3-dev libatk-bridge2.0-dev libdrm2
