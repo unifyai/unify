@@ -1997,10 +1997,12 @@ class CommsManager:
                     await asyncio.sleep(5)
                     continue
                 LOGGER.info(
-                    f"{DEFAULT_ICON} Assignment session loaded for {job_name}: "
-                    f"phase={(session_status.get('phase') or '')}, "
-                    f"secret={secret_name}, "
-                    f"binding_id={session_binding_id}",
+                    "%s Assignment session loaded: phase=%r secret_present=%s "
+                    "binding_present=%s",
+                    DEFAULT_ICON,
+                    session_status.get("phase") or "",
+                    bool(secret_name),
+                    bool(session_binding_id),
                 )
 
                 secret_record = await asyncio.to_thread(

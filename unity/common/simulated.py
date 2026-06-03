@@ -219,9 +219,9 @@ def maybe_tool_log_scheduled(segment: str, method: str, args: dict):
         cid = SimulatedLineage.extract_suffix(label) or ""
         try:
             LOGGER.info(
-                "%s [%s] ToolCall Scheduled | arg_keys=%s",
+                "%s ToolCall Scheduled | segment=%r arg_keys=%s",
                 ICONS["info"],
-                label,
+                segment,
                 sorted(args.keys()) if isinstance(args, dict) else type(args).__name__,
             )
         except Exception:
