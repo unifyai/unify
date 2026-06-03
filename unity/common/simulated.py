@@ -218,12 +218,7 @@ def maybe_tool_log_scheduled(segment: str, method: str, args: dict):
         label = SimulatedLineage.make_label(segment)
         cid = SimulatedLineage.extract_suffix(label) or ""
         try:
-            LOGGER.info(
-                "%s ToolCall Scheduled | segment=%r arg_keys=%s",
-                ICONS["info"],
-                segment,
-                sorted(args.keys()) if isinstance(args, dict) else type(args).__name__,
-            )
+            LOGGER.info("%s ToolCall Scheduled", ICONS["info"])
         except Exception:
             pass
         return label, cid, _time.perf_counter()
