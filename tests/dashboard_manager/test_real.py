@@ -515,6 +515,7 @@ def test_full_dashboard_lifecycle():
     dm.delete_dashboard(dashboard.token)
     assert dm.get_dashboard(dashboard.token) is None
 
+
 @pytest.mark.asyncio
 @_handle_project
 async def test_primitives_dashboard_creation_uses_dashboard_contexts():
