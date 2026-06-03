@@ -230,11 +230,11 @@ def register_available_integrations() -> None:
         registered_now.append(slug)
 
     logger.info(
-        "[integrations] register: discovered=%d registered=%s "
-        "skipped_no_secrets=%s functions=%d guidance=%d",
+        "[integrations] register: discovered=%d registered=%d "
+        "skipped_no_secrets=%d functions=%d guidance=%d",
         len(packages),
-        sorted(registered_now),
-        sorted(skipped_no_secrets),
+        len(registered_now),
+        len(skipped_no_secrets),
         total_funcs,
         total_guidance,
     )

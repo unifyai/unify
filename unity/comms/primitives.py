@@ -3721,7 +3721,10 @@ class CommsPrimitives:
 
         to_number = (contact or {}).get("phone_number")
         LOGGER.debug(
-            f"{DEFAULT_ICON} [make_call] context: {context}, to_number: {to_number}",
+            "%s [make_call] context=%r to_number_present=%s",
+            DEFAULT_ICON,
+            context,
+            bool(to_number),
         )
         if self._cm is not None and context:
             self._cm.call_manager.initial_notification = context

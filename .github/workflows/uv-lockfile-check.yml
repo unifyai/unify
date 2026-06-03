@@ -72,7 +72,9 @@ jobs:
       with:
         repository: unifyai/unify
         path: unify
-        ref: ${{ github.base_ref == 'main' && 'main' || 'staging' }}
+        # Unity on staging is locked against unify/unillm staging tips; only
+        # resolve against main siblings when unity itself is on main.
+        ref: ${{ (github.ref == 'refs/heads/main' || github.head_ref == 'main') && 'main' || 'staging' }}
         token: ${{ secrets.CLONE_TOKEN || github.token }}
 
     - name: Checkout unillm (sibling editable dep)
@@ -80,7 +82,7 @@ jobs:
       with:
         repository: unifyai/unillm
         path: unillm
-        ref: ${{ github.base_ref == 'main' && 'main' || 'staging' }}
+        ref: ${{ (github.ref == 'refs/heads/main' || github.head_ref == 'main') && 'main' || 'staging' }}
         token: ${{ secrets.CLONE_TOKEN || github.token }}
 
     - name: Install uv

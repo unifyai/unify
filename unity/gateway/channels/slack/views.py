@@ -186,7 +186,7 @@ async def send_slack_message(request: Request):
             detail=f"chat.postMessage failed: {msg_data.get('error')}",
         )
     logger.info(
-        "sent Slack message to %s on team %s (ts=%s)",
+        "sent Slack message to %r on team %r (ts=%r)",
         channel_id,
         team_id,
         msg_data.get("ts"),

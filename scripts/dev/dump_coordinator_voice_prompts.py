@@ -256,7 +256,7 @@ def _write_or_print(label: str, content: str, write_dir: Path | None) -> None:
 
     banner = f"{'=' * 72}\n{label}\n{'=' * 72}"
     print(banner)
-    print(content)
+    print(f"({len(content):,} chars — use --write-dir to materialize)")
     print()
 
 
