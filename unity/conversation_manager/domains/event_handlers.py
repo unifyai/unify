@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Union
 
 from unity.contact_manager.types.contact import UNASSIGNED
+from unity.common.context_registry import ContextRegistry
 from unity.common.hierarchical_logger import DEFAULT_ICON
 from unity.conversation_manager import assistant_jobs
 from unity.conversation_manager.events import *
@@ -23,6 +24,8 @@ from unity.conversation_manager.domains.task_activation import (
     _handle_task_due_event,
     _surface_trigger_task_candidates,
 )
+from unity.memory_manager import broader_context
+from unity.task_scheduler.machine_state import invalidate_task_machine_state_reads
 from unity.conversation_manager.cm_types import Medium, Mode
 from unity.common.startup_timing import log_startup_timing
 from unity.logger import LOGGER
@@ -348,7 +351,7 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
     if cm.mode.is_voice:
         return
 
-    boss_contact_id = SESSION_DETAILS.user.contact_id
+    boss_contact_id = SESSION_DETAILS.boss_contact_id
     boss = (
         cm.contact_index.get_contact(contact_id=int(boss_contact_id))
         if boss_contact_id is not None
@@ -467,7 +470,7 @@ async def _(
     ):
         return
 
-    boss_contact_id = SESSION_DETAILS.user.contact_id
+    boss_contact_id = SESSION_DETAILS.boss_contact_id
     boss = (
         cm.contact_index.get_contact(contact_id=int(boss_contact_id)) or {}
         if boss_contact_id is not None
@@ -547,7 +550,7 @@ async def _(
     ):
         return
 
-    boss_contact_id = SESSION_DETAILS.user.contact_id
+    boss_contact_id = SESSION_DETAILS.boss_contact_id
     boss = (
         cm.contact_index.get_contact(contact_id=int(boss_contact_id)) or {}
         if boss_contact_id is not None
@@ -653,7 +656,7 @@ async def _(
         contact = event.contact
 
     contact_id = (
-        contact.get("contact_id") if contact else SESSION_DETAILS.user.contact_id
+        contact.get("contact_id") if contact else SESSION_DETAILS.boss_contact_id
     )
     sender_name = _get_sender_name(contact)
 
@@ -795,7 +798,7 @@ async def _(
         contact = event.contact
 
     contact_id = (
-        contact.get("contact_id") if contact else SESSION_DETAILS.user.contact_id
+        contact.get("contact_id") if contact else SESSION_DETAILS.boss_contact_id
     )
     sender_name = _get_sender_name(contact)
     reason = event.reason or "no-answer"
@@ -864,7 +867,7 @@ async def _(
         contact = event.contact
 
     contact_id = (
-        contact.get("contact_id") if contact else SESSION_DETAILS.user.contact_id
+        contact.get("contact_id") if contact else SESSION_DETAILS.boss_contact_id
     )
     sender_name = _get_sender_name(contact)
     reason = event.reason or "no-answer"
@@ -918,7 +921,7 @@ async def _(
     """Handle call permission grant/rejection from a WhatsApp contact."""
     contact = event.contact
     contact_id = (
-        contact.get("contact_id") if contact else SESSION_DETAILS.user.contact_id
+        contact.get("contact_id") if contact else SESSION_DETAILS.boss_contact_id
     )
     sender_name = _get_sender_name(contact)
 
@@ -997,7 +1000,7 @@ async def _(
     """Log the invite template send in the conversation thread."""
     contact = event.contact
     contact_id = (
-        contact.get("contact_id") if contact else SESSION_DETAILS.user.contact_id
+        contact.get("contact_id") if contact else SESSION_DETAILS.boss_contact_id
     )
     sender_name = _get_sender_name(contact)
 
@@ -2111,6 +2114,24 @@ async def _(event: StartupEvent, cm: "ConversationManager", *args, **kwargs):
 @EventHandler.register(AssistantUpdateEvent)
 async def _(event: AssistantUpdateEvent, cm: "ConversationManager", *args, **kwargs):
     cm._session_logger.info("assistant_update", "Received assistant update event")
+    if event.update_kind == "membership":
+        space_ids = sorted(set(event.space_ids or []))
+        SESSION_DETAILS.space_ids = space_ids
+        SESSION_DETAILS.space_summaries = event.space_summaries or []
+        SESSION_DETAILS.self_contact_id = event.self_contact_id
+        SESSION_DETAILS.boss_contact_id = event.boss_contact_id
+        SESSION_DETAILS.export_space_ids_to_env()
+        SESSION_DETAILS.export_space_summaries_to_env()
+        SESSION_DETAILS.export_contact_ids_to_env()
+        cm.space_ids = space_ids
+        cm.space_summaries = SESSION_DETAILS.space_summaries
+        cm.self_contact_id = event.self_contact_id
+        cm.boss_contact_id = event.boss_contact_id
+        ContextRegistry.forget_departed_space_roots(space_ids)
+        broader_context.reset()
+        invalidate_task_machine_state_reads()
+        return
+
     payload = event.to_dict()["payload"]
     old_key = SESSION_DETAILS.unify_key
     cm.set_details(payload)
@@ -2849,7 +2870,7 @@ async def _(event: DirectMessageEvent, cm: "ConversationManager", *args, **kwarg
 
     contact = cm.get_active_contact()
     contact_id = (
-        contact.get("contact_id") if contact else SESSION_DETAILS.user.contact_id
+        contact.get("contact_id") if contact else SESSION_DETAILS.boss_contact_id
     )
     sender_name = _get_sender_name(contact)
 

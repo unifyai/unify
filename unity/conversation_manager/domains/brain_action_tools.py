@@ -25,6 +25,7 @@ from unity.common.prompt_helpers import now as prompt_now
 from unity.logger import LOGGER
 from unity.common.hierarchical_logger import ICONS
 from unity.comms import CommsPrimitives
+from unity.session_details import SESSION_DETAILS
 
 from unity.conversation_manager.domains import managers_utils
 from unity.conversation_manager.event_broker import get_event_broker
@@ -515,7 +516,12 @@ class ConversationManagerBrainActionTools:
 
         from unity.conversation_manager.events import GoogleMeetReceived
 
-        boss = self._cm.contact_index.get_contact(contact_id=1) or {}
+        boss = (
+            self._cm.contact_index.get_contact(
+                contact_id=SESSION_DETAILS.boss_contact_id,
+            )
+            or {}
+        )
         event = GoogleMeetReceived(contact=boss, meet_url=meet_url)
         await self._event_broker.publish(event.topic, event.to_json())
         return {"status": "ok", "message": f"Joining Google Meet at {meet_url}"}
@@ -613,7 +619,12 @@ class ConversationManagerBrainActionTools:
 
         from unity.conversation_manager.events import TeamsMeetReceived
 
-        boss = self._cm.contact_index.get_contact(contact_id=1) or {}
+        boss = (
+            self._cm.contact_index.get_contact(
+                contact_id=SESSION_DETAILS.boss_contact_id,
+            )
+            or {}
+        )
         event = TeamsMeetReceived(contact=boss, meet_url=meet_url)
         await self._event_broker.publish(event.topic, event.to_json())
         return {"status": "ok", "message": f"Joining Teams meeting at {meet_url}"}
@@ -1374,7 +1385,7 @@ class ConversationManagerBrainActionTools:
         email_address: str | None = None,
     ) -> dict[str, Any]:
         """
-        Update the boss contact's details (contact_id=1).
+        Update the boss contact's details.
 
         Use this when you learn the boss's name, phone number, or email
         address during conversation. Only provided fields are updated;
@@ -1404,7 +1415,7 @@ class ConversationManagerBrainActionTools:
             return {"status": "error", "error": "No fields provided to update."}
 
         self._cm.contact_index.contact_manager.update_contact(
-            contact_id=1,
+            contact_id=SESSION_DETAILS.boss_contact_id,
             **updates,
         )
         return {"status": "updated", "updates": updates}

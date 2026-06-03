@@ -1009,6 +1009,8 @@ class _SessionConfigBase(Event):
     )
     assistant_job_title: str = ""
     assistant_email_provider: str = "google_workspace"
+    self_contact_id: int = 0
+    boss_contact_id: int = 1
     desktop_mode: str = "ubuntu"
     desktop_url: str | None = None
     user_whatsapp_number: str = ""
@@ -1018,6 +1020,9 @@ class _SessionConfigBase(Event):
     org_id: int | None = None
     org_name: str = ""
     team_ids: list[int] = field(default_factory=list)
+    space_ids: list[int] = field(default_factory=list)
+    space_summaries: list[dict[str, Any]] = field(default_factory=list)
+    update_kind: str = "general"
     wake_reasons: list[dict[str, Any]] = field(default_factory=list)
     # Demo assistant metadata ID. If set, this is a demo session.
     # Unity derives demo_mode from (demo_id is not None).
@@ -1312,6 +1317,7 @@ class TaskDue(Event):
     source_task_log_id: int
     activation_revision: str
     scheduled_for: str
+    destination: str | None = None
     execution_mode: str = "live"
     source_type: str = "scheduled"
     task_label: str = ""

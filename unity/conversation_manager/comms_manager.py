@@ -75,6 +75,15 @@ _seen_discord_ids: dict[str, float] = {}
 _DISCORD_DEDUP_TTL = 300.0
 
 
+def _required_contact_id(event: dict, field_name: str) -> int:
+    """Return a resolved contact id required by startup/update events."""
+    value = event.get(field_name)
+    if value is None:
+        assistant_id = event.get("assistant_id")
+        raise ValueError(f"Assistant {assistant_id} is missing required {field_name}")
+    return int(value)
+
+
 def _already_seen_discord(message_id: str) -> bool:
     """Return True if this Discord message_id was already processed recently."""
     now = time.time()
@@ -214,9 +223,7 @@ def _task_due_event_from_payload(
     """Build a `TaskDue` event from a comms Pub/Sub payload.
 
     Thin alias around :meth:`TaskDue.from_dict` kept here to preserve the
-    call-site name `comms_manager` already imports. The Pub/Sub ingress
-    has already gated on ``event_type == "task_due"`` before calling this,
-    so no additional type discriminator check is needed.
+    call-site name `comms_manager` already imports.
     """
 
     return TaskDue.from_dict(payload, reason=reason)
@@ -695,6 +702,14 @@ class CommsManager:
                         "assistant_email_provider",
                         "google_workspace",
                     ),
+                    "self_contact_id": _required_contact_id(
+                        event,
+                        "self_contact_id",
+                    ),
+                    "boss_contact_id": _required_contact_id(
+                        event,
+                        "boss_contact_id",
+                    ),
                     "assistant_whatsapp_number": event.get(
                         "assistant_whatsapp_number",
                         "",
@@ -727,6 +742,9 @@ class CommsManager:
                     "org_id": event.get("org_id"),
                     "org_name": event.get("org_name", ""),
                     "team_ids": event.get("team_ids") or [],
+                    "space_ids": event.get("space_ids") or [],
+                    "space_summaries": event.get("space_summaries") or [],
+                    "update_kind": event.get("update_kind", "general"),
                     "demo_id": event.get("demo_id"),
                 }
                 await publish(
@@ -2045,6 +2063,14 @@ class CommsManager:
                         "assistant_email_provider",
                         "google_workspace",
                     ),
+                    "self_contact_id": _required_contact_id(
+                        event,
+                        "self_contact_id",
+                    ),
+                    "boss_contact_id": _required_contact_id(
+                        event,
+                        "boss_contact_id",
+                    ),
                     "assistant_whatsapp_number": event.get(
                         "assistant_whatsapp_number",
                         "",
@@ -2077,6 +2103,8 @@ class CommsManager:
                     "org_id": event.get("org_id"),
                     "org_name": event.get("org_name", ""),
                     "team_ids": event.get("team_ids") or [],
+                    "space_ids": event.get("space_ids") or [],
+                    "space_summaries": event.get("space_summaries") or [],
                     "wake_reasons": event.get("wake_reasons") or [],
                     "demo_id": event.get("demo_id"),
                 }

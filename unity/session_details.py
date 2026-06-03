@@ -21,6 +21,7 @@ Usage:
     name = SESSION_DETAILS.assistant.name  # computed from first_name + surname
 """
 
+import json
 import os
 from dataclasses import dataclass, field
 
@@ -37,6 +38,8 @@ UNASSIGNED_USER_ID = "default"
 # StartupEvent; the local install never does, and the local single-assistant
 # experience is intentionally fixed to "Unity").
 # ─────────────────────────────────────────────────────────────────────────────
+DEFAULT_SELF_CONTACT_ID = 0
+DEFAULT_BOSS_CONTACT_ID = 1
 PLACEHOLDER_ASSISTANT_FIRST_NAME = "Unity"
 PLACEHOLDER_ASSISTANT_SURNAME = None  # Contact.surname is Optional[str] with a
 # UNICODE_NAME_RE pattern; empty string fails the pattern and Pydantic coerces
@@ -64,9 +67,101 @@ DEFAULT_VOICE_PROVIDER = "cartesia"
 DEFAULT_VOICE_MODE = "tts"
 
 
+def _encode_int_csv(values: list[int]) -> str:
+    """Encode integer ids for env vars that can only carry plain strings."""
+    return ",".join(str(value) for value in values) if values else ""
+
+
+def _decode_int_csv(value: str) -> list[int]:
+    """Decode an integer-id CSV env var."""
+    return [int(item) for item in value.split(",") if item.strip()]
+
+
+@dataclass
+class SpaceSummary:
+    """Display and routing metadata for one shared space membership."""
+
+    space_id: int
+    name: str
+    description: str
+
+
+def normalize_space_summaries(value: list[SpaceSummary | dict]) -> list[SpaceSummary]:
+    """Return shared-space summaries in runtime dataclass form."""
+
+    summaries: list[SpaceSummary] = []
+    for item in value:
+        if isinstance(item, SpaceSummary):
+            summaries.append(
+                _normalize_space_summary(
+                    space_id=item.space_id,
+                    name=item.name,
+                    description=item.description,
+                ),
+            )
+            continue
+        if not isinstance(item, dict):
+            raise ValueError("space_summaries entries must be objects")
+        if not {"space_id", "name", "description"} <= set(item):
+            raise ValueError(
+                "space_summaries entries require space_id, name, and description",
+            )
+        summaries.append(
+            _normalize_space_summary(
+                space_id=item["space_id"],
+                name=item["name"],
+                description=item["description"],
+            ),
+        )
+    return summaries
+
+
+def _normalize_space_summary(
+    *,
+    space_id: object,
+    name: object,
+    description: object,
+) -> SpaceSummary:
+    if not isinstance(space_id, int) or isinstance(space_id, bool):
+        raise ValueError("space_summaries space_id values must be integers")
+    if not isinstance(name, str) or not name:
+        raise ValueError("space_summaries name values must be non-empty strings")
+    if not isinstance(description, str) or not description:
+        raise ValueError("space_summaries description values must be non-empty strings")
+    return SpaceSummary(space_id=space_id, name=name, description=description)
+
+
+def _encode_space_summaries(value: list[SpaceSummary]) -> str:
+    """Encode shared-space summaries for env vars that can only carry strings."""
+
+    if not value:
+        return ""
+    return json.dumps(
+        [
+            {
+                "space_id": summary.space_id,
+                "name": summary.name,
+                "description": summary.description,
+            }
+            for summary in value
+        ],
+    )
+
+
+def _decode_space_summaries(value: str) -> list[SpaceSummary]:
+    """Decode shared-space summaries from their environment representation."""
+
+    if not value:
+        return []
+    decoded = json.loads(value)
+    if not isinstance(decoded, list):
+        raise ValueError("SPACE_SUMMARIES must be a JSON list")
+    return normalize_space_summaries(decoded)
+
+
 @dataclass
 class AssistantDetails:
-    """Details about the assistant."""
+    """Details about the assistant and its runtime routing identity."""
 
     agent_id: int | None = None
     binding_id: str = ""
@@ -85,6 +180,7 @@ class AssistantDetails:
     slack_bot_user_id: str = ""
     is_coordinator: bool = False
     contact_id: int = 0  # Contact ID in Contacts table
+    self_contact_id: int = 0
     desktop_mode: str = "ubuntu"  # "ubuntu" or "windows" - determines VM type
     desktop_url: str | None = None  # URL for managed VM desktop access
     user_desktop_mode: str | None = (
@@ -94,6 +190,8 @@ class AssistantDetails:
     user_desktop_url: str | None = (
         None  # URL for user's own desktop (not the managed VM)
     )
+    space_ids: list[int] = field(default_factory=list)
+    space_summaries: list[SpaceSummary] = field(default_factory=list)
 
     @property
     def name(self) -> str:
@@ -102,7 +200,7 @@ class AssistantDetails:
 
 @dataclass
 class UserDetails:
-    """Details about the user (boss)."""
+    """Details about the user and their assistant-scoped boss identity."""
 
     id: str = UNASSIGNED_USER_ID
     first_name: str = ""
@@ -110,7 +208,7 @@ class UserDetails:
     number: str = ""
     email: str = ""
     whatsapp_number: str = ""
-    contact_id: int = 1  # Contact ID in Contacts table
+    boss_contact_id: int = 1
 
     @property
     def name(self) -> str:
@@ -246,6 +344,42 @@ class SessionDetails:
         self.team.ids = value
 
     @property
+    def space_ids(self) -> list[int]:
+        """Shortcut to assistant.space_ids for convenient access."""
+        return self.assistant.space_ids
+
+    @space_ids.setter
+    def space_ids(self, value: list[int]) -> None:
+        self.assistant.space_ids = value
+
+    @property
+    def space_summaries(self) -> list[SpaceSummary]:
+        """Shortcut to assistant.space_summaries for convenient access."""
+        return self.assistant.space_summaries
+
+    @space_summaries.setter
+    def space_summaries(self, value: list[SpaceSummary | dict]) -> None:
+        self.assistant.space_summaries = normalize_space_summaries(value)
+
+    @property
+    def self_contact_id(self) -> int:
+        """Shortcut to assistant.self_contact_id for convenient access."""
+        return self.assistant.self_contact_id
+
+    @self_contact_id.setter
+    def self_contact_id(self, value: int) -> None:
+        self.assistant.self_contact_id = value
+
+    @property
+    def boss_contact_id(self) -> int:
+        """Shortcut to user.boss_contact_id for convenient access."""
+        return self.user.boss_contact_id
+
+    @boss_contact_id.setter
+    def boss_contact_id(self, value: int) -> None:
+        self.user.boss_contact_id = value
+
+    @property
     def unify_key(self) -> str:
         """API key for Unify services.
 
@@ -293,15 +427,19 @@ class SessionDetails:
         assistant_slack_bot_user_id: str = "",
         assistant_is_coordinator: bool = False,
         assistant_contact_id: int = 0,
+        assistant_self_contact_id: int = DEFAULT_SELF_CONTACT_ID,
         user_id: str = "",
         user_first_name: str = "",
         user_surname: str = "",
         user_number: str = "",
         user_email: str = "",
         user_whatsapp_number: str = "",
+        user_boss_contact_id: int = DEFAULT_BOSS_CONTACT_ID,
         org_id: int | None = None,
         org_name: str = "",
         team_ids: list[int] | None = None,
+        space_ids: list[int] | None = None,
+        space_summaries: list[SpaceSummary | dict] | None = None,
         voice_provider: str = "",
         voice_id: str = "",
         binding_id: str = "",
@@ -330,6 +468,7 @@ class SessionDetails:
         self.assistant.slack_bot_user_id = assistant_slack_bot_user_id
         self.assistant.is_coordinator = assistant_is_coordinator
         self.assistant.contact_id = assistant_contact_id
+        self.self_contact_id = assistant_self_contact_id
         self.assistant.binding_id = binding_id
         self.assistant.desktop_mode = desktop_mode
         self.assistant.user_desktop_mode = user_desktop_mode
@@ -341,9 +480,12 @@ class SessionDetails:
         self.user.number = user_number
         self.user.email = user_email
         self.user.whatsapp_number = user_whatsapp_number
+        self.boss_contact_id = user_boss_contact_id
         self.org.id = org_id
         self.org.name = org_name
         self.team.ids = team_ids or []
+        self.assistant.space_ids = space_ids or []
+        self.space_summaries = space_summaries or []
         self.voice.provider = voice_provider
         self.voice.id = voice_id
         self._initialized = True
@@ -394,6 +536,7 @@ class SessionDetails:
             self.assistant.user_desktop_filesys_sync,
         )
         os.environ["ASSISTANT_USER_DESKTOP_URL"] = self.assistant.user_desktop_url or ""
+        self.export_contact_ids_to_env()
         os.environ["USER_ID"] = self.user.id
         os.environ["USER_FIRST_NAME"] = self.user.first_name
         os.environ["USER_SURNAME"] = self.user.surname
@@ -403,9 +546,9 @@ class SessionDetails:
         os.environ["USER_WHATSAPP_NUMBER"] = self.user.whatsapp_number
         os.environ["ORG_ID"] = str(self.org.id) if self.org.id is not None else ""
         os.environ["ORG_NAME"] = self.org.name
-        os.environ["TEAM_IDS"] = (
-            ",".join(str(t) for t in self.team.ids) if self.team.ids else ""
-        )
+        os.environ["TEAM_IDS"] = _encode_int_csv(self.team.ids)
+        self.export_space_ids_to_env()
+        self.export_space_summaries_to_env()
         os.environ["VOICE_PROVIDER"] = self.voice.provider
         os.environ["VOICE_ID"] = self.voice.id
         os.environ["VOICE_MODE"] = self.voice.mode
@@ -415,6 +558,21 @@ class SessionDetails:
         os.environ["CONTACT"] = self.voice_call.contact_json
         os.environ["BOSS"] = self.voice_call.boss_json
         os.environ["UNIFY_KEY"] = self.unify_key
+
+    def export_space_ids_to_env(self) -> None:
+        """Export current shared-space memberships to the subprocess env shape."""
+        os.environ["SPACE_IDS"] = _encode_int_csv(self.assistant.space_ids)
+
+    def export_space_summaries_to_env(self) -> None:
+        """Export current shared-space summaries to the subprocess env shape."""
+        os.environ["SPACE_SUMMARIES"] = _encode_space_summaries(
+            self.assistant.space_summaries,
+        )
+
+    def export_contact_ids_to_env(self) -> None:
+        """Export resolved self and boss contact ids to the subprocess env shape."""
+        os.environ["SELF_CONTACT_ID"] = str(self.assistant.self_contact_id)
+        os.environ["BOSS_CONTACT_ID"] = str(self.user.boss_contact_id)
 
     def populate_from_env(self) -> None:
         """Populate from environment variables.
@@ -460,6 +618,11 @@ class SessionDetails:
                 self.assistant.contact_id = int(val)
             except ValueError:
                 pass
+        if val := os.environ.get("SELF_CONTACT_ID"):
+            try:
+                self.self_contact_id = int(val)
+            except ValueError:
+                pass
         if val := os.environ.get("ASSISTANT_DESKTOP_MODE"):
             self.assistant.desktop_mode = val
         if val := os.environ.get("ASSISTANT_DESKTOP_URL"):
@@ -482,6 +645,11 @@ class SessionDetails:
             self.user.email = val
         if val := os.environ.get("USER_WHATSAPP_NUMBER"):
             self.user.whatsapp_number = val
+        if val := os.environ.get("BOSS_CONTACT_ID"):
+            try:
+                self.boss_contact_id = int(val)
+            except ValueError:
+                pass
         if val := os.environ.get("ORG_ID"):
             try:
                 self.org.id = int(val)
@@ -491,8 +659,18 @@ class SessionDetails:
             self.org.name = val
         if val := os.environ.get("TEAM_IDS"):
             try:
-                self.team.ids = [int(t) for t in val.split(",") if t.strip()]
+                self.team.ids = _decode_int_csv(val)
             except (ValueError, TypeError):
+                pass
+        if val := os.environ.get("SPACE_IDS"):
+            try:
+                self.assistant.space_ids = _decode_int_csv(val)
+            except (ValueError, TypeError):
+                pass
+        if val := os.environ.get("SPACE_SUMMARIES"):
+            try:
+                self.space_summaries = _decode_space_summaries(val)
+            except (ValueError, TypeError, KeyError, json.JSONDecodeError):
                 pass
         if val := os.environ.get("VOICE_PROVIDER"):
             self.voice.provider = val
@@ -558,3 +736,15 @@ class SessionDetails:
 
 # Global singleton instance
 SESSION_DETAILS = SessionDetails()
+
+
+def is_self_contact(contact_id: int | None) -> bool:
+    """Return whether a contact id is the assistant's own contact identity."""
+
+    return contact_id is not None and int(contact_id) == SESSION_DETAILS.self_contact_id
+
+
+def is_boss_contact(contact_id: int | None) -> bool:
+    """Return whether a contact id is the boss contact identity."""
+
+    return contact_id is not None and int(contact_id) == SESSION_DETAILS.boss_contact_id

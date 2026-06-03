@@ -963,6 +963,8 @@ class TestStartupEvents:
                     "user_email": "user@test.com",
                     "voice_provider": "elevenlabs",
                     "voice_id": "new_voice",
+                    "self_contact_id": 42,
+                    "boss_contact_id": 43,
                 },
             )
 
@@ -1015,6 +1017,8 @@ class TestStartupEvents:
                     "user_email": "user@test.com",
                     "voice_provider": "cartesia",
                     "voice_id": "voice_1",
+                    "self_contact_id": 42,
+                    "boss_contact_id": 43,
                 },
             )
 
@@ -1064,6 +1068,8 @@ class TestStartupEvents:
                     "user_email": "user@test.com",
                     "voice_provider": "cartesia",
                     "voice_id": "voice_1",
+                    "self_contact_id": 42,
+                    "boss_contact_id": 43,
                 },
             )
 
@@ -1076,6 +1082,127 @@ class TestStartupEvents:
             event = Event.from_json(msg["data"])
             assert isinstance(event, AssistantUpdateEvent)
             assert event.assistant_email_provider == "google_workspace"
+
+    @pytest.mark.asyncio
+    async def test_assistant_update_propagates_membership_fields(
+        self,
+        broker,
+        mock_session_details,
+        mock_settings,
+    ):
+        """assistant_update carries membership fields into the runtime event."""
+        from unity.conversation_manager.comms_manager import CommsManager
+
+        cm = CommsManager(broker)
+        cm.loop = asyncio.get_event_loop()
+
+        async with broker.pubsub() as pubsub:
+            await pubsub.psubscribe("app:comms:*")
+
+            message = create_pubsub_message(
+                "assistant_update",
+                {
+                    "api_key": "key",
+                    "assistant_id": "3",
+                    "user_id": "user_3",
+                    "assistant_first_name": "Member",
+                    "assistant_surname": "Update",
+                    "assistant_age": "25",
+                    "assistant_nationality": "US",
+                    "assistant_about": "test",
+                    "assistant_number": "+15555551234",
+                    "assistant_email": "member@unify.ai",
+                    "user_first_name": "Test",
+                    "user_surname": "User",
+                    "user_number": "+15555550000",
+                    "user_email": "user@test.com",
+                    "voice_provider": "cartesia",
+                    "voice_id": "voice_1",
+                    "space_ids": [3, 7],
+                    "space_summaries": [
+                        {
+                            "space_id": 3,
+                            "name": "Ops",
+                            "description": "Operations workspace for customer support.",
+                        },
+                    ],
+                    "self_contact_id": 42,
+                    "boss_contact_id": 43,
+                    "update_kind": "membership",
+                },
+            )
+
+            cm.handle_message(message)
+            await _wait_for_condition(lambda: message._acked)
+
+            msg = await pubsub.get_message(timeout=1.0, ignore_subscribe_messages=True)
+            assert msg is not None
+
+            event = Event.from_json(msg["data"])
+            assert isinstance(event, AssistantUpdateEvent)
+            assert event.space_ids == [3, 7]
+            assert event.space_summaries == [
+                {
+                    "space_id": 3,
+                    "name": "Ops",
+                    "description": "Operations workspace for customer support.",
+                },
+            ]
+            assert event.self_contact_id == 42
+            assert event.boss_contact_id == 43
+            assert event.update_kind == "membership"
+
+    @pytest.mark.asyncio
+    async def test_assistant_update_requires_resolved_contact_ids(
+        self,
+        broker,
+        mock_session_details,
+        mock_settings,
+    ):
+        """assistant_update fails loud instead of restoring legacy contact defaults."""
+        from unity.conversation_manager.comms_manager import CommsManager
+
+        cm = CommsManager(broker)
+        cm.loop = asyncio.get_event_loop()
+
+        async with broker.pubsub() as pubsub:
+            await pubsub.psubscribe("app:comms:*")
+
+            message = create_pubsub_message(
+                "assistant_update",
+                {
+                    "api_key": "key",
+                    "assistant_id": "missing-contact-ids",
+                    "user_id": "user_missing",
+                    "assistant_first_name": "Missing",
+                    "assistant_surname": "Ids",
+                    "assistant_age": "25",
+                    "assistant_nationality": "US",
+                    "assistant_about": "test",
+                    "assistant_number": "+15555551234",
+                    "assistant_email": "missing@unify.ai",
+                    "user_first_name": "Test",
+                    "user_surname": "User",
+                    "user_number": "+15555550000",
+                    "user_email": "user@test.com",
+                    "voice_provider": "cartesia",
+                    "voice_id": "voice_1",
+                    "boss_contact_id": 43,
+                },
+            )
+
+            with patch(
+                "unity.conversation_manager.comms_manager.publish_system_error",
+            ) as mock_error:
+                cm.handle_message(message)
+                await _wait_for_condition(lambda: message._acked)
+
+            mock_error.assert_called_once()
+            assert message._acked
+            assert (
+                await pubsub.get_message(timeout=0.1, ignore_subscribe_messages=True)
+                is None
+            )
 
 
 # =============================================================================

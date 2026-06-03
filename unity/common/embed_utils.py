@@ -86,7 +86,7 @@ def _cross_process_column_lock(context: str, key: str, timeout: float = 600.0):
     import time
 
     # Hash the key to avoid filesystem issues with long/special characters
-    lock_id = hashlib.sha1(f"{context}:{key}".encode()).hexdigest()[:16]
+    lock_id = hashlib.sha256(f"{context}:{key}".encode()).hexdigest()[:16]
     lock_path = os.path.join(tempfile.gettempdir(), f"unity_col_{lock_id}.lock")
 
     lock_file = open(lock_path, "w")
