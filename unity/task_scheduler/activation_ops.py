@@ -23,12 +23,18 @@ def detach_from_queue_for_activation(
     scheduler: "TaskScheduler",
     *,
     task_id: int,
+    instance_id: int | None = None,
     detach: bool = True,
     unlink_from_prev: bool = False,
 ) -> None:
     """Detach a runnable task ahead of activation and record a reintegration plan.
 
     Semantics:
+    - Selection: ``task_id`` identifies the logical task. When ``instance_id`` is
+      supplied, detach exactly that physical task instance; otherwise detach the
+      oldest runnable instance for the logical task. This keeps explicit/manual
+      execution behavior unchanged while allowing scheduled activations to target
+      recurring instances precisely.
     - General: Record a ``ReintegrationPlan`` capturing ``prev_task``, ``next_task``,
       whether the task was the head (``was_head``), the task's original ``start_at``
       (if any), the original status, and the queue head's ``start_at`` at the moment
@@ -52,14 +58,19 @@ def detach_from_queue_for_activation(
     These rules make reinstatement deterministic and easy to reason about.
     """
 
-    candidate_rows = scheduler._filter_tasks(
-        filter=(
-            f"task_id == {task_id} and status not in "
-            "('completed','cancelled','failed','active')"
-        ),
+    candidate_filter = (
+        f"task_id == {task_id} and status not in "
+        "('completed','cancelled','failed','active')"
     )
+    if instance_id is not None:
+        candidate_filter = f"{candidate_filter} and instance_id == {int(instance_id)}"
+    candidate_rows = scheduler._filter_tasks(filter=candidate_filter)
     if not candidate_rows:
-        raise ValueError(f"No runnable task found with id={task_id}")
+        if instance_id is None:
+            raise ValueError(f"No runnable task found with id={task_id}")
+        raise ValueError(
+            f"No runnable task found with id={task_id}, instance_id={instance_id}",
+        )
     task_row = sorted(
         candidate_rows,
         key=lambda r: r.instance_id,
@@ -72,7 +83,13 @@ def detach_from_queue_for_activation(
     # Derive the current head's start_at so downstream tasks can be reinstated as
     # head-scheduled later if their original predecessor becomes terminal.
     def _get_row(tid: int) -> Optional[Task]:
-        rows = scheduler._filter_tasks(filter=f"task_id == {tid}", limit=1)
+        rows = scheduler._filter_tasks(
+            filter=(
+                f"task_id == {tid} and status not in "
+                "('completed','cancelled','failed','active')"
+            ),
+            limit=1,
+        )
         return rows[0] if rows else None
 
     # Compute head_start_at with at most one backend read.
@@ -99,21 +116,21 @@ def detach_from_queue_for_activation(
             if cur_head is not None:
                 head_start_at = cur_head.schedule_start_at
 
-    # Batch-fetch log objects for all relevant task_ids in one backend call (reuse scheduler helper)
-    needed_ids: list[int] = [t for t in (task_id, prev_tid, next_tid) if t is not None]
-    try:
-        log_objs = scheduler._get_logs_by_task_ids(  # type: ignore[attr-defined]
-            task_ids=needed_ids,
-            return_ids_only=False,
-        )
-    except Exception:
-        log_objs = []
+    # Resolve physical rows before writing. Task ids alone are ambiguous for
+    # recurring tasks because historical instances share the same logical id.
+    _row_cache: Dict[int, Task] = {task_id: task_row}
+    for tid in (prev_tid, next_tid):
+        if tid is None:
+            continue
+        row = _get_row(tid)
+        if row is not None:
+            _row_cache[int(tid)] = row
     _log_cache: Dict[int, unify.Log] = {}
-    for lg in log_objs or []:
-        entries = getattr(lg, "entries", {})
-        tid = entries.get("task_id")
-        if tid is not None:
-            _log_cache[int(tid)] = lg
+    for tid, row in _row_cache.items():
+        _log_cache[tid] = scheduler._get_log_by_task_instance(  # type: ignore[attr-defined]
+            task_id=row.task_id,
+            instance_id=row.instance_id,
+        )
 
     def _get_log_obj(tid: int) -> Optional[unify.Log]:
         if not isinstance(tid, int):
@@ -134,6 +151,11 @@ def detach_from_queue_for_activation(
         new_sched: Dict[str, Any],
         extra: Optional[Dict[str, Any]] = None,
     ) -> None:
+        if log_or_id is None:
+            raise ValueError(
+                f"Cannot update activation schedule for task_id={task_id}, "
+                f"instance_id={task_row.instance_id}: no physical log row resolved.",
+            )
         entries: Dict[str, Any] = {"schedule": new_sched}
         if extra:
             entries.update(extra)

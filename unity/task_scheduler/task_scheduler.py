@@ -809,6 +809,109 @@ class TaskScheduler(BaseTaskScheduler):
             id_map[lg.entries["task_id"]] = lg.id
         return id_map
 
+    def _get_log_by_task_instance(self, *, task_id: int, instance_id: int) -> unify.Log:
+        """Return the physical task row for one logical task instance."""
+
+        log_objs = self._view.get_rows(
+            filter=f"task_id == {task_id} and instance_id == {instance_id}",
+            limit=2,
+            return_ids_only=False,
+        )
+        if not log_objs:
+            raise ValueError(
+                f"No task row found for task_id={task_id}, instance_id={instance_id}.",
+            )
+        if len(log_objs) != 1:
+            raise ValueError(
+                f"Ambiguous task rows for task_id={task_id}, instance_id={instance_id}.",
+            )
+        return log_objs[0]
+
+    def _get_task_for_source_log_id(
+        self,
+        *,
+        source_task_log_id: int,
+        expected_task_id: int,
+    ) -> Task:
+        """Return the task instance addressed by an activation source log id."""
+
+        log_objs = self._view.get_rows_by_log_ids(log_ids=[source_task_log_id])
+        if not log_objs:
+            raise ValueError(
+                f"Activation source task log {source_task_log_id} was not found.",
+            )
+        if len(log_objs) != 1:
+            raise ValueError(
+                f"Activation source task log {source_task_log_id} is ambiguous.",
+            )
+        entries = dict(log_objs[0].entries or {})
+        row_task_id = entries.get("task_id")
+        if row_task_id != expected_task_id:
+            raise ValueError(
+                "Activation source task log does not match requested task: "
+                f"expected task_id={expected_task_id}, got task_id={row_task_id}.",
+            )
+        instance_id = entries.get("instance_id")
+        if instance_id is None:
+            raise ValueError(
+                f"Activation source task log {source_task_log_id} has no instance_id.",
+            )
+        return Task(**entries)
+
+    @staticmethod
+    def _normalize_activation_datetime(value: Any) -> str | None:
+        if value is None:
+            return None
+        try:
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00")).isoformat()
+        except ValueError:
+            return str(value)
+
+    def _validate_task_matches_provenance(
+        self,
+        *,
+        task: Task,
+        provenance: "TaskRunProvenance | None",
+    ) -> None:
+        """Reject stale scheduled provenance before mutating a task instance."""
+
+        if provenance is None or provenance.source_type != "scheduled":
+            return
+        if provenance.scheduled_for is None:
+            return
+        task_scheduled_for = self._normalize_activation_datetime(task.schedule_start_at)
+        provenance_scheduled_for = self._normalize_activation_datetime(
+            provenance.scheduled_for,
+        )
+        if task_scheduled_for != provenance_scheduled_for:
+            raise ValueError(
+                "Scheduled activation does not match selected task instance: "
+                f"task_id={task.task_id}, instance_id={task.instance_id}, "
+                f"task_start_at={task_scheduled_for}, "
+                f"activation_scheduled_for={provenance_scheduled_for}.",
+            )
+
+    def _resolve_tasks_by_ids_for_queue_edit(self, task_ids: List[int]) -> List[Task]:
+        """Resolve logical task ids for queue edits, including freshly-created rows."""
+
+        unique_ids = list(dict.fromkeys(int(task_id) for task_id in task_ids))
+        tasks = self._filter_tasks(filter=f"task_id in {unique_ids}")
+        if {task.task_id for task in tasks} == set(unique_ids):
+            tasks_by_id = {task.task_id: task for task in tasks}
+            return [tasks_by_id[task_id] for task_id in unique_ids]
+
+        log_ids = self._view.get_log_ids_by_task_ids(task_ids=unique_ids)
+        exact_logs = self._view.get_rows_by_log_ids(
+            log_ids=[int(log_id) for log_id in log_ids],
+        )
+        tasks_by_id = {task.task_id: task for task in tasks}
+        for log in exact_logs:
+            task = Task(**log.entries)
+            tasks_by_id[task.task_id] = task
+        return [
+            tasks_by_id[task_id] for task_id in unique_ids if task_id in tasks_by_id
+        ]
+
     def _write_entries_batched(
         self,
         *,
@@ -1158,7 +1261,8 @@ class TaskScheduler(BaseTaskScheduler):
         if not candidate_tasks:
             raise ValueError(f"No runnable task found with id={task_id}")
 
-        # Pick the *oldest* runnable instance (lowest instance_id)
+        # Pick the oldest runnable instance unless activation provenance points
+        # at a specific physical task row.
         task = sorted(
             candidate_tasks,
             key=lambda t: t.instance_id,
@@ -1195,14 +1299,46 @@ class TaskScheduler(BaseTaskScheduler):
             if trigger_attempt_token
             else source_type_from_activation_reason(reason.value)
         )
-        source_task_log_id = self._task_id_to_log_id_map([task_id]).get(task_id)
         task_run_provenance = consume_live_task_run_provenance(
             assistant_id=SESSION_DETAILS.assistant.agent_id,
             task_id=task_id,
             source_type=task_run_source_type,
-            source_task_log_id=source_task_log_id,
             destination=task.destination,
             trigger_attempt_token=trigger_attempt_token,
+        )
+        if task_run_provenance and task_run_provenance.source_task_log_id is not None:
+            task = self._get_task_for_source_log_id(
+                source_task_log_id=task_run_provenance.source_task_log_id,
+                expected_task_id=task_id,
+            )
+            if task.status in (
+                Status.completed,
+                Status.cancelled,
+                Status.failed,
+                Status.active,
+            ):
+                raise ValueError(
+                    "Activation source task instance is not runnable: "
+                    f"task_id={task.task_id}, instance_id={task.instance_id}, "
+                    f"status={task.status!r}.",
+                )
+            if activated_by is None:
+                if task.trigger is not None:
+                    reason = ActivatedBy.trigger
+                elif task.schedule_prev is None and task.schedule_start_at is not None:
+                    reason = ActivatedBy.schedule
+                elif task.schedule_prev is not None:
+                    reason = ActivatedBy.queue
+                else:
+                    reason = ActivatedBy.explicit
+                task_run_source_type = (
+                    "triggered"
+                    if trigger_attempt_token
+                    else source_type_from_activation_reason(reason.value)
+                )
+        self._validate_task_matches_provenance(
+            task=task,
+            provenance=task_run_provenance,
         )
 
         # Adjust queue linkages for activation (and record reintegration plan).
@@ -1211,6 +1347,7 @@ class TaskScheduler(BaseTaskScheduler):
         detach_from_queue_for_activation(
             self,
             task_id=task_id,
+            instance_id=task.instance_id,
             detach=detach,
             unlink_from_prev=unlink_from_prev,
         )
@@ -2376,34 +2513,41 @@ class TaskScheduler(BaseTaskScheduler):
         # Guard against touching the active task (fast in‑memory check)
         self._ensure_not_active_task(task_ids)
 
-        # Single targeted read for the referenced tasks only with a minimal field projection
-        # (avoid scanning all completed tasks and avoid fetching unused columns within this call).
-        logs = self._view.get_minimal_rows_by_task_ids(
-            task_ids=task_ids,
-            fields=["status"],
+        requested_task_ids = list(dict.fromkeys(int(task_id) for task_id in task_ids))
+
+        log_ids = self._view.get_log_ids_by_task_ids(task_ids=requested_task_ids)
+        logs = self._view.get_rows_by_log_ids(
+            log_ids=[int(log_id) for log_id in log_ids],
         )
+        logs_by_task_id = {
+            int(log.entries["task_id"]): log
+            for log in logs
+            if log.entries.get("task_id") is not None
+        }
+        missing = [
+            task_id for task_id in requested_task_ids if task_id not in logs_by_task_id
+        ]
+        if missing:
+            raise ValueError(f"No matching task_ids resolved: {missing}")
+
         # Validate none of the referenced tasks are already completed
-        try:
-            completed_ids = {
-                int(lg.entries["task_id"])
-                for lg in logs
-                if str(lg.entries.get("status")) == "completed"
-            }
-        except Exception:
-            completed_ids = set()
-        overlap = set(task_ids).intersection(completed_ids)
-        assert not overlap, (
-            "Cannot cancel completed tasks. Attempted to cancel: " f"{overlap}"
+        completed_ids = {
+            task_id
+            for task_id, log in logs_by_task_id.items()
+            if str(log.entries.get("status")) == Status.completed.value
+        }
+        assert not completed_ids, (
+            "Cannot cancel completed tasks. Attempted to cancel: " f"{completed_ids}"
         )
 
         # Batch update status using the resolved log ids directly (no extra reads)
         self._write_log_entries(
-            logs=[lg.id for lg in logs],
+            logs=[logs_by_task_id[task_id].id for task_id in requested_task_ids],
             entries={"status": Status.cancelled},
         )
         return {
             "outcome": "tasks cancelled",
-            "details": {"task_ids": task_ids},
+            "details": {"task_ids": requested_task_ids},
         }
 
     # Update Task Queue
@@ -2947,7 +3091,7 @@ class TaskScheduler(BaseTaskScheduler):
         self._ensure_not_active_task(block)
 
         # Validate existence, reject terminal/trigger-based; single consolidated read
-        tasks = self._filter_tasks(filter=f"task_id in {block}")
+        tasks = self._resolve_tasks_by_ids_for_queue_edit(block)
         ids_found = {t.task_id for t in tasks}
         missing = [tid for tid in block if tid not in ids_found]
         assert not missing, f"Unknown task ids: {missing}"
@@ -3098,7 +3242,7 @@ class TaskScheduler(BaseTaskScheduler):
                 "details": {"queue_id": queue_id, "order": []},
             }
 
-        tasks: List[Task] = self._filter_tasks(filter=f"task_id in {order}")
+        tasks = self._resolve_tasks_by_ids_for_queue_edit(order)
         ids_found = {t.task_id for t in tasks}
         missing = [tid for tid in order if tid not in ids_found]
         assert not missing, f"Unknown task ids: {missing}"
@@ -4907,6 +5051,16 @@ class TaskScheduler(BaseTaskScheduler):
         rows_by_id: Dict[int, Dict[str, Any]] = {
             lg.entries["task_id"]: lg.entries for lg in logs
         }
+        if set(rows_by_id) != set(ids):
+            missing_ids = [int(task_id) for task_id in ids if task_id not in rows_by_id]
+            log_ids = self._view.get_log_ids_by_task_ids(task_ids=missing_ids)
+            exact_logs = self._view.get_rows_by_log_ids(
+                log_ids=[int(log_id) for log_id in log_ids],
+            )
+            for log in exact_logs:
+                task_id = log.entries.get("task_id")
+                if task_id is not None:
+                    rows_by_id[int(task_id)] = log.entries
         return rows_by_id
 
     def _find_name_desc_collisions(
