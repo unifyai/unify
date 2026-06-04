@@ -1,5 +1,7 @@
 """Tests for the headless offline task runner."""
 
+from types import SimpleNamespace
+
 import pytest
 
 
@@ -120,6 +122,61 @@ def test_offline_runner_initializes_before_scheduler_delegate_execution(monkeypa
         "handle.result",
     ]
     assert current_task_execution_delegate.get() is None
+
+
+def test_mark_source_task_failed_terminalizes_active_row(monkeypatch):
+    """Failure fallback should terminalize the exact active source task row."""
+
+    from unity.task_scheduler import offline_runner
+
+    writes = []
+
+    class _FakeView:
+        def get_rows_by_log_ids(self, *, log_ids):
+            assert log_ids == [555]
+            return [
+                SimpleNamespace(
+                    id=555,
+                    entries={
+                        "task_id": 101,
+                        "instance_id": 0,
+                        "status": "active",
+                    },
+                ),
+            ]
+
+    class _FakeScheduler:
+        def __init__(self):
+            self._view = _FakeView()
+
+        def _write_log_entries(self, *, logs, entries):
+            writes.append((logs, entries))
+
+    _stub_runtime_initialization(monkeypatch, offline_runner)
+    monkeypatch.setattr(offline_runner, "TaskScheduler", _FakeScheduler)
+    config = offline_runner.OfflineTaskConfig(
+        assistant_id="42",
+        run_key="offline:scheduled:42:101:rev:once",
+        task_id=101,
+        function_id=None,
+        request="Send the agentic offline summary.",
+        source_type="scheduled",
+        source_task_log_id=555,
+        activation_revision="rev-123",
+        scheduled_for="2026-04-10T09:00:00+00:00",
+    )
+
+    offline_runner._mark_source_task_failed(config, "boom")
+
+    assert writes == [
+        (
+            555,
+            {
+                "status": "failed",
+                "info": "Offline task runner failed before task lifecycle finalization completed: boom",
+            },
+        ),
+    ]
 
 
 def test_offline_delegate_runs_agentic_task_through_actor(monkeypatch):
