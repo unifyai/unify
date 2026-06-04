@@ -79,6 +79,16 @@ class _LimitCheckResult:
     billing_mode: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class CreditGateState:
+    """Current prepaid-credit gate state for surfaces that stay conversational."""
+
+    allowed: bool = True
+    reason: Optional[str] = None
+    credit_balance: Optional[float] = None
+    billing_mode: Optional[str] = None
+
+
 def _get_current_month(timezone: str = "UTC") -> str:
     """Get current month string in YYYY-MM format for the given timezone."""
     try:
@@ -122,6 +132,77 @@ def _parse_spend_result(
         credit_balance=credit_balance,
         billing_mode=billing_mode,
     )
+
+
+def _credit_gate_from_spend_data(data: dict) -> CreditGateState:
+    credit_balance = data.get("credit_balance")
+    billing_mode = data.get("billing_mode")
+
+    if billing_mode == "METERED":
+        return CreditGateState(
+            allowed=True,
+            credit_balance=credit_balance,
+            billing_mode=billing_mode,
+        )
+
+    if credit_balance is not None and credit_balance <= 0:
+        return CreditGateState(
+            allowed=False,
+            reason=(
+                f"Insufficient credits: balance is ${credit_balance:.2f}. "
+                "Please add credits to continue."
+            ),
+            credit_balance=credit_balance,
+            billing_mode=billing_mode,
+        )
+
+    return CreditGateState(
+        allowed=True,
+        credit_balance=credit_balance,
+        billing_mode=billing_mode,
+    )
+
+
+async def check_credit_gate_state() -> CreditGateState:
+    """Return the active billing account's prepaid-credit gate state.
+
+    This is intentionally narrower than ``check_spending_limits_callback``:
+    it only checks whether the active prepaid wallet is empty. Voice surfaces
+    can keep the call alive while using this state to avoid task guidance when
+    credits are depleted.
+    """
+    from .session_details import SESSION_DETAILS
+
+    api_key = _get_api_key()
+    if not api_key:
+        logger.debug("Credit gate check skipped: no API key")
+        return CreditGateState()
+
+    user_id = SESSION_DETAILS.user_id
+    org_id = SESSION_DETAILS.org_id
+    if not user_id:
+        logger.debug("Credit gate check skipped: missing user context")
+        return CreditGateState()
+
+    timezone = "UTC"
+    if SESSION_DETAILS.assistant:
+        timezone = SESSION_DETAILS.assistant.timezone or "UTC"
+    month = _get_current_month(timezone)
+
+    try:
+        client = _get_spend_client()
+        if org_id is not None:
+            data = await client.get_org_spend(org_id=org_id, month=month)
+        else:
+            data = await client.get_user_spend(month=month)
+        return _credit_gate_from_spend_data(data)
+    except SpendRequestError as e:
+        if e.status != 404:
+            logger.warning(f"Failed to check credit gate: {type(e).__name__}: {e}")
+        return CreditGateState()
+    except Exception as e:
+        logger.warning(f"Failed to check credit gate: {type(e).__name__}: {e}")
+        return CreditGateState()
 
 
 async def _check_assistant_limit(

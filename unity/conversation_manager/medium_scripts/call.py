@@ -34,8 +34,9 @@ if sys.platform == "darwin":
 from livekit.plugins.turn_detector.english import EnglishModel
 from livekit.agents import ChatContext, ChatMessage
 from livekit.agents import ModelSettings, llm
+from livekit.agents.llm import ChatChunk, ChoiceDelta
 
-from typing import AsyncIterable
+from typing import AsyncIterable, Callable
 
 load_dotenv()
 
@@ -86,6 +87,41 @@ VAD = None
 
 # Module-level logger created early for prewarm (before entrypoint runs).
 _log = FastBrainLogger()
+
+DEPLETED_CREDITS_FAST_BRAIN_RESPONSE = (
+    "Your credits are depleted, so I can't continue helping with setup or tasks "
+    "until you top up. Please add credits in billing, then I'll pick this back up."
+)
+
+
+class FastBrainCreditGateMonitor:
+    """Polls credit state off the voice response path."""
+
+    def __init__(self, refresh_interval_s: float = 5.0) -> None:
+        from unity.spending_limits import CreditGateState
+
+        self._refresh_interval_s = refresh_interval_s
+        self._state = CreditGateState()
+
+    @property
+    def state(self):
+        return self._state
+
+    async def refresh_once(self) -> None:
+        from unity.spending_limits import check_credit_gate_state
+
+        next_state = await check_credit_gate_state()
+        if next_state.allowed != self._state.allowed:
+            if next_state.allowed:
+                _log.info("Credit gate cleared")
+            else:
+                _log.warning(next_state.reason or "Credit gate active")
+        self._state = next_state
+
+    async def run(self) -> None:
+        while True:
+            await self.refresh_once()
+            await asyncio.sleep(self._refresh_interval_s)
 
 
 class MeetAudioBridge:
@@ -231,8 +267,12 @@ class Assistant(Agent):
         self.call_received = not outbound
         self._user_speech_logged = False
         self.user_turn_generating = False
+        self._credit_gate_state_provider: Callable | None = None
 
         super().__init__(instructions=instructions)
+
+    def set_credit_gate_state_provider(self, provider: Callable) -> None:
+        self._credit_gate_state_provider = provider
 
     def set_call_received(self):
         self.call_received = True
@@ -261,6 +301,22 @@ class Assistant(Agent):
             while not self.call_received:
                 await asyncio.sleep(0.1)
             _log.call_status("call_received")
+
+            credit_gate_state = (
+                self._credit_gate_state_provider()
+                if self._credit_gate_state_provider is not None
+                else None
+            )
+            if credit_gate_state is not None and not credit_gate_state.allowed:
+                _log.info("Credit gate response served from cached state")
+                yield ChatChunk(
+                    id=f"credit-gate-{monotonic_ms()}",
+                    delta=ChoiceDelta(
+                        role="assistant",
+                        content=DEPLETED_CREDITS_FAST_BRAIN_RESPONSE,
+                    ),
+                )
+                return
 
             await self._capture_screenshots_for_llm(chat_ctx)
 
@@ -935,9 +991,13 @@ async def entrypoint(ctx: agents.JobContext):
         user_utterance_event = InboundUnifyMeetUtterance
         assistant_utterance_event = OutboundUnifyMeetUtterance
 
+    credit_gate_task: asyncio.Task | None = None
+
     # Register cleanup as a LiveKit shutdown callback so it runs on any
     # exit path: participant disconnect or explicit stop.
     async def _on_job_shutdown():
+        if credit_gate_task is not None:
+            await utils.aio.cancel_and_wait(credit_gate_task)
         if audio_bridge is not None:
             await asyncio.to_thread(audio_bridge.stop)
         await delete_livekit_room(ctx.room.name)
@@ -1258,6 +1318,12 @@ async def entrypoint(ctx: agents.JobContext):
         instructions=system_prompt,
         outbound=outbound,
         audio_bridge=audio_bridge,
+    )
+    credit_gate_monitor = FastBrainCreditGateMonitor()
+    assistant.set_credit_gate_state_provider(lambda: credit_gate_monitor.state)
+    credit_gate_task = asyncio.create_task(
+        credit_gate_monitor.run(),
+        name="fast_brain_credit_gate_monitor",
     )
 
     async def _capture_screenshots_for_llm(chat_ctx) -> None:
@@ -1752,16 +1818,21 @@ async def entrypoint(ctx: agents.JobContext):
 
     from unity.common.llm_client import new_llm_client
 
-    greeting_client = new_llm_client(
-        model=SETTINGS.conversation.FAST_BRAIN_MODEL,
-        origin="fast_brain_greeting",
-        reasoning_effort="low",
-    )
-    greeting_messages = build_opening_greeting_messages(
-        system_prompt=system_prompt,
-        history_messages=_extract_chat_messages(session.history),
-    )
-    greeting_text = await greeting_client.generate(messages=greeting_messages)
+    credit_gate_state = credit_gate_monitor.state
+    if credit_gate_state.allowed:
+        greeting_client = new_llm_client(
+            model=SETTINGS.conversation.FAST_BRAIN_MODEL,
+            origin="fast_brain_greeting",
+            reasoning_effort="low",
+        )
+        greeting_messages = build_opening_greeting_messages(
+            system_prompt=system_prompt,
+            history_messages=_extract_chat_messages(session.history),
+        )
+        greeting_text = await greeting_client.generate(messages=greeting_messages)
+    else:
+        _log.info("Credit gate greeting served from cached state")
+        greeting_text = DEPLETED_CREDITS_FAST_BRAIN_RESPONSE
 
     if channel != "phone":
         await ctx.room.local_participant.publish_data(
