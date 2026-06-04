@@ -85,11 +85,11 @@ async def test_code_act_routes_to_coordinator_list_assistants(monkeypatch) -> No
     ) -> list[dict[str, Any]]:
         del phone, email, agent_id
         assert list_all_org is True
-        assert api_key == "test-api-key"
+        assert api_key == "test-api-key"  # pragma: allowlist secret
         return expected_assistants
 
     monkeypatch.setattr(
-        "unity.conversation_manager.domains.coordinator_tools.unify.list_assistants",
+        "unity.coordinator_manager.workspace_manager.unify.list_assistants",
         _fake_list_assistants,
     )
     primitives = Primitives(primitive_scope=PrimitiveScope.single("coordinator"))
@@ -128,7 +128,7 @@ async def test_code_act_enforces_coordinator_permission_gate(monkeypatch) -> Non
         raise AssertionError(f"Unexpected upstream call: {kwargs}")
 
     monkeypatch.setattr(
-        "unity.conversation_manager.domains.coordinator_tools.unify.list_assistants",
+        "unity.coordinator_manager.workspace_manager.unify.list_assistants",
         _should_not_call_upstream,
     )
     primitives = Primitives(primitive_scope=PrimitiveScope.single("coordinator"))

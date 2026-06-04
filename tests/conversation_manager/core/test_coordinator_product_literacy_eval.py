@@ -16,7 +16,7 @@ from unity.common.single_shot import single_shot_tool_decision
 from unity.common.llm_client import new_llm_client
 from unity.conversation_manager.cm_types.mode import Mode
 from unity.conversation_manager.domains.brain import build_brain_spec
-from unity.conversation_manager.domains.coordinator_tools import (
+from unity.coordinator_manager.workspace_manager import (
     COORDINATOR_TOOL_METHOD_NAMES,
 )
 from unity.coordinator_manager.workspace_manager import CoordinatorWorkspaceManager

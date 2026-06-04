@@ -15,7 +15,7 @@ from unity.coordinator_manager.activity import (
     publish_coordinator_activity,
     safe_activity_text,
 )
-from unity.conversation_manager.domains.coordinator_tools import CoordinatorTools
+from unity.coordinator_manager.workspace_manager import CoordinatorWorkspaceManager
 from unity.events.stream_filters import is_streaming_noise
 from unity.events.types.coordinator_activity import CoordinatorActivityPayload
 from unity.session_details import SESSION_DETAILS
@@ -192,10 +192,10 @@ def test_coordinator_activity_is_not_streaming_noise():
 @_handle_project
 async def test_setup_tools_emit_lightweight_activity_for_progress():
     SESSION_DETAILS.is_coordinator = True
-    tools = CoordinatorTools(cm=object()).as_tools()
+    manager = CoordinatorWorkspaceManager()
 
     async with capture_events("CoordinatorActivity") as events:
-        added = tools["add_setup_checklist_item"](
+        added = manager.add_setup_checklist_item(
             title="Connect Salesforce",
             description="Store read-only access and validate renewal data.",
             kind="integration",
@@ -203,13 +203,13 @@ async def test_setup_tools_emit_lightweight_activity_for_progress():
             chat_prompt_label="Start guided setup",
         )
         item_id = added["details"]["item_id"]
-        tools["update_setup_checklist_item"](
+        manager.update_setup_checklist_item(
             item_id=item_id,
             description="Start with read-only Salesforce access, then pause.",
             chat_prompt="Should we start with Salesforce first, or pause after planning?",
             chat_prompt_label="Choose first slice",
         )
-        tools["update_setup_checklist_item"](
+        manager.update_setup_checklist_item(
             item_id=item_id,
             status="done",
             chat_prompt="Let's review the next integration before continuing.",

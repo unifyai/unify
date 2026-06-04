@@ -5,7 +5,6 @@ import inspect
 import pytest
 
 from unity.coordinator_manager.workspace_manager import CoordinatorWorkspaceManager
-from unity.conversation_manager.domains.coordinator_tools import CoordinatorTools
 from unity.manager_registry import ManagerRegistry
 from unity.session_details import SESSION_DETAILS
 
@@ -31,28 +30,32 @@ def test_workspace_manager_blocks_non_coordinator_sessions():
 
 def test_workspace_manager_delegates_reads_for_coordinator(monkeypatch):
     SESSION_DETAILS.is_coordinator = True
+    SESSION_DETAILS.unify_key = "owner-key"
+    SESSION_DETAILS.org_id = 7
 
     monkeypatch.setattr(
-        CoordinatorTools,
-        "list_assistants",
-        lambda self, **_: [{"agent_id": 42, "first_name": "Ops"}],
+        "unity.coordinator_manager.workspace_manager.unify.list_assistants",
+        lambda **_: [{"agent_id": 42, "first_name": "Ops", "organization_id": 7}],
     )
 
     manager = CoordinatorWorkspaceManager()
     result = manager.list_assistants(agent_id=42)
 
-    assert result == [{"agent_id": 42, "first_name": "Ops"}]
+    assert result == [{"agent_id": 42, "first_name": "Ops", "organization_id": 7}]
 
 
 def test_workspace_manager_blocks_mutations_when_role_is_not_coordinator(monkeypatch):
     SESSION_DETAILS.is_coordinator = False
     called = {"create_space": False}
 
-    def _fake_create_space(self, **_kwargs):
+    def _fake_create_space(**_kwargs):
         called["create_space"] = True
         return {"space_id": 99}
 
-    monkeypatch.setattr(CoordinatorTools, "create_space", _fake_create_space)
+    monkeypatch.setattr(
+        "unity.coordinator_manager.workspace_manager.unify.create_space",
+        _fake_create_space,
+    )
 
     manager = CoordinatorWorkspaceManager()
     result = manager.create_space(name="Ops", description="Operations")
@@ -61,8 +64,8 @@ def test_workspace_manager_blocks_mutations_when_role_is_not_coordinator(monkeyp
     assert called["create_space"] is False
 
 
-def test_workspace_manager_inherits_rich_delegate_docstrings():
-    """Actor-facing coordinator primitives keep delegate 'when to use' guidance."""
+def test_workspace_manager_exposes_rich_primitive_docstrings():
+    """Actor-facing coordinator primitives keep actionable usage guidance."""
 
     methods = (
         "create_assistant",
@@ -74,15 +77,7 @@ def test_workspace_manager_inherits_rich_delegate_docstrings():
         "update_setup_checklist_item",
     )
     for method_name in methods:
-        workspace_doc = inspect.getdoc(
-            getattr(CoordinatorWorkspaceManager, method_name),
-        )
-        delegate_doc = inspect.getdoc(getattr(CoordinatorTools, method_name))
-        assert workspace_doc is not None
-        assert delegate_doc is not None
-        workspace_paragraphs = [p for p in workspace_doc.split("\n\n") if p.strip()]
-        delegate_paragraphs = [p for p in delegate_doc.split("\n\n") if p.strip()]
-        assert len(workspace_paragraphs) >= 2
-        assert len(delegate_paragraphs) >= 2
-        assert workspace_paragraphs[1] == delegate_paragraphs[1]
-        assert "Parameters" in workspace_doc
+        doc = inspect.getdoc(getattr(CoordinatorWorkspaceManager, method_name))
+        assert doc is not None
+        paragraphs = [paragraph for paragraph in doc.split("\n\n") if paragraph.strip()]
+        assert len(paragraphs) >= 2
