@@ -1394,7 +1394,7 @@ class E2ETestConfig:
     test_assistant_first_name: str = "SpendingTest"
     test_assistant_surname: str = "Assistant"
     model: str = "gpt-4o-mini@openai"
-    test_agent_id: _Optional[int] = None
+    test_agent_id: _Optional[str] = None
 
     @classmethod
     def from_env(cls) -> "E2ETestConfig":
@@ -1403,6 +1403,58 @@ class E2ETestConfig:
         api_key = _os.getenv("UNIFY_KEY", "local-test-api-key")
         admin_key = _os.getenv("UNIFY_KEY", api_key)
         return cls(base_url=base_url, api_key=api_key, admin_key=admin_key)
+
+
+_E2E_ASSISTANT_STARTING_CAP = 25.0
+
+
+def _assistant_info_from_response(response: httpx.Response) -> dict:
+    data = response.json()
+    info = data.get("info") if isinstance(data, dict) else None
+    if not isinstance(info, dict):
+        raise RuntimeError(
+            f"Assistant response did not include info object: {data}",
+        )
+    if not info.get("agent_id"):
+        raise RuntimeError(
+            f"Assistant response info did not include agent_id: {data}",
+        )
+    return info
+
+
+async def _get_assistant_spending_cap(
+    client: httpx.AsyncClient,
+    config: E2ETestConfig,
+    headers: dict,
+) -> _Optional[float]:
+    response = await client.get(
+        f"{config.base_url}/assistant/{config.test_agent_id}/spending-limit",
+        headers=headers,
+    )
+    if response.status_code != 200:
+        raise RuntimeError(
+            "Failed to get assistant spending limit: "
+            f"{response.status_code} {response.text}",
+        )
+    return response.json().get("monthly_spending_cap")
+
+
+async def _set_assistant_spending_cap(
+    client: httpx.AsyncClient,
+    config: E2ETestConfig,
+    headers: dict,
+    monthly_spending_cap: _Optional[float],
+) -> None:
+    response = await client.put(
+        f"{config.base_url}/assistant/{config.test_agent_id}/spending-limit",
+        headers=headers,
+        json={"monthly_spending_cap": monthly_spending_cap},
+    )
+    if response.status_code not in (200, 201):
+        raise RuntimeError(
+            "Failed to set assistant spending limit: "
+            f"{response.status_code} {response.text}",
+        )
 
 
 @pytest_asyncio.fixture
@@ -1482,16 +1534,14 @@ async def e2e_config(request):
 
         # Always create a fresh assistant for THIS test. Name includes
         # the test node + a UUID so we never reuse another test's
-        # state. monthly_spending_cap=25.0 matches AssistantCreate's
-        # validation (ge=1.0; 25 is a comfortable default; tests that
-        # want a different cap PATCH it themselves).
+        # state. The cap is set through the spending-limit endpoint
+        # because AssistantCreate does not own spending-limit mutation.
         response = await client.post(
             f"{config.base_url}/assistant",
             headers=headers,
             json={
                 "first_name": config.test_assistant_first_name,
                 "surname": f"{config.test_assistant_surname}_{test_node_slug}_{unique_suffix}",
-                "monthly_spending_cap": 25.0,
                 "create_infra": False,
                 # Skip wake_up_assistant — in CI there's no adapters
                 # service to hit, and the orchestra `wake_up_assistant`
@@ -1509,12 +1559,14 @@ async def e2e_config(request):
                 f"Failed to create per-test assistant for {test_node_slug}: "
                 f"{response.status_code} {response.text}",
             )
-        config.test_agent_id = response.json().get("agent_id")
-        if not config.test_agent_id:
-            raise RuntimeError(
-                f"Assistant create succeeded but response did not include "
-                f"agent_id: {response.json()}",
-            )
+        assistant_info = _assistant_info_from_response(response)
+        config.test_agent_id = assistant_info["agent_id"]
+        await _set_assistant_spending_cap(
+            client,
+            config,
+            headers,
+            _E2E_ASSISTANT_STARTING_CAP,
+        )
 
     # Populate SESSION_DETAILS
     from unity.session_details import SESSION_DETAILS
@@ -1694,20 +1746,20 @@ class TestE2ESpendingLimits:
         # Save original limit before modifying
         original_limit = None
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(
-                f"{e2e_config.base_url}/assistant/{e2e_config.test_agent_id}",
+            original_limit = await _get_assistant_spending_cap(
+                client,
+                e2e_config,
                 headers=headers,
             )
-            if response.status_code == 200:
-                original_limit = response.json().get("monthly_spending_cap")
 
         try:
             # Set assistant limit to $0
             async with httpx.AsyncClient(timeout=10.0) as client:
-                await client.patch(
-                    f"{e2e_config.base_url}/assistant/{e2e_config.test_agent_id}/config",
-                    headers=headers,
-                    json={"monthly_spending_cap": 0.0},
+                await _set_assistant_spending_cap(
+                    client,
+                    e2e_config,
+                    headers,
+                    0.0,
                 )
 
             llm_client = unillm.AsyncUnify(e2e_config.model)
@@ -1720,10 +1772,11 @@ class TestE2ESpendingLimits:
         finally:
             # Restore original limit (None means no limit)
             async with httpx.AsyncClient(timeout=10.0) as client:
-                await client.patch(
-                    f"{e2e_config.base_url}/assistant/{e2e_config.test_agent_id}/config",
-                    headers=headers,
-                    json={"monthly_spending_cap": original_limit},
+                await _set_assistant_spending_cap(
+                    client,
+                    e2e_config,
+                    headers,
+                    original_limit,
                 )
 
     @pytest.mark.asyncio
@@ -2076,22 +2129,19 @@ class TestE2ESpendingLimits:
 
         # Get current limit to restore later
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(
-                f"{e2e_config.base_url}/assistant/{e2e_config.test_agent_id}",
+            original_limit = await _get_assistant_spending_cap(
+                client,
+                e2e_config,
                 headers=headers,
             )
-            original_limit = 25.0
-            if response.status_code == 200:
-                original_limit = (
-                    response.json().get("monthly_spending_cap", 25.0) or 25.0
-                )
 
         # Set assistant limit to $0
         async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.patch(
-                f"{e2e_config.base_url}/assistant/{e2e_config.test_agent_id}/config",
-                headers=headers,
-                json={"monthly_spending_cap": 0.0},
+            await _set_assistant_spending_cap(
+                client,
+                e2e_config,
+                headers,
+                0.0,
             )
 
         try:
@@ -2105,10 +2155,11 @@ class TestE2ESpendingLimits:
         finally:
             # Restore original limit
             async with httpx.AsyncClient(timeout=10.0) as client:
-                await client.patch(
-                    f"{e2e_config.base_url}/assistant/{e2e_config.test_agent_id}/config",
-                    headers=headers,
-                    json={"monthly_spending_cap": original_limit},
+                await _set_assistant_spending_cap(
+                    client,
+                    e2e_config,
+                    headers,
+                    original_limit,
                 )
 
     @pytest.mark.asyncio
