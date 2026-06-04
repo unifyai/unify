@@ -16,7 +16,7 @@ import functools
 import json
 import os
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Type, Union, Callable, Tuple
 from typing import Literal, overload
 from pydantic import BaseModel
@@ -132,6 +132,7 @@ from .machine_state import (
     TaskRunProvenance,
     build_task_run_key,
     consume_live_task_run_provenance,
+    peek_live_task_run_provenance,
     source_type_from_activation_reason,
 )
 from ..session_details import SESSION_DETAILS
@@ -912,6 +913,67 @@ class TaskScheduler(BaseTaskScheduler):
             tasks_by_id[task_id] for task_id in unique_ids if task_id in tasks_by_id
         ]
 
+    def _reconcile_offline_active_blockers(
+        self,
+        *,
+        task_id: int,
+        provenance: TaskRunProvenance | None,
+    ) -> bool:
+        """Fail stale same-task active rows before a headless retry starts."""
+
+        if (
+            provenance is None
+            or provenance.execution_mode != "offline"
+            or provenance.source_type not in {"scheduled", "triggered"}
+            or provenance.source_task_log_id is None
+        ):
+            return False
+
+        active_rows = self._view.get_rows(
+            filter="status == 'active'",
+            return_ids_only=False,
+        )
+        if not active_rows:
+            return True
+
+        stale_rows = []
+        for row in active_rows:
+            entries = dict(row.entries or {})
+            row_task_id = entries.get("task_id")
+            if row_task_id is None or int(row_task_id) != int(task_id):
+                return False
+            if int(row.id) == int(provenance.source_task_log_id):
+                return False
+            stale_rows.append(row)
+
+        if not stale_rows:
+            return True
+
+        now = datetime.now(timezone.utc).isoformat()
+        for row in stale_rows:
+            entries = dict(row.entries or {})
+            self._write_log_entries(
+                logs=row.id,
+                entries={
+                    "status": Status.failed,
+                    "info": (
+                        "Task instance marked failed by offline lifecycle reconciliation. "
+                        f"The headless execution for source_task_log_id={row.id} left "
+                        "the row active without a live scheduler handle; "
+                        f"reconciled_at={now}; "
+                        f"next_source_task_log_id={provenance.source_task_log_id}."
+                    ),
+                },
+            )
+            self._reintegration_plans.pop(
+                (
+                    int(entries["task_id"]),
+                    int(entries["instance_id"]),
+                ),
+                None,
+            )
+        return True
+
     def _write_entries_batched(
         self,
         *,
@@ -1184,9 +1246,26 @@ class TaskScheduler(BaseTaskScheduler):
         except Exception:
             any_active = False
         if any_active:
-            raise RuntimeError(
-                "A task is marked as active, but no active handle is present – reconcile state before starting another task.",
+            source_type = (
+                "triggered"
+                if trigger_attempt_token
+                else source_type_from_activation_reason(
+                    (_activated_by or ActivatedBy.explicit).value,
+                )
             )
+            provenance = peek_live_task_run_provenance(
+                assistant_id=SESSION_DETAILS.assistant.agent_id,
+                task_id=task_id,
+                source_type=source_type,
+                trigger_attempt_token=trigger_attempt_token,
+            )
+            if not self._reconcile_offline_active_blockers(
+                task_id=task_id,
+                provenance=provenance,
+            ):
+                raise RuntimeError(
+                    "A task is marked as active, but no active handle is present – reconcile state before starting another task.",
+                )
 
         # Execute strictly by id; choose isolation semantics based on flag
         handle = await self._execute_queue_internal(
