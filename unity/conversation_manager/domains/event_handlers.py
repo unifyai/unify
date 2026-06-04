@@ -1473,6 +1473,47 @@ def _push_email_to_all_contacts(
             _push_to_contact(contact["contact_id"], "bcc")
 
 
+def _credit_gate_reply_context(
+    *,
+    medium: Medium,
+    contact_id: int | None,
+    email_id: str | None = None,
+    api_message_id: str | None = None,
+    tags: list[str] | None = None,
+    chat_id: str | None = None,
+    channel_id: str | None = None,
+    team_id: str | None = None,
+    thread_id: str | None = None,
+    thread_ts: str | None = None,
+    guild_id: str | None = None,
+    bot_id: str | None = None,
+    message_id: str | None = None,
+    routing_metadata: dict | None = None,
+) -> dict:
+    context = {
+        "medium": medium.value,
+        "contact_id": contact_id,
+    }
+    optional_fields = {
+        "email_id": email_id,
+        "api_message_id": api_message_id,
+        "tags": tags,
+        "chat_id": chat_id,
+        "channel_id": channel_id,
+        "team_id": team_id,
+        "thread_id": thread_id,
+        "thread_ts": thread_ts,
+        "guild_id": guild_id,
+        "bot_id": bot_id,
+        "message_id": message_id,
+        "routing_metadata": routing_metadata,
+    }
+    for key, value in optional_fields.items():
+        if value:
+            context[key] = value
+    return context
+
+
 @EventHandler.register(
     (
         SMSSent,
@@ -1664,6 +1705,11 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             )
             await cm.request_llm_run(
                 triggering_contact_id=contact_id,
+                credit_gate_reply_context=_credit_gate_reply_context(
+                    medium=Medium.EMAIL,
+                    contact_id=contact_id,
+                    email_id=event.email_id,
+                ),
             )
             return  # Early return - email handling is complete
 
@@ -1941,6 +1987,25 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
         _t0 = time.perf_counter()
         await cm.request_llm_run(
             triggering_contact_id=contact_id,
+            credit_gate_reply_context=(
+                _credit_gate_reply_context(
+                    medium=medium,
+                    contact_id=contact_id,
+                    api_message_id=getattr(event, "api_message_id", None),
+                    tags=tags,
+                    chat_id=chat_id,
+                    channel_id=channel_id,
+                    team_id=team_id,
+                    thread_id=thread_id,
+                    thread_ts=thread_ts,
+                    guild_id=guild_id,
+                    bot_id=bot_id,
+                    message_id=message_id,
+                    routing_metadata=routing_metadata,
+                )
+                if role == "user"
+                else None
+            ),
         )
         log_startup_timing(
             LOGGER,
