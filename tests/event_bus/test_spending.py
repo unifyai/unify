@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -712,6 +712,131 @@ class TestCheckSpendingLimitsCallback:
         assert response.allowed is False
         assert response.limit_type == LimitType.ASSISTANT
         assert "exceeded" in response.reason.lower()
+
+
+class TestCreditGateState:
+    """Tests for the lightweight prepaid-credit gate used by voice surfaces."""
+
+    @pytest.mark.asyncio
+    async def test_personal_zero_credits_blocks(self):
+        from unity.spending_limits import check_credit_gate_state
+
+        spend_data = {
+            "cumulative_spend": 0.0,
+            "limit": None,
+            "credit_balance": 0.0,
+            "billing_mode": "CREDITS",
+        }
+
+        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
+            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+                mock_session.user_id = "user_456"
+                mock_session.org_id = None
+                mock_session.assistant.timezone = "UTC"
+
+                with patch(
+                    "unity.spending_limits._get_spend_client",
+                ) as mock_get_client:
+                    mock_instance = MagicMock()
+                    mock_instance.closed = False
+                    mock_instance.get_user_spend = AsyncMock(return_value=spend_data)
+                    mock_get_client.return_value = mock_instance
+
+                    state = await check_credit_gate_state()
+
+        assert state.allowed is False
+        assert state.credit_balance == 0.0
+        assert "Insufficient credits" in state.reason
+        mock_instance.get_user_spend.assert_called_once()
+        mock_instance.get_org_spend.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_metered_zero_credits_allowed(self):
+        from unity.spending_limits import check_credit_gate_state
+
+        spend_data = {
+            "cumulative_spend": 0.0,
+            "limit": None,
+            "credit_balance": 0.0,
+            "billing_mode": "METERED",
+        }
+
+        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
+            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+                mock_session.user_id = "user_456"
+                mock_session.org_id = None
+                mock_session.assistant.timezone = "UTC"
+
+                with patch(
+                    "unity.spending_limits._get_spend_client",
+                ) as mock_get_client:
+                    mock_instance = MagicMock()
+                    mock_instance.closed = False
+                    mock_instance.get_user_spend = AsyncMock(return_value=spend_data)
+                    mock_get_client.return_value = mock_instance
+
+                    state = await check_credit_gate_state()
+
+        assert state.allowed is True
+        assert state.credit_balance == 0.0
+        assert state.billing_mode == "METERED"
+
+    @pytest.mark.asyncio
+    async def test_org_context_checks_org_balance(self):
+        from unity.spending_limits import check_credit_gate_state
+
+        spend_data = {
+            "cumulative_spend": 0.0,
+            "limit": None,
+            "credit_balance": 12.0,
+            "billing_mode": "CREDITS",
+        }
+
+        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
+            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+                mock_session.user_id = "user_456"
+                mock_session.org_id = 789
+                mock_session.assistant.timezone = "UTC"
+
+                with patch(
+                    "unity.spending_limits._get_spend_client",
+                ) as mock_get_client:
+                    mock_instance = MagicMock()
+                    mock_instance.closed = False
+                    mock_instance.get_org_spend = AsyncMock(return_value=spend_data)
+                    mock_get_client.return_value = mock_instance
+
+                    state = await check_credit_gate_state()
+
+        assert state.allowed is True
+        assert state.credit_balance == 12.0
+        mock_instance.get_org_spend.assert_called_once_with(org_id=789, month=ANY)
+        mock_instance.get_user_spend.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_credit_gate_failures_fail_open(self):
+        from unity.spending_limits import check_credit_gate_state
+
+        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
+            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+                mock_session.user_id = "user_456"
+                mock_session.org_id = None
+                mock_session.assistant.timezone = "UTC"
+
+                with patch(
+                    "unity.spending_limits._get_spend_client",
+                ) as mock_get_client:
+                    mock_instance = MagicMock()
+                    mock_instance.closed = False
+                    mock_instance.get_user_spend = AsyncMock(
+                        side_effect=Exception("network"),
+                    )
+                    mock_get_client.return_value = mock_instance
+
+                    state = await check_credit_gate_state()
+
+        assert state.allowed is True
+        assert state.reason is None
 
 
 class TestPersonalContextLimitChecks:
