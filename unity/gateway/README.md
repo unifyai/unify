@@ -31,6 +31,8 @@ unity/gateway/
 ├── app.py                 # FastAPI app mounting channels and adapters
 ├── __main__.py            # python -m unity.gateway serve/doctor
 ├── context.py             # GatewayContext dependency injection
+├── local_setup.py         # local channel setup metadata
+├── local-setup.md         # local operator setup guide
 ├── envelope_sink.py       # local/http/pubsub delivery backends
 ├── runtime.py             # local/hosted runtime activation backends
 ├── public_url.py          # callback URL construction
@@ -67,7 +69,10 @@ such as `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `SLACK_SIGNING_SECRET`,
 Check configuration with:
 
 ```bash
+python -m unity.gateway setup --public-url https://your-public-callback.example
+python -m unity.gateway urls --public-url https://your-public-callback.example
 python -m unity.gateway doctor --check-credentials
+python -m unity.gateway smoke --base-url http://127.0.0.1:8001 --public-url https://your-public-callback.example
 ```
 
 ## Hosted Usage

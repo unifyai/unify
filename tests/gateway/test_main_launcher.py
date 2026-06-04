@@ -143,3 +143,129 @@ class TestMain:
         out = capsys.readouterr().out
         assert "unity.gateway" in out
         assert "--host" in out
+
+    def test_urls_command_prints_callback_urls(
+        self,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        from unity.gateway import __main__ as launcher
+
+        exit_code = launcher.main(
+            [
+                "urls",
+                "--public-url",
+                "https://callbacks.example.com",
+                "--channels",
+                "twilio",
+            ],
+        )
+
+        assert exit_code == 0
+        out = capsys.readouterr().out
+        assert "Inbound SMS webhook: https://callbacks.example.com/twilio/sms" in out
+        assert "Call TwiML callback: https://callbacks.example.com/phone/twiml" in out
+
+    def test_setup_prints_guidance_without_writing_files(
+        self,
+        capsys: pytest.CaptureFixture,
+        tmp_path,
+    ) -> None:
+        from unity.gateway import __main__ as launcher
+
+        env_file = tmp_path / ".env"
+        exit_code = launcher.main(
+            [
+                "setup",
+                "--print",
+                "--channels",
+                "slack",
+                "--public-url",
+                "https://callbacks.example.com",
+                "--env-file",
+                str(env_file),
+            ],
+        )
+
+        assert exit_code == 0
+        out = capsys.readouterr().out
+        assert "Unity gateway local setup" in out
+        assert "SLACK_SIGNING_SECRET=" in out
+        assert not env_file.exists()
+
+    def test_setup_can_append_missing_env_placeholders(
+        self,
+        capsys: pytest.CaptureFixture,
+        tmp_path,
+    ) -> None:
+        from unity.gateway import __main__ as launcher
+
+        env_file = tmp_path / ".env"
+        exit_code = launcher.main(
+            [
+                "setup",
+                "--channels",
+                "slack",
+                "--write-env",
+                "--env-file",
+                str(env_file),
+            ],
+        )
+
+        assert exit_code == 0
+        assert "appended missing" in capsys.readouterr().out
+        contents = env_file.read_text(encoding="utf-8")
+        assert "SLACK_SIGNING_SECRET=" in contents
+        assert "ORCHESTRA_ADMIN_KEY=" in contents
+
+    def test_doctor_reports_missing_channel_credentials(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        monkeypatch.delenv("SLACK_SIGNING_SECRET", raising=False)
+        monkeypatch.delenv("ORCHESTRA_ADMIN_KEY", raising=False)
+
+        from unity.gateway import __main__ as launcher
+
+        exit_code = launcher.main(
+            ["doctor", "--channels", "slack", "--check-credentials"],
+        )
+
+        assert exit_code == 1
+        out = capsys.readouterr().out
+        assert "slack: missing required credentials" in out
+        assert "SLACK_SIGNING_SECRET: missing (required)" in out
+
+    def test_smoke_checks_gateway_health(
+        self,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        from unity.gateway import __main__ as launcher
+
+        class _Response:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return None
+
+            def read(self):
+                return b'{"status":"ok"}'
+
+        with patch.object(launcher, "urlopen", return_value=_Response()):
+            exit_code = launcher.main(
+                [
+                    "smoke",
+                    "--base-url",
+                    "http://127.0.0.1:8001",
+                    "--public-url",
+                    "https://callbacks.example.com",
+                ],
+            )
+
+        assert exit_code == 0
+        out = capsys.readouterr().out
+        assert "health: ok (http://127.0.0.1:8001/health)" in out
+        assert "public-url ok (https://callbacks.example.com)" in out
