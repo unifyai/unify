@@ -1369,9 +1369,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         trace_meta = trace_meta or {}
 
+        # Resolve per-turn org member attribution (only meaningful in org
+        # context, where a cost can be attributed to a specific member).
+        attributed_user_id = None
         if SESSION_DETAILS.org_id is not None:
             triggering_contact_id = trace_meta.get("triggering_contact_id")
-            attributed_user_id = None
             if triggering_contact_id is not None:
                 contact = self.contact_index.get_contact(
                     contact_id=triggering_contact_id,
@@ -1383,17 +1385,23 @@ class ConversationManager(metaclass=SingletonABCMeta):
             else:
                 COST_ATTRIBUTION.set([SESSION_DETAILS.user.id])
 
-            try:
-                import unillm
+        # Re-bind the billing context for THIS turn so credit deductions are
+        # attributed to the assistant (and the acting member, in org context).
+        # This must run for personal workspaces too: the context set once at
+        # init does not reliably propagate to the generation execution
+        # context, so without this LLM transactions are recorded with a NULL
+        # assistant_id and disappear when filtering usage by assistant.
+        try:
+            import unillm
 
-                unillm.set_billing_context(
-                    assistant_id=SESSION_DETAILS.assistant.agent_id,
-                    user_id=attributed_user_id or SESSION_DETAILS.user.id,
-                    organization_id=SESSION_DETAILS.org_id,
-                    source="call" if self.mode.is_voice else "chat",
-                )
-            except (ImportError, Exception):
-                pass
+            unillm.set_billing_context(
+                assistant_id=SESSION_DETAILS.assistant.agent_id,
+                user_id=attributed_user_id or SESSION_DETAILS.user.id,
+                organization_id=SESSION_DETAILS.org_id,
+                source="call" if self.mode.is_voice else "chat",
+            )
+        except (ImportError, Exception):
+            pass
         _cost_attribution_ms = _mark_preamble_step()
 
         self._llm_gen += 1
