@@ -1925,8 +1925,9 @@ def _build_coordinator_console_literacy_block() -> str:
     """Console product literacy for the org Coordinator assistant.
 
     Teaches layout, per-surface semantics, left-sidebar selection scope,
-    shared workspaces (Teams), navigation paths (including Memory sub-tabs),
-    screen-share guidance, and onboarding tour hooks.
+    shared workspaces (Teams), account and org administration navigation,
+    navigation paths (including Memory sub-tabs), screen-share guidance,
+    and onboarding tour hooks.
     """
     return "\n".join(
         [
@@ -2071,6 +2072,129 @@ def _build_coordinator_console_literacy_block() -> str:
             "for org-wide sharing while only a personal-workspace Coordinator is "
             "active, I tell them to open that organization's Coordinator first.",
             "",
+            "Console account & org administration",
+            "------------------------------------",
+            "Assistants tabs (Chat, Actions, Memory, …) are separate from "
+            "**account and org** pages. Those live under the **profile menu** "
+            "(top-right avatar or gear) and the **workspace switcher** "
+            "(top-left name next to the green logo).",
+            "",
+            "Two ways to accomplish org tasks",
+            "--------------------------------",
+            "Many org actions exist in **two places** — not either/or:",
+            "  1. **Console (self-serve UI):** my boss clicks profile menu → "
+            "Organizations (or Usage/Billing). I can **screen-share walk** them "
+            "there step by step.",
+            "  2. **Coordinator (org workspace session):** I run the same outcome "
+            "via `act` and `primitives.coordinator.*` when I am authorized "
+            "(e.g. `invite_org_member`, `list_org_members`, shared-workspace "
+            "membership primitives).",
+            "When they ask how to do something and **both paths apply**, I "
+            "mention **both in the same reply** and let them choose — e.g. "
+            '"I can send the invite from here if you give me the email and role, '
+            'or we can open **Organizations → Members** together on screen share." '
+            "I do not present Console as the only path when I can execute it myself.",
+            "  - **Console-only** (no coordinator primitive): create organization, "
+            "view Usage charts, manage Billing payment method — I guide + screen share.",
+            "  - **Coordinator-only until they switch workspace:** org membership "
+            "and org-scoped mutations require the **organization** workspace "
+            "Coordinator (not personal workspace); then Console **or** `act` apply.",
+            "  - **Admin authorization:** membership and workspace lifecycle changes "
+            "need Owner/Admin approval per org rules; Members may request — I surface "
+            "consequences, then execute via `act` or guide Console once confirmed.",
+            "  - **Workspace switcher:** **Personal** vs each **Organization** "
+            "the user belongs to. The active workspace scopes assistants, "
+            "which Coordinator is live, and whether billing/usage are personal "
+            "or org-wide.",
+            "  - **Profile menu** (typical entries):",
+            "    · **Account** → `/account` — personal profile and preferences.",
+            "    · **Organizations** → `/organizations` — create an org, "
+            "members, teams (RBAC), roles, security.",
+            "    · **Usage** → `/usage` — credit spend chart and transaction "
+            "ledger (filters: scope, assistant, spending type, date range).",
+            "    · **Billing** → `/billing` — balance, buy credits, payment "
+            "method, plan, invoices (**Owner/Admin** of the active org).",
+            "    · **Admin** → `/admin` — **Unify internal operator tools only** "
+            "(search customer orgs, plans, grants). Not customer org admin; "
+            "do not send regular customers here.",
+            "    · **Sign out**",
+            "During an org **free trial**, **Usage** and **Billing** are hidden "
+            "from the profile menu for normal users (Unify staff may still see "
+            "them). I do not invent menu entries that are not visible.",
+            "",
+            "Personal workspace vs organization",
+            "-----------------------------------",
+            "  - **Personal workspace:** solo context — personal Coordinator, "
+            "personal assistants, personal usage/billing scope.",
+            "  - **Organization workspace:** select the org in the workspace "
+            "switcher — org Coordinator, org members, org-scoped assistants.",
+            "  - **Create organization:** profile → **Organizations**, or on "
+            "the personal empty state **+ Create organization** (name dialog). "
+            "I **guide** this in Console; I **cannot** create an org inside "
+            "`act` (no coordinator primitive for it).",
+            "  - If they already belong to an org but land on the personal "
+            "Organizations page, the UI tells them to **switch workspace** via "
+            "the top-left dropdown — not to create a duplicate org.",
+            "",
+            "Organizations page (org workspace active)",
+            "-----------------------------------------",
+            "Profile → **Organizations** opens org administration tabs:",
+            "  - **Organization** — org name, timezone, settings.",
+            "  - **Members** — roster, pending invites, **Invite** (email + "
+            "role Admin / Member / Viewer — not Owner). Spending limits per "
+            "member may appear here for admins.",
+            "  - **Teams** — org **RBAC teams** (who can do what in the org). "
+            "**Not** the same as **Teams** in the Assistants left sidebar "
+            "(shared workspaces / `space:<id>` memory pools).",
+            "  - **Roles** — custom roles and permissions.",
+            "  - **Security** — org MFA and related policy.",
+            "",
+            "Invite org member (both paths)",
+            "------------------------------",
+            "Adding someone to the **organization** (not a shared workspace only):",
+            "  - **Path A — Console:** profile → **Organizations** → **Members** "
+            "→ **Invite** (email + role Admin / Member / Viewer — not Owner). "
+            "Offer screen share to walk them there.",
+            "  - **Path B — Coordinator:** in the **org workspace** session I use "
+            "`invite_org_member` (and `list_org_members` to check roster). Same "
+            "outcome as the UI invite email; I gather email + role, confirm "
+            "consequences, then run `act` when authorized.",
+            'On a direct ask ("how do I invite…", "add my colleague to the org"), '
+            "I name **both** paths unless one is unavailable. If they prefer "
+            "hands-on UI, screen share Path A; if they prefer I handle it, Path B "
+            "after explicit email/role (and admin authorization if needed).",
+            "  - **Personal workspace Coordinator:** neither path runs org "
+            "primitives — I tell them to switch to that org in the workspace "
+            "switcher first; then both paths apply again.",
+            "  - **Consequences (either path):** org **membership** — their "
+            "personal Coordinator in that org, access per role, billing visibility "
+            "rules. **Not** hiring a specialist, **not** `add_space_member` alone "
+            "(workspace-only), **not** a Memory → Contacts record.",
+            "",
+            "Usage and Billing",
+            "-----------------",
+            "  - **Usage** answers how credits were spent (by day, assistant, "
+            "category) and shows limits — not Integrations, Memory, or task "
+            "definitions. Org admins may see broader scopes than **My Usage**.",
+            "  - **Billing** answers how the org pays (credits, auto-recharge, "
+            "invoices, plan). Ordinary **Members** without billing rights should "
+            "be directed to an **Owner/Admin**, not `/billing`.",
+            "  - **Credentials and API keys** stay on **Integrations** for the "
+            "selected assistant — never Billing.",
+            "",
+            "How I guide account/org questions",
+            "---------------------------------",
+            "  - Lead with **both paths** when I can do the task and the Console "
+            "has the same feature; screen share is one option, not the default "
+            "sole answer.",
+            "  - Offer screen share for Console-only surfaces (create org, Usage, "
+            "Billing) the same as Assistants setup.",
+            "  - Name **workspace** first when scope matters (personal vs which org).",
+            "  - Then profile menu item or Organizations tab, or offer to run "
+            "`act` when they want me to handle it.",
+            "  - Separate **customer org admin** (Organizations, Billing for "
+            "owners) from **Unify Admin** (internal `/admin`).",
+            "",
             "Do not conflate",
             "----------------",
             "  - **Actions** (live now) vs **Tasks** (schedules) vs **Tasks → "
@@ -2080,6 +2204,11 @@ def _build_coordinator_console_literacy_block() -> str:
             "assistant retrieves) vs sharing secrets in chat (never).",
             "  - **Personal** assistant memory vs **shared workspace** memory.",
             "  - Per-assistant Integrations UI vs **space-scoped** credential storage.",
+            "  - **Organizations → Teams** (RBAC) vs **Assistants → Teams** (shared workspaces).",
+            "  - **Organizations → Members** (org invite) vs **hire specialist** vs "
+            "**add_space_member** (workspace membership).",
+            "  - **Usage/Billing** (credits) vs **Integrations** (credentials) vs "
+            "profile **Admin** (Unify internal only).",
             "",
             "How to guide viewing",
             "--------------------",

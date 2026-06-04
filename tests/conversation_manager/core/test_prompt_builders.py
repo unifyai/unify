@@ -281,6 +281,7 @@ class TestPromptSectionOwnershipMatrix:
                     "Act capabilities\n----------------",
                     "Concurrent action and acknowledgment\n------------------------------------",
                     "Coordinator Console literacy\n-----------------------------",
+                    "Console account & org administration",
                     "Proactive meeting offers\n------------------------",
                 ),
                 "absent": (
@@ -320,6 +321,7 @@ class TestPromptSectionOwnershipMatrix:
                     "Organization membership actions are unavailable",
                     "switch to that organization's workspace coordinator",
                     "Coordinator Console literacy\n-----------------------------",
+                    "Console account & org administration",
                     "Proactive meeting offers\n------------------------",
                 ),
                 "absent": (
@@ -378,6 +380,11 @@ class TestCoordinatorVoicePrompt:
         assert "Coordinator Console literacy" in prompt
         assert "Left sidebar — selection drives everything" in prompt
         assert "Shared workspaces (Teams in the left sidebar)" in prompt
+        assert "Console account & org administration" in prompt
+        assert "Two ways to accomplish org tasks" in prompt
+        assert "Invite org member (both paths)" in prompt
+        assert "mention **both in the same reply**" in prompt
+        assert "Unify internal operator tools only" in prompt
         assert "Coordinator onboarding flow (UI reference)" in prompt
         assert "Console knowledge\n-----------------" not in prompt
 
