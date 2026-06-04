@@ -425,7 +425,7 @@ class TestProactiveSpeechLoop:
 
     async def test_loop_publishes_guidance_when_should_speak(self, mock_cm):
         """The loop publishes a FastBrainNotification event with should_speak=True and
-        response_text so the fast brain speaks it via session.say()."""
+        message so the fast brain speaks it via session.say()."""
         from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm.mode = Mode.CALL
@@ -469,8 +469,7 @@ class TestProactiveSpeechLoop:
         # Proactive speech publishes a FastBrainNotification event (not raw JSON)
         data = json.loads(message)
         payload = data["payload"]
-        assert payload["content"] == "Still with you!"
-        assert payload["response_text"] == "Still with you!"
+        assert payload["message"] == "Still with you!"
         assert payload["should_speak"] is True
 
     async def test_loop_records_message_in_contact_index(self, mock_cm):
@@ -603,8 +602,7 @@ class TestEventHandlerProactiveSpeechIntegration:
 
         event = FastBrainNotification(
             contact={"contact_id": 1, "first_name": "Boss", "surname": "User"},
-            content="I found several backend engineer openings at OpenAI.",
-            response_text="I found several backend engineer openings at OpenAI.",
+            message="I found several backend engineer openings at OpenAI.",
             should_speak=True,
             source="slow_brain",
         )
@@ -626,7 +624,7 @@ class TestEventHandlerProactiveSpeechIntegration:
 
         event = FastBrainNotification(
             contact={"contact_id": 1, "first_name": "Boss", "surname": "User"},
-            content="Checking your contacts for Bob.",
+            message="Checking your contacts for Bob.",
             should_speak=False,
             source="slow_brain",
         )

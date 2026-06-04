@@ -106,7 +106,7 @@ class TestVoiceCallFlowIntegration:
             # Publish a guidance event
             event = FastBrainNotification(
                 contact=boss_contact,
-                content="Please ask about their schedule",
+                message="Please ask about their schedule",
             )
             await event_broker.publish("app:call:notification", event.to_json())
 

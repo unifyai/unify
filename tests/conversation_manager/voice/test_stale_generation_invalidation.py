@@ -117,7 +117,7 @@ class TestNotificationTriggersTurnClassification:
     @staticmethod
     def _triggers_turn(
         should_speak: bool,
-        response_text: str,
+        message: str,
         notification_source: str,
     ) -> bool:
         return notification_source not in ("meet_interaction", "proactive_speech")
@@ -125,7 +125,7 @@ class TestNotificationTriggersTurnClassification:
     def test_silent_slow_brain_notification_triggers(self):
         assert self._triggers_turn(
             should_speak=False,
-            response_text="",
+            message="",
             notification_source="slow_brain",
         )
 
@@ -134,21 +134,21 @@ class TestNotificationTriggersTurnClassification:
         in-flight generation so it regenerates with the new context."""
         assert self._triggers_turn(
             should_speak=True,
-            response_text="I've sent those scopes in the chat.",
+            message="I've sent those scopes in the chat.",
             notification_source="slow_brain",
         )
 
     def test_meet_interaction_does_not_trigger(self):
         assert not self._triggers_turn(
             should_speak=False,
-            response_text="",
+            message="",
             notification_source="meet_interaction",
         )
 
-    def test_notify_mode_with_content_only_triggers(self):
+    def test_notify_mode_with_message_only_triggers(self):
         assert self._triggers_turn(
             should_speak=True,
-            response_text="",
+            message="",
             notification_source="slow_brain",
         )
 
@@ -157,7 +157,7 @@ class TestNotificationTriggersTurnClassification:
         invalidate in-flight fast brain generation."""
         assert not self._triggers_turn(
             should_speak=False,
-            response_text="",
+            message="",
             notification_source="proactive_speech",
         )
 

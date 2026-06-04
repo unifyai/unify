@@ -1301,7 +1301,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     pending_notifications: list[tuple[str, str, bool, str, str, str]] = (
         []
-    )  # (content, response_text, should_speak, notification_id, notification_source, llm_log_path)
+    )  # (message, spoken_message, should_speak, notification_id, notification_source, llm_log_path)
     session_ready = False
 
     def on_status(data: dict) -> None:
@@ -1407,20 +1407,20 @@ async def entrypoint(ctx: agents.JobContext):
         return messages
 
     def apply_notification(
-        content: str,
-        response_text: str = "",
+        message: str,
         should_speak: bool = False,
         *,
+        spoken_message: str = "",
         notification_id: str = "",
         source: str = "",
         notification_source: str = "",
         llm_log_path: str = "",
     ) -> None:
-        # Inject into chat context unconditionally so the fast brain always
-        # sees the latest slow brain understanding.  Proactive speech is
-        # fire-and-forget filler — it never updates context.
-        if notification_source != "proactive_speech":
-            notification_message = f"[notification] {content}"
+        # Inject into chat context so the fast brain sees slow-brain guidance.
+        # Proactive speech is fire-and-forget filler — it never updates context.
+        speech_text = spoken_message or message
+        if notification_source != "proactive_speech" and message:
+            notification_message = f"[notification] {message}"
             assistant._chat_ctx.add_message(
                 role="system",
                 content=[notification_message],
@@ -1430,7 +1430,7 @@ async def entrypoint(ctx: agents.JobContext):
                 content=[notification_message],
             )
 
-        if should_speak and response_text:
+        if should_speak and speech_text:
             if notification_source == "proactive_speech":
                 # Proactive speech exists purely to fill silence — never queue it.
                 # Play immediately if the pipeline is fully quiescent and nothing
@@ -1438,10 +1438,10 @@ async def entrypoint(ctx: agents.JobContext):
                 if not _is_pipeline_quiescent() or _queued_speech:
                     return
                 _speak_now(
-                    response_text,
+                    speech_text,
                     notification_id,
                     notification_source,
-                    content,
+                    message,
                     llm_log_path,
                 )
             else:
@@ -1449,10 +1449,10 @@ async def entrypoint(ctx: agents.JobContext):
                 _queued_speech.clear()
                 _queued_speech.append(
                     (
-                        response_text,
+                        speech_text,
                         notification_id,
                         notification_source,
-                        content,
+                        message,
                         llm_log_path,
                     ),
                 )
@@ -1569,10 +1569,10 @@ async def entrypoint(ctx: agents.JobContext):
         """Handle notifications from conversation manager."""
         nonlocal assistant_screen_share_active, _agent_service_url
         payload = data.get("payload") or data
-        content = payload.get("content", "")
+        message = payload.get("message", "")
         # Track screen share state from meet interaction notifications.
         if payload.get("source") == "meet_interaction":
-            low = content.lower()
+            low = message.lower()
             if "screen sharing is now on" in low:
                 assistant_screen_share_active = True
                 if payload.get("agent_service_url"):
@@ -1601,28 +1601,28 @@ async def entrypoint(ctx: agents.JobContext):
 
                 if assistant_screen_share_active:
                     asyncio.create_task(_update_cache_after_remote_control())
-        response_text = payload.get("response_text", "")
+        spoken_message = payload.get("spoken_message", "")
         should_speak = payload.get("should_speak", False)
         notification_source = payload.get("source", "")
         llm_log_path = payload.get("llm_log_path", "")
-        notification_id = content_trace_id("guid", content)
+        notification_id = content_trace_id("guid", message or spoken_message)
         triggers_turn = notification_source not in (
             "meet_interaction",
             "proactive_speech",
         )
         _log.notification(
             notification_source,
-            content,
+            message,
             speak=should_speak,
             turn=triggers_turn,
         )
 
-        if content:
+        if message or (should_speak and spoken_message):
             if not session_ready:
                 pending_notifications.append(
                     (
-                        content,
-                        response_text,
+                        message,
+                        spoken_message,
                         should_speak,
                         notification_id,
                         notification_source,
@@ -1632,9 +1632,9 @@ async def entrypoint(ctx: agents.JobContext):
                 _log.notification_buffered(len(pending_notifications))
             else:
                 apply_notification(
-                    content,
-                    response_text,
+                    message,
                     should_speak,
+                    spoken_message=spoken_message,
                     notification_id=notification_id,
                     source="socket_callback",
                     notification_source=notification_source,
@@ -1721,17 +1721,17 @@ async def entrypoint(ctx: agents.JobContext):
             f"Applying {len(pending_notifications)} buffered notification(s)",
         )
         for (
-            content,
-            response_text,
+            message,
+            spoken_message,
             should_speak,
             notification_id,
             notification_source,
             llm_log_path,
         ) in pending_notifications:
             apply_notification(
-                content,
-                response_text,
+                message,
                 should_speak,
+                spoken_message=spoken_message,
                 notification_id=notification_id,
                 source="pending_buffer_flush",
                 notification_source=notification_source,

@@ -414,7 +414,7 @@ class LivekitCallManager:
         if self.initial_notification:
             notification_event = FastBrainNotification(
                 contact=contact,
-                content=self.initial_notification,
+                message=self.initial_notification,
                 source="initial_call",
             )
             await self._socket_server.queue_for_clients(
@@ -1023,7 +1023,7 @@ class LivekitCallManager:
                     if not text:
                         continue
                     notification = FastBrainNotification(
-                        content=text,
+                        message=text,
                         source="system",
                         contact={},
                     )

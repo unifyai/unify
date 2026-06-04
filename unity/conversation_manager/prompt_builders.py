@@ -18,7 +18,7 @@ from ..common.prompt_helpers import now, PromptParts
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Shared guardrails for any text that becomes live speech (fast brain turns or
-# slow-brain ``guide_voice_agent`` verbatim ``response_text``).
+# slow-brain ``guide_voice_agent`` verbatim ``message`` when SPEAK).
 _SPOKEN_OUTPUT_FOR_LIVE_TTS = """**Spoken output — write for the ear, not the page.**
 Live call audio is generated from text by TTS. Numbered lists, markdown bullets, and outline-style enumeration ("one… two…", "first… second… third…", "1) … 2) …") sound stiff and unnatural — the system reads labels and numbers aloud literally.
 
@@ -191,9 +191,9 @@ When the user's request fits that list, I propose handing it to {workspace_coord
 def _build_voice_output_block(*, is_internal_call: bool = False) -> str:
     """Build the voice call output format guidance block."""
     if is_internal_call:
-        block = """The Voice Agent receives system events (action progress, completions, results) directly as silent context. I do not need to relay event content — it is already visible. My role with `guide_voice_agent` is the **speech decision**: when an event contains concrete results or completion status the caller should hear, I call `guide_voice_agent(should_speak=True, response_text="...")` in parallel with my action tool. When the event is trivial or the Voice Agent already acknowledged it, I stay silent (omit the tool)."""
+        block = """The Voice Agent receives system events (action progress, completions, results) directly as silent context. I do not need to relay event content — it is already visible. My role with `guide_voice_agent` is the **speech decision**: when an event contains concrete results or completion status the caller should hear, I call `guide_voice_agent(message="...", should_speak=True)` in parallel with my action tool. When the event is trivial or the Voice Agent already acknowledged it, I stay silent (omit the tool)."""
     else:
-        block = """If I am on a voice call with a contact, I relay information to the Voice Agent by calling the `guide_voice_agent` tool **in parallel** with my action tool. I can call multiple tools per turn — for example, `guide_voice_agent(content="...")` alongside `wait()`. Guidance is NOT a field in my text output."""
+        block = """If I am on a voice call with a contact, I relay information to the Voice Agent by calling the `guide_voice_agent` tool **in parallel** with my action tool. I can call multiple tools per turn — for example, `guide_voice_agent(message="...")` alongside `wait()`. Guidance is NOT a field in my text output."""
     block += """
 
 **No text messages during voice calls.** I do NOT send text messages (Unify messages, SMS, email) to the person on the call to communicate results, progress, or updates. The Voice Agent handles all communication verbally. Even if there is a pre-existing text thread from before the call, the voice call is now the active channel.
@@ -206,7 +206,7 @@ I only send a text message to the person on the call when one of these applies:
 
 **URLs in chat messages must always be clickable.** Whenever I include a URL in a text message, I prepend `https://` (e.g. `https://console.cloud.google.com`) so the recipient can click it directly. Bare domains like `console.cloud.google.com` are not clickable in most chat clients.
 
-When I do send a text message during a call, I **also** call `guide_voice_agent(should_speak=True, response_text="...")` to verbally announce it — e.g., "I've just sent that to the chat for you to copy." The caller cannot be expected to notice a silent chat notification mid-conversation."""
+When I do send a text message during a call, I **also** call `guide_voice_agent(message="...", should_speak=True)` to verbally announce it — e.g., "I've just sent that to the chat for you to copy." The caller cannot be expected to notice a silent chat notification mid-conversation."""
     return block
 
 
@@ -231,19 +231,19 @@ Call transcriptions will appear as another communication thread, with the Voice 
         + _SPOKEN_OUTPUT_FOR_LIVE_TTS
         + """
 
-**Verbatim speech (`response_text`).** When I use SPEAK mode, `response_text` is spoken **verbatim** by TTS with no rewrite — it must already follow **Spoken output** above. NOTIFY `content` should follow the same spirit (connected prose, no outlines) so the Voice Agent is not steered toward list-like replies.
+**Verbatim speech (SPEAK mode).** When I use SPEAK mode (`should_speak=True`), `message` is spoken **verbatim** by TTS with no rewrite — it must already follow **Spoken output** above. The same `message` is also injected as silent context. NOTIFY mode (`should_speak=False`) injects `message` only.
 
-**I am the sole route for event-driven speech.** The Voice Agent only speaks autonomously in response to user speech. For everything else — action progress, action results, participant messages, cross-channel notifications — the Voice Agent will remain silent unless I explicitly trigger speech via `guide_voice_agent(should_speak=True, response_text="...")`. If I call `wait()` without `guide_voice_agent`, the caller hears nothing about the event. This means I must call `guide_voice_agent` whenever an event contains information the caller is waiting for or should hear about."""
+**I am the sole route for event-driven speech.** The Voice Agent only speaks autonomously in response to user speech. For everything else — action progress, action results, participant messages, cross-channel notifications — the Voice Agent will remain silent unless I explicitly trigger speech via `guide_voice_agent(message="...", should_speak=True)`. If I call `wait()` without `guide_voice_agent`, the caller hears nothing about the event. This means I must call `guide_voice_agent` whenever an event contains information the caller is waiting for or should hear about."""
     )
 
     if is_internal_call:
         base += """
 
-**Speech decisions on internal calls.** The Voice Agent already receives system events (action progress, completions, results) as silent context. I do not need to relay event content. My job is the **speech decision**: when I am woken by an event that contains concrete results, completion status, or actionable information the caller is waiting for, I call `guide_voice_agent(should_speak=True, response_text="...")` to have it spoken. When the event is trivial, purely internal, or the Voice Agent already acknowledged it (check the transcript), I stay silent.
+**Speech decisions on internal calls.** The Voice Agent already receives system events (action progress, completions, results) as silent context. I do not need to relay event content. My job is the **speech decision**: when I am woken by an event that contains concrete results, completion status, or actionable information the caller is waiting for, I call `guide_voice_agent(message="...", should_speak=True)` to have it spoken. When the event is trivial, purely internal, or the Voice Agent already acknowledged it (check the transcript), I stay silent.
 
-**Modes:** SPEAK (`should_speak=True, response_text="..."`) for concrete answers and results the caller should hear now. NOTIFY (`content="..."`) to inject silent context the Voice Agent can reference on its next user-initiated turn. Omit the tool entirely to stay silent.
+**Modes:** SPEAK (`should_speak=True` with `message`) for concrete answers the caller should hear now. NOTIFY (`should_speak=False` with `message`) to inject silent context for the Voice Agent's next user-initiated turn. Omit the tool entirely to stay silent.
 
-**Participant messages.** When a call participant sends an SMS, email, or message during the call, the Voice Agent sees it as silent context but will not proactively mention it. I am responsible for deciding whether it warrants verbal acknowledgment — if so, I call `guide_voice_agent(should_speak=True, response_text="...")` to relay it."""
+**Participant messages.** When a call participant sends an SMS, email, or message during the call, the Voice Agent sees it as silent context but will not proactively mention it. I am responsible for deciding whether it warrants verbal acknowledgment — if so, I call `guide_voice_agent(message="...", should_speak=True)` to relay it."""
     else:
         base += """
 
@@ -259,18 +259,18 @@ I should NOT relay progress when:
 **How to relay guidance — three modes:**
 
 1. **SPEAK** — I have a concrete answer, data, or confirmation the user should hear immediately. I write the exact speech text myself as **connected spoken prose** (see **Spoken output** above — never outlines or numbered lists). Call `guide_voice_agent` in parallel with my action tool:
-   `guide_voice_agent(content="flight details", should_speak=True, response_text="Your flight's at 6am out of Terminal 2, gate B14.")` + `wait()`
-   The Voice Agent speaks the response_text verbatim via TTS, bypassing its own LLM. Use when I can write a concise, natural line the user should hear now.
+   `guide_voice_agent(message="Your flight's at 6am out of Terminal 2, gate B14.", should_speak=True)` + `wait()`
+   The Voice Agent speaks `message` verbatim via TTS, bypassing its own LLM. Use when I can write a concise, natural line the user should hear now.
 
 2. **NOTIFY** (default) — I have useful context but the Voice Agent should decide how to phrase it:
-   `guide_voice_agent(content="The meeting is confirmed for 3pm Thursday in the downtown office.")` + `wait()`
-   The Voice Agent receives this as background context for reference on its next turn. Write `content` in the same **spoken-prose** style (no bullet lists or "option one / option two" scaffolding) so the Voice Agent is not nudged toward list-like replies. Use for progress updates, supplementary context, or information the Voice Agent can articulate better with its conversational context.
+   `guide_voice_agent(message="The meeting is confirmed for 3pm Thursday in the downtown office.")` + `wait()`
+   The Voice Agent receives this as background context for reference on its next turn. Write `message` in the same **spoken-prose** style (no bullet lists or "option one / option two" scaffolding) so the Voice Agent is not nudged toward list-like replies. Use for progress updates, supplementary context, or information the Voice Agent can articulate better with its conversational context.
 
 3. **BLOCK** — Nothing to relay. Just call my action tool without `guide_voice_agent`.
 
-The Voice Agent independently handles conversational style. I still avoid list-shaped `content` or `response_text` — outline-style guidance overrides that independence once it is spoken or paraphrased.
+The Voice Agent independently handles conversational style. I still avoid list-shaped `message` text — outline-style guidance overrides that independence once it is spoken or paraphrased.
 
-**Participant messages.** When a call participant sends an SMS, email, or message during the call, the Voice Agent sees it as silent context but will not proactively mention it. I am responsible for deciding whether it warrants verbal acknowledgment — if so, I call `guide_voice_agent(should_speak=True, response_text="...")` to relay it."""
+**Participant messages.** When a call participant sends an SMS, email, or message during the call, the Voice Agent sees it as silent context but will not proactively mention it. I am responsible for deciding whether it warrants verbal acknowledgment — if so, I call `guide_voice_agent(message="...", should_speak=True)` to relay it."""
 
     return base
 
@@ -612,7 +612,7 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "stand down.",
             "  3. Deliver the acknowledgement on whichever channel is live. When a "
             "voice call is active you MUST speak it by calling "
-            '`guide_voice_agent(should_speak=True, response_text="...")` with the '
+            '`guide_voice_agent(message="...", should_speak=True)` with the '
             "acknowledgement as the verbatim spoken line — do NOT send a chat "
             "message during a call (a chat message is silent to the caller, which "
             "is why workspace/app connections currently go unmentioned on calls). "
@@ -914,7 +914,7 @@ CRITICAL: I have a tendency to be over-eager and verbose. I must fight this aggr
 - Just made a call → `wait` (the call is in progress)
 - Just started an action (via `act`) → `wait` (do NOT poll status)
 - Completed an action (text) → `wait` (do not announce completion unless asked)
-- Completed an action (voice call) → call `guide_voice_agent(should_speak=True, response_text="...")` to relay results, then `wait`
+- Completed an action (voice call) → call `guide_voice_agent(message="...", should_speak=True)` to relay results, then `wait`
 - Unsure what to *say* → `wait`
 
 **Understanding `wait`**: Calling `wait()` (no delay) yields control back to the system indefinitely. I will automatically get another turn when:
@@ -1799,7 +1799,7 @@ This is a hard constraint, not a suggestion. Even if my boss asks me to contact 
     if is_voice_call:
         guidance_language_note = """
 
-**``guide_voice_agent`` matches the call's language.** The ``content`` passed to ``guide_voice_agent`` should be written in whichever language the assistant is currently speaking on the call. This lets the fast brain (Voice Agent) relay it reflexively without needing to translate. If no call is active or the language is unclear, default to English."""
+**``guide_voice_agent`` matches the call's language.** The ``message`` passed to ``guide_voice_agent`` should be written in whichever language the assistant is currently speaking on the call. This lets the fast brain (Voice Agent) relay it reflexively without needing to translate. If no call is active or the language is unclear, default to English."""
 
     parts.add(
         f"""Multilingual communication
@@ -1979,15 +1979,14 @@ def _build_coordinator_onboarding_flow_reference_block() -> str:
             "open to the Integrations side panel. They install at least "
             "one app (Slack, Gmail, Notion, etc.) by clicking its tile "
             "and walking through that app's OAuth flow.",
-            "  3. **Get work done** (`work`, grouping row). Children, in "
-            "order:",
+            "  3. **Get work done** (`work`, grouping row). Children, in " "order:",
             "     - **Ask your coordinator to do something now** (`act`). "
             "This is point-in-time work: the user hands me a one-off job "
             "that runs immediately, and watches it execute live in the "
             'Actions panel (which opens automatically). Three static "try '
             'one of these" chips render under the row: "Summarize my '
             'unread emails", "Help me through this website (on a call)", '
-            "and \"Catch me up on today's news\". The chips are "
+            'and "Catch me up on today\'s news". The chips are '
             "inspiration only — they do not click. The step completes the "
             "moment a real action starts running — NOT when a scheduled "
             "task is created. The user advances by typing (or, on a call, "

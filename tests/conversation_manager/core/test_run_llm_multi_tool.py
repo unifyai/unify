@@ -26,6 +26,8 @@ import pytest
 
 from tests.helpers import _handle_project
 from unity.common.single_shot import SingleShotResult, ToolExecution
+from unity.conversation_manager.conversation_manager import ConversationManager
+from unity.conversation_manager.events import Event, FastBrainNotification
 
 
 def _make_multi_tool_result(*tool_pairs: tuple[str, dict, object]) -> SingleShotResult:
@@ -164,6 +166,42 @@ async def test_wait_delay_scheduled_when_not_first_tool(initialized_cm):
         f"but it was not.  The wait(delay=N) scheduling was missed because "
         f"wait was not the first tool in the multi-tool response."
     )
+
+
+# =============================================================================
+# guide_voice_agent SPEAK uses a single message field
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_publish_slow_brain_guidance_speak_mode():
+    """SPEAK publishes message for injection and verbatim TTS."""
+    spoken = "I found it: spot gold is about 4,486 US dollars per troy ounce."
+    cm = ConversationManager.__new__(ConversationManager)
+    cm.get_active_contact = MagicMock(return_value={"contact_id": 1})
+    cm._session_logger = MagicMock()
+
+    published: list[FastBrainNotification] = []
+
+    async def capture_publish(channel: str, message: str) -> int:
+        if channel == "app:call:notification":
+            event = Event.from_json(message)
+            if isinstance(event, FastBrainNotification):
+                published.append(event)
+        return 1
+
+    cm.event_broker = MagicMock()
+    cm.event_broker.publish = AsyncMock(side_effect=capture_publish)
+
+    await cm._publish_slow_brain_fast_brain_guidance(
+        message=spoken,
+        should_speak=True,
+    )
+
+    assert len(published) == 1
+    notif = published[0]
+    assert notif.should_speak is True
+    assert notif.message == spoken
 
 
 # =============================================================================

@@ -718,7 +718,7 @@ async def _(
         guidance_text = _MEET_FAST_BRAIN_GUIDANCE[AssistantScreenShareStarted]
         notification_event = FastBrainNotification(
             contact=contact,
-            content=guidance_text,
+            message=guidance_text,
             source="meet_interaction",
             agent_service_url=_resolve_agent_service_url(),
         )
@@ -1143,7 +1143,7 @@ async def _(
         contact_id=contact_id,
         sender_name=sender_name,
         thread_name=_active_voice_thread_medium(cm),
-        message_content=event.content,
+        message_content=event.message,
         role="guidance",
     )
 
@@ -2667,7 +2667,7 @@ async def _(
     if cm.call_manager and cm.call_manager._socket_server:
         fast_brain_notification = FastBrainNotification(
             contact={},
-            content=(
+            message=(
                 "Initialization complete — all actions are now available. "
                 "Full conversation history has been loaded."
             ),
@@ -2826,7 +2826,7 @@ async def _(
 
             notification_event = FastBrainNotification(
                 contact=contact,
-                content=fast_brain_text,
+                message=fast_brain_text,
                 source="meet_interaction",
                 agent_service_url=_resolve_agent_service_url(),
             )

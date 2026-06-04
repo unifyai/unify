@@ -161,7 +161,7 @@ def _coordinator_onboarding_notification_text(
         "just completed, and preview the next pending onboarding checklist step. "
         "Stay celebratory but brief — do not re-list every prior step. If a voice "
         "call is active you MUST speak it by calling "
-        'guide_voice_agent(should_speak=True, response_text="...") — do not send a '
+        'guide_voice_agent(message="...", should_speak=True) — do not send a '
         "chat message during a call (it is silent to the caller). Otherwise send a "
         "single chat message."
     )

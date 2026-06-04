@@ -864,9 +864,15 @@ class TestBidirectionalCommunication:
         await server.start()
 
         # Publish multiple events before any client connects
+        from unity.conversation_manager.events import FastBrainNotification
+
         await real_event_broker.publish(
             "app:call:notification",
-            '{"content": "First guidance"}',
+            FastBrainNotification(
+                contact={},
+                message="First guidance",
+                source="slow_brain",
+            ).to_json(),
         )
         await real_event_broker.publish(
             "app:call:status",
@@ -1005,9 +1011,15 @@ class TestSocketAwareEventBroker:
             await asyncio.sleep(0.1)
 
             # Parent publishes event
+            from unity.conversation_manager.events import FastBrainNotification
+
             await parent_broker.publish(
                 "app:call:notification",
-                '{"content": "Test guidance"}',
+                FastBrainNotification(
+                    contact={},
+                    message="Test guidance",
+                    source="slow_brain",
+                ).to_json(),
             )
 
             # Wait for forwarding
@@ -1015,7 +1027,8 @@ class TestSocketAwareEventBroker:
 
             # Should have received the forwarded event via callback
             assert len(received_events) == 1
-            assert received_events[0]["content"] == "Test guidance"
+            payload = received_events[0].get("payload", received_events[0])
+            assert payload["message"] == "Test guidance"
 
             await wrapper.stop()
 

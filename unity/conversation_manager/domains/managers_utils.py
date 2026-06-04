@@ -597,7 +597,7 @@ async def hydrate_global_thread(cm: "ConversationManager") -> None:
                     contact_id=contact_id,
                     sender_name=sender_name,
                     thread_name=notif_medium,
-                    message_content=cm_event.content,
+                    message_content=cm_event.message,
                     role="guidance",
                     timestamp=ts,
                 )

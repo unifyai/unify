@@ -484,7 +484,7 @@ class TestUnifyMeetFastBrainNotification:
         # Send guidance
         guidance = FastBrainNotification(
             contact=boss_contact,
-            content="The meeting you mentioned is scheduled for 3pm Thursday",
+            message="The meeting you mentioned is scheduled for 3pm Thursday",
         )
         await initialized_cm.step(guidance)
 
@@ -519,7 +519,7 @@ class TestUnifyMeetFastBrainNotification:
         # When mode=MEET, it should use Medium.UNIFY_MEET
         guidance = FastBrainNotification(
             contact=boss_contact,
-            content="Test guidance content",
+            message="Test guidance content",
         )
         await initialized_cm.step(guidance)
 
@@ -791,7 +791,7 @@ class TestFullUnifyMeetLifecycle:
         # 5. Slow brain sends guidance
         guidance = FastBrainNotification(
             contact=boss_contact,
-            content="Remember to mention the deadline is Friday",
+            message="Remember to mention the deadline is Friday",
         )
         await initialized_cm.step(guidance)
 
@@ -1074,11 +1074,17 @@ class TestRealLiveKitUnifyMeet:
 
             # Send Unify Meet specific guidance
             events_from_subprocess.clear()
-            guidance_content = "The boss mentioned they prefer morning meetings"
+            from unity.conversation_manager.events import FastBrainNotification
+
+            guidance_message = "The boss mentioned they prefer morning meetings"
 
             await event_broker.publish(
                 "app:call:notification",
-                json.dumps({"content": guidance_content}),
+                FastBrainNotification(
+                    contact={},
+                    message=guidance_message,
+                    source="slow_brain",
+                ).to_json(),
             )
 
             # Wait for ack
@@ -1088,7 +1094,7 @@ class TestRealLiveKitUnifyMeet:
                 for channel, event_json in events_from_subprocess:
                     if channel == "app:call:ack":
                         data = json.loads(event_json)
-                        if "morning meetings" in data.get("received_content", ""):
+                        if "morning meetings" in data.get("received_message", ""):
                             ack_received = True
                             break
                 if ack_received:

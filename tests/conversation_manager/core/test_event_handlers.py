@@ -913,7 +913,7 @@ class TestVoiceUtteranceHandlers:
         """FastBrainNotification adds guidance message to voice thread."""
         event = FastBrainNotification(
             contact={"contact_id": 2},
-            content="Please mention the meeting at 3pm",
+            message="Please mention the meeting at 3pm",
         )
 
         await EventHandler.handle_event(event, mock_cm)

@@ -1125,17 +1125,17 @@ class ConversationManager(metaclass=SingletonABCMeta):
         """Surface a slow-brain exhaustion failure to the fast brain.
 
         Publishes a ``FastBrainNotification`` with ``should_speak=True`` and
-        an explicit ``response_text`` so the fast brain utters the error via
+        a dedicated ``spoken_message`` so the fast brain utters the error via
         TTS directly (bypassing its own LLM, which may be hitting the same
         provider outage). Also cancels any pending proactive-speech loop so
         it stops emitting "still looking" filler for a request the slow brain
         has given up on.
         """
-        response_text = (
+        spoken_message = (
             "Sorry, I'm having trouble thinking right now — "
             "could you say that again in a moment?"
         )
-        notification_content = (
+        notification_message = (
             f"Slow-brain turn failed after retries were exhausted "
             f"({type(exc).__name__}). The user's last request was not processed. "
             "Acknowledge the error and ask them to try again; do NOT claim you "
@@ -1144,8 +1144,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
         contact = self.get_active_contact()
         event = FastBrainNotification(
             contact=contact or {},
-            content=notification_content,
-            response_text=response_text,
+            message=notification_message,
+            spoken_message=spoken_message,
             should_speak=True,
             source="slow_brain_failure",
         )
@@ -1165,6 +1165,38 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         with contextlib.suppress(Exception):
             await self.cancel_proactive_speech()
+
+    async def _publish_slow_brain_fast_brain_guidance(
+        self,
+        *,
+        message: str,
+        should_speak: bool,
+        slow_brain_log_path: str = "",
+    ) -> None:
+        """Publish slow-brain ``guide_voice_agent`` output to the fast brain."""
+        if not message:
+            return
+        contact = self.get_active_contact()
+        event = FastBrainNotification(
+            contact=contact,
+            message=message,
+            should_speak=should_speak,
+            source="slow_brain",
+            llm_log_path=slow_brain_log_path,
+        )
+        self._session_logger.info(
+            "call_notification",
+            f"Guide FastBrain (speak={should_speak}): {message}",
+        )
+        event_json = event.to_json()
+        await self.event_broker.publish(
+            "app:call:notification",
+            event_json,
+        )
+        await self.event_broker.publish(
+            "app:comms:assistant_notification",
+            event_json,
+        )
 
     async def _run_llm_with_failure_notification(
         self,
@@ -1700,47 +1732,27 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         # Handle guide_voice_agent tool calls for voice modes.
         # The slow brain decides BLOCK (omit the tool), NOTIFY (default),
-        # or SPEAK (should_speak=True + response_text) by calling
-        # guide_voice_agent in parallel with its action tool.
-        # Dedup is handled in the fast brain subprocess at speak time.
+        # or SPEAK (should_speak=True + message) by calling guide_voice_agent
+        # in parallel with its action tool. Dedup runs in the fast brain subprocess.
         if self.mode.is_voice:
-            notification_content = ""
+            guidance_message = ""
             should_speak = False
-            response_text = ""
             for tool_exec in result.tools:
                 if tool_exec.name == "guide_voice_agent":
                     args = tool_exec.args or {}
-                    notification_content = args.get("content", "")
+                    guidance_message = args.get("message", "")
                     should_speak = args.get("should_speak", False)
-                    response_text = args.get("response_text", "")
                     break
 
-            if notification_content:
+            if guidance_message:
                 pending = getattr(client, "_pending_thinking_log", None)
                 slow_brain_log_path = (
                     pending.last_path or "" if pending is not None else ""
                 )
-                contact = self.get_active_contact()
-                event = FastBrainNotification(
-                    contact=contact,
-                    content=notification_content,
-                    response_text=response_text,
+                await self._publish_slow_brain_fast_brain_guidance(
+                    message=guidance_message,
                     should_speak=should_speak,
-                    source="slow_brain",
-                    llm_log_path=slow_brain_log_path,
-                )
-                self._session_logger.info(
-                    "call_notification",
-                    f"Guide FastBrain (speak={should_speak}): {notification_content}",
-                )
-                event_json = event.to_json()
-                await self.event_broker.publish(
-                    "app:call:notification",
-                    event_json,
-                )
-                await self.event_broker.publish(
-                    "app:comms:assistant_notification",
-                    event_json,
+                    slow_brain_log_path=slow_brain_log_path,
                 )
 
         self._session_logger.debug(
@@ -2388,8 +2400,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
             event = FastBrainNotification(
                 contact=contact or {},
-                content=decision.content,
-                response_text=decision.content,
+                message=decision.content,
                 should_speak=True,
                 source="proactive_speech",
                 llm_log_path=llm_log_path,

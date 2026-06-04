@@ -643,7 +643,7 @@ class TestGuidanceChannelSubscription:
         async with event_broker.pubsub() as pubsub:
             await pubsub.subscribe("app:call:notification")
 
-            event = FastBrainNotification(contact=contact, content="Test guidance")
+            event = FastBrainNotification(contact=contact, message="Test guidance")
             await event_broker.publish("app:call:notification", event.to_json())
 
             msg = await pubsub.get_message(
@@ -957,9 +957,9 @@ class TestFastBrainGuidanceFlow:
         session = fake_session_holder["session"]
         session.say_calls.clear()
 
-        # Send notify-only guidance (should_speak=False, no response_text)
+        # Send notify-only guidance (should_speak=False)
         guidance_cb = fake_broker.callbacks["app:call:notification"]
-        guidance_cb({"payload": {"content": "No, there is no contact named Bob."}})
+        guidance_cb({"payload": {"message": "No, there is no contact named Bob."}})
 
         # Notification should be in both chat contexts
         mirror_texts = [
@@ -1055,7 +1055,7 @@ class TestFastBrainGuidanceFlow:
             def register_callback(self, channel, handler):
                 self.callbacks[channel] = handler
                 if channel == "app:call:notification":
-                    handler({"payload": {"content": buffered_text}})
+                    handler({"payload": {"message": buffered_text}})
 
             async def publish(self, channel, message):
                 return 1
@@ -1604,8 +1604,7 @@ class TestFastBrainGuidanceFlow:
         guidance_cb(
             {
                 "payload": {
-                    "content": "No contact named Bob was found.",
-                    "response_text": "There's no contact named Bob in your list.",
+                    "message": "There's no contact named Bob in your list.",
                     "should_speak": True,
                 },
             },
@@ -1914,8 +1913,7 @@ class TestFastBrainGuidanceFlow:
         guidance_cb(
             {
                 "payload": {
-                    "content": "No, there is no contact named Bob.",
-                    "response_text": "No, there's no contact named Bob.",
+                    "message": "No, there's no contact named Bob.",
                     "should_speak": True,
                 },
             },
@@ -2144,8 +2142,7 @@ class TestFastBrainGuidanceFlow:
         guidance_cb(
             {
                 "payload": {
-                    "content": "The meeting is at 3pm.",
-                    "response_text": "It's at 3pm.",
+                    "message": "It's at 3pm.",
                     "should_speak": True,
                 },
             },
@@ -2384,18 +2381,16 @@ class TestFastBrainSpeechDedup:
             "monkeypatch": monkeypatch,
         }
 
-    def _send_speak_guidance(self, env, content, response_text):
+    def _send_speak_guidance(self, env, message, *, spoken_message: str = ""):
         """Queue a should_speak=True notification."""
-        env["guidance_cb"](
-            {
-                "payload": {
-                    "content": content,
-                    "response_text": response_text,
-                    "should_speak": True,
-                    "source": "slow_brain",
-                },
-            },
-        )
+        payload = {
+            "message": message,
+            "should_speak": True,
+            "source": "slow_brain",
+        }
+        if spoken_message:
+            payload["spoken_message"] = spoken_message
+        env["guidance_cb"]({"payload": payload})
 
     async def _settle_and_drain(self, env):
         """Transition agent to listening and let async dedup task complete."""
@@ -2435,8 +2430,8 @@ class TestFastBrainSpeechDedup:
             env["session"].agent_state = "thinking"
             self._send_speak_guidance(
                 env,
-                content="Italian restaurant search results.",
-                response_text="I found three Italian restaurants nearby.",
+                "Italian restaurant search results.",
+                spoken_message="I found three Italian restaurants nearby.",
             )
             await self._settle_and_drain(env)
             assert (
@@ -2490,8 +2485,7 @@ class TestFastBrainSpeechDedup:
             env["session"].agent_state = "thinking"
             self._send_speak_guidance(
                 env,
-                content="Weather forecast results.",
-                response_text="It's 22 degrees and sunny in London.",
+                "It's 22 degrees and sunny in London.",
             )
             await self._settle_and_drain(env)
             assert len(env["session"].say_calls) == 1, "Novel speech should be spoken."
@@ -2515,8 +2509,7 @@ class TestFastBrainSpeechDedup:
             env["session"].agent_state = "thinking"
             self._send_speak_guidance(
                 env,
-                content="Italian restaurant search results.",
-                response_text="I found three Italian restaurants nearby.",
+                "I found three Italian restaurants nearby.",
             )
             await self._settle_and_drain(env)
             assert (
@@ -2557,8 +2550,7 @@ class TestFastBrainSpeechDedup:
             env["session"].agent_state = "thinking"
             self._send_speak_guidance(
                 env,
-                content="Weather forecast.",
-                response_text="It's sunny in London.",
+                "It's sunny in London.",
             )
             await self._settle_and_drain(env)
             assert (
@@ -2601,13 +2593,11 @@ class TestFastBrainSpeechDedup:
             env["session"].agent_state = "thinking"
             self._send_speak_guidance(
                 env,
-                content="First result.",
-                response_text="Here is the first result.",
+                "Here is the first result.",
             )
             self._send_speak_guidance(
                 env,
-                content="Second result.",
-                response_text="Here is the second result.",
+                "Here is the second result.",
             )
             await self._settle_and_drain(env)
 
