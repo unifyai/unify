@@ -554,21 +554,24 @@ def test_render_actor_result_empty_success_not_misleading():
 
 
 def test_render_actor_result_with_data():
-    """An ActorResult with actual data should include the data snippet."""
+    """An ActorResult with actual data should include the full result text."""
     from unity.conversation_manager.events import ActorResult
     from unity.conversation_manager.medium_scripts.common import (
         render_event_for_fast_brain,
     )
 
+    tail_marker = "PAST_TWO_HUNDRED_CHARS"
+    long_result = ("x" * 210) + tail_marker
     event = ActorResult(
         handle_id=1,
         success=True,
-        result="Found 3 files in Drive",
+        result=long_result,
     )
     text = render_event_for_fast_brain(event.to_json())
 
     assert text is not None
-    assert "Found 3 files in Drive" in text
+    assert "Action completed:" in text
+    assert tail_marker in text
     assert "no results" not in text.lower()
 
 
