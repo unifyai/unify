@@ -274,6 +274,46 @@ def remember_live_task_run_provenance(provenance: TaskRunProvenance) -> None:
     ] = provenance
 
 
+def peek_live_task_run_provenance(
+    *,
+    assistant_id: str | int | None,
+    task_id: int,
+    source_type: str,
+    destination: str | None = None,
+    trigger_attempt_token: str | None = None,
+) -> TaskRunProvenance | None:
+    """Return pending provenance for one task without claiming it."""
+
+    pending: TaskRunProvenance | None
+    if source_type == "triggered":
+        normalized_attempt_token = _normalize_pending_trigger_attempt_token(
+            trigger_attempt_token,
+        )
+        if not normalized_attempt_token:
+            return None
+        pending = _PENDING_TRIGGER_LIVE_TASK_RUNS.get(normalized_attempt_token)
+    else:
+        pending = _PENDING_LIVE_TASK_RUNS.get(
+            _pending_live_provenance_key(task_id, destination),
+        )
+        if pending is None and destination is None:
+            matches = [
+                item
+                for item in _PENDING_LIVE_TASK_RUNS.values()
+                if item.task_id == task_id and item.source_type == source_type
+            ]
+            if len(matches) == 1:
+                pending = matches[0]
+    if pending is None:
+        return None
+    normalized_assistant_id = _coerce_str(assistant_id)
+    if pending.task_id != task_id:
+        return None
+    if normalized_assistant_id and pending.assistant_id != normalized_assistant_id:
+        return None
+    return pending
+
+
 def consume_live_task_run_provenance(
     *,
     assistant_id: str | int | None,

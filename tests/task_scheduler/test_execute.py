@@ -614,6 +614,121 @@ async def test_offline_recurring_execution_uses_physical_source_instance(
 
 
 @pytest.mark.asyncio
+@_handle_project
+async def test_offline_scheduled_execution_reconciles_stale_active_blocker(
+    monkeypatch,
+):
+    from unity.task_scheduler import offline_runner
+
+    scheduler = TaskScheduler()
+    task_id = scheduler._create_task(
+        name="Offline stale active blocker",
+        description="Run the current scheduled instance.",
+        status=Status.scheduled,
+        schedule=Schedule(
+            start_at=(
+                datetime.now(timezone.utc).replace(microsecond=0) - timedelta(days=1)
+            ).isoformat(),
+        ),
+        repeat=[RepeatPattern(frequency=Frequency.DAILY)],
+        offline=True,
+    )["details"]["task_id"]
+    first = scheduler._filter_tasks(filter=f"task_id == {task_id}")[0]
+    scheduler._clone_task_instance(first)
+    first_source_log_id = _source_log_id(scheduler, task_id, 0)
+    second_source_log_id = _source_log_id(scheduler, task_id, 1)
+    scheduler._update_task_status_instance(
+        task_id=task_id,
+        instance_id=0,
+        new_status=Status.active,
+        activated_by=ActivatedBy.schedule,
+    )
+
+    class _Handle:
+        async def result(self):
+            return "done"
+
+    class _FakeOfflineActor:
+        async def act(self, request, **kwargs):
+            return _Handle()
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(task_scheduler_module.SESSION_DETAILS.assistant, "agent_id", 42)
+    monkeypatch.setattr(offline_runner, "_build_offline_actor", _FakeOfflineActor)
+    monkeypatch.setattr(
+        "unity.task_scheduler.active_task.create_or_adopt_live_task_run",
+        lambda provenance: TaskRunReference(
+            assistant_id=provenance.assistant_id,
+            run_key=(
+                f"{provenance.execution_mode}:{provenance.source_type}:"
+                f"{provenance.assistant_id}:{provenance.task_id}:"
+                f"{provenance.activation_revision}"
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "unity.task_scheduler.active_task.update_task_run_record",
+        lambda run_reference, updates: None,
+    )
+
+    current = [
+        task
+        for task in scheduler._filter_tasks(filter=f"task_id == {task_id}")
+        if task.instance_id == 1
+    ][0]
+    config = offline_runner.OfflineTaskConfig(
+        assistant_id="42",
+        run_key=f"offline:scheduled:42:{task_id}:instance-1",
+        task_id=task_id,
+        function_id=None,
+        request="Run the current scheduled instance.",
+        source_type="scheduled",
+        source_task_log_id=second_source_log_id,
+        activation_revision="rev-instance-1",
+        task_name=current.name,
+        task_description=current.description,
+        scheduled_for=current.schedule_start_at.isoformat(),
+    )
+    remember_live_task_run_provenance(
+        TaskRunProvenance(
+            assistant_id="42",
+            task_id=task_id,
+            source_type="scheduled",
+            execution_mode="offline",
+            source_task_log_id=second_source_log_id,
+            activation_revision="rev-instance-1",
+            scheduled_for=current.schedule_start_at.isoformat(),
+            task_name=current.name,
+            task_description=current.description,
+        ),
+    )
+    delegate = offline_runner._OfflineTaskExecutionDelegate(config)
+    token = current_task_execution_delegate.set(delegate)
+    try:
+        handle = await scheduler.execute(
+            task_id=task_id,
+            _activated_by=ActivatedBy.schedule,
+            isolated=True,
+        )
+        await handle.result()
+    finally:
+        current_task_execution_delegate.reset(token)
+        await delegate.close()
+
+    rows = sorted(
+        scheduler._filter_tasks(filter=f"task_id == {task_id}"),
+        key=lambda task: task.instance_id,
+    )
+    assert first_source_log_id != second_source_log_id
+    assert rows[0].status == Status.failed
+    assert "offline lifecycle reconciliation" in (rows[0].info or "")
+    assert rows[1].status == Status.completed
+    assert rows[2].status == Status.scheduled
+
+
+@pytest.mark.asyncio
 @pytest.mark.llm_call
 @_handle_project
 async def test_triggered_execution_offline_delegate_consumes_trigger_provenance(
