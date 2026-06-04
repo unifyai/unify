@@ -168,6 +168,42 @@ def _update_task_run(assistant_id: str, run_key: str, updates: dict[str, Any]) -
     response.raise_for_status()
 
 
+def _mark_source_task_failed(config: OfflineTaskConfig, error_text: str) -> None:
+    """Mark the source task row failed when scheduler finalization did not run."""
+
+    try:
+        SESSION_DETAILS.populate_from_env()
+        unity.ensure_initialised(project_name=TASK_MACHINE_STATE_PROJECT)
+        scheduler = TaskScheduler()
+        rows = scheduler._view.get_rows_by_log_ids(  # type: ignore[attr-defined]
+            log_ids=[config.source_task_log_id],
+        )
+        if not rows:
+            return
+        row = rows[0]
+        entries = dict(row.entries or {})
+        if str(entries.get("status") or "") != "active":
+            return
+        scheduler._write_log_entries(  # type: ignore[attr-defined]
+            logs=config.source_task_log_id,
+            entries={
+                "status": "failed",
+                "info": _truncate_text(
+                    "Offline task runner failed before task lifecycle finalization "
+                    f"completed: {error_text}",
+                ),
+            },
+        )
+    except Exception:
+        LOGGER.exception(
+            "Failed to terminalize source task row after offline runner failure "
+            "(task_id=%s, source_task_log_id=%s, run_key=%s)",
+            config.task_id,
+            config.source_task_log_id,
+            config.run_key,
+        )
+
+
 def _now_iso() -> str:
     """Return the current UTC timestamp in ISO-8601 format."""
 
@@ -452,6 +488,7 @@ def main() -> int:
             config.task_id,
             config.run_key,
         )
+        _mark_source_task_failed(config, error_text)
         _update_task_run(
             config.assistant_id,
             config.run_key,
