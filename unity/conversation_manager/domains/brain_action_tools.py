@@ -868,6 +868,12 @@ class ConversationManagerBrainActionTools:
                 ),
             )
 
+        # Use the first sentence (everything before the first ".") as a
+        # concise action label, falling back to the whole query when there is
+        # no period.
+        action_summary = query.split(".", 1)[0].strip() if query else ""
+        action_label = f"Action: {action_summary}" if action_summary else None
+
         # Bind the billing context so all nested LLM calls in this action are
         # recorded as tool-driven work (source="tool") with the action label.
         # This must run for personal workspaces too: otherwise the action's
@@ -881,7 +887,7 @@ class ConversationManagerBrainActionTools:
                 user_id=effective_user_id,
                 organization_id=SESSION_DETAILS.org_id,
                 source="tool",
-                label=f"Action: {query[:120]}" if query else None,
+                label=action_label,
             )
         except (ImportError, Exception):
             pass
