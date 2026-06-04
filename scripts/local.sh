@@ -69,10 +69,15 @@ fi
 LOCAL_COMMS_HOST="${UNITY_CONVERSATION_LOCAL_COMMS_HOST:-127.0.0.1}"
 LOCAL_COMMS_PORT="${UNITY_CONVERSATION_LOCAL_COMMS_PORT:-8787}"
 LOCAL_COMMS_PUBLIC_URL="${UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL:-}"
+GATEWAY_HOST="${UNITY_GATEWAY_HOST:-127.0.0.1}"
+GATEWAY_PORT="${UNITY_GATEWAY_PORT:-8001}"
+GATEWAY_PUBLIC_URL="${UNITY_GATEWAY_PUBLIC_URL:-$LOCAL_COMMS_PUBLIC_URL}"
 
 PIDFILE="/tmp/unity-local.pid"
 LOGFILE="/tmp/unity-local.log"
 MODEFILE="/tmp/unity-local.mode"
+GATEWAY_PIDFILE="/tmp/unity-gateway.pid"
+GATEWAY_LOGFILE="/tmp/unity-gateway.log"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -147,14 +152,70 @@ local_comms_base_url() {
   fi
 }
 
+gateway_base_url() {
+  if [[ -n "$GATEWAY_PUBLIC_URL" ]]; then
+    echo "$GATEWAY_PUBLIC_URL"
+  else
+    echo "http://$GATEWAY_HOST:$GATEWAY_PORT"
+  fi
+}
+
 describe_comms_backend() {
   if [[ "$LOCAL_COMMS_ENABLED" == "true" || "$LOCAL_COMMS_MODE" == "local" ]]; then
-    echo "local ingress ($(local_comms_base_url))"
+    echo "local gateway ($(gateway_base_url))"
   elif [[ -n "${UNITY_COMMS_URL:-}" ]]; then
     echo "hosted service ($UNITY_COMMS_URL)"
   else
     echo "simulated / no external comms"
   fi
+}
+
+is_gateway_running() {
+  if [[ -f "$GATEWAY_PIDFILE" ]]; then
+    local pid
+    pid=$(cat "$GATEWAY_PIDFILE")
+    if kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+start_gateway() {
+  if is_gateway_running; then
+    log_success "Unity gateway already running (PID $(cat "$GATEWAY_PIDFILE"))"
+    return 0
+  fi
+
+  cd "$UNITY_REPO_PATH"
+  local python_cmd
+  python_cmd="$(get_python)"
+  local public_url_args=()
+  [[ -n "$GATEWAY_PUBLIC_URL" ]] && public_url_args=(--public-url "$GATEWAY_PUBLIC_URL")
+
+  env \
+    ORCHESTRA_URL="$ORCHESTRA_URL" \
+    ORCHESTRA_ADMIN_KEY="${ORCHESTRA_ADMIN_KEY:-}" \
+    UNITY_COMMS_URL="$(gateway_base_url)" \
+    UNITY_ADAPTERS_URL="$(gateway_base_url)" \
+    UNITY_GATEWAY_LOCAL_INGRESS_URL="$(local_comms_base_url)" \
+    "$python_cmd" -m unity.gateway serve \
+      --host "$GATEWAY_HOST" \
+      --port "$GATEWAY_PORT" \
+      --mode all \
+      --single-url \
+      "${public_url_args[@]}" \
+      > "$GATEWAY_LOGFILE" 2>&1 &
+
+  local pid=$!
+  echo "$pid" > "$GATEWAY_PIDFILE"
+  sleep 2
+  if ! kill -0 "$pid" 2>/dev/null; then
+    log_error "Unity gateway failed to start. Check log: $GATEWAY_LOGFILE"
+    tail -30 "$GATEWAY_LOGFILE" 2>/dev/null
+    return 1
+  fi
+  log_success "Unity gateway running (PID $pid)"
 }
 
 # =============================================================================
@@ -217,6 +278,8 @@ start_full_cm() {
     "UNITY_CONVERSATION_LOCAL_COMMS_MODE=$LOCAL_COMMS_MODE"
     "UNITY_CONVERSATION_LOCAL_COMMS_HOST=$LOCAL_COMMS_HOST"
     "UNITY_CONVERSATION_LOCAL_COMMS_PORT=$LOCAL_COMMS_PORT"
+    "UNITY_COMMS_URL=$(gateway_base_url)"
+    "UNITY_ADAPTERS_URL=$(gateway_base_url)"
     "UNITY_VALIDATE_LLM_PROVIDERS=false"
     "EVENTBUS_PUBLISHING_ENABLED=false"
     "EVENTBUS_PUBSUB_STREAMING=false"
@@ -230,7 +293,6 @@ start_full_cm() {
   [[ -n "${ANTHROPIC_API_KEY:-}" ]]    && env_vars+=("ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
   [[ -n "${UNIFY_KEY:-}" ]]            && env_vars+=("UNIFY_KEY=$UNIFY_KEY")
   [[ -n "${ORCHESTRA_ADMIN_KEY:-}" ]]  && env_vars+=("ORCHESTRA_ADMIN_KEY=$ORCHESTRA_ADMIN_KEY")
-  [[ -n "${UNITY_COMMS_URL:-}" ]]      && env_vars+=("UNITY_COMMS_URL=$UNITY_COMMS_URL")
 
   # Provide minimal identity defaults so SESSION_DETAILS populates.
   [[ -z "${ASSISTANT_FIRST_NAME:-}" ]] && env_vars+=("ASSISTANT_FIRST_NAME=Local")
@@ -307,6 +369,7 @@ cmd_start() {
     if ! has_llm_keys; then
       log_warn "LLM keys not found — full CM mode may fail at LLM calls."
     fi
+    start_gateway
     start_full_cm
   else
     start_echo
@@ -319,6 +382,7 @@ cmd_start() {
     echo "  Echo bus:   $PUBSUB_EMULATOR_HOST"
   else
     echo "  Comms:      $(describe_comms_backend)"
+    echo "  Gateway:    $(gateway_base_url)"
   fi
   echo "  Log:        $LOGFILE"
   echo ""
@@ -337,6 +401,17 @@ cmd_stop() {
       kill -9 "$pid" 2>/dev/null || true
     fi
     rm -f "$PIDFILE" "$MODEFILE"
+  fi
+  if [[ -f "$GATEWAY_PIDFILE" ]]; then
+    local gateway_pid
+    gateway_pid=$(cat "$GATEWAY_PIDFILE")
+    if kill -0 "$gateway_pid" 2>/dev/null; then
+      log_info "Stopping Unity gateway (PID $gateway_pid)..."
+      kill "$gateway_pid" 2>/dev/null || true
+      sleep 2
+      kill -9 "$gateway_pid" 2>/dev/null || true
+    fi
+    rm -f "$GATEWAY_PIDFILE"
   fi
   log_success "Unity stopped"
 }
@@ -360,6 +435,11 @@ cmd_status() {
     echo "  Project:   $GCP_PROJECT_ID"
   else
     echo "  Comms:     $(describe_comms_backend)"
+    if is_gateway_running; then
+      echo "  Gateway:   running ($(gateway_base_url), PID $(cat "$GATEWAY_PIDFILE"))"
+    else
+      echo "  Gateway:   not running ($(gateway_base_url))"
+    fi
   fi
   echo "  Log:       $LOGFILE"
   echo ""

@@ -117,6 +117,24 @@ The local install runs **one customized assistant called `Unity`** — the natur
 
 ---
 
+## Communication Channels
+
+Unity's external communication surface lives in `unity.gateway`, so local and hosted deployments use the same channel code.
+
+- Local chat and browser voice work after install.
+- Local external channels such as Twilio SMS/phone/WhatsApp, Slack, Gmail, Outlook, and Teams require provider credentials plus a public HTTPS callback URL.
+- Hosted SaaS uses the same gateway routes with hosted backends for Pub/Sub delivery, runtime activation, storage, scheduling, and infrastructure.
+
+Run the gateway locally with:
+
+```bash
+python -m unity.gateway serve --port 8001 --single-url --public-url https://your-public-callback.example
+```
+
+Then configure providers to call the relevant `unity.gateway.adapters` URLs on that public callback domain. Use `python -m unity.gateway doctor --check-credentials` to check local configuration.
+
+---
+
 ## Day-to-day commands
 
 ```text

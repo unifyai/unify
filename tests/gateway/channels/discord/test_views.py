@@ -6,7 +6,7 @@ manager + admin API). Tests cover:
 - views router contract + happy-path / error per endpoint
 - bot_manager helpers (registry, status, get_bot_token)
 - gateway helpers (_assistant_topic, _default_contacts,
-  _already_published)
+  shared dedup)
 
 The WebSocket gateway loop itself is integration territory; we
 verify importability and the pure helpers but do not exercise the
@@ -28,12 +28,10 @@ from unity.gateway.channels.discord.gateway import (
     GatewayConnection,
 )
 from unity.gateway.channels.discord.gateway import (
-    _already_published as gateway_already_published,
-)
-from unity.gateway.channels.discord.gateway import (
     _assistant_topic,
     _default_contacts,
 )
+from unity.gateway.common import pubsub as shared_pubsub
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -50,12 +48,11 @@ def _reset_bot_pool() -> None:
 
 @pytest.fixture(autouse=True)
 def _reset_dedup_cache() -> None:
-    """Same for the inbound message dedup cache in gateway."""
-    from unity.gateway.channels.discord import gateway as gw
+    """Same for the inbound message dedup cache."""
 
-    gw._seen_message_ids.clear()
+    shared_pubsub._seen_ids.clear()
     yield
-    gw._seen_message_ids.clear()
+    shared_pubsub._seen_ids.clear()
 
 
 @pytest.fixture
@@ -187,24 +184,24 @@ class TestDefaultContacts:
 
 class TestAlreadyPublished:
     def test_first_call_returns_false(self) -> None:
-        assert gateway_already_published("msg-1") is False
+        assert shared_pubsub.already_published("discord", "msg-1") is False
 
     def test_second_call_returns_true(self) -> None:
-        gateway_already_published("msg-1")
-        assert gateway_already_published("msg-1") is True
+        shared_pubsub.already_published("discord", "msg-1")
+        assert shared_pubsub.already_published("discord", "msg-1") is True
 
     def test_expired_entries_are_cleaned(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from unity.gateway.channels.discord import gateway as gw
-
         # Seed an entry that's already expired
-        gw._seen_message_ids["old-msg"] = time.time() - gw._DEDUP_TTL - 100
-        gateway_already_published("new-msg")
+        shared_pubsub._seen_ids["discord"] = {
+            "old-msg": time.time() - shared_pubsub._DEDUP_TTL - 100,
+        }
+        shared_pubsub.already_published("discord", "new-msg")
         # The old expired key should have been swept on this call
-        assert "old-msg" not in gw._seen_message_ids
-        assert "new-msg" in gw._seen_message_ids
+        assert "old-msg" not in shared_pubsub._seen_ids["discord"]
+        assert "new-msg" in shared_pubsub._seen_ids["discord"]
 
 
 # ---------------------------------------------------------------------------

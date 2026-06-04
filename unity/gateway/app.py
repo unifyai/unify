@@ -61,6 +61,14 @@ from unity.gateway.channels.whatsapp import (
     unauth_router as whatsapp_unauth_router,
 )
 from unity.gateway.common.auth import admin_auth_dependency
+from unity.gateway.context import GatewayContext, create_default_gateway_context
+from unity.gateway.adapters import (
+    google_router,
+    internal_router,
+    microsoft_router,
+    slack_adapter_router,
+    twilio_router,
+)
 
 logger = logging.getLogger("unity.gateway.app")
 
@@ -180,6 +188,7 @@ def _compose_lifespan(
 
 def create_app(
     *,
+    gateway_context: GatewayContext | None = None,
     extra_routers: Sequence[ExtraRouter] | None = None,
     extra_setup_hooks: Sequence[SetupHook] | None = None,
     extra_lifespan_hooks: Sequence[LifespanHook] | None = None,
@@ -199,12 +208,14 @@ def create_app(
     extra_routers = list(extra_routers or ())
     extra_setup_hooks = list(extra_setup_hooks or ())
     extra_lifespan_hooks = list(extra_lifespan_hooks or ())
+    gateway_context = gateway_context or create_default_gateway_context()
 
     app = FastAPI(
         title="unity.gateway",
         description="Open-source communication channels for Unity.",
         lifespan=_compose_lifespan(extra_setup_hooks, extra_lifespan_hooks),
     )
+    app.state.gateway_context = gateway_context
 
     # Built-in admin-authed channels.
     app.include_router(
@@ -257,10 +268,19 @@ def create_app(
         prefix="/slack",
         dependencies=admin_auth_dependency,
     )
+    app.include_router(
+        internal_router,
+        dependencies=admin_auth_dependency,
+        tags=["internal-adapters"],
+    )
 
     # Built-in unauth channels (webhooks from third-parties that can't carry our bearer).
     app.include_router(phone_unauth_router, prefix="/phone")
     app.include_router(whatsapp_unauth_router, prefix="/whatsapp")
+    app.include_router(google_router, tags=["google-adapters"])
+    app.include_router(microsoft_router, tags=["microsoft-adapters"])
+    app.include_router(slack_adapter_router, tags=["slack-adapters"])
+    app.include_router(twilio_router, tags=["twilio-adapters"])
 
     # Built-in user-API-key authed channel (auth is enforced inside the route).
     app.include_router(unillm_router, prefix="/unillm")
