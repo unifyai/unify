@@ -3,10 +3,8 @@ import asyncio
 import base64
 import aiohttp
 import json
-import mimetypes
 import os
 from pathlib import Path
-import uuid
 
 from unity.logger import LOGGER
 from unity.common.hierarchical_logger import ICONS
@@ -115,6 +113,20 @@ def _local_comms_base_url() -> str:
     )
 
 
+def _gateway_comms_base_url() -> str:
+    base_url = SETTINGS.conversation.COMMS_URL.strip()
+    if base_url:
+        return base_url.rstrip("/")
+    return _local_comms_base_url()
+
+
+def _gateway_adapters_base_url() -> str:
+    base_url = SETTINGS.conversation.ADAPTERS_URL.strip()
+    if base_url:
+        return base_url.rstrip("/")
+    return _gateway_comms_base_url()
+
+
 async def _publish_local_outbox_async(payload: dict) -> bool:
     async with aiohttp.ClientSession() as session:
         async with session.post(
@@ -159,18 +171,9 @@ async def send_sms_message_via_number(to_number: str, content: str) -> str:
     if not from_number:
         return {"success": False}
 
-    if _use_local_comms():
-        from unity.conversation_manager.local_providers import twilio as local_twilio
-
-        try:
-            return await local_twilio.send_sms_message(to_number, from_number, content)
-        except Exception as e:
-            LOGGER.error(f"{ICONS['comms_outbound']} {e}")
-            return {"success": False, "error": str(e)}
-
     async with aiohttp.ClientSession() as session:
         async with session.post(
-            f"{SETTINGS.conversation.COMMS_URL}/phone/send-text",
+            f"{_gateway_comms_base_url()}/phone/send-text",
             headers=headers,
             json={
                 "From": from_number,
@@ -216,26 +219,6 @@ async def send_whatsapp_message(
     if agent_id is None:
         return {"success": False}
 
-    if _use_local_comms():
-        from unity.conversation_manager.local_providers import twilio as local_twilio
-
-        from_number = (
-            SESSION_DETAILS.assistant.whatsapp_number
-            or SESSION_DETAILS.assistant.number
-        )
-        if not from_number:
-            return {"success": False, "error": "No WhatsApp sender number configured"}
-        try:
-            return await local_twilio.send_whatsapp_message(
-                to_number=to_number,
-                from_number=from_number,
-                body=content,
-                media_url=media_url,
-            )
-        except Exception as e:
-            LOGGER.error(f"{ICONS['comms_outbound']} WhatsApp send failed: {e}")
-            return {"success": False, "error": str(e)}
-
     payload = {
         "to": to_number,
         "body": content,
@@ -248,7 +231,7 @@ async def send_whatsapp_message(
 
     async with aiohttp.ClientSession() as session:
         async with session.post(
-            f"{SETTINGS.conversation.COMMS_URL}/whatsapp/send",
+            f"{_gateway_comms_base_url()}/whatsapp/send",
             headers=headers,
             json=payload,
         ) as response:
@@ -482,31 +465,9 @@ async def upload_unify_attachment(
     if assistant_id is None:
         assistant_id = SESSION_DETAILS.assistant.agent_id
 
-    if _use_local_comms():
-        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-        attachment = {
-            "id": str(uuid.uuid4()),
-            "filename": filename,
-            "content_base64": base64.b64encode(file_content).decode("ascii"),
-            "content_type": content_type,
-            "size_bytes": len(file_content),
-        }
-        attachment["url"] = (
-            f"{_local_comms_base_url()}/local/comms/attachments/{attachment['id']}"
-        )
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{_local_comms_base_url()}/local/comms/attachments",
-                json=attachment,
-            ) as response:
-                if response.status >= 400:
-                    detail = await response.text()
-                    return {"success": False, "error": detail}
-        return attachment
-
     from io import BytesIO
 
-    adapters_url = SETTINGS.conversation.ADAPTERS_URL
+    adapters_url = _gateway_adapters_base_url()
 
     LOGGER.debug(
         f"{ICONS['comms_outbound']} Uploading unify attachment: {filename} ({len(file_content)} bytes)",
@@ -1043,19 +1004,6 @@ async def send_email_via_address(
     Returns:
         dict: Response with 'success' bool and optionally 'error' message
     """
-    if _use_local_comms():
-        from unity.conversation_manager.local_providers import email as local_email
-
-        return await local_email.send_email(
-            to=to,
-            subject=subject,
-            body=body,
-            cc=cc,
-            bcc=bcc,
-            email_id=email_id,
-            attachment=attachment,
-        )
-
     from_email = SESSION_DETAILS.assistant.email
     if not from_email:
         return {"success": False, "error": "No sender email configured"}
@@ -1076,7 +1024,7 @@ async def send_email_via_address(
 
     async with aiohttp.ClientSession() as session:
         async with session.post(
-            f"{SETTINGS.conversation.COMMS_URL}/email/send",
+            f"{_gateway_comms_base_url()}/email/send",
             headers=headers,
             json=payload,
         ) as response:
@@ -1106,20 +1054,9 @@ async def start_call(to_number: str) -> str:
     assistant_id = str(SESSION_DETAILS.assistant.agent_id)
     room_name = make_room_name(assistant_id, "phone")
 
-    if _use_local_comms():
-        from unity.conversation_manager.local_providers import twilio as local_twilio
-
-        try:
-            return await local_twilio.start_call(to_number, from_number, room_name)
-        except Exception:
-            return {
-                "success": False,
-                "error": f"Failed to initiate call to {to_number}",
-            }
-
     async with aiohttp.ClientSession() as session:
         async with session.post(
-            f"{SETTINGS.conversation.COMMS_URL}/phone/send-call",
+            f"{_gateway_comms_base_url()}/phone/send-call",
             headers=headers,
             json={
                 "From": from_number,
@@ -1161,30 +1098,9 @@ async def start_whatsapp_call(
     if agent_id is None:
         return {"success": False}
 
-    if _use_local_comms():
-        from unity.conversation_manager.local_providers import twilio as local_twilio
-
-        from_number = (
-            SESSION_DETAILS.assistant.whatsapp_number
-            or SESSION_DETAILS.assistant.number
-        )
-        if not from_number:
-            return {"success": False, "error": "No WhatsApp sender number configured"}
-        try:
-            return await local_twilio.start_whatsapp_call(
-                to_number=to_number,
-                from_number=from_number,
-                room_name=room_name,
-            )
-        except Exception:
-            return {
-                "success": False,
-                "error": f"Failed to initiate WhatsApp call to {to_number}",
-            }
-
     async with aiohttp.ClientSession() as session:
         async with session.post(
-            f"{SETTINGS.conversation.COMMS_URL}/whatsapp/send-call",
+            f"{_gateway_comms_base_url()}/whatsapp/send-call",
             headers=headers,
             json={
                 "to": to_number,

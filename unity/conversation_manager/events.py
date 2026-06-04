@@ -7,6 +7,7 @@ from dataclasses import dataclass, asdict, field
 
 from pydantic import BaseModel
 
+from unity.common.context_registry import ContextRegistry
 from unity.common.prompt_helpers import now as prompt_now
 
 

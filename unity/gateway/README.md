@@ -1,187 +1,118 @@
 # unity.gateway
 
-External communication gateway for Unity. This package is the transport
-layer that connects the assistant runtime to the outside world: phone
-networks, email providers, chat platforms, and inbound webhook
-surfaces. It owns the abstractions (broker, storage, secrets, envelope
-schemas) through which Unity speaks to those transports.
+External communication gateway for Unity. This package connects the assistant
+runtime to phone networks, email providers, chat platforms, internal
+Console/Orchestra events, and provider webhooks.
 
-## Why this exists
+Unity owns channel semantics in one place: webhook parsing, route resolution,
+OAuth callbacks, envelope creation, and outbound provider calls live in
+`unity.gateway`. Local self-hosted and hosted SaaS deployments run this same
+code. Only the backend implementations differ.
 
-Today the channel routers that bridge Unity to Twilio, Microsoft Graph,
-Discord, etc. live in a private `communication` repository deployed as
-two Cloud Run services (`unity-comms-app`, `unity-adapters`). That
-arrangement has two costs:
+## Backend Contracts
 
-1. **Open-source discoverability.** Unity is the public-facing vessel
-   for the AI assistant. A reader of the open codebase cannot run an
-   end-to-end deployment from what is in `unity/` alone, because the
-   channel transports live elsewhere and behind a private boundary.
-2. **Duplication between local and deployed paths.** Unity ships a
-   `LocalCommsIngress` in-process aiohttp server with its own
-   `local_providers/twilio.py`, `local_providers/email.py`, etc., that
-   re-implements parts of the comms-side routes. The two paths drift.
+Deployment-specific behavior sits behind small protocols:
 
-The fix is to concentrate the channel transports into Unity behind
-small, well-defined abstractions, and have the production deployment
-consume Unity as a library rather than maintaining a parallel codebase.
+- `EnvelopeSink` delivers normalized inbound envelopes to Unity. Local mode uses
+  an HTTP sink into the local runtime; hosted mode uses Pub/Sub.
+- `RuntimeActivator` ensures the target assistant runtime is ready. Local mode
+  treats the runtime as already running; hosted mode delegates to
+  Communication's AssistantSession infrastructure.
+- `Storage` stores attachments. Local mode uses local disk.
+- `CredentialStore` reads operator provider credentials. Local mode uses
+  environment variables.
+- `PublicUrlProvider` builds public callback URLs for providers.
+- `Scheduler` owns recurring maintenance in the active backend.
 
-## Naming
+## Package Layout
 
-The package is called `gateway` to match the two nearest open-source
-reference designs:
-
-- [`openclaw/openclaw`](https://github.com/openclaw/openclaw) — MIT,
-  organises its external surface under `gateway/`.
-- [`NousResearch/hermes-agent`](https://github.com/NousResearch/hermes-agent)
-  — MIT, same convention.
-
-The name also avoids collision with `unity.comms`, which already
-exists and holds the *behavioural* outbound layer (`CommsPrimitives`).
-The separation matters:
-
-- `unity.comms` = **what the assistant does** when it decides to reach
-  out. Contact resolution, capability gating, transcript publication.
-- `unity.gateway` = **how the assistant gets to the outside world**.
-  Webhook envelope schemas, pluggable broker, pluggable storage,
-  pluggable secrets.
-
-## What is in this package today
-
-Phase A (this landing) ships only the seam — the abstractions and their
-default in-process implementations. The channel routers themselves
-arrive in Phase B.
-
-```
+```text
 unity/gateway/
-├── __init__.py            # clean public exports
-├── README.md              # you are here
-├── PHASES.md              # full multi-phase rollout plan
-├── event_broker.py        # EventBroker + PubSubConnection Protocols
-├── envelopes.py           # canonical inbound webhook envelope schemas
-├── storage/
-│   ├── base.py            # Storage Protocol
-│   ├── local.py           # LocalDiskStorage (default; self-hosted)
-│   └── gcs.py             # GcsStorage stub (Phase B)
-└── credentials/
-    ├── base.py            # CredentialStore Protocol
-    ├── env.py             # EnvCredentialStore (default; self-hosted)
-    └── gcp.py             # GcpCredentialStore stub (Phase B)
+├── app.py                 # FastAPI app mounting channels and adapters
+├── __main__.py            # python -m unity.gateway serve/doctor
+├── context.py             # GatewayContext dependency injection
+├── envelope_sink.py       # local/http/pubsub delivery backends
+├── runtime.py             # local/hosted runtime activation backends
+├── public_url.py          # callback URL construction
+├── scheduler.py           # scheduler abstraction
+├── envelopes.py           # canonical inbound envelope schemas
+├── adapters/              # inbound provider/internal webhooks
+├── channels/              # outbound/admin channel APIs
+├── storage/               # storage backends
+└── credentials/           # operator credential backends
 ```
 
-`tests/gateway/` mirrors the structure with focused unit tests for
-each module.
+`tests/gateway/` mirrors the structure with focused tests for contracts, route
+shape, and selected channel behavior.
 
-### EventBroker (`event_broker.py`)
+## Local Self-Hosted Usage
 
-The `EventBroker` `Protocol` is a strict subset of `redis.asyncio.Redis`
-pub/sub. The existing
-`unity.conversation_manager.in_memory_event_broker.InMemoryEventBroker`
-already satisfies it without modification; the test
-`test_in_memory_event_broker_satisfies_event_broker_protocol` pins that
-invariant.
+Run the gateway alongside local Orchestra, Console, and the ConversationManager:
 
-Concrete implementations now and planned:
+```bash
+python -m unity.gateway serve --port 8001 --single-url --public-url https://your-public-callback.example
+```
 
-| Implementation | Status | Used by |
-| --- | --- | --- |
-| `InMemoryEventBroker` | Shipped | Tests, single-process self-hosted Unity, offline runs |
-| `PubSubEventBroker` | **Phase A.bis** | Hosted Cloud Run deployment (currently inline in `comms_manager.py`) |
-| `RedisStreamsEventBroker` | Possible future | Multi-process self-hosted on a single VPS |
+`scripts/local.sh start` starts the gateway automatically and points
+`UNITY_COMMS_URL`, `UNITY_ADAPTERS_URL`, and `LOCAL_ADAPTERS_URL` at the same
+local process. In local mode, adapter routes publish through `HttpEnvelopeSink`
+to the local Unity runtime.
 
-### Envelopes (`envelopes.py`)
+External provider channels require provider credentials and a public HTTPS
+callback URL. The gateway reads operator credentials from environment variables
+such as `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `SLACK_SIGNING_SECRET`,
+`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `MICROSOFT_CLIENT_ID`, and
+`MICROSOFT_CLIENT_SECRET`.
 
-Pydantic models for the `{thread, publish_timestamp, event}` wire
-format that every inbound channel publishes. Phase A models a
-representative subset (`msg`, `email`, `unify_message`,
-`unity_system_event`) plus a `GenericEnvelope` fallback that keeps
-unmigrated channels flowing. `KNOWN_THREADS` enumerates the full
-17-thread catalogue recovered from the current code paths.
+Check configuration with:
 
-### Storage (`storage/`)
+```bash
+python -m unity.gateway doctor --check-credentials
+```
 
-`LocalDiskStorage` is the self-hosted default — backs attachments under
-`UNITY_GATEWAY_STORAGE_DIR` (defaults to `./.unity-gateway-storage`).
-`GcsStorage` is a stub that raises `NotImplementedError` pending Phase B,
-when the first hosted call site needs it wired in.
+## Hosted Usage
 
-### Credentials (`credentials/`)
-
-`EnvCredentialStore` is the self-hosted default — reads from process
-environment variables, with optional prefix filtering. `GcpCredentialStore`
-is a stub pending Phase B.
-
-This package is **distinct from** `unity.secret_manager` -- the
-gateway's `credentials/` holds operator infrastructure credentials
-(e.g. `TWILIO_ACCOUNT_SID`) used by the gateway processes to talk to
-external messaging providers, while `unity.secret_manager` holds
-assistant-owned secrets the assistant uses on the user's behalf.
-The two systems never touch each other and were given distinct names
-to prevent confusion.
-
-## What is **not** in this package
-
-Anything that requires touching files outside `unity/gateway/` and
-`tests/gateway/`. In particular:
-
-- The Pub/Sub-specific code currently inline in
-  `unity/conversation_manager/comms_manager.py` is **not yet
-  extracted**. That extraction is Phase A.bis and deserves a dedicated
-  PR with focused test coverage, because `CommsManager`'s threading
-  model (Pub/Sub callbacks marshalled into the asyncio loop via
-  `run_coroutine_threadsafe`) is the single highest-risk piece of the
-  migration.
-- No channel routers have moved. The full `communication/{phone,
-  gmail, outlook, whatsapp, discord, teams, email, social, sharepoint,
-  unillm}/` tree still lives in the private repository and still
-  serves production traffic exactly as before.
-- No Dockerfile, Cloud Build config, or Cloud Run service has been
-  touched. Production deployment is unchanged.
-
-## What comes next
-
-See `PHASES.md` for the full rollout plan from here to a single-vessel
-Unity that consumes the same code in production and in self-hosted
-mode.
+The hosted `communication` service composes this gateway app and injects hosted
+infrastructure backends: Pub/Sub envelope delivery and Communication's existing
+AssistantSession activation infrastructure. Hosted-only VM pools, tunnels,
+Cloud Scheduler/Tasks, DNS, and Kubernetes controllers remain in
+`communication/infra`.
 
 ## Relationship to `unity.conversation_manager`
 
-`unity.conversation_manager` keeps its current public surface. In
-particular:
-
-- `unity.conversation_manager.event_broker.get_event_broker()` still
-  returns an `InMemoryEventBroker` — unchanged behaviour. Once the
-  Phase A.bis `PubSubEventBroker` lands, that factory grows a switch
-  on `UNITY_EVENT_BROKER` (default `inmemory`, production sets
-  `pubsub`).
-- `unity.conversation_manager.local_ingress.LocalCommsIngress` still
-  serves the in-process aiohttp routes. It will be retired once the
-  full gateway HTTP surface (Phase B) lands and is reachable in
-  single-process mode through a unified entrypoint.
+`unity.conversation_manager` remains the assistant runtime and live
+conversation orchestrator. The gateway is the HTTP edge. Local inbound delivery
+flows through `HttpEnvelopeSink` into the runtime-side local ingress endpoint;
+hosted inbound delivery flows through Pub/Sub topics consumed by Unity runtime
+workers.
 
 ## Relationship to `communication/`
 
-The private `communication/` repo's `phone/`, `gmail/`, `outlook/`,
-`whatsapp/`, `discord/`, `teams/`, `email/`, `social/`, `sharepoint/`,
-and `unillm/` packages migrate to `unity/gateway/channels/<name>/`
-during Phase B. The `adapters/` Cloud Functions / webhook receivers
-migrate to `unity/gateway/adapters/`. The shared `common/` library
-migrates to `unity/gateway/common/`.
+`communication/` is the hosted infrastructure wrapper around `unity.gateway`.
+The pieces that stay there are:
 
-The pieces that stay in the private repo indefinitely:
-
-- `communication/infra/` — GCE pool VMs, Cloud DNS, ACME wildcard cert
-  renewal, tunnel server. The hosted-SaaS desktop infrastructure.
-- `communication/assistant_session_controller/` — Kubernetes
-  per-binding session orchestration.
+- `communication/infra/`: GCE pool VMs, Cloud DNS, ACME wildcard cert renewal,
+  tunnel server, and hosted runtime activation.
+- `communication/assistant_session_controller/`: Kubernetes per-binding session
+  orchestration.
 - `communication/cloudbuild/`, `communication/k8s/`,
-  `communication/sbc-proxy/`, `communication/scripts/` — the
-  deployment + runbook surface that targets Unity's hosted topology.
-- `communication/Dockerfile-*` — these get rewritten in Phase C to
-  `pip install unity` and shell out to `unity gateway ...` rather
-  than `uvicorn communication.main:app`.
+  `communication/sbc-proxy/`, and `communication/scripts/`: deployment and
+  runbook surfaces for Unity's hosted topology.
+- `communication/Dockerfile-*`: hosted images that install Unity and run the
+  hosted wrapper around `unity.gateway`.
 
-Self-hosted users never touch the private repo. They install Unity,
-provide their own Twilio / Microsoft Graph / Discord credentials, and
-run `unity gateway serve` to get the full external-comms surface
+Self-hosted users never touch the private repo. They install Unity, provide
+provider credentials and a public callback URL, and run the Unity gateway
 locally.
+
+## Verification
+
+Focused tests live under `tests/gateway/`:
+
+```bash
+tests/parallel_run.sh tests/gateway/
+```
+
+Provider SDK calls are mocked in unit tests. Real Twilio, Slack, Gmail, Outlook,
+Teams, and Discord checks should be explicit smoke tests in an environment with
+provider credentials and a reachable callback URL.

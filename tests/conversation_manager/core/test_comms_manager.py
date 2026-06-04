@@ -1014,6 +1014,8 @@ class TestStartupEvents:
                     "assistant_about": "test",
                     "assistant_number": "+15555551234",
                     "assistant_email": "coord@unify.ai",
+                    "self_contact_id": 1,
+                    "boss_contact_id": 2,
                     "user_first_name": "Test",
                     "user_surname": "User",
                     "user_number": "+15555550000",
@@ -1057,6 +1059,8 @@ class TestStartupEvents:
             "assistant_about": "test",
             "assistant_number": "+15555551234",
             "assistant_email": "coord@unify.ai",
+            "self_contact_id": 1,
+            "boss_contact_id": 2,
             "user_first_name": "Test",
             "user_surname": "User",
             "user_number": "+15555550000",
@@ -1090,7 +1094,7 @@ class TestStartupEvents:
                         "spec": {
                             "assistantId": "7",
                             "activationId": "activation-a",
-                            "startupSecretRef": "secret-a",
+                            "startupSecretRef": "secret-a",  # pragma: allowlist secret
                         },
                         "status": {"binding": {"id": "binding-a"}},
                     },

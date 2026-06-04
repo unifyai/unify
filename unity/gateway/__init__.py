@@ -86,6 +86,34 @@ from unity.gateway.credentials import (
     CredentialStore,
     EnvCredentialStore,
 )
+from unity.gateway.context import (
+    GatewayContext,
+    create_default_gateway_context,
+    get_gateway_context,
+)
+from unity.gateway.envelope_sink import (
+    DirectEnvelopeSink,
+    EnvelopeSink,
+    HttpEnvelopeSink,
+    MissingEnvelopeSink,
+    OutboundTransportEnvelopeSink,
+)
+from unity.gateway.public_url import (
+    PublicUrlProvider,
+    StaticPublicUrlProvider,
+)
+from unity.gateway.runtime import (
+    HostedRuntimeActivator,
+    LocalRuntimeActivator,
+    RuntimeActivation,
+    RuntimeActivator,
+)
+from unity.gateway.scheduler import (
+    LocalScheduler,
+    MissingScheduler,
+    ScheduledHandle,
+    Scheduler,
+)
 from unity.gateway.storage import LocalDiskStorage, Storage
 
 # The aggregator (app.py) and per-channel routers live deeper in the tree
@@ -112,23 +140,41 @@ __all__ = [
     "EnvCredentialStore",
     "EnvelopeDispatcher",
     "EventBroker",
+    "DirectEnvelopeSink",
+    "EnvelopeSink",
+    "GatewayContext",
+    "HttpEnvelopeSink",
     "GenericEnvelope",
+    "HostedRuntimeActivator",
     "InMemoryIngressTransport",
     "InMemoryOutboundTransport",
     "IngressTransport",
+    "LocalRuntimeActivator",
+    "LocalScheduler",
     "LocalDiskStorage",
+    "MissingEnvelopeSink",
+    "MissingScheduler",
     "OutboundTransport",
+    "OutboundTransportEnvelopeSink",
     "PublishedEnvelope",
     "PubSubConnection",
     "PubSubIngressTransport",
     "PubSubMessage",
     "PubSubOutboundTransport",
+    "PublicUrlProvider",
+    "RuntimeActivation",
+    "RuntimeActivator",
     "SMSEnvelope",
     "SMSReceivedEvent",
+    "ScheduledHandle",
+    "Scheduler",
+    "StaticPublicUrlProvider",
     "Storage",
     "SystemEventEnvelope",
     "UnifyMessageEnvelope",
     "UnifyMessageReceivedEvent",
     "UnitySystemEvent",
+    "create_default_gateway_context",
+    "get_gateway_context",
     "parse_envelope",
 ]
