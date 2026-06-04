@@ -132,8 +132,10 @@ from .machine_state import (
     TaskRunProvenance,
     build_task_run_key,
     consume_live_task_run_provenance,
+    latest_task_run_reference_for_source,
     peek_live_task_run_provenance,
     source_type_from_activation_reason,
+    update_task_run_record,
 )
 from ..session_details import SESSION_DETAILS
 
@@ -952,17 +954,34 @@ class TaskScheduler(BaseTaskScheduler):
         now = datetime.now(timezone.utc).isoformat()
         for row in stale_rows:
             entries = dict(row.entries or {})
+            reconciliation_info = (
+                "Task instance marked failed by offline lifecycle reconciliation. "
+                f"The headless execution for source_task_log_id={row.id} left "
+                "the row active without a live scheduler handle; "
+                f"reconciled_at={now}; "
+                f"next_source_task_log_id={provenance.source_task_log_id}."
+            )
             self._write_log_entries(
                 logs=row.id,
                 entries={
                     "status": Status.failed,
-                    "info": (
-                        "Task instance marked failed by offline lifecycle reconciliation. "
-                        f"The headless execution for source_task_log_id={row.id} left "
-                        "the row active without a live scheduler handle; "
-                        f"reconciled_at={now}; "
-                        f"next_source_task_log_id={provenance.source_task_log_id}."
-                    ),
+                    "info": reconciliation_info,
+                },
+            )
+            run_reference = latest_task_run_reference_for_source(
+                assistant_id=provenance.assistant_id,
+                task_id=task_id,
+                source_task_log_id=int(row.id),
+            )
+            update_task_run_record(
+                run_reference,
+                {
+                    "state": "failed",
+                    "completed_at": now,
+                    "error": reconciliation_info,
+                    "result_summary": None,
+                    "reconciled_at": now,
+                    "reconciliation_reason": "offline_active_row_reconciliation",
                 },
             )
             self._reintegration_plans.pop(

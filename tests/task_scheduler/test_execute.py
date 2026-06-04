@@ -672,6 +672,30 @@ async def test_offline_scheduled_execution_reconciles_stale_active_blocker(
         "unity.task_scheduler.active_task.update_task_run_record",
         lambda run_reference, updates: None,
     )
+    reconciled_run_updates = []
+    expected_task_id = task_id
+
+    def _latest_run_for_source(*, assistant_id, task_id, source_task_log_id):
+        assert assistant_id == "42"
+        assert task_id == expected_task_id
+        assert source_task_log_id == first_source_log_id
+        return TaskRunReference(
+            assistant_id="42",
+            run_key=f"offline:scheduled:42:{expected_task_id}:instance-0",
+        )
+
+    monkeypatch.setattr(
+        task_scheduler_module,
+        "latest_task_run_reference_for_source",
+        _latest_run_for_source,
+    )
+    monkeypatch.setattr(
+        task_scheduler_module,
+        "update_task_run_record",
+        lambda run_reference, updates: reconciled_run_updates.append(
+            (run_reference, updates),
+        ),
+    )
 
     current = [
         task
@@ -726,6 +750,15 @@ async def test_offline_scheduled_execution_reconciles_stale_active_blocker(
     assert "offline lifecycle reconciliation" in (rows[0].info or "")
     assert rows[1].status == Status.completed
     assert rows[2].status == Status.scheduled
+    assert len(reconciled_run_updates) == 1
+    run_reference, updates = reconciled_run_updates[0]
+    assert run_reference == TaskRunReference(
+        assistant_id="42",
+        run_key=f"offline:scheduled:42:{expected_task_id}:instance-0",
+    )
+    assert updates["state"] == "failed"
+    assert updates["reconciliation_reason"] == "offline_active_row_reconciliation"
+    assert "offline lifecycle reconciliation" in updates["error"]
 
 
 @pytest.mark.asyncio

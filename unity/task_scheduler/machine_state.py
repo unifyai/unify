@@ -37,6 +37,7 @@ _TASK_RUNS_CONTEXT_LEAF = "Runs"
 _TASK_OUTBOUND_OPERATIONS_CONTEXT_LEAF = "OutboundOperations"
 TASK_MACHINE_STATE_PROJECT = "Assistants"
 _TASK_RUN_CREATE_OR_ADOPT_PATH = "/admin/task-run/create-or-adopt"
+_TASK_RUN_LATEST_PATH = "/admin/task-run/latest"
 _TASK_RUN_UPDATE_PATH = "/admin/task-run/update"
 _TASK_OUTBOUND_OPERATION_CREATE_OR_ADOPT_PATH = (
     "/admin/task-outbound-operation/create-or-adopt"
@@ -506,6 +507,40 @@ def update_task_run_record(
             "run_key": run_reference.run_key,
             "updates": _drop_none_values(dict(updates)),
         },
+    )
+
+
+def latest_task_run_reference_for_source(
+    *,
+    assistant_id: str | int | None,
+    task_id: int,
+    source_task_log_id: int,
+) -> TaskRunReference | None:
+    """Return the latest run row tied to one physical source task row."""
+
+    normalized_assistant_id = _coerce_str(assistant_id)
+    if not normalized_assistant_id:
+        return None
+    response_body = _orchestra_admin_post(
+        _TASK_RUN_LATEST_PATH,
+        {
+            "project_name": TASK_MACHINE_STATE_PROJECT,
+            "assistant_id": normalized_assistant_id,
+            "task_id": int(task_id),
+            "source_task_log_id": int(source_task_log_id),
+        },
+    )
+    if not isinstance(response_body, Mapping):
+        return None
+    run_payload = response_body.get("run")
+    if not isinstance(run_payload, Mapping):
+        return None
+    run_key = _coerce_str(run_payload.get("run_key"))
+    if not run_key:
+        return None
+    return TaskRunReference(
+        assistant_id=normalized_assistant_id,
+        run_key=run_key,
     )
 
 
