@@ -1247,13 +1247,13 @@ def _render_actor_result(event) -> str:
         detail = event.error or event.result or ""
         if isinstance(detail, dict):
             detail = detail.get("summary", str(detail))
-        snippet = str(detail)[:200]
+        snippet = str(detail)
         return f"Action failed: {snippet}" if snippet else "Action failed"
 
     detail = event.result or ""
     if isinstance(detail, dict):
         detail = detail.get("summary", str(detail))
-    snippet = str(detail)[:200]
+    snippet = str(detail)
     if snippet:
         return f"Action completed: {snippet}"
     return "Action finished with no results returned"
@@ -1283,20 +1283,20 @@ def render_event_for_fast_brain(event_json: str) -> str | None:
             return None
         return _render_actor_result(event)
     if isinstance(event, ActorHandleStarted):
-        return f"Action started: {event.query[:200]}"
+        return f"Action started: {event.query}"
     if isinstance(event, ActorHandleResponse):
         answer = event.response if event.response else "(no answer)"
         return f"Ask answered ({event.query[:100]}): {answer}"
     if isinstance(event, ActorSessionResponse):
         if event.content:
-            return f"Action update: {event.content[:200]}"
+            return f"Action update: {event.content}"
         return None
     if isinstance(event, NotificationInjectedEvent):
         return event.content
     if isinstance(event, ActorClarificationRequest):
         return f"Clarification needed: {event.query}"
     if isinstance(event, ComputerActCompleted):
-        snippet = event.summary[:200] if event.summary else event.instruction[:200]
+        snippet = event.summary if event.summary else event.instruction
         return f"Computer action executed: {snippet}"
 
     return None
