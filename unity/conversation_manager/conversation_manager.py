@@ -1394,11 +1394,13 @@ class ConversationManager(metaclass=SingletonABCMeta):
         try:
             import unillm
 
+            is_voice = self.mode.is_voice
             unillm.set_billing_context(
                 assistant_id=SESSION_DETAILS.assistant.agent_id,
                 user_id=attributed_user_id or SESSION_DETAILS.user.id,
                 organization_id=SESSION_DETAILS.org_id,
-                source="call" if self.mode.is_voice else "chat",
+                source="call" if is_voice else "chat",
+                label="Voice reply" if is_voice else "Chat reply",
             )
         except (ImportError, Exception):
             pass
