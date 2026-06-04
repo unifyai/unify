@@ -843,10 +843,12 @@ class ConversationManagerBrainActionTools:
             return suppression
 
         # Override cost attribution for all nested LLM calls in this action.
-        # Only meaningful in org context (personal accounts have a single user).
         from unity.events.cost_attribution import COST_ATTRIBUTION
         from unity.session_details import SESSION_DETAILS
 
+        # Per-user cost attribution only matters in org context (personal
+        # accounts have a single user). Resolve the acting user here.
+        effective_user_id = SESSION_DETAILS.user.id
         if SESSION_DETAILS.org_id is not None:
             contact = self._cm.contact_index.get_contact(
                 contact_id=requesting_contact_id,
@@ -866,18 +868,23 @@ class ConversationManagerBrainActionTools:
                 ),
             )
 
-            try:
-                import unillm
+        # Bind the billing context so all nested LLM calls in this action are
+        # recorded as tool-driven work (source="tool") with the action label.
+        # This must run for personal workspaces too: otherwise the action's
+        # LLM spend inherits the conversation turn's "chat" context and shows
+        # in the usage ledger as generic chat work instead of the action.
+        try:
+            import unillm
 
-                unillm.set_billing_context(
-                    assistant_id=SESSION_DETAILS.assistant.agent_id,
-                    user_id=effective_user_id,
-                    organization_id=SESSION_DETAILS.org_id,
-                    source="tool",
-                    label=f"Action: {query[:120]}" if query else None,
-                )
-            except (ImportError, Exception):
-                pass
+            unillm.set_billing_context(
+                assistant_id=SESSION_DETAILS.assistant.agent_id,
+                user_id=effective_user_id,
+                organization_id=SESSION_DETAILS.org_id,
+                source="tool",
+                label=f"Action: {query[:120]}" if query else None,
+            )
+        except (ImportError, Exception):
+            pass
 
         # Pass the fresh rendered state snapshot as context for the Actor,
         # unless the LLM opted out.
