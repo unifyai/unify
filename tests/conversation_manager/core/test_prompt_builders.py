@@ -199,7 +199,8 @@ class TestCoordinatorPrompt:
         assert "Intent vs verified outcomes" in base_prompt
         assert "Intent vs verified outcomes" in coordinator_prompt
         assert "Console knowledge" in base_prompt
-        assert "Console knowledge" in coordinator_prompt
+        assert "Console knowledge" not in coordinator_prompt
+        assert "Coordinator Console literacy" in coordinator_prompt
         assert "Concurrent action and acknowledgment" in base_prompt
         assert "Concurrent action and acknowledgment" in coordinator_prompt
         assert "Onboarding reference" in base_prompt
@@ -279,13 +280,14 @@ class TestPromptSectionOwnershipMatrix:
                     "Authorized humans\n-----------------",
                     "Act capabilities\n----------------",
                     "Concurrent action and acknowledgment\n------------------------------------",
-                    "Console knowledge\n-----------------",
+                    "Coordinator Console literacy\n-----------------------------",
                     "Proactive meeting offers\n------------------------",
                 ),
                 "absent": (
                     "Team Coordinator\n----------------",
                     "Demo mode\n---------",
                     "Onboarding reference\n--------------------",
+                    "Console knowledge\n-----------------",
                 ),
             },
             {
@@ -317,13 +319,14 @@ class TestPromptSectionOwnershipMatrix:
                     "Boss details\n------------",
                     "Organization membership actions are unavailable",
                     "switch to that organization's workspace coordinator",
-                    "Console knowledge\n-----------------",
+                    "Coordinator Console literacy\n-----------------------------",
                     "Proactive meeting offers\n------------------------",
                 ),
                 "absent": (
                     "Authorized humans\n-----------------",
                     "Team Coordinator\n----------------",
                     "Onboarding reference\n--------------------",
+                    "Console knowledge\n-----------------",
                 ),
             },
         )
@@ -368,6 +371,15 @@ class TestCoordinatorVoicePrompt:
         assert "`create_assistant`" not in prompt
         assert "`delete_space`" not in prompt
         assert "`remove_space_member`" not in prompt
+
+    def test_coordinator_voice_prompt_includes_console_literacy(self):
+        prompt = _build_voice(is_coordinator=True)
+
+        assert "Coordinator Console literacy" in prompt
+        assert "Left sidebar — selection drives everything" in prompt
+        assert "Shared workspaces (Teams in the left sidebar)" in prompt
+        assert "Coordinator onboarding flow (UI reference)" in prompt
+        assert "Console knowledge\n-----------------" not in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -548,6 +560,14 @@ class TestConsoleKnowledge:
     def test_console_knowledge_absent_in_demo_mode(self):
         prompt = _build(demo_mode=True)
         assert "Console knowledge" not in prompt
+
+    def test_coordinator_uses_console_literacy_not_base_block(self):
+        prompt = _build(is_coordinator=True)
+        assert "Coordinator Console literacy" in prompt
+        assert "hover over my name in the left sidebar → ⋮ → **Secrets**" not in prompt
+        assert "Memory → Guidance" in prompt
+        assert "Secrets (on the Integrations tab)" in prompt
+        assert "Shared workspaces (Teams in the left sidebar)" in prompt
 
 
 # ---------------------------------------------------------------------------
