@@ -7,7 +7,7 @@ import uuid
 from pathlib import PurePath
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
 from unity.gateway.adapters.common import (
@@ -58,7 +58,7 @@ def _normalize_int_list(value: Any) -> list[int]:
 @router.post("/unify/attachment")
 async def unify_attachment_upload(
     file: UploadFile = File(...),
-    assistant_id: str | None = None,
+    assistant_id: str | None = Form(default=None),
     context: GatewayContext = Depends(get_gateway_context),
 ) -> dict[str, Any]:
     content = await file.read()
@@ -77,7 +77,9 @@ async def unify_attachment_upload(
         "id": attachment_id,
         "filename": filename,
         "url": url,
+        "signed_url": url,
         "storage_key": stored.key,
+        "gs_url": stored.key,
         "content_type": stored.content_type,
         "size_bytes": stored.size_bytes,
     }
