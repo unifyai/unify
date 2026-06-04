@@ -50,10 +50,17 @@ from unity.conversation_manager.cm_types.screenshot import (
 from unity.actor.base import BaseActor
 from unity.conversation_manager.domains.proactive_speech import ProactiveSpeech
 from unity.conversation_manager.medium_scripts.common import FastBrainLogger
+from unity.spending_limits import check_credit_gate_state
 
 MAX_CONV_MANAGER_MSGS = 50
 RECENT_TOOL_EXECUTIONS_LIMIT = 20
 RECENT_TOOL_PREVIEW_CHARS = 500
+CREDIT_GATE_REPLY_THROTTLE_SECONDS = 300
+DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE = (
+    "Your credits are depleted, so I can't continue helping with setup or tasks "
+    "until you top up. Please add credits in billing, then I'll pick this back up."
+)
+DEPLETED_CREDITS_EMAIL_SUBJECT = "Credits depleted"
 COMMISSIONING_MUTATION_TOOL_NAMES = frozenset(
     {
         "act",
@@ -275,8 +282,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         # LLM run requests recorded during event handling (production path).
         # In step() mode, requests are recorded via a contextvar instead.
-        self._pending_llm_requests: list[tuple[float, bool]] = []
-        self._pending_llm_request_meta: list[dict[str, str]] = []
+        self._pending_llm_requests: list[tuple[float, bool, bool]] = []
+        self._pending_llm_request_meta: list[dict[str, Any]] = []
         self._current_event_trace: dict[str, str] | None = None
         self._event_trace_seq: int = 0
         self._llm_request_seq: int = 0
@@ -284,6 +291,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self._llm_gen: int = 0
         self._outbound_suppress_gen: int = -1
         self._active_llm_trace_meta: dict[str, Any] | None = None
+        self._credit_gate_reply_sent_at: dict[tuple[str, str], float] = {}
         self._recent_tool_executions: list[dict[str, Any]] = []
         self._recent_commissioning_successes: dict[str, int] = {}
 
@@ -1222,12 +1230,178 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     await self._notify_fast_brain_of_slow_brain_failure(exc)
             raise
 
+    def _credit_gate_throttle_key(
+        self,
+        reply_context: dict[str, Any],
+    ) -> tuple[str, str]:
+        medium = str(reply_context.get("medium") or "")
+        target = (
+            reply_context.get("api_message_id")
+            or reply_context.get("channel_id")
+            or reply_context.get("chat_id")
+            or reply_context.get("contact_id")
+            or ""
+        )
+        return (medium, str(target))
+
+    def _credit_gate_reply_is_throttled(
+        self,
+        reply_context: dict[str, Any],
+    ) -> bool:
+        if reply_context.get("medium") == Medium.API_MESSAGE.value:
+            return False
+
+        throttle_key = self._credit_gate_throttle_key(reply_context)
+        last_sent_at = self._credit_gate_reply_sent_at.get(throttle_key)
+        now = self.loop.time()
+        if (
+            last_sent_at is not None
+            and now - last_sent_at < CREDIT_GATE_REPLY_THROTTLE_SECONDS
+        ):
+            return True
+
+        self._credit_gate_reply_sent_at[throttle_key] = now
+        return False
+
+    async def _send_credit_gate_reply(
+        self,
+        reply_context: dict[str, Any],
+    ) -> bool:
+        medium = reply_context.get("medium")
+        contact_id = reply_context.get("contact_id")
+        tools = ConversationManagerBrainActionTools(self)
+
+        previous_suppress_gen = self._outbound_suppress_gen
+        self._outbound_suppress_gen = self._llm_gen
+        try:
+            if medium == Medium.UNIFY_MESSAGE.value and contact_id is not None:
+                await tools.send_unify_message(
+                    contact_id=contact_id,
+                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                )
+            elif medium == Medium.SMS_MESSAGE.value and contact_id is not None:
+                await tools.send_sms(
+                    contact_id=contact_id,
+                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                )
+            elif medium == Medium.WHATSAPP_MESSAGE.value and contact_id is not None:
+                await tools.send_whatsapp(
+                    contact_id=contact_id,
+                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                )
+            elif medium == Medium.EMAIL.value:
+                email_id = reply_context.get("email_id")
+                if email_id:
+                    await tools.send_email(
+                        subject=DEPLETED_CREDITS_EMAIL_SUBJECT,
+                        body=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                        reply_all=True,
+                        email_id_to_reply_to=email_id,
+                    )
+                elif contact_id is not None:
+                    await tools.send_email(
+                        to=[contact_id],
+                        subject=DEPLETED_CREDITS_EMAIL_SUBJECT,
+                        body=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                    )
+                else:
+                    return False
+            elif medium == Medium.API_MESSAGE.value:
+                await tools.send_api_response(
+                    contact_id=contact_id or SESSION_DETAILS.boss_contact_id,
+                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                    tags=reply_context.get("tags"),
+                )
+            elif medium == Medium.DISCORD_MESSAGE.value and contact_id is not None:
+                await tools.send_discord_message(
+                    contact_id=contact_id,
+                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                )
+            elif medium == Medium.DISCORD_CHANNEL_MESSAGE.value and reply_context.get(
+                "channel_id",
+            ):
+                await tools.send_discord_channel_message(
+                    channel_id=reply_context["channel_id"],
+                    guild_id=reply_context.get("guild_id") or "",
+                    contact_id=contact_id,
+                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                )
+            elif medium == Medium.SLACK_MESSAGE.value and contact_id is not None:
+                await tools.send_slack_message(
+                    contact_id=contact_id,
+                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                    team_id=reply_context.get("team_id") or "",
+                    thread_ts=reply_context.get("thread_ts"),
+                )
+            elif medium == Medium.SLACK_CHANNEL_MESSAGE.value and reply_context.get(
+                "channel_id",
+            ):
+                await tools.send_slack_channel_message(
+                    channel_id=reply_context["channel_id"],
+                    team_id=reply_context.get("team_id") or "",
+                    thread_ts=reply_context.get("thread_ts"),
+                    contact_id=contact_id,
+                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                )
+            elif medium == Medium.TEAMS_MESSAGE.value and contact_id is not None:
+                await tools.send_teams_message(
+                    contact_id=contact_id,
+                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                    chat_id=reply_context.get("chat_id"),
+                )
+            elif medium == Medium.TEAMS_CHANNEL_MESSAGE.value and reply_context.get(
+                "channel_id",
+            ):
+                await tools.send_teams_message(
+                    contact_id=contact_id or SESSION_DETAILS.boss_contact_id,
+                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                    channel_id=reply_context.get("channel_id"),
+                    team_id=reply_context.get("team_id"),
+                )
+            else:
+                return False
+        finally:
+            self._outbound_suppress_gen = previous_suppress_gen
+
+        return True
+
+    async def _maybe_handle_depleted_credit_gate(
+        self,
+        trace_meta: dict[str, Any],
+    ) -> bool:
+        reply_context = trace_meta.get("credit_gate_reply_context")
+        if not reply_context:
+            return False
+
+        credit_gate_state = await check_credit_gate_state()
+        if credit_gate_state.allowed:
+            return False
+
+        if self._credit_gate_reply_is_throttled(reply_context):
+            self._session_logger.info(
+                "credit_gate",
+                "Skipped repeated depleted-credit reply",
+            )
+            return True
+
+        sent = await self._send_credit_gate_reply(reply_context)
+        self._session_logger.info(
+            "credit_gate",
+            (
+                "Served depleted-credit reply"
+                if sent
+                else "Skipped depleted-credit reply without a deliverable channel"
+            ),
+        )
+        return True
+
     async def request_llm_run(
         self,
         delay=0,
         cancel_running=False,
         triggering_contact_id: int | None = None,
         is_user_origin: bool = False,
+        credit_gate_reply_context: dict[str, Any] | None = None,
     ) -> None:
         """Request an LLM run.
 
@@ -1244,6 +1418,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "triggering_contact_id": triggering_contact_id,
             "is_user_origin": is_user_origin,
         }
+        if credit_gate_reply_context is not None:
+            request_meta["credit_gate_reply_context"] = credit_gate_reply_context
         self._pending_llm_requests.append((delay, cancel_running, is_user_origin))
         self._pending_llm_request_meta.append(request_meta)
         log_startup_timing(
@@ -1327,6 +1503,19 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 f"cancel_running={cancel_running} is_user_origin={is_user_origin}"
             ),
         )
+        if await self._maybe_handle_depleted_credit_gate(selected_meta):
+            log_startup_timing(
+                LOGGER,
+                (
+                    "⏱️ [StartupTiming] first_reply.credit_gate_blocked "
+                    "run_id=%s request_id=%s origin_event=%s"
+                ),
+                run_id,
+                selected_meta.get("request_id", "-") or "-",
+                selected_meta.get("origin_event_name", "-") or "-",
+            )
+            return
+
         log_startup_timing(
             LOGGER,
             (
