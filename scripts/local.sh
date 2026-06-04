@@ -16,6 +16,7 @@
 #   ./scripts/local.sh start --full       # Force full CM (fails without keys)
 #   ./scripts/local.sh stop               # Stop Unity process
 #   ./scripts/local.sh status             # Show status
+#   ./scripts/local.sh gateway-doctor     # Run gateway config checks
 #   ./scripts/local.sh check              # Quick check (returns 0 if running)
 #
 # Environment (all optional — sensible defaults for local testing):
@@ -160,6 +161,15 @@ gateway_base_url() {
   fi
 }
 
+run_gateway_doctor() {
+  cd "$UNITY_REPO_PATH"
+  local python_cmd
+  python_cmd="$(get_python)"
+  local public_url_args=()
+  [[ -n "$GATEWAY_PUBLIC_URL" ]] && public_url_args=(--public-url "$GATEWAY_PUBLIC_URL")
+  "$python_cmd" -m unity.gateway doctor "${public_url_args[@]}"
+}
+
 describe_comms_backend() {
   if [[ "$LOCAL_COMMS_ENABLED" == "true" || "$LOCAL_COMMS_MODE" == "local" ]]; then
     echo "local gateway ($(gateway_base_url))"
@@ -216,6 +226,13 @@ start_gateway() {
     return 1
   fi
   log_success "Unity gateway running (PID $pid)"
+  log_info "Gateway URL: $(gateway_base_url)"
+  log_info "Local ingress URL: $(local_comms_base_url)"
+  if [[ -n "$GATEWAY_PUBLIC_URL" ]]; then
+    log_info "Public callback URL: $GATEWAY_PUBLIC_URL"
+  else
+    log_warn "Public callback URL not set. Use UNITY_GATEWAY_PUBLIC_URL for provider webhooks."
+  fi
 }
 
 # =============================================================================
@@ -383,6 +400,12 @@ cmd_start() {
   else
     echo "  Comms:      $(describe_comms_backend)"
     echo "  Gateway:    $(gateway_base_url)"
+    echo "  Ingress:    $(local_comms_base_url)"
+    if [[ -n "$GATEWAY_PUBLIC_URL" ]]; then
+      echo "  Callbacks:  $GATEWAY_PUBLIC_URL"
+    else
+      echo "  Callbacks:  not set (export UNITY_GATEWAY_PUBLIC_URL)"
+    fi
   fi
   echo "  Log:        $LOGFILE"
   echo ""
@@ -440,6 +463,16 @@ cmd_status() {
     else
       echo "  Gateway:   not running ($(gateway_base_url))"
     fi
+    echo "  Ingress:   $(local_comms_base_url)"
+    if [[ -n "$GATEWAY_PUBLIC_URL" ]]; then
+      echo "  Callbacks: $GATEWAY_PUBLIC_URL"
+    else
+      echo "  Callbacks: not set (export UNITY_GATEWAY_PUBLIC_URL)"
+    fi
+    echo ""
+    echo "Gateway Doctor"
+    echo "--------------"
+    run_gateway_doctor || true
   fi
   echo "  Log:       $LOGFILE"
   echo ""
@@ -449,6 +482,10 @@ cmd_check() {
   is_running
 }
 
+cmd_gateway_doctor() {
+  run_gateway_doctor
+}
+
 cmd_help() {
   echo "Usage: $0 [command] [options]"
   echo ""
@@ -456,6 +493,8 @@ cmd_help() {
   echo "  start     Start Unity locally (auto-detects mode)"
   echo "  stop      Stop Unity"
   echo "  status    Show status"
+  echo "  gateway-doctor"
+  echo "            Run gateway config checks"
   echo "  check     Quick check (exit 0 if running)"
   echo ""
   echo "Start Options:"
@@ -474,6 +513,7 @@ cmd_help() {
   echo "  UNITY_CONVERSATION_LOCAL_COMMS_MODE     local|hosted"
   echo "  UNITY_CONVERSATION_LOCAL_COMMS_HOST     Local ingress bind host"
   echo "  UNITY_CONVERSATION_LOCAL_COMMS_PORT     Local ingress bind port"
+  echo "  UNITY_GATEWAY_PUBLIC_URL                Public HTTPS callback URL"
   echo "  UNITY_COMMS_URL                         Hosted comms service URL"
   echo "  PUBSUB_EMULATOR_HOST                    Pub/Sub host for echo mode"
   echo "  GCP_PROJECT_ID                          Project ID for echo mode"
@@ -497,6 +537,7 @@ main() {
     start)   cmd_start "$@" ;;
     stop)    cmd_stop ;;
     status)  cmd_status ;;
+    gateway-doctor) cmd_gateway_doctor ;;
     check)   cmd_check ;;
     help|--help|-h) cmd_help ;;
     *)
