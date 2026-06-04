@@ -808,25 +808,20 @@ class OutboundWhatsAppCallUtterance(Event):
 class FastBrainNotification(Event):
     """Notification delivered to the fast brain during a voice call.
 
-    When should_speak is True, response_text contains the exact text the fast
-    brain should utter via session.say(), bypassing its own LLM. When
-    should_speak is False, the fast brain absorbs the notification silently
-    and must NOT speak in response.
+    ``message`` is injected as silent ``[notification]`` context for non-proactive
+    sources. When ``should_speak`` is True, the fast brain speaks
+    ``spoken_message`` if set, otherwise ``message``, verbatim via TTS.
     """
 
     topic: ClassVar[str | None] = "app:comms:assistant_notification"
 
     contact: dict
-    content: str
-    response_text: str = ""
+    message: str = ""
     should_speak: bool = False
+    spoken_message: str = ""
     source: str = ""
     agent_service_url: str = ""
     llm_log_path: str = ""
-
-
-# Backward-compatible alias for deserialization of persisted events.
-CallGuidance = FastBrainNotification
 
 
 @dataclass

@@ -283,14 +283,11 @@ class TestSlowBrainDecisionBoundaries:
             ConversationManagerBrainActionTools.guide_voice_agent,
         )
         assert (
-            "content" in guide_sig.parameters
-        ), "guide_voice_agent() must accept a content parameter"
+            "message" in guide_sig.parameters
+        ), "guide_voice_agent() must accept a message parameter"
         assert (
             "should_speak" in guide_sig.parameters
         ), "guide_voice_agent() must accept a should_speak parameter"
-        assert (
-            "response_text" in guide_sig.parameters
-        ), "guide_voice_agent() must accept a response_text parameter"
 
         # wait() should NOT have call_guidance params (moved to standalone tool)
         wait_sig = inspect.signature(ConversationManagerBrainActionTools.wait)
@@ -345,7 +342,7 @@ class TestSlowBrainAppropriateGuidance:
         # Manually publish a data-provision guidance (this is appropriate)
         guidance = FastBrainNotification(
             contact=boss_contact,
-            content="The meeting time mentioned in the earlier SMS was 3pm on Thursday",
+            message="The meeting time mentioned in the earlier SMS was 3pm on Thursday",
         )
         result = await initialized_cm.step(guidance)
 
@@ -380,7 +377,7 @@ class TestSlowBrainAppropriateGuidance:
         # Manually publish a notification guidance (this is appropriate)
         guidance = FastBrainNotification(
             contact=boss_contact,
-            content="SMS just received from Alice: 'Running 10 minutes late'",
+            message="SMS just received from Alice: 'Running 10 minutes late'",
         )
         result = await initialized_cm.step(guidance)
 
@@ -627,13 +624,13 @@ class TestRapidUtteranceHandling:
 
 
 # =============================================================================
-# Test: guide_voice_agent SPEAK mode — should_speak + response_text pipeline
+# Test: guide_voice_agent SPEAK mode — should_speak + message pipeline
 # =============================================================================
 
 
 @pytest.mark.asyncio
 class TestFastBrainNotificationSpeakMode:
-    """Verify that guide_voice_agent's should_speak and response_text
+    """Verify that guide_voice_agent's should_speak and message
     parameters propagate correctly through the FastBrainNotification event to the
     fast brain."""
 
@@ -642,7 +639,7 @@ class TestFastBrainNotificationSpeakMode:
         initialized_cm,
     ):
         """When the slow brain calls guide_voice_agent with should_speak=True
-        and response_text, the published FastBrainNotification event must carry both
+        and message, the published FastBrainNotification event must carry both
         fields so the fast brain can speak via TTS."""
         import json
 
@@ -688,8 +685,8 @@ class TestFastBrainNotificationSpeakMode:
                 "should_speak" in guide_sig.parameters
             ), "guide_voice_agent() must accept should_speak"
             assert (
-                "response_text" in guide_sig.parameters
-            ), "guide_voice_agent() must accept response_text"
+                "message" in guide_sig.parameters
+            ), "guide_voice_agent() must accept message"
 
             # Verify published guidance events carry the fields (even if
             # the LLM didn't use them this turn, the schema must support them)
@@ -699,8 +696,8 @@ class TestFastBrainNotificationSpeakMode:
                     "should_speak" in payload
                 ), f"FastBrainNotification event missing should_speak field: {payload}"
                 assert (
-                    "response_text" in payload
-                ), f"FastBrainNotification event missing response_text field: {payload}"
+                    "message" in payload
+                ), f"FastBrainNotification event missing message field: {payload}"
 
         finally:
             cm.event_broker.publish = original_publish
@@ -1137,9 +1134,7 @@ class TestSpeechDedupGateInSpeechFlow:
 
             for event_data in published:
                 payload = event_data.get("payload", event_data)
-                if payload.get("source") == "slow_brain" and payload.get(
-                    "response_text",
-                ):
+                if payload.get("source") == "slow_brain" and payload.get("message"):
                     assert payload.get("should_speak") is True, (
                         "The slow brain should pass should_speak=True through "
                         "unmodified; dedup is now a fast-brain concern.\n"

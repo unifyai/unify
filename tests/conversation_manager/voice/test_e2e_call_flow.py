@@ -263,7 +263,7 @@ class TestEndToEndCallFlow:
 
             guidance_event = FastBrainNotification(
                 contact=sample_contact,
-                content="Ask the caller about their schedule for next week",
+                message="Ask the caller about their schedule for next week",
             )
 
             # Publish guidance - this should be forwarded to subprocess via IPC
@@ -279,7 +279,7 @@ class TestEndToEndCallFlow:
                 for channel, event_json in events_from_subprocess:
                     if channel == "app:call:ack":
                         data = json.loads(event_json)
-                        if "schedule" in data.get("received_content", ""):
+                        if "schedule" in data.get("received_message", ""):
                             ack_received = True
                             break
                 if ack_received:
@@ -736,7 +736,7 @@ class TestEventChannelRouting:
 
         guidance = FastBrainNotification(
             contact=sample_contact,
-            content="Ask about their schedule",
+            message="Ask about their schedule",
         )
 
         received_on_channel = None
@@ -905,7 +905,7 @@ class TestIPCBidirectionalCommunication:
                 "app:call:notification",
                 FastBrainNotification(
                     contact=sample_contact,
-                    content="First guidance message",
+                    message="First guidance message",
                 ).to_json(),
             )
 
@@ -916,7 +916,7 @@ class TestIPCBidirectionalCommunication:
                 for channel, event_json in events_from_subprocess:
                     if channel == "app:call:ack":
                         data = json.loads(event_json)
-                        if "First guidance" in data.get("received_content", ""):
+                        if "First guidance" in data.get("received_message", ""):
                             ack_received = True
                             break
                 if ack_received:

@@ -1475,9 +1475,8 @@ class ConversationManagerBrainActionTools:
     async def guide_voice_agent(
         self,
         *,
-        content: str,
+        message: str,
         should_speak: bool = False,
-        response_text: str = "",
     ) -> dict[str, Any]:
         """
         Relay information or trigger speech on the Voice Agent during a live call.
@@ -1488,45 +1487,34 @@ class ConversationManagerBrainActionTools:
 
         **On internal calls** (calls with colleagues / system contacts), the
         Voice Agent already receives system events (action progress, completions,
-        results) as silent context automatically. You do not need to relay event
-        content — it is already visible. Use this tool only for the **speech
-        decision**: call with ``should_speak=True`` and ``response_text`` when
-        the caller should hear something, or omit the tool to stay silent.
+        results) as silent context automatically. You do not need to repeat event
+        bodies in ``message`` — use this tool for the **speech decision** when
+        the caller should hear a concise spoken line now.
 
         **On external calls** (calls with non-system contacts), the Voice Agent
-        has no visibility into system events. Use this tool to relay information
-        via ``content`` (silent context injection) and optionally speak via
-        ``should_speak=True`` + ``response_text``.
+        has no visibility into system events. Use ``message`` to relay what it
+        should know and optionally speak.
 
         **Modes:**
 
-        1. **SPEAK** — Provide exact text to speak aloud immediately via TTS,
-           bypassing the Voice Agent's LLM. Set ``should_speak=True`` and provide
-           ``response_text``. Use when the caller should hear concrete data,
-           completion confirmations, or results now.
+        1. **SPEAK** — ``should_speak=True`` with ``message`` set to the exact
+           spoken line. The same text is injected as silent context and spoken
+           verbatim via TTS.
 
-        2. **NOTIFY** (default) — Provide context for the Voice Agent as a
-           silent background reference for its next turn. Use for supplementary
-           context or information the Voice Agent may need but that does not
-           warrant immediate speech.
+        2. **NOTIFY** (default) — ``should_speak=False``. Inject ``message`` as
+           silent background context for the Voice Agent's next user-initiated turn.
 
         3. **BLOCK** — Do not call this tool at all.
 
-        Write ``content`` and ``response_text`` in the language currently spoken
-        on the call.
+        Write ``message`` in the language currently spoken on the call.
 
         Args:
-            content: Context to inject into the Voice Agent's conversation.
-                On internal calls this can be brief or empty (events are already
-                visible). On external calls this is the primary relay mechanism.
-            should_speak: When True, ``response_text`` is spoken aloud via TTS.
-                Use for concrete data answers, completion confirmations, or
-                notifications the caller should hear immediately.
-            response_text: Exact text to speak aloud when ``should_speak`` is
-                True. Must be concise (1-2 sentences), natural, first person,
-                and **spoken prose** (no numbered lists, bullets, or outline
-                labels — TTS reads them literally). Leave empty when
-                ``should_speak`` is False.
+            message: Text for the Voice Agent. Injected as silent context unless
+                the source is proactive speech. When ``should_speak`` is True,
+                this exact text is also spoken via TTS. Use **spoken prose** (no
+                numbered lists, bullets, or outline labels — TTS reads them
+                literally).
+            should_speak: When True, speak ``message`` aloud immediately via TTS.
         """
         return {"status": "guidance_noted"}
 
@@ -1767,7 +1755,7 @@ class ConversationManagerBrainActionTools:
                 await event_broker.publish(
                     "app:call:notification",
                     FastBrainNotification(
-                        content=f"Ask dispatched on action: {_param_value[:200]}",
+                        message=f"Ask dispatched on action: {_param_value[:200]}",
                         source="system",
                         contact={},
                     ).to_json(),
@@ -1889,7 +1877,7 @@ class ConversationManagerBrainActionTools:
                             await event_broker.publish(
                                 "app:call:notification",
                                 FastBrainNotification(
-                                    content=f"Ask dispatched on action: {_param_value[:200]}",
+                                    message=f"Ask dispatched on action: {_param_value[:200]}",
                                     source="system",
                                     contact={},
                                 ).to_json(),

@@ -271,7 +271,7 @@ class TestVoiceHydration:
         events = [
             FastBrainNotification(
                 contact=ALICE,
-                content="Mention the 3pm meeting",
+                message="Mention the 3pm meeting",
                 timestamp=BASE_TIME,
             ),
         ]

@@ -362,7 +362,7 @@ async def _queue_fast_brain_task_context(
         return
     notification = FastBrainNotification(
         contact=contact or getattr(cm.call_manager, "_disconnect_contact", None) or {},
-        content=content,
+        message=content,
         should_speak=False,
         source=source,
     )
