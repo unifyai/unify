@@ -51,6 +51,8 @@ _PRIMARY_LLM_CONFIG = {
 _SECONDARY_SMOKE_SCENARIOS = {
     "intro-logistics-founder",
     "regular-assistant-defers-renewal-desk",
+    "colleague-guidance-navigation",
+    "integrations-secrets-semantics",
 }
 
 _COORDINATOR_TOOLS = tuple(COORDINATOR_TOOL_METHOD_NAMES)
@@ -673,7 +675,7 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
         ),
         screen_context=(
             "The user is looking at an empty Console sidebar and a right pane with "
-            "Chat, Tasks, Memory, Secrets, and Actions."
+            "Chat, Actions, Integrations, Tasks, and Memory."
         ),
         turns=(
             DialogueTurn(
@@ -886,7 +888,7 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
         rubric=(
             "The response should identify a Revenue Ops colleague as the owner of "
             "scheduled summaries and triggered support pings. It should route HubSpot "
-            "tokens to the colleague or shared-space Secrets tab, refuse credential "
+            "tokens to the colleague's Integrations tab (secrets table), refuse credential "
             "paste/readout in chat, ask one prioritized discovery question or name the "
             "next checks about access, freshness, and a first validation read, and "
             "avoid saying the Coordinator itself will run the recurring work. It "
@@ -904,8 +906,8 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
             "before doing setup."
         ),
         screen_context=(
-            "A colleague is selected. The right pane shows Chat, Tasks, Dashboards, "
-            "Memory, Secrets, and Actions. The user has not asked to create anything."
+            "A colleague is selected. The right pane shows Chat, Actions, Dashboards, "
+            "Integrations, Tasks, and Memory. The user has not asked to create anything."
         ),
         turns=(
             DialogueTurn(
@@ -931,11 +933,113 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
         ),
         rubric=(
             "The response should orient the user without performing setup. It should "
-            "map supplier/API credentials to Secrets, manuals and SOPs to Memory or "
-            "Guidance, recurring checklists to Tasks, and reports to Dashboards when "
-            "needed. It should connect NetSuite/Fiix setup to future colleague "
-            "ownership and avoid inventing unsupported UI."
+            "map supplier/API credentials to the Integrations tab (secrets table / "
+            "app connects) for the selected assistant, manuals and SOPs to Memory "
+            "(Knowledge or Guidance), recurring checklists to Tasks, and reports to "
+            "Dashboards when needed. It should connect NetSuite/Fiix setup to "
+            "future colleague ownership and avoid inventing unsupported UI."
         ),
+    ),
+    CoordinatorScenario(
+        scenario_id="colleague-guidance-navigation",
+        title="Navigate to a colleague's Guidance",
+        business_context=(
+            "The user is in the Console with Coordinator selected. They want to see "
+            "playbooks stored for a hired colleague named Priya, not for the "
+            "Coordinator."
+        ),
+        screen_context=(
+            "Coordinator (swirl logo) is selected in the left sidebar. Under Teams, "
+            "Priya Shah appears in the Ops workspace. Top tabs include Memory with "
+            "sub-views Contacts, Transcripts, Knowledge, Guidance, and Functions."
+        ),
+        turns=(
+            DialogueTurn(
+                "user",
+                "I just saw you store guidance during that last job. Where do I open "
+                "Priya's guidance — is it under the Coordinator or under her?",
+                new=True,
+            ),
+        ),
+        masked_components=(
+            "No tool-call history is supplied.",
+            "The user has not shared their screen yet.",
+        ),
+        rubric=(
+            "The response should explain that Guidance is per assistant: click Priya "
+            "in the left sidebar first, then open Memory and Guidance (or the Memory "
+            "menu → Guidance). It should clarify that Coordinator-selected Memory "
+            "shows Coordinator guidance, not Priya's. It may offer a brief screen-share "
+            "walkthrough. It should not claim a single org-wide Guidance view or tell "
+            "the user to paste guidance in chat."
+        ),
+        forbidden_tools=frozenset({"act", "create_assistant", "delegate_to_colleague"}),
+    ),
+    CoordinatorScenario(
+        scenario_id="integrations-secrets-semantics",
+        title="Integrations tab and Secrets semantics",
+        business_context=(
+            "The user is onboarding and needs to store a HubSpot private-app token "
+            "for the Coordinator without pasting it in chat."
+        ),
+        screen_context=(
+            "Coordinator is selected in the left sidebar. The Integrations tab is "
+            "open with a Search secrets field, + Add new, and a table of secret "
+            "names and descriptions."
+        ),
+        turns=(
+            DialogueTurn(
+                "user",
+                "Where do I put the HubSpot token, and what is the Secrets section "
+                "actually for?",
+                new=True,
+            ),
+        ),
+        masked_components=("The actual token value is withheld.",),
+        rubric=(
+            "The response should explain that credential storage lives on the "
+            "**Integrations** tab for the selected assistant (Coordinator here): "
+            "runtime secrets the assistant uses, not **Memory** and not chat. It "
+            "should give a concrete path (Coordinator selected on the left → "
+            "**Integrations** → HubSpot tile or **+ Add new**) and refuse to receive "
+            "the token in chat or voice. It should offer screen-share guidance. "
+            "Describing a secrets table or section on **Integrations** is fine; fail "
+            "only if it invents a separate top-level **Secrets** tab."
+        ),
+        forbidden_tools=frozenset({"act"}),
+    ),
+    CoordinatorScenario(
+        scenario_id="onboarding-live-task-actions-tour",
+        title="Onboarding live task points to Actions",
+        business_context=(
+            "The user is mid Coordinator onboarding on a voice call and just handed "
+            "off a one-off research task."
+        ),
+        screen_context=(
+            "Onboarding checklist visible on the right; Coordinator selected on the "
+            "left. The user is on a live call with no separate text chat pane."
+        ),
+        turns=(
+            DialogueTurn(
+                "user",
+                "Okay — search the web for today's gold spot price and tell me when "
+                "you have it.",
+                new=True,
+            ),
+        ),
+        masked_components=(
+            "No actor completion notification is supplied yet.",
+            "The act step may already be marked in progress.",
+        ),
+        rubric=(
+            "The response should start the live task with `act` and may choose to send a short "
+            "user-visible line (chat message in this scenario) that acknowledges the "
+            "request and tells the user to watch the **Actions** tab for live progress. "
+            "It may offer screen share to find Actions. It should not dump the whole "
+            "onboarding checklist."
+        ),
+        forbidden_tools=frozenset(),
+        required_tools=frozenset({"act"}),
     ),
     CoordinatorScenario(
         scenario_id="freight-samsara-integration",
@@ -976,7 +1080,8 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
         ),
         rubric=(
             "The response should refuse to receive the token in chat or voice, route "
-            "it to the Cold Chain Ops colleague or operations-space Secrets tab, and "
+            "it to the Cold Chain Ops colleague or that colleague's Integrations tab "
+            "(secrets table), and "
             "propose a concrete first validation read such as active refrigerated "
             "shipments with temperature, target range, ETA, and exception flags. It "
             "should preserve Samsara as the trigger source and not say the Coordinator "
@@ -1063,8 +1168,8 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
             "The response should offer both safe setup paths: a guided screen-share "
             "walkthrough if the user wants handholding, and a direct self-serve path "
             "for a technical user to add an API key in the owning Renewal Desk "
-            "colleague's Secrets tab, or in a shared-space Secrets surface only if "
-            "that shared scope is the right owner and the surface is available. It "
+            "colleague's Integrations tab (secrets table), or a shared-space "
+            "Integrations surface only if that shared scope is the right owner. It "
             "should refuse pasted keys or token readout in chat, explain that OAuth "
             "consent must be completed by the user in the browser, distinguish OAuth "
             "from long-lived API-key storage, and name a first read-only Salesforce "
@@ -1598,6 +1703,7 @@ def _fake_conversation_manager(scenario: CoordinatorScenario) -> SimpleNamespace
         assistant_email="",
         assistant_whatsapp_number="",
         assistant_discord_bot_id="",
+        assistant_slack_bot_user_id="",
         assistant_has_teams=False,
         space_summaries=list(scenario.space_summaries),
     )

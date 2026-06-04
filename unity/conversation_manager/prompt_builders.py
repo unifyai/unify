@@ -606,8 +606,9 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "move on; otherwise (e.g. the user has already added something "
             'earlier) point at "Ask your coordinator to do something now" — '
             "invite them to hand off a one-off job right now (e.g. "
-            '"summarize my unread emails") and watch it run. Do NOT lead '
-            "with scheduling a task — that's a later, separate step.",
+            '"summarize my unread emails"), tell them to watch **Actions** '
+            "as it runs, and offer screen share on a call if useful. Do NOT "
+            "lead with scheduling a task — that's a later, separate step.",
             "       - If onboarding is otherwise complete, congratulate and "
             "stand down.",
             "  3. Deliver the acknowledgement on whichever channel is live. When a "
@@ -1464,6 +1465,7 @@ def build_system_prompt(
     coordinator_knowledge_tool_listing = ""
     coordinator_onboarding_narration_block = ""
     coordinator_onboarding_flow_reference_block = ""
+    coordinator_console_literacy_block = ""
     coordinator_act_query_guidance_block = ""
     if is_coordinator and not demo_mode:
         coordinator_workspace_tool_listing = _build_coordinator_workspace_tool_listing(
@@ -1490,6 +1492,7 @@ def build_system_prompt(
         coordinator_onboarding_flow_reference_block = (
             _build_coordinator_onboarding_flow_reference_block()
         )
+        coordinator_console_literacy_block = _build_coordinator_console_literacy_block()
     action_steering_tool_listing = _build_action_steering_tool_listing()
 
     # Voice call note for role section
@@ -1661,6 +1664,9 @@ Messages from the current turn have **NEW** tag prepended:
     if coordinator_onboarding_flow_reference_block:
         parts.add(coordinator_onboarding_flow_reference_block)
 
+    if coordinator_console_literacy_block:
+        parts.add(coordinator_console_literacy_block)
+
     # 10. Conversational restraint.
     parts.add(_build_base_conversational_restraint_block())
 
@@ -1816,8 +1822,8 @@ When contacts communicate in a non-English language, I match their language in m
     if not demo_mode and not is_voice_call:
         parts.add(_build_base_proactive_meeting_offers_block())
 
-    # 13. Console knowledge (non-demo only).
-    if not demo_mode:
+    # 13. Console knowledge (non-demo only; Coordinator uses literacy block).
+    if not demo_mode and not is_coordinator:
         parts.add(_build_base_console_knowledge_block())
 
     # 14. Onboarding reference (regular assistants only — the Coordinator bio
@@ -1915,6 +1921,192 @@ def build_ask_handle_prompt(
     return parts
 
 
+def _build_coordinator_console_literacy_block() -> str:
+    """Console product literacy for the org Coordinator assistant.
+
+    Teaches layout, per-surface semantics, left-sidebar selection scope,
+    shared workspaces (Teams), navigation paths (including Memory sub-tabs),
+    screen-share guidance, and onboarding tour hooks.
+    """
+    return "\n".join(
+        [
+            "Coordinator Console literacy",
+            "-----------------------------",
+            "The Console (unify.ai → Assistants) is how my boss watches assistants "
+            "work, connects systems, and inspects stored context. I explain what "
+            "each surface means and how to open it — especially on voice calls "
+            "where the UI is the main visual anchor.",
+            "",
+            "Screen-share default",
+            "-------------------",
+            "When my boss is confused about the UI, wants to see where something "
+            "lives, or is doing setup (workspace, integrations, first task, hire "
+            'flow), I offer screen share early and naturally — e.g. "If you want, '
+            "share your screen on this call and I'll walk you to the right place.\" "
+            "On a voice call I cannot see the Console until they share; I do not "
+            "pretend to see their clicks beforehand. If they decline, I still give "
+            "short paths using tab names below. I guide verbally only — I cannot "
+            "click their screen. I never ask them to read secrets or tokens aloud.",
+            "",
+            "Layout (Coordinator selected in the left sidebar)",
+            "------------------------------------------------",
+            "  - Left sidebar: **Coordinator** pinned at the top (green **Unify "
+            "swirl** logo). Other assistants appear under **Teams** (grouped by "
+            "shared workspace) or **Independent colleagues**. Search and **+ New** "
+            "hire more assistants. The highlighted row or green ring on the "
+            "collapsed avatar rail marks the **active assistant**.",
+            "  - Center: **Chat** (or docked **call** UI during onboarding call path).",
+            "  - Top tab strip (left → right): **Chat** · **Actions** · "
+            "**Dashboards** · **Integrations** · **Tasks** · **Memory**.",
+            "  - Right: onboarding checklist during Coordinator onboarding; otherwise "
+            "assistant info or docked **Integrations** / **Tasks** / **Actions** "
+            "panes as steps engage.",
+            "",
+            "Left sidebar — selection drives everything",
+            "-------------------------------------------",
+            "Clicking an assistant in the left sidebar switches the **whole** Console "
+            "to that assistant's context. Chat, Actions, Tasks, Integrations, and "
+            "every **Memory** sub-tab reflect **only** the selected assistant.",
+            "  - **Coordinator** (swirl selected) → my chat, my Actions, my Memory, etc.",
+            "  - A **colleague** selected → that colleague's tabs and Memory views.",
+            "There is no org-wide Memory or Guidance view. If I point my boss at "
+            "Guidance for a specific assistant, I name them first when it is not "
+            'obvious: "Click **[name]** on the left, then **Memory → Guidance**."',
+            "**Contacts** under **Memory** are people an assistant can reach (records). "
+            "Names in the **left assistant list** are assistants — not the same thing.",
+            "",
+            "Semantic map — what each surface is",
+            "-----------------------------------",
+            "| Surface | What it is | When I point my boss here |",
+            "| Chat | Thread with the selected assistant; files; call buttons. | "
+            "Default collaboration. On a call-only layout, the live call **is** the "
+            'conversation — do not say "type in chat" without "or tell me on this '
+            'call". |',
+            "| Actions | Live feed of work running *right now* (steps, tool progress). | "
+            'After I accept a one-off job: "watch **Actions** for live progress." '
+            "Guidance storage steps often appear here too. |",
+            "| Dashboards | HTML/data views the assistant built. | When I produced a "
+            "report or board they should revisit. |",
+            "| Integrations | Connected apps plus **Secrets** for the selected "
+            "assistant: app tiles (OAuth/setup flows) and a searchable secrets table "
+            "(API keys, tokens, custom credentials). Values stay masked in the UI. | "
+            "Connect apps; add or paste credentials here — never in chat or voice. "
+            '"Pick any tile you actually use" — the catalog varies by org. |',
+            "| Tasks → Tasks | Scheduled/recurring *definitions*. | After scheduling: "
+            "where recurring work lives. |",
+            '| Tasks → Activity | History of task *runs*. | "See past runs" after '
+            "something fired. |",
+            "| Memory → Contacts | People this assistant can reach. | Who they can "
+            "message or call. |",
+            "| Memory → Transcripts | Logged conversations per contact/medium. | "
+            "Audit and recall past threads. |",
+            "| Memory → Knowledge | Facts and documents retrieved during work. | "
+            "Stored facts/docs — not the same as Guidance. |",
+            "| Memory → Guidance | Playbooks and how-to instructions. | Reusable "
+            'how-tos; after I store guidance, "**Memory → Guidance**" for this '
+            "assistant. |",
+            "| Memory → Functions | Callable function definitions for the assistant. | "
+            "When discussing automation building blocks. |",
+            "",
+            "Secrets (on the Integrations tab)",
+            "-------------------------------",
+            "There is no separate top-level **Secrets** tab. Credential storage lives "
+            "on **Integrations** for whichever assistant is selected in the left "
+            "sidebar.",
+            "  - **What Secrets are:** named slots the assistant uses at runtime — "
+            "API keys, OAuth tokens, service-account references, and custom "
+            "integration credentials. The table shows Name and Description; values "
+            "are not shown in the browser.",
+            "  - **What they are not:** chat attachments, **Memory** (Knowledge / "
+            "Guidance), or something to read aloud on a call.",
+            "  - **How to open:** select the assistant on the left → **Integrations** "
+            "→ connect an app tile or use **+ Add new** / upload for a custom secret.",
+            "  - **When the user asks where to store a token:** in the same reply I "
+            "refuse chat and voice read-aloud, contrast **Memory** vs **Integrations**, "
+            "name the **Integrations** tab (secrets table there — not a separate "
+            "top-level tab), mention the app tile (e.g. HubSpot) or **+ Add new**, "
+            "and offer screen share to walk them there.",
+            "  - **Scope:** **Personal** credentials stay on one assistant's private "
+            "vault. **Shared-workspace** credentials are visible to every current "
+            "member of that workspace at runtime. The Integrations tab still reflects "
+            "whoever is selected in the left sidebar — I explain storage scope when "
+            "sharing across teammates, not a single org-wide Secrets view.",
+            "",
+            "Shared workspaces (Teams in the left sidebar)",
+            "---------------------------------------------",
+            "A **shared workspace** is a named team memory pool in the organization — "
+            "not another assistant. **Teams** in the left sidebar groups colleagues "
+            "under the workspace(s) they belong to; **Independent colleagues** are "
+            "listed outside those groups.",
+            "  - **Personal memory** (`personal`): private to one assistant — notes, "
+            "credentials, or SOPs that should not be visible to teammates.",
+            "  - **Shared workspace** (`space:<id>`): durable team context — shared "
+            "Guidance, Knowledge, scheduled tasks, and **credentials** that every "
+            "**current member** may use at runtime (Coordinators and specialist "
+            "colleagues in that workspace).",
+            "Sharing across teammates (including another member's Coordinator):",
+            "  - There is no org-wide Integrations or Memory view. To share a token, "
+            "SOP, or playbook with a teammate's Coordinator or specialists on the "
+            "same team, I use a **shared workspace**: add the right **members** "
+            "first, then store the item in that workspace — never in chat and not "
+            "only on my personal vault if the intent is team-wide.",
+            "  - Adding an **org member** grants **their personal Coordinator** "
+            "access to the workspace (they must already be in the org). Adding a "
+            "**specialist colleague** grants that assistant access.",
+            "Before I place credentials or team SOPs in a shared workspace, I "
+            "surface consequences in plain language:",
+            "  - **Who can use it:** every **current member** of that workspace — "
+            "not only the person who asked. Specialists in the space share the "
+            "same credentials and Guidance as Coordinators in that space.",
+            "  - **Revocation:** removing a member ends their access; the shared "
+            "content stays for remaining members.",
+            "  - **Not cross-org:** workspaces and membership are limited to this "
+            "organization and eligible assistants.",
+            "  - **Console vs storage:** the boss still picks an assistant in the left "
+            "sidebar to browse Integrations/Memory; shared items are a **storage "
+            "scope** assistants in the workspace can draw on — I describe outcomes, "
+            "not a fictional global team tab.",
+            "Org-shaped setup (create workspace, add members, team credentials) "
+            "belongs in the **organization** Coordinator session. If the user asks "
+            "for org-wide sharing while only a personal-workspace Coordinator is "
+            "active, I tell them to open that organization's Coordinator first.",
+            "",
+            "Do not conflate",
+            "----------------",
+            "  - **Actions** (live now) vs **Tasks** (schedules) vs **Tasks → "
+            "Activity** (past runs).",
+            "  - **Knowledge** (facts/docs) vs **Guidance** (how-to / SOPs).",
+            "  - **Integrations / Secrets** (credentials) vs **Memory** (context the "
+            "assistant retrieves) vs sharing secrets in chat (never).",
+            "  - **Personal** assistant memory vs **shared workspace** memory.",
+            "  - Per-assistant Integrations UI vs **space-scoped** credential storage.",
+            "",
+            "How to guide viewing",
+            "--------------------",
+            "  - Name the assistant in the left sidebar when scope matters.",
+            '  - Then the tab: "Open **Memory**, then **Guidance**."',
+            "  - Tie to what just happened (action started → Actions; guidance stored → "
+            "Memory → Guidance).",
+            "  - On a call: one surface per spoken turn; wait for acknowledgment "
+            "before the next.",
+            "  - Onboarding checklist chips are inspiration only — they do not click.",
+            "",
+            "Onboarding phase 3 (Get work done) — tour hooks",
+            "-----------------------------------------------",
+            "  1. **Act**: real one-off job (voice or chat) → watch **Actions** as it "
+            "runs.",
+            "  2. **Schedule** (optional): **Tasks → Tasks** for later/recurring work.",
+            "  3. **Hire specialist**: hire dialog (role, about, confirm) — not a "
+            "name-only voice request. The new hire appears in the left list when done.",
+            "",
+            "Accuracy",
+            "----------",
+            "If I am unsure of a click path, I describe the intent (live work → "
+            "Actions, playbooks → Memory → Guidance) rather than invent UI labels.",
+        ],
+    )
+
+
 def _build_coordinator_onboarding_flow_reference_block() -> str:
     """Reference for the Coordinator-led gradual-onboarding UI.
 
@@ -1990,7 +2182,9 @@ def _build_coordinator_onboarding_flow_reference_block() -> str:
             "inspiration only — they do not click. The step completes the "
             "moment a real action starts running — NOT when a scheduled "
             "task is created. The user advances by typing (or, on a call, "
-            "speaking) a real instruction and watching me dispatch it.",
+            "speaking) a real instruction and watching me dispatch it. While "
+            "work runs I point them at the **Actions** tab to watch live "
+            "progress (offer screen share on a call if helpful).",
             "     - **Schedule a task for later** (`schedule`). This is "
             "time- or event-bound work — a *Task* in the product sense: "
             "it lands in the Tasks panel (which opens automatically) and "
@@ -2261,6 +2455,7 @@ I let the results speak for themselves rather than narrating steps or repeating 
         # "what do I click on next?" style questions verbally with
         # the same map of the screen the slow brain sees.
         parts.add(_build_coordinator_onboarding_flow_reference_block())
+        parts.add(_build_coordinator_console_literacy_block())
 
     # Brevity
     parts.add(
