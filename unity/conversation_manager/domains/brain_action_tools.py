@@ -874,6 +874,7 @@ class ConversationManagerBrainActionTools:
                     user_id=effective_user_id,
                     organization_id=SESSION_DETAILS.org_id,
                     source="tool",
+                    label=f"Action: {query[:120]}" if query else None,
                 )
             except (ImportError, Exception):
                 pass
