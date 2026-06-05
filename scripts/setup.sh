@@ -319,13 +319,25 @@ PYEOF
     upsert "UNIFY_KEY" "$UNIFY_KEY"
 
     log_success "Wrote ORCHESTRA_URL and UNIFY_KEY to $env_file"
-    log_info "Edit this file to add OPENAI_API_KEY or ANTHROPIC_API_KEY for the LLM provider."
+}
+
+# --- Voice stack (LiveKit + BYOK keys) ------------------------------------
+setup_voice_defaults() {
+    log_info "Setting up local voice (LiveKit + BYOK keys)..."
+
+    if [ -x "$UNITY_REPO/scripts/voice.sh" ]; then
+        if ! bash "$UNITY_REPO/scripts/voice.sh" setup; then
+            log_warn "LiveKit setup failed — browser calls may not work until you run: unity voice setup"
+        fi
+    else
+        log_warn "voice.sh not found — skipping LiveKit setup"
+    fi
 }
 
 # --- Main -----------------------------------------------------------------
 main() {
     echo ""
-    echo -e "${BOLD}Unity setup${NC} — bootstrapping local orchestra"
+    echo -e "${BOLD}Unity setup${NC} — bootstrapping local orchestra + voice"
     echo ""
 
     if [ ! -d "$UNITY_REPO" ]; then
@@ -345,6 +357,7 @@ main() {
     install_orchestra_deps || exit 1
     start_local_orchestra || exit 1
     wire_unity_env
+    setup_voice_defaults
 
     echo ""
     echo -e "${GREEN}${BOLD}Setup complete.${NC}"
@@ -352,7 +365,8 @@ main() {
     echo "  orchestra is running at $UNIFY_BASE_URL"
     echo "  Stop it any time with:  unity stop"
     echo ""
-    echo "  Next: add an LLM key to $UNITY_REPO/.env, then run  ${CYAN}unity${NC}"
+    echo "  Self-host full stack:  ${CYAN}unity stack up${NC}"
+    echo "  Sandbox REPL:          ${CYAN}unity${NC}"
     echo ""
 }
 

@@ -197,8 +197,8 @@ cmd_up() {
   # often also contains cloud LiveKit keys that override the dev pair when
   # sourced, which breaks browser meet token minting in Console.
   export LIVEKIT_URL="ws://localhost:7880"
-  export LIVEKIT_API_KEY="devkey"
-  export LIVEKIT_API_SECRET="secret"
+  export LIVEKIT_API_KEY="devkey"  # pragma: allowlist secret
+  export LIVEKIT_API_SECRET="secret"  # pragma: allowlist secret
 
   if ! bash "$CONSOLE_LOCAL_SCRIPT" start --self-host; then
     log_error "Self-host stack failed to start"
