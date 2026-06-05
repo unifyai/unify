@@ -41,6 +41,13 @@ LIMIT_CHECK_TIMEOUT = 5.0
 _spend_client: Optional[AsyncSpendClient] = None
 
 
+def _charges_billing() -> bool:
+    """Whether Unify platform billing gates apply (mirrors Orchestra settings)."""
+    is_self_host = os.environ.get("SELF_HOST", "0") == "1"
+    is_staging = os.environ.get("STAGING", "False") == "True"
+    return not is_staging and not is_self_host
+
+
 def _get_api_key() -> Optional[str]:
     """Get the user API key for Orchestra calls."""
     return os.getenv("UNIFY_KEY")
@@ -477,6 +484,10 @@ def install_limit_check_hook() -> None:
 
     Should be called during unity.init() after SESSION_DETAILS is populated.
     """
+    if not _charges_billing():
+        logger.debug("Limit check hook not installed: platform billing disabled")
+        return
+
     api_key = _get_api_key()
     if not api_key:
         logger.debug("Limit check hook not installed: no API key")
