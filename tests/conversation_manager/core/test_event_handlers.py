@@ -740,6 +740,44 @@ class TestPhoneCallHandlers:
         )
 
     @pytest.mark.asyncio
+    async def test_phone_call_ended_preserves_in_flight_actions(self, mock_cm):
+        """PhoneCallEnded leaves action lifecycle decisions to the slow brain."""
+        mock_cm.mode = Mode.CALL
+        mock_cm.contact_index.push_message(
+            contact_id=2,
+            sender_name="Alice",
+            thread_name=Medium.PHONE_CALL,
+            message_content="test",
+        )
+        mock_cm.contact_index.active_conversations[2].on_call = True
+
+        handle = MagicMock()
+        handle.done.return_value = False
+        handle.stop = AsyncMock()
+        mock_cm.in_flight_actions = {
+            42: {
+                "handle": handle,
+                "instruction": "Research this and let me know when it is done",
+                "handle_actions": [],
+            },
+        }
+
+        event = PhoneCallEnded(
+            contact={"contact_id": 2, "phone_number": "+15555552222"},
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        handle.stop.assert_not_called()
+        assert 42 in mock_cm.in_flight_actions
+        assert 42 not in mock_cm.completed_actions
+        mock_cm.request_llm_run.assert_called_once_with(
+            delay=0,
+            cancel_running=True,
+            triggering_contact_id=2,
+        )
+
+    @pytest.mark.asyncio
     async def test_whatsapp_permission_keeps_legacy_room_name_when_agent_id_missing(
         self,
         mock_cm,
