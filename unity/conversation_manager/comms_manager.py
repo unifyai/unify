@@ -1752,8 +1752,15 @@ class CommsManager:
                 ack_now()
                 return
 
-            if thread != "assistant_desktop_ready":
-                LOGGER.error(f"{DEFAULT_ICON} Unknown event type: {thread}")
+            if thread in (
+                "unify_message_outbound",
+                "system_error",
+                "assistant_desktop_ready",
+            ):
+                ack_now()
+                return
+
+            LOGGER.error(f"{DEFAULT_ICON} Unknown event type: {thread}")
             ack_now()
         except Exception as exc:
             LOGGER.error(f"{DEFAULT_ICON} Error processing message: {exc}")
