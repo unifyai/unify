@@ -507,6 +507,12 @@ case "\${1:-}" in
         [ -d "\$UNITY_REPO" ]                        && pass "unity repo at \$UNITY_REPO"                 || { fail "unity repo missing at \$UNITY_REPO"; fix "Re-run install.sh"; }
         [ -d "\$UNITY_HOME/unify" ]                  && pass "unify repo at \$UNITY_HOME/unify"           || { warn "unify repo missing at \$UNITY_HOME/unify";   fix "Re-run install.sh"; }
         [ -d "\$UNITY_HOME/unillm" ]                 && pass "unillm repo at \$UNITY_HOME/unillm"         || { warn "unillm repo missing at \$UNITY_HOME/unillm"; fix "Re-run install.sh"; }
+        case "\$ORCHESTRA_REPO" in
+            *orchestra-core*)
+                fail "CLI shim points at obsolete orchestra-core (use orchestra)"
+                fix "Regenerate CLI: bash \$UNITY_REPO/scripts/install.sh --skip-setup --skip-deps"
+                ;;
+        esac
         [ -d "\$ORCHESTRA_REPO" ]                    && pass "orchestra repo at \$ORCHESTRA_REPO"         || { warn "orchestra repo missing at \$ORCHESTRA_REPO"; fix "Run: unity setup"; }
         [ -f "\$UNITY_REPO/.env" ]                   && pass ".env at \$UNITY_REPO/.env"                  || { fail ".env missing at \$UNITY_REPO/.env";          fix "Re-run install.sh"; }
         [ -d "\$UNITY_REPO/.venv" ]                  && pass "Python venv at \$UNITY_REPO/.venv"          || { warn "Python venv missing at \$UNITY_REPO/.venv";  fix "Run: cd \$UNITY_REPO && uv sync"; }
@@ -655,10 +661,10 @@ Usage:
   unity --live-voice                 Same, with live voice calls in the browser.
   unity logs                         Tail the runtime log in a second terminal.
 
-  unity setup                        Bootstrap / re-bootstrap local orchestra
-  unity stack up                     Start full self-host stack
+  unity setup                        Bootstrap local orchestra + BYOK wizard (LLM, voice, OAuth)
+  unity stack doctor                 Check self-host prerequisites (run before stack up)
+  unity stack up                     Start full self-host stack (Console + Coordinator)
   unity stack down                   Stop self-host stack
-  unity stack doctor                 Check self-host prerequisites
   unity stop                         Stop local orchestra (preserves data)
   unity status                       Show local orchestra status
   unity restart                      Restart local orchestra (preserves data)
@@ -861,6 +867,7 @@ print_next_steps() {
         echo "     Stop with Ctrl+C in Terminal 1; \`unity\` again picks up where you left off."
         echo ""
         echo "  Also available:"
+        echo -e "     ${CYAN}\$ unity stack doctor${NC}     Check self-host prerequisites"
         echo -e "     ${CYAN}\$ unity stack up${NC}           Full self-host (Console + Coordinator + voice)"
         echo -e "     ${CYAN}\$ unity --live-voice${NC}     Talk to your assistant in the browser (sandbox)"
         echo -e "     ${CYAN}\$ unity voice setup${NC}      Re-run LiveKit + voice BYOK prompts"
