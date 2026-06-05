@@ -359,14 +359,20 @@ main() {
     wire_unity_env
     setup_voice_defaults
 
+    if [[ -x "$UNITY_REPO/scripts/prompt_byok_keys.sh" ]]; then
+        log_info "BYOK wizard (LLM, voice, optional workspace OAuth)..."
+        UNITY_REPO="$UNITY_REPO" bash "$UNITY_REPO/scripts/prompt_byok_keys.sh" || true
+    fi
+
     echo ""
     echo -e "${GREEN}${BOLD}Setup complete.${NC}"
     echo ""
     echo "  orchestra is running at $UNIFY_BASE_URL"
     echo "  Stop it any time with:  unity stop"
     echo ""
-    echo "  Self-host full stack:  ${CYAN}unity stack up${NC}"
-    echo "  Sandbox REPL:          ${CYAN}unity${NC}"
+    echo "  Next:  ${CYAN}unity stack doctor${NC}  Check self-host prerequisites"
+    echo "         ${CYAN}unity stack up${NC}      Full Console + Coordinator stack"
+    echo "  Sandbox REPL:  ${CYAN}unity${NC}"
     echo ""
 }
 

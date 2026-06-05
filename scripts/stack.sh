@@ -22,6 +22,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 UNITY_REPO_PATH="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+ENSURE_PREREQS_SCRIPT="$UNITY_REPO_PATH/scripts/ensure_prereqs.sh"
+SELF_HOST_ENV_SCRIPT="$UNITY_REPO_PATH/scripts/self_host_env.sh"
 
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$UNITY_REPO_PATH/.." && pwd -P)}"
 CONSOLE_REPO_PATH="${CONSOLE_REPO_PATH:-$UNIFY_STACK_ROOT/console}"
@@ -52,12 +54,24 @@ require_repo() {
   fi
 }
 
+_has_env_key() {
+  local key="$1"
+  local env_file="$UNITY_REPO_PATH/.env"
+  [[ -n "${!key:-}" ]] && return 0
+  [[ -f "$env_file" ]] && grep -qE "^${key}=.+$" "$env_file"
+}
+
 cmd_doctor() {
   local ok=true
   echo ""
   echo "Self-host doctor"
   echo "================"
   echo ""
+  echo "Stranger path: unity setup → unity stack doctor → unity stack up"
+  echo ""
+
+  echo "Infrastructure"
+  echo "--------------"
 
   if ! command -v docker &>/dev/null; then
     log_error "Docker is not installed"
@@ -76,21 +90,34 @@ cmd_doctor() {
     log_success "Node.js/npm found"
   fi
 
-  if ! command -v gcloud &>/dev/null; then
-    log_warn "gcloud not found — Pub/Sub emulator requires gcloud beta emulators pubsub"
-    ok=false
+  if [[ -f "$ENSURE_PREREQS_SCRIPT" ]]; then
+    # shellcheck disable=SC1090
+    source "$ENSURE_PREREQS_SCRIPT"
+    if ! ensure_java; then
+      ok=false
+    else
+      log_success "Java JRE ready"
+    fi
+    if ! ensure_pubsub_emulator; then
+      ok=false
+    else
+      log_success "Pub/Sub emulator ready"
+    fi
   else
-    log_success "gcloud found"
+    log_warn "ensure_prereqs.sh missing — checking Java/gcloud manually"
+    if ! command -v gcloud &>/dev/null; then
+      ok=false
+      log_error "gcloud CLI not found"
+    fi
+    if ! command -v java &>/dev/null || ! java -version &>/dev/null 2>&1; then
+      ok=false
+      log_error "Java JRE required for Pub/Sub emulator"
+    fi
   fi
 
-  if ! command -v java &>/dev/null || ! java -version &>/dev/null; then
-    log_error "Java JRE required for Pub/Sub emulator (macOS stub java is not enough)"
-    log_info "Fix: brew install openjdk && export PATH=\"/opt/homebrew/opt/openjdk/bin:\$PATH\""
-    ok=false
-  else
-    log_success "Java JRE found"
-  fi
-
+  echo ""
+  echo "Sibling repos"
+  echo "-------------"
   require_repo "Console" "$CONSOLE_REPO_PATH" || ok=false
   require_repo "Orchestra" "$ORCHESTRA_REPO_PATH" || ok=false
   require_repo "Communication" "$COMMUNICATION_REPO_PATH" || ok=false
@@ -98,7 +125,7 @@ cmd_doctor() {
     if "$COMMUNICATION_REPO_PATH/.venv/bin/python" -c "from unity.task_scheduler.offline_runner_contract import build_offline_run_key" &>/dev/null; then
       log_success "Comms App unity import OK"
     else
-      log_warn "Comms venv missing unity — will auto-install on stack up (needs ../unity sibling)"
+      log_warn "Comms venv missing unity — auto-installs on stack up"
     fi
   else
     log_warn "communication/.venv missing — run: cd $COMMUNICATION_REPO_PATH && uv sync"
@@ -112,46 +139,72 @@ cmd_doctor() {
     ok=false
   fi
 
-  if [[ -z "${OPENAI_API_KEY:-}" && -z "${ANTHROPIC_API_KEY:-}" ]]; then
-    if [[ -f "$UNITY_REPO_PATH/.env" ]] && grep -qE '^(OPENAI_API_KEY|ANTHROPIC_API_KEY)=' "$UNITY_REPO_PATH/.env" 2>/dev/null; then
-      log_success "LLM key present in unity/.env"
-    else
-      log_warn "No LLM API key — run: UNITY_REPO=$UNITY_REPO_PATH $UNITY_REPO_PATH/scripts/prompt_byok_keys.sh"
-    fi
-  else
-    log_success "LLM API key present in environment"
-  fi
-
-  if [[ -f "$UNITY_REPO_PATH/.env" ]]; then
-    if grep -qE '^DEEPGRAM_API_KEY=.+' "$UNITY_REPO_PATH/.env" 2>/dev/null; then
-      log_success "DEEPGRAM_API_KEY set"
-    else
-      log_warn "DEEPGRAM_API_KEY missing — required for browser calls"
-    fi
-    if grep -qE '^CARTESIA_API_KEY=.+' "$UNITY_REPO_PATH/.env" 2>/dev/null; then
-      log_success "CARTESIA_API_KEY set"
-    else
-      log_warn "CARTESIA_API_KEY missing — required for browser calls"
-    fi
-    if grep -qE '^LIVEKIT_URL=.+' "$UNITY_REPO_PATH/.env" 2>/dev/null; then
-      log_success "LIVEKIT_URL set (run: unity voice setup if server not running)"
-    else
-      log_warn "LiveKit not configured — run: unity voice setup (or unity setup)"
-    fi
-  fi
-
   if [[ -f "$CONSOLE_REPO_PATH/.env.local" ]]; then
     log_success "console/.env.local found"
   else
     log_warn "console/.env.local missing — copy from .env.development and set JWT_SECRET"
+    ok=false
+  fi
+
+  echo ""
+  echo "BYOK keys (unity/.env)"
+  echo "----------------------"
+  echo "  Required: LLM (OpenAI or Anthropic)"
+  echo "  Voice:    Deepgram + Cartesia (browser calls; LiveKit auto-configured on stack up)"
+  echo "  Optional: Google / Microsoft OAuth (workspace connect)"
+  echo "  Optional: Tavily (web search), AntiCaptcha (computer use)"
+  echo ""
+
+  if _has_env_key OPENAI_API_KEY || _has_env_key ANTHROPIC_API_KEY; then
+    log_success "LLM provider key configured"
+  else
+    log_error "No LLM API key — run: unity setup (or scripts/prompt_byok_keys.sh)"
+    ok=false
+  fi
+
+  if _has_env_key DEEPGRAM_API_KEY; then
+    log_success "DEEPGRAM_API_KEY set"
+  else
+    log_warn "DEEPGRAM_API_KEY missing — browser calls need STT"
+  fi
+
+  if _has_env_key CARTESIA_API_KEY; then
+    log_success "CARTESIA_API_KEY set"
+  else
+    log_warn "CARTESIA_API_KEY missing — browser calls need TTS"
+  fi
+
+  if _has_env_key OAUTH_STATE_SIGNING_KEY \
+    && { _has_env_key GOOGLE_OAUTH_CLIENT_ID || _has_env_key MICROSOFT_BYOD_CLIENT_ID; }; then
+    if _has_env_key GOOGLE_OAUTH_CLIENT_ID && _has_env_key GOOGLE_OAUTH_CLIENT_SECRET; then
+      log_success "Google workspace OAuth configured"
+    elif _has_env_key MICROSOFT_BYOD_CLIENT_ID && _has_env_key MS365_BYOD_CLIENT_SECRET; then
+      log_success "Microsoft workspace OAuth configured"
+    else
+      log_warn "Workspace OAuth partially configured — finish client id + secret in unity/.env"
+    fi
+  else
+    log_info "Workspace OAuth not configured (optional — onboarding workspace connect disabled)"
+  fi
+
+  if _has_env_key UNITY_WEB_TAVILY_API_KEY; then
+    log_success "UNITY_WEB_TAVILY_API_KEY set (web search)"
+  else
+    log_info "Web search not configured (optional — Tavily via prompt_byok_keys.sh)"
+  fi
+
+  if _has_env_key ANTICAPTCHA_KEY || _has_env_key UNITY_ACTOR_ANTICAPTCHA_KEY; then
+    log_success "AntiCaptcha key set (computer automation)"
+  else
+    log_info "AntiCaptcha not configured (optional — computer use / CAPTCHA solving)"
   fi
 
   echo ""
   if [[ "$ok" == "true" ]]; then
-    log_success "Doctor passed"
+    log_success "Doctor passed — run: unity stack up"
     return 0
   fi
-  log_error "Doctor found blockers"
+  log_error "Doctor found blockers — fix above, then re-run: unity stack doctor"
   return 1
 }
 
@@ -185,8 +238,11 @@ cmd_up() {
   export UNITY_REPO_PATH
   export CONSOLE_REPO_PATH
 
-  # Forward LLM keys from unity/.env when not already exported.
-  if [[ -f "$UNITY_REPO_PATH/.env" ]]; then
+  if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
+    # shellcheck disable=SC1090
+    source "$SELF_HOST_ENV_SCRIPT"
+    export_workspace_oauth_env "$UNITY_REPO_PATH/.env"
+  elif [[ -f "$UNITY_REPO_PATH/.env" ]]; then
     # shellcheck disable=SC1090
     set -a
     source "$UNITY_REPO_PATH/.env"
