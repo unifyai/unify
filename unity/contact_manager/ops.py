@@ -224,7 +224,7 @@ def create_contact(
         stamp_authoring=True,
         add_to_all_context=(
             self.include_in_multi_assistant_table
-            and not context_name.startswith("Spaces/")
+            and not context_name.startswith("Teams/")
         ),
     )
     try:

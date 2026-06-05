@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 from unity.common.context_registry import (
     ContextRegistry,
     INVALID_DESTINATION_ERROR,
-    SPACE_DESTINATION_PREFIX,
+    TEAM_DESTINATION_PREFIX,
     TableContext,
 )
 from unity.common.model_to_fields import model_to_fields
@@ -199,17 +199,17 @@ class DashboardManager(BaseDashboardManager):
         """Resolve which root live tile data bindings should read from."""
         if data_scope == DASHBOARD_DATA_SCOPE:
             return self._resolved_root_context(table_name, destination)
-        if not data_scope.startswith(SPACE_DESTINATION_PREFIX):
+        if not data_scope.startswith(TEAM_DESTINATION_PREFIX):
             raise ToolErrorException(
                 {
                     "error_kind": INVALID_DESTINATION_ERROR,
                     "message": (
                         "data_scope must be 'dashboard' or an accessible "
-                        "'space:<id>' destination."
+                        "'team:<id>' destination."
                     ),
                     "details": {
                         "destination": data_scope,
-                        "space_ids": SESSION_DETAILS.space_ids,
+                        "team_ids": SESSION_DETAILS.team_ids,
                         "table_name": table_name,
                     },
                 },

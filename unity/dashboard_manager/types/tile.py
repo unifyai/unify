@@ -143,8 +143,8 @@ class TileRecordRow(AuthoredRow):
         default="dashboard",
         description=(
             "Root used to resolve live data bindings: 'dashboard' inherits "
-            "the tile row destination, while 'space:<id>' pins reads to a "
-            "specific shared space."
+            "the tile row destination, while 'team:<id>' pins reads to a "
+            "specific shared team."
         ),
     )
     data_binding_contexts: Optional[str] = Field(

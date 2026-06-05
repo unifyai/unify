@@ -12,8 +12,8 @@ from .types.message import Message
 def _image_destination_for_transcript_context(context: str) -> str:
     """Return the Images destination that matches a concrete Transcripts context."""
 
-    if context.startswith("Spaces/"):
-        return f"space:{context.split('/')[1]}"
+    if context.startswith("Teams/"):
+        return f"team:{context.split('/')[1]}"
     return "personal"
 
 

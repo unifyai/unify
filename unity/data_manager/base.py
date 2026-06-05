@@ -168,10 +168,10 @@ class BaseDataManager(BaseStateManager):
         destination : str | None, default ``None``
             Where this data table lives. Pass ``"personal"`` (the default)
             for working datasets, scratch tables, and data tied only to your
-            individual analysis. Pass ``"space:<id>"`` for team-shared
+            individual analysis. Pass ``"team:<id>"`` for team-shared
             datasets every member of the space should see, such as operational
             data, team KPIs, shared reference tables, and datasets every member
-            queries. Read the *Accessible shared spaces* block in your system
+            queries. Read the *Accessible shared teams* block in your system
             prompt before choosing. Schema operations operate within one
             destination at a time; cross-destination schema migrations are not
             supported. The privacy floor is personal: when confidence is low
@@ -521,9 +521,9 @@ class BaseDataManager(BaseStateManager):
         destination : str | None, default ``None``
             Which Data root contains the table. Pass ``"personal"`` (the
             default) for working datasets, scratch tables, and data tied only
-            to your individual analysis. Pass ``"space:<id>"`` for
+            to your individual analysis. Pass ``"team:<id>"`` for
             team-shared datasets every member of the space should see. Read
-            the *Accessible shared spaces* block before choosing. The privacy
+            the *Accessible shared teams* block before choosing. The privacy
             floor is personal; call ``request_clarification`` for
             ambiguity-going-wider.
 
@@ -584,9 +584,9 @@ class BaseDataManager(BaseStateManager):
             Which Data root contains the source and destination tables. Pass
             ``"personal"`` (the default) for working datasets, scratch tables,
             and data tied only to your individual analysis. Pass
-            ``"space:<id>"`` for team-shared datasets every member of the
+            ``"team:<id>"`` for team-shared datasets every member of the
             space should see. Schema operations operate within one destination
-            at a time. Read the *Accessible shared spaces* block before
+            at a time. Read the *Accessible shared teams* block before
             choosing; call ``request_clarification`` for ambiguity-going-wider.
 
         Returns
@@ -670,8 +670,8 @@ class BaseDataManager(BaseStateManager):
         destination : str | None, default ``None``
             Which Data root contains the table. Pass ``"personal"`` (the
             default) for working datasets and scratch tables. Pass
-            ``"space:<id>"`` for a team-shared dataset every member of the
-            space should see. Read the *Accessible shared spaces* block before
+            ``"team:<id>"`` for a team-shared dataset every member of the
+            space should see. Read the *Accessible shared teams* block before
             choosing; call ``request_clarification`` for ambiguity-going-wider.
 
         Returns
@@ -741,8 +741,8 @@ class BaseDataManager(BaseStateManager):
         destination : str | None, default ``None``
             Which Data root contains the table. Pass ``"personal"`` (the
             default) for working datasets and scratch tables. Pass
-            ``"space:<id>"`` for a team-shared dataset every member of the
-            space should see. Read the *Accessible shared spaces* block before
+            ``"team:<id>"`` for a team-shared dataset every member of the
+            space should see. Read the *Accessible shared teams* block before
             choosing; call ``request_clarification`` for ambiguity-going-wider.
 
         Returns
@@ -807,8 +807,8 @@ class BaseDataManager(BaseStateManager):
         destination : str | None, default ``None``
             Which Data root contains the table. Pass ``"personal"`` (the
             default) for working datasets and scratch tables. Pass
-            ``"space:<id>"`` for a team-shared dataset every member of the
-            space should see. Read the *Accessible shared spaces* block before
+            ``"team:<id>"`` for a team-shared dataset every member of the
+            space should see. Read the *Accessible shared teams* block before
             choosing; call ``request_clarification`` for ambiguity-going-wider.
 
         Returns
@@ -885,8 +885,8 @@ class BaseDataManager(BaseStateManager):
         destination : str | None, default ``None``
             Which Data root contains the table. Pass ``"personal"`` (the
             default) for working datasets and scratch tables. Pass
-            ``"space:<id>"`` for a team-shared dataset every member of the
-            space should see. Read the *Accessible shared spaces* block before
+            ``"team:<id>"`` for a team-shared dataset every member of the
+            space should see. Read the *Accessible shared teams* block before
             choosing; call ``request_clarification`` for ambiguity-going-wider.
 
         Returns
@@ -1457,7 +1457,7 @@ class BaseDataManager(BaseStateManager):
         destination : str | None, default ``None``
             Which Data root should receive ``dest_table``. Pass
             ``"personal"`` (the default) for working datasets and scratch
-            tables. Pass ``"space:<id>"`` for a team-shared dataset every
+            tables. Pass ``"team:<id>"`` for a team-shared dataset every
             member of the space should see. Read the *Accessible shared
             spaces* block before choosing; call ``request_clarification`` for
             ambiguity-going-wider.
@@ -2150,7 +2150,7 @@ class BaseDataManager(BaseStateManager):
         destination : str | None, default ``None``
             Where Data-owned rows should be stored. Pass ``"personal"`` (the
             default) for working datasets, scratch tables, and data tied only
-            to your individual analysis. Pass ``"space:<id>"`` for
+            to your individual analysis. Pass ``"team:<id>"`` for
             team-shared operational data, team KPIs, shared reference tables,
             and datasets every member queries. Read the *Accessible shared
             spaces* block before choosing. The privacy floor is personal; call
@@ -2224,7 +2224,7 @@ class BaseDataManager(BaseStateManager):
         destination : str | None, default ``None``
             Which Data root contains the rows. Pass ``"personal"`` (the
             default) for working datasets, scratch tables, and data tied only
-            to your individual analysis. Pass ``"space:<id>"`` for
+            to your individual analysis. Pass ``"team:<id>"`` for
             team-shared operational data, team KPIs, shared reference tables,
             and datasets every member queries. Read the *Accessible shared
             spaces* block before choosing; call ``request_clarification`` for
@@ -2304,7 +2304,7 @@ class BaseDataManager(BaseStateManager):
         destination : str | None, default ``None``
             Which Data root contains the rows. Pass ``"personal"`` (the
             default) for working datasets, scratch tables, and data tied only
-            to your individual analysis. Pass ``"space:<id>"`` for
+            to your individual analysis. Pass ``"team:<id>"`` for
             team-shared operational data, team KPIs, shared reference tables,
             and datasets every member queries. Read the *Accessible shared
             spaces* block before choosing; call ``request_clarification`` for
@@ -2474,7 +2474,7 @@ class BaseDataManager(BaseStateManager):
         destination : str | None, default ``None``
             Where Data-owned rows should be stored. Pass ``"personal"`` (the
             default) for working datasets, scratch tables, and data tied only
-            to your individual analysis. Pass ``"space:<id>"`` for
+            to your individual analysis. Pass ``"team:<id>"`` for
             team-shared operational data, team KPIs, shared reference tables,
             and datasets every member queries. Read the *Accessible shared
             spaces* block before choosing. The privacy floor is personal; call
@@ -2668,8 +2668,8 @@ class BaseDataManager(BaseStateManager):
         destination : str | None, default ``None``
             Which Data root contains the table. Pass ``"personal"`` (the
             default) for working datasets and scratch tables. Pass
-            ``"space:<id>"`` for a team-shared dataset every member of the
-            space should see. Read the *Accessible shared spaces* block before
+            ``"team:<id>"`` for a team-shared dataset every member of the
+            space should see. Read the *Accessible shared teams* block before
             choosing; call ``request_clarification`` for ambiguity-going-wider.
 
         Returns
@@ -2742,8 +2742,8 @@ class BaseDataManager(BaseStateManager):
         destination : str | None, default ``None``
             Which Data root contains the table. Pass ``"personal"`` (the
             default) for working datasets and scratch tables. Pass
-            ``"space:<id>"`` for a team-shared dataset every member of the
-            space should see. Read the *Accessible shared spaces* block before
+            ``"team:<id>"`` for a team-shared dataset every member of the
+            space should see. Read the *Accessible shared teams* block before
             choosing; call ``request_clarification`` for ambiguity-going-wider.
 
         Returns

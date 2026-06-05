@@ -14,7 +14,7 @@ from ..blacklist_manager.types.blacklist import BlackList
 from unity.conversation_manager.cm_types import Medium
 from .base import BaseBlackListManager
 from ..common.context_registry import (
-    SPACE_CONTEXT_PREFIX,
+    TEAM_CONTEXT_PREFIX,
     ContextRegistry,
     TableContext,
 )
@@ -85,8 +85,8 @@ class BlackListManager(BaseBlackListManager):
 
             contexts = [self._ctx]
             contexts.extend(
-                f"{SPACE_CONTEXT_PREFIX}{space_id}/BlackList"
-                for space_id in sorted(set(SESSION_DETAILS.space_ids))
+                f"{TEAM_CONTEXT_PREFIX}{team_id}/BlackList"
+                for team_id in sorted(set(SESSION_DETAILS.team_ids))
             )
         return list(dict.fromkeys(contexts))
 
@@ -100,10 +100,10 @@ class BlackListManager(BaseBlackListManager):
     def _destination_for_context(self, context: str) -> str:
         """Return the public destination label for a concrete BlackList context."""
 
-        if context.startswith(SPACE_CONTEXT_PREFIX):
+        if context.startswith(TEAM_CONTEXT_PREFIX):
             parts = context.split("/")
             if len(parts) >= 2:
-                return f"space:{parts[1]}"
+                return f"team:{parts[1]}"
         return "personal"
 
     # ------------------------------------------------------------------ #
@@ -213,7 +213,7 @@ class BlackListManager(BaseBlackListManager):
             stamp_authoring=True,
             add_to_all_context=(
                 self.include_in_multi_assistant_table
-                and not context.startswith(SPACE_CONTEXT_PREFIX)
+                and not context.startswith(TEAM_CONTEXT_PREFIX)
             ),
             **payload,
         )

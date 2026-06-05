@@ -21,7 +21,7 @@ import requests
 from unity.common.context_registry import (
     ContextRegistry,
     PERSONAL_DESTINATION,
-    SPACE_DESTINATION_PREFIX,
+    TEAM_DESTINATION_PREFIX,
 )
 from unity.session_details import SESSION_DETAILS
 from unity.settings import SETTINGS
@@ -765,14 +765,14 @@ def list_trigger_activations(
     activations: list[TaskActivationSnapshot] = []
     for row in rows:
         activation = _row_to_activation(row)
-        destination_space_id = (
-            _destination_space_id(activation.destination)
+        destination_team_id = (
+            _destination_team_id(activation.destination)
             if activation is not None
             else None
         )
         if activation is not None and (
-            destination_space_id is None
-            or destination_space_id in set(SESSION_DETAILS.space_ids)
+            destination_team_id is None
+            or destination_team_id in set(SESSION_DETAILS.team_ids)
         ):
             activations.append(activation)
     return activations
@@ -808,9 +808,9 @@ def validate_task_due_activation(
         return None, "activation_revision_mismatch"
     if activation.destination != normalized_destination:
         return None, "destination_mismatch"
-    destination_space_id = _destination_space_id(activation.destination)
-    if destination_space_id is not None and destination_space_id not in set(
-        SESSION_DETAILS.space_ids,
+    destination_team_id = _destination_team_id(activation.destination)
+    if destination_team_id is not None and destination_team_id not in set(
+        SESSION_DETAILS.team_ids,
     ):
         return None, "destination_membership_revoked"
     if activation.source_task_log_id != source_task_log_id:
@@ -831,13 +831,13 @@ def _activation_store() -> TasksStore:
     )
 
 
-def _destination_space_id(destination: str | None) -> int | None:
+def _destination_team_id(destination: str | None) -> int | None:
     """Return the shared-space id encoded in a task destination label."""
 
     normalized_destination = _canonical_destination_or_none(destination)
     if normalized_destination is None:
         return None
-    return int(normalized_destination[len(SPACE_DESTINATION_PREFIX) :])
+    return int(normalized_destination[len(TEAM_DESTINATION_PREFIX) :])
 
 
 def _row_to_activation(row: Any) -> TaskActivationSnapshot | None:

@@ -124,8 +124,8 @@ from ..common.sentinels import _UnsetSentinel
 from ..common.context_registry import (
     ContextRegistry,
     PERSONAL_DESTINATION,
-    SPACE_CONTEXT_PREFIX,
-    SPACE_DESTINATION_PREFIX,
+    TEAM_CONTEXT_PREFIX,
+    TEAM_DESTINATION_PREFIX,
     TableContext,
 )
 from .machine_state import (
@@ -702,9 +702,9 @@ class TaskScheduler(BaseTaskScheduler):
     def _destination_from_task_context(self, context_name: str) -> str | None:
         """Return the public destination represented by a concrete Tasks context."""
 
-        if context_name.startswith(SPACE_CONTEXT_PREFIX):
-            raw_space_id = context_name[len(SPACE_CONTEXT_PREFIX) :].split("/", 1)[0]
-            return f"{SPACE_DESTINATION_PREFIX}{raw_space_id}"
+        if context_name.startswith(TEAM_CONTEXT_PREFIX):
+            raw_team_id = context_name[len(TEAM_CONTEXT_PREFIX) :].split("/", 1)[0]
+            return f"{TEAM_DESTINATION_PREFIX}{raw_team_id}"
         return None
 
     def _view_for_task_context(self, context_name: str) -> LocalTaskView:
@@ -716,7 +716,7 @@ class TaskScheduler(BaseTaskScheduler):
             context_name,
             add_to_all_context=(
                 self.include_in_multi_assistant_table
-                and not context_name.startswith(SPACE_CONTEXT_PREFIX)
+                and not context_name.startswith(TEAM_CONTEXT_PREFIX)
             ),
         )
         view = LocalTaskView(store)

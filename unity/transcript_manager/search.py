@@ -145,7 +145,7 @@ def _build_message_authoring_attribution(
 ) -> list[dict[str, Any]]:
     """Build message-level authorship labels for shared transcript reads."""
 
-    if not messages or not SESSION_DETAILS.space_ids:
+    if not messages or not SESSION_DETAILS.team_ids:
         return []
 
     current_assistant_id = SESSION_DETAILS.assistant.agent_id

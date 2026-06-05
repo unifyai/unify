@@ -46,7 +46,7 @@ from unity.common.read_only_ask_guard import ReadOnlyAskGuardHandle
 from unity.events.manager_event_logging import log_manager_call
 from unity.common.context_store import TableStore
 from unity.common.context_registry import (
-    SPACE_CONTEXT_PREFIX,
+    TEAM_CONTEXT_PREFIX,
     ContextRegistry,
     TableContext,
 )
@@ -368,8 +368,8 @@ class FileManager(BaseFileManager):
 
             contexts = [self._ctx]
             contexts.extend(
-                f"{SPACE_CONTEXT_PREFIX}{space_id}/FileRecords/{self._fs_alias}"
-                for space_id in sorted(set(SESSION_DETAILS.space_ids))
+                f"{TEAM_CONTEXT_PREFIX}{team_id}/FileRecords/{self._fs_alias}"
+                for team_id in sorted(set(SESSION_DETAILS.team_ids))
             )
         return list(dict.fromkeys(contexts))
 
@@ -386,8 +386,8 @@ class FileManager(BaseFileManager):
 
             contexts = [self._per_file_root]
             contexts.extend(
-                f"{SPACE_CONTEXT_PREFIX}{space_id}/Files/{self._fs_alias}"
-                for space_id in sorted(set(SESSION_DETAILS.space_ids))
+                f"{TEAM_CONTEXT_PREFIX}{team_id}/Files/{self._fs_alias}"
+                for team_id in sorted(set(SESSION_DETAILS.team_ids))
             )
         return list(dict.fromkeys(contexts))
 
@@ -1920,8 +1920,8 @@ class FileManager(BaseFileManager):
             Where auto-ingested FileRecords metadata and parsed Files content
             should live. Pass ``"personal"`` (the default) for private
             attachments, personal screenshots, and drafts. Pass
-            ``"space:<id>"`` for shared media artifacts the team needs. Read
-            the *Accessible shared spaces* block before choosing; call
+            ``"team:<id>"`` for shared media artifacts the team needs. Read
+            the *Accessible shared teams* block before choosing; call
             ``request_clarification`` instead of guessing toward a wider
             audience. When ``auto_ingest`` is false this method only saves bytes
             through the adapter, so the destination is validated but no metadata
