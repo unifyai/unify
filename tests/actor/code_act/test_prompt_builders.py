@@ -250,6 +250,13 @@ def test_code_act_prompt_includes_reasoning_helper_decision_guidance():
     assert "A comment that says" in prompt
     assert "actually call `reason(...)`" in prompt
     assert "brittle substring checks" in prompt
+    assert "Choosing A Model For `reason(...)`" in prompt
+    assert "Artificial Analysis: https://artificialanalysis.ai/" in prompt
+    assert "ARC Prize leaderboard: https://arcprize.org/leaderboard" in prompt
+    assert "Supported UniLLM endpoints currently registered" in prompt
+    assert "gpt-4.1-nano@openai" in prompt
+    assert "gpt-5.5@openai" in prompt
+    assert "Do not put benchmark browsing or" in prompt
 
 
 @pytest.mark.timeout(30)
