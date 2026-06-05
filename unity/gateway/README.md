@@ -29,9 +29,10 @@ Deployment-specific behavior sits behind small protocols:
 ```text
 unity/gateway/
 ├── app.py                 # FastAPI app mounting channels and adapters
-├── __main__.py            # python -m unity.gateway serve/doctor
+├── __main__.py            # python -m unity.gateway serve/setup/doctor/urls/smoke
 ├── context.py             # GatewayContext dependency injection
 ├── local_setup.py         # local channel setup metadata
+├── wizard.py              # interactive env-file setup wizard
 ├── local-setup.md         # local operator setup guide
 ├── envelope_sink.py       # local/http/pubsub delivery backends
 ├── runtime.py             # local/hosted runtime activation backends
@@ -63,17 +64,24 @@ to the local Unity runtime.
 External provider channels require provider credentials and a public HTTPS
 callback URL. The gateway reads operator credentials from environment variables
 such as `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `SLACK_SIGNING_SECRET`,
-`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `MICROSOFT_CLIENT_ID`, and
-`MICROSOFT_CLIENT_SECRET`.
+`GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`,
+`MS365_BYOD_CLIENT_ID`, and `MS365_BYOD_CLIENT_SECRET`.
 
-Check configuration with:
+Run the local setup wizard, print callback URLs, and validate configuration with:
 
 ```bash
-python -m unity.gateway setup --public-url https://your-public-callback.example
+python -m unity.gateway setup --interactive
+python -m unity.gateway setup --channels twilio google --write-env --env-file .env
 python -m unity.gateway urls --public-url https://your-public-callback.example
-python -m unity.gateway doctor --check-credentials
-python -m unity.gateway smoke --base-url http://127.0.0.1:8001 --public-url https://your-public-callback.example
+python -m unity.gateway doctor --check-credentials --channels all --env-file .env
+python -m unity.gateway smoke --base-url http://127.0.0.1:8001 --check-credentials
 ```
+
+The setup registry covers user-facing channels (`twilio`, `whatsapp`, `social`,
+`slack`, `google`, `microsoft`, `discord`, `email`), local capabilities
+(`local-stack`, `unillm`, `voice`), and internal Console/runtime adapter
+endpoints (`internal`). Internal endpoints are validated by smoke and
+compatibility tests rather than configured in provider dashboards.
 
 ## Hosted Usage
 

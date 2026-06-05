@@ -14,12 +14,16 @@ from urllib.request import urlopen
 from unity.gateway.local_setup import (
     callback_urls,
     channel_names,
-    credential_status,
     env_placeholder_lines,
     missing_required_credentials,
     public_url_provider_from_base,
     select_channel_setups,
     validate_public_url,
+)
+from unity.gateway.wizard import (
+    load_env_file,
+    report_env_status,
+    run_interactive_setup,
 )
 
 GATEWAY_MODES = ("all", "channels", "adapters", "local-single-process")
@@ -97,7 +101,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--channels",
         nargs="*",
         default=None,
-        help=f"Channels to inspect (default: all). Known: {', '.join(channel_names())}",
+        help=f"Channels to inspect (default: all). Known: all, {', '.join(channel_names())}",
+    )
+    doctor.add_argument(
+        "--env-file",
+        default=".env",
+        help="Env file to load before checks (default: .env).",
+    )
+    doctor.add_argument(
+        "--fix",
+        action="store_true",
+        help="Append missing credential placeholders to --env-file.",
     )
 
     urls = subparsers.add_parser("urls", help="Print provider callback URLs")
@@ -110,7 +124,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--channels",
         nargs="*",
         default=None,
-        help=f"Channels to print (default: all). Known: {', '.join(channel_names())}",
+        help=f"Channels to print (default: all). Known: all, {', '.join(channel_names())}",
     )
     urls.add_argument(
         "--format",
@@ -135,7 +149,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--channels",
         nargs="*",
         default=None,
-        help=f"Channels to include (default: all). Known: {', '.join(channel_names())}",
+        help=f"Channels to include (default: all). Known: all, {', '.join(channel_names())}",
     )
     setup.add_argument(
         "--env-file",
@@ -146,6 +160,26 @@ def _build_parser() -> argparse.ArgumentParser:
         "--write-env",
         action="store_true",
         help="Append missing channel credential placeholders to --env-file.",
+    )
+    setup.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Prompt for selected channel values and write them to --env-file.",
+    )
+    setup.add_argument(
+        "--quick",
+        action="store_true",
+        help="In interactive mode, prompt only for missing values.",
+    )
+    setup.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Fail instead of prompting when selected required values are missing.",
+    )
+    setup.add_argument(
+        "--no-write-env",
+        action="store_true",
+        help="In interactive mode, print collected values summary without writing.",
     )
     setup.add_argument(
         "--print",
@@ -164,12 +198,45 @@ def _build_parser() -> argparse.ArgumentParser:
         "--channels",
         nargs="*",
         default=None,
-        help=f"Channels to inspect (default: all). Known: {', '.join(channel_names())}",
+        help=f"Channels to inspect (default: all). Known: all, {', '.join(channel_names())}",
     )
     smoke.add_argument(
         "--check-credentials",
         action="store_true",
         help="Fail when selected channels are missing required credentials.",
+    )
+    smoke.add_argument(
+        "--env-file",
+        default=".env",
+        help="Env file to load before checks (default: .env).",
+    )
+
+    wizard = subparsers.add_parser("wizard", help="Run the interactive setup wizard")
+    wizard.add_argument(
+        "--public-url",
+        default=os.environ.get("UNITY_GATEWAY_PUBLIC_URL", ""),
+        help="Externally reachable HTTPS callback base URL.",
+    )
+    wizard.add_argument(
+        "--channels",
+        nargs="*",
+        default=None,
+        help=f"Channels to include (default: all). Known: all, {', '.join(channel_names())}",
+    )
+    wizard.add_argument(
+        "--env-file",
+        default=".env",
+        help="Env file path to update (default: .env).",
+    )
+    wizard.add_argument(
+        "--quick",
+        action="store_true",
+        help="Prompt only for missing values.",
+    )
+    wizard.add_argument(
+        "--no-write-env",
+        action="store_true",
+        help="Do not write collected values to --env-file.",
     )
 
     _add_serve_args(parser)
@@ -177,7 +244,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _normalize_argv(argv: list[str] | None) -> list[str] | None:
-    commands = {"serve", "doctor", "urls", "setup", "smoke", "-h", "--help"}
+    commands = {"serve", "doctor", "urls", "setup", "smoke", "wizard", "-h", "--help"}
     if argv and argv[0] not in commands:
         return ["serve", *argv]
     return argv
@@ -294,6 +361,19 @@ def _append_env_placeholders(env_file: str, lines: tuple[str, ...]) -> None:
 
 def _setup(args: argparse.Namespace) -> int:
     setups = _selected_setups(args)
+    if getattr(args, "interactive", False):
+        if getattr(args, "non_interactive", False):
+            print("setup: --interactive and --non-interactive cannot be combined")
+            return 2
+        return run_interactive_setup(
+            setups,
+            env_file=args.env_file,
+            public_url=args.public_url.strip(),
+            quick=getattr(args, "quick", False),
+            write=not getattr(args, "no_write_env", False),
+        )
+
+    env_file = load_env_file(args.env_file, override=False)
     print("Unity gateway local setup")
     print("")
     print("Start the gateway with:")
@@ -315,6 +395,16 @@ def _setup(args: argparse.Namespace) -> int:
     print("Credential placeholders:")
     for line in env_placeholder_lines(setups):
         print(line)
+    if getattr(args, "non_interactive", False):
+        failed, lines = report_env_status(setups, env_values=env_file.values)
+        print("")
+        print("Credential status:")
+        for line in lines:
+            print(line)
+        if failed:
+            print("")
+            print("setup: missing required credentials")
+            return 1
     if args.write_env:
         _append_env_placeholders(args.env_file, env_placeholder_lines(setups))
     print(
@@ -324,8 +414,14 @@ def _setup(args: argparse.Namespace) -> int:
 
 
 def _doctor(args: argparse.Namespace) -> int:
+    setups = _selected_setups(args)
+    env_file = load_env_file(args.env_file, override=False)
     failed = False
     public_url = args.public_url.strip()
+    print("Unity gateway doctor")
+    print("")
+    print("Public URL")
+    print("----------")
     if public_url:
         ok, message = validate_public_url(public_url)
         print(message)
@@ -333,22 +429,38 @@ def _doctor(args: argparse.Namespace) -> int:
     else:
         print("public-url: not set")
 
+    print("")
+    print("Local Runtime")
+    print("-------------")
+    ingress_url = os.environ.get("UNITY_GATEWAY_LOCAL_INGRESS_URL", "").strip()
+    if ingress_url:
+        if ingress_url.startswith(("http://", "https://")):
+            print(f"local ingress: configured ({ingress_url})")
+        else:
+            print(f"local ingress: invalid URL ({ingress_url})")
+            failed = True
+    else:
+        print("local ingress: not set (ok for adapter-only checks)")
+
     if args.check_credentials:
-        for setup in _selected_setups(args):
-            status = credential_status(setup)
-            missing = missing_required_credentials(setup)
-            print(
-                f"{setup.name}: {'ok' if not missing else 'missing required credentials'}",
-            )
-            for spec in setup.credentials:
-                marker = "set" if status[spec.name] else "missing"
-                requirement = "required" if spec.required else "optional"
-                print(f"  {spec.name}: {marker} ({requirement})")
-            failed = failed or bool(missing)
+        print("")
+        print("Credentials")
+        print("-----------")
+        creds_failed, lines = report_env_status(setups, env_values=env_file.values)
+        for line in lines:
+            print(line)
+        failed = failed or creds_failed
+
+    if args.fix:
+        print("")
+        print("Safe fixes")
+        print("----------")
+        _append_env_placeholders(args.env_file, env_placeholder_lines(setups))
     return 1 if failed else 0
 
 
 def _smoke(args: argparse.Namespace) -> int:
+    load_env_file(args.env_file, override=False)
     failed = False
     base_url = args.base_url.strip() or f"http://{args.host}:{args.port}"
     health_url = f"{base_url.rstrip('/')}/health"
@@ -393,6 +505,15 @@ def main(argv: list[str] | None = None) -> int:
         return _setup(args)
     if command == "smoke":
         return _smoke(args)
+    if command == "wizard":
+        setups = _selected_setups(args)
+        return run_interactive_setup(
+            setups,
+            env_file=args.env_file,
+            public_url=args.public_url.strip(),
+            quick=getattr(args, "quick", False),
+            write=not getattr(args, "no_write_env", False),
+        )
     return _serve(args)
 
 

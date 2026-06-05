@@ -221,20 +221,115 @@ class TestMain:
         self,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture,
+        tmp_path,
     ) -> None:
         monkeypatch.delenv("SLACK_SIGNING_SECRET", raising=False)
         monkeypatch.delenv("ORCHESTRA_ADMIN_KEY", raising=False)
+        env_file = tmp_path / ".env"
 
         from unity.gateway import __main__ as launcher
 
         exit_code = launcher.main(
-            ["doctor", "--channels", "slack", "--check-credentials"],
+            [
+                "doctor",
+                "--channels",
+                "slack",
+                "--check-credentials",
+                "--env-file",
+                str(env_file),
+            ],
         )
 
         assert exit_code == 1
         out = capsys.readouterr().out
-        assert "slack: missing required credentials" in out
+        assert "Unity gateway doctor" in out
+        assert "slack: Slack" in out
         assert "SLACK_SIGNING_SECRET: missing (required)" in out
+        assert "missing required: SLACK_SIGNING_SECRET, ORCHESTRA_ADMIN_KEY" in out
+
+    def test_doctor_loads_env_file_for_credential_checks(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+        tmp_path,
+    ) -> None:
+        monkeypatch.delenv("SLACK_SIGNING_SECRET", raising=False)
+        monkeypatch.delenv("ORCHESTRA_ADMIN_KEY", raising=False)
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "SLACK_SIGNING_SECRET=x\nORCHESTRA_ADMIN_KEY=y\n",
+            encoding="utf-8",
+        )
+
+        from unity.gateway import __main__ as launcher
+
+        exit_code = launcher.main(
+            [
+                "doctor",
+                "--channels",
+                "slack",
+                "--check-credentials",
+                "--env-file",
+                str(env_file),
+            ],
+        )
+
+        assert exit_code == 0
+        out = capsys.readouterr().out
+        assert "SLACK_SIGNING_SECRET: set (required)" in out
+        assert "ORCHESTRA_ADMIN_KEY: set (required)" in out
+
+    def test_doctor_fix_appends_placeholders(
+        self,
+        capsys: pytest.CaptureFixture,
+        tmp_path,
+    ) -> None:
+        from unity.gateway import __main__ as launcher
+
+        env_file = tmp_path / ".env"
+        exit_code = launcher.main(
+            [
+                "doctor",
+                "--channels",
+                "slack",
+                "--fix",
+                "--env-file",
+                str(env_file),
+            ],
+        )
+
+        assert exit_code == 0
+        assert "Safe fixes" in capsys.readouterr().out
+        contents = env_file.read_text(encoding="utf-8")
+        assert "SLACK_SIGNING_SECRET=" in contents
+        assert "ORCHESTRA_ADMIN_KEY=" in contents
+
+    def test_wizard_alias_runs_interactive_setup(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        from unity.gateway import __main__ as launcher
+
+        env_file = tmp_path / ".env"
+        answers = iter(["https://callbacks.example.com", "secret", "admin"])
+        monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+        monkeypatch.setattr("getpass.getpass", lambda _prompt: next(answers))
+
+        exit_code = launcher.main(
+            [
+                "wizard",
+                "--channels",
+                "slack",
+                "--env-file",
+                str(env_file),
+            ],
+        )
+
+        assert exit_code == 0
+        contents = env_file.read_text(encoding="utf-8")
+        assert "UNITY_GATEWAY_PUBLIC_URL=https://callbacks.example.com" in contents
+        assert "SLACK_SIGNING_SECRET=secret" in contents
 
     def test_smoke_checks_gateway_health(
         self,
