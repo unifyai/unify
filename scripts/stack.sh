@@ -13,7 +13,7 @@
 #   ./scripts/stack.sh doctor   Check prerequisites
 #
 # Environment:
-#   UNIFY_STACK_ROOT          Parent dir with orchestra/console/communication siblings
+#   UNIFY_STACK_ROOT          Parent dir with orchestra/console/unity-deploy siblings
 #   SELF_HOST_OWNER_PASSWORD  Pin the bootstrap owner password (optional)
 #   OPENAI_API_KEY / ANTHROPIC_API_KEY  Required for Coordinator chat
 #   DEEPGRAM_API_KEY / CARTESIA_API_KEY Required for browser calls (prompted by unity setup)
@@ -28,7 +28,7 @@ SELF_HOST_ENV_SCRIPT="$UNITY_REPO_PATH/scripts/self_host_env.sh"
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$UNITY_REPO_PATH/.." && pwd -P)}"
 CONSOLE_REPO_PATH="${CONSOLE_REPO_PATH:-$UNIFY_STACK_ROOT/console}"
 ORCHESTRA_REPO_PATH="${ORCHESTRA_REPO_PATH:-$UNIFY_STACK_ROOT/orchestra}"
-COMMUNICATION_REPO_PATH="${COMMUNICATION_REPO_PATH:-$UNIFY_STACK_ROOT/communication}"
+COMMUNICATION_REPO_PATH="${COMMUNICATION_REPO_PATH:-$UNIFY_STACK_ROOT/unity-deploy}"
 
 CONSOLE_LOCAL_SCRIPT="$CONSOLE_REPO_PATH/scripts/local.sh"
 CREDENTIALS_FILE="${SELF_HOST_CREDENTIALS_FILE:-$HOME/.unity/self-host-credentials.json}"
