@@ -43,7 +43,7 @@ from unity.conversation_manager.prompt_builders import (
     build_system_prompt,
     build_voice_agent_prompt,
 )
-from unity.session_details import SESSION_DETAILS, SpaceSummary
+from unity.session_details import SESSION_DETAILS, TeamSummary
 from unity.settings import SETTINGS
 
 # Source of truth: orchestra/services/coordinator_personas.py (assistants.about at provision time).
@@ -149,7 +149,7 @@ def _build_slow_brain_system_prompt(
     demo_mode: bool,
     authorized_humans: list[dict] | None,
     workspace_coordinator_name: str | None,
-    space_summaries: list[SpaceSummary],
+    team_summaries: list[TeamSummary],
 ) -> str:
     """Mirror ``unity/conversation_manager/domains/brain.py::build_brain_spec``."""
     bio_parts: list[str] = []
@@ -180,7 +180,7 @@ def _build_slow_brain_system_prompt(
         assistant_has_teams=False,
         user_desktop_control=SETTINGS.conversation.USER_DESKTOP_CONTROL_ENABLED,
         runtime_setup_note=None,
-        space_summaries=space_summaries,
+        team_summaries=team_summaries,
         is_coordinator=is_coordinator,
         authorized_humans=(
             authorized_humans if (is_coordinator and is_org_workspace) else None
@@ -401,7 +401,7 @@ def main() -> int:
             demo_mode=demo_mode,
             authorized_humans=authorized_humans,
             workspace_coordinator_name=workspace_coordinator_name,
-            space_summaries=[],
+            team_summaries=[],
         )
         _write_or_print(
             f"{label_prefix}_slow_brain_system_prompt",

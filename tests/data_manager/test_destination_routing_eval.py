@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from tests.destination_routing_helpers import (
-    PATCH_SPACE_DESTINATION,
+    PATCH_TEAM_DESTINATION,
     DestinationRoutingDecision,
     routing_decision_prompt,
     tool_name,
@@ -26,5 +26,5 @@ async def test_team_kpi_data_routes_to_patch_space():
 
     assert decision.manager.lower().replace("_", "") == "datamanager"
     assert tool_name(decision) == "insert_rows"
-    assert decision.destination == PATCH_SPACE_DESTINATION
+    assert decision.destination == PATCH_TEAM_DESTINATION
     assert decision.clarification_requested is False

@@ -15,21 +15,21 @@ from unify.utils.http import RequestError
 
 from tests.async_tool_loop.conftest import LLM_CONFIGS
 from unity.blacklist_manager.base import BaseBlackListManager
-from unity.common.accessible_spaces_block import build_accessible_spaces_block
+from unity.common.accessible_teams_block import build_accessible_teams_block
 from unity.common.async_tool_loop import start_async_tool_loop
 from unity.common.context_registry import ContextRegistry
 from unity.common.llm_client import new_llm_client
 from unity.data_manager.base import BaseDataManager
 from unity.file_manager.managers.base import BaseFileManager
-from unity.session_details import SESSION_DETAILS, SpaceSummary
+from unity.session_details import SESSION_DETAILS, TeamSummary
 
-PATCH_SPACE_DESTINATION = "space:41001"
-FAMILY_SPACE_DESTINATION = "space:41002"
+PATCH_TEAM_DESTINATION = "team:41001"
+FAMILY_TEAM_DESTINATION = "team:41002"
 PERSONAL_DESTINATIONS = {None, "", "personal"}
 
-EVAL_SPACE_SUMMARIES = [
-    SpaceSummary(
-        space_id=41001,
+EVAL_TEAM_SUMMARIES = [
+    TeamSummary(
+        team_id=41001,
         name="South-East repairs patch",
         description=(
             "Daily operations for Patch-1 supervisors and operatives. Carries "
@@ -38,8 +38,8 @@ EVAL_SPACE_SUMMARIES = [
             "team-level blacklist entries the patch has agreed to refuse."
         ),
     ),
-    SpaceSummary(
-        space_id=41002,
+    TeamSummary(
+        team_id=41002,
         name="Family logistics",
         description=(
             "Household scheduling, school logistics, family reference files, "
@@ -58,23 +58,23 @@ ROUTING_TOOL_METHODS = (
 
 @pytest.fixture(scope="function")
 def manager_routing_context(request):
-    """Provide an isolated personal root plus one isolated shared space."""
+    """Provide an isolated personal root plus one isolated shared team."""
 
     context = f"tests/destination_routing/{request.node.name}/{uuid.uuid4().hex}"
-    space_id = 20_000_000 + uuid.uuid4().int % 1_000_000_000
+    team_id = 20_000_000 + uuid.uuid4().int % 1_000_000_000
     ContextRegistry.clear()
     SESSION_DETAILS.reset()
     unify.set_context(context, relative=False)
-    SESSION_DETAILS.space_ids = [space_id]
-    SESSION_DETAILS.space_summaries = [
+    SESSION_DETAILS.team_ids = [team_id]
+    SESSION_DETAILS.team_summaries = [
         {
-            "space_id": space_id,
+            "team_id": team_id,
             "name": "Ops Team",
             "description": "Shared operations workspace for team-visible memory.",
         },
     ]
-    yield context, space_id
-    for root in (context, f"Spaces/{space_id}"):
+    yield context, team_id
+    for root in (context, f"Teams/{team_id}"):
         delete_context_tree(root)
     unify.unset_context()
     SESSION_DETAILS.reset()
@@ -95,11 +95,11 @@ class RoutingScenario:
         unique = uuid.uuid4().hex
         base_id = 40_000_000 + uuid.uuid4().int % 1_000_000_000
         self.context = f"tests/destination_routing_eval/{name}/{unique}"
-        self.patch_space_id = base_id
-        self.research_space_id = base_id + 1
-        self.space_summaries = [
-            SpaceSummary(
-                space_id=self.patch_space_id,
+        self.patch_team_id = base_id
+        self.research_team_id = base_id + 1
+        self.team_summaries = [
+            TeamSummary(
+                team_id=self.patch_team_id,
                 name="Patch Reliability",
                 description=(
                     "Shared workspace for field dispatch, compressor incidents, "
@@ -107,8 +107,8 @@ class RoutingScenario:
                     "repair automation used by the patch reliability coordinators."
                 ),
             ),
-            SpaceSummary(
-                space_id=self.research_space_id,
+            TeamSummary(
+                team_id=self.research_team_id,
                 name="Market Research",
                 description=(
                     "Shared workspace for competitive research, analyst notes, "
@@ -121,14 +121,14 @@ class RoutingScenario:
         ContextRegistry.clear()
         SESSION_DETAILS.reset()
         unify.set_context(self.context, relative=False)
-        SESSION_DETAILS.space_ids = [self.patch_space_id, self.research_space_id]
-        SESSION_DETAILS.space_summaries = self.space_summaries
+        SESSION_DETAILS.team_ids = [self.patch_team_id, self.research_team_id]
+        SESSION_DETAILS.team_summaries = self.team_summaries
 
     def teardown(self) -> None:
         for root in (
             self.context,
-            f"Spaces/{self.patch_space_id}",
-            f"Spaces/{self.research_space_id}",
+            f"Teams/{self.patch_team_id}",
+            f"Teams/{self.research_team_id}",
         ):
             delete_context_tree(root)
         unify.unset_context()
@@ -137,11 +137,11 @@ class RoutingScenario:
 
     @property
     def patch_destination(self) -> str:
-        return f"space:{self.patch_space_id}"
+        return f"team:{self.patch_team_id}"
 
     @property
     def research_destination(self) -> str:
-        return f"space:{self.research_space_id}"
+        return f"team:{self.research_team_id}"
 
 
 class DestinationRoutingDecision(BaseModel):
@@ -151,7 +151,7 @@ class DestinationRoutingDecision(BaseModel):
     tool: str = Field(description="The write tool to call, or request_clarification.")
     destination: str | None = Field(
         default=None,
-        description='The chosen destination argument, such as "personal" or "space:<id>".',
+        description='The chosen destination argument, such as "personal" or "team:<id>".',
     )
     clarification_requested: bool = Field(
         default=False,
@@ -171,7 +171,7 @@ def routing_decision_prompt(user_request: str) -> str:
     )
 
     return (
-        f"{build_accessible_spaces_block(EVAL_SPACE_SUMMARIES)}\n\n"
+        f"{build_accessible_teams_block(EVAL_TEAM_SUMMARIES)}\n\n"
         f"Available write tools from the live manager docstrings:\n{tool_descriptions}\n\n"
         "request_clarification(question): ask before a write that would go to a "
         "wider audience when the user intent is ambiguous.\n\n"
@@ -290,7 +290,7 @@ def assert_tool_destination(
     tool_suffix: str,
     expected_destination: str,
 ) -> None:
-    """Assert a matching tool call used the expected shared-space destination."""
+    """Assert a matching tool call used the expected shared-team destination."""
 
     matching_calls = matching_tool_calls(messages, tool_suffix)
     assert matching_calls, f"Expected a tool call ending with {tool_suffix!r}"
@@ -316,7 +316,7 @@ async def run_direct_routing_loop(
     *,
     llm_config: dict[str, str],
     tools: dict[str, Any],
-    accessible_spaces: list[SpaceSummary],
+    accessible_teams: list[TeamSummary],
     message: str,
     loop_id: str,
 ) -> list[dict[str, Any]]:
@@ -330,10 +330,10 @@ async def run_direct_routing_loop(
             Read the tool schema carefully, especially the destination parameter.
             Choose the destination from the user's meaning and the space descriptions,
             not from literal keywords alone. Use personal memory for private user
-            preferences or ownership that does not clearly belong to a shared space.
+            preferences or ownership that does not clearly belong to a shared team.
             Do not answer without performing the requested write.
 
-            {build_accessible_spaces_block(accessible_spaces)}
+            {build_accessible_teams_block(accessible_teams)}
             """,
         ).strip(),
     )

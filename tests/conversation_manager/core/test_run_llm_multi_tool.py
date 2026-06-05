@@ -258,7 +258,7 @@ async def test_run_llm_records_recent_tool_executions_for_follow_up_turns(
     cm._recent_commissioning_successes = {}
 
     fake_result = _make_multi_tool_result(
-        ("create_space", {"name": "Ops HQ"}, {"space_id": 11, "name": "Ops HQ"}),
+        ("create_space", {"name": "Ops HQ"}, {"team_id": 11, "name": "Ops HQ"}),
     )
     with patch(
         "unity.conversation_manager.conversation_manager.single_shot_tool_decision",
@@ -270,7 +270,7 @@ async def test_run_llm_records_recent_tool_executions_for_follow_up_turns(
     last = cm._recent_tool_executions[-1]
     assert last["tool_name"] == "create_space"
     assert last["origin_event_name"] == "SMSSent"
-    assert "space_id" in last["result_preview"]
+    assert "team_id" in last["result_preview"]
 
 
 @pytest.mark.asyncio
@@ -289,7 +289,7 @@ async def test_run_llm_carries_recent_tool_executions_into_next_turn_prompt(
                 (
                     "create_space",
                     {"name": "Ops HQ"},
-                    {"space_id": 11, "name": "Ops HQ"},
+                    {"team_id": 11, "name": "Ops HQ"},
                 ),
             )
         return SingleShotResult(tools=[], text_response="noop", structured_output=None)

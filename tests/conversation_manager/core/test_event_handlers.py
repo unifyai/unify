@@ -2982,21 +2982,21 @@ class TestAssistantUpdateEventHandler:
         """Membership updates refresh reachable roots without running config side effects."""
         from unity.common.context_registry import (
             PERSONAL_ROOT_IDENTITY,
-            SPACE_CONTEXT_PREFIX,
+            TEAM_CONTEXT_PREFIX,
             ContextRegistry,
         )
         from unity.session_details import SESSION_DETAILS
 
-        SESSION_DETAILS.space_ids = [3, 7]
+        SESSION_DETAILS.team_ids = [3, 7]
         SESSION_DETAILS.self_contact_id = 0
         SESSION_DETAILS.boss_contact_id = 1
         monkeypatch.delenv("SELF_CONTACT_ID", raising=False)
         monkeypatch.delenv("BOSS_CONTACT_ID", raising=False)
-        monkeypatch.delenv("SPACE_SUMMARIES", raising=False)
+        monkeypatch.delenv("TEAM_SUMMARIES", raising=False)
         ContextRegistry._registry = {
             ("TaskScheduler", "Tasks", PERSONAL_ROOT_IDENTITY): "user456/123/Tasks",
-            ("TaskScheduler", "Tasks", f"{SPACE_CONTEXT_PREFIX}3"): "Spaces/3/Tasks",
-            ("TaskScheduler", "Tasks", f"{SPACE_CONTEXT_PREFIX}7"): "Spaces/7/Tasks",
+            ("TaskScheduler", "Tasks", f"{TEAM_CONTEXT_PREFIX}3"): "Teams/3/Tasks",
+            ("TaskScheduler", "Tasks", f"{TEAM_CONTEXT_PREFIX}7"): "Teams/7/Tasks",
         }
         mock_cm.set_details = MagicMock()
         mock_cm.get_call_config = MagicMock(return_value={})
@@ -3020,15 +3020,15 @@ class TestAssistantUpdateEventHandler:
             voice_id="voice_123",
             voice_provider="cartesia",
             update_kind="membership",
-            space_ids=[7, 11],
-            space_summaries=[
+            team_ids=[7, 11],
+            team_summaries=[
                 {
-                    "space_id": 7,
+                    "team_id": 7,
                     "name": "Ops",
                     "description": "Operations workspace for customer support.",
                 },
                 {
-                    "space_id": 11,
+                    "team_id": 11,
                     "name": "Repairs",
                     "description": "South-East repairs patch daily operations.",
                 },
@@ -3044,17 +3044,17 @@ class TestAssistantUpdateEventHandler:
             try:
                 await EventHandler.handle_event(event, mock_cm)
 
-                assert SESSION_DETAILS.space_ids == [7, 11]
+                assert SESSION_DETAILS.team_ids == [7, 11]
                 assert SESSION_DETAILS.self_contact_id == 42
                 assert SESSION_DETAILS.boss_contact_id == 43
                 assert os.environ["SELF_CONTACT_ID"] == "42"
                 assert os.environ["BOSS_CONTACT_ID"] == "43"
                 assert (
                     "South-East repairs patch daily operations."
-                    in os.environ["SPACE_SUMMARIES"]
+                    in os.environ["TEAM_SUMMARIES"]
                 )
-                assert mock_cm.space_ids == [7, 11]
-                assert [summary.space_id for summary in mock_cm.space_summaries] == [
+                assert mock_cm.team_ids == [7, 11]
+                assert [summary.team_id for summary in mock_cm.team_summaries] == [
                     7,
                     11,
                 ]
@@ -3068,19 +3068,19 @@ class TestAssistantUpdateEventHandler:
                 )
                 assert (
                     ContextRegistry._registry[
-                        ("TaskScheduler", "Tasks", f"{SPACE_CONTEXT_PREFIX}7")
+                        ("TaskScheduler", "Tasks", f"{TEAM_CONTEXT_PREFIX}7")
                     ]
-                    == "Spaces/7/Tasks"
+                    == "Teams/7/Tasks"
                 )
                 assert (
                     "TaskScheduler",
                     "Tasks",
-                    f"{SPACE_CONTEXT_PREFIX}3",
+                    f"{TEAM_CONTEXT_PREFIX}3",
                 ) not in ContextRegistry._registry
                 assert (
                     "TaskScheduler",
                     "Tasks",
-                    f"{SPACE_CONTEXT_PREFIX}11",
+                    f"{TEAM_CONTEXT_PREFIX}11",
                 ) not in ContextRegistry._registry
                 mock_cm.set_details.assert_not_called()
                 mock_cm.call_manager.set_config.assert_not_called()

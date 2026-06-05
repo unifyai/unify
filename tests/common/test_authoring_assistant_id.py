@@ -95,8 +95,8 @@ def test_shared_row_models_register_immutable_authoring_field(
     [
         "default/42/Data/Forecasts",
         "default/42/FileRecords/Local",
-        "Spaces/7/Knowledge/Competitors",
-        "Spaces/7/Files/Contracts/12/Content",
+        "Teams/7/Knowledge/Competitors",
+        "Teams/7/Files/Contracts/12/Content",
         "default/42/Functions/Compositional",
     ],
 )

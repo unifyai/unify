@@ -21,7 +21,7 @@ from unity.coordinator_manager.workspace_manager import (
 )
 from unity.coordinator_manager.workspace_manager import CoordinatorWorkspaceManager
 from unity.function_manager.primitives.registry import get_registry
-from unity.session_details import SESSION_DETAILS, AssistantDetails, SpaceSummary
+from unity.session_details import SESSION_DETAILS, AssistantDetails, TeamSummary
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
@@ -183,7 +183,7 @@ class CoordinatorScenario:
     required_tools: frozenset[str] = field(default_factory=frozenset)
     required_tool_alternatives: tuple[frozenset[str], ...] = ()
     required_tool_args: dict[str, tuple[str, ...]] = field(default_factory=dict)
-    space_summaries: tuple[SpaceSummary, ...] = ()
+    team_summaries: tuple[TeamSummary, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -461,7 +461,7 @@ class _RecordingTools:
         """
 
         return {
-            "space_id": 8101,
+            "team_id": 8101,
             "name": name,
             "description": description,
             "owner_user_id": owner_user_id,
@@ -470,31 +470,31 @@ class _RecordingTools:
     def delete_space(
         self,
         *,
-        space_id: int,
+        team_id: int,
     ) -> dict[str, Any]:
         """Delete a reachable shared workspace after explicit confirmation."""
-        return {"status": "deleted", "space_id": space_id}
+        return {"status": "deleted", "team_id": team_id}
 
     def update_space(
         self,
         *,
-        space_id: int,
+        team_id: int,
         patch: dict[str, Any],
     ) -> dict[str, Any]:
         """Update metadata for a reachable shared workspace."""
-        return {"status": "updated", "space_id": space_id, "patch": patch}
+        return {"status": "updated", "team_id": team_id, "patch": patch}
 
     def add_space_member(
         self,
         *,
-        space_id: int,
+        team_id: int,
         assistant_id: int | None = None,
         member_user_id: str | None = None,
     ) -> dict[str, Any]:
         """Add exactly one assistant or org member to a reachable workspace."""
         return {
             "status": "added",
-            "space_id": space_id,
+            "team_id": team_id,
             "assistant_id": assistant_id,
             "member_user_id": member_user_id,
         }
@@ -502,11 +502,11 @@ class _RecordingTools:
     def remove_space_member(
         self,
         *,
-        space_id: int,
+        team_id: int,
         assistant_id: int,
     ) -> dict[str, Any]:
         """Remove a reachable assistant colleague from a reachable workspace."""
-        return {"status": "removed", "space_id": space_id, "assistant_id": assistant_id}
+        return {"status": "removed", "team_id": team_id, "assistant_id": assistant_id}
 
     def list_spaces(
         self,
@@ -517,26 +517,26 @@ class _RecordingTools:
 
         del owner_user_id
         return [
-            {"space_id": 3101, "name": "CashOps"},
-            {"space_id": 3102, "name": "Invoice Sandbox"},
-            {"space_id": 3103, "name": "Launch War Room"},
+            {"team_id": 3101, "name": "CashOps"},
+            {"team_id": 3102, "name": "Invoice Sandbox"},
+            {"team_id": 3103, "name": "Launch War Room"},
         ]
 
     def list_space_members(
         self,
         *,
-        space_id: int,
+        team_id: int,
     ) -> list[dict[str, Any]]:
         """List assistant members for a reachable shared workspace."""
         return [
-            {"space_id": space_id, "assistant_id": 7002, "name": "Revenue Ops"},
-            {"space_id": space_id, "assistant_id": 7004, "name": "Contractor Bot"},
+            {"team_id": team_id, "assistant_id": 7002, "name": "Revenue Ops"},
+            {"team_id": team_id, "assistant_id": 7004, "name": "Contractor Bot"},
         ]
 
     def list_spaces_for_assistant(self, *, assistant_id: int) -> list[dict[str, Any]]:
         """List shared workspaces currently attached to one assistant."""
 
-        return [{"assistant_id": assistant_id, "space_id": 3101, "name": "CashOps"}]
+        return [{"assistant_id": assistant_id, "team_id": 3101, "name": "CashOps"}]
 
     def commission_colleague_into_workspace(
         self,
@@ -551,12 +551,12 @@ class _RecordingTools:
         assistant_nationality: str | None = None,
         assistant_config: dict[str, Any] | None = None,
         assistant_id: int | None = None,
-        space_id: int | None = None,
+        team_id: int | None = None,
     ) -> dict[str, Any]:
         """Resolve/create colleague + workspace and ensure membership in one step."""
 
         resolved_assistant_id = assistant_id or 7005
-        resolved_space_id = space_id or 3104
+        resolved_team_id = team_id or 3104
         merged_assistant_config = dict(assistant_config or {})
         if assistant_about is not None:
             merged_assistant_config["about"] = assistant_about
@@ -578,17 +578,17 @@ class _RecordingTools:
                 },
             },
             "space": {
-                "status": "reused" if space_id else "created",
-                "space_id": resolved_space_id,
+                "status": "reused" if team_id else "created",
+                "team_id": resolved_team_id,
                 "space": {
-                    "space_id": resolved_space_id,
+                    "team_id": resolved_team_id,
                     "name": space_name,
                     "description": space_description,
                 },
             },
             "membership": {
                 "status": "added",
-                "space_id": resolved_space_id,
+                "team_id": resolved_team_id,
                 "assistant_id": resolved_assistant_id,
             },
         }
@@ -844,7 +844,7 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
             "The ideal clinic-space layout is not pre-labeled.",
         ),
         rubric=(
-            "The response should reason in Unify terms: colleagues, shared spaces, "
+            "The response should reason in Unify terms: colleagues, shared teams, "
             "Memory/Guidance for SOPs, and Tasks for recurring reminders. It should "
             "not prematurely create assistants without confirmation. It should offer "
             "a practical structure such as a central patient-ops colleague with clinic "
@@ -1379,7 +1379,7 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
             "with a plain-English assignment covering the weekday summary and "
             "blocked enterprise account guidance. It "
             "should not create a space or route the setup through a shared "
-            '`destination="space:<id>"` because the user asked for one colleague to '
+            '`destination="team:<id>"` because the user asked for one colleague to '
             "own the workflow."
         ),
         required_tools=frozenset({"delegate_to_colleague"}),
@@ -1399,20 +1399,20 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
                 "user",
                 "Launch War Room space 3103 already has Revenue Ops assistant 7002 "
                 "and Cold Chain Ops assistant 7003 as members. Put the launch "
-                "handoff SOP in that shared space so both colleagues read the same "
+                "handoff SOP in that shared team so both colleagues read the same "
                 "source.",
                 new=True,
             ),
         ),
         masked_components=(
-            "A reachable shared space id and assistant ids are supplied.",
+            "A reachable shared team id and assistant ids are supplied.",
             "The user says membership is already settled.",
             "The user explicitly wants one shared source across colleagues.",
         ),
         rubric=(
             "The response should treat this as shared-space setup, not colleague "
             "owned setup. It should use or describe a destination-aware shared write "
-            'such as `destination="space:3103"` for the handoff SOP. It must not call '
+            'such as `destination="team:3103"` for the handoff SOP. It must not call '
             "`delegate_to_colleague`, because the user asked for shared workspace setup."
         ),
         required_tools=frozenset({"act"}),
@@ -1423,9 +1423,9 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
                 "add_space_member",
             },
         ),
-        space_summaries=(
-            SpaceSummary(
-                space_id=3103,
+        team_summaries=(
+            TeamSummary(
+                team_id=3103,
                 name="Launch War Room",
                 description="Shared launch coordination memory.",
             ),
@@ -1705,7 +1705,7 @@ def _fake_conversation_manager(scenario: CoordinatorScenario) -> SimpleNamespace
         assistant_discord_bot_id="",
         assistant_slack_bot_user_id="",
         assistant_has_teams=False,
-        space_summaries=list(scenario.space_summaries),
+        team_summaries=list(scenario.team_summaries),
     )
 
 
@@ -1719,7 +1719,7 @@ def _configure_session(scenario: CoordinatorScenario) -> None:
     SESSION_DETAILS.user.first_name = _BOSS_CONTACT["first_name"]
     SESSION_DETAILS.user.surname = _BOSS_CONTACT["surname"]
     SESSION_DETAILS.org_id = 90210
-    SESSION_DETAILS.space_summaries = list(scenario.space_summaries)
+    SESSION_DETAILS.team_summaries = list(scenario.team_summaries)
 
 
 def _render_state(scenario: CoordinatorScenario) -> str:
@@ -2042,7 +2042,7 @@ async def test_coordinator_provisioning_sequence_includes_membership_step():
             ),
         ),
         masked_components=(
-            "No existing assistant_id or space_id is provided.",
+            "No existing assistant_id or team_id is provided.",
             "The user explicitly confirms colleague creation, workspace creation, "
             "and membership.",
         ),

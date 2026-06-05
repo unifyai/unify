@@ -910,7 +910,7 @@ class TestRenderStateWithTracking:
                     "origin_event_name": "SMSSent",
                     "tool_name": "create_space",
                     "args_preview": '{"name":"Ops HQ"}',
-                    "result_preview": '{"space_id":11}',
+                    "result_preview": '{"team_id":11}',
                 },
             ],
             last_snapshot=last_snapshot,

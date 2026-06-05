@@ -3,7 +3,7 @@
 from types import SimpleNamespace
 
 from unity.memory_manager import broader_context
-from unity.session_details import SESSION_DETAILS, SpaceSummary
+from unity.session_details import SESSION_DETAILS, TeamSummary
 
 
 class _ContactManager:
@@ -35,9 +35,9 @@ def test_broader_context_includes_accessible_spaces_and_reset(monkeypatch):
 
     monkeypatch.setattr(MemoryManager, "get_rolling_activity", lambda: "Recent work.")
     SESSION_DETAILS.reset()
-    SESSION_DETAILS.space_summaries = [
-        SpaceSummary(
-            space_id=3,
+    SESSION_DETAILS.team_summaries = [
+        TeamSummary(
+            team_id=3,
             name="Repairs",
             description="South-East repairs patch daily operations.",
         ),
@@ -45,18 +45,18 @@ def test_broader_context_includes_accessible_spaces_and_reset(monkeypatch):
     broader_context.reset()
 
     first = broader_context.get_broader_context(contact_manager=_ContactManager())
-    assert "Accessible shared spaces" in first
-    assert '- space:3 "Repairs" - South-East repairs patch daily operations.' in first
+    assert "Accessible shared teams" in first
+    assert '- team:3 "Repairs" - South-East repairs patch daily operations.' in first
     assert first.index("A bit about Boss User") < first.index(
-        "Accessible shared spaces",
+        "Accessible shared teams",
     )
-    assert first.index("Accessible shared spaces") < first.index("# Activity Logs")
+    assert first.index("Accessible shared teams") < first.index("# Activity Logs")
 
-    SESSION_DETAILS.space_summaries = []
+    SESSION_DETAILS.team_summaries = []
     assert (
         broader_context.get_broader_context(contact_manager=_ContactManager()) == first
     )
 
     broader_context.reset()
     refreshed = broader_context.get_broader_context(contact_manager=_ContactManager())
-    assert "No shared spaces are currently available." in refreshed
+    assert "No shared teams are currently available." in refreshed

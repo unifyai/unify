@@ -31,7 +31,7 @@ async def test_team_function_routes_to_the_matching_shared_space(llm_config):
         messages = await run_direct_routing_loop(
             llm_config=llm_config,
             tools=methods_to_tool_dict(manager.add_functions, include_class_name=True),
-            accessible_spaces=scenario.space_summaries,
+            accessible_teams=scenario.team_summaries,
             loop_id="destination-routing-functions-shared",
             message=(
                 "Create the small Python helper our field dispatch coordinators can "
@@ -45,7 +45,7 @@ async def test_team_function_routes_to_the_matching_shared_space(llm_config):
         assert [
             row
             for row in unify.get_logs(
-                context=f"Spaces/{scenario.patch_space_id}/Functions/Compositional",
+                context=f"Teams/{scenario.patch_team_id}/Functions/Compositional",
                 filter=f"name == '{function_name}'",
                 limit=10,
             )
@@ -60,7 +60,7 @@ async def test_team_function_routes_to_the_matching_shared_space(llm_config):
         )
         assert (
             rows_containing(
-                f"Spaces/{scenario.research_space_id}/Functions/Compositional",
+                f"Teams/{scenario.research_team_id}/Functions/Compositional",
                 function_name,
             )
             == []

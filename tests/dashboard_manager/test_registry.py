@@ -117,13 +117,13 @@ class TestPrimitivesDiscovery:
         for method in write_methods:
             doc = primitives[f"primitives.dashboards.{method}"]["docstring"]
             assert "destination" in doc
-            assert "Accessible shared spaces" in doc
+            assert "Accessible shared teams" in doc
 
         for method in ("create_tile", "update_tile"):
             doc = primitives[f"primitives.dashboards.{method}"]["docstring"]
             assert "data_scope" in doc
             assert "dashboard" in doc
-            assert "space:<id>" in doc
+            assert "team:<id>" in doc
             assert "FilterBinding.limit" in doc
             assert "JoinBinding.result_limit" in doc
             assert str(DASHBOARD_BRIDGE_MAX_ROW_LIMIT) in doc

@@ -40,7 +40,7 @@ from unity.common.llm_helpers import methods_to_tool_dict
 from unity.function_manager.function_manager import FunctionManager
 from unity.function_manager.primitives import PrimitiveScope, Primitives
 from unity.guidance_manager.guidance_manager import GuidanceManager
-from unity.session_details import SESSION_DETAILS, AssistantDetails, SpaceSummary
+from unity.session_details import SESSION_DETAILS, AssistantDetails, TeamSummary
 
 pytestmark = [pytest.mark.eval, pytest.mark.integration, pytest.mark.llm_call]
 
@@ -125,10 +125,10 @@ class _WorkspaceAwareRecordingTools(_AssistantAwareRecordingTools):
         del owner_user_id
         return list(self._spaces)
 
-    def list_space_members(self, *, space_id: int) -> list[dict[str, Any]]:
+    def list_space_members(self, *, team_id: int) -> list[dict[str, Any]]:
         """List assistant members for a reachable shared workspace."""
 
-        return list(self._memberships.get(int(space_id), []))
+        return list(self._memberships.get(int(team_id), []))
 
 
 def _headers(api_key: str) -> dict[str, str]:
@@ -284,7 +284,7 @@ def _configure_session(
     *,
     organization: LiveOrganization,
     coordinator: dict[str, Any],
-    spaces: list[SpaceSummary] | None = None,
+    spaces: list[TeamSummary] | None = None,
 ) -> None:
     SESSION_DETAILS.unify_key = organization.api_key
     SESSION_DETAILS.org_id = organization.organization_id
@@ -297,8 +297,8 @@ def _configure_session(
     SESSION_DETAILS.user.id = coordinator["user_id"]
     SESSION_DETAILS.user.first_name = _BOSS_CONTACT["first_name"]
     SESSION_DETAILS.user.surname = _BOSS_CONTACT["surname"]
-    SESSION_DETAILS.space_ids = [space.space_id for space in spaces or []]
-    SESSION_DETAILS.space_summaries = spaces or []
+    SESSION_DETAILS.team_ids = [space.team_id for space in spaces or []]
+    SESSION_DETAILS.team_summaries = spaces or []
 
 
 def _activate_assistant_context(
@@ -453,17 +453,17 @@ async def test_coordinator_persists_confirmed_shared_space_guidance():
             description=space_description,
             api_key=organization.api_key,
         )
-        space_id = int(space["space_id"])
+        team_id = int(space["team_id"])
         for assistant in (revenue, support):
             unify.add_space_member(
-                space_id,
+                team_id,
                 int(assistant["agent_id"]),
                 api_key=organization.api_key,
             )
 
         sentinel = f"LAUNCH-HANDOFF-{uuid.uuid4().hex[:10]}"
-        space_summary = SpaceSummary(
-            space_id=space_id,
+        space_summary = TeamSummary(
+            team_id=team_id,
             name=space["name"],
             description=space_description,
         )
@@ -477,23 +477,23 @@ async def test_coordinator_persists_confirmed_shared_space_guidance():
             turns=(
                 DialogueTurn(
                     "user",
-                    f"{space['name']} space {space_id} already has Revenue Ops "
+                    f"{space['name']} space {team_id} already has Revenue Ops "
                     f"assistant {revenue['agent_id']} and Support Ops assistant "
                     f"{support['agent_id']} as members. Put the {sentinel} launch "
-                    "handoff SOP in that shared space so both colleagues use the "
+                    "handoff SOP in that shared team so both colleagues use the "
                     "same source.",
                     new=True,
                 ),
             ),
             masked_components=(
-                "A reachable shared space id and assistant ids are supplied.",
+                "A reachable shared team id and assistant ids are supplied.",
                 "The user says membership is already settled.",
                 "The user explicitly wants one shared source across colleagues.",
             ),
             rubric=(
                 "The response should treat this as shared-space setup, not "
                 "colleague-owned setup. It should use `act` with instructions to "
-                "write the handoff SOP into the supplied shared space, and must "
+                "write the handoff SOP into the supplied shared team, and must "
                 "not call `delegate_to_colleague`."
             ),
             required_tools=frozenset({"act"}),
@@ -504,7 +504,7 @@ async def test_coordinator_persists_confirmed_shared_space_guidance():
                     "add_space_member",
                 },
             ),
-            space_summaries=(space_summary,),
+            team_summaries=(space_summary,),
         )
         selection_tools = _WorkspaceAwareRecordingTools(
             assistants=[
@@ -519,16 +519,16 @@ async def test_coordinator_persists_confirmed_shared_space_guidance():
                     "surname": support.get("surname"),
                 },
             ],
-            spaces=[{"space_id": space_id, "name": space["name"]}],
+            spaces=[{"team_id": team_id, "name": space["name"]}],
             memberships={
-                space_id: [
+                team_id: [
                     {
-                        "space_id": space_id,
+                        "team_id": team_id,
                         "assistant_id": int(revenue["agent_id"]),
                         "name": "Revenue Ops",
                     },
                     {
-                        "space_id": space_id,
+                        "team_id": team_id,
                         "assistant_id": int(support["agent_id"]),
                         "name": "Support Ops",
                     },
@@ -556,7 +556,7 @@ async def test_coordinator_persists_confirmed_shared_space_guidance():
             selection,
         )
         assert sentinel in act_query, _format_failure(scenario, selection)
-        assert str(space_id) in act_query or f"space:{space_id}" in act_query
+        assert str(team_id) in act_query or f"team:{team_id}" in act_query
 
         _configure_session(
             organization=organization,
@@ -575,13 +575,13 @@ async def test_coordinator_persists_confirmed_shared_space_guidance():
                     manager.add_guidance,
                     include_class_name=True,
                 ),
-                accessible_spaces=[space_summary],
+                accessible_teams=[space_summary],
                 message=act_query,
                 loop_id="coordinator-shared-space-persistence",
             )
 
-        assert_tool_destination(messages, "add_guidance", f"space:{space_id}")
-        shared_rows = _logs(f"Spaces/{space_id}/Guidance", organization)
+        assert_tool_destination(messages, "add_guidance", f"team:{team_id}")
+        shared_rows = _logs(f"Teams/{team_id}/Guidance", organization)
         matching_shared = [
             row for row in shared_rows if sentinel in json.dumps(row.entries)
         ]

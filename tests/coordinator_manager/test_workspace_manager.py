@@ -50,7 +50,7 @@ def test_workspace_manager_blocks_mutations_when_role_is_not_coordinator(monkeyp
 
     def _fake_create_space(**_kwargs):
         called["create_space"] = True
-        return {"space_id": 99}
+        return {"team_id": 99}
 
     monkeypatch.setattr(
         "unity.coordinator_manager.workspace_manager.unify.create_space",

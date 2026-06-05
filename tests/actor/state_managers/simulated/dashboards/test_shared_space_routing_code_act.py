@@ -9,11 +9,11 @@ from contextlib import contextmanager
 import pytest
 
 from tests.actor.state_managers.utils import make_code_act_actor
-from unity.common.accessible_spaces_block import build_accessible_spaces_block
+from unity.common.accessible_teams_block import build_accessible_teams_block
 from unity.common.context_registry import ContextRegistry
 from unity.manager_registry import ManagerRegistry
 from unity.memory_manager import broader_context
-from unity.session_details import SESSION_DETAILS, SpaceSummary
+from unity.session_details import SESSION_DETAILS, TeamSummary
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
@@ -24,11 +24,11 @@ EVAL_TIMEOUT_SECONDS = 300.0
 
 def _set_dashboard_spaces(
     *,
-    space_ids: list[int],
-    space_summaries: list[SpaceSummary],
+    team_ids: list[int],
+    team_summaries: list[TeamSummary],
 ) -> None:
-    SESSION_DETAILS.space_ids = list(space_ids)
-    SESSION_DETAILS.space_summaries = list(space_summaries)
+    SESSION_DETAILS.team_ids = list(team_ids)
+    SESSION_DETAILS.team_summaries = list(team_summaries)
     ManagerRegistry.clear()
     ContextRegistry.clear()
     broader_context.reset()
@@ -36,10 +36,10 @@ def _set_dashboard_spaces(
 
 @contextmanager
 def _dashboard_spaces():
-    original_space_ids = list(SESSION_DETAILS.space_ids)
-    original_space_summaries = list(SESSION_DETAILS.space_summaries)
-    patch_summary = SpaceSummary(
-        space_id=PATCH_SPACE_ID,
+    original_team_ids = list(SESSION_DETAILS.team_ids)
+    original_team_summaries = list(SESSION_DETAILS.team_summaries)
+    patch_summary = TeamSummary(
+        team_id=PATCH_SPACE_ID,
         name="Patch-1 Operations",
         description=(
             "South-East repairs patch daily operations for supervisors and "
@@ -47,8 +47,8 @@ def _dashboard_spaces():
             "counts, and shared dashboard pools the whole patch reads."
         ),
     )
-    executive_summary = SpaceSummary(
-        space_id=EXECUTIVE_SPACE_ID,
+    executive_summary = TeamSummary(
+        team_id=EXECUTIVE_SPACE_ID,
         name="Executive Dashboards",
         description=(
             "Executive team board-deck dashboards, cross-patch KPI reviews, "
@@ -56,15 +56,15 @@ def _dashboard_spaces():
         ),
     )
     _set_dashboard_spaces(
-        space_ids=[PATCH_SPACE_ID, EXECUTIVE_SPACE_ID],
-        space_summaries=[patch_summary, executive_summary],
+        team_ids=[PATCH_SPACE_ID, EXECUTIVE_SPACE_ID],
+        team_summaries=[patch_summary, executive_summary],
     )
     try:
         yield
     finally:
         _set_dashboard_spaces(
-            space_ids=original_space_ids,
-            space_summaries=original_space_summaries,
+            team_ids=original_team_ids,
+            team_summaries=original_team_summaries,
         )
 
 
@@ -91,24 +91,24 @@ def _binding_contexts(tile) -> set[str]:
     return contexts
 
 
-def _show_only_space(space_id: int) -> None:
-    SESSION_DETAILS.space_ids = [space_id]
+def _show_only_space(team_id: int) -> None:
+    SESSION_DETAILS.team_ids = [team_id]
     ContextRegistry.clear()
 
 
 def _show_no_spaces() -> None:
-    SESSION_DETAILS.space_ids = []
+    SESSION_DETAILS.team_ids = []
     ContextRegistry.clear()
 
 
 def _routing_guidelines() -> str:
-    return build_accessible_spaces_block(SESSION_DETAILS.space_summaries)
+    return build_accessible_teams_block(SESSION_DETAILS.team_summaries)
 
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(EVAL_TIMEOUT_SECONDS)
 async def test_team_dashboard_routes_to_patch_space():
-    """A team-facing dashboard request lands in the named shared space."""
+    """A team-facing dashboard request lands in the named shared team."""
     with _dashboard_spaces():
         async with make_code_act_actor(
             impl="simulated",
@@ -212,7 +212,7 @@ async def test_team_live_tile_routes_to_patch_space_and_inherits_dashboard_scope
             tile = patch_live_tiles[0]
             assert tile.data_scope == "dashboard"
             assert any(
-                context.startswith(f"Spaces/{PATCH_SPACE_ID}/")
+                context.startswith(f"Teams/{PATCH_SPACE_ID}/")
                 for context in _binding_contexts(tile)
             )
 
@@ -249,9 +249,9 @@ async def test_private_dashboard_tile_can_bind_to_team_data():
             live_tiles = _live_tiles(await primitives.dashboards.list_tiles())
             assert len(live_tiles) == 1, f"Expected one live-data tile. Calls: {calls}"
             tile = live_tiles[0]
-            assert tile.data_scope == f"space:{PATCH_SPACE_ID}"
+            assert tile.data_scope == f"team:{PATCH_SPACE_ID}"
             assert any(
-                context.startswith(f"Spaces/{PATCH_SPACE_ID}/")
+                context.startswith(f"Teams/{PATCH_SPACE_ID}/")
                 for context in _binding_contexts(tile)
             )
 
@@ -266,7 +266,7 @@ async def test_private_dashboard_tile_can_bind_to_team_data():
 @pytest.mark.asyncio
 @pytest.mark.timeout(EVAL_TIMEOUT_SECONDS)
 async def test_executive_overview_tile_routes_to_executive_space():
-    """An executive board-deck tile lands in the executive shared space."""
+    """An executive board-deck tile lands in the executive shared team."""
     with _dashboard_spaces():
         async with make_code_act_actor(
             impl="simulated",
@@ -293,7 +293,7 @@ async def test_executive_overview_tile_routes_to_executive_space():
             tile = executive_live_tiles[0]
             assert tile.data_scope == "dashboard"
             assert any(
-                context.startswith(f"Spaces/{EXECUTIVE_SPACE_ID}/")
+                context.startswith(f"Teams/{EXECUTIVE_SPACE_ID}/")
                 for context in _binding_contexts(tile)
             )
 

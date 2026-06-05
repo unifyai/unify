@@ -60,7 +60,7 @@ def reset_context_registry():
 
 
 def test_write_root_resolves_personal_and_space_destinations():
-    SESSION_DETAILS.space_ids = [3, 7]
+    SESSION_DETAILS.team_ids = [3, 7]
 
     with patch("unity.common.context_registry._create_context_with_retry"):
         assert (
@@ -83,9 +83,9 @@ def test_write_root_resolves_personal_and_space_destinations():
             ContextRegistry.write_root(
                 RegistryExampleManager,
                 "Contacts",
-                destination="space:7",
+                destination="team:7",
             )
-            == "Spaces/7"
+            == "Teams/7"
         )
 
 
@@ -119,7 +119,7 @@ def test_write_root_resolves_all_manager_destination_tables_to_shared_spaces():
                 ),
             ]
 
-    SESSION_DETAILS.space_ids = [37]
+    SESSION_DETAILS.team_ids = [37]
 
     with patch("unity.common.context_registry._create_context_with_retry"):
         for table_name in (
@@ -134,61 +134,61 @@ def test_write_root_resolves_all_manager_destination_tables_to_shared_spaces():
                 ContextRegistry.write_root(
                     DestinationAwareManager,
                     table_name,
-                    destination="space:37",
+                    destination="team:37",
                 )
-                == "Spaces/37"
+                == "Teams/37"
             )
 
 
 def test_invalid_destination_raises_structured_error():
-    SESSION_DETAILS.space_ids = [3, 7]
+    SESSION_DETAILS.team_ids = [3, 7]
 
     with pytest.raises(ToolErrorException) as exc_info:
         ContextRegistry.write_root(
             RegistryExampleManager,
             "Tasks",
-            destination="space:999",
+            destination="team:999",
         )
 
     assert exc_info.value.payload["error_kind"] == "invalid_destination"
-    assert exc_info.value.payload["details"]["destination"] == "space:999"
-    assert exc_info.value.payload["details"]["space_ids"] == [3, 7]
+    assert exc_info.value.payload["details"]["destination"] == "team:999"
+    assert exc_info.value.payload["details"]["team_ids"] == [3, 7]
 
 
 def test_read_roots_returns_personal_then_sorted_spaces():
-    SESSION_DETAILS.space_ids = [7, 3]
+    SESSION_DETAILS.team_ids = [7, 3]
 
     with patch("unity.common.context_registry._create_context_with_retry"):
         task_roots = ContextRegistry.read_roots(RegistryExampleManager, "Tasks")
         contact_roots = ContextRegistry.read_roots(RegistryExampleManager, "Contacts")
 
-    assert task_roots == ["user123/42", "Spaces/3", "Spaces/7"]
-    assert contact_roots == ["user123/42", "Spaces/3", "Spaces/7"]
+    assert task_roots == ["user123/42", "Teams/3", "Teams/7"]
+    assert contact_roots == ["user123/42", "Teams/3", "Teams/7"]
 
 
 def test_files_data_and_blacklist_are_shared_scoped():
-    SESSION_DETAILS.space_ids = [7]
+    SESSION_DETAILS.team_ids = [7]
 
     with patch("unity.common.context_registry._create_context_with_retry"):
         assert ContextRegistry.read_roots(RegistryExampleManager, "Secrets") == [
             "user123/42",
-            "Spaces/7",
+            "Teams/7",
         ]
         assert ContextRegistry.read_roots(RegistryExampleManager, "FileRecords") == [
             "user123/42",
-            "Spaces/7",
+            "Teams/7",
         ]
         assert ContextRegistry.read_roots(RegistryExampleManager, "Files") == [
             "user123/42",
-            "Spaces/7",
+            "Teams/7",
         ]
         assert ContextRegistry.read_roots(RegistryExampleManager, "Data") == [
             "user123/42",
-            "Spaces/7",
+            "Teams/7",
         ]
         assert ContextRegistry.read_roots(RegistryExampleManager, "BlackList") == [
             "user123/42",
-            "Spaces/7",
+            "Teams/7",
         ]
 
 
@@ -201,7 +201,7 @@ def test_coordinator_manager_is_registered_for_coordinator_startup_provisioning(
 
 
 def test_coordinator_contexts_do_not_fan_out_to_spaces():
-    SESSION_DETAILS.space_ids = [7]
+    SESSION_DETAILS.team_ids = [7]
 
     with (
         patch("unity.common.context_registry._create_context_with_retry"),
@@ -216,7 +216,7 @@ def test_coordinator_contexts_do_not_fan_out_to_spaces():
 
 
 def test_resolve_root_supports_dashboard_tables_without_provisioning():
-    SESSION_DETAILS.space_ids = [7]
+    SESSION_DETAILS.team_ids = [7]
 
     with patch(
         "unity.common.context_registry._create_context_with_retry",
@@ -224,19 +224,19 @@ def test_resolve_root_supports_dashboard_tables_without_provisioning():
         manager_name, root_identity, root_context = ContextRegistry.resolve_root(
             RegistryExampleManager,
             "Dashboards/Tiles",
-            destination="space:7",
+            destination="team:7",
         )
 
     assert manager_name == "RegistryExampleManager"
-    assert root_identity == "Spaces/7"
-    assert root_context == "Spaces/7"
+    assert root_identity == "Teams/7"
+    assert root_context == "Teams/7"
     create_context.assert_not_called()
     assert ContextRegistry._registry == {}
 
 
 @pytest.mark.parametrize("table_name", ["Transcripts", "Exchanges", "Images"])
 def test_media_tables_are_shared_scoped(table_name: str):
-    SESSION_DETAILS.space_ids = [7, 3]
+    SESSION_DETAILS.team_ids = [7, 3]
 
     with patch("unity.common.context_registry._create_context_with_retry"):
         assert (
@@ -251,19 +251,19 @@ def test_media_tables_are_shared_scoped(table_name: str):
             ContextRegistry.write_root(
                 RegistryExampleManager,
                 table_name,
-                destination="space:7",
+                destination="team:7",
             )
-            == "Spaces/7"
+            == "Teams/7"
         )
         assert ContextRegistry.read_roots(RegistryExampleManager, table_name) == [
             "user123/42",
-            "Spaces/3",
-            "Spaces/7",
+            "Teams/3",
+            "Teams/7",
         ]
 
 
 def test_lazy_provisioning_is_cached_per_root():
-    SESSION_DETAILS.space_ids = [7]
+    SESSION_DETAILS.team_ids = [7]
 
     with patch(
         "unity.common.context_registry._create_context_with_retry",
@@ -271,19 +271,19 @@ def test_lazy_provisioning_is_cached_per_root():
         ContextRegistry.write_root(
             RegistryExampleManager,
             "Tasks",
-            destination="space:7",
+            destination="team:7",
         )
         ContextRegistry.write_root(
             RegistryExampleManager,
             "Tasks",
-            destination="space:7",
+            destination="team:7",
         )
 
     create_context.assert_called_once()
-    assert create_context.call_args.args[0] == "Spaces/7/Tasks"
+    assert create_context.call_args.args[0] == "Teams/7/Tasks"
     assert (
-        ContextRegistry._registry[("RegistryExampleManager", "Tasks", "Spaces/7")]
-        == "Spaces/7/Tasks"
+        ContextRegistry._registry[("RegistryExampleManager", "Tasks", "Teams/7")]
+        == "Teams/7/Tasks"
     )
 
 
@@ -311,14 +311,14 @@ def test_lazy_provisioning_is_cached_per_root():
     ],
 )
 def test_landed_shared_tables_accept_space_destinations(table_name: str):
-    SESSION_DETAILS.space_ids = [7]
+    SESSION_DETAILS.team_ids = [7]
 
     with patch("unity.common.context_registry._create_context_with_retry"):
         assert (
             ContextRegistry.write_root(
                 RegistryExampleManager,
                 table_name,
-                destination="space:7",
+                destination="team:7",
             )
-            == "Spaces/7"
+            == "Teams/7"
         )

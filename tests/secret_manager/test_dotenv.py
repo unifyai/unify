@@ -67,7 +67,7 @@ def test_dotenv_mirror_includes_personal_only(
         dotenv_path = str(pathlib.Path(td) / ".env")
         monkeypatch.setattr(SETTINGS.secret, "DOTENV_PATH", dotenv_path)
 
-        space_id, _ = secret_manager_spaces
+        team_id, _ = secret_manager_spaces
         manager = SecretManager()
 
         manager._create_secret(
@@ -79,7 +79,7 @@ def test_dotenv_mirror_includes_personal_only(
             name="team_slack_bot",
             value="xoxb-team",
             description="Patch team Slack bot",
-            destination=f"space:{space_id}",
+            destination=f"team:{team_id}",
         )
         manager._sync_dotenv()
 

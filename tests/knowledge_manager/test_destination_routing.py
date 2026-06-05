@@ -13,7 +13,7 @@ def test_knowledge_writes_route_to_destination_and_reads_merge_roots(
 ):
     """Knowledge tables write to one root while filter reads all reachable roots."""
 
-    _, space_id = manager_routing_context
+    _, team_id = manager_routing_context
     manager = KnowledgeManager()
 
     manager._create_table(
@@ -23,7 +23,7 @@ def test_knowledge_writes_route_to_destination_and_reads_merge_roots(
     manager._create_table(
         name="Runbooks",
         columns={"title": "str", "audience": "str"},
-        destination=f"space:{space_id}",
+        destination=f"team:{team_id}",
     )
     manager._add_rows(
         table="Runbooks",
@@ -32,7 +32,7 @@ def test_knowledge_writes_route_to_destination_and_reads_merge_roots(
     manager._add_rows(
         table="Runbooks",
         rows=[{"title": "Team escalation", "audience": "shared"}],
-        destination=f"space:{space_id}",
+        destination=f"team:{team_id}",
     )
     manager._create_table(
         name="PersonalOnly",
@@ -44,7 +44,7 @@ def test_knowledge_writes_route_to_destination_and_reads_merge_roots(
     )
 
     personal_rows = unify.get_logs(context=f"{manager._ctx}/Runbooks")
-    shared_rows = unify.get_logs(context=f"Spaces/{space_id}/Knowledge/Runbooks")
+    shared_rows = unify.get_logs(context=f"Teams/{team_id}/Knowledge/Runbooks")
 
     assert [row.entries["audience"] for row in personal_rows] == ["personal"]
     assert [row.entries["audience"] for row in shared_rows] == ["shared"]
@@ -58,6 +58,6 @@ def test_knowledge_writes_route_to_destination_and_reads_merge_roots(
     outcome = manager._add_rows(
         table="Runbooks",
         rows=[{"title": "Invisible", "audience": "shared"}],
-        destination="space:404404",
+        destination="team:404404",
     )
     assert outcome["error_kind"] == "invalid_destination"

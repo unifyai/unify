@@ -1259,10 +1259,10 @@ class TestStartupEvents:
                     "user_email": "user@test.com",
                     "voice_provider": "cartesia",
                     "voice_id": "voice_1",
-                    "space_ids": [3, 7],
-                    "space_summaries": [
+                    "team_ids": [3, 7],
+                    "team_summaries": [
                         {
-                            "space_id": 3,
+                            "team_id": 3,
                             "name": "Ops",
                             "description": "Operations workspace for customer support.",
                         },
@@ -1281,10 +1281,10 @@ class TestStartupEvents:
 
             event = Event.from_json(msg["data"])
             assert isinstance(event, AssistantUpdateEvent)
-            assert event.space_ids == [3, 7]
-            assert event.space_summaries == [
+            assert event.team_ids == [3, 7]
+            assert event.team_summaries == [
                 {
-                    "space_id": 3,
+                    "team_id": 3,
                     "name": "Ops",
                     "description": "Operations workspace for customer support.",
                 },
@@ -1499,7 +1499,7 @@ class TestSystemEvents:
         mock_session_details,
         mock_settings,
     ):
-        """task_due destinations are normalized to canonical space:<id> labels."""
+        """task_due destinations are normalized to canonical team:<id> labels."""
 
         from unity.conversation_manager.comms_manager import CommsManager
 
@@ -1517,7 +1517,7 @@ class TestSystemEvents:
                     "source_task_log_id": 555,
                     "activation_revision": "rev-1",
                     "scheduled_for": "2026-04-10T09:00:00+00:00",
-                    "destination": "space:007",
+                    "destination": "team:007",
                 },
             )
 
@@ -1528,7 +1528,7 @@ class TestSystemEvents:
             assert msg is not None
             event = Event.from_json(msg["data"])
             assert isinstance(event, TaskDue)
-            assert event.destination == "space:7"
+            assert event.destination == "team:7"
 
     @pytest.mark.asyncio
     async def test_handle_task_due_event_drops_invalid_destination(

@@ -119,24 +119,20 @@ def test_dashboard_short_paths_are_not_data_prefixed():
 
 
 def test_shared_space_path_not_double_prefixed():
-    """Spaces/* contexts are absolute roots, not Data/* children."""
+    """Teams/* contexts are absolute roots, not Data/* children."""
     from unity.data_manager.data_manager import DataManager
 
     dm = DataManager.__new__(DataManager)
     dm._base_ctx = "org123/42/Data"
 
-    assert (
-        dm._resolve_context("Spaces/7/Dashboards/Tiles") == "Spaces/7/Dashboards/Tiles"
-    )
+    assert dm._resolve_context("Teams/7/Dashboards/Tiles") == "Teams/7/Dashboards/Tiles"
 
 
 def test_simulated_shared_space_path_not_double_prefixed():
     """SimulatedDataManager follows the same Spaces/* absolute-root contract."""
     dm = SimulatedDataManager()
 
-    assert (
-        dm._resolve_context("Spaces/7/Dashboards/Tiles") == "Spaces/7/Dashboards/Tiles"
-    )
+    assert dm._resolve_context("Teams/7/Dashboards/Tiles") == "Teams/7/Dashboards/Tiles"
 
 
 def test_data_manager_constructor_fails_when_context_resolution_fails():

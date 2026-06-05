@@ -190,11 +190,11 @@ def test_ask_system_prompt_formatting():
 def test_ask_prompt_includes_shared_authorship_guidance_when_spaces_exist():
     tm = TranscriptManager()
     tools = dict(tm.get_tools("ask"))
-    original_space_ids = list(SESSION_DETAILS.space_ids)
+    original_team_ids = list(SESSION_DETAILS.team_ids)
     original_agent_id = SESSION_DETAILS.assistant.agent_id
 
     try:
-        SESSION_DETAILS.space_ids = [4242]
+        SESSION_DETAILS.team_ids = [4242]
         SESSION_DETAILS.assistant.agent_id = 684
         prompt = build_ask_prompt(
             tools=tools,
@@ -203,7 +203,7 @@ def test_ask_prompt_includes_shared_authorship_guidance_when_spaces_exist():
             contact_columns=_contact_columns(tm),
         ).flatten()
     finally:
-        SESSION_DETAILS.space_ids = original_space_ids
+        SESSION_DETAILS.team_ids = original_team_ids
         SESSION_DETAILS.assistant.agent_id = original_agent_id
 
     assert "Shared transcript attribution" in prompt

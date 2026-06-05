@@ -91,7 +91,7 @@ def _make_cm():
         assistant_whatsapp_number="",
         assistant_discord_bot_id="",
         assistant_has_teams=False,
-        space_summaries=[],
+        team_summaries=[],
     )
 
 
@@ -158,7 +158,7 @@ class TestBrainSpecStateMessage:
             assistant_whatsapp_number="",
             assistant_discord_bot_id="",
             assistant_has_teams=False,
-            space_summaries=[],
+            team_summaries=[],
         )
         snapshot_state = SimpleNamespace(full_render="<state>ready</state>")
 
@@ -413,7 +413,7 @@ class TestBuildBrainSpecCoordinatorPrompt:
         assert "Escalate to Avery Coordinator" in prompt
         list_assistants.assert_called_once_with(
             list_all_org=True,
-            api_key="owner-key",
+            api_key="owner-key",  # pragma: allowlist secret
         )
 
     def test_coordinator_prompt_does_not_render_reciprocal_block(self):
@@ -436,7 +436,10 @@ class TestBuildBrainSpecCoordinatorPrompt:
         assert "Authorized humans" in prompt
         assert "Team Coordinator" not in prompt
         assert "I cannot forward it automatically" not in prompt
-        list_org_members.assert_called_once_with(7, api_key="owner-key")
+        list_org_members.assert_called_once_with(
+            7,
+            api_key="owner-key",  # pragma: allowlist secret
+        )
         list_assistants.assert_not_called()
 
     def test_personal_assistant_queries_personal_workspace_coordinator(self):
@@ -453,7 +456,9 @@ class TestBuildBrainSpecCoordinatorPrompt:
         prompt = spec.system_prompt.flatten()
         assert "Team Coordinator" not in prompt
         assert "Escalate to Avery Coordinator" not in prompt
-        list_assistants.assert_called_once_with(api_key="owner-key")
+        list_assistants.assert_called_once_with(
+            api_key="owner-key",  # pragma: allowlist secret
+        )
 
     def test_personal_coordinator_skips_org_member_and_workspace_fetch(self):
         SESSION_DETAILS.org_id = None

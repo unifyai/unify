@@ -31,7 +31,7 @@ async def test_private_preference_stays_in_personal_guidance(llm_config):
         messages = await run_direct_routing_loop(
             llm_config=llm_config,
             tools=methods_to_tool_dict(manager.add_guidance, include_class_name=True),
-            accessible_spaces=scenario.space_summaries,
+            accessible_teams=scenario.team_summaries,
             loop_id="destination-routing-guidance-personal",
             message=(
                 f"Remember for how you work with me: {sentinel}. When drafting my "
@@ -43,11 +43,11 @@ async def test_private_preference_stays_in_personal_guidance(llm_config):
         assert_personal_tool_destination(messages, "add_guidance")
         assert rows_containing(manager._ctx, sentinel)
         assert not rows_containing(
-            f"Spaces/{scenario.patch_space_id}/Guidance",
+            f"Teams/{scenario.patch_team_id}/Guidance",
             sentinel,
         )
         assert not rows_containing(
-            f"Spaces/{scenario.research_space_id}/Guidance",
+            f"Teams/{scenario.research_team_id}/Guidance",
             sentinel,
         )
     finally:
@@ -67,7 +67,7 @@ async def test_team_guidance_routes_to_the_matching_shared_space(llm_config):
         messages = await run_direct_routing_loop(
             llm_config=llm_config,
             tools=methods_to_tool_dict(manager.add_guidance, include_class_name=True),
-            accessible_spaces=scenario.space_summaries,
+            accessible_teams=scenario.team_summaries,
             loop_id="destination-routing-guidance-shared",
             message=(
                 f"Store a guidance rule titled '{sentinel}': for recurring patch "
@@ -78,10 +78,10 @@ async def test_team_guidance_routes_to_the_matching_shared_space(llm_config):
         )
 
         assert_tool_destination(messages, "add_guidance", scenario.patch_destination)
-        assert rows_containing(f"Spaces/{scenario.patch_space_id}/Guidance", sentinel)
+        assert rows_containing(f"Teams/{scenario.patch_team_id}/Guidance", sentinel)
         assert not rows_containing(manager._ctx, sentinel)
         assert not rows_containing(
-            f"Spaces/{scenario.research_space_id}/Guidance",
+            f"Teams/{scenario.research_team_id}/Guidance",
             sentinel,
         )
     finally:

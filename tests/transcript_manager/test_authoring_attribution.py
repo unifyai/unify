@@ -12,7 +12,7 @@ from unity.session_details import SESSION_DETAILS
 from unity.transcript_manager.transcript_manager import TranscriptManager
 
 
-def _space_id() -> int:
+def _team_id() -> int:
     return int(time.time_ns() % 1_000_000_000)
 
 
@@ -52,14 +52,14 @@ def _reset_session_details():
 
 @_handle_project
 def test_shared_authoring_attribution_enriches_messages_and_reuses_cache(monkeypatch):
-    space_id = _space_id()
+    team_id = _team_id()
     SESSION_DETAILS.assistant.agent_id = 684
     SESSION_DETAILS.assistant.first_name = "Avery"
     SESSION_DETAILS.assistant.surname = "Ops"
     SESSION_DETAILS.user.id = "boss-user"
     SESSION_DETAILS.org_id = 77
     SESSION_DETAILS.unify_key = "owner-key"
-    SESSION_DETAILS.space_ids = [space_id]
+    SESSION_DETAILS.team_ids = [team_id]
     manager = TranscriptManager()
 
     try:
@@ -69,7 +69,7 @@ def test_shared_authoring_attribution_enriches_messages_and_reuses_cache(monkeyp
                 exchange_id=1101,
             ),
             synchronous=True,
-            destination=f"space:{space_id}",
+            destination=f"team:{team_id}",
         )
 
         SESSION_DETAILS.assistant.agent_id = 90210
@@ -79,7 +79,7 @@ def test_shared_authoring_attribution_enriches_messages_and_reuses_cache(monkeyp
                 exchange_id=1102,
             ),
             synchronous=True,
-            destination=f"space:{space_id}",
+            destination=f"team:{team_id}",
         )
         SESSION_DETAILS.assistant.agent_id = 684
 
@@ -125,7 +125,7 @@ def test_shared_authoring_attribution_enriches_messages_and_reuses_cache(monkeyp
             {
                 "agent_id": 90210,
                 "list_all_org": True,
-                "api_key": "owner-key",
+                "api_key": "owner-key",  # pragma: allowlist secret
             },
         ]
         assert (
@@ -133,7 +133,7 @@ def test_shared_authoring_attribution_enriches_messages_and_reuses_cache(monkeyp
             == first["message_authoring_attribution"]
         )
     finally:
-        _delete_context_tree(f"Spaces/{space_id}")
+        _delete_context_tree(f"Teams/{team_id}")
 
 
 def test_colleague_name_cache_invalidates_when_org_scope_changes(monkeypatch):
@@ -145,7 +145,7 @@ def test_colleague_name_cache_invalidates_when_org_scope_changes(monkeypatch):
 
     def fake_list_assistants(**kwargs):
         calls.append(kwargs)
-        if kwargs["api_key"] == "scope-one":
+        if kwargs["api_key"] == "scope-one":  # pragma: allowlist secret
             return [{"agent_id": 999, "first_name": "Mina", "surname": "Ops"}]
         return [{"agent_id": 999, "first_name": "Rafi", "surname": "Ops"}]
 
@@ -184,12 +184,12 @@ def test_colleague_name_cache_caches_error_fallback(monkeypatch):
 
 @_handle_project
 def test_shared_authoring_attribution_uses_former_colleague_fallback(monkeypatch):
-    space_id = _space_id()
+    team_id = _team_id()
     SESSION_DETAILS.assistant.agent_id = 321
     SESSION_DETAILS.assistant.first_name = "Mina"
     SESSION_DETAILS.assistant.surname = "Support"
     SESSION_DETAILS.user.id = "boss-user"
-    SESSION_DETAILS.space_ids = [space_id]
+    SESSION_DETAILS.team_ids = [team_id]
     manager = TranscriptManager()
 
     try:
@@ -197,7 +197,7 @@ def test_shared_authoring_attribution_uses_former_colleague_fallback(monkeypatch
         [colleague_message] = manager.log_messages(
             _message_payload("missing-assistant marker", exchange_id=2201),
             synchronous=True,
-            destination=f"space:{space_id}",
+            destination=f"team:{team_id}",
         )
         SESSION_DETAILS.assistant.agent_id = 321
 
@@ -216,4 +216,4 @@ def test_shared_authoring_attribution_uses_former_colleague_fallback(monkeypatch
         assert attribution["source_label"] == "From: a former colleague"
         assert attribution["is_current_assistant"] is False
     finally:
-        _delete_context_tree(f"Spaces/{space_id}")
+        _delete_context_tree(f"Teams/{team_id}")
