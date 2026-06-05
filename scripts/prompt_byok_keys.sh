@@ -12,8 +12,45 @@
 #
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+
+_looks_like_unity_repo() {
+  local dir="$1"
+  [[ -d "$dir" && -f "$dir/pyproject.toml" && -d "$dir/unity" ]]
+}
+
+resolve_unity_repo() {
+  local candidate=""
+  if [[ -n "${UNITY_REPO:-}" && -d "$UNITY_REPO" ]]; then
+    printf '%s' "$UNITY_REPO"
+    return 0
+  fi
+  if [[ -n "${UNITY_REPO_PATH:-}" && -d "$UNITY_REPO_PATH" ]]; then
+    printf '%s' "$UNITY_REPO_PATH"
+    return 0
+  fi
+  candidate="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+  if _looks_like_unity_repo "$candidate"; then
+    printf '%s' "$candidate"
+    return 0
+  fi
+  candidate="$(pwd -P)"
+  if _looks_like_unity_repo "$candidate"; then
+    printf '%s' "$candidate"
+    return 0
+  fi
+  if [[ -n "${UNIFY_STACK_ROOT:-}" && -d "$UNIFY_STACK_ROOT/unity" ]]; then
+    printf '%s' "$UNIFY_STACK_ROOT/unity"
+    return 0
+  fi
+  printf '%s' "${UNITY_HOME:-$HOME/.unity}/unity"
+}
+
 UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
-UNITY_REPO="${UNITY_REPO:-${UNITY_REPO_PATH:-$UNITY_HOME/unity}}"
+UNITY_REPO="$(resolve_unity_repo)"
+if _looks_like_unity_repo "$UNITY_REPO"; then
+  UNITY_HOME="$(cd "$UNITY_REPO/.." && pwd -P)"
+fi
 ENV_FILE="${UNITY_ENV_FILE:-$UNITY_REPO/.env}"
 
 RED='\033[0;31m'
@@ -132,6 +169,154 @@ prompt_llm_key() {
   prompt_secret "LLM" "$var_name" "Required for Coordinator chat."
 }
 
+ensure_oauth_signing_key() {
+  if has_env_value OAUTH_STATE_SIGNING_KEY; then
+    log_success "OAUTH_STATE_SIGNING_KEY already set"
+    return 0
+  fi
+  local signing_key
+  signing_key="$(openssl rand -hex 32)"
+  upsert_env "OAUTH_STATE_SIGNING_KEY" "$signing_key"
+  log_success "Generated OAUTH_STATE_SIGNING_KEY (local OAuth state signing)"
+}
+
+prompt_workspace_oauth() {
+  echo ""
+  echo -e "${BOLD}Workspace connect (optional)${NC}"
+  echo "  Enables Google / Microsoft workspace OAuth in Console onboarding."
+  echo "  Create an OAuth app in your cloud console, then paste credentials here."
+  echo "  Redirect URI to register:"
+  echo "    http://127.0.0.1:8081/google/auth/callback"
+  echo ""
+
+  ensure_oauth_signing_key
+
+  prompt_secret \
+    "Google workspace — OAuth client ID" \
+    "GOOGLE_OAUTH_CLIENT_ID" \
+    "Google Cloud Console → APIs & Services → Credentials"
+  prompt_secret \
+    "Google workspace — OAuth client secret" \
+    "GOOGLE_OAUTH_CLIENT_SECRET" \
+    "Same OAuth client; used by local Adapters for token exchange"
+  prompt_secret \
+    "Microsoft workspace — OAuth client ID" \
+    "MICROSOFT_BYOD_CLIENT_ID" \
+    "Azure App Registration → Application (client) ID"
+
+  if has_env_value MICROSOFT_BYOD_CLIENT_ID && ! has_env_value MS365_BYOD_CLIENT_ID; then
+    local ms_id
+    ms_id="$(grep -E '^MICROSOFT_BYOD_CLIENT_ID=' "$ENV_FILE" | sed 's/^[^=]*=//')"
+    upsert_env "MS365_BYOD_CLIENT_ID" "$ms_id"
+    log_success "Mirrored MS365_BYOD_CLIENT_ID from MICROSOFT_BYOD_CLIENT_ID"
+  fi
+
+  prompt_secret \
+    "Microsoft workspace — OAuth client secret" \
+    "MS365_BYOD_CLIENT_SECRET" \
+    "Azure App Registration → Certificates & secrets"
+
+  echo ""
+  if has_env_value GOOGLE_OAUTH_CLIENT_ID && has_env_value GOOGLE_OAUTH_CLIENT_SECRET; then
+    log_success "Google workspace OAuth configured"
+  elif has_env_value MICROSOFT_BYOD_CLIENT_ID && has_env_value MS365_BYOD_CLIENT_SECRET; then
+    log_success "Microsoft workspace OAuth configured"
+  else
+    log_warn "Workspace connect skipped — add OAuth keys later to $ENV_FILE"
+  fi
+  echo ""
+}
+
+sync_anticaptcha_keys() {
+  local key=""
+  if has_env_value ANTICAPTCHA_KEY; then
+    key="$(grep -E '^ANTICAPTCHA_KEY=' "$ENV_FILE" | sed 's/^[^=]*=//')"
+  elif has_env_value UNITY_ACTOR_ANTICAPTCHA_KEY; then
+    key="$(grep -E '^UNITY_ACTOR_ANTICAPTCHA_KEY=' "$ENV_FILE" | sed 's/^[^=]*=//')"
+  fi
+  if [[ -z "$key" ]]; then
+    return 0
+  fi
+  if ! has_env_value ANTICAPTCHA_KEY; then
+    upsert_env "ANTICAPTCHA_KEY" "$key"
+    log_success "Mirrored ANTICAPTCHA_KEY for agent-service"
+  fi
+  if ! has_env_value UNITY_ACTOR_ANTICAPTCHA_KEY; then
+    upsert_env "UNITY_ACTOR_ANTICAPTCHA_KEY" "$key"
+    log_success "Mirrored UNITY_ACTOR_ANTICAPTCHA_KEY for Unity CM"
+  fi
+}
+
+prompt_anticaptcha_key() {
+  sync_anticaptcha_keys
+  if has_env_value ANTICAPTCHA_KEY || has_env_value UNITY_ACTOR_ANTICAPTCHA_KEY; then
+    log_success "AntiCaptcha key already set"
+    sync_anticaptcha_keys
+    return 0
+  fi
+
+  if [[ "$NON_INTERACTIVE" == "true" ]] || [[ ! -r /dev/tty ]] || [[ ! -w /dev/tty ]]; then
+    log_warn "AntiCaptcha not set — add ANTICAPTCHA_KEY to $ENV_FILE for computer-use CAPTCHA solving"
+    return 0
+  fi
+
+  local value=""
+  echo "" >/dev/tty
+  echo -e "${BOLD}AntiCaptcha (optional — computer use)${NC}" >/dev/tty
+  echo "  CAPTCHA solving for browser automation (agent-service + Unity actor)." >/dev/tty
+  echo "  Not needed for chat or voice-only installs." >/dev/tty
+  echo "  Sign up: https://anti-captcha.com" >/dev/tty
+  printf "Paste ANTICAPTCHA_KEY (hidden, Enter to skip): " >/dev/tty
+  if ! IFS= read -rs value </dev/tty 2>/dev/null; then
+    IFS= read -r value </dev/tty || value=""
+  fi
+  echo "" >/dev/tty
+
+  if [[ -z "$value" ]]; then
+    log_warn "Skipped AntiCaptcha"
+    return 0
+  fi
+
+  upsert_env "ANTICAPTCHA_KEY" "$value"
+  upsert_env "UNITY_ACTOR_ANTICAPTCHA_KEY" "$value"
+  log_success "Wrote ANTICAPTCHA_KEY + UNITY_ACTOR_ANTICAPTCHA_KEY to $ENV_FILE"
+}
+
+prompt_research_and_computer() {
+  echo ""
+  echo -e "${BOLD}Research + computer automation (optional)${NC}"
+  echo "  Tavily:      web search tools for Coordinator research"
+  echo "  AntiCaptcha: CAPTCHA solving when computer use is enabled (Phase 2+)"
+  echo ""
+
+  prompt_secret \
+    "Web search — Tavily API key" \
+    "UNITY_WEB_TAVILY_API_KEY" \
+    "Free tier: https://tavily.com — enables Coordinator web search"
+
+  if has_env_value UNITY_WEB_TAVILY_API_KEY && ! has_env_value UNITY_WEB_ENABLED; then
+    upsert_env "UNITY_WEB_ENABLED" "true"
+    log_success "Set UNITY_WEB_ENABLED=true (web search on)"
+  elif has_env_value UNITY_WEB_TAVILY_API_KEY; then
+    log_success "UNITY_WEB_ENABLED already set"
+  fi
+
+  prompt_anticaptcha_key
+
+  echo ""
+  if has_env_value UNITY_WEB_TAVILY_API_KEY; then
+    log_success "Web search (Tavily) configured"
+  else
+    log_warn "Web search skipped — Coordinator research tools stay disabled"
+  fi
+  if has_env_value ANTICAPTCHA_KEY || has_env_value UNITY_ACTOR_ANTICAPTCHA_KEY; then
+    log_success "AntiCaptcha configured for computer automation"
+  else
+    log_info "AntiCaptcha not set (optional until computer use)"
+  fi
+  echo ""
+}
+
 main() {
   if [[ ! -d "$UNITY_REPO" ]]; then
     log_warn "Unity repo not found at $UNITY_REPO — skipping BYOK prompts"
@@ -139,7 +324,12 @@ main() {
   fi
 
   echo ""
-  echo -e "${BOLD}BYOK setup${NC} — provider keys for chat and voice"
+  echo -e "${BOLD}BYOK setup${NC} — provider keys for chat, voice, and workspace"
+  echo ""
+  echo "  Required:  LLM key (OpenAI or Anthropic)"
+  echo "  Voice:     Deepgram + Cartesia (browser calls)"
+  echo "  Optional:  Google / Microsoft OAuth (workspace connect)"
+  echo "  Optional:  Tavily (web search), AntiCaptcha (computer use)"
   echo ""
 
   prompt_llm_key
@@ -163,7 +353,9 @@ main() {
   else
     log_warn "Voice calls need DEEPGRAM_API_KEY + CARTESIA_API_KEY in $ENV_FILE"
   fi
-  echo ""
+
+  prompt_workspace_oauth
+  prompt_research_and_computer
 }
 
 main "$@"
