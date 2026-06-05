@@ -1016,8 +1016,7 @@ class _SessionConfigBase(Event):
     org_id: int | None = None
     org_name: str = ""
     team_ids: list[int] = field(default_factory=list)
-    space_ids: list[int] = field(default_factory=list)
-    space_summaries: list[dict[str, Any]] = field(default_factory=list)
+    team_summaries: list[dict[str, Any]] = field(default_factory=list)
     is_coordinator: bool = False
     update_kind: str = "general"
     wake_reasons: list[dict[str, Any]] = field(default_factory=list)

@@ -277,7 +277,7 @@ def build_brain_spec(
         assistant_has_teams=bool(cm.assistant_has_teams),
         user_desktop_control=SETTINGS.conversation.USER_DESKTOP_CONTROL_ENABLED,
         runtime_setup_note=runtime_setup_note,
-        space_summaries=getattr(cm, "space_summaries", []),
+        team_summaries=getattr(cm, "team_summaries", []),
         is_coordinator=SESSION_DETAILS.is_coordinator,
         authorized_humans=authorized_humans,
         workspace_coordinator_name=workspace_coordinator_name,

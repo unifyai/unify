@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-from unity.common.accessible_spaces_block import build_accessible_spaces_block
-from unity.session_details import SpaceSummary
+from unity.common.accessible_teams_block import build_accessible_teams_block
+from unity.session_details import TeamSummary
 
 from ..common.prompt_helpers import now, PromptParts
 
@@ -1346,7 +1346,7 @@ def build_system_prompt(
     is_coordinator: bool = False,
     user_desktop_control: bool = False,
     runtime_setup_note: str | None = None,
-    space_summaries: list[SpaceSummary] | None = None,
+    team_summaries: list[TeamSummary] | None = None,
     authorized_humans: list[dict[str, Any]] | None = None,
     workspace_coordinator_name: str | None = None,
     is_org_workspace: bool = True,
@@ -1392,8 +1392,8 @@ def build_system_prompt(
         Whether the user has enabled remote control access for setup/help flows.
     runtime_setup_note : str | None
         Optional guidance about background setup/readiness.
-    space_summaries : list[SpaceSummary] | None
-        Shared spaces available to the assistant for memory routing.
+    team_summaries : list[TeamSummary] | None
+        Shared teams available to the assistant for memory routing.
     is_coordinator : bool
         Whether the current assistant is a Coordinator session.
     authorized_humans : list[dict[str, Any]] | None
@@ -1507,7 +1507,7 @@ def build_system_prompt(
     # Section order (1-17):
     #   1. Setup readiness (when applicable)
     #   2. Role + Bio (identity)
-    #   3. Accessible shared spaces (where memory lives)
+    #   3. Accessible shared teams (where memory lives)
     #   4. Boss details / Authorized humans (who I'm talking to)
     #   5. Input format (what I read)
     #   6. Output format + tools enumeration (what I emit)
@@ -1543,8 +1543,8 @@ def build_system_prompt(
 {bio}""",
     )
 
-    # 3. Accessible shared spaces.
-    parts.add(build_accessible_spaces_block(space_summaries or []))
+    # 3. Accessible shared teams.
+    parts.add(build_accessible_teams_block(team_summaries or []))
 
     # 4. Boss details / Authorized humans.
     if coordinator_has_org_context:
@@ -2041,7 +2041,7 @@ def _build_coordinator_console_literacy_block() -> str:
             "listed outside those groups.",
             "  - **Personal memory** (`personal`): private to one assistant — notes, "
             "credentials, or SOPs that should not be visible to teammates.",
-            "  - **Shared workspace** (`space:<id>`): durable team context — shared "
+            "  - **Shared workspace** (`team:<id>`): durable team context — shared "
             "Guidance, Knowledge, scheduled tasks, and **credentials** that every "
             "**current member** may use at runtime (Coordinators and specialist "
             "colleagues in that workspace).",
@@ -2145,7 +2145,7 @@ def _build_coordinator_console_literacy_block() -> str:
             "member may appear here for admins.",
             "  - **Teams** — org **RBAC teams** (who can do what in the org). "
             "**Not** the same as **Teams** in the Assistants left sidebar "
-            "(shared workspaces / `space:<id>` memory pools).",
+            "(shared workspaces / `team:<id>` memory pools).",
             "  - **Roles** — custom roles and permissions.",
             "  - **Security** — org MFA and related policy.",
             "",
