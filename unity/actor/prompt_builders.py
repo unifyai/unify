@@ -375,14 +375,14 @@ _EXECUTION_RULES = textwrap.dedent("""
 """).strip()
 
 _SEMANTIC_REASONING_SELECTION = textwrap.dedent("""
-    ### Deterministic Code With Semantic Reasoning
+    ### Deterministic Code With LLM-Native Semantic Processing
 
     The execution sandbox includes a `reason(...)` helper for focused,
-    billable UniLLM reasoning calls inside generated Python. Do not treat it
-    as a separate execution mode that competes with primitives or stored
-    functions. A good `execute_code` block may fetch data through several
+    billable UniLLM calls inside generated Python. Do not treat it as a
+    separate execution mode that competes with primitives or stored functions.
+    A good `execute_code` block may fetch data through several
     primitives/functions, reshape it deterministically, call `reason(...)` for
-    the meaning-based judgment, and then continue with normal Python control
+    fuzzy unstructured-data work, and then continue with normal Python control
     flow.
 
     **Deterministic substeps stay deterministic:** Exact lookups, primitive
@@ -391,24 +391,32 @@ _SEMANTIC_REASONING_SELECTION = textwrap.dedent("""
     reasoning. Keep those parts as ordinary Python or direct primitive/function
     calls, even inside a larger workflow that uses `reason(...)` elsewhere.
 
-    **Semantic substeps use `reason(...)`:** Sprinkle focused reasoning calls
-    into the generated Python when a decision depends on meaning rather than
-    exact values. This is the right shape for judgment-heavy loops: inbox
-    triage, broad categorization, relevance judgment, priority, whether
-    something needs a reply, document/ticket routing, or ambiguous
-    user-preference inference.
+    **LLMs are the fuzzy operator for unstructured data:** Use UniLLM /
+    `reason(...)` liberally when the task processes meaning, intent, nuance, or
+    natural language rather than exact values. This includes both
+    unstructured -> structured work (classify, extract, score, route, decide,
+    summarize into fields, choose an action) and unstructured -> unstructured
+    work (draft, respond, rewrite, synthesize, explain, personalize, compress).
 
     Ask yourself at each decision point: is this substep exact data
-    manipulation, or interpreting meaning? If exact manipulation is enough,
-    keep it deterministic. If interpreting meaning is central, do not replace
-    semantic judgment with brittle substring checks. Lexical signals can
-    cheaply pre-filter or support a decision, but they should not be the whole
-    classifier for semantic work.
+    manipulation, or fuzzy processing over unstructured input/output? If exact
+    manipulation is enough, keep it deterministic. If interpreting or producing
+    meaning is central, preserve that as an actual `reason(...)` / UniLLM call
+    with a compact prompt, deliberate model, and `response_format` when
+    downstream Python branches on the result.
+
+    **Semantic downgrades are bugs:** Do not replace fuzzy semantic work with
+    pre-LLM coding patterns: keyword ladders, regex classifiers, hand-written
+    sentiment rules, label-specific canned prose, or templates pretending to be
+    judgment. Lexical signals can cheaply pre-filter or support a decision, but
+    they should not be the whole processor for semantic work unless the user
+    explicitly requested fixed deterministic rules/templates.
 
     A comment that says "using reasoning" above keyword conditions is not
-    semantic reasoning. When the generated code reaches a meaning-based
-    classification or judgment substep, it should actually call `reason(...)`
-    for that substep and then branch on the returned judgment.
+    semantic reasoning. When generated code reaches a meaning-based
+    classification, extraction, routing, drafting, rewriting, or synthesis
+    substep, it should actually call `reason(...)` for that substep and then
+    branch, validate, or persist from the returned result.
 """).strip()
 
 _INCREMENTAL_EXECUTION = textwrap.dedent("""

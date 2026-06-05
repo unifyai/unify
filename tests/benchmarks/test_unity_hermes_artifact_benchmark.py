@@ -8,6 +8,12 @@ from benchmarks.unity_hermes_artifact_benchmark.arms import HERMES_ARM, UNITY_AR
 from benchmarks.unity_hermes_artifact_benchmark.fixtures import (
     OUTPUT_CONTRACT,
     synthetic_email_batches,
+    workweek_email_batches,
+)
+from benchmarks.unity_hermes_artifact_benchmark.daily_email_live import (
+    InMemoryFunctionManager,
+    _summarize_unillm_cost_events,
+    prepare_workspace,
 )
 from benchmarks.unity_hermes_artifact_benchmark.runner import (
     build_payload,
@@ -37,6 +43,77 @@ def test_synthetic_corpus_has_fixed_expected_outputs():
     assert expected_by_id["msg-005"].category == "urgent_action"
     assert expected_by_id["msg-005"].needs_reply is True
     assert expected_by_id["msg-004"].draft_reply is None
+
+
+def test_workweek_corpus_covers_monday_through_friday():
+    batches = workweek_email_batches()
+
+    assert [batch.batch_id.split("-", 1)[0] for batch in batches] == [
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+    ]
+    assert all(batch.emails for batch in batches)
+    assert batches[0].expected[0].needs_reply is True
+    assert batches[-1].expected[-1].message_id == "fri-002"
+
+
+def test_live_workspace_seeds_get_emails_helper(tmp_path):
+    paths = prepare_workspace(tmp_path)
+
+    assert "emails_by_day.json" in paths["emails_by_day"]
+    namespace: dict[str, object] = {}
+    exec((tmp_path / "email_fixture.py").read_text(encoding="utf-8"), namespace)
+    emails = namespace["get_emails"](day="monday")  # type: ignore[index,operator]
+    assert [email["message_id"] for email in emails] == [
+        "mon-001",
+        "mon-002",
+        "mon-003",
+    ]
+
+
+def test_in_memory_function_manager_persists_added_functions(tmp_path):
+    prepare_workspace(tmp_path)
+    manager = InMemoryFunctionManager()
+    source = """
+def hello(name: str) -> str:
+    \"\"\"Say hello.\"\"\"
+    return f"hello {name}"
+"""
+
+    result = manager.add_functions(implementations=source)
+    search = manager.search_functions(
+        query="hello",
+        _return_callable=True,
+        _namespace={},
+        _also_return_metadata=True,
+    )
+
+    assert result["added"][0]["name"] == "hello"
+    assert search["metadata"][0]["name"] == "hello"
+    assert manager._get_function_data_by_name(name="hello") is not None
+
+
+def test_unillm_cost_event_summary_counts_tokens_and_costs():
+    class FakeCostEvent:
+        model = "gpt-test@provider"
+        prompt_tokens = 100
+        completion_tokens = 25
+        provider_cost = 0.001
+        billed_cost = 0.002
+        cache_status = "miss"
+
+    summary = _summarize_unillm_cost_events([FakeCostEvent()])
+
+    assert summary["calls"] == 1
+    assert summary["prompt_tokens"] == 100
+    assert summary["completion_tokens"] == 25
+    assert summary["total_tokens"] == 125
+    assert summary["provider_cost_usd"] == 0.001
+    assert summary["billed_cost_usd"] == 0.002
+    assert summary["by_model"]["gpt-test@provider"]["calls"] == 1
 
 
 def test_unity_arm_encodes_functionmanager_repeat_path():
