@@ -49,6 +49,20 @@ python -m unity.gateway urls --public-url "$UNITY_GATEWAY_PUBLIC_URL"
 
 ## Setup, Doctor, and Smoke
 
+Run the guided wizard for a local env file:
+
+```bash
+python -m unity.gateway setup --interactive --env-file .env
+```
+
+Useful variants:
+
+```bash
+python -m unity.gateway setup --channels twilio,gmail --write-env --env-file .env
+python -m unity.gateway setup --channels twilio google --quick --interactive --env-file .env
+python -m unity.gateway setup --channels all --non-interactive --env-file .env
+```
+
 Print setup guidance and credential placeholders:
 
 ```bash
@@ -64,7 +78,8 @@ python -m unity.gateway setup --channels twilio --write-env --env-file .env
 Validate URL shape and selected channel credentials:
 
 ```bash
-python -m unity.gateway doctor --channels twilio slack --public-url "$UNITY_GATEWAY_PUBLIC_URL" --check-credentials
+python -m unity.gateway doctor --channels twilio slack --public-url "$UNITY_GATEWAY_PUBLIC_URL" --check-credentials --env-file .env
+python -m unity.gateway doctor --channels all --check-credentials --fix --env-file .env
 ```
 
 Check the local gateway process:
@@ -72,6 +87,29 @@ Check the local gateway process:
 ```bash
 python -m unity.gateway smoke --base-url http://127.0.0.1:8001 --public-url "$UNITY_GATEWAY_PUBLIC_URL"
 ```
+
+`doctor --fix` only performs safe local file repairs, currently appending missing
+credential placeholders. It never buys phone numbers, creates provider apps, or
+mutates provider dashboards.
+
+## Channel And Capability Groups
+
+The wizard registry covers:
+
+- Local stack: Docker/Orchestra/Console URL wiring, gateway public URL, local
+  ingress URL, admin auth, and local storage.
+- Phone, SMS, and calls: Twilio plus optional LiveKit SIP credentials.
+- WhatsApp and social verification: Twilio-backed WhatsApp sender and
+  verification-code flows.
+- Email and collaboration: Google/Gmail, Microsoft/Outlook/Teams/SharePoint,
+  and generic email APIs.
+- Chat apps: Slack and Discord.
+- Model and voice capabilities: UniLLM/OpenAI/Anthropic plus Deepgram,
+  ElevenLabs, Cartesia, and OpenAI voice/realtime keys where the local voice
+  stack consumes them.
+- Internal runtime endpoints: `/unify/message`, `/unify/attachment`,
+  `/unify/meet`, `/unity/system-event`, and `/assistant/*`. These are smoke
+  tested, not provider setup steps.
 
 ## What Unity Provides
 

@@ -128,18 +128,27 @@ Unity's external communication surface lives in `unity.gateway`, so local and ho
 Print the local setup guide and exact provider callback URLs with:
 
 ```bash
-python -m unity.gateway setup --public-url https://your-public-callback.example
+python -m unity.gateway setup --interactive --env-file .env
 python -m unity.gateway urls --public-url https://your-public-callback.example
 ```
 
 Then configure providers to call those generated URLs and validate the local deployment:
 
 ```bash
-python -m unity.gateway doctor --check-credentials --public-url https://your-public-callback.example
-python -m unity.gateway smoke --base-url http://127.0.0.1:8001 --public-url https://your-public-callback.example
+python -m unity.gateway doctor --check-credentials --channels all --env-file .env --public-url https://your-public-callback.example
+python -m unity.gateway smoke --base-url http://127.0.0.1:8001 --check-credentials --public-url https://your-public-callback.example
 ```
 
-`scripts/local.sh start --full` starts the gateway on `:8001` and the local ConversationManager ingress on `:8787`. See [`unity/gateway/local-setup.md`](unity/gateway/local-setup.md) and [`unity/gateway/channels/README.md`](unity/gateway/channels/README.md) for provider recipes. Self-hosted users do not need the private `communication` repository; hosted SaaS still uses it for GCP, Kubernetes, DNS, scheduler, tunnel, and runtime activation infrastructure.
+The wizard covers channel providers (Twilio, WhatsApp, Slack, Gmail/Google,
+Microsoft/Outlook/Teams/SharePoint, Discord, generic email), local capabilities
+(UniLLM/model keys and voice/audio providers), and internal Console/runtime
+adapter smoke checks. `scripts/local.sh start --full` starts the gateway on
+`:8001` and the local ConversationManager ingress on `:8787`. See
+[`unity/gateway/local-setup.md`](unity/gateway/local-setup.md) and
+[`unity/gateway/channels/README.md`](unity/gateway/channels/README.md) for
+provider recipes. Self-hosted users do not need the private `communication`
+repository; hosted SaaS still uses it for GCP, Kubernetes, DNS, scheduler,
+tunnel, and runtime activation infrastructure.
 
 ---
 
