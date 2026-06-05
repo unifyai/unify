@@ -76,15 +76,15 @@ FUNCTIONS_META_TABLE = "Functions/Meta"
 FUNCTIONS_COMPOSITIONAL_DESTINATION_GUIDANCE = """destination : str | None, default None
     Where this composed function (or set of functions) lives. Pass
     ``"personal"`` (the default) for one-off helper scripts and private
-    automations. Pass ``"space:<id>"`` for team automation every member of the
-    space should be able to invoke. See the *Accessible shared spaces* block in
+    automations. Pass ``"team:<id>"`` for team automation every member of the
+    space should be able to invoke. See the *Accessible shared teams* block in
     your system prompt for available spaces and descriptions. Pick personal
     when in doubt; call ``request_clarification`` when the right audience is
     unclear."""
 FUNCTIONS_VENV_DESTINATION_GUIDANCE = """destination : str | None, default None
     Where the virtual env definition lives. Pass ``"personal"`` (the default)
-    for envs only your private functions need. Pass ``"space:<id>"`` to share
-    the env with team-level functions in that space. See the Accessible shared spaces
+    for envs only your private functions need. Pass ``"team:<id>"`` to share
+    the env with team-level functions in that space. See the Accessible shared teams
     block in your system prompt; pick personal when in doubt."""
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -2651,8 +2651,8 @@ class FunctionManager(BaseFunctionManager):
                 an empty set is assumed (no custom venvs).
             destination: Where the custom venv definitions live. Use
                 ``"personal"`` for private custom environments and
-                ``"space:<id>"`` for team-level environments shared by a
-                space. See the Accessible shared spaces block in your system
+                ``"team:<id>"`` for team-level environments shared by a
+                space. See the Accessible shared teams block in your system
                 prompt for available spaces.
 
         Returns:
@@ -2770,9 +2770,9 @@ class FunctionManager(BaseFunctionManager):
                 :func:`collect_functions_from_directories`).  If *None*,
                 an empty set is assumed (no custom functions).
             destination: Where the custom functions live. Use ``"personal"``
-                for private helper functions and ``"space:<id>"`` for
+                for private helper functions and ``"team:<id>"`` for
                 team-level functions every space member should be able to
-                invoke. See the Accessible shared spaces block in your system
+                invoke. See the Accessible shared teams block in your system
                 prompt for available spaces.
 
         Returns:

@@ -32,7 +32,7 @@ class Secret(AuthoredRow):
     )
     destination: str = Field(
         default="personal",
-        description="Vault that owns the credential metadata, such as personal or space:<id>.",
+        description="Vault that owns the credential metadata, such as personal or team:<id>.",
     )
     description_emb: List[float] = Field(
         default_factory=list,

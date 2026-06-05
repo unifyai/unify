@@ -17,7 +17,7 @@ from ..common.prompt_helpers import (
     compose_system_prompt,
     special_contacts_block as _special_contacts_block,
 )
-from ..common.accessible_spaces_block import build_accessible_spaces_block
+from ..common.accessible_teams_block import build_accessible_teams_block
 from ..session_details import SESSION_DETAILS
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -168,8 +168,8 @@ Anti‑patterns to avoid
 
     # Special contacts via shared helper
     special_block = _special_contacts_block()
-    accessible_spaces_block = build_accessible_spaces_block(
-        SESSION_DETAILS.space_summaries,
+    accessible_teams_block = build_accessible_teams_block(
+        SESSION_DETAILS.team_summaries,
     )
 
     # Early exit policy for mutation-intent requests reaching ask() is handled by composer toggle
@@ -201,7 +201,7 @@ Anti‑patterns to avoid
         images_extras_block=None,
         include_parallelism=True,
         schemas=[("Contact", Contact)],
-        special_blocks=[accessible_spaces_block, special_block],
+        special_blocks=[accessible_teams_block, special_block],
         include_clarification_footer=True,
         include_time_footer=True,
     )
@@ -354,8 +354,8 @@ Anti‑patterns to avoid
 
     # Compose using standardized composer with schema-based table info
     special_block = _special_contacts_block()
-    accessible_spaces_block = build_accessible_spaces_block(
-        SESSION_DETAILS.space_summaries,
+    accessible_teams_block = build_accessible_teams_block(
+        SESSION_DETAILS.team_summaries,
     )
 
     # Schemas: Contact for table columns, ColumnType for custom column creation
@@ -397,7 +397,7 @@ Anti‑patterns to avoid
         include_parallelism=True,
         schemas=schemas,
         special_blocks=[
-            accessible_spaces_block,
+            accessible_teams_block,
             special_block,
             "Do not create new columns if an alias already exists.",
         ],

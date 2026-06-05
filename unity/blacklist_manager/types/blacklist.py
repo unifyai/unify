@@ -47,7 +47,7 @@ class BlackList(AuthoredRow):
     )
     destination: str = Field(
         default="personal",
-        description="Blacklist root that owns this entry, such as personal or space:<id>.",
+        description="Blacklist root that owns this entry, such as personal or team:<id>.",
     )
 
     @model_validator(mode="before")

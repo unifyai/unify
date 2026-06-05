@@ -39,11 +39,11 @@ def _handle_magnitude_debug_payload(raw: str) -> None:
 
     log_dir = Path(_MAGNITUDE_LOG_DIR)
 
-    space_idx = raw.find(" ")
-    if space_idx == -1:
+    team_idx = raw.find(" ")
+    if team_idx == -1:
         return
-    ptype = raw[:space_idx]
-    body_str = raw[space_idx + 1 :]
+    ptype = raw[:team_idx]
+    body_str = raw[team_idx + 1 :]
 
     if ptype != "TEXT":
         return

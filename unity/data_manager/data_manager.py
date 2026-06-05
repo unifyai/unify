@@ -57,7 +57,7 @@ from unity.common.embed_utils import ensure_vector_column as _ensure_vector_colu
 from unity.common.join_utils import rewrite_join_paths
 from unity.data_manager.ops.ingest_ops import run_ingest
 from unity.common.context_registry import (
-    SPACE_CONTEXT_PREFIX,
+    TEAM_CONTEXT_PREFIX,
     ContextRegistry,
     TableContext,
 )
@@ -73,13 +73,13 @@ _ABSOLUTE_PREFIXES = (
     "Dashboards/",
     "Files/",
     "FileRecords/",
-    "Spaces/",
+    "Teams/",
     "Contacts",
     "Knowledge/",
     "Tasks",
     "Messages",
     "Exchanges",
-    SPACE_CONTEXT_PREFIX,
+    TEAM_CONTEXT_PREFIX,
 )
 
 
@@ -201,7 +201,7 @@ class DataManager(BaseDataManager):
             if context.startswith(base + "/"):
                 return context[len(base) + 1 :]
 
-        if context.startswith(SPACE_CONTEXT_PREFIX):
+        if context.startswith(TEAM_CONTEXT_PREFIX):
             parts = context.split("/", 3)
             if len(parts) >= 3 and parts[2] == "Data":
                 return parts[3] if len(parts) == 4 else ""
@@ -226,7 +226,7 @@ class DataManager(BaseDataManager):
 
         context = context.lstrip("/")
         base = (self._base_ctx or "").strip("/")
-        return context.startswith(SPACE_CONTEXT_PREFIX) or bool(
+        return context.startswith(TEAM_CONTEXT_PREFIX) or bool(
             base and (context == base or context.startswith(base + "/")),
         )
 
@@ -268,8 +268,8 @@ class DataManager(BaseDataManager):
             if "no base context available" not in str(exc):
                 raise
             root_contexts = [
-                f"{SPACE_CONTEXT_PREFIX}{space_id}"
-                for space_id in SESSION_DETAILS.space_ids
+                f"{TEAM_CONTEXT_PREFIX}{team_id}"
+                for team_id in SESSION_DETAILS.team_ids
             ]
             if not root_contexts:
                 return [self._resolve_context(context)]

@@ -92,7 +92,7 @@ def _render_two_table_info(
 def _authoring_attribution_guidance() -> str:
     """Return shared-space transcript attribution policy for ask prompts."""
 
-    if not SESSION_DETAILS.space_ids:
+    if not SESSION_DETAILS.team_ids:
         return ""
 
     assistant_id = SESSION_DETAILS.assistant.agent_id

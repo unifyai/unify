@@ -2585,9 +2585,9 @@ class CommsPrimitives:
         the outbound message and transcript history.
 
         ``contact_id`` must be the integer id of an existing contact record.
-        Shared-space routing tokens such as ``space:80`` are for memory and
+        Shared-space routing tokens such as ``team:80`` are for memory and
         task destinations only; they are not valid here. To notify people who
-        collaborate in a shared space, message each member's contact id
+        collaborate in a shared team, message each member's contact id
         individually. There is no comms primitive that posts to a space channel.
 
         Parameters
@@ -2595,7 +2595,7 @@ class CommsPrimitives:
         content : str
             Message body to send through the Unify platform.
         contact_id : int | str
-            Integer contact id for the recipient. Not a ``space:<id>`` token.
+            Integer contact id for the recipient. Not a ``team:<id>`` token.
         attachment_filepath : str | None, optional
             Workspace-local file path for one attachment to upload and include.
 

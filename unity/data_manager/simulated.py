@@ -28,7 +28,7 @@ from unity.data_manager.types.ingest import (
     IngestResult,
     PostIngestConfig,
 )
-from unity.common.context_registry import SPACE_CONTEXT_PREFIX
+from unity.common.context_registry import TEAM_CONTEXT_PREFIX
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +159,7 @@ class SimulatedDataManager(BaseDataManager):
                 "Tasks",
                 "Messages",
                 "Exchanges",
-                SPACE_CONTEXT_PREFIX,
+                TEAM_CONTEXT_PREFIX,
             ),
         ):
             return context

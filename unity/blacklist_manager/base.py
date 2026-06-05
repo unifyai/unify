@@ -97,12 +97,12 @@ class BaseBlackListManager(BaseStateManager, metaclass=SingletonABCMeta):
             Where this blacklist entry lives. Pass ``"personal"`` (the
             default) for contacts you personally want to block, such as spam
             callers or contacts you do not want to engage with individually.
-            Pass ``"space:<id>"`` for an operational team-level block: a
+            Pass ``"team:<id>"`` for an operational team-level block: a
             contact every member of the space should refuse. Strictest-rule-wins:
             an entry in any accessible root blocks the contact from your
             sessions, so a personal block does not need a space write to take
             effect for you, but a space write blocks the contact for every
-            other member of that space. Read the *Accessible shared spaces*
+            other member of that space. Read the *Accessible shared teams*
             block before choosing. Default to personal when in doubt; call
             ``request_clarification`` for ambiguity-going-wider.
 
@@ -129,10 +129,10 @@ class BaseBlackListManager(BaseStateManager, metaclass=SingletonABCMeta):
         At least one of ``medium``, ``contact_detail`` or ``reason`` must be provided.
         ``destination`` selects the exact BlackList root to update. Pass
         ``"personal"`` (the default) for contacts you personally want to block
-        and ``"space:<id>"`` for an operational team-level block every member
+        and ``"team:<id>"`` for an operational team-level block every member
         of the space should refuse. Strictest-rule-wins means an entry in any
         accessible root blocks the contact from your sessions, but updates only
-        change the selected root. Read the *Accessible shared spaces* block
+        change the selected root. Read the *Accessible shared teams* block
         before choosing; call ``request_clarification`` for ambiguity-going-wider.
 
         Returns
@@ -153,7 +153,7 @@ class BaseBlackListManager(BaseStateManager, metaclass=SingletonABCMeta):
         Delete a blacklist entry by its identifier.
         ``destination`` selects the exact BlackList root to delete from. Pass
         ``"personal"`` (the default) for contacts you personally block and
-        ``"space:<id>"`` for an operational team-level block every member of
+        ``"team:<id>"`` for an operational team-level block every member of
         the space should refuse. Strictest-rule-wins means an entry in any
         accessible root blocks the contact from your sessions, but deletion
         only removes the selected root's row. Read the *Accessible shared
@@ -178,11 +178,11 @@ class BaseBlackListManager(BaseStateManager, metaclass=SingletonABCMeta):
 
         destination : str | None, default None
             Which BlackList root to clear. Pass ``"personal"`` (the default)
-            for contacts you personally block and ``"space:<id>"`` for an
+            for contacts you personally block and ``"team:<id>"`` for an
             operational team-level block list. Strictest-rule-wins means rows
             in any accessible root block contacts from your sessions, but clear
             only removes rows from the selected root. Read the *Accessible
-            shared spaces* block before choosing; call ``request_clarification``
+            shared teams* block before choosing; call ``request_clarification``
             for ambiguity-going-wider because clearing or writing a team block
             surprises other members.
         """

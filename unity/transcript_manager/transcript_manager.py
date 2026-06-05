@@ -63,7 +63,7 @@ from .images import (
 )
 from ..common.context_registry import (
     ContextRegistry,
-    SPACE_CONTEXT_PREFIX,
+    TEAM_CONTEXT_PREFIX,
     TableContext,
 )
 from ..common.model_to_fields import model_to_fields
@@ -255,10 +255,10 @@ class TranscriptManager(BaseTranscriptManager):
 
         if from_root == "personal":
             return ContextRegistry.write_root(self, table_name, destination=None)
-        if from_root.startswith("space:"):
+        if from_root.startswith("team:"):
             return ContextRegistry.write_root(self, table_name, destination=from_root)
-        if from_root.startswith(SPACE_CONTEXT_PREFIX):
-            destination = f"space:{from_root.split('/')[1]}"
+        if from_root.startswith(TEAM_CONTEXT_PREFIX):
+            destination = f"team:{from_root.split('/')[1]}"
             return ContextRegistry.write_root(self, table_name, destination=destination)
         return from_root.rstrip("/")
 
@@ -266,7 +266,7 @@ class TranscriptManager(BaseTranscriptManager):
         """Return whether writes to this context should mirror into All/* contexts."""
 
         return self.include_in_multi_assistant_table and not context.startswith(
-            SPACE_CONTEXT_PREFIX,
+            TEAM_CONTEXT_PREFIX,
         )
 
     # ──────────────────────────────────────────────────────────────────────

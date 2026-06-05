@@ -31,7 +31,7 @@ from ..common.filter_utils import normalize_filter_expr
 from ..common.data_store import DataStore
 from ..common.context_registry import (
     ContextRegistry,
-    SPACE_CONTEXT_PREFIX,
+    TEAM_CONTEXT_PREFIX,
     TableContext,
 )
 from ..common.tool_outcome import ToolErrorException, ToolOutcome
@@ -712,17 +712,17 @@ class ImageManager(BaseImageManager):
 
         if from_root == "personal":
             return ContextRegistry.write_root(self, IMAGES_TABLE, destination=None)
-        if from_root.startswith("space:"):
+        if from_root.startswith("team:"):
             return ContextRegistry.write_root(
                 self,
                 IMAGES_TABLE,
                 destination=from_root,
             )
-        if from_root.startswith(SPACE_CONTEXT_PREFIX):
+        if from_root.startswith(TEAM_CONTEXT_PREFIX):
             return ContextRegistry.write_root(
                 self,
                 IMAGES_TABLE,
-                destination=f"space:{from_root.split('/')[1]}",
+                destination=f"team:{from_root.split('/')[1]}",
             )
         return from_root.rstrip("/")
 
@@ -730,7 +730,7 @@ class ImageManager(BaseImageManager):
         """Return whether writes to this Images context should mirror into All/*."""
 
         return self.include_in_multi_assistant_table and not context.startswith(
-            SPACE_CONTEXT_PREFIX,
+            TEAM_CONTEXT_PREFIX,
         )
 
     # ------------------------------ Reads ---------------------------------
@@ -1094,7 +1094,7 @@ class ImageManager(BaseImageManager):
 
         ``destination`` controls where the image metadata row is stored. Omit it
         or pass ``"personal"`` for the personal Images root; pass
-        ``"space:<id>"`` to write metadata into an accessible shared space. The
+        ``"team:<id>"`` to write metadata into an accessible shared team. The
         image blob is not re-keyed by destination.
 
         Extended support
@@ -1394,7 +1394,7 @@ class ImageManager(BaseImageManager):
         set ``timestamp``, ``caption``, ``data``, and/or ``filepath``.
         ``destination`` selects the Images root containing the metadata row.
         Omit it or pass ``"personal"`` for personal metadata; pass
-        ``"space:<id>"`` for an accessible shared-space copy.
+        ``"team:<id>"`` for an accessible shared-space copy.
         Returns updated ids.
         """
         try:

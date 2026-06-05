@@ -77,7 +77,7 @@ def _upsert_personal_contact_membership(
         json={
             "contact_id": int(contact_id),
             "target_scope": _PERSONAL_SCOPE,
-            "target_space_id": None,
+            "target_team_id": None,
             "relationship": relationship,
             "should_respond": True,
             "response_policy": response_policy,

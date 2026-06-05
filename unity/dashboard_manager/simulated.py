@@ -14,8 +14,8 @@ from typing import Any, Dict, List, Optional
 
 from unity.common.context_registry import (
     PERSONAL_DESTINATION,
-    SPACE_CONTEXT_PREFIX,
-    SPACE_DESTINATION_PREFIX,
+    TEAM_CONTEXT_PREFIX,
+    TEAM_DESTINATION_PREFIX,
 )
 from unity.common.join_utils import rewrite_join_paths
 from unity.dashboard_manager.base import DASHBOARD_DATA_SCOPE, BaseDashboardManager
@@ -81,14 +81,14 @@ class SimulatedDashboardManager(BaseDashboardManager):
         if destination in (None, PERSONAL_DESTINATION):
             return PERSONAL_DESTINATION
         if (
-            destination.startswith(SPACE_DESTINATION_PREFIX)
-            and destination[len(SPACE_DESTINATION_PREFIX) :].isdigit()
+            destination.startswith(TEAM_DESTINATION_PREFIX)
+            and destination[len(TEAM_DESTINATION_PREFIX) :].isdigit()
         ):
-            space_id = int(destination[len(SPACE_DESTINATION_PREFIX) :])
-            if space_id in SESSION_DETAILS.space_ids:
+            team_id = int(destination[len(TEAM_DESTINATION_PREFIX) :])
+            if team_id in SESSION_DETAILS.team_ids:
                 return destination
         raise ValueError(
-            "invalid_destination: destination must be personal or space:<id>.",
+            "invalid_destination: destination must be personal or team:<id>.",
         )
 
     def _visible_destinations(self) -> set[str]:
@@ -96,8 +96,8 @@ class SimulatedDashboardManager(BaseDashboardManager):
         return {
             PERSONAL_DESTINATION,
             *[
-                f"{SPACE_DESTINATION_PREFIX}{space_id}"
-                for space_id in SESSION_DETAILS.space_ids
+                f"{TEAM_DESTINATION_PREFIX}{team_id}"
+                for team_id in SESSION_DETAILS.team_ids
             ],
         }
 
@@ -111,9 +111,9 @@ class SimulatedDashboardManager(BaseDashboardManager):
         binding_destination = (
             row_destination if data_scope == DASHBOARD_DATA_SCOPE else data_scope
         )
-        if binding_destination.startswith(SPACE_DESTINATION_PREFIX):
-            space_id = binding_destination[len(SPACE_DESTINATION_PREFIX) :]
-            return f"Spaces/{space_id}"
+        if binding_destination.startswith(TEAM_DESTINATION_PREFIX):
+            team_id = binding_destination[len(TEAM_DESTINATION_PREFIX) :]
+            return f"Teams/{team_id}"
         return None
 
     def _resolve_binding_contexts(
@@ -137,7 +137,7 @@ class SimulatedDashboardManager(BaseDashboardManager):
 
         def scoped(path: str) -> str:
             path = path.strip().lstrip("/")
-            if path.startswith(SPACE_CONTEXT_PREFIX):
+            if path.startswith(TEAM_CONTEXT_PREFIX):
                 return path
             return f"{base_context}/{path}"
 

@@ -37,11 +37,11 @@ from ..common.search_utils import table_search_top_k, is_plain_identifier
 from ..common.context_registry import (
     ContextRegistry,
     PERSONAL_DESTINATION,
-    SPACE_CONTEXT_PREFIX,
+    TEAM_CONTEXT_PREFIX,
     TableContext,
 )
 
-SECRETS_TABLE = "Secrets"
+SECRETS_TABLE = "Secrets"  # pragma: allowlist secret
 DESTINATION_FILTER_PATTERN = (
     r"destination\s*==\s*(?P<quote>['\"])(?P<destination>[^'\"]+)(?P=quote)"
 )
@@ -159,10 +159,10 @@ class SecretManager(BaseSecretManager):
 
     def _destination_for_context(self, context: str) -> str:
         """Return the public destination label for a concrete Secrets context."""
-        if context.startswith(SPACE_CONTEXT_PREFIX):
+        if context.startswith(TEAM_CONTEXT_PREFIX):
             parts = context.split("/")
             if len(parts) >= 2:
-                return f"space:{parts[1]}"
+                return f"team:{parts[1]}"
         return PERSONAL_DESTINATION
 
     def _split_destination_filter(
@@ -921,7 +921,7 @@ class SecretManager(BaseSecretManager):
         integration : str
             Secret name to resolve.
         destination : str | None, default None
-            ``"personal"`` or ``"space:<id>"``. ``None`` inherits the active
+            ``"personal"`` or ``"team:<id>"``. ``None`` inherits the active
             task destination when one is set, otherwise personal.
 
         Raises
@@ -1203,14 +1203,14 @@ class SecretManager(BaseSecretManager):
             Where the credential is stored. Pass ``"personal"`` (the default)
             for credentials only you should use: your own personal API key,
             your individual OAuth tokens, anything tied to your identity. Pass
-            ``"space:<id>"`` for a team service account or shared credential
+            ``"team:<id>"`` for a team service account or shared credential
             that every member of the space should be able to use: the team
             Slack bot token, the shared SendGrid API key, the team's
             integration service account. Personal credentials never leak into
             a space; space credentials never leak into your local ``.env``
-            mirror. The set of available ``space:<id>`` values, each with a
+            mirror. The set of available ``team:<id>`` values, each with a
             name and a description naming the team / domain the credential
-            pool belongs to, is rendered in the *Accessible shared spaces*
+            pool belongs to, is rendered in the *Accessible shared teams*
             block of your system prompt; read that block before choosing.
             The privacy floor: when in doubt between personal and a space,
             pick personal, because sharing a credential is harder to undo than
@@ -1287,10 +1287,10 @@ class SecretManager(BaseSecretManager):
             New description (optional).
         destination : str | None, default None
             Which copy of the credential to update. Defaults to ``"personal"``
-            (your private credential). Passing ``"space:<id>"`` rotates the
+            (your private credential). Passing ``"team:<id>"`` rotates the
             shared credential in that space and is visible to every member;
             pooled subprocesses pick up the new value on next invocation. See
-            the *Accessible shared spaces* block in your system prompt for
+            the *Accessible shared teams* block in your system prompt for
             the available spaces and their descriptions. Inside a task, an
             omitted destination inherits the task destination.
 
@@ -1357,7 +1357,7 @@ class SecretManager(BaseSecretManager):
             The secret name to remove.
         destination : str | None, default None
             Which copy of the credential to remove. Defaults to ``"personal"``.
-            Passing ``"space:<id>"`` removes the shared credential from the
+            Passing ``"team:<id>"`` removes the shared credential from the
             space for every member, breaking any team integration that depends
             on it; do not delete a shared credential unless the team decision
             is to rotate or retire the integration. See the *Accessible shared

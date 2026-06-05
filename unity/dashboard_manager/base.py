@@ -369,10 +369,10 @@ class BaseDashboardManager(BaseStateManager):
         destination : str | None, default ``None``
             Where this tile row lives -- i.e., which dashboard pool this
             tile belongs to. Pass ``"personal"`` (the default) for tiles
-            on private dashboards. Pass ``"space:<id>"`` for a tile on a
+            on private dashboards. Pass ``"team:<id>"`` for a tile on a
             shared team dashboard every member of the space sees. The set
-            of available ``space:<id>`` values, each with a name and
-            description, is rendered in the *Accessible shared spaces*
+            of available ``team:<id>`` values, each with a name and
+            description, is rendered in the *Accessible shared teams*
             block of your system prompt; read that block before choosing.
             ``destination`` controls where the tile row lives. The data
             the tile renders is governed separately by ``data_scope``. The
@@ -384,15 +384,15 @@ class BaseDashboardManager(BaseStateManager):
         data_scope : str, default ``"dashboard"``
             Which root this tile's live-data bindings read from when they
             are resolved. Pass ``"dashboard"`` to inherit the tile row's
-            destination root. Pass ``"space:<id>"`` to bind this tile's
-            data to a specific shared space even when the tile row itself
+            destination root. Pass ``"team:<id>"`` to bind this tile's
+            data to a specific shared team even when the tile row itself
             lives somewhere else. The available spaces are listed in the
-            *Accessible shared spaces* block. This parameter matters only
+            *Accessible shared teams* block. This parameter matters only
             for live tiles with ``data_bindings``.
 
             Use ``"dashboard"`` when the live data should come from the
             same place the tile lives, including shared team dashboards.
-            Use ``"space:<id>"`` when the tile's audience and data source
+            Use ``"team:<id>"`` when the tile's audience and data source
             intentionally differ, for example a private watch tile that
             reads Patch-1 operations data.
 
@@ -782,19 +782,19 @@ class BaseDashboardManager(BaseStateManager):
 
         destination : str | None, default ``None``
             Which tile pool to update. Pass ``"personal"`` for your private
-            tiles or ``"space:<id>"`` for a shared team tile listed in the
-            *Accessible shared spaces* block. The privacy floor and
+            tiles or ``"team:<id>"`` for a shared team tile listed in the
+            *Accessible shared teams* block. The privacy floor and
             clarification rule are the same as ``create_tile``.
 
         data_scope : str | None, default ``None``
             Optional replacement for the root used to resolve fresh
             ``data_bindings``. Pass ``"dashboard"`` to inherit the tile
-            row's destination root, or ``"space:<id>"`` to bind the tile's
-            data reads to a specific shared space. This can only be changed
+            row's destination root, or ``"team:<id>"`` to bind the tile's
+            data reads to a specific shared team. This can only be changed
             together with fresh ``data_bindings`` because stored tiles keep
             resolved binding paths rather than an unresolved binding recipe.
             Use ``"dashboard"`` when the tile and data source belong to the
-            same dashboard root; use ``"space:<id>"`` for intentional
+            same dashboard root; use ``"team:<id>"`` for intentional
             cross-root bindings.
 
         Returns
@@ -914,8 +914,8 @@ class BaseDashboardManager(BaseStateManager):
 
         destination : str | None, default ``None``
             Which tile pool to delete from. Pass ``"personal"`` for a
-            private tile or ``"space:<id>"`` for a shared team tile. Read
-            the *Accessible shared spaces* block before choosing a shared
+            private tile or ``"team:<id>"`` for a shared team tile. Read
+            the *Accessible shared teams* block before choosing a shared
             destination, and choose personal or ask for clarification when
             the user is ambiguous.
 
@@ -1179,11 +1179,11 @@ class BaseDashboardManager(BaseStateManager):
 
         destination : str | None, default ``None``
             Where this dashboard lives. Pass ``"personal"`` (the default)
-            for private dashboards only you see. Pass ``"space:<id>"`` for
+            for private dashboards only you see. Pass ``"team:<id>"`` for
             a team dashboard every member of the space sees -- operational
             overview boards, team KPI dashboards, and shared monitoring
-            views. The set of available ``space:<id>`` values is rendered
-            in the *Accessible shared spaces* block of your system prompt;
+            views. The set of available ``team:<id>`` values is rendered
+            in the *Accessible shared teams* block of your system prompt;
             read that block before choosing. Pick personal when in doubt;
             if a clarification channel is available, ask a targeted question
             when the user appears to want a wider audience but the target
@@ -1429,8 +1429,8 @@ class BaseDashboardManager(BaseStateManager):
 
         destination : str | None, default ``None``
             Which dashboard pool to update. Pass ``"personal"`` for a
-            private dashboard or ``"space:<id>"`` for a shared team
-            dashboard listed in the *Accessible shared spaces* block. The
+            private dashboard or ``"team:<id>"`` for a shared team
+            dashboard listed in the *Accessible shared teams* block. The
             privacy floor and clarification rule are the same as
             ``create_dashboard``.
 
@@ -1541,8 +1541,8 @@ class BaseDashboardManager(BaseStateManager):
 
         destination : str | None, default ``None``
             Which dashboard pool to delete from. Pass ``"personal"`` for a
-            private dashboard or ``"space:<id>"`` for a shared dashboard.
-            Read the *Accessible shared spaces* block before choosing a
+            private dashboard or ``"team:<id>"`` for a shared dashboard.
+            Read the *Accessible shared teams* block before choosing a
             shared destination.
 
         Returns
