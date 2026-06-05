@@ -78,68 +78,68 @@ def _decode_int_csv(value: str) -> list[int]:
 
 
 @dataclass
-class SpaceSummary:
-    """Display and routing metadata for one shared space membership."""
+class TeamSummary:
+    """Display and routing metadata for one shared team membership."""
 
-    space_id: int
+    team_id: int
     name: str
     description: str
 
 
-def normalize_space_summaries(value: list[SpaceSummary | dict]) -> list[SpaceSummary]:
-    """Return shared-space summaries in runtime dataclass form."""
+def normalize_team_summaries(value: list[TeamSummary | dict]) -> list[TeamSummary]:
+    """Return shared-team summaries in runtime dataclass form."""
 
-    summaries: list[SpaceSummary] = []
+    summaries: list[TeamSummary] = []
     for item in value:
-        if isinstance(item, SpaceSummary):
+        if isinstance(item, TeamSummary):
             summaries.append(
-                _normalize_space_summary(
-                    space_id=item.space_id,
+                _normalize_team_summary(
+                    team_id=item.team_id,
                     name=item.name,
                     description=item.description,
                 ),
             )
             continue
         if not isinstance(item, dict):
-            raise ValueError("space_summaries entries must be objects")
-        if not {"space_id", "name", "description"} <= set(item):
-            raise ValueError(
-                "space_summaries entries require space_id, name, and description",
-            )
+            raise ValueError("team_summaries entries must be objects")
+        if not {"team_id", "name"} <= set(item):
+            raise ValueError("team_summaries entries require team_id and name")
         summaries.append(
-            _normalize_space_summary(
-                space_id=item["space_id"],
+            _normalize_team_summary(
+                team_id=item["team_id"],
                 name=item["name"],
-                description=item["description"],
+                description=item.get("description") or "",
             ),
         )
     return summaries
 
 
-def _normalize_space_summary(
+def _normalize_team_summary(
     *,
-    space_id: object,
+    team_id: object,
     name: object,
     description: object,
-) -> SpaceSummary:
-    if not isinstance(space_id, int) or isinstance(space_id, bool):
-        raise ValueError("space_summaries space_id values must be integers")
+) -> TeamSummary:
+    if not isinstance(team_id, int) or isinstance(team_id, bool):
+        raise ValueError("team_summaries team_id values must be integers")
     if not isinstance(name, str) or not name:
-        raise ValueError("space_summaries name values must be non-empty strings")
-    if not isinstance(description, str) or not description:
-        raise ValueError("space_summaries description values must be non-empty strings")
-    return SpaceSummary(space_id=space_id, name=name, description=description)
+        raise ValueError("team_summaries name values must be non-empty strings")
+    if description is None:
+        description = ""
+    if not isinstance(description, str):
+        raise ValueError("team_summaries description values must be strings")
+    return TeamSummary(team_id=team_id, name=name, description=description)
 
 
-def _encode_space_summaries(value: list[SpaceSummary]) -> str:
-    """Encode shared-space summaries for env vars that can only carry strings."""
+def _encode_team_summaries(value: list[TeamSummary]) -> str:
+    """Encode shared-team summaries for env vars that can only carry strings."""
 
     if not value:
         return ""
     return json.dumps(
         [
             {
-                "space_id": summary.space_id,
+                "team_id": summary.team_id,
                 "name": summary.name,
                 "description": summary.description,
             }
@@ -148,15 +148,15 @@ def _encode_space_summaries(value: list[SpaceSummary]) -> str:
     )
 
 
-def _decode_space_summaries(value: str) -> list[SpaceSummary]:
-    """Decode shared-space summaries from their environment representation."""
+def _decode_team_summaries(value: str) -> list[TeamSummary]:
+    """Decode shared-team summaries from their environment representation."""
 
     if not value:
         return []
     decoded = json.loads(value)
     if not isinstance(decoded, list):
-        raise ValueError("SPACE_SUMMARIES must be a JSON list")
-    return normalize_space_summaries(decoded)
+        raise ValueError("TEAM_SUMMARIES must be a JSON list")
+    return normalize_team_summaries(decoded)
 
 
 @dataclass
@@ -190,13 +190,17 @@ class AssistantDetails:
     user_desktop_url: str | None = (
         None  # URL for user's own desktop (not the managed VM)
     )
-    is_coordinator: bool = False
-    space_ids: list[int] = field(default_factory=list)
-    space_summaries: list[SpaceSummary] = field(default_factory=list)
+    team_ids: list[int] = field(default_factory=list)
+    team_summaries: list[TeamSummary] = field(default_factory=list)
 
     @property
     def name(self) -> str:
         return f"{self.first_name} {self.surname}".strip()
+
+    @property
+    def has_managed_desktop(self) -> bool:
+        """True when a managed VM desktop is assigned and sync gates apply."""
+        return self.desktop_mode in ("ubuntu", "windows") and bool(self.desktop_url)
 
 
 @dataclass
@@ -225,17 +229,6 @@ class OrgDetails:
 
     id: int | None = None  # Organization ID, None for personal context
     name: str = ""  # Organization name
-
-
-@dataclass
-class TeamDetails:
-    """Details about team memberships within the current org.
-
-    A user can belong to multiple teams.  ``ids`` contains all team IDs
-    the user is a member of (empty list for personal / no-team context).
-    """
-
-    ids: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -283,9 +276,6 @@ class SessionDetails:
 
     # Organization context (None id for personal/non-org context)
     org: OrgDetails = field(default_factory=OrgDetails)
-
-    # Team memberships within the org
-    team: TeamDetails = field(default_factory=TeamDetails)
 
     _initialized: bool = field(default=False, repr=False)
 
@@ -337,30 +327,21 @@ class SessionDetails:
 
     @property
     def team_ids(self) -> list[int]:
-        """Shortcut to team.ids for convenient access."""
-        return self.team.ids
+        """Shortcut to assistant.team_ids for convenient access."""
+        return self.assistant.team_ids
 
     @team_ids.setter
     def team_ids(self, value: list[int]) -> None:
-        self.team.ids = value
+        self.assistant.team_ids = value
 
     @property
-    def space_ids(self) -> list[int]:
-        """Shortcut to assistant.space_ids for convenient access."""
-        return self.assistant.space_ids
+    def team_summaries(self) -> list[TeamSummary]:
+        """Shortcut to assistant.team_summaries for convenient access."""
+        return self.assistant.team_summaries
 
-    @space_ids.setter
-    def space_ids(self, value: list[int]) -> None:
-        self.assistant.space_ids = value
-
-    @property
-    def space_summaries(self) -> list[SpaceSummary]:
-        """Shortcut to assistant.space_summaries for convenient access."""
-        return self.assistant.space_summaries
-
-    @space_summaries.setter
-    def space_summaries(self, value: list[SpaceSummary | dict]) -> None:
-        self.assistant.space_summaries = normalize_space_summaries(value)
+    @team_summaries.setter
+    def team_summaries(self, value: list[TeamSummary | dict]) -> None:
+        self.assistant.team_summaries = normalize_team_summaries(value)
 
     @property
     def is_coordinator(self) -> bool:
@@ -448,8 +429,7 @@ class SessionDetails:
         org_id: int | None = None,
         org_name: str = "",
         team_ids: list[int] | None = None,
-        space_ids: list[int] | None = None,
-        space_summaries: list[SpaceSummary | dict] | None = None,
+        team_summaries: list[TeamSummary | dict] | None = None,
         voice_provider: str = "",
         voice_id: str = "",
         binding_id: str = "",
@@ -495,9 +475,8 @@ class SessionDetails:
         self.boss_contact_id = user_boss_contact_id
         self.org.id = org_id
         self.org.name = org_name
-        self.team.ids = team_ids or []
-        self.assistant.space_ids = space_ids or []
-        self.space_summaries = space_summaries or []
+        self.team_ids = team_ids or []
+        self.team_summaries = team_summaries or []
         self.voice.provider = voice_provider
         self.voice.id = voice_id
         self._initialized = True
@@ -507,7 +486,6 @@ class SessionDetails:
         self.assistant = AssistantDetails()
         self.user = UserDetails()
         self.org = OrgDetails()
-        self.team = TeamDetails()
         self.voice = VoiceConfig()
         self.voice_call = VoiceCallConfig()
         self._unify_key = ""
@@ -556,9 +534,8 @@ class SessionDetails:
         os.environ["USER_WHATSAPP_NUMBER"] = self.user.whatsapp_number
         os.environ["ORG_ID"] = str(self.org.id) if self.org.id is not None else ""
         os.environ["ORG_NAME"] = self.org.name
-        os.environ["TEAM_IDS"] = _encode_int_csv(self.team.ids)
-        self.export_space_ids_to_env()
-        self.export_space_summaries_to_env()
+        self.export_team_ids_to_env()
+        self.export_team_summaries_to_env()
         os.environ["VOICE_PROVIDER"] = self.voice.provider
         os.environ["VOICE_ID"] = self.voice.id
         os.environ["VOICE_MODE"] = self.voice.mode
@@ -569,14 +546,14 @@ class SessionDetails:
         os.environ["BOSS"] = self.voice_call.boss_json
         os.environ["UNIFY_KEY"] = self.unify_key
 
-    def export_space_ids_to_env(self) -> None:
-        """Export current shared-space memberships to the subprocess env shape."""
-        os.environ["SPACE_IDS"] = _encode_int_csv(self.assistant.space_ids)
+    def export_team_ids_to_env(self) -> None:
+        """Export current shared-team memberships to the subprocess env shape."""
+        os.environ["TEAM_IDS"] = _encode_int_csv(self.assistant.team_ids)
 
-    def export_space_summaries_to_env(self) -> None:
-        """Export current shared-space summaries to the subprocess env shape."""
-        os.environ["SPACE_SUMMARIES"] = _encode_space_summaries(
-            self.assistant.space_summaries,
+    def export_team_summaries_to_env(self) -> None:
+        """Export current shared-team summaries to the subprocess env shape."""
+        os.environ["TEAM_SUMMARIES"] = _encode_team_summaries(
+            self.assistant.team_summaries,
         )
 
     def export_contact_ids_to_env(self) -> None:
@@ -669,17 +646,12 @@ class SessionDetails:
             self.org.name = val
         if val := os.environ.get("TEAM_IDS"):
             try:
-                self.team.ids = _decode_int_csv(val)
+                self.assistant.team_ids = _decode_int_csv(val)
             except (ValueError, TypeError):
                 pass
-        if val := os.environ.get("SPACE_IDS"):
+        if val := os.environ.get("TEAM_SUMMARIES"):
             try:
-                self.assistant.space_ids = _decode_int_csv(val)
-            except (ValueError, TypeError):
-                pass
-        if val := os.environ.get("SPACE_SUMMARIES"):
-            try:
-                self.space_summaries = _decode_space_summaries(val)
+                self.team_summaries = _decode_team_summaries(val)
             except (ValueError, TypeError, KeyError, json.JSONDecodeError):
                 pass
         if val := os.environ.get("VOICE_PROVIDER"):
