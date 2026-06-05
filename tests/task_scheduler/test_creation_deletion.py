@@ -85,51 +85,51 @@ def test_create_task_with_response_policy():
 @_handle_project
 def test_create_space_task_routes_to_shared_root():
     ts = TaskScheduler()
-    SESSION_DETAILS.space_ids = [987654]
+    SESSION_DETAILS.team_ids = [987654]
 
     try:
         out = ts._create_task(
             name="Shared follow-up",
             description="Coordinate with the shared project room.",
-            destination="space:987654",
+            destination="team:987654",
         )
         task_id = out["details"]["task_id"]
 
         rows = ts._filter_tasks(filter=f"task_id == {task_id}")
         assert len(rows) == 1
-        assert rows[0].destination == "space:987654"
+        assert rows[0].destination == "team:987654"
         assert rows[0].assistant_id == SESSION_DETAILS.assistant_context
     finally:
         try:
-            unify.delete_context("Spaces/987654/Tasks")
+            unify.delete_context("Teams/987654/Tasks")
         except Exception:
             pass
-        SESSION_DETAILS.space_ids = []
-        ContextRegistry.forget_departed_space_roots([])
+        SESSION_DETAILS.team_ids = []
+        ContextRegistry.forget_departed_team_roots([])
 
 
 @_handle_project
 def test_invalid_space_destination_raises_tool_error():
     ts = TaskScheduler()
-    SESSION_DETAILS.space_ids = [987655]
+    SESSION_DETAILS.team_ids = [987655]
 
     try:
         with pytest.raises(ToolErrorException):
             ts._create_task(
                 name="Bad shared task",
                 description="Should not write outside membership.",
-                destination="space:987656",
+                destination="team:987656",
             )
     finally:
-        SESSION_DETAILS.space_ids = []
+        SESSION_DETAILS.team_ids = []
 
 
 @_handle_project
 def test_clone_recurring_task_instance_uses_space_destination_root():
     """Re-arming a recurring task must clone into the same Tasks root as the template row."""
     ts = TaskScheduler()
-    space_id = 987658
-    SESSION_DETAILS.space_ids = [space_id]
+    team_id = 987658
+    SESSION_DETAILS.team_ids = [team_id]
 
     try:
         initial_start = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(
@@ -141,38 +141,38 @@ def test_clone_recurring_task_instance_uses_space_destination_root():
             status=Status.scheduled,
             schedule=Schedule(start_at=initial_start.isoformat()),
             repeat=[RepeatPattern(frequency=Frequency.DAILY)],
-            destination=f"space:{space_id}",
+            destination=f"team:{team_id}",
         )
         task_id = out["details"]["task_id"]
         current = ts._filter_tasks(filter=f"task_id == {task_id}")[0]
-        assert current.destination == f"space:{space_id}"
+        assert current.destination == f"team:{team_id}"
 
         ts._clone_task_instance(current)
 
         rows = ts._filter_tasks(filter=f"task_id == {task_id}")
         assert len(rows) == 2
         assert {row.instance_id for row in rows} == {0, 1}
-        assert all(row.destination == f"space:{space_id}" for row in rows)
+        assert all(row.destination == f"team:{team_id}" for row in rows)
     finally:
         try:
-            unify.delete_context(f"Spaces/{space_id}/Tasks")
+            unify.delete_context(f"Teams/{team_id}/Tasks")
         except Exception:
             pass
-        SESSION_DETAILS.space_ids = []
-        ContextRegistry.forget_departed_space_roots([])
+        SESSION_DETAILS.team_ids = []
+        ContextRegistry.forget_departed_team_roots([])
 
 
 @_handle_project
 def test_duplicate_task_id_update_requires_destination():
     ts = TaskScheduler()
-    SESSION_DETAILS.space_ids = [987657]
+    SESSION_DETAILS.team_ids = [987657]
 
     try:
         ts._create_task(name="Personal duplicate", description="Personal root.")
         ts._create_task(
             name="Shared duplicate",
             description="Shared root.",
-            destination="space:987657",
+            destination="team:987657",
         )
 
         with pytest.raises(ValueError, match="provide destination"):
@@ -181,19 +181,19 @@ def test_duplicate_task_id_update_requires_destination():
         ts._update_task(
             task_id=0,
             name="Shared duplicate updated",
-            destination="space:987657",
+            destination="team:987657",
         )
         rows = ts._filter_tasks(filter="task_id == 0")
         by_destination = {row.destination or "personal": row.name for row in rows}
         assert by_destination["personal"] == "Personal duplicate"
-        assert by_destination["space:987657"] == "Shared duplicate updated"
+        assert by_destination["team:987657"] == "Shared duplicate updated"
     finally:
         try:
-            unify.delete_context("Spaces/987657/Tasks")
+            unify.delete_context("Teams/987657/Tasks")
         except Exception:
             pass
-        SESSION_DETAILS.space_ids = []
-        ContextRegistry.forget_departed_space_roots([])
+        SESSION_DETAILS.team_ids = []
+        ContextRegistry.forget_departed_team_roots([])
 
 
 @_handle_project

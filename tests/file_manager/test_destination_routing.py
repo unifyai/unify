@@ -15,38 +15,38 @@ from unity.session_details import SESSION_DETAILS
 
 
 def _configure_spaces() -> tuple[int, int]:
-    base_space_id = 40_000_000 + uuid.uuid4().int % 1_000_000_000
-    space_ids = (base_space_id, base_space_id + 1)
-    SESSION_DETAILS.space_ids = list(space_ids)
-    SESSION_DETAILS.space_summaries = [
+    base_team_id = 40_000_000 + uuid.uuid4().int % 1_000_000_000
+    team_ids = (base_team_id, base_team_id + 1)
+    SESSION_DETAILS.team_ids = list(team_ids)
+    SESSION_DETAILS.team_summaries = [
         {
-            "space_id": space_ids[0],
+            "team_id": team_ids[0],
             "name": "Research Library",
             "description": "Shared workspace for research files and notes.",
         },
         {
-            "space_id": space_ids[1],
+            "team_id": team_ids[1],
             "name": "Finance Library",
             "description": "Shared workspace for finance files and tables.",
         },
     ]
     ContextRegistry.clear()
     ManagerRegistry.clear()
-    return space_ids
+    return team_ids
 
 
-def _reset_spaces(space_ids: tuple[int, int], alias: str) -> None:
-    for space_id in space_ids:
+def _reset_spaces(team_ids: tuple[int, int], alias: str) -> None:
+    for team_id in team_ids:
         for context in (
-            f"Spaces/{space_id}/FileRecords/{alias}",
-            f"Spaces/{space_id}/Files/{alias}",
+            f"Teams/{team_id}/FileRecords/{alias}",
+            f"Teams/{team_id}/Files/{alias}",
         ):
             try:
                 unify.delete_context(context)
             except Exception:
                 pass
-    SESSION_DETAILS.space_ids = []
-    SESSION_DETAILS.space_summaries = []
+    SESSION_DETAILS.team_ids = []
+    SESSION_DETAILS.team_summaries = []
     ContextRegistry.clear()
     ManagerRegistry.clear()
 
@@ -61,7 +61,7 @@ def _compact_no_embedding_config() -> FilePipelineConfig:
 
 @_handle_project
 def test_file_ingest_routes_to_destination_and_reads_merge_roots(tmp_path):
-    space_ids = _configure_spaces()
+    team_ids = _configure_spaces()
     personal_path = tmp_path / f"personal-{uuid.uuid4().hex}.txt"
     shared_path = tmp_path / f"shared-{uuid.uuid4().hex}.txt"
     personal_path.write_text("personal research note", encoding="utf-8")
@@ -77,14 +77,14 @@ def test_file_ingest_routes_to_destination_and_reads_merge_roots(tmp_path):
         manager.ingest_files(
             str(shared_path),
             config=_compact_no_embedding_config(),
-            destination=f"space:{space_ids[0]}",
+            destination=f"team:{team_ids[0]}",
         )
 
         personal_rows = manager._data_manager.filter(
             context=manager._ctx,
             filter=f"file_path == {str(shared_path)!r}",
         )
-        shared_context = f"Spaces/{space_ids[0]}/FileRecords/{manager._fs_alias}"
+        shared_context = f"Teams/{team_ids[0]}/FileRecords/{manager._fs_alias}"
         shared_rows = manager._data_manager.filter(
             context=shared_context,
             filter=f"file_path == {str(shared_path)!r}",
@@ -96,7 +96,7 @@ def test_file_ingest_routes_to_destination_and_reads_merge_roots(tmp_path):
         assert shared_storage.index_context == shared_context
         if shared_storage.all_context_paths:
             assert all(
-                context_path.startswith(f"Spaces/{space_ids[0]}/Files/")
+                context_path.startswith(f"Teams/{team_ids[0]}/Files/")
                 for context_path in shared_storage.all_context_paths
             )
 
@@ -104,7 +104,7 @@ def test_file_ingest_routes_to_destination_and_reads_merge_roots(tmp_path):
         assert str(personal_path) in merged_paths
         assert str(shared_path) in merged_paths
     finally:
-        _reset_spaces(space_ids, manager._fs_alias)
+        _reset_spaces(team_ids, manager._fs_alias)
 
 
 @_handle_project
@@ -118,16 +118,16 @@ def test_file_invalid_destination_returns_tool_error(tmp_path):
         outcome = manager.ingest_files(
             str(file_path),
             config=_compact_no_embedding_config(),
-            destination="space:99999999",
+            destination="team:99999999",
         )
     finally:
-        SESSION_DETAILS.space_ids = []
-        SESSION_DETAILS.space_summaries = []
+        SESSION_DETAILS.team_ids = []
+        SESSION_DETAILS.team_summaries = []
         ContextRegistry.clear()
         ManagerRegistry.clear()
 
     assert outcome["error_kind"] == "invalid_destination"
-    assert outcome["details"]["destination"] == "space:99999999"
+    assert outcome["details"]["destination"] == "team:99999999"
 
 
 @_handle_project
@@ -136,15 +136,15 @@ def test_file_clear_invalid_destination_returns_tool_error():
     manager = FileManager(adapter=LocalFileSystemAdapter(None))
 
     try:
-        outcome = manager.clear(destination="space:99999999")
+        outcome = manager.clear(destination="team:99999999")
     finally:
-        SESSION_DETAILS.space_ids = []
-        SESSION_DETAILS.space_summaries = []
+        SESSION_DETAILS.team_ids = []
+        SESSION_DETAILS.team_summaries = []
         ContextRegistry.clear()
         ManagerRegistry.clear()
 
     assert outcome["error_kind"] == "invalid_destination"
-    assert outcome["details"]["destination"] == "space:99999999"
+    assert outcome["details"]["destination"] == "team:99999999"
 
 
 @_handle_project
@@ -158,16 +158,16 @@ def test_file_save_attachment_invalid_destination_returns_tool_error():
             "report.txt",
             b"report",
             auto_ingest=False,
-            destination="space:99999999",
+            destination="team:99999999",
         )
     finally:
-        SESSION_DETAILS.space_ids = []
-        SESSION_DETAILS.space_summaries = []
+        SESSION_DETAILS.team_ids = []
+        SESSION_DETAILS.team_summaries = []
         ContextRegistry.clear()
         ManagerRegistry.clear()
 
     assert outcome["error_kind"] == "invalid_destination"
-    assert outcome["details"]["destination"] == "space:99999999"
+    assert outcome["details"]["destination"] == "team:99999999"
 
 
 @pytest.mark.parametrize(
@@ -175,26 +175,26 @@ def test_file_save_attachment_invalid_destination_returns_tool_error():
     [
         lambda manager, path: manager.sync(
             file_path=path,
-            destination="space:99999999",
+            destination="team:99999999",
         ),
         lambda manager, path: manager.rename_file(
             file_id_or_path=path,
             new_name="renamed.txt",
-            destination="space:99999999",
+            destination="team:99999999",
         ),
         lambda manager, path: manager.move_file(
             file_id_or_path=path,
             new_parent_path="Archive",
-            destination="space:99999999",
+            destination="team:99999999",
         ),
         lambda manager, path: manager.delete_file(
             file_id_or_path=path,
-            destination="space:99999999",
+            destination="team:99999999",
         ),
         lambda manager, path: manager.ingest_files(
             path,
             config=_compact_no_embedding_config(),
-            destination="space:99999999",
+            destination="team:99999999",
         ),
     ],
 )
@@ -208,10 +208,10 @@ def test_file_write_tools_return_tool_error_for_invalid_destination(tmp_path, ca
     try:
         outcome = call(manager, str(file_path))
     finally:
-        SESSION_DETAILS.space_ids = []
-        SESSION_DETAILS.space_summaries = []
+        SESSION_DETAILS.team_ids = []
+        SESSION_DETAILS.team_summaries = []
         ContextRegistry.clear()
         ManagerRegistry.clear()
 
     assert outcome["error_kind"] == "invalid_destination"
-    assert outcome["details"]["destination"] == "space:99999999"
+    assert outcome["details"]["destination"] == "team:99999999"

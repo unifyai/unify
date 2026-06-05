@@ -15,7 +15,7 @@ from unity.transcript_manager.types.message import Message
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
 
-def _space_ids() -> tuple[int, int]:
+def _team_ids() -> tuple[int, int]:
     base = int(time.time_ns() % 1_000_000_000)
     return base, base + 1
 
@@ -50,16 +50,16 @@ def _delete_context_tree(root: str) -> None:
 @_handle_project
 @pytest.mark.asyncio
 async def test_ask_reads_the_relevant_accessible_space_transcript() -> None:
-    patch_space_id, research_space_id = _space_ids()
+    patch_team_id, research_team_id = _team_ids()
     target_token = "amber-coupler-5197"
     personal_decoy = "private-lotus-1189"
     research_decoy = "market-cedar-2048"
 
     try:
-        SESSION_DETAILS.space_ids = [patch_space_id, research_space_id]
-        SESSION_DETAILS.space_summaries = [
+        SESSION_DETAILS.team_ids = [patch_team_id, research_team_id]
+        SESSION_DETAILS.team_summaries = [
             {
-                "space_id": patch_space_id,
+                "team_id": patch_team_id,
                 "name": "Patch Reliability",
                 "description": (
                     "Shared workspace for field dispatch, compressor incidents, "
@@ -67,7 +67,7 @@ async def test_ask_reads_the_relevant_accessible_space_transcript() -> None:
                 ),
             },
             {
-                "space_id": research_space_id,
+                "team_id": research_team_id,
                 "name": "Market Research",
                 "description": (
                     "Shared workspace for competitive research, pricing studies, "
@@ -93,7 +93,7 @@ async def test_ask_reads_the_relevant_accessible_space_transcript() -> None:
                 exchange_id=51002,
             ),
             synchronous=True,
-            destination=f"space:{research_space_id}",
+            destination=f"team:{research_team_id}",
         )
         manager.log_messages(
             _message(
@@ -104,7 +104,7 @@ async def test_ask_reads_the_relevant_accessible_space_transcript() -> None:
                 exchange_id=51003,
             ),
             synchronous=True,
-            destination=f"space:{patch_space_id}",
+            destination=f"team:{patch_team_id}",
         )
 
         handle = await manager.ask(
@@ -127,15 +127,15 @@ async def test_ask_reads_the_relevant_accessible_space_transcript() -> None:
         assert personal_decoy not in normalized
         assert research_decoy not in normalized
     finally:
-        _delete_context_tree(f"Spaces/{patch_space_id}")
-        _delete_context_tree(f"Spaces/{research_space_id}")
+        _delete_context_tree(f"Teams/{patch_team_id}")
+        _delete_context_tree(f"Teams/{research_team_id}")
         SESSION_DETAILS.reset()
 
 
 @_handle_project
 @pytest.mark.asyncio
 async def test_ask_attributes_colleague_shared_transcript_as_team_knowledge() -> None:
-    shared_space_id, _ = _space_ids()
+    shared_team_id, _ = _team_ids()
     own_token = "self-ledger-1102"
     colleague_token = "teammate-ledger-9971"
     colleague_assistant_id = 987654321
@@ -145,10 +145,10 @@ async def test_ask_attributes_colleague_shared_transcript_as_team_knowledge() ->
         SESSION_DETAILS.assistant.first_name = "Avery"
         SESSION_DETAILS.assistant.surname = "Ops"
         SESSION_DETAILS.user.id = "boss-user"
-        SESSION_DETAILS.space_ids = [shared_space_id]
-        SESSION_DETAILS.space_summaries = [
+        SESSION_DETAILS.team_ids = [shared_team_id]
+        SESSION_DETAILS.team_summaries = [
             {
-                "space_id": shared_space_id,
+                "team_id": shared_team_id,
                 "name": "Operations Coordination",
                 "description": (
                     "Shared workspace for dispatch handoffs, incident notes, "
@@ -164,7 +164,7 @@ async def test_ask_attributes_colleague_shared_transcript_as_team_knowledge() ->
                 exchange_id=61001,
             ),
             synchronous=True,
-            destination=f"space:{shared_space_id}",
+            destination=f"team:{shared_team_id}",
         )
 
         SESSION_DETAILS.assistant.agent_id = colleague_assistant_id
@@ -177,7 +177,7 @@ async def test_ask_attributes_colleague_shared_transcript_as_team_knowledge() ->
                 exchange_id=61002,
             ),
             synchronous=True,
-            destination=f"space:{shared_space_id}",
+            destination=f"team:{shared_team_id}",
         )
         SESSION_DETAILS.assistant.agent_id = 684
 
@@ -214,5 +214,5 @@ async def test_ask_attributes_colleague_shared_transcript_as_team_knowledge() ->
         )
         assert own_token not in normalized
     finally:
-        _delete_context_tree(f"Spaces/{shared_space_id}")
+        _delete_context_tree(f"Teams/{shared_team_id}")
         SESSION_DETAILS.reset()

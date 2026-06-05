@@ -639,7 +639,7 @@ class TestResolveBindingContexts:
             assert result[0].alias == "sales"
 
     def test_filter_binding_resolved_against_explicit_root(self):
-        space_base = "Spaces/7"
+        space_base = "Teams/7"
         known_contexts = {
             f"{space_base}/Data/Sales/Monthly",
             f"{BASE}/Data/Sales/Monthly",

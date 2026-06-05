@@ -16,7 +16,7 @@ from unity.session_details import (
     SESSION_DETAILS,
     AssistantDetails,
     SessionDetails,
-    SpaceSummary,
+    TeamSummary,
     UserDetails,
     is_boss_contact,
     is_self_contact,
@@ -61,34 +61,34 @@ class TestEmailProvider:
 
 class TestSpaceIds:
     def test_export_and_populate_from_env_round_trips(self, monkeypatch):
-        monkeypatch.delenv("SPACE_IDS", raising=False)
+        monkeypatch.delenv("TEAM_IDS", raising=False)
         sd = SessionDetails()
-        sd.populate(space_ids=[3, 7])
+        sd.populate(team_ids=[3, 7])
         sd.export_to_env()
 
-        assert os.environ["SPACE_IDS"] == "3,7"
+        assert os.environ["TEAM_IDS"] == "3,7"
 
         sd2 = SessionDetails()
         sd2.populate_from_env()
-        assert sd2.space_ids == [3, 7]
-        assert sd2.assistant.space_ids == [3, 7]
+        assert sd2.team_ids == [3, 7]
+        assert sd2.assistant.team_ids == [3, 7]
 
-        sd.populate(space_ids=[])
+        sd.populate(team_ids=[])
         sd.export_to_env()
-        assert os.environ["SPACE_IDS"] == ""
+        assert os.environ["TEAM_IDS"] == ""
 
         sd3 = SessionDetails()
         sd3.populate_from_env()
-        assert sd3.space_ids == []
+        assert sd3.team_ids == []
 
     def test_reset_restores_empty_memberships(self):
         sd = SessionDetails()
-        sd.populate(space_ids=[3, 7])
-        assert sd.space_ids == [3, 7]
+        sd.populate(team_ids=[3, 7])
+        assert sd.team_ids == [3, 7]
 
         sd.reset()
-        assert sd.space_ids == []
-        assert sd.assistant.space_ids == []
+        assert sd.team_ids == []
+        assert sd.assistant.team_ids == []
 
 
 class TestCoordinatorFlag:
@@ -138,46 +138,45 @@ class TestCoordinatorFlag:
 
 class TestSpaceSummaries:
     def test_export_and_populate_from_env_round_trips(self, monkeypatch):
-        monkeypatch.delenv("SPACE_SUMMARIES", raising=False)
+        monkeypatch.delenv("TEAM_SUMMARIES", raising=False)
         summaries = [
             {
-                "space_id": 3,
+                "team_id": 3,
                 "name": "Repairs",
                 "description": "South-East repairs patch daily operations.",
             },
         ]
         sd = SessionDetails()
-        sd.populate(space_summaries=summaries)
+        sd.populate(team_summaries=summaries)
         sd.export_to_env()
 
-        assert json.loads(os.environ["SPACE_SUMMARIES"]) == summaries
+        assert json.loads(os.environ["TEAM_SUMMARIES"]) == summaries
 
         sd2 = SessionDetails()
         sd2.populate_from_env()
-        assert sd2.space_summaries == [
-            SpaceSummary(
-                space_id=3,
+        assert sd2.team_summaries == [
+            TeamSummary(
+                team_id=3,
                 name="Repairs",
                 description="South-East repairs patch daily operations.",
             ),
         ]
 
         sd.reset()
-        assert sd.space_summaries == []
+        assert sd.team_summaries == []
 
     @pytest.mark.parametrize(
         "summary",
         [
-            {"space_id": True, "name": "Repairs", "description": "Valid text"},
-            {"space_id": 3, "name": "", "description": "Valid text"},
-            {"space_id": 3, "name": "Repairs", "description": None},
+            {"team_id": True, "name": "Repairs", "description": "Valid text"},
+            {"team_id": 3, "name": "", "description": "Valid text"},
         ],
     )
-    def test_rejects_malformed_space_summaries(self, summary):
+    def test_rejects_malformed_team_summaries(self, summary):
         sd = SessionDetails()
 
         with pytest.raises(ValueError):
-            sd.populate(space_summaries=[summary])
+            sd.populate(team_summaries=[summary])
 
 
 class TestContactIds:

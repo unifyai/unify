@@ -44,12 +44,12 @@ def seeded_dm(simulated_dm):
 def dashboard_manager_spaces():
     """Assign unique shared-space memberships for dashboard routing tests."""
     base_id = time.time_ns() % 1_000_000_000
-    space_ids = (base_id, base_id + 1)
-    original_space_ids = list(SESSION_DETAILS.space_ids)
-    SESSION_DETAILS.space_ids = list(space_ids)
+    team_ids = (base_id, base_id + 1)
+    original_team_ids = list(SESSION_DETAILS.team_ids)
+    SESSION_DETAILS.team_ids = list(team_ids)
     ContextRegistry.clear()
     try:
-        yield space_ids
+        yield team_ids
     finally:
-        SESSION_DETAILS.space_ids = original_space_ids
+        SESSION_DETAILS.team_ids = original_team_ids
         ContextRegistry.clear()

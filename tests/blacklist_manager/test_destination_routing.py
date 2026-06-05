@@ -14,41 +14,41 @@ from unity.session_details import SESSION_DETAILS
 
 
 def _configure_spaces() -> tuple[int, int]:
-    base_space_id = 30_000_000 + uuid.uuid4().int % 1_000_000_000
-    space_ids = (base_space_id, base_space_id + 1)
-    SESSION_DETAILS.space_ids = list(space_ids)
-    SESSION_DETAILS.space_summaries = [
+    base_team_id = 30_000_000 + uuid.uuid4().int % 1_000_000_000
+    team_ids = (base_team_id, base_team_id + 1)
+    SESSION_DETAILS.team_ids = list(team_ids)
+    SESSION_DETAILS.team_summaries = [
         {
-            "space_id": space_ids[0],
+            "team_id": team_ids[0],
             "name": "Comms Safety",
             "description": "Shared workspace for communication safety rules.",
         },
         {
-            "space_id": space_ids[1],
+            "team_id": team_ids[1],
             "name": "Vendors",
             "description": "Shared vendor coordination workspace.",
         },
     ]
     ContextRegistry.clear()
     ManagerRegistry.clear()
-    return space_ids
+    return team_ids
 
 
-def _reset_spaces(space_ids: tuple[int, int]) -> None:
-    for space_id in space_ids:
+def _reset_spaces(team_ids: tuple[int, int]) -> None:
+    for team_id in team_ids:
         try:
-            unify.delete_context(f"Spaces/{space_id}/BlackList")
+            unify.delete_context(f"Teams/{team_id}/BlackList")
         except Exception:
             pass
-    SESSION_DETAILS.space_ids = []
-    SESSION_DETAILS.space_summaries = []
+    SESSION_DETAILS.team_ids = []
+    SESSION_DETAILS.team_summaries = []
     ContextRegistry.clear()
     ManagerRegistry.clear()
 
 
 @_handle_project
 def test_blacklist_writes_route_to_destination_and_reads_merge_roots():
-    space_ids = _configure_spaces()
+    team_ids = _configure_spaces()
     manager = BlackListManager()
     personal_detail = f"personal.{uuid.uuid4().hex}@example.com"
     shared_detail = f"shared.{uuid.uuid4().hex}@example.com"
@@ -63,7 +63,7 @@ def test_blacklist_writes_route_to_destination_and_reads_merge_roots():
             medium=Medium.EMAIL,
             contact_detail=shared_detail,
             reason="shared block",
-            destination=f"space:{space_ids[0]}",
+            destination=f"team:{team_ids[0]}",
         )
 
         merged = manager.filter_blacklist()["entries"]
@@ -75,15 +75,15 @@ def test_blacklist_writes_route_to_destination_and_reads_merge_roots():
             entry.contact_detail: entry.destination for entry in merged
         }
         assert destinations_by_detail[personal_detail] == "personal"
-        assert destinations_by_detail[shared_detail] == f"space:{space_ids[0]}"
+        assert destinations_by_detail[shared_detail] == f"team:{team_ids[0]}"
 
         shared_rows = unify.get_logs(
-            context=f"Spaces/{space_ids[0]}/BlackList",
+            context=f"Teams/{team_ids[0]}/BlackList",
             filter=f"contact_detail == '{shared_detail}'",
         )
         assert len(shared_rows) == 1
     finally:
-        _reset_spaces(space_ids)
+        _reset_spaces(team_ids)
 
 
 @_handle_project
@@ -91,7 +91,7 @@ def test_blacklist_any_visible_root_blocks_contact_detail(monkeypatch):
     from unity.conversation_manager import comms_manager
     from unity.settings import SETTINGS
 
-    space_ids = _configure_spaces()
+    team_ids = _configure_spaces()
     detail = f"blocked.{uuid.uuid4().hex}@example.com"
     manager = BlackListManager()
 
@@ -100,7 +100,7 @@ def test_blacklist_any_visible_root_blocks_contact_detail(monkeypatch):
             medium=Medium.EMAIL,
             contact_detail=detail,
             reason="shared block",
-            destination=f"space:{space_ids[0]}",
+            destination=f"team:{team_ids[0]}",
         )
         monkeypatch.setattr(
             SETTINGS.conversation,
@@ -110,12 +110,12 @@ def test_blacklist_any_visible_root_blocks_contact_detail(monkeypatch):
 
         assert comms_manager._is_blacklisted(Medium.EMAIL.value, detail) is True
     finally:
-        _reset_spaces(space_ids)
+        _reset_spaces(team_ids)
 
 
 @_handle_project
 def test_blacklist_invalid_destination_returns_tool_error():
-    space_ids = _configure_spaces()
+    team_ids = _configure_spaces()
     manager = BlackListManager()
 
     try:
@@ -123,27 +123,27 @@ def test_blacklist_invalid_destination_returns_tool_error():
             medium=Medium.EMAIL,
             contact_detail=f"bad.{uuid.uuid4().hex}@example.com",
             reason="bad destination",
-            destination="space:99999999",
+            destination="team:99999999",
         )
     finally:
-        _reset_spaces(space_ids)
+        _reset_spaces(team_ids)
 
     assert outcome["error_kind"] == "invalid_destination"
-    assert outcome["details"]["destination"] == "space:99999999"
+    assert outcome["details"]["destination"] == "team:99999999"
 
 
 @_handle_project
 def test_blacklist_clear_invalid_destination_returns_tool_error():
-    space_ids = _configure_spaces()
+    team_ids = _configure_spaces()
     manager = BlackListManager()
 
     try:
-        outcome = manager.clear(destination="space:99999999")
+        outcome = manager.clear(destination="team:99999999")
     finally:
-        _reset_spaces(space_ids)
+        _reset_spaces(team_ids)
 
     assert outcome["error_kind"] == "invalid_destination"
-    assert outcome["details"]["destination"] == "space:99999999"
+    assert outcome["details"]["destination"] == "team:99999999"
 
 
 @pytest.mark.parametrize(
@@ -153,29 +153,29 @@ def test_blacklist_clear_invalid_destination_returns_tool_error():
             medium=Medium.EMAIL,
             contact_detail=f"bad.{uuid.uuid4().hex}@example.com",
             reason="bad destination",
-            destination="space:99999999",
+            destination="team:99999999",
         ),
         lambda manager: manager.update_blacklist_entry(
             blacklist_id=1,
             reason="updated",
-            destination="space:99999999",
+            destination="team:99999999",
         ),
         lambda manager: manager.delete_blacklist_entry(
             blacklist_id=1,
-            destination="space:99999999",
+            destination="team:99999999",
         ),
-        lambda manager: manager.clear(destination="space:99999999"),
+        lambda manager: manager.clear(destination="team:99999999"),
     ],
 )
 @_handle_project
 def test_blacklist_write_tools_return_tool_error_for_invalid_destination(call):
-    space_ids = _configure_spaces()
+    team_ids = _configure_spaces()
     manager = BlackListManager()
 
     try:
         outcome = call(manager)
     finally:
-        _reset_spaces(space_ids)
+        _reset_spaces(team_ids)
 
     assert outcome["error_kind"] == "invalid_destination"
-    assert outcome["details"]["destination"] == "space:99999999"
+    assert outcome["details"]["destination"] == "team:99999999"

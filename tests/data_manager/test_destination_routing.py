@@ -19,38 +19,38 @@ def _fresh_manager() -> DataManager:
 
 
 def _configure_spaces() -> tuple[int, int]:
-    base_space_id = 20_000_000 + uuid.uuid4().int % 1_000_000_000
-    space_ids = (base_space_id, base_space_id + 1)
-    SESSION_DETAILS.space_ids = list(space_ids)
-    SESSION_DETAILS.space_summaries = [
+    base_team_id = 20_000_000 + uuid.uuid4().int % 1_000_000_000
+    team_ids = (base_team_id, base_team_id + 1)
+    SESSION_DETAILS.team_ids = list(team_ids)
+    SESSION_DETAILS.team_summaries = [
         {
-            "space_id": space_ids[0],
+            "team_id": team_ids[0],
             "name": "Revenue Ops",
             "description": "Shared workspace for revenue operations data.",
         },
         {
-            "space_id": space_ids[1],
+            "team_id": team_ids[1],
             "name": "Support Ops",
             "description": "Shared workspace for support operations data.",
         },
     ]
-    return space_ids
+    return team_ids
 
 
-def _reset_spaces(space_ids: tuple[int, int], suffix: str) -> None:
-    for space_id in space_ids:
+def _reset_spaces(team_ids: tuple[int, int], suffix: str) -> None:
+    for team_id in team_ids:
         try:
-            unify.delete_context(f"Spaces/{space_id}/Data/{suffix}")
+            unify.delete_context(f"Teams/{team_id}/Data/{suffix}")
         except Exception:
             pass
-    SESSION_DETAILS.space_ids = []
-    SESSION_DETAILS.space_summaries = []
+    SESSION_DETAILS.team_ids = []
+    SESSION_DETAILS.team_summaries = []
     ContextRegistry.clear()
 
 
 @_handle_project
 def test_data_writes_route_to_destination_and_reads_merge_roots():
-    space_ids = _configure_spaces()
+    team_ids = _configure_spaces()
     table_suffix = f"destination_routing/{uuid.uuid4().hex}"
     manager = _fresh_manager()
 
@@ -62,17 +62,17 @@ def test_data_writes_route_to_destination_and_reads_merge_roots():
         shared_path = manager.create_table(
             table_suffix,
             fields={"label": "str", "amount": "int"},
-            destination=f"space:{space_ids[0]}",
+            destination=f"team:{team_ids[0]}",
         )
 
         manager.insert_rows(personal_path, [{"label": "personal", "amount": 1}])
         manager.insert_rows(
             table_suffix,
             [{"label": "shared", "amount": 2}],
-            destination=f"space:{space_ids[0]}",
+            destination=f"team:{team_ids[0]}",
         )
 
-        assert shared_path == f"Spaces/{space_ids[0]}/Data/{table_suffix}"
+        assert shared_path == f"Teams/{team_ids[0]}/Data/{table_suffix}"
         shared_meta = manager.get_table(shared_path)
         assert "row_id" in shared_meta.get("unique_keys", [])
         assert {row["label"] for row in manager.filter(shared_path)} == {"shared"}
@@ -94,13 +94,13 @@ def test_data_writes_route_to_destination_and_reads_merge_roots():
         assert prefixed_path.endswith(f"/Data/{table_suffix}/prefixed_default")
         assert not prefixed_path.startswith("Data/")
     finally:
-        _reset_spaces(space_ids, table_suffix)
+        _reset_spaces(team_ids, table_suffix)
 
 
 @_handle_project
 def test_data_prefixed_paths_default_to_personal_without_spaces():
-    SESSION_DETAILS.space_ids = []
-    SESSION_DETAILS.space_summaries = []
+    SESSION_DETAILS.team_ids = []
+    SESSION_DETAILS.team_summaries = []
     ContextRegistry.clear()
     table_suffix = f"prefixed_personal/{uuid.uuid4().hex}"
     manager = _fresh_manager()
@@ -122,7 +122,7 @@ def test_data_prefixed_paths_default_to_personal_without_spaces():
 
 @_handle_project
 def test_data_shared_only_metadata_and_join_reads_use_visible_roots():
-    space_ids = _configure_spaces()
+    team_ids = _configure_spaces()
     table_suffix = f"destination_routing_metadata/{uuid.uuid4().hex}"
     left_suffix = f"{table_suffix}/left"
     right_suffix = f"{table_suffix}/right"
@@ -132,22 +132,22 @@ def test_data_shared_only_metadata_and_join_reads_use_visible_roots():
         shared_left = manager.create_table(
             left_suffix,
             fields={"label": "str", "join_key": "int"},
-            destination=f"space:{space_ids[0]}",
+            destination=f"team:{team_ids[0]}",
         )
         shared_right = manager.create_table(
             right_suffix,
             fields={"join_key": "int", "amount": "int"},
-            destination=f"space:{space_ids[0]}",
+            destination=f"team:{team_ids[0]}",
         )
         manager.insert_rows(
             left_suffix,
             [{"label": "shared", "join_key": 7}],
-            destination=f"space:{space_ids[0]}",
+            destination=f"team:{team_ids[0]}",
         )
         manager.insert_rows(
             right_suffix,
             [{"join_key": 7, "amount": 42}],
-            destination=f"space:{space_ids[0]}",
+            destination=f"team:{team_ids[0]}",
         )
 
         assert manager.describe_table(left_suffix).context == shared_left
@@ -192,9 +192,9 @@ def test_data_shared_only_metadata_and_join_reads_use_visible_roots():
             columns="amount",
             group_by="label",
         ) == {"shared": 42}
-        assert shared_right == f"Spaces/{space_ids[0]}/Data/{right_suffix}"
+        assert shared_right == f"Teams/{team_ids[0]}/Data/{right_suffix}"
     finally:
-        _reset_spaces(space_ids, table_suffix)
+        _reset_spaces(team_ids, table_suffix)
 
 
 @_handle_project
@@ -205,15 +205,15 @@ def test_data_invalid_destination_returns_tool_error():
     try:
         outcome = manager.create_table(
             f"bad_destination/{uuid.uuid4().hex}",
-            destination="space:99999999",
+            destination="team:99999999",
         )
     finally:
-        SESSION_DETAILS.space_ids = []
-        SESSION_DETAILS.space_summaries = []
+        SESSION_DETAILS.team_ids = []
+        SESSION_DETAILS.team_summaries = []
         ContextRegistry.clear()
 
     assert outcome["error_kind"] == "invalid_destination"
-    assert outcome["details"]["destination"] == "space:99999999"
+    assert outcome["details"]["destination"] == "team:99999999"
 
 
 @pytest.mark.parametrize(
@@ -221,40 +221,40 @@ def test_data_invalid_destination_returns_tool_error():
     [
         lambda manager, context: manager.create_table(
             context,
-            destination="space:99999999",
+            destination="team:99999999",
         ),
         lambda manager, context: manager.delete_table(
             context,
             dangerous_ok=True,
-            destination="space:99999999",
+            destination="team:99999999",
         ),
         lambda manager, context: manager.rename_table(
             context,
             f"{context}_renamed",
-            destination="space:99999999",
+            destination="team:99999999",
         ),
         lambda manager, context: manager.create_column(
             context,
             column_name="label",
             column_type="str",
-            destination="space:99999999",
+            destination="team:99999999",
         ),
         lambda manager, context: manager.delete_column(
             context,
             column_name="label",
-            destination="space:99999999",
+            destination="team:99999999",
         ),
         lambda manager, context: manager.rename_column(
             context,
             old_name="label",
             new_name="name",
-            destination="space:99999999",
+            destination="team:99999999",
         ),
         lambda manager, context: manager.create_derived_column(
             context,
             column_name="total",
             equation="amount * 2",
-            destination="space:99999999",
+            destination="team:99999999",
         ),
         lambda manager, context: manager.join_tables(
             left_table=context,
@@ -262,38 +262,38 @@ def test_data_invalid_destination_returns_tool_error():
             join_expr=f"{context}.id == {context}_right.id",
             dest_table=f"{context}_joined",
             select={f"{context}.id": "id"},
-            destination="space:99999999",
+            destination="team:99999999",
         ),
         lambda manager, context: manager.insert_rows(
             context,
             [{"label": "x"}],
-            destination="space:99999999",
+            destination="team:99999999",
         ),
         lambda manager, context: manager.update_rows(
             context,
             updates={"label": "y"},
             filter="label == 'x'",
-            destination="space:99999999",
+            destination="team:99999999",
         ),
         lambda manager, context: manager.delete_rows(
             context,
             filter="label == 'x'",
-            destination="space:99999999",
+            destination="team:99999999",
         ),
         lambda manager, context: manager.ingest(
             context,
             rows=[{"label": "x"}],
-            destination="space:99999999",
+            destination="team:99999999",
         ),
         lambda manager, context: manager.ensure_vector_column(
             context,
             source_column="label",
-            destination="space:99999999",
+            destination="team:99999999",
         ),
         lambda manager, context: manager.vectorize_rows(
             context,
             source_column="label",
-            destination="space:99999999",
+            destination="team:99999999",
         ),
     ],
 )
@@ -305,9 +305,9 @@ def test_data_write_tools_return_tool_error_for_invalid_destination(call):
     try:
         outcome = call(manager, f"bad_destination/{uuid.uuid4().hex}")
     finally:
-        SESSION_DETAILS.space_ids = []
-        SESSION_DETAILS.space_summaries = []
+        SESSION_DETAILS.team_ids = []
+        SESSION_DETAILS.team_summaries = []
         ContextRegistry.clear()
 
     assert outcome["error_kind"] == "invalid_destination"
-    assert outcome["details"]["destination"] == "space:99999999"
+    assert outcome["details"]["destination"] == "team:99999999"

@@ -242,13 +242,13 @@ def test_get_info_cache_fallback():
 
 @_handle_project
 def test_get_info_cache_fallback_reads_accessible_space_roots():
-    space_id = time.time_ns()
-    SESSION_DETAILS.space_ids = [space_id]
+    team_id = time.time_ns()
+    SESSION_DETAILS.team_ids = [team_id]
 
     try:
         cm = ContactManager()
         personal_ds = DataStore.for_context(cm._ctx, key_fields=("contact_id",))
-        shared_context = f"Spaces/{space_id}/Contacts"
+        shared_context = f"Teams/{team_id}/Contacts"
         shared_ds = DataStore.for_context(shared_context, key_fields=("contact_id",))
 
         personal_max_id = max(
@@ -257,8 +257,8 @@ def test_get_info_cache_fallback_reads_accessible_space_roots():
         for _ in range(personal_max_id + 2):
             out = cm._create_contact(
                 first_name="Shared Info",
-                bio=f"space-info-marker-{space_id}",
-                destination=f"space:{space_id}",
+                bio=f"space-info-marker-{team_id}",
+                destination=f"team:{team_id}",
             )
         cid = out["details"]["contact_id"]
 
@@ -270,15 +270,15 @@ def test_get_info_cache_fallback_reads_accessible_space_roots():
             search_local_storage=True,
         )
         assert info == {
-            cid: {"first_name": "Shared Info", "bio": f"space-info-marker-{space_id}"},
+            cid: {"first_name": "Shared Info", "bio": f"space-info-marker-{team_id}"},
         }
         assert shared_ds[cid]["first_name"] == "Shared Info"
         with pytest.raises(KeyError):
             personal_ds[cid]
     finally:
         try:
-            unify.delete_context(f"Spaces/{space_id}/Contacts")
+            unify.delete_context(f"Teams/{team_id}/Contacts")
         except Exception:
             pass
-        SESSION_DETAILS.space_ids = []
+        SESSION_DETAILS.team_ids = []
         ContextRegistry.clear()

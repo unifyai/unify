@@ -81,17 +81,17 @@ def test_contact_reduce_param_shapes():
 @pytest.mark.requires_real_unify
 @_handle_project
 def test_contact_reduce_reads_personal_and_accessible_space_roots():
-    space_id = time.time_ns()
-    SESSION_DETAILS.space_ids = [space_id]
+    team_id = time.time_ns()
+    SESSION_DETAILS.team_ids = [team_id]
 
     try:
         cm = ContactManager()
-        marker = f"reduce-marker-{space_id}"
+        marker = f"reduce-marker-{team_id}"
         cm._create_contact(first_name="Personal Reduce", bio=marker)
         cm._create_contact(
             first_name="Shared Reduce",
             bio=marker,
-            destination=f"space:{space_id}",
+            destination=f"team:{team_id}",
         )
 
         count = cm._reduce(
@@ -109,7 +109,7 @@ def test_contact_reduce_reads_personal_and_accessible_space_roots():
         )
         assert grouped == {"Personal Reduce": 1, "Shared Reduce": 1}
 
-        SESSION_DETAILS.space_ids = []
+        SESSION_DETAILS.team_ids = []
         ContextRegistry.clear()
         assert (
             cm._reduce(
@@ -121,8 +121,8 @@ def test_contact_reduce_reads_personal_and_accessible_space_roots():
         )
     finally:
         try:
-            unify.delete_context(f"Spaces/{space_id}/Contacts")
+            unify.delete_context(f"Teams/{team_id}/Contacts")
         except Exception:
             pass
-        SESSION_DETAILS.space_ids = []
+        SESSION_DETAILS.team_ids = []
         ContextRegistry.clear()

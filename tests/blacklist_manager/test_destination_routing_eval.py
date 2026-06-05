@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from tests.destination_routing_helpers import (
-    FAMILY_SPACE_DESTINATION,
+    FAMILY_TEAM_DESTINATION,
     PERSONAL_DESTINATIONS,
     DestinationRoutingDecision,
     assert_personal_or_clarification,
@@ -27,7 +27,7 @@ async def test_household_blacklist_routes_to_family_space():
 
     assert decision.manager.lower().replace("_", "") == "blacklistmanager"
     assert tool_name(decision) == "create_blacklist_entry"
-    assert decision.destination == FAMILY_SPACE_DESTINATION
+    assert decision.destination == FAMILY_TEAM_DESTINATION
     assert decision.clarification_requested is False
 
 

@@ -26,6 +26,6 @@ def test_data_write_tools_expose_destination_guidance():
         assert "Accessible" in doc
         assert "shared" in doc
         assert "spaces" in doc
-        assert "space:<id>" in doc
+        assert "team:<id>" in doc
         assert "personal" in doc
         assert "request_clarification" in doc

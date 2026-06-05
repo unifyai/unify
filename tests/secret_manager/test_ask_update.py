@@ -84,8 +84,8 @@ async def test_update_routes_team_credential_to_shared_space(
     secret_manager_context,
     secret_manager_spaces,
 ):
-    """Natural-language updates choose the named shared-space destination."""
-    patch_space_id, _ = secret_manager_spaces
+    """Natural-language updates choose the named shared-team destination."""
+    patch_team_id, _ = secret_manager_spaces
     manager = SecretManager()
 
     handle = await manager.update(
@@ -100,7 +100,7 @@ async def test_update_routes_team_credential_to_shared_space(
         filter="name == 'patch_ops_slack_bot'",
     )
     shared_matches = unify.get_logs(
-        context=f"Spaces/{patch_space_id}/Secrets",
+        context=f"Teams/{patch_team_id}/Secrets",
         filter="name == 'patch_ops_slack_bot'",
     )
 

@@ -14,7 +14,7 @@ from unity.conversation_manager.prompt_builders import (
     build_system_prompt,
     build_voice_agent_prompt,
 )
-from unity.session_details import SpaceSummary
+from unity.session_details import TeamSummary
 
 pytestmark = pytest.mark.no_unify_context
 
@@ -91,9 +91,9 @@ class TestAccessibleSpacesBlock:
     def test_block_renders_after_bio(self):
         prompt = _build(
             bio="Assistant biography.",
-            space_summaries=[
-                SpaceSummary(
-                    space_id=3,
+            team_summaries=[
+                TeamSummary(
+                    team_id=3,
                     name="Repairs",
                     description="South-East repairs patch daily operations.",
                 ),
@@ -101,12 +101,12 @@ class TestAccessibleSpacesBlock:
         )
 
         assert "Bio\n---\nAssistant biography." in prompt
-        assert "Accessible shared spaces" in prompt
+        assert "Accessible shared teams" in prompt
         assert (
-            '- space:3 "Repairs" - South-East repairs patch daily operations.' in prompt
+            '- team:3 "Repairs" - South-East repairs patch daily operations.' in prompt
         )
-        assert prompt.index("Bio\n---") < prompt.index("Accessible shared spaces")
-        assert prompt.index("Accessible shared spaces") < prompt.index(
+        assert prompt.index("Bio\n---") < prompt.index("Accessible shared teams")
+        assert prompt.index("Accessible shared teams") < prompt.index(
             "Onboarding reference",
         )
 

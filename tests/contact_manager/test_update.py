@@ -13,7 +13,7 @@ from unity.blacklist_manager.blacklist_manager import BlackListManager
 from unity.conversation_manager.cm_types import Medium
 from unity.common.context_registry import ContextRegistry
 from unity.memory_manager import broader_context
-from unity.session_details import SESSION_DETAILS, SpaceSummary
+from unity.session_details import SESSION_DETAILS, TeamSummary
 from tests.helpers import _handle_project
 from tests.async_helpers import _wait_for_next_assistant_response_event
 
@@ -63,11 +63,11 @@ def _contacts_with_email(context: str, email: str) -> list:
         return []
 
 
-def _configure_contact_routing_space(space_id: int) -> None:
-    SESSION_DETAILS.space_ids = [space_id]
-    SESSION_DETAILS.space_summaries = [
-        SpaceSummary(
-            space_id=space_id,
+def _configure_contact_routing_space(team_id: int) -> None:
+    SESSION_DETAILS.team_ids = [team_id]
+    SESSION_DETAILS.team_summaries = [
+        TeamSummary(
+            team_id=team_id,
             name="Repairs Dispatch",
             description=(
                 "South-East repairs dispatch operations, contractor scheduling, "
@@ -79,13 +79,13 @@ def _configure_contact_routing_space(space_id: int) -> None:
     broader_context.reset()
 
 
-def _reset_contact_routing_space(space_id: int) -> None:
+def _reset_contact_routing_space(team_id: int) -> None:
     try:
-        unify.delete_context(f"Spaces/{space_id}/Contacts")
+        unify.delete_context(f"Teams/{team_id}/Contacts")
     except Exception:
         pass
-    SESSION_DETAILS.space_ids = []
-    SESSION_DETAILS.space_summaries = []
+    SESSION_DETAILS.team_ids = []
+    SESSION_DETAILS.team_summaries = []
     ContextRegistry.clear()
     broader_context.reset()
 
@@ -93,9 +93,9 @@ def _reset_contact_routing_space(space_id: int) -> None:
 @_handle_project
 @pytest.mark.asyncio
 async def test_update_routes_explicit_team_contact_to_shared_space():
-    space_id = time.time_ns()
-    _configure_contact_routing_space(space_id)
-    email = f"nora.shared.{space_id}@example.com"
+    team_id = time.time_ns()
+    _configure_contact_routing_space(team_id)
+    email = f"nora.shared.{team_id}@example.com"
 
     try:
         cm = ContactManager()
@@ -108,20 +108,20 @@ async def test_update_routes_explicit_team_contact_to_shared_space():
         await handle.result()
 
         personal_rows = _contacts_with_email(cm._ctx, email)
-        shared_rows = _contacts_with_email(f"Spaces/{space_id}/Contacts", email)
+        shared_rows = _contacts_with_email(f"Teams/{team_id}/Contacts", email)
         assert personal_rows == []
         assert len(shared_rows) == 1
         assert shared_rows[0].entries["first_name"] == "Nora"
     finally:
-        _reset_contact_routing_space(space_id)
+        _reset_contact_routing_space(team_id)
 
 
 @_handle_project
 @pytest.mark.asyncio
 async def test_update_routes_private_contact_to_personal_memory():
-    space_id = time.time_ns()
-    _configure_contact_routing_space(space_id)
-    email = f"pia.private.{space_id}@example.com"
+    team_id = time.time_ns()
+    _configure_contact_routing_space(team_id)
+    email = f"pia.private.{team_id}@example.com"
 
     try:
         cm = ContactManager()
@@ -133,20 +133,20 @@ async def test_update_routes_private_contact_to_personal_memory():
         await handle.result()
 
         personal_rows = _contacts_with_email(cm._ctx, email)
-        shared_rows = _contacts_with_email(f"Spaces/{space_id}/Contacts", email)
+        shared_rows = _contacts_with_email(f"Teams/{team_id}/Contacts", email)
         assert len(personal_rows) == 1
         assert shared_rows == []
         assert personal_rows[0].entries["first_name"] == "Pia"
     finally:
-        _reset_contact_routing_space(space_id)
+        _reset_contact_routing_space(team_id)
 
 
 @_handle_project
 @pytest.mark.asyncio
 async def test_update_defaults_ambiguous_contact_to_personal_memory():
-    space_id = time.time_ns()
-    _configure_contact_routing_space(space_id)
-    email = f"owen.neighbor.{space_id}@example.com"
+    team_id = time.time_ns()
+    _configure_contact_routing_space(team_id)
+    email = f"owen.neighbor.{team_id}@example.com"
 
     try:
         cm = ContactManager()
@@ -158,12 +158,12 @@ async def test_update_defaults_ambiguous_contact_to_personal_memory():
         await handle.result()
 
         personal_rows = _contacts_with_email(cm._ctx, email)
-        shared_rows = _contacts_with_email(f"Spaces/{space_id}/Contacts", email)
+        shared_rows = _contacts_with_email(f"Teams/{team_id}/Contacts", email)
         assert len(personal_rows) == 1
         assert shared_rows == []
         assert personal_rows[0].entries["first_name"] == "Owen"
     finally:
-        _reset_contact_routing_space(space_id)
+        _reset_contact_routing_space(team_id)
 
 
 @_handle_project

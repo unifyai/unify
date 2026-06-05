@@ -100,7 +100,7 @@ async def test_team_knowledge_routes_to_the_matching_shared_space(llm_config):
 
         assert_tool_destination(messages, "add_rows", scenario.patch_destination)
         assert _knowledge_table_rows_containing(
-            f"Spaces/{scenario.patch_space_id}",
+            f"Teams/{scenario.patch_team_id}",
             "OperationalNotes",
             sentinel,
         )
@@ -110,7 +110,7 @@ async def test_team_knowledge_routes_to_the_matching_shared_space(llm_config):
             sentinel,
         )
         assert not _knowledge_table_rows_containing(
-            f"Spaces/{scenario.research_space_id}",
+            f"Teams/{scenario.research_team_id}",
             "OperationalNotes",
             sentinel,
         )

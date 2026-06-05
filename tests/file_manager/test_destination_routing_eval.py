@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from tests.destination_routing_helpers import (
-    PATCH_SPACE_DESTINATION,
+    PATCH_TEAM_DESTINATION,
     PERSONAL_DESTINATIONS,
     DestinationRoutingDecision,
     routing_decision_prompt,
@@ -27,7 +27,7 @@ async def test_team_reference_file_routes_to_patch_space():
 
     assert decision.manager.lower().replace("_", "") == "filemanager"
     assert tool_name(decision) in {"ingest_files", "save_attachment"}
-    assert decision.destination == PATCH_SPACE_DESTINATION
+    assert decision.destination == PATCH_TEAM_DESTINATION
     assert decision.clarification_requested is False
 
 

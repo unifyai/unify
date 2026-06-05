@@ -32,7 +32,7 @@ def reset_coordinator_manager_state():
 
 class TestCoordinatorOnboardingManager:
     def test_contexts_are_private_to_assistant_scope(self):
-        SESSION_DETAILS.space_ids = [3, 7]
+        SESSION_DETAILS.team_ids = [3, 7]
 
         with (
             patch("unity.common.context_registry._create_context_with_retry"),
@@ -142,7 +142,10 @@ class TestCoordinatorOnboardingManager:
             assert manager.get_org_members() == [{"email": "dana@acme.com"}]
             assert manager.get_org_members() == [{"email": "dana@acme.com"}]
 
-        list_members.assert_called_once_with(7, api_key="owner-key")
+        list_members.assert_called_once_with(
+            7,
+            api_key="owner-key",  # pragma: allowlist secret
+        )
 
     def test_org_member_failures_do_not_poison_cache(self):
         SESSION_DETAILS.org_id = 7
@@ -191,7 +194,9 @@ class TestCoordinatorOnboardingManager:
             assert manager.get_workspace_coordinator_name() == "Avery Coordinator"
             assert manager.get_workspace_coordinator_name() == "Avery Coordinator"
 
-        list_assistants.assert_called_once_with(api_key="owner-key")
+        list_assistants.assert_called_once_with(
+            api_key="owner-key",  # pragma: allowlist secret
+        )
 
     def test_workspace_coordinator_name_returns_none_when_no_coordinator_exists(self):
         SESSION_DETAILS.org_id = 7

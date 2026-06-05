@@ -240,11 +240,11 @@ def test_load_config_from_env_canonicalizes_destination(monkeypatch):
     from unity.task_scheduler import offline_runner
 
     _seed_env(monkeypatch)
-    monkeypatch.setenv("TASK_DESTINATION", "space:007")
+    monkeypatch.setenv("TASK_DESTINATION", "team:007")
 
     config = offline_runner._load_config_from_env()
 
-    assert config.destination == "space:7"
+    assert config.destination == "team:7"
 
 
 def test_load_config_from_env_rejects_invalid_destination(monkeypatch):
