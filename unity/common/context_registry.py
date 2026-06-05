@@ -14,10 +14,10 @@ from unity.session_details import SESSION_DETAILS
 
 _log = logging.getLogger(__name__)
 
-SPACE_CONTEXT_PREFIX: Final[str] = "Spaces/"
+TEAM_CONTEXT_PREFIX: Final[str] = "Teams/"
 PERSONAL_ROOT_IDENTITY: Final[str] = "Personal"
 PERSONAL_DESTINATION: Final[str] = "personal"
-SPACE_DESTINATION_PREFIX: Final[str] = "space:"
+TEAM_DESTINATION_PREFIX: Final[str] = "team:"
 INVALID_DESTINATION_ERROR: Final[str] = "invalid_destination"
 
 _SHARED_SCOPED_TABLES: Final[frozenset[str]] = SHARED_SCOPED_TABLES
@@ -56,12 +56,12 @@ class ContextRegistry:
             return type(manager).__name__
 
     @staticmethod
-    def _space_root_identity(space_id: int) -> str:
-        return f"{SPACE_CONTEXT_PREFIX}{space_id}"
+    def _team_root_identity(team_id: int) -> str:
+        return f"{TEAM_CONTEXT_PREFIX}{team_id}"
 
     @classmethod
     def _is_shared_scoped(cls, table_name: str) -> bool:
-        """Return whether a table participates in shared-space routing."""
+        """Return whether a table participates in shared-team routing."""
         if table_name in _SHARED_SCOPED_TABLES:
             return True
         parent = table_name
@@ -114,7 +114,7 @@ class ContextRegistry:
             "message": message,
             "details": {
                 "destination": destination,
-                "space_ids": sorted(SESSION_DETAILS.space_ids),
+                "team_ids": sorted(SESSION_DETAILS.team_ids),
                 "table_name": table_name,
             },
         }
@@ -125,33 +125,33 @@ class ContextRegistry:
         """Normalize one public destination label.
 
         Returns ``None`` for personal destinations and the canonical
-        ``space:<id>`` form for shared destinations.
+        ``team:<id>`` form for shared destinations.
         """
         if destination is None:
             return None
         if not isinstance(destination, str):
-            raise ValueError("Destination must be 'personal' or 'space:<id>'.")
+            raise ValueError("Destination must be 'personal' or 'team:<id>'.")
         normalized = destination.strip()
         if not normalized or normalized == PERSONAL_DESTINATION:
             return None
-        if not normalized.startswith(SPACE_DESTINATION_PREFIX):
-            raise ValueError("Destination must be 'personal' or 'space:<id>'.")
-        raw_space_id = normalized[len(SPACE_DESTINATION_PREFIX) :]
+        if not normalized.startswith(TEAM_DESTINATION_PREFIX):
+            raise ValueError("Destination must be 'personal' or 'team:<id>'.")
+        raw_team_id = normalized[len(TEAM_DESTINATION_PREFIX) :]
         try:
-            space_id = int(raw_space_id)
+            team_id = int(raw_team_id)
         except (TypeError, ValueError):
-            raise ValueError("Space destination must include an integer space id.")
-        if space_id < 0:
-            raise ValueError("Space destination must include a non-negative id.")
-        return f"{SPACE_DESTINATION_PREFIX}{space_id}"
+            raise ValueError("Team destination must include an integer team id.")
+        if team_id < 0:
+            raise ValueError("Team destination must include a non-negative id.")
+        return f"{TEAM_DESTINATION_PREFIX}{team_id}"
 
     @classmethod
     def implicit_shared_destinations(cls) -> list[str | None]:
         """Return implicit write destinations for transcript/image fanout."""
-        space_ids = sorted({int(space_id) for space_id in SESSION_DETAILS.space_ids})
-        if not space_ids:
+        team_ids = sorted({int(team_id) for team_id in SESSION_DETAILS.team_ids})
+        if not team_ids:
             return [None]
-        return [f"{SPACE_DESTINATION_PREFIX}{space_id}" for space_id in space_ids]
+        return [f"{TEAM_DESTINATION_PREFIX}{team_id}" for team_id in team_ids]
 
     @classmethod
     def _parse_destination(
@@ -176,18 +176,18 @@ class ContextRegistry:
             raise cls._invalid_destination(
                 table_name,
                 canonical_destination,
-                f"Table {table_name!r} does not support space destinations.",
+                f"Table {table_name!r} does not support team destinations.",
             )
 
-        space_id = int(canonical_destination[len(SPACE_DESTINATION_PREFIX) :])
-        if space_id not in SESSION_DETAILS.space_ids:
+        team_id = int(canonical_destination[len(TEAM_DESTINATION_PREFIX) :])
+        if team_id not in SESSION_DETAILS.team_ids:
             raise cls._invalid_destination(
                 table_name,
                 canonical_destination,
-                f"Assistant is not a member of space {space_id}.",
+                f"Assistant is not a member of team {team_id}.",
             )
 
-        root_identity = cls._space_root_identity(space_id)
+        root_identity = cls._team_root_identity(team_id)
         return root_identity, root_identity
 
     @classmethod
@@ -338,7 +338,7 @@ class ContextRegistry:
         - Include private fields (_user, _user_id, _assistant, _assistant_id, _org, _org_id)
         - Have NO unique_keys or auto_counting (logs are added by reference)
         """
-        if target_name.startswith(SPACE_CONTEXT_PREFIX):
+        if target_name.startswith(TEAM_CONTEXT_PREFIX):
             return
 
         parts = target_name.split("/")
@@ -425,12 +425,12 @@ class ContextRegistry:
                 cls._registry.pop(key, None)
 
     @classmethod
-    def forget_departed_space_roots(cls, space_ids: list[int]) -> None:
+    def forget_departed_team_roots(cls, team_ids: list[int]) -> None:
         """Drop cached entries for shared roots the assistant can no longer reach."""
-        reachable_roots = {cls._space_root_identity(space_id) for space_id in space_ids}
+        reachable_roots = {cls._team_root_identity(team_id) for team_id in team_ids}
         for key in list(cls._registry):
             root_identity = key[2]
-            if root_identity.startswith(SPACE_CONTEXT_PREFIX) and (
+            if root_identity.startswith(TEAM_CONTEXT_PREFIX) and (
                 root_identity not in reachable_roots
             ):
                 cls._registry.pop(key, None)
@@ -505,8 +505,8 @@ class ContextRegistry:
         roots = [(PERSONAL_ROOT_IDENTITY, personal_root)]
         if cls._is_shared_scoped(table_name):
             roots.extend(
-                (cls._space_root_identity(space_id), cls._space_root_identity(space_id))
-                for space_id in sorted(set(SESSION_DETAILS.space_ids))
+                (cls._team_root_identity(team_id), cls._team_root_identity(team_id))
+                for team_id in sorted(set(SESSION_DETAILS.team_ids))
             )
 
         for root_identity, root_context in roots:
