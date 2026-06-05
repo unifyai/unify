@@ -25,6 +25,7 @@ from unity.actor.code_act_actor import (
     AgentContext,
     CodeActActor,
     _StorageCheckHandle,
+    _STORAGE_WHAT_CAN_BE_STORED,
     _start_proactive_storage_loop,
 )
 
@@ -68,6 +69,17 @@ class _TrackingGuidanceManager:
     def delete_guidance(self, *, guidance_id):
         """Delete a guidance entry by ID."""
         return {"deleted": True}
+
+
+def test_storage_prompt_encourages_bounded_agent_loop_distillation():
+    prompt = _STORAGE_WHAT_CAN_BE_STORED
+
+    assert "execute_code` -> observe -> agent reasoning -> `execute_code" in prompt
+    assert "bounded semantic judgment inside an otherwise stable" in prompt
+    assert "distill the trajectory into one function" in prompt
+    assert "focused `reason(...)` / UniLLM calls" in prompt
+    assert "changing tool discovery" in prompt
+    assert "unknown-state debugging" in prompt
 
 
 # ---------------------------------------------------------------------------
