@@ -161,15 +161,21 @@ async def reason(
 ) -> str | BaseModel | dict[str, Any]:
     """Run a one-shot semantic reasoning step from generated Python code.
 
-    Use ``reason(...)`` when the code you are writing needs to interpret
-    meaning, not merely manipulate exact values. It is useful as the semantic
-    part of a broader symbolic workflow: Python handles retrieval, iteration,
-    grouping, date arithmetic, API calls, and side effects; ``reason(...)``
-    handles a focused judgment that would be brittle if implemented as keyword
-    matching.
+    Use ``reason(...)`` when the code you are writing needs to process
+    unstructured meaning, not merely manipulate exact values. Treat UniLLM as a
+    first-class fuzzy processor inside a broader deterministic workflow:
+    Python handles retrieval, iteration, batching, grouping, date arithmetic,
+    API calls, validation, persistence, and side effects; ``reason(...)``
+    handles bounded unstructured-data work that would be brittle if implemented
+    as keyword matching or canned templates.
 
     Good uses
     ---------
+    - Unstructured -> structured work: classify, extract, score, route, decide,
+      summarize into fields, or choose an action from text, images, documents,
+      tickets, emails, transcripts, notes, lead records, or web pages.
+    - Unstructured -> unstructured work: draft, respond, rewrite, synthesize,
+      explain, personalize, compress, or adapt human-facing text.
     - Classifying emails, tickets, documents, notes, or leads into broad
       categories based on meaning.
     - Deciding whether a message needs a reply, follow-up, escalation, or
@@ -216,6 +222,29 @@ async def reason(
         if classification.needs_reply and classification.confidence >= 0.8:
             to_reply.append(email)
 
+    Structured triage plus draft generation::
+
+        from pydantic import BaseModel, Field
+
+        class EmailDraftDecision(BaseModel):
+            category: str
+            needs_reply: bool
+            draft_reply: str | None = Field(
+                description="Short human-reviewable draft, or null if no reply is needed"
+            )
+            confidence: float = Field(ge=0.0, le=1.0)
+            rationale: str
+
+        EmailDraftDecision.model_rebuild()
+
+        decision = await reason(
+            "Decide whether this email needs a reply. If it does, draft a concise reply "
+            "in the user's voice. Return null for draft_reply when no reply is needed.\\n"
+            f"Subject: {subject}\\nFrom: {sender}\\nBody: {body}",
+            response_format=EmailDraftDecision,
+            model="gpt-4.1-nano@openai",
+        )
+
     Custom rubric with ``system`` for consistent bulk classification::
 
         system = (
@@ -244,6 +273,9 @@ async def reason(
     - Using substring checks as the whole classifier for semantic tasks, e.g.
       ``if "urgent" in subject.lower()`` for inbox triage. Exact lexical
       signals can help pre-filter, but they are not semantic judgment.
+    - Replacing human-facing drafting, rewriting, or personalization with
+      label-specific canned prose or templates unless the user explicitly asked
+      for fixed deterministic templates.
     - Calling ``reason(...)`` for every item in a large set before cheap
       deterministic pre-filtering, sampling, or batching.
 

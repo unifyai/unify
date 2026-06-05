@@ -112,9 +112,14 @@ def test_reason_docstring_contains_actor_usage_guidance():
     assert "Good uses" in doc
     assert "Prefer direct symbolic code instead" in doc
     assert "Structured output for downstream control flow" in doc
+    assert "Unstructured -> structured work" in doc
+    assert "Unstructured -> unstructured work" in doc
+    assert "draft, respond, rewrite" in doc
+    assert "EmailDraftDecision" in doc
     assert "Anti-patterns" in doc
     assert "billable UniLLM call" in doc
     assert "substring checks" in doc
+    assert "label-specific canned prose or templates" in doc
 
 
 def test_reasoning_prompt_context_uses_introspected_signature():

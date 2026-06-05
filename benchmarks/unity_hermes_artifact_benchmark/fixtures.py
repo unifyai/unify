@@ -227,3 +227,248 @@ def synthetic_email_batches() -> tuple[EmailBatch, ...]:
             ),
         ),
     )
+
+
+def workweek_email_batches() -> tuple[EmailBatch, ...]:
+    """Return Monday-Friday inbox slices for the live recurring-task simulation."""
+
+    return (
+        EmailBatch(
+            batch_id="monday-2026-06-01",
+            since="2026-06-01T00:00:00+01:00",
+            description="Monday 9am activation: customer ask, newsletter, and alert.",
+            emails=(
+                EmailMessage(
+                    message_id="mon-001",
+                    received_at="2026-06-01T07:12:00+01:00",
+                    from_email="maya@northstar.ai",
+                    from_name="Maya Chen",
+                    subject="Pilot kickoff docs",
+                    body=(
+                        "Could you send the SOC2 summary and a short note on how "
+                        "Unity handles mid-run steering before kickoff?"
+                    ),
+                    labels=["inbox", "customer"],
+                ),
+                EmailMessage(
+                    message_id="mon-002",
+                    received_at="2026-06-01T08:04:00+01:00",
+                    from_email="digest@mlopsweekly.example",
+                    from_name="MLOps Weekly",
+                    subject="This week in agents",
+                    body="Top stories: eval harnesses, sandboxes, and vector DBs.",
+                    labels=["inbox", "newsletter"],
+                ),
+                EmailMessage(
+                    message_id="mon-003",
+                    received_at="2026-06-01T08:41:00+01:00",
+                    from_email="security@bigco.example",
+                    from_name="BigCo Security",
+                    subject="URGENT: access review due today",
+                    body=(
+                        "The vendor access review is still incomplete. Please "
+                        "confirm the owner and updated security contact today."
+                    ),
+                    labels=["inbox", "security"],
+                ),
+            ),
+            expected=(
+                ExpectedEmailOutcome(
+                    message_id="mon-001",
+                    category="needs_reply",
+                    needs_reply=True,
+                    draft_reply=(
+                        "Hi Maya - yes, I can send both. I will include the SOC2 "
+                        "summary and a short note on mid-run steering."
+                    ),
+                    rationale="Customer asks for concrete docs before kickoff.",
+                ),
+                ExpectedEmailOutcome(
+                    message_id="mon-002",
+                    category="newsletter",
+                    needs_reply=False,
+                    draft_reply=None,
+                    rationale="Bulk newsletter with no direct ask.",
+                ),
+                ExpectedEmailOutcome(
+                    message_id="mon-003",
+                    category="urgent_action",
+                    needs_reply=True,
+                    draft_reply=(
+                        "Hi - thanks for the heads up. I am checking the owner "
+                        "and security contact now and will send the update today."
+                    ),
+                    rationale="Time-sensitive access-review request.",
+                ),
+            ),
+        ),
+        EmailBatch(
+            batch_id="tuesday-2026-06-02",
+            since="2026-06-02T00:00:00+01:00",
+            description="Tuesday 9am activation: reschedule request and CI notice.",
+            emails=(
+                EmailMessage(
+                    message_id="tue-001",
+                    received_at="2026-06-02T07:31:00+01:00",
+                    from_email="danielle@acme.example",
+                    from_name="Danielle",
+                    subject="Can we move the integration review?",
+                    body=(
+                        "I have a conflict at 3. Could we move the integration "
+                        "review to Wednesday morning?"
+                    ),
+                    labels=["inbox", "customer"],
+                ),
+                EmailMessage(
+                    message_id="tue-002",
+                    received_at="2026-06-02T08:03:00+01:00",
+                    from_email="alerts@github.com",
+                    from_name="GitHub",
+                    subject="[unifyai/unity] CI fixed on main",
+                    body="The previously failing build is now green.",
+                    labels=["inbox", "notification"],
+                ),
+            ),
+            expected=(
+                ExpectedEmailOutcome(
+                    message_id="tue-001",
+                    category="meeting_or_calendar",
+                    needs_reply=True,
+                    draft_reply=(
+                        "Hi Danielle - Wednesday morning works on my side. Send "
+                        "me the time that is easiest and I will move it."
+                    ),
+                    rationale="Meeting reschedule request needs a reply.",
+                ),
+                ExpectedEmailOutcome(
+                    message_id="tue-002",
+                    category="fyi",
+                    needs_reply=False,
+                    draft_reply=None,
+                    rationale="Notification only; no action requested.",
+                ),
+            ),
+        ),
+        EmailBatch(
+            batch_id="wednesday-2026-06-03",
+            since="2026-06-03T00:00:00+01:00",
+            description="Wednesday 9am activation: legal ask and spam.",
+            emails=(
+                EmailMessage(
+                    message_id="wed-001",
+                    received_at="2026-06-03T08:18:00+01:00",
+                    from_email="sam@partner.example",
+                    from_name="Sam",
+                    subject="Draft MSA redlines",
+                    body=(
+                        "We left two comments in the MSA. Could you confirm "
+                        "whether the DPA language is acceptable?"
+                    ),
+                    labels=["inbox", "legal"],
+                ),
+                EmailMessage(
+                    message_id="wed-002",
+                    received_at="2026-06-03T08:49:00+01:00",
+                    from_email="promo@random-saas.example",
+                    from_name="Random SaaS",
+                    subject="Last chance to unlock seamless productivity",
+                    body="Buy now and get 80% off. Click here.",
+                    labels=["inbox", "promotion"],
+                ),
+            ),
+            expected=(
+                ExpectedEmailOutcome(
+                    message_id="wed-001",
+                    category="needs_reply",
+                    needs_reply=True,
+                    draft_reply=(
+                        "Hi Sam - thanks, I will look at the two comments and "
+                        "come back on the DPA language shortly."
+                    ),
+                    rationale="Partner/legal thread asks for confirmation.",
+                ),
+                ExpectedEmailOutcome(
+                    message_id="wed-002",
+                    category="ignore",
+                    needs_reply=False,
+                    draft_reply=None,
+                    rationale="Promotional spam with no business relevance.",
+                ),
+            ),
+        ),
+        EmailBatch(
+            batch_id="thursday-2026-06-04",
+            since="2026-06-04T00:00:00+01:00",
+            description="Thursday 9am activation: investor product question.",
+            emails=(
+                EmailMessage(
+                    message_id="thu-001",
+                    received_at="2026-06-04T08:20:00+01:00",
+                    from_email="lee@seedfund.example",
+                    from_name="Lee",
+                    subject="Quick diligence question",
+                    body=(
+                        "Can you clarify whether FunctionManager functions are "
+                        "stored as callable artifacts or just prompt snippets?"
+                    ),
+                    labels=["inbox", "investor"],
+                ),
+            ),
+            expected=(
+                ExpectedEmailOutcome(
+                    message_id="thu-001",
+                    category="needs_reply",
+                    needs_reply=True,
+                    draft_reply=(
+                        "Hi Lee - they are callable artifacts with names, "
+                        "signatures, and implementations, not prompt snippets."
+                    ),
+                    rationale="Investor asks a substantive product question.",
+                ),
+            ),
+        ),
+        EmailBatch(
+            batch_id="friday-2026-06-05",
+            since="2026-06-05T00:00:00+01:00",
+            description="Friday 9am activation: calendar update and customer ask.",
+            emails=(
+                EmailMessage(
+                    message_id="fri-001",
+                    received_at="2026-06-05T07:12:00+01:00",
+                    from_email="calendar-notification@google.com",
+                    from_name="Google Calendar",
+                    subject="Updated invitation: Unity walkthrough",
+                    body="This event has been moved to Friday at 14:00. No response is required.",
+                    labels=["inbox", "calendar"],
+                ),
+                EmailMessage(
+                    message_id="fri-002",
+                    received_at="2026-06-05T08:22:00+01:00",
+                    from_email="maya@northstar.ai",
+                    from_name="Maya Chen",
+                    subject="One more pilot question",
+                    body="Could you also send a sentence on how recurring task entrypoints work?",
+                    labels=["inbox", "customer"],
+                ),
+            ),
+            expected=(
+                ExpectedEmailOutcome(
+                    message_id="fri-001",
+                    category="meeting_or_calendar",
+                    needs_reply=False,
+                    draft_reply=None,
+                    rationale="Calendar update explicitly says no response required.",
+                ),
+                ExpectedEmailOutcome(
+                    message_id="fri-002",
+                    category="needs_reply",
+                    needs_reply=True,
+                    draft_reply=(
+                        "Hi Maya - yes, I will include a short note that recurring "
+                        "tasks can attach a stored function as the future entrypoint."
+                    ),
+                    rationale="Customer asks for one more concrete explanation.",
+                ),
+            ),
+        ),
+    )
