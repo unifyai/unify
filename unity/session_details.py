@@ -536,9 +536,6 @@ class SessionDetails:
         os.environ["ASSISTANT_WHATSAPP_NUMBER"] = self.assistant.whatsapp_number
         os.environ["ASSISTANT_DISCORD_BOT_ID"] = self.assistant.discord_bot_id
         os.environ["ASSISTANT_SLACK_BOT_USER_ID"] = self.assistant.slack_bot_user_id
-        os.environ["ASSISTANT_IS_COORDINATOR"] = (
-            "1" if self.assistant.is_coordinator else "0"
-        )
         os.environ["ASSISTANT_DESKTOP_MODE"] = self.assistant.desktop_mode
         os.environ["ASSISTANT_DESKTOP_URL"] = self.assistant.desktop_url or ""
         os.environ["ASSISTANT_USER_DESKTOP_MODE"] = (
@@ -622,8 +619,6 @@ class SessionDetails:
             self.assistant.whatsapp_number = val
         if val := os.environ.get("ASSISTANT_DISCORD_BOT_ID"):
             self.assistant.discord_bot_id = val
-        if val := os.environ.get("ASSISTANT_IS_COORDINATOR"):
-            self.assistant.is_coordinator = val == "1"
         if val := os.environ.get("ASSISTANT_SLACK_BOT_USER_ID"):
             self.assistant.slack_bot_user_id = val
         if val := os.environ.get("ASSISTANT_CONTACT_ID"):
