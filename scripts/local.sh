@@ -45,6 +45,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 UNITY_REPO_PATH="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 
+PUBSUB_EMULATOR_HOST_EXPLICIT="${PUBSUB_EMULATOR_HOST+x}"
 PUBSUB_EMULATOR_HOST="${PUBSUB_EMULATOR_HOST:-localhost:8085}"
 GCP_PROJECT_ID="${GCP_PROJECT_ID:-local-test-project}"
 ASSISTANT_ID="${ASSISTANT_ID:-default-test-assistant}"
@@ -55,7 +56,7 @@ if [[ -n "${UNITY_CONVERSATION_LOCAL_COMMS_MODE:-}" ]]; then
   LOCAL_COMMS_MODE="$UNITY_CONVERSATION_LOCAL_COMMS_MODE"
 elif [[ -n "${UNITY_COMMS_URL:-}" ]]; then
   LOCAL_COMMS_MODE="hosted"
-elif [[ -n "${PUBSUB_EMULATOR_HOST:-}" ]]; then
+elif [[ -n "$PUBSUB_EMULATOR_HOST_EXPLICIT" ]]; then
   # Console --chat uses the Pub/Sub emulator end-to-end; local ingress outbox
   # mode disables the CM subscriber.
   LOCAL_COMMS_MODE="hosted"
