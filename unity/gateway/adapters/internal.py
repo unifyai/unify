@@ -40,13 +40,13 @@ def _optional_list(value: Any) -> list[Any]:
     return parsed
 
 
-def _normalize_space_summaries(value: Any) -> list[dict[str, Any]]:
+def _normalize_team_summaries(value: Any) -> list[dict[str, Any]]:
     summaries = _optional_list(value)
     for summary in summaries:
         if not isinstance(summary, dict):
             raise HTTPException(
                 status_code=400,
-                detail="space_summaries must be objects",
+                detail="team_summaries must be objects",
             )
     return summaries
 
@@ -335,9 +335,9 @@ async def assistant_update_webhook(
     assistant_id = str(assistant_data["assistant_id"])
     assistant_event = {
         **assistant_data,
-        "space_ids": _normalize_int_list(assistant_data.get("space_ids") or []),
-        "space_summaries": _normalize_space_summaries(
-            assistant_data.get("space_summaries") or [],
+        "team_ids": _normalize_int_list(assistant_data.get("team_ids") or []),
+        "team_summaries": _normalize_team_summaries(
+            assistant_data.get("team_summaries") or [],
         ),
         "update_kind": update_kind,
     }

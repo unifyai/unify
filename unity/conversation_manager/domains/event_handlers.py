@@ -2153,19 +2153,19 @@ async def _(event: StartupEvent, cm: "ConversationManager", *args, **kwargs):
 async def _(event: AssistantUpdateEvent, cm: "ConversationManager", *args, **kwargs):
     cm._session_logger.info("assistant_update", "Received assistant update event")
     if event.update_kind == "membership":
-        space_ids = sorted(set(event.space_ids or []))
-        SESSION_DETAILS.space_ids = space_ids
-        SESSION_DETAILS.space_summaries = event.space_summaries or []
+        team_ids = sorted(set(event.team_ids or []))
+        SESSION_DETAILS.team_ids = team_ids
+        SESSION_DETAILS.team_summaries = event.team_summaries or []
         SESSION_DETAILS.self_contact_id = event.self_contact_id
         SESSION_DETAILS.boss_contact_id = event.boss_contact_id
-        SESSION_DETAILS.export_space_ids_to_env()
-        SESSION_DETAILS.export_space_summaries_to_env()
+        SESSION_DETAILS.export_team_ids_to_env()
+        SESSION_DETAILS.export_team_summaries_to_env()
         SESSION_DETAILS.export_contact_ids_to_env()
-        cm.space_ids = space_ids
-        cm.space_summaries = SESSION_DETAILS.space_summaries
+        cm.team_ids = team_ids
+        cm.team_summaries = SESSION_DETAILS.team_summaries
         cm.self_contact_id = event.self_contact_id
         cm.boss_contact_id = event.boss_contact_id
-        ContextRegistry.forget_departed_space_roots(space_ids)
+        ContextRegistry.forget_departed_team_roots(team_ids)
         broader_context.reset()
         invalidate_task_machine_state_reads()
         return

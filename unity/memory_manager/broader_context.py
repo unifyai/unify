@@ -55,8 +55,8 @@ def get_broader_context(
         from unity.memory_manager.memory_manager import (
             MemoryManager,
         )  # noqa: WPS433  – runtime import
-        from unity.common.accessible_spaces_block import (
-            build_accessible_spaces_block,
+        from unity.common.accessible_teams_block import (
+            build_accessible_teams_block,
         )  # noqa: WPS433  – runtime import
         from unity.session_details import SESSION_DETAILS  # noqa: WPS433
 
@@ -110,7 +110,7 @@ def get_broader_context(
             parts.append(user_bio)
 
         parts.append("")
-        parts.append(build_accessible_spaces_block(SESSION_DETAILS.space_summaries))
+        parts.append(build_accessible_teams_block(SESSION_DETAILS.team_summaries))
 
         if rolling_activity:
             parts.append(
