@@ -618,6 +618,15 @@ case "\${1:-}" in
             exit 0
         fi
         ;;
+    stack)
+        shift
+        if [ -x "\$UNITY_REPO/scripts/stack.sh" ]; then
+            exec bash "\$UNITY_REPO/scripts/stack.sh" "\$@"
+        else
+            echo "stack.sh not found at \$UNITY_REPO/scripts/stack.sh" >&2
+            exit 1
+        fi
+        ;;
     voice)
         shift
         if [ -x "\$UNITY_REPO/scripts/voice.sh" ]; then
@@ -647,6 +656,9 @@ Usage:
   unity logs                         Tail the runtime log in a second terminal.
 
   unity setup                        Bootstrap / re-bootstrap local orchestra
+  unity stack up                     Start full self-host stack
+  unity stack down                   Stop self-host stack
+  unity stack doctor                 Check self-host prerequisites
   unity stop                         Stop local orchestra (preserves data)
   unity status                       Show local orchestra status
   unity restart                      Restart local orchestra (preserves data)
@@ -849,8 +861,9 @@ print_next_steps() {
         echo "     Stop with Ctrl+C in Terminal 1; \`unity\` again picks up where you left off."
         echo ""
         echo "  Also available:"
-        echo -e "     ${CYAN}\$ unity --live-voice${NC}     Talk to your assistant in the browser"
-        echo -e "     ${CYAN}\$ unity voice setup${NC}      One-time local LiveKit bring-up"
+        echo -e "     ${CYAN}\$ unity stack up${NC}           Full self-host (Console + Coordinator + voice)"
+        echo -e "     ${CYAN}\$ unity --live-voice${NC}     Talk to your assistant in the browser (sandbox)"
+        echo -e "     ${CYAN}\$ unity voice setup${NC}      Re-run LiveKit + voice BYOK prompts"
         echo -e "     ${CYAN}\$ unity status${NC}           Local orchestra status"
         echo -e "     ${CYAN}\$ unity stop${NC}             Stop local orchestra"
         echo -e "     ${CYAN}\$ unity help${NC}             Subcommand reference"
@@ -878,7 +891,9 @@ main() {
     do_install
     create_cli
     run_setup
-    prompt_llm_key
+    if [ "${SETUP_OK:-}" != "ok" ] && [ -x "$UNITY_REPO/scripts/prompt_byok_keys.sh" ]; then
+        UNITY_REPO="$UNITY_REPO" bash "$UNITY_REPO/scripts/prompt_byok_keys.sh" || true
+    fi
     print_next_steps
 }
 

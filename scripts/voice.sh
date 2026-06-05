@@ -26,7 +26,7 @@
 set -e
 
 UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
-UNITY_REPO="${UNITY_HOME}/unity"
+UNITY_REPO="${UNITY_REPO:-${UNITY_REPO_PATH:-$UNITY_HOME/unity}}"
 VOICE_PIDFILE="${UNITY_HOME}/.livekit-server.pid"
 VOICE_LOGFILE="${UNITY_HOME}/.livekit-server.log"
 
@@ -215,7 +215,11 @@ case "$cmd" in
         ensure_livekit_installed || exit 1
         start_livekit            || exit 1
         wire_voice_env           || exit 1
-        report_byok_status
+        if [ -x "$UNITY_REPO/scripts/prompt_byok_keys.sh" ]; then
+            UNITY_REPO="$UNITY_REPO" bash "$UNITY_REPO/scripts/prompt_byok_keys.sh" || true
+        else
+            report_byok_status
+        fi
         ;;
     stop)
         stop_livekit
