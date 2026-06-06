@@ -1565,7 +1565,7 @@ fi
 echo ""
 print_log_directories
 
-if (( ${#failed_sessions[@]} > 0 )); then
+if (( fail_count > 0 || ${#failed_sessions[@]} > 0 )); then
   exit 1
 else
   echo ""
