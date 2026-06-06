@@ -255,6 +255,9 @@ def test_code_act_prompt_includes_reasoning_helper_decision_guidance():
     assert "A comment that says" in prompt
     assert "actually call `reason(...)`" in prompt
     assert "keyword ladders" in prompt
+    assert "reusable function with a semantic drafting step" in prompt
+    assert "keep the reason(...) call inside the" in prompt
+    assert "draft_replies_for_messages" in prompt
     assert "Choosing A Model For `reason(...)`" in prompt
     assert "Artificial Analysis: https://artificialanalysis.ai/" in prompt
     assert "ARC Prize leaderboard: https://arcprize.org/leaderboard" in prompt

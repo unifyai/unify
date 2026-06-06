@@ -28,6 +28,7 @@ USER_REQUEST = (
     "Could you please check my emails every morning at 9am, and then draft "
     "basic replies to each of them?"
 )
+LIVE_BENCHMARK_DAYS = ("monday", "tuesday")
 
 
 @dataclass
@@ -136,11 +137,24 @@ def _sum_usage(turns: Iterable[LiveTurn]) -> dict[str, Any]:
 
 
 def _workweek_payload() -> dict[str, Any]:
-    batches = workweek_email_batches()
+    batches = _live_email_batches()
+    visible_batches = {}
+    for batch in batches:
+        batch_dict = batch.to_dict()
+        batch_dict.pop("expected", None)
+        visible_batches[batch.batch_id] = batch_dict
     return {
         "days": [batch.batch_id.split("-", 1)[0] for batch in batches],
-        "batches": {batch.batch_id: batch.to_dict() for batch in batches},
+        "batches": visible_batches,
     }
+
+
+def _live_email_batches() -> tuple[Any, ...]:
+    return tuple(
+        batch
+        for batch in workweek_email_batches()
+        if batch.batch_id.split("-", 1)[0] in LIVE_BENCHMARK_DAYS
+    )
 
 
 def prepare_workspace(root: Path) -> dict[str, str]:
@@ -168,7 +182,7 @@ def get_emails(day: str | None = None, since: str | None = None) -> list[dict]:
     """
 
     if day is None:
-        raise ValueError("Pass day='monday' ... day='friday' in this benchmark")
+        raise ValueError("Pass day='monday' or day='tuesday' in this benchmark")
     normalized = day.lower().strip()
     if normalized in EMAILS_BY_DAY:
         return list(EMAILS_BY_DAY[normalized]["emails"])
@@ -571,7 +585,7 @@ async def run_unity_live(
     try:
         prompt = _setup_prompt(workspace, "unity")
         turns.append(await _run_unity_turn(actor, "setup", None, prompt, timeout))
-        for batch in workweek_email_batches():
+        for batch in _live_email_batches():
             day = batch.batch_id.split("-", 1)[0]
             prompt = _activation_prompt(workspace, "unity", batch.batch_id)
             turns.append(
@@ -732,7 +746,7 @@ def run_hermes_live(
                 timeout,
             ),
         )
-        for batch in workweek_email_batches():
+        for batch in _live_email_batches():
             day = batch.batch_id.split("-", 1)[0]
             turns.append(
                 _run_hermes_turn(
@@ -965,7 +979,7 @@ async def run_live_benchmark(
     payload = {
         "benchmark": "unity_hermes_daily_email_live",
         "user_request": USER_REQUEST,
-        "days": [batch.batch_id for batch in workweek_email_batches()],
+        "days": [batch.batch_id for batch in _live_email_batches()],
         "output_dir": str(output_dir),
         "results": [result.to_dict() for result in results],
     }

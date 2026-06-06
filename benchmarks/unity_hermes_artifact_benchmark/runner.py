@@ -29,6 +29,7 @@ def _reference_trace(arm: BenchmarkArm, *, seed: int, batch_id: str) -> RunTrace
                 detail="Discovery-first search for existing email triage functions.",
                 prompt_tokens=950 + seed * 3,
                 completion_tokens=120,
+                estimated_cost_usd=0.012,
                 tool_call=True,
             ),
             TraceEvent(
@@ -37,6 +38,7 @@ def _reference_trace(arm: BenchmarkArm, *, seed: int, batch_id: str) -> RunTrace
                 detail="One-off dry-run solution for calibration batch.",
                 prompt_tokens=1300 + seed * 5,
                 completion_tokens=480,
+                estimated_cost_usd=0.025,
                 tool_call=True,
             ),
             TraceEvent(
@@ -45,6 +47,7 @@ def _reference_trace(arm: BenchmarkArm, *, seed: int, batch_id: str) -> RunTrace
                 detail="Storage review extracts FunctionManager function.",
                 prompt_tokens=1800 + seed * 4,
                 completion_tokens=520,
+                estimated_cost_usd=0.034,
                 tool_call=True,
             ),
             TraceEvent(
@@ -53,6 +56,7 @@ def _reference_trace(arm: BenchmarkArm, *, seed: int, batch_id: str) -> RunTrace
                 detail="Find classify_and_draft_email_batch.",
                 prompt_tokens=420 + seed,
                 completion_tokens=80,
+                estimated_cost_usd=0.005,
                 tool_call=True,
             ),
             TraceEvent(
@@ -61,6 +65,7 @@ def _reference_trace(arm: BenchmarkArm, *, seed: int, batch_id: str) -> RunTrace
                 detail="Invoke stored function by exact name.",
                 prompt_tokens=180 + seed,
                 completion_tokens=60,
+                estimated_cost_usd=0.002,
                 tool_call=True,
             ),
             TraceEvent(
@@ -69,6 +74,8 @@ def _reference_trace(arm: BenchmarkArm, *, seed: int, batch_id: str) -> RunTrace
                 detail="Cheap model calls happen inside function per email needing judgment.",
                 prompt_tokens=360,
                 completion_tokens=160,
+                estimated_cost_usd=0.0003,
+                artifact_internal_llm_calls=3,
                 tool_call=False,
             ),
         )
@@ -80,6 +87,7 @@ def _reference_trace(arm: BenchmarkArm, *, seed: int, batch_id: str) -> RunTrace
                 detail="Discover relevant skill affordances.",
                 prompt_tokens=850 + seed * 3,
                 completion_tokens=110,
+                estimated_cost_usd=0.011,
                 tool_call=True,
             ),
             TraceEvent(
@@ -88,6 +96,7 @@ def _reference_trace(arm: BenchmarkArm, *, seed: int, batch_id: str) -> RunTrace
                 detail="Initial dry-run solution and script prototype.",
                 prompt_tokens=1250 + seed * 5,
                 completion_tokens=500,
+                estimated_cost_usd=0.025,
                 tool_call=True,
             ),
             TraceEvent(
@@ -96,6 +105,7 @@ def _reference_trace(arm: BenchmarkArm, *, seed: int, batch_id: str) -> RunTrace
                 detail="Create SKILL.md plus scripts/classify_and_draft.py.",
                 prompt_tokens=1500 + seed * 4,
                 completion_tokens=620,
+                estimated_cost_usd=0.031,
                 tool_call=True,
             ),
             TraceEvent(
@@ -104,6 +114,7 @@ def _reference_trace(arm: BenchmarkArm, *, seed: int, batch_id: str) -> RunTrace
                 detail="Cron/preload injects full SKILL.md before use.",
                 prompt_tokens=900 + seed,
                 completion_tokens=90,
+                estimated_cost_usd=0.010,
                 tool_call=False,
             ),
             TraceEvent(
@@ -112,6 +123,7 @@ def _reference_trace(arm: BenchmarkArm, *, seed: int, batch_id: str) -> RunTrace
                 detail="Agent decides to run scripts/classify_and_draft.py.",
                 prompt_tokens=310 + seed,
                 completion_tokens=130,
+                estimated_cost_usd=0.004,
                 tool_call=False,
             ),
             TraceEvent(
@@ -120,6 +132,8 @@ def _reference_trace(arm: BenchmarkArm, *, seed: int, batch_id: str) -> RunTrace
                 detail="Run inner script in dry-run mode.",
                 prompt_tokens=230,
                 completion_tokens=120,
+                estimated_cost_usd=0.0003,
+                artifact_internal_llm_calls=3,
                 tool_call=True,
             ),
             TraceEvent(
@@ -128,6 +142,7 @@ def _reference_trace(arm: BenchmarkArm, *, seed: int, batch_id: str) -> RunTrace
                 detail="Agent reads script output and writes final response.",
                 prompt_tokens=420,
                 completion_tokens=190,
+                estimated_cost_usd=0.006,
                 tool_call=False,
             ),
         )
@@ -216,7 +231,9 @@ def render_markdown_report(payload: dict[str, object]) -> str:
                 f"- Artifact score: {score['total']}",
                 f"- Direct invocability: {score['direct_invocability']}",
                 f"- Future-run autonomy: {score['future_run_autonomy']}",
+                f"- Avg total cost estimate: ${summary['avg_estimated_cost_usd']}",
                 f"- Avg repeat orchestration tokens: {summary['avg_repeat_orchestration_tokens']}",
+                f"- Avg artifact-internal LLM calls: {summary['avg_artifact_internal_llm_calls']}",
                 f"- Avg tool calls before execution: {summary['avg_tool_calls_before_execution']}",
                 "",
             ],

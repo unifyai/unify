@@ -153,6 +153,8 @@ class TraceEvent:
     detail: str
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    estimated_cost_usd: float = 0.0
+    artifact_internal_llm_calls: int = 0
     tool_call: bool = False
 
     @property
@@ -201,10 +203,12 @@ class TraceMeasurement:
     seed: int
     batch_id: str
     total_tokens: int
+    estimated_cost_usd: float
     first_run_tokens: int
     consolidation_tokens: int
     repeat_run_tokens: int
     repeat_orchestration_tokens: int
+    artifact_internal_llm_calls: int
     tool_calls_before_execution: int
     first_execution_action: str | None
 

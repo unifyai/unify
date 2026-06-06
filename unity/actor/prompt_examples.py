@@ -164,6 +164,48 @@ async def classify_with_small_model(email_text: str):
         model="gpt-4.1-nano@openai",
         temperature=0.0,
     )
+
+
+# Pattern: reusable function with a semantic drafting step
+#
+# If this code is stored for future reuse, keep the reason(...) call inside the
+# function. The loop, filtering, JSON shaping, and file writes are ordinary
+# Python; deciding whether a reply is needed and writing the reply are semantic
+# unstructured-data work.
+class DraftDecision(BaseModel):
+    needs_reply: bool
+    category: str
+    reply_body: str | None = None
+    rationale: str
+
+
+DraftDecision.model_rebuild()
+
+
+async def draft_replies_for_messages(messages: list[dict]) -> list[dict]:
+    drafts = []
+    for message in messages:
+        if "no-reply" in message.get("from", "").lower():
+            continue
+
+        decision = await reason(
+            "Decide whether this message needs a reply. If it does, draft a "
+            "short human-reviewable response using only the message content.\n\n"
+            f"Subject: {message.get('subject')}\n"
+            f"From: {message.get('from')}\n\n"
+            f"{message.get('body')}",
+            response_format=DraftDecision,
+            model="gpt-4.1-nano@openai",
+            temperature=0.0,
+        )
+        drafts.append({
+            "message_id": message.get("message_id"),
+            "needs_reply": decision.needs_reply,
+            "category": decision.category,
+            "draft_reply": decision.reply_body,
+            "rationale": decision.rationale,
+        })
+    return drafts
 """
 
 
