@@ -30,6 +30,7 @@ class ArtifactKind(str, Enum):
     UNITY_FUNCTION = "unity_function"
     HERMES_SKILL_WITH_SCRIPT = "hermes_skill_with_script"
     HERMES_NO_AGENT_SCRIPT = "hermes_no_agent_script"
+    FILESYSTEM_SCRIPT = "filesystem_script"
     PROMPT_ONLY = "prompt_only"
 
 

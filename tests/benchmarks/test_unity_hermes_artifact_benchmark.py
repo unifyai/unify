@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -12,6 +13,17 @@ from benchmarks.unity_hermes_artifact_benchmark.fixtures import (
 )
 from benchmarks.unity_hermes_artifact_benchmark.daily_email_live import (
     InMemoryFunctionManager,
+    InMemoryGuidanceManager,
+    LiveMailboxContext,
+    MockTaskScheduler,
+    USER_REQUEST,
+    _activation_prompt,
+    _collect_unity_artifacts,
+    _live_email_batches,
+    _observe_hermes_artifact,
+    _seed_get_emails_function,
+    _setup_prompt,
+    _set_workspace_active_batch,
     _summarize_unillm_cost_events,
     prepare_workspace,
 )
@@ -64,6 +76,7 @@ def test_live_workspace_seeds_get_emails_helper(tmp_path):
     paths = prepare_workspace(tmp_path)
 
     assert "emails_by_day.json" in paths["emails_by_day"]
+    assert "active_batch_id.txt" in paths["active_batch_id"]
     payload = json.loads((tmp_path / "emails_by_day.json").read_text(encoding="utf-8"))
     assert payload["days"] == ["monday", "tuesday"]
     assert sorted(payload["batches"]) == [
@@ -71,18 +84,148 @@ def test_live_workspace_seeds_get_emails_helper(tmp_path):
         "tuesday-2026-06-02",
     ]
     assert "expected" not in json.dumps(payload)
-    namespace: dict[str, object] = {}
+    namespace: dict[str, object] = {"__file__": str(tmp_path / "email_fixture.py")}
     helper_source = (tmp_path / "email_fixture.py").read_text(encoding="utf-8")
     assert "expected" not in helper_source
     assert "draft_reply" not in helper_source
+    assert "benchmark" not in helper_source.lower()
     assert "wednesday-2026-06-03" not in helper_source
     exec(helper_source, namespace)
-    emails = namespace["get_emails"](day="monday")  # type: ignore[index,operator]
+    emails = namespace["get_emails"]()  # type: ignore[index,operator]
     assert [email["message_id"] for email in emails] == [
         "mon-001",
         "mon-002",
         "mon-003",
     ]
+    _set_workspace_active_batch(tmp_path, "tuesday-2026-06-02")
+    tuesday = namespace["get_emails"]()  # type: ignore[index,operator]
+    assert [email["message_id"] for email in tuesday] == ["tue-001", "tue-002"]
+
+
+def test_live_agent_prompts_are_production_like_only(tmp_path):
+    setup_prompt = _setup_prompt(tmp_path, "unity")
+    activation_prompt = _activation_prompt(tmp_path, "unity", "monday-2026-06-01")
+
+    assert setup_prompt == USER_REQUEST
+    assert activation_prompt == USER_REQUEST
+    combined = f"{setup_prompt}\n{activation_prompt}".lower()
+    assert "benchmark" not in combined
+    assert str(tmp_path).lower() not in combined
+    assert "expected" not in combined
+    assert "draft_reply" not in combined
+    assert 'day="monday"' not in combined
+    assert "email_fixture" not in combined
+
+
+def test_live_mailbox_context_hides_active_batch_from_function_metadata():
+    mailbox = LiveMailboxContext(_live_email_batches())
+    manager = InMemoryFunctionManager()
+    _seed_get_emails_function(manager, mailbox)
+
+    metadata = manager.search_functions(query="email", include_implementations=True)
+    public_text = json.dumps(metadata)
+    assert "benchmark" not in public_text.lower()
+    assert "monday-2026-06-01" not in public_text
+    assert "expected" not in public_text
+
+    monday = manager._get_function_data_by_name(name="get_emails")["_callable"]()
+    mailbox.set_active_batch("tuesday-2026-06-02")
+    tuesday = manager._get_function_data_by_name(name="get_emails")["_callable"]()
+    assert [email["message_id"] for email in monday] == [
+        "mon-001",
+        "mon-002",
+        "mon-003",
+    ]
+    assert [email["message_id"] for email in tuesday] == ["tue-001", "tue-002"]
+
+
+def test_mock_scheduler_records_recurrence_without_side_effects():
+    scheduler = MockTaskScheduler()
+
+    handle = asyncio.run(
+        scheduler.update(
+            text=(
+                "Create a task to check my emails every morning at 9am using "
+                "the draft_replies_for_recent_emails function."
+            ),
+        ),
+    )
+    result = asyncio.run(handle.result())
+
+    assert "draft_replies_for_recent_emails" in result
+    assert scheduler.records[0]["repeat"] == "daily"
+    assert scheduler.records[0]["start_at"] == "09:00"
+    assert scheduler.records[0]["entrypoint_candidate"] == (
+        "draft_replies_for_recent_emails"
+    )
+
+
+def test_live_artifact_inspection_classifies_functions_and_scripts(tmp_path):
+    prepare_workspace(tmp_path)
+    manager = InMemoryFunctionManager()
+    manager.add_functions(
+        implementations="""
+async def draft_replies_for_recent_emails(dry_run: bool = True) -> list[dict]:
+    \"\"\"Draft replies from recent email messages.\"\"\"
+    decision = await reason("draft a reply", model="gpt-4.1-nano@openai")
+    return [{"decision": decision}]
+""",
+    )
+    scheduler = MockTaskScheduler()
+    asyncio.run(
+        scheduler.update(
+            text=(
+                "Every morning at 9am call "
+                "draft_replies_for_recent_emails as the entrypoint."
+            ),
+        ),
+    )
+    artifacts = _collect_unity_artifacts(
+        tmp_path,
+        manager,
+        InMemoryGuidanceManager(),
+        scheduler,
+        LiveMailboxContext(_live_email_batches()),
+    )
+
+    assert artifacts["observed_artifact_kind"] == "unity_function"
+    assert artifacts["observed_artifact_score"]["semantic_isolation"] > 0
+    assert artifacts["scheduler_records"][0]["start_at"] == "09:00"
+
+    script_path = tmp_path / "daily_email.py"
+    script_path.write_text("import json\nprint(json.dumps([]))\n", encoding="utf-8")
+    empty_manager = InMemoryFunctionManager()
+    script_artifacts = _collect_unity_artifacts(
+        tmp_path,
+        empty_manager,
+        InMemoryGuidanceManager(),
+        MockTaskScheduler(),
+        LiveMailboxContext(_live_email_batches()),
+    )
+    assert script_artifacts["observed_artifact_kind"] == "filesystem_script"
+
+
+def test_hermes_artifact_inspection_classifies_skill_script_and_prompt_only(tmp_path):
+    skill_dir = tmp_path / ".hermes-home" / "skills" / "email_replies"
+    skill_dir.mkdir(parents=True)
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text("Run scripts/draft.py each morning.", encoding="utf-8")
+    script = tmp_path / ".hermes-home" / "skills" / "email_replies" / "scripts"
+    script.mkdir()
+    script_file = script / "draft.py"
+    script_file.write_text("import unillm\nprint([])\n", encoding="utf-8")
+
+    observation = _observe_hermes_artifact(
+        [str(skill_file)],
+        [str(script_file)],
+        ["cron/email.json"],
+    )
+    assert observation.kind.value == "hermes_skill_with_script"
+    assert observation.semantic_calls_inside_artifact is True
+    assert observation.scheduler_binding == "cron/task file"
+
+    prompt_only = _observe_hermes_artifact([], [], [])
+    assert prompt_only.kind.value == "prompt_only"
 
 
 def test_in_memory_function_manager_persists_added_functions(tmp_path):

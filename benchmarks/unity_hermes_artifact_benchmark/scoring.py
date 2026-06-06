@@ -45,6 +45,11 @@ def score_artifact(artifact: ArtifactObservation) -> ArtifactQualityScore:
         rationale.append(
             "Standalone no-agent script is directly runnable, but outside skill semantics.",
         )
+    elif artifact.kind is ArtifactKind.FILESYSTEM_SCRIPT:
+        direct_invocability = 0.6
+        rationale.append(
+            "Filesystem script is runnable, but not a first-class stored function.",
+        )
     elif artifact.kind is ArtifactKind.HERMES_SKILL_WITH_SCRIPT:
         direct_invocability = (
             0.55 if artifact.exposes_supporting_script_directly else 0.35
@@ -95,6 +100,11 @@ def score_artifact(artifact: ArtifactObservation) -> ArtifactQualityScore:
     if artifact.requires_procedural_prompt_reread:
         interpretation_penalty += 0.25
         rationale.append("Repeat runs still reread procedural prompt material.")
+    if artifact.kind is ArtifactKind.FILESYSTEM_SCRIPT:
+        interpretation_penalty += 0.20
+        rationale.append(
+            "Repeat runs need path or script selection outside FunctionManager.",
+        )
     future_run_autonomy = _clamp(1.0 - interpretation_penalty)
 
     scheduler_readiness = 0.2
@@ -108,6 +118,8 @@ def score_artifact(artifact: ArtifactObservation) -> ArtifactQualityScore:
         and artifact.scheduler_binding
     ):
         scheduler_readiness = 0.65
+    elif artifact.kind is ArtifactKind.FILESYSTEM_SCRIPT and artifact.scheduler_binding:
+        scheduler_readiness = 0.55
 
     total = round(
         mean(

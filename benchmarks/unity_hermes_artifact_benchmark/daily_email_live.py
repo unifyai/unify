@@ -11,6 +11,8 @@ import argparse
 import asyncio
 import ast
 import contextlib
+import copy
+import inspect
 import json
 import os
 import pprint
@@ -23,6 +25,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .fixtures import workweek_email_batches
+from .models import ArtifactKind, ArtifactObservation
+from .scoring import score_artifact
 
 USER_REQUEST = (
     "Could you please check my emails every morning at 9am, and then draft "
@@ -45,7 +49,9 @@ class LiveTurn:
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        data["agent_visible_prompt"] = self.prompt
+        return data
 
 
 @dataclass
@@ -158,31 +164,40 @@ def _live_email_batches() -> tuple[Any, ...]:
 
 
 def prepare_workspace(root: Path) -> dict[str, str]:
-    """Create a fake inbox workspace with a deterministic ``get_emails`` helper."""
+    """Create an isolated workspace with a local ``get_emails`` helper."""
 
     root.mkdir(parents=True, exist_ok=True)
     payload = _workweek_payload()
     _write_json(root / "emails_by_day.json", payload)
+    if payload["batches"]:
+        (root / "active_batch_id.txt").write_text(
+            next(iter(payload["batches"])),
+            encoding="utf-8",
+        )
     (root / "drafts").mkdir(exist_ok=True)
-    helper = f'''"""Synthetic inbox helper for the recurring email benchmark."""
+    helper = f'''"""Local inbox helper available to the email assistant."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 EMAILS_BY_DAY = {pprint.pformat(payload["batches"], sort_dicts=True, width=100)}
+ACTIVE_BATCH_FILE = Path(__file__).with_name("active_batch_id.txt")
 
 
 def get_emails(day: str | None = None, since: str | None = None) -> list[dict]:
-    """Return synthetic emails for a benchmark day.
+    """Return recent emails from the local mailbox adapter.
 
     Args:
-        day: Day name such as ``"monday"`` or batch id such as
-            ``"monday-2026-06-01"``.
-        since: Accepted for mailbox-like call signatures. It is not needed
-            because this fixture is already partitioned by daily activation.
+        day: Optional day name such as ``"monday"``.
+        since: Optional mailbox-style cursor. The local adapter is already
+            partitioned by scheduled run.
     """
 
     if day is None:
-        raise ValueError("Pass day='monday' or day='tuesday' in this benchmark")
+        if not ACTIVE_BATCH_FILE.exists():
+            raise ValueError("No active mailbox batch is configured for this run")
+        day = ACTIVE_BATCH_FILE.read_text(encoding="utf-8").strip()
     normalized = day.lower().strip()
     if normalized in EMAILS_BY_DAY:
         return list(EMAILS_BY_DAY[normalized]["emails"])
@@ -195,53 +210,28 @@ def get_emails(day: str | None = None, since: str | None = None) -> list[dict]:
     return {
         "workspace": str(root),
         "emails_by_day": str(root / "emails_by_day.json"),
+        "active_batch_id": str(root / "active_batch_id.txt"),
         "email_fixture": str(root / "email_fixture.py"),
         "drafts_dir": str(root / "drafts"),
     }
 
 
-def _setup_prompt(workspace: Path, arm_id: str) -> str:
-    return f"""\
-You are running the live {arm_id} recurring-email benchmark.
-
-User request:
-{USER_REQUEST}
-
-Benchmark constraints:
-- Do not touch Gmail, Calendar, or any external mailbox.
-- A fake inbox helper already exists at `{workspace / "email_fixture.py"}`.
-- Treat `get_emails(day=...)` as the only mailbox integration.
-- Create or record the recurring 9am weekday workflow in the most natural way
-  for this system.
-- Do not create, load, or mutate any real scheduler outside this benchmark. Record
-  intended cron/launchd/TaskScheduler configuration as workspace artifacts only.
-- Keep every generated file under `{workspace}`.
-- Prefer a reusable artifact over re-solving the whole loop every morning.
-- Draft basic replies only; never send.
-- Write any daily drafts under `{workspace / "drafts"}` as JSON.
-- Write a short artifact/plan summary under `{workspace / "artifact_summary.json"}`
-  if you create a reusable function, script, skill, cron job, or task.
-"""
+def _set_workspace_active_batch(workspace: Path, batch_id: str) -> None:
+    (workspace / "active_batch_id.txt").write_text(batch_id, encoding="utf-8")
 
 
-def _activation_prompt(workspace: Path, arm_id: str, batch_id: str) -> str:
-    day = batch_id.split("-", 1)[0]
-    return f"""\
-Simulated activation for the live {arm_id} recurring-email benchmark.
+def _setup_prompt(workspace: Path | None = None, arm_id: str | None = None) -> str:
+    return USER_REQUEST
 
-It is {day.title()} at 9am. Run the workflow created from the original request:
-{USER_REQUEST}
 
-Use the fake inbox helper only:
-- import from `{workspace / "email_fixture.py"}`
-- call `get_emails(day="{day}")`
-
-Draft replies for today's emails and write JSON to:
-`{workspace / "drafts" / f"{day}.json"}`
-
-Use the reusable function/script/skill/task you created if one exists. If you
-decide not to use it, say why in the final response.
-"""
+def _activation_prompt(
+    workspace: Path | None = None,
+    arm_id: str | None = None,
+    batch_id: str | None = None,
+    *,
+    scheduled_task_description: str | None = None,
+) -> str:
+    return scheduled_task_description or USER_REQUEST
 
 
 class InMemoryFunctionManager:
@@ -258,11 +248,14 @@ class InMemoryFunctionManager:
         name: str,
         implementation: str,
         docstring: str = "",
+        *,
+        callable_fn: Any | None = None,
     ) -> None:
         self._store_source(
             name=name,
             implementation=implementation,
             docstring=docstring,
+            callable_fn=callable_fn,
         )
 
     def _store_source(
@@ -271,6 +264,7 @@ class InMemoryFunctionManager:
         name: str,
         implementation: str,
         docstring: str = "",
+        callable_fn: Any | None = None,
     ) -> dict[str, Any]:
         function_id = self._next_id
         self._next_id += 1
@@ -283,6 +277,7 @@ class InMemoryFunctionManager:
             "implementation": implementation,
             "language": "python",
             "venv_id": None,
+            "_callable": callable_fn,
         }
         self._functions[name] = record
         return record
@@ -291,6 +286,7 @@ class InMemoryFunctionManager:
         rows = []
         for record in self._functions.values():
             row = dict(record)
+            row.pop("_callable", None)
             if not include_implementations:
                 row.pop("implementation", None)
             rows.append(row)
@@ -301,8 +297,12 @@ class InMemoryFunctionManager:
             return {}
         injected = {}
         for record in self._functions.values():
-            exec(record["implementation"], namespace)
-            fn = namespace.get(record["name"])
+            if record.get("_callable") is not None:
+                namespace[record["name"]] = record["_callable"]
+                fn = record["_callable"]
+            else:
+                exec(record["implementation"], namespace)
+                fn = namespace.get(record["name"])
             if callable(fn):
                 injected[record["name"]] = fn
         return injected
@@ -344,6 +344,7 @@ class InMemoryFunctionManager:
             score = sum(1 for term in terms if term in haystack)
             if score or not terms:
                 row = dict(record)
+                row.pop("_callable", None)
                 row["score"] = float(score or 0.1)
                 if not include_implementations:
                     row.pop("implementation", None)
@@ -419,8 +420,14 @@ class InMemoryFunctionManager:
         record = self._get_function_data_by_name(name=function_name)
         if record is None:
             return {"result": None, "error": f"Function not found: {function_name}"}
-        exec(record["implementation"], namespace)
-        result = namespace[function_name](**(call_kwargs or {}))
+        if record.get("_callable") is not None:
+            fn = record["_callable"]
+        else:
+            exec(record["implementation"], namespace)
+            fn = namespace[function_name]
+        result = fn(**(call_kwargs or {}))
+        if inspect.isawaitable(result):
+            result = await result
         return {"result": result, "error": None, "stdout": "", "stderr": ""}
 
     def clear(self) -> None:
@@ -478,6 +485,213 @@ InMemoryFunctionManager.__name__ = "FunctionManager"
 InMemoryGuidanceManager.__name__ = "GuidanceManager"
 
 
+class LiveMailboxContext:
+    """Harness-side mailbox state with hidden scheduled-run activation context."""
+
+    def __init__(self, batches: Iterable[Any]) -> None:
+        self._batches = {batch.batch_id: batch.to_dict() for batch in batches}
+        self.active_batch_id: str | None = next(iter(self._batches), None)
+
+    def set_active_batch(self, batch_id: str) -> None:
+        if batch_id not in self._batches:
+            raise KeyError(f"Unknown mailbox batch: {batch_id}")
+        self.active_batch_id = batch_id
+
+    def get_emails(
+        self,
+        day: str | None = None,
+        since: str | None = None,
+    ) -> list[dict[str, Any]]:
+        del since
+        batch = self._select_batch(day)
+        return copy.deepcopy(batch["emails"])
+
+    def harness_context(self) -> dict[str, Any]:
+        return {
+            "active_batch_id": self.active_batch_id,
+            "available_batch_ids": list(self._batches),
+            "expected_outputs_hidden": True,
+        }
+
+    def _select_batch(self, day: str | None) -> dict[str, Any]:
+        if day is None:
+            if self.active_batch_id is None:
+                raise RuntimeError("No active mailbox batch is configured")
+            return self._batches[self.active_batch_id]
+        normalized = day.lower().strip()
+        if normalized in self._batches:
+            return self._batches[normalized]
+        for batch_id, batch in self._batches.items():
+            if batch_id.startswith(normalized):
+                return batch
+        raise KeyError(f"No mailbox batch for {day!r}")
+
+
+class _CompletedToolHandle:
+    def __init__(self, payload: Any) -> None:
+        self._payload = payload
+
+    async def result(self) -> str:
+        return _json_dump(self._payload)
+
+    async def ask(self, question: str, **_: Any) -> "_CompletedToolHandle":
+        return _CompletedToolHandle({"question": question, "result": self._payload})
+
+    async def interject(self, message: str, **_: Any) -> None:
+        del message
+
+    async def stop(self, reason: str | None = None) -> None:
+        del reason
+
+    async def pause(self) -> None:
+        return None
+
+    async def resume(self) -> None:
+        return None
+
+    def done(self) -> bool:
+        return True
+
+    async def next_clarification(self) -> dict[str, Any]:
+        return {}
+
+    async def next_notification(self) -> dict[str, Any]:
+        return {}
+
+    async def answer_clarification(self, call_id: str, answer: str) -> None:
+        del call_id, answer
+
+
+class MockTaskScheduler:
+    """Production-shaped task manager that records schedules in memory only."""
+
+    def __init__(self) -> None:
+        self.records: list[dict[str, Any]] = []
+        self.executions: list[dict[str, Any]] = []
+        self._next_id = 1
+
+    async def update(
+        self,
+        text: str,
+        *,
+        response_format: Any | None = None,
+        **_: Any,
+    ) -> _CompletedToolHandle:
+        del response_format
+        record = {
+            "task_id": self._next_id,
+            "description": text,
+            "status": "scheduled",
+            "repeat": _infer_repeat(text),
+            "start_at": _infer_start_at(text),
+            "entrypoint_candidate": _infer_entrypoint_candidate(text),
+        }
+        self._next_id += 1
+        self.records.append(record)
+        return _CompletedToolHandle({"created_or_updated": record})
+
+    async def execute(self, task_id: int, **_: Any) -> _CompletedToolHandle:
+        record = {"task_id": task_id, "status": "started"}
+        self.executions.append(record)
+        return _CompletedToolHandle(record)
+
+    async def ask(self, text: str, **_: Any) -> _CompletedToolHandle:
+        return _CompletedToolHandle({"query": text, "tasks": self.records})
+
+    def to_artifact_dict(self) -> dict[str, Any]:
+        return {
+            "scheduler_records": copy.deepcopy(self.records),
+            "scheduler_executions": copy.deepcopy(self.executions),
+        }
+
+
+@dataclass
+class _LivePrimitives:
+    tasks: MockTaskScheduler
+
+
+class LiveTaskEnvironment:
+    """Small production-like primitives surface for recurring task setup."""
+
+    namespace = "primitives"
+
+    def __init__(self, scheduler: MockTaskScheduler) -> None:
+        self.scheduler = scheduler
+        self._instance = _LivePrimitives(tasks=scheduler)
+        self._clarification_up_q = None
+        self._clarification_down_q = None
+
+    def get_instance(self) -> _LivePrimitives:
+        return self._instance
+
+    def get_sandbox_instance(self) -> _LivePrimitives:
+        return self._instance
+
+    def get_tools(self) -> dict[str, Any]:
+        from unity.actor.environments.base import ToolMetadata
+
+        return {
+            "primitives.tasks.update": ToolMetadata(
+                name="primitives.tasks.update",
+                is_impure=True,
+                is_steerable=True,
+            ),
+            "primitives.tasks.execute": ToolMetadata(
+                name="primitives.tasks.execute",
+                is_impure=True,
+                is_steerable=True,
+            ),
+            "primitives.tasks.ask": ToolMetadata(
+                name="primitives.tasks.ask",
+                is_impure=False,
+                is_steerable=True,
+            ),
+        }
+
+    def get_prompt_context(self) -> str:
+        return """\
+### Task Scheduling
+
+Use `await primitives.tasks.update(text=...)` to create or update durable tasks,
+including recurring work. Put the user's goal, cadence, and any reusable
+entrypoint/function choice in the natural-language request. The task manager
+returns a handle; await `handle.result()` when you need confirmation.
+
+Use `await primitives.tasks.execute(task_id=...)` only when intentionally
+starting an existing task now."""
+
+    async def capture_state(self) -> dict[str, Any]:
+        return self.scheduler.to_artifact_dict()
+
+
+def _infer_repeat(text: str) -> str | None:
+    lowered = text.lower()
+    if "every morning" in lowered or "daily" in lowered:
+        return "daily"
+    if "weekday" in lowered or "monday" in lowered:
+        return "weekdays"
+    return None
+
+
+def _infer_start_at(text: str) -> str | None:
+    lowered = text.lower()
+    if "9am" in lowered or "9:00" in lowered:
+        return "09:00"
+    return None
+
+
+def _infer_entrypoint_candidate(text: str) -> str | None:
+    lowered = text.lower()
+    marker_terms = ("entrypoint", "function", "call")
+    if not any(term in lowered for term in marker_terms):
+        return None
+    tokens = [token.strip("`'\".,:()[]{}") for token in text.replace("\n", " ").split()]
+    for token in tokens:
+        if token and token.replace("_", "").isalnum() and "_" in token:
+            return token
+    return None
+
+
 def _first_function_name(source: str) -> str | None:
     try:
         tree = ast.parse(source)
@@ -518,25 +732,19 @@ def _argspec_for_source(source: str, name: str) -> str:
     return f"{name}(...)"
 
 
-def _seed_get_emails_function(fm: InMemoryFunctionManager, workspace: Path) -> None:
-    source = f'''from pathlib import Path
-import importlib.util
-
-
-def get_emails(day: str | None = None, since: str | None = None) -> list[dict]:
-    """Return the synthetic benchmark emails for a day."""
-    fixture_path = Path({str(workspace / "email_fixture.py")!r})
-    spec = importlib.util.spec_from_file_location("benchmark_email_fixture", fixture_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load {{fixture_path}}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.get_emails(day=day, since=since)
+def _seed_get_emails_function(
+    fm: InMemoryFunctionManager,
+    mailbox: LiveMailboxContext,
+) -> None:
+    source = '''def get_emails(day: str | None = None, since: str | None = None) -> list[dict]:
+    """Return recent emails from the user's mailbox."""
+    raise RuntimeError("Mailbox adapter is only available in the configured runtime")
 '''
     fm.seed_function(
         "get_emails",
         source,
-        "Return synthetic benchmark emails for a supplied weekday.",
+        "Return recent emails from the user's mailbox.",
+        callable_fn=mailbox.get_emails,
     )
 
 
@@ -573,31 +781,37 @@ async def run_unity_live(
     with contextlib.suppress(RuntimeError):
         unity_event_bus._initialize_event_bus()
 
+    batches = _live_email_batches()
+    mailbox = LiveMailboxContext(batches)
+    scheduler = MockTaskScheduler()
     fm = InMemoryFunctionManager()
     gm = InMemoryGuidanceManager()
-    _seed_get_emails_function(fm, workspace)
+    _seed_get_emails_function(fm, mailbox)
     actor = CodeActActor(
+        environments=[LiveTaskEnvironment(scheduler)],
         function_manager=fm,
         guidance_manager=gm,
         timeout=timeout,
     )
     turns: list[LiveTurn] = []
     try:
+        if batches:
+            mailbox.set_active_batch(batches[0].batch_id)
         prompt = _setup_prompt(workspace, "unity")
         turns.append(await _run_unity_turn(actor, "setup", None, prompt, timeout))
-        for batch in _live_email_batches():
+        for batch in batches:
             day = batch.batch_id.split("-", 1)[0]
-            prompt = _activation_prompt(workspace, "unity", batch.batch_id)
+            mailbox.set_active_batch(batch.batch_id)
+            prompt = _activation_prompt(
+                workspace,
+                "unity",
+                batch.batch_id,
+                scheduled_task_description=_scheduled_task_description(scheduler),
+            )
             turns.append(
                 await _run_unity_turn(actor, "activation", day, prompt, timeout),
             )
-        artifacts = {
-            **fm.to_artifact_dict(),
-            **gm.to_artifact_dict(),
-            "draft_files": sorted(
-                str(path) for path in (workspace / "drafts").glob("*.json")
-            ),
-        }
+        artifacts = _collect_unity_artifacts(workspace, fm, gm, scheduler, mailbox)
         return LiveBenchmarkResult(
             arm_id="unity",
             status="completed",
@@ -612,7 +826,7 @@ async def run_unity_live(
             status="failed",
             workspace=str(workspace),
             turns=turns,
-            artifacts={**fm.to_artifact_dict(), **gm.to_artifact_dict()},
+            artifacts=_collect_unity_artifacts(workspace, fm, gm, scheduler, mailbox),
             usage=_sum_usage(turns),
             error=repr(exc),
         )
@@ -659,6 +873,172 @@ async def _run_unity_turn(
         usage=_summarize_unillm_cost_events(cost_events),
         error=error,
     )
+
+
+def _scheduled_task_description(scheduler: MockTaskScheduler) -> str | None:
+    if not scheduler.records:
+        return None
+    return str(scheduler.records[-1].get("description") or "").strip() or None
+
+
+def _collect_unity_artifacts(
+    workspace: Path,
+    fm: InMemoryFunctionManager,
+    gm: InMemoryGuidanceManager,
+    scheduler: MockTaskScheduler,
+    mailbox: LiveMailboxContext,
+) -> dict[str, Any]:
+    functions = fm.to_artifact_dict()
+    guidance = gm.to_artifact_dict()
+    files = _workspace_generated_files(workspace)
+    observation = _observe_unity_artifact(functions, scheduler, files)
+    score = score_artifact(observation)
+    return {
+        **functions,
+        **guidance,
+        **scheduler.to_artifact_dict(),
+        "workspace_files": files,
+        "draft_files": sorted(
+            str(path) for path in (workspace / "drafts").glob("*.json")
+        ),
+        "mailbox_harness_context": mailbox.harness_context(),
+        "observed_artifact_kind": observation.kind.value,
+        "observed_artifact": observation.to_dict(),
+        "observed_artifact_score": score.to_dict(),
+    }
+
+
+def _observe_unity_artifact(
+    functions_artifact: dict[str, Any],
+    scheduler: MockTaskScheduler,
+    files: list[str],
+) -> ArtifactObservation:
+    user_functions = [
+        row
+        for row in functions_artifact.get("functions", [])
+        if row.get("name") != "get_emails"
+    ]
+    scheduler_binding = _scheduler_binding(scheduler)
+    if user_functions:
+        chosen = user_functions[-1]
+        implementation = str(chosen.get("implementation") or "")
+        semantic = _contains_semantic_llm_call(implementation)
+        return ArtifactObservation(
+            arm_id="unity",
+            name=str(chosen.get("name") or "stored_function"),
+            kind=ArtifactKind.UNITY_FUNCTION,
+            entrypoint=str(chosen.get("name") or ""),
+            invocation_path=("FunctionManager_search_functions", "execute_function"),
+            has_stable_input_schema=bool(chosen.get("argspec")),
+            has_stable_output_schema=_looks_structured(implementation),
+            has_dry_run_mode="dry_run" in implementation,
+            semantic_calls_inside_artifact=semantic,
+            cheap_semantic_model=_extract_model_hint(implementation),
+            scheduler_binding=scheduler_binding,
+            requires_procedural_prompt_reread=False,
+            exposes_supporting_script_directly=False,
+            notes="Stored FunctionManager function observed after live run.",
+        )
+    if files:
+        return ArtifactObservation(
+            arm_id="unity",
+            name=Path(files[0]).name,
+            kind=ArtifactKind.FILESYSTEM_SCRIPT,
+            entrypoint=files[0],
+            invocation_path=("locate_workspace_file", "terminal_run_script"),
+            has_stable_input_schema=False,
+            has_stable_output_schema=_file_mentions_json(Path(files[0])),
+            has_dry_run_mode=_file_contains(Path(files[0]), "dry_run"),
+            semantic_calls_inside_artifact=_file_mentions_semantic_llm(Path(files[0])),
+            cheap_semantic_model=_extract_model_hint(_safe_read_text(Path(files[0]))),
+            scheduler_binding=scheduler_binding,
+            requires_procedural_prompt_reread=True,
+            exposes_supporting_script_directly=True,
+            notes="Filesystem script fallback observed after live run.",
+        )
+    return ArtifactObservation(
+        arm_id="unity",
+        name="prompt_only",
+        kind=ArtifactKind.PROMPT_ONLY,
+        entrypoint=None,
+        invocation_path=("regenerate_workflow",),
+        has_stable_input_schema=False,
+        has_stable_output_schema=False,
+        has_dry_run_mode=False,
+        semantic_calls_inside_artifact=False,
+        cheap_semantic_model=None,
+        scheduler_binding=scheduler_binding,
+        requires_procedural_prompt_reread=True,
+        exposes_supporting_script_directly=False,
+        notes="No reusable function or generated script found.",
+    )
+
+
+def _workspace_generated_files(workspace: Path) -> list[str]:
+    ignored = {
+        workspace / "email_fixture.py",
+        workspace / "emails_by_day.json",
+        workspace / "active_batch_id.txt",
+        workspace / "live_benchmark.json",
+    }
+    files: list[str] = []
+    for path in workspace.glob("**/*"):
+        if not path.is_file() or path in ignored:
+            continue
+        if ".hermes-home/sessions" in str(path):
+            continue
+        if path.suffix in {".py", ".json", ".yaml", ".yml", ".sh", ".md"}:
+            files.append(str(path))
+    return sorted(files)
+
+
+def _scheduler_binding(scheduler: MockTaskScheduler) -> str | None:
+    if not scheduler.records:
+        return None
+    record = scheduler.records[-1]
+    cadence = record.get("repeat") or "scheduled"
+    start_at = record.get("start_at")
+    if start_at:
+        return f"{cadence} at {start_at}"
+    return str(cadence)
+
+
+def _contains_semantic_llm_call(text: str) -> bool:
+    lowered = text.lower()
+    return any(term in lowered for term in ("reason(", "unillm", "chat.completions"))
+
+
+def _looks_structured(text: str) -> bool:
+    lowered = text.lower()
+    return any(term in lowered for term in ("pydantic", "basemodel", "dict", "json"))
+
+
+def _extract_model_hint(text: str) -> str | None:
+    for marker in ("model=", "model ="):
+        if marker in text:
+            after = text.split(marker, 1)[1].strip()
+            if after[:1] in {"'", '"'}:
+                quote = after[0]
+                return after[1:].split(quote, 1)[0]
+    return None
+
+
+def _safe_read_text(path: Path) -> str:
+    with contextlib.suppress(Exception):
+        return path.read_text(encoding="utf-8")
+    return ""
+
+
+def _file_contains(path: Path, needle: str) -> bool:
+    return needle in _safe_read_text(path)
+
+
+def _file_mentions_json(path: Path) -> bool:
+    return "json" in _safe_read_text(path).lower()
+
+
+def _file_mentions_semantic_llm(path: Path) -> bool:
+    return _contains_semantic_llm_call(_safe_read_text(path))
 
 
 def _summarize_unillm_cost_events(cost_events: Iterable[Any]) -> dict[str, Any]:
@@ -737,6 +1117,9 @@ def run_hermes_live(
         os.chdir(workspace)
         from run_agent import AIAgent
 
+        batches = _live_email_batches()
+        if batches:
+            _set_workspace_active_batch(workspace, batches[0].batch_id)
         turns.append(
             _run_hermes_turn(
                 AIAgent,
@@ -746,8 +1129,9 @@ def run_hermes_live(
                 timeout,
             ),
         )
-        for batch in _live_email_batches():
+        for batch in batches:
             day = batch.batch_id.split("-", 1)[0]
+            _set_workspace_active_batch(workspace, batch.batch_id)
             turns.append(
                 _run_hermes_turn(
                     AIAgent,
@@ -946,6 +1330,8 @@ def _collect_hermes_artifacts(workspace: Path, hermes_home: Path) -> dict[str, A
         if root.exists()
         for path in root.glob("**/*.json")
     )
+    observation = _observe_hermes_artifact(skill_files, scripts, cron_files)
+    score = score_artifact(observation)
     return {
         "skill_files": skill_files,
         "scripts": scripts,
@@ -954,7 +1340,86 @@ def _collect_hermes_artifacts(workspace: Path, hermes_home: Path) -> dict[str, A
             str(path) for path in (workspace / "drafts").glob("*.json")
         ),
         "artifact_summary_exists": (workspace / "artifact_summary.json").exists(),
+        "observed_artifact_kind": observation.kind.value,
+        "observed_artifact": observation.to_dict(),
+        "observed_artifact_score": score.to_dict(),
     }
+
+
+def _observe_hermes_artifact(
+    skill_files: list[str],
+    scripts: list[str],
+    cron_files: list[str],
+) -> ArtifactObservation:
+    scheduler_binding = "cron/task file" if cron_files else None
+    generated_scripts = [
+        path
+        for path in scripts
+        if not path.endswith("email_fixture.py")
+        and not path.endswith("__init__.py")
+        and ".hermes-home/sessions" not in path
+    ]
+    if skill_files:
+        skill_text = "\n".join(_safe_read_text(Path(path)) for path in skill_files)
+        script_text = "\n".join(
+            _safe_read_text(Path(path)) for path in generated_scripts
+        )
+        return ArtifactObservation(
+            arm_id="hermes",
+            name=Path(skill_files[0]).parent.name,
+            kind=ArtifactKind.HERMES_SKILL_WITH_SCRIPT,
+            entrypoint=generated_scripts[0] if generated_scripts else None,
+            invocation_path=(
+                "load_or_preload_skill_text",
+                "infer_supporting_script_path",
+                "terminal_run_script",
+            ),
+            has_stable_input_schema=_looks_structured(script_text),
+            has_stable_output_schema=_looks_structured(script_text),
+            has_dry_run_mode="dry_run" in script_text,
+            semantic_calls_inside_artifact=_contains_semantic_llm_call(
+                skill_text + "\n" + script_text,
+            ),
+            cheap_semantic_model=_extract_model_hint(skill_text + "\n" + script_text),
+            scheduler_binding=scheduler_binding,
+            requires_procedural_prompt_reread=True,
+            exposes_supporting_script_directly=bool(generated_scripts),
+            notes="Hermes skill observed after live run.",
+        )
+    if generated_scripts:
+        script_text = _safe_read_text(Path(generated_scripts[0]))
+        return ArtifactObservation(
+            arm_id="hermes",
+            name=Path(generated_scripts[0]).name,
+            kind=ArtifactKind.HERMES_NO_AGENT_SCRIPT,
+            entrypoint=generated_scripts[0],
+            invocation_path=("terminal_run_script",),
+            has_stable_input_schema=_looks_structured(script_text),
+            has_stable_output_schema=_looks_structured(script_text),
+            has_dry_run_mode="dry_run" in script_text,
+            semantic_calls_inside_artifact=_contains_semantic_llm_call(script_text),
+            cheap_semantic_model=_extract_model_hint(script_text),
+            scheduler_binding=scheduler_binding,
+            requires_procedural_prompt_reread=False,
+            exposes_supporting_script_directly=True,
+            notes="Standalone script observed after live run.",
+        )
+    return ArtifactObservation(
+        arm_id="hermes",
+        name="prompt_only",
+        kind=ArtifactKind.PROMPT_ONLY,
+        entrypoint=None,
+        invocation_path=("regenerate_workflow",),
+        has_stable_input_schema=False,
+        has_stable_output_schema=False,
+        has_dry_run_mode=False,
+        semantic_calls_inside_artifact=False,
+        cheap_semantic_model=None,
+        scheduler_binding=scheduler_binding,
+        requires_procedural_prompt_reread=True,
+        exposes_supporting_script_directly=False,
+        notes="No skill or generated script found.",
+    )
 
 
 async def run_live_benchmark(
@@ -979,6 +1444,13 @@ async def run_live_benchmark(
     payload = {
         "benchmark": "unity_hermes_daily_email_live",
         "user_request": USER_REQUEST,
+        "agent_visible_setup_prompt": _setup_prompt(),
+        "harness_context": {
+            "mailbox_batches": [batch.batch_id for batch in _live_email_batches()],
+            "expected_outputs_hidden_from_agent": True,
+            "fake_mailbox_selection": "hidden activation context",
+            "scheduler_surface": "mock primitives.tasks sink for Unity; isolated home/workspace for Hermes",
+        },
         "days": [batch.batch_id for batch in _live_email_batches()],
         "output_dir": str(output_dir),
         "results": [result.to_dict() for result in results],
