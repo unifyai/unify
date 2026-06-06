@@ -211,7 +211,7 @@ async def test_prunes_over_quota_tool_calls(llm_config, monkeypatch):
     )
     assert all(
         tc.get("function", {}).get("name") == "short_tool"
-        for tc in first_asst_with_calls["tool_calls"]
+        for tc in first_asst_with_short_tool["tool_calls"]
     )
 
 

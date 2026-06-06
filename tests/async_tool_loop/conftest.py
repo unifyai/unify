@@ -5,7 +5,7 @@ tests/async_tool_loop/conftest.py
 Shared pytest fixtures for async tool loop tests.
 
 Provides model parameterization to ensure all LLM-based tests run against
-multiple model families (OpenAI and Anthropic) for cross-provider compatibility.
+multiple model families for cross-provider compatibility.
 Each config bundles the model identifier with its production-matching kwargs
 (reasoning_effort, service_tier, etc.) so tests exercise the exact settings
 used when that model is hot-swapped into production.
@@ -32,6 +32,24 @@ LLM_CONFIGS = [
             "service_tier": "priority",
         },
         id="claude-4.6-opus",
+    ),
+    pytest.param(
+        {
+            "model": "deepseek-v4-max@deepseek",
+        },
+        id="deepseek-v4-max",
+    ),
+    pytest.param(
+        {
+            "model": "minimax-v3@minimax",
+        },
+        id="minimax-v3",
+    ),
+    pytest.param(
+        {
+            "model": "mimo-v2.5@xiaomi-mimo",
+        },
+        id="mimo-v2.5",
     ),
 ]
 
