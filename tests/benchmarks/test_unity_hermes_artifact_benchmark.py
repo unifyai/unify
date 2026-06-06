@@ -64,8 +64,19 @@ def test_live_workspace_seeds_get_emails_helper(tmp_path):
     paths = prepare_workspace(tmp_path)
 
     assert "emails_by_day.json" in paths["emails_by_day"]
+    payload = json.loads((tmp_path / "emails_by_day.json").read_text(encoding="utf-8"))
+    assert payload["days"] == ["monday", "tuesday"]
+    assert sorted(payload["batches"]) == [
+        "monday-2026-06-01",
+        "tuesday-2026-06-02",
+    ]
+    assert "expected" not in json.dumps(payload)
     namespace: dict[str, object] = {}
-    exec((tmp_path / "email_fixture.py").read_text(encoding="utf-8"), namespace)
+    helper_source = (tmp_path / "email_fixture.py").read_text(encoding="utf-8")
+    assert "expected" not in helper_source
+    assert "draft_reply" not in helper_source
+    assert "wednesday-2026-06-03" not in helper_source
+    exec(helper_source, namespace)
     emails = namespace["get_emails"](day="monday")  # type: ignore[index,operator]
     assert [email["message_id"] for email in emails] == [
         "mon-001",
@@ -163,6 +174,10 @@ def test_reference_benchmark_collects_measurements_and_analysis():
         unity.measurements[0].repeat_orchestration_tokens
         < hermes.measurements[0].repeat_orchestration_tokens
     )
+    assert unity.measurements[0].estimated_cost_usd > 0
+    assert hermes.measurements[0].estimated_cost_usd > 0
+    assert unity.measurements[0].artifact_internal_llm_calls == 3
+    assert hermes.measurements[0].artifact_internal_llm_calls == 3
     assert unity.measurements[0].first_execution_action == "execute_function"
     assert hermes.measurements[0].first_execution_action == "terminal_run_script"
 
@@ -174,5 +189,7 @@ def test_payload_and_markdown_report_are_json_serializable():
 
     assert "unity_hermes_artifact_benchmark" in encoded
     assert "Unity vs Hermes Artifact Benchmark" in report
+    assert "Avg total cost estimate" in report
     assert "Avg repeat orchestration tokens" in report
+    assert "Avg artifact-internal LLM calls" in report
     assert "Unity demonstrates" in report

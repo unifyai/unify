@@ -23,4 +23,6 @@ The output directory contains:
 
 The reference traces are baselines for the design comparison. To run a live
 experiment, keep the same corpus/output contract and replace the reference
-traces with real Unity/Hermes traces before scoring.
+traces with real Unity/Hermes traces before scoring. Trace measurements include
+token counts, estimated costs, tool calls before useful execution, and the number
+of cheap LLM calls inside the reusable artifact.

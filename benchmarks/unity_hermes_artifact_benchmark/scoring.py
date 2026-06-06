@@ -140,9 +140,13 @@ def measure_trace(trace: RunTrace) -> TraceMeasurement:
 
     phase_tokens: dict[str, int] = defaultdict(int)
     total_tokens = 0
+    estimated_cost_usd = 0.0
+    artifact_internal_llm_calls = 0
     for event in trace.events:
         phase_tokens[event.phase] += event.total_tokens
         total_tokens += event.total_tokens
+        estimated_cost_usd += event.estimated_cost_usd
+        artifact_internal_llm_calls += event.artifact_internal_llm_calls
 
     repeat_events = [event for event in trace.events if event.phase == "repeat_run"]
     first_execution_index: int | None = None
@@ -163,12 +167,14 @@ def measure_trace(trace: RunTrace) -> TraceMeasurement:
         seed=trace.seed,
         batch_id=trace.batch_id,
         total_tokens=total_tokens,
+        estimated_cost_usd=round(estimated_cost_usd, 6),
         first_run_tokens=phase_tokens["first_run"],
         consolidation_tokens=phase_tokens["consolidation"],
         repeat_run_tokens=phase_tokens["repeat_run"],
         repeat_orchestration_tokens=sum(
             event.total_tokens for event in orchestration_events
         ),
+        artifact_internal_llm_calls=artifact_internal_llm_calls,
         tool_calls_before_execution=sum(
             1 for event in orchestration_events if event.tool_call
         ),
@@ -184,14 +190,24 @@ def aggregate_measurements(
         return {
             "runs": 0,
             "avg_total_tokens": 0.0,
+            "avg_estimated_cost_usd": 0.0,
             "avg_repeat_orchestration_tokens": 0.0,
+            "avg_artifact_internal_llm_calls": 0.0,
             "avg_tool_calls_before_execution": 0.0,
         }
     return {
         "runs": float(len(rows)),
         "avg_total_tokens": round(mean(row.total_tokens for row in rows), 2),
+        "avg_estimated_cost_usd": round(
+            mean(row.estimated_cost_usd for row in rows),
+            6,
+        ),
         "avg_repeat_orchestration_tokens": round(
             mean(row.repeat_orchestration_tokens for row in rows),
+            2,
+        ),
+        "avg_artifact_internal_llm_calls": round(
+            mean(row.artifact_internal_llm_calls for row in rows),
             2,
         ),
         "avg_tool_calls_before_execution": round(
