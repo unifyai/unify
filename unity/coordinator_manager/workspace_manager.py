@@ -87,7 +87,6 @@ _DELEGATE_INTENT_SURFACES: dict[str, CoordinatorActivitySurface] = {
     "create_dashboard": "dashboards",
     "data_setup": "data",
 }
-_WORKSPACE_MUTATION_ROLE_NAMES: tuple[str, ...] = ("owner", "admin")
 
 ChecklistItemStatus = Literal["pending", "done", "skipped"]
 
@@ -159,7 +158,6 @@ class _CoordinatorWorkspaceSession:
     def __init__(self) -> None:
         self._assistant_cache: list[dict[str, Any]] | None = None
         self._known_assistant_ids: set[str] = set()
-        self._organization_cache: list[dict[str, Any]] | None = None
         self._team_cache: list[dict[str, Any]] | None = None
         self._known_team_ids: set[str] = set()
         self._activity_metadata: dict[
@@ -683,17 +681,6 @@ class _CoordinatorWorkspaceSession:
                 error=resolved_organization_id,
             )
             return resolved_organization_id
-        permission_error = self._require_workspace_admin_role(
-            organization_id=resolved_organization_id,
-            operation_name="invite_org_member",
-        )
-        if permission_error is not None:
-            self._publish_failure(
-                activity_id,
-                title="Could not invite organization member",
-                error=permission_error,
-            )
-            return permission_error
         try:
             result = unify.invite_org_member(
                 resolved_organization_id,
@@ -877,12 +864,6 @@ class _CoordinatorWorkspaceSession:
         )
         if _is_tool_error(resolved_organization_id):
             return resolved_organization_id
-        permission_error = self._require_workspace_admin_role(
-            organization_id=resolved_organization_id,
-            operation_name="create_team",
-        )
-        if permission_error is not None:
-            return permission_error
         team_name_label = safe_activity_text(name, fallback="Team")
         activity_id = self._publish_activity(
             phase="started",
@@ -957,17 +938,6 @@ class _CoordinatorWorkspaceSession:
                 error=resolved_organization_id,
             )
             return resolved_organization_id
-        permission_error = self._require_workspace_admin_role(
-            organization_id=resolved_organization_id,
-            operation_name="delete_team",
-        )
-        if permission_error is not None:
-            self._publish_failure(
-                activity_id,
-                title="Could not remove team",
-                error=permission_error,
-            )
-            return permission_error
         reachable = self._team_is_reachable(
             team_id,
         )
@@ -1055,17 +1025,6 @@ class _CoordinatorWorkspaceSession:
                 error=resolved_organization_id,
             )
             return resolved_organization_id
-        permission_error = self._require_workspace_admin_role(
-            organization_id=resolved_organization_id,
-            operation_name="update_team",
-        )
-        if permission_error is not None:
-            self._publish_failure(
-                activity_id,
-                title="Could not update team",
-                error=permission_error,
-            )
-            return permission_error
         reachable = self._team_is_reachable(
             team_id,
         )
@@ -1170,17 +1129,6 @@ class _CoordinatorWorkspaceSession:
                 error=resolved_organization_id,
             )
             return resolved_organization_id
-        permission_error = self._require_workspace_admin_role(
-            organization_id=resolved_organization_id,
-            operation_name="add_team_member",
-        )
-        if permission_error is not None:
-            self._publish_failure(
-                activity_id,
-                title="Could not add colleague to team",
-                error=permission_error,
-            )
-            return permission_error
         reachable_team = self._team_is_reachable(
             team_id,
         )
@@ -1350,17 +1298,6 @@ class _CoordinatorWorkspaceSession:
                 error=resolved_organization_id,
             )
             return resolved_organization_id
-        permission_error = self._require_workspace_admin_role(
-            organization_id=resolved_organization_id,
-            operation_name="commission_colleague_into_team",
-        )
-        if permission_error is not None:
-            self._publish_failure(
-                activity_id,
-                title=f"Could not commission {colleague_name} into {team_name_label}",
-                error=permission_error,
-            )
-            return permission_error
         assistant_step = self._resolve_or_create_commission_assistant(
             assistant_first_name=assistant_first_name,
             assistant_surname=assistant_surname,
@@ -1491,17 +1428,6 @@ class _CoordinatorWorkspaceSession:
                 error=resolved_organization_id,
             )
             return resolved_organization_id
-        permission_error = self._require_workspace_admin_role(
-            organization_id=resolved_organization_id,
-            operation_name="remove_team_member",
-        )
-        if permission_error is not None:
-            self._publish_failure(
-                activity_id,
-                title="Could not remove colleague from team",
-                error=permission_error,
-            )
-            return permission_error
         invalid = self._validate_team_and_assistant(
             team_id,
             assistant_id,
@@ -2035,77 +1961,6 @@ class _CoordinatorWorkspaceSession:
             assistant.get("organization_id") or assistant.get("org_id"),
         )
         return assistant_organization_id == organization_id
-
-    @staticmethod
-    def _normalized_organization_role_name(role_name: Any) -> str | None:
-        if not isinstance(role_name, str):
-            return None
-        normalized = role_name.strip().lower()
-        if not normalized:
-            return None
-        return normalized
-
-    @classmethod
-    def _organization_role_name(cls, organization: dict[str, Any]) -> str | None:
-        normalized_role_name = cls._normalized_organization_role_name(
-            organization.get("role_name"),
-        )
-        if normalized_role_name is not None:
-            return normalized_role_name
-        if organization.get("is_owner") is True:
-            return "owner"
-        if organization.get("is_admin") is True:
-            return "admin"
-        return None
-
-    def _resolved_role_for_organization(
-        self,
-        organization_id: int,
-    ) -> str | None | ToolError:
-        organizations = self._accessible_organizations()
-        if _is_tool_error(organizations):
-            return organizations
-        for organization in organizations:
-            if self._coerce_int(organization.get("id")) != organization_id:
-                continue
-            return self._organization_role_name(organization)
-        return None
-
-    def _accessible_organizations(self) -> list[dict[str, Any]] | ToolError:
-        """Return organizations reachable by the current auth key."""
-        if self._organization_cache is not None:
-            return self._organization_cache
-        try:
-            organizations = unify.list_organizations(api_key=SESSION_DETAILS.unify_key)
-        except RequestError as exc:
-            return _request_error_to_tool_error(exc)
-        self._organization_cache = organizations
-        return organizations
-
-    def _require_workspace_admin_role(
-        self,
-        *,
-        organization_id: int | None,
-        operation_name: str,
-    ) -> ToolError | None:
-        if organization_id is None:
-            return None
-        resolved_role = self._resolved_role_for_organization(organization_id)
-        if _is_tool_error(resolved_role):
-            return resolved_role
-        if resolved_role in _WORKSPACE_MUTATION_ROLE_NAMES:
-            return None
-        return {
-            "error_kind": "permission_denied",
-            "message": (
-                f"`{operation_name}` requires Owner or Admin role in the target organization."
-            ),
-            "details": {
-                "organization_id": organization_id,
-                "role_name": resolved_role,
-                "required_roles": ["Owner", "Admin"],
-            },
-        }
 
     def _resolve_target_organization_id(
         self,
