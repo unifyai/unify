@@ -1,4 +1,4 @@
-"""CodeActActor evals for dashboard shared-space routing."""
+"""CodeActActor evals for dashboard team routing."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ EXECUTIVE_SPACE_ID = 9109
 EVAL_TIMEOUT_SECONDS = 300.0
 
 
-def _set_dashboard_spaces(
+def _set_dashboard_teams(
     *,
     team_ids: list[int],
     team_summaries: list[TeamSummary],
@@ -35,7 +35,7 @@ def _set_dashboard_spaces(
 
 
 @contextmanager
-def _dashboard_spaces():
+def _dashboard_teams():
     original_team_ids = list(SESSION_DETAILS.team_ids)
     original_team_summaries = list(SESSION_DETAILS.team_summaries)
     patch_summary = TeamSummary(
@@ -55,14 +55,14 @@ def _dashboard_spaces():
             "and monthly leadership reporting."
         ),
     )
-    _set_dashboard_spaces(
+    _set_dashboard_teams(
         team_ids=[PATCH_SPACE_ID, EXECUTIVE_SPACE_ID],
         team_summaries=[patch_summary, executive_summary],
     )
     try:
         yield
     finally:
-        _set_dashboard_spaces(
+        _set_dashboard_teams(
             team_ids=original_team_ids,
             team_summaries=original_team_summaries,
         )
@@ -96,7 +96,7 @@ def _show_only_space(team_id: int) -> None:
     ContextRegistry.clear()
 
 
-def _show_no_spaces() -> None:
+def _show_no_teams() -> None:
     SESSION_DETAILS.team_ids = []
     ContextRegistry.clear()
 
@@ -109,7 +109,7 @@ def _routing_guidelines() -> str:
 @pytest.mark.timeout(EVAL_TIMEOUT_SECONDS)
 async def test_team_dashboard_routes_to_patch_space():
     """A team-facing dashboard request lands in the named shared team."""
-    with _dashboard_spaces():
+    with _dashboard_teams():
         async with make_code_act_actor(
             impl="simulated",
             exposed_managers={"dashboards"},
@@ -136,7 +136,7 @@ async def test_team_dashboard_routes_to_patch_space():
             executive_dashboards = await primitives.dashboards.list_dashboards()
             assert executive_dashboards == []
 
-            _show_no_spaces()
+            _show_no_teams()
             hidden_dashboards = await primitives.dashboards.list_dashboards()
             assert hidden_dashboards == []
 
@@ -145,7 +145,7 @@ async def test_team_dashboard_routes_to_patch_space():
 @pytest.mark.timeout(EVAL_TIMEOUT_SECONDS)
 async def test_private_dashboard_stays_personal():
     """A private dashboard request honors the personal privacy floor."""
-    with _dashboard_spaces():
+    with _dashboard_teams():
         async with make_code_act_actor(
             impl="simulated",
             exposed_managers={"dashboards"},
@@ -162,7 +162,7 @@ async def test_private_dashboard_stays_personal():
             result = await _await_eval_result(handle)
             assert result is not None
 
-            _show_no_spaces()
+            _show_no_teams()
             personal_dashboards = await primitives.dashboards.list_dashboards()
             personal_tokens = _record_tokens(personal_dashboards)
             assert (
@@ -186,7 +186,7 @@ async def test_private_dashboard_stays_personal():
 @pytest.mark.timeout(EVAL_TIMEOUT_SECONDS)
 async def test_team_live_tile_routes_to_patch_space_and_inherits_dashboard_scope():
     """A team dashboard tile lands in Patch-1 and inherits its data root."""
-    with _dashboard_spaces():
+    with _dashboard_teams():
         async with make_code_act_actor(
             impl="simulated",
             exposed_managers={"dashboards"},
@@ -219,7 +219,7 @@ async def test_team_live_tile_routes_to_patch_space_and_inherits_dashboard_scope
             _show_only_space(EXECUTIVE_SPACE_ID)
             assert _live_tiles(await primitives.dashboards.list_tiles()) == []
 
-            _show_no_spaces()
+            _show_no_teams()
             assert _live_tiles(await primitives.dashboards.list_tiles()) == []
 
 
@@ -227,7 +227,7 @@ async def test_team_live_tile_routes_to_patch_space_and_inherits_dashboard_scope
 @pytest.mark.timeout(EVAL_TIMEOUT_SECONDS)
 async def test_private_dashboard_tile_can_bind_to_team_data():
     """A private watch tile stays personal while binding to Patch-1 data."""
-    with _dashboard_spaces():
+    with _dashboard_teams():
         async with make_code_act_actor(
             impl="simulated",
             exposed_managers={"dashboards"},
@@ -255,7 +255,7 @@ async def test_private_dashboard_tile_can_bind_to_team_data():
                 for context in _binding_contexts(tile)
             )
 
-            _show_no_spaces()
+            _show_no_teams()
             personal_tiles = await primitives.dashboards.list_tiles()
             personal_live_tokens = {
                 item.token for item in personal_tiles if item.has_data_bindings
@@ -267,7 +267,7 @@ async def test_private_dashboard_tile_can_bind_to_team_data():
 @pytest.mark.timeout(EVAL_TIMEOUT_SECONDS)
 async def test_executive_overview_tile_routes_to_executive_space():
     """An executive board-deck tile lands in the executive shared team."""
-    with _dashboard_spaces():
+    with _dashboard_teams():
         async with make_code_act_actor(
             impl="simulated",
             exposed_managers={"dashboards"},
@@ -300,7 +300,7 @@ async def test_executive_overview_tile_routes_to_executive_space():
             _show_only_space(PATCH_SPACE_ID)
             assert _live_tiles(await primitives.dashboards.list_tiles()) == []
 
-            _show_no_spaces()
+            _show_no_teams()
             assert _live_tiles(await primitives.dashboards.list_tiles()) == []
 
 
@@ -308,7 +308,7 @@ async def test_executive_overview_tile_routes_to_executive_space():
 @pytest.mark.timeout(EVAL_TIMEOUT_SECONDS)
 async def test_ambiguous_dashboard_request_does_not_publish_to_a_space():
     """An underspecified dashboard request clarifies or stays personal."""
-    with _dashboard_spaces():
+    with _dashboard_teams():
         async with make_code_act_actor(
             impl="simulated",
             exposed_managers={"dashboards"},
@@ -322,7 +322,7 @@ async def test_ambiguous_dashboard_request_does_not_publish_to_a_space():
             result = await _await_eval_result(handle)
             assert result is not None
 
-            _show_no_spaces()
+            _show_no_teams()
             personal_dashboards = await primitives.dashboards.list_dashboards()
             personal_tokens = _record_tokens(personal_dashboards)
 
