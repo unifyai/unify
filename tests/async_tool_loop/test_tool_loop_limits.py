@@ -252,6 +252,7 @@ async def test_prunes_over_quota_serial_calls(llm_config, monkeypatch):
         timeout=60,
         max_steps=100,
         raise_on_limit=False,
+        enable_compression=False,
     )
 
     await handle.result()
