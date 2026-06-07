@@ -269,6 +269,7 @@ def _fallback_entity_name(entity_type: CoordinatorActivityEntityType) -> str:
     return {
         "human": "Authorized human",
         "colleague": "Colleague",
+        "team": "Team",
         "workspace": "Workspace",
         "credential": "Credential",
         "task": "Task",
