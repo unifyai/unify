@@ -764,13 +764,12 @@ class TestCoordinatorWorkspaceManager:
         assert result["error_kind"] == "conflict"
         assert result["message"] == "User is already a member of this organization"
 
-    def test_workspace_mutations_require_owner_or_admin_role(self, monkeypatch):
+    def test_workspace_mutations_delegate_to_orchestra_without_local_role_gate(
+        self,
+        monkeypatch,
+    ):
         mutation_calls = []
 
-        monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.list_organizations",
-            lambda **_: [{"id": 7, "name": "Acme", "role_name": "Member"}],
-        )
         monkeypatch.setattr(
             "unity.coordinator_manager.workspace_manager.unify.invite_org_member",
             lambda *args, **kwargs: mutation_calls.append(
@@ -816,6 +815,18 @@ class TestCoordinatorWorkspaceManager:
             lambda **kwargs: mutation_calls.append(("create_assistant", kwargs))
             or {"agent_id": 42},
         )
+        monkeypatch.setattr(
+            "unity.coordinator_manager.workspace_manager.unify.list_teams",
+            lambda *_, **__: [{"team_id": 11, "name": "Ops"}],
+        )
+        monkeypatch.setattr(
+            "unity.coordinator_manager.workspace_manager.unify.list_assistants",
+            lambda **_: [{"agent_id": 42, "organization_id": 7}],
+        )
+        monkeypatch.setattr(
+            "unity.coordinator_manager.workspace_manager.unify.list_team_members",
+            lambda *args, **kwargs: [],
+        )
 
         tools = CoordinatorWorkspaceManager()
         results = {
@@ -839,24 +850,23 @@ class TestCoordinatorWorkspaceManager:
             ),
         }
 
-        for operation_name, result in results.items():
-            assert result["error_kind"] == "permission_denied"
-            assert (
-                f"`{operation_name}` requires Owner or Admin role in the target organization."
-                in result["message"]
-            )
-            assert result["details"]["role_name"] == "member"
-            assert result["details"]["required_roles"] == ["Owner", "Admin"]
+        for result in results.values():
+            assert "error_kind" not in result
 
-        assert mutation_calls == []
+        assert {name for name, *_ in mutation_calls} == {
+            "invite_org_member",
+            "create_team",
+            "delete_team",
+            "update_team",
+            "add_team_member",
+            "remove_team_member",
+            "create_assistant",
+        }
+        assert sum(1 for call in mutation_calls if call[0] == "add_team_member") == 2
 
-    def test_workspace_mutation_gate_allows_admin_role(self, monkeypatch):
+    def test_create_team_forwards_to_orchestra_api(self, monkeypatch):
         calls = []
 
-        monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.list_organizations",
-            lambda **_: [{"id": 7, "name": "Acme", "role_name": "Admin"}],
-        )
         monkeypatch.setattr(
             "unity.coordinator_manager.workspace_manager.unify.create_team",
             lambda *args, **kwargs: calls.append((args, kwargs))
