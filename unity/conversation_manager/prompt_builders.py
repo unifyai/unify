@@ -499,7 +499,7 @@ def _build_coordinator_workspace_tool_listing(*, is_org_workspace: bool) -> str:
     """Build the Coordinator workspace tools block for the output format section."""
     lines = [
         "- `act` is the execution path for privileged Coordinator workspace lifecycle operations.",
-        "- Inside `act`, use `primitives.coordinator.*` for assistant/space/membership/checklist reads and mutations.",
+        "- Inside `act`, use `primitives.coordinator.*` for assistant/team/membership/checklist reads and mutations.",
         "- Before running coordinator mutations inside `act`, gather identifiers and confirmation details in chat unless the request is already explicit and unambiguous.",
         "- Prefer one `act` request that executes the full confirmed setup step over fragmented no-op turns.",
     ]
@@ -2168,8 +2168,8 @@ def _build_coordinator_console_literacy_block() -> str:
             "switcher first; then both paths apply again.",
             "  - **Consequences (either path):** org **membership** — their "
             "personal Coordinator in that org, access per role, billing visibility "
-            "rules. **Not** hiring a specialist, **not** `add_space_member` alone "
-            "(workspace-only), **not** a Memory → Contacts record.",
+            "rules. **Not** hiring a specialist, **not** `add_team_member` alone "
+            "(team-only), **not** a Memory → Contacts record.",
             "",
             "Usage and Billing",
             "-----------------",
@@ -2206,7 +2206,7 @@ def _build_coordinator_console_literacy_block() -> str:
             "  - Per-assistant Integrations UI vs **space-scoped** credential storage.",
             "  - **Organizations → Teams** (RBAC) vs **Assistants → Teams** (shared workspaces).",
             "  - **Organizations → Members** (org invite) vs **hire specialist** vs "
-            "**add_space_member** (workspace membership).",
+            "**add_team_member** (team membership).",
             "  - **Usage/Billing** (credits) vs **Integrations** (credentials) vs "
             "profile **Admin** (Unify internal only).",
             "",
