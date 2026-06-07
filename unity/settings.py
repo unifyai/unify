@@ -67,13 +67,14 @@ class ProductionSettings(BaseSettings):
     # ─────────────────────────────────────────────────────────────────────────
     # Core LLM Settings
     # ─────────────────────────────────────────────────────────────────────────
-    UNIFY_MODEL: str = "gpt-5.5@openai"
+    UNIFY_MODEL: str = "deepseek-v4-max@deepseek"
 
     # ─────────────────────────────────────────────────────────────────────────
     # LLM Provider Credentials
     # ─────────────────────────────────────────────────────────────────────────
     OPENAI_API_KEY: SecretStr = SecretStr("")
     ANTHROPIC_API_KEY: SecretStr = SecretStr("")
+    DEEPSEEK_API_KEY: SecretStr = SecretStr("")
     UNITY_VALIDATE_LLM_PROVIDERS: bool = True
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -254,11 +255,12 @@ class ProductionSettings(BaseSettings):
         available = {
             "OPENAI_API_KEY": self.OPENAI_API_KEY,
             "ANTHROPIC_API_KEY": self.ANTHROPIC_API_KEY,
+            "DEEPSEEK_API_KEY": self.DEEPSEEK_API_KEY,
         }
         if not any(available.values()):
             raise RuntimeError(
                 "At least one LLM provider credential is required. "
-                "Set OPENAI_API_KEY and/or ANTHROPIC_API_KEY.",
+                "Set OPENAI_API_KEY, ANTHROPIC_API_KEY, and/or DEEPSEEK_API_KEY.",
             )
 
 
