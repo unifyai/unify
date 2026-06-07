@@ -434,6 +434,161 @@ def auth_headers(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
 
 
+def admin_headers() -> dict[str, str]:
+    """Return Orchestra admin auth headers for the local self-host stack."""
+
+    _unify_key, admin_key = resolve_local_stack_credentials()
+    return auth_headers(admin_key)
+
+
+def bootstrap_user_id(urls: LocalStackUrls, *, unify_key: str | None = None) -> str:
+    """Return the bootstrap user's Orchestra id."""
+
+    resolved_unify_key = unify_key or resolve_local_stack_credentials()[0]
+    response = requests.get(
+        f"{urls.orchestra_url}/user/basic-info",
+        headers=auth_headers(resolved_unify_key),
+        timeout=30,
+    )
+    if response.status_code != 200:
+        raise AssertionError(
+            f"bootstrap user lookup failed: {response.status_code} {response.text}",
+        )
+    user_id = response.json().get("user_id")
+    if not user_id:
+        raise AssertionError("bootstrap user lookup returned no user_id")
+    return str(user_id)
+
+
+def create_user(
+    urls: LocalStackUrls,
+    *,
+    email: str,
+    name: str = "Test",
+) -> dict:
+    """Create a disposable Orchestra user with an API key."""
+
+    response = requests.post(
+        f"{urls.orchestra_url}/admin/user",
+        json={"email": email, "name": name},
+        headers=admin_headers(),
+        timeout=30,
+    )
+    if response.status_code != 200:
+        raise AssertionError(
+            f"create user failed: {response.status_code} {response.text}",
+        )
+    body = response.json()
+    user_id = str(body["id"])
+    api_key = body.get("api_key")
+    if not api_key:
+        detail_response = requests.get(
+            f"{urls.orchestra_url}/admin/user/by-user-id",
+            params={"user_id": user_id},
+            headers=admin_headers(),
+            timeout=30,
+        )
+        if detail_response.status_code != 200:
+            raise AssertionError(
+                "create user succeeded but API key lookup failed: "
+                f"{detail_response.status_code} {detail_response.text}",
+            )
+        api_key = detail_response.json().get("api_key")
+    if not api_key:
+        raise AssertionError(f"API key not found for user {email}")
+    return {
+        "id": user_id,
+        "email": email,
+        "api_key": api_key,
+        "headers": auth_headers(api_key),
+    }
+
+
+def add_org_member(urls: LocalStackUrls, org: dict, *, user_id: str) -> None:
+    """Add an organization member and provision their workspace coordinator."""
+
+    response = requests.post(
+        f"{urls.orchestra_url}/organizations/{org['id']}/members",
+        json={"user_id": user_id},
+        headers=org["headers"],
+        timeout=30,
+    )
+    if response.status_code != 201:
+        raise AssertionError(
+            f"add org member failed: {response.status_code} {response.text}",
+        )
+
+
+def list_org_assistants(urls: LocalStackUrls, org: dict) -> list[dict]:
+    """List every assistant in an organization workspace."""
+
+    response = requests.get(
+        f"{urls.orchestra_url}/assistant",
+        params={"list_all_org": "true"},
+        headers=org["headers"],
+        timeout=30,
+    )
+    if response.status_code != 200:
+        raise AssertionError(
+            f"list org assistants failed: {response.status_code} {response.text}",
+        )
+    body = response.json()
+    return body.get("info", body)
+
+
+def find_org_coordinator_for_user(
+    assistants: list[dict],
+    *,
+    user_id: str,
+) -> dict:
+    """Return the org-scoped workspace coordinator owned by ``user_id``."""
+
+    for assistant in assistants:
+        if not assistant.get("is_coordinator"):
+            continue
+        if str(assistant.get("user_id")) == str(user_id):
+            return assistant
+    raise AssertionError(
+        f"No org coordinator found for user {user_id} among {len(assistants)} assistants",
+    )
+
+
+def fetch_admin_assistant_record(urls: LocalStackUrls, assistant_id: int) -> dict:
+    """Fetch one assistant record through the Orchestra admin API."""
+
+    response = requests.get(
+        f"{urls.orchestra_url}/admin/assistant",
+        params={"agent_id": assistant_id},
+        headers=admin_headers(),
+        timeout=30,
+    )
+    if response.status_code != 200:
+        raise AssertionError(
+            f"fetch admin assistant failed: {response.status_code} {response.text}",
+        )
+    info = response.json()["info"]
+    return info[0] if isinstance(info, list) else info
+
+
+def credit_organization(urls: LocalStackUrls, *, organization_id: int) -> None:
+    """Grant promo credits so org-scoped LLM and log writes can run locally."""
+
+    response = requests.post(
+        f"{urls.orchestra_url}/admin/create_recharge",
+        headers=admin_headers(),
+        json={
+            "organization_id": organization_id,
+            "quantity": 10,
+            "type": "promo",
+        },
+        timeout=30,
+    )
+    if response.status_code >= 300:
+        raise AssertionError(
+            f"credit organization failed: {response.status_code} {response.text}",
+        )
+
+
 def create_organization(urls: LocalStackUrls, *, name: str) -> dict:
     unify_key, _admin_key = resolve_local_stack_credentials()
     response = requests.post(
