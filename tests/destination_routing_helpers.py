@@ -89,7 +89,7 @@ def llm_config(request) -> dict[str, str]:
 
 
 class RoutingScenario:
-    """Isolated memory roots and shared-space metadata for routing evals."""
+    """Isolated memory roots and shared-team metadata for routing evals."""
 
     def __init__(self, name: str) -> None:
         unique = uuid.uuid4().hex
@@ -320,7 +320,7 @@ async def run_direct_routing_loop(
     message: str,
     loop_id: str,
 ) -> list[dict[str, Any]]:
-    """Run a real LLM write loop with shared-space routing context."""
+    """Run a real LLM write loop with shared-team routing context."""
 
     client = new_llm_client(**llm_config)
     client.set_system_message(
@@ -328,7 +328,7 @@ async def run_direct_routing_loop(
             f"""
             You write durable assistant memory by calling the available tool.
             Read the tool schema carefully, especially the destination parameter.
-            Choose the destination from the user's meaning and the space descriptions,
+            Choose the destination from the user's meaning and the team descriptions,
             not from literal keywords alone. Use personal memory for private user
             preferences or ownership that does not clearly belong to a shared team.
             Do not answer without performing the requested write.

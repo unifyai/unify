@@ -28,8 +28,8 @@ class _ContactManager:
         return {"contacts": contacts[:limit]}
 
 
-def test_broader_context_includes_accessible_spaces_and_reset(monkeypatch):
-    """The broader-context cache includes shared-space guidance and can reset."""
+def test_broader_context_includes_accessible_teams_and_reset(monkeypatch):
+    """The broader-context cache includes shared-team guidance and can reset."""
 
     from unity.memory_manager.memory_manager import MemoryManager
 

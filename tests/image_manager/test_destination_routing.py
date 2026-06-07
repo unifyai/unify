@@ -102,15 +102,15 @@ def test_image_updates_resolve_filepath_and_move_are_root_aware(tmp_path):
         [_image_payload("personal duplicate id")],
         synchronous=True,
     )
-    [space_image_id] = im.add_images(
-        [_image_payload("space original")],
+    [team_image_id] = im.add_images(
+        [_image_payload("team original")],
         synchronous=True,
         destination=f"team:{team_id}",
     )
-    assert personal_id == space_image_id
+    assert personal_id == team_image_id
 
     im.update_images(
-        [{"image_id": space_image_id, "caption": "space updated"}],
+        [{"image_id": team_image_id, "caption": "team updated"}],
         destination=f"team:{team_id}",
     )
     assert (
@@ -121,10 +121,10 @@ def test_image_updates_resolve_filepath_and_move_are_root_aware(tmp_path):
     )
     assert (
         im.filter_images(
-            filter=f"image_id == {space_image_id}",
+            filter=f"image_id == {team_image_id}",
             destination=f"team:{team_id}",
         )[0].caption
-        == "space updated"
+        == "team updated"
     )
 
     raw_path = tmp_path / "routed.png"
@@ -171,11 +171,11 @@ def test_image_handle_updates_persist_to_original_root():
         destination=f"team:{team_id}",
     )
 
-    handle.update_metadata(caption="handle updated in space")
+    handle.update_metadata(caption="handle updated in team")
 
     assert not unify.get_logs(
         context=im._ctx,
-        filter="caption == 'handle updated in space'",
+        filter="caption == 'handle updated in team'",
     )
-    [space_row] = _image_logs(f"Teams/{team_id}/Images", handle.image_id)
-    assert space_row.entries["caption"] == "handle updated in space"
+    [team_row] = _image_logs(f"Teams/{team_id}/Images", handle.image_id)
+    assert team_row.entries["caption"] == "handle updated in team"

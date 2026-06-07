@@ -19,7 +19,7 @@ pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
 
 @pytest.mark.asyncio
-async def test_team_function_routes_to_the_matching_shared_space(llm_config):
+async def test_team_function_routes_to_the_matching_shared_team(llm_config):
     """A team automation helper lands in shared Functions for that team."""
 
     scenario = RoutingScenario("function_shared")

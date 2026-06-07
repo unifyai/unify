@@ -137,7 +137,7 @@ def test_clone_recurring_task_instance_uses_space_destination_root():
         )
         out = ts._create_task(
             name="Daily shared alert",
-            description="Check KPI thresholds for the patch team space.",
+            description="Check KPI thresholds for the patch team.",
             status=Status.scheduled,
             schedule=Schedule(start_at=initial_start.isoformat()),
             repeat=[RepeatPattern(frequency=Frequency.DAILY)],

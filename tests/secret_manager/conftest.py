@@ -28,7 +28,7 @@ def secret_manager_context(request):
 
 
 @pytest.fixture(scope="function")
-def secret_manager_spaces():
+def secret_manager_teams():
     """Attach the active assistant to two isolated shared teams."""
     base_team_id = 10_000_000 + uuid.uuid4().int % 1_000_000_000
     team_ids = [base_team_id, base_team_id + 1]

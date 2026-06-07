@@ -80,12 +80,12 @@ async def test_update_creates_two_secrets(secret_manager_context):
 
 
 @pytest.mark.asyncio
-async def test_update_routes_team_credential_to_shared_space(
+async def test_update_routes_team_credential_to_shared_team(
     secret_manager_context,
-    secret_manager_spaces,
+    secret_manager_teams,
 ):
     """Natural-language updates choose the named shared-team destination."""
-    patch_team_id, _ = secret_manager_spaces
+    patch_team_id, _ = secret_manager_teams
     manager = SecretManager()
 
     handle = await manager.update(

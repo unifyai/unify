@@ -20,7 +20,7 @@ pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
 @pytest.mark.asyncio
 async def test_private_preference_stays_in_personal_guidance(llm_config):
-    """A user-specific working preference does not leak into either space."""
+    """A user-specific working preference does not leak into either team."""
 
     scenario = RoutingScenario("guidance_personal")
     scenario.setup()
@@ -55,7 +55,7 @@ async def test_private_preference_stays_in_personal_guidance(llm_config):
 
 
 @pytest.mark.asyncio
-async def test_team_guidance_routes_to_the_matching_shared_space(llm_config):
+async def test_team_guidance_routes_to_the_matching_shared_team(llm_config):
     """A team SOP lands in the shared Guidance root for the relevant domain."""
 
     scenario = RoutingScenario("guidance_shared")

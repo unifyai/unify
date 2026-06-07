@@ -44,7 +44,7 @@ def _reset_space(team_id: int) -> None:
 
 
 @_handle_project
-def test_move_to_blacklist_preserves_shared_space_destination():
+def test_move_to_blacklist_preserves_shared_team_destination():
     team_id = _configure_space()
     email = f"blocked.vendor.{uuid.uuid4().hex}@example.com"
     manager = ContactManager()

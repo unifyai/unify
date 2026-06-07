@@ -118,7 +118,7 @@ def test_dashboard_short_paths_are_not_data_prefixed():
     assert dm._resolve_context("Dashboards/Layouts") == "Dashboards/Layouts"
 
 
-def test_shared_space_path_not_double_prefixed():
+def test_shared_team_path_not_double_prefixed():
     """Teams/* contexts are absolute roots, not Data/* children."""
     from unity.data_manager.data_manager import DataManager
 
@@ -128,8 +128,8 @@ def test_shared_space_path_not_double_prefixed():
     assert dm._resolve_context("Teams/7/Dashboards/Tiles") == "Teams/7/Dashboards/Tiles"
 
 
-def test_simulated_shared_space_path_not_double_prefixed():
-    """SimulatedDataManager follows the same Spaces/* absolute-root contract."""
+def test_simulated_shared_team_path_not_double_prefixed():
+    """SimulatedDataManager follows the same Teams/* absolute-root contract."""
     dm = SimulatedDataManager()
 
     assert dm._resolve_context("Teams/7/Dashboards/Tiles") == "Teams/7/Dashboards/Tiles"

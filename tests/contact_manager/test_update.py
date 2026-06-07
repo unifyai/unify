@@ -92,7 +92,7 @@ def _reset_contact_routing_space(team_id: int) -> None:
 
 @_handle_project
 @pytest.mark.asyncio
-async def test_update_routes_explicit_team_contact_to_shared_space():
+async def test_update_routes_explicit_team_contact_to_shared_team():
     team_id = time.time_ns()
     _configure_contact_routing_space(team_id)
     email = f"nora.shared.{team_id}@example.com"
@@ -128,7 +128,7 @@ async def test_update_routes_private_contact_to_personal_memory():
         handle = await cm.update(
             "Add Pia Private, email "
             f"{email}, as my personal friend from yoga. This is private to me "
-            "and should go in personal memory, not the Repairs Dispatch space.",
+            "and should go in personal memory, not the Repairs Dispatch team.",
         )
         await handle.result()
 

@@ -20,98 +20,98 @@ def _create_work_order_contexts(personal_root: str, *team_ids: int) -> None:
 
 @_handle_project
 def test_tile_data_scope_uses_dashboard_destination_for_fresh_bindings(
-    dashboard_manager_spaces,
+    dashboard_manager_teams,
 ):
     """Dashboard-scoped bindings inherit the destination root."""
-    tile_space, _ = dashboard_manager_spaces
+    tile_team, _ = dashboard_manager_teams
     manager = fresh_dashboard_manager()
     personal_root = active_read_root()
 
-    _create_work_order_contexts(personal_root, tile_space)
+    _create_work_order_contexts(personal_root, tile_team)
 
     inherited = manager.create_tile(
         "<div id='kpi'></div>",
         title="Team Tile",
         data_bindings=[FilterBinding(context="Data/WorkOrders", alias="orders")],
-        destination=f"team:{tile_space}",
+        destination=f"team:{tile_team}",
     )
     assert inherited.succeeded, inherited.error
     inherited_tile = manager.get_tile(inherited.token)
     assert inherited_tile.data_scope == "dashboard"
     assert (
         serialized_binding_context(inherited_tile)
-        == f"Teams/{tile_space}/Data/WorkOrders"
+        == f"Teams/{tile_team}/Data/WorkOrders"
     )
 
 
 @_handle_project
 def test_tile_data_scope_can_bind_private_tile_to_shared_data(
-    dashboard_manager_spaces,
+    dashboard_manager_teams,
 ):
     """Explicit data_scope binds fresh data independently from tile destination."""
-    _, data_space = dashboard_manager_spaces
+    _, data_team = dashboard_manager_teams
     manager = fresh_dashboard_manager()
     personal_root = active_read_root()
 
-    _create_work_order_contexts(personal_root, data_space)
+    _create_work_order_contexts(personal_root, data_team)
 
     scoped = manager.create_tile(
         "<div id='watch'></div>",
         title="Personal Watch Tile",
         data_bindings=[FilterBinding(context="Data/WorkOrders", alias="orders")],
         destination="personal",
-        data_scope=f"team:{data_space}",
+        data_scope=f"team:{data_team}",
     )
     assert scoped.succeeded, scoped.error
     scoped_tile = manager.get_tile(scoped.token)
-    assert scoped_tile.data_scope == f"team:{data_space}"
+    assert scoped_tile.data_scope == f"team:{data_team}"
     assert (
-        serialized_binding_context(scoped_tile) == f"Teams/{data_space}/Data/WorkOrders"
+        serialized_binding_context(scoped_tile) == f"Teams/{data_team}/Data/WorkOrders"
     )
 
 
 @_handle_project
 def test_tile_data_scope_update_requires_fresh_bindings_and_resets_when_cleared(
-    dashboard_manager_spaces,
+    dashboard_manager_teams,
 ):
     """Updating data_scope is tied to fresh bindings and resets with no bindings."""
-    tile_space, data_space = dashboard_manager_spaces
+    tile_team, data_team = dashboard_manager_teams
     manager = fresh_dashboard_manager()
     personal_root = active_read_root()
 
-    _create_work_order_contexts(personal_root, tile_space, data_space)
+    _create_work_order_contexts(personal_root, tile_team, data_team)
 
     scoped = manager.create_tile(
         "<div id='watch'></div>",
         title="Personal Watch Tile",
         data_bindings=[FilterBinding(context="Data/WorkOrders", alias="orders")],
         destination="personal",
-        data_scope=f"team:{data_space}",
+        data_scope=f"team:{data_team}",
     )
     assert scoped.succeeded, scoped.error
 
     updated = manager.update_tile(
         scoped.token,
         data_bindings=[FilterBinding(context="Data/WorkOrders", alias="orders")],
-        data_scope=f"team:{tile_space}",
+        data_scope=f"team:{tile_team}",
     )
     assert updated.succeeded, updated.error
     retargeted_tile = manager.get_tile(scoped.token)
-    assert retargeted_tile.data_scope == f"team:{tile_space}"
+    assert retargeted_tile.data_scope == f"team:{tile_team}"
     assert (
         serialized_binding_context(retargeted_tile)
-        == f"Teams/{tile_space}/Data/WorkOrders"
+        == f"Teams/{tile_team}/Data/WorkOrders"
     )
 
-    error = manager.update_tile(scoped.token, data_scope=f"team:{data_space}")
+    error = manager.update_tile(scoped.token, data_scope=f"team:{data_team}")
     assert not error.succeeded
     assert "fresh data_bindings" in error.error
 
     unchanged_tile = manager.get_tile(scoped.token)
-    assert unchanged_tile.data_scope == f"team:{tile_space}"
+    assert unchanged_tile.data_scope == f"team:{tile_team}"
     assert (
         serialized_binding_context(unchanged_tile)
-        == f"Teams/{tile_space}/Data/WorkOrders"
+        == f"Teams/{tile_team}/Data/WorkOrders"
     )
 
     cleared = manager.update_tile(scoped.token, data_bindings=[])
@@ -134,19 +134,19 @@ def test_tile_data_scope_update_requires_fresh_bindings_and_resets_when_cleared(
 
 @_handle_project
 def test_tile_data_scope_rejects_invalid_or_unbound_scopes(
-    dashboard_manager_spaces,
+    dashboard_manager_teams,
 ):
     """data_scope must be valid and paired with fresh live bindings."""
-    _, data_space = dashboard_manager_spaces
+    _, data_team = dashboard_manager_teams
     manager = fresh_dashboard_manager()
     personal_root = active_read_root()
 
-    _create_work_order_contexts(personal_root, data_space)
+    _create_work_order_contexts(personal_root, data_team)
 
     scoped_without_bindings = manager.create_tile(
         "<div></div>",
         title="Scoped Baked Tile",
-        data_scope=f"team:{data_space}",
+        data_scope=f"team:{data_team}",
     )
     assert not scoped_without_bindings.succeeded
     assert "fresh data_bindings" in scoped_without_bindings.error

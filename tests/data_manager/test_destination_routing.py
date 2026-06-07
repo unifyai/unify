@@ -18,7 +18,7 @@ def _fresh_manager() -> DataManager:
     return DataManager()
 
 
-def _configure_spaces() -> tuple[int, int]:
+def _configure_teams() -> tuple[int, int]:
     base_team_id = 20_000_000 + uuid.uuid4().int % 1_000_000_000
     team_ids = (base_team_id, base_team_id + 1)
     SESSION_DETAILS.team_ids = list(team_ids)
@@ -37,7 +37,7 @@ def _configure_spaces() -> tuple[int, int]:
     return team_ids
 
 
-def _reset_spaces(team_ids: tuple[int, int], suffix: str) -> None:
+def _reset_teams(team_ids: tuple[int, int], suffix: str) -> None:
     for team_id in team_ids:
         try:
             unify.delete_context(f"Teams/{team_id}/Data/{suffix}")
@@ -50,7 +50,7 @@ def _reset_spaces(team_ids: tuple[int, int], suffix: str) -> None:
 
 @_handle_project
 def test_data_writes_route_to_destination_and_reads_merge_roots():
-    team_ids = _configure_spaces()
+    team_ids = _configure_teams()
     table_suffix = f"destination_routing/{uuid.uuid4().hex}"
     manager = _fresh_manager()
 
@@ -94,11 +94,11 @@ def test_data_writes_route_to_destination_and_reads_merge_roots():
         assert prefixed_path.endswith(f"/Data/{table_suffix}/prefixed_default")
         assert not prefixed_path.startswith("Data/")
     finally:
-        _reset_spaces(team_ids, table_suffix)
+        _reset_teams(team_ids, table_suffix)
 
 
 @_handle_project
-def test_data_prefixed_paths_default_to_personal_without_spaces():
+def test_data_prefixed_paths_default_to_personal_without_teams():
     SESSION_DETAILS.team_ids = []
     SESSION_DETAILS.team_summaries = []
     ContextRegistry.clear()
@@ -122,7 +122,7 @@ def test_data_prefixed_paths_default_to_personal_without_spaces():
 
 @_handle_project
 def test_data_shared_only_metadata_and_join_reads_use_visible_roots():
-    team_ids = _configure_spaces()
+    team_ids = _configure_teams()
     table_suffix = f"destination_routing_metadata/{uuid.uuid4().hex}"
     left_suffix = f"{table_suffix}/left"
     right_suffix = f"{table_suffix}/right"
@@ -194,12 +194,12 @@ def test_data_shared_only_metadata_and_join_reads_use_visible_roots():
         ) == {"shared": 42}
         assert shared_right == f"Teams/{team_ids[0]}/Data/{right_suffix}"
     finally:
-        _reset_spaces(team_ids, table_suffix)
+        _reset_teams(team_ids, table_suffix)
 
 
 @_handle_project
 def test_data_invalid_destination_returns_tool_error():
-    _configure_spaces()
+    _configure_teams()
     manager = _fresh_manager()
 
     try:
@@ -299,7 +299,7 @@ def test_data_invalid_destination_returns_tool_error():
 )
 @_handle_project
 def test_data_write_tools_return_tool_error_for_invalid_destination(call):
-    _configure_spaces()
+    _configure_teams()
     manager = _fresh_manager()
 
     try:
