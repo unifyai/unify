@@ -1358,7 +1358,7 @@ class CommsPrimitives:
             Direct-message body to send.
         team_id : str
             Slack workspace ID the bot token belongs to. Required to resolve
-            the workspace-scoped bot token server-side.
+            the workteam-scoped bot token server-side.
         slack_user_id : str | None, optional
             Recipient Slack user ID when the contact does not already have
             one on file.
@@ -2585,10 +2585,10 @@ class CommsPrimitives:
         the outbound message and transcript history.
 
         ``contact_id`` must be the integer id of an existing contact record.
-        Shared-space routing tokens such as ``team:80`` are for memory and
+        Shared-team routing tokens such as ``team:80`` are for memory and
         task destinations only; they are not valid here. To notify people who
         collaborate in a shared team, message each member's contact id
-        individually. There is no comms primitive that posts to a space channel.
+        individually. There is no comms primitive that posts to a team channel.
 
         Parameters
         ----------

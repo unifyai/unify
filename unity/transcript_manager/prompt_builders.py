@@ -90,7 +90,7 @@ def _render_two_table_info(
 
 
 def _authoring_attribution_guidance() -> str:
-    """Return shared-space transcript attribution policy for ask prompts."""
+    """Return shared team transcript attribution policy for ask prompts."""
 
     if not SESSION_DETAILS.team_ids:
         return ""
@@ -103,7 +103,7 @@ def _authoring_attribution_guidance() -> str:
         Shared transcript attribution
         ----------------------------
         • Your own assistant id is `{assistant_id_label}`.
-        • Shared-space transcript rows include {authorship_field}, which identifies which assistant originally had that conversation.
+        • Shared-team transcript rows include {authorship_field}, which identifies which assistant originally had that conversation.
         • If {authorship_field} matches your assistant id (or is null for legacy rows), treat it as your own prior conversation.
         • If {authorship_field} differs, treat that row as colleague-authored team knowledge.
         • When tool results include `message_authoring_attribution`, use each row's `source_label` / `authoring_assistant_name` in your explanation.

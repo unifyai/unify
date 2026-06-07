@@ -48,7 +48,7 @@ KNOWLEDGE_DESTINATION_GUIDANCE = """destination : str | None, default None
     Where this knowledge row lives. Pass ``"personal"`` (the default)
     for working notes, private hypotheses, draft research, and any fact tied
     to your individual workflow. Pass ``"team:<id>"`` for a team-shared
-    fact every member of the space should see: operational reference data,
+    fact every member of the team should see: operational reference data,
     shared playbooks, team-level KPIs, or institutional knowledge the team
     has to keep in sync. The set of available ``team:<id>`` values is
     rendered in the *Accessible shared teams* block of your system prompt.

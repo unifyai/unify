@@ -1032,7 +1032,7 @@ class ContactManager(BaseContactManager):
             description naming the team / domain it exists for, is rendered in
             the *Accessible shared teams* block of your system prompt — read
             that block before choosing. The privacy floor: when in doubt
-            between personal and a space, pick personal. When confidence is
+            between personal and a team, pick personal. When confidence is
             low and the contact would land in a shared team, call
             ``request_clarification`` instead of guessing toward the wider
             audience.
@@ -1145,11 +1145,11 @@ class ContactManager(BaseContactManager):
         response_policy : str | None
             Override the contact‑specific response policy. Omit to leave unchanged.
         destination : str | None, default None
-            The space whose copy of this contact you are updating. Defaults to
+            The team whose copy of this contact you are updating. Defaults to
             ``"personal"`` (your private copy). Passing ``"team:<id>"``
-            updates the shared copy in that space and is visible to every
+            updates the shared copy in that team and is visible to every
             member. See the *Accessible shared teams* block in your system
-            prompt for the available spaces and their descriptions.
+            prompt for the available teams and their descriptions.
         Additional keyword arguments
         ----------------------------
         Any additional top‑level keyword arguments are treated as updates for existing
@@ -1216,7 +1216,7 @@ class ContactManager(BaseContactManager):
             The identifier of the contact to remove. Must refer to a non‑system contact.
         destination : str | None, default None
             Which copy of the contact to remove. Defaults to ``"personal"``.
-            Passing ``"team:<id>"`` removes the shared copy from that space
+            Passing ``"team:<id>"`` removes the shared copy from that team
             for every member; do not delete a shared contact unless the team
             decision is to remove the relationship entirely. See the
             *Accessible shared teams* block in your system prompt.
@@ -1287,7 +1287,7 @@ class ContactManager(BaseContactManager):
         destination : str | None, default None
             Which root the merge operates within. Defaults to ``"personal"``.
             Passing ``"team:<id>"`` merges the two contacts inside that
-            space's contact pool; merging across roots is not supported.
+            team's contact pool; merging across roots is not supported.
             See the *Accessible shared teams* block in your system prompt.
 
         Returns
@@ -1347,7 +1347,7 @@ class ContactManager(BaseContactManager):
         destination : str | None, default None
             Which Contacts root contains the contact. Defaults to ``"personal"``.
             Pass ``"team:<id>"`` when blacklisting a contact from a shared
-            space. See the *Accessible shared teams* block in your system prompt.
+            team. See the *Accessible shared teams* block in your system prompt.
 
         Returns
         -------

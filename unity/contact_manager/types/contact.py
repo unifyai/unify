@@ -143,7 +143,7 @@ class Contact(AuthoredRow):
     )
     slack_user_id: Optional[str] = Field(
         default=None,
-        description="Slack user ID (workspace-scoped, e.g. 'U01ABC234' — letters and digits, optionally underscore-separated)",
+        description="Slack user ID (workteam-scoped, e.g. 'U01ABC234' — letters and digits, optionally underscore-separated)",
         pattern=r"^[A-Z0-9][A-Z0-9_]*$",
         json_schema_extra={"unique": True},
     )

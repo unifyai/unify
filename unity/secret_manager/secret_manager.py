@@ -52,7 +52,7 @@ class SecretManager(BaseSecretManager):
     Manage personal and shared credentials without exposing raw values to LLMs.
 
     LLM-facing reads merge the assistant's personal vault with every reachable
-    shared-space vault. Writes accept a destination and persist to exactly one
+    shared team vault. Writes accept a destination and persist to exactly one
     vault. Runtime credential lookups also read exactly one vault; a missing
     credential in the requested destination raises instead of falling back to
     another scope.
@@ -1204,18 +1204,18 @@ class SecretManager(BaseSecretManager):
             for credentials only you should use: your own personal API key,
             your individual OAuth tokens, anything tied to your identity. Pass
             ``"team:<id>"`` for a team service account or shared credential
-            that every member of the space should be able to use: the team
+            that every member of the team should be able to use: the team
             Slack bot token, the shared SendGrid API key, the team's
             integration service account. Personal credentials never leak into
-            a space; space credentials never leak into your local ``.env``
+            team memory; team credentials never leak into your local ``.env``
             mirror. The set of available ``team:<id>`` values, each with a
             name and a description naming the team / domain the credential
             pool belongs to, is rendered in the *Accessible shared teams*
             block of your system prompt; read that block before choosing.
-            The privacy floor: when in doubt between personal and a space,
+            The privacy floor: when in doubt between personal and a team,
             pick personal, because sharing a credential is harder to undo than
             re-sharing later. When confidence is low and the credential would
-            land in a space, call ``request_clarification`` instead of
+            land in a team, call ``request_clarification`` instead of
             guessing toward the wider audience.
             When running inside a task, omitting this argument inherits the
             task destination so task-owned credentials stay with the task's
@@ -1288,10 +1288,10 @@ class SecretManager(BaseSecretManager):
         destination : str | None, default None
             Which copy of the credential to update. Defaults to ``"personal"``
             (your private credential). Passing ``"team:<id>"`` rotates the
-            shared credential in that space and is visible to every member;
+            shared credential in that team and is visible to every member;
             pooled subprocesses pick up the new value on next invocation. See
             the *Accessible shared teams* block in your system prompt for
-            the available spaces and their descriptions. Inside a task, an
+            the available teams and their descriptions. Inside a task, an
             omitted destination inherits the task destination.
 
         Returns
@@ -1358,10 +1358,9 @@ class SecretManager(BaseSecretManager):
         destination : str | None, default None
             Which copy of the credential to remove. Defaults to ``"personal"``.
             Passing ``"team:<id>"`` removes the shared credential from the
-            space for every member, breaking any team integration that depends
+            team for every member, breaking any team integration that depends
             on it; do not delete a shared credential unless the team decision
-            is to rotate or retire the integration. See the *Accessible shared
-            spaces* block in your system prompt. Inside a task, an omitted
+            is to rotate or retire the integration. See the *Accessible shared teams* block in your system prompt. Inside a task, an omitted
             destination inherits the task destination.
 
         Returns

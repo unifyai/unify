@@ -370,23 +370,23 @@ class BaseDashboardManager(BaseStateManager):
             Where this tile row lives -- i.e., which dashboard pool this
             tile belongs to. Pass ``"personal"`` (the default) for tiles
             on private dashboards. Pass ``"team:<id>"`` for a tile on a
-            shared team dashboard every member of the space sees. The set
+            shared team dashboard every member of the team sees. The set
             of available ``team:<id>`` values, each with a name and
             description, is rendered in the *Accessible shared teams*
             block of your system prompt; read that block before choosing.
             ``destination`` controls where the tile row lives. The data
             the tile renders is governed separately by ``data_scope``. The
-            privacy floor: when in doubt between personal and a space,
+            privacy floor: when in doubt between personal and a team,
             pick personal. If a clarification channel is available, ask a
             targeted question when the user appears to want a wider audience
-            but the target space is ambiguous.
+            but the target team is ambiguous.
 
         data_scope : str, default ``"dashboard"``
             Which root this tile's live-data bindings read from when they
             are resolved. Pass ``"dashboard"`` to inherit the tile row's
             destination root. Pass ``"team:<id>"`` to bind this tile's
             data to a specific shared team even when the tile row itself
-            lives somewhere else. The available spaces are listed in the
+            lives somewhere else. The available teams are listed in the
             *Accessible shared teams* block. This parameter matters only
             for live tiles with ``data_bindings``.
 
@@ -1180,14 +1180,14 @@ class BaseDashboardManager(BaseStateManager):
         destination : str | None, default ``None``
             Where this dashboard lives. Pass ``"personal"`` (the default)
             for private dashboards only you see. Pass ``"team:<id>"`` for
-            a team dashboard every member of the space sees -- operational
+            a team dashboard every member of the team sees -- operational
             overview boards, team KPI dashboards, and shared monitoring
             views. The set of available ``team:<id>`` values is rendered
             in the *Accessible shared teams* block of your system prompt;
             read that block before choosing. Pick personal when in doubt;
             if a clarification channel is available, ask a targeted question
             when the user appears to want a wider audience but the target
-            space is ambiguous.
+            team is ambiguous.
 
         Returns
         -------

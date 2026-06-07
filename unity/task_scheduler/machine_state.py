@@ -832,7 +832,7 @@ def _activation_store() -> TasksStore:
 
 
 def _destination_team_id(destination: str | None) -> int | None:
-    """Return the shared-space id encoded in a task destination label."""
+    """Return the team id encoded in a task destination label."""
 
     normalized_destination = _canonical_destination_or_none(destination)
     if normalized_destination is None:

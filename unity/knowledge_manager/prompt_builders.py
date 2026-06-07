@@ -50,7 +50,7 @@ def _require_tools(pairs: Dict[str, str | None], tools: Dict[str, Callable]) -> 
 
 
 def _accessible_teams_section() -> str:
-    """Return shared-space routing guidance for destination-aware tools."""
+    """Return shared team routing guidance for destination-aware tools."""
 
     try:
         return build_accessible_teams_block(SESSION_DETAILS.team_summaries)

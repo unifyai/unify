@@ -215,7 +215,7 @@ def _get_sender_name(contact: dict | None, fallback: str = "Unknown") -> str:
 def _adopt_slack_bot_user_id(cm: "ConversationManager", event) -> None:
     """Enable Slack send capability from an inbound Slack event.
 
-    Slack's ``bot_user_id`` is workspace-scoped (it lives on the
+    Slack's ``bot_user_id`` is workteam-scoped (it lives on the
     ``slack_installs`` row), not on the assistant record, so the
     per-assistant ``assistant_slack_bot_user_id`` is never populated at
     session bootstrap. The brain gates the ``send_slack_message`` /

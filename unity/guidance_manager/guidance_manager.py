@@ -26,10 +26,10 @@ FUNCTIONS_COMPOSITIONAL_TABLE = "Functions/Compositional"
 GUIDANCE_DESTINATION_GUIDANCE = """destination : str | None, default None
     Where this guidance lives. Pass ``"personal"`` (the default) for private
     working preferences and individual reminders. Pass ``"team:<id>"`` for
-    team-level guidance every member of the space should follow: shared
+    team-level guidance every member of the team should follow: shared
     response style, team-wide do/don't rules, and operational SOPs the team
     agrees on. See the *Accessible shared teams* block in your system prompt
-    for available spaces and descriptions. Pick personal when in doubt; call
+    for available teams and descriptions. Pick personal when in doubt; call
     ``request_clarification`` when the right audience is unclear."""
 
 

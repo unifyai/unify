@@ -1394,7 +1394,7 @@ class ImageManager(BaseImageManager):
         set ``timestamp``, ``caption``, ``data``, and/or ``filepath``.
         ``destination`` selects the Images root containing the metadata row.
         Omit it or pass ``"personal"`` for personal metadata; pass
-        ``"team:<id>"`` for an accessible shared-space copy.
+        ``"team:<id>"`` for an accessible shared team copy.
         Returns updated ids.
         """
         try:

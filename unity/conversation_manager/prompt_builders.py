@@ -170,7 +170,7 @@ def _build_workspace_coordinator_deferral_block(
     scope_label = "organization" if is_org_workspace else "workspace"
     coordinator_surface = [
         "- inviting, removing, or changing roles for colleagues",
-        "- creating or removing team spaces and managing who belongs to them",
+        "- creating or removing teams and managing who belongs to them",
         "- placing shared credentials, integrations, or other org-level setup",
     ]
     if is_org_workspace:
@@ -2057,8 +2057,8 @@ def _build_coordinator_console_literacy_block() -> str:
             "Before I place credentials or team SOPs in a shared workspace, I "
             "surface consequences in plain language:",
             "  - **Who can use it:** every **current member** of that workspace — "
-            "not only the person who asked. Specialists in the space share the "
-            "same credentials and Guidance as Coordinators in that space.",
+            "not only the person who asked. Specialists in the team share the "
+            "same credentials and Guidance as Coordinators in that team.",
             "  - **Revocation:** removing a member ends their access; the shared "
             "content stays for remaining members.",
             "  - **Not cross-org:** workspaces and membership are limited to this "
@@ -2203,7 +2203,7 @@ def _build_coordinator_console_literacy_block() -> str:
             "  - **Integrations / Secrets** (credentials) vs **Memory** (context the "
             "assistant retrieves) vs sharing secrets in chat (never).",
             "  - **Personal** assistant memory vs **shared workspace** memory.",
-            "  - Per-assistant Integrations UI vs **space-scoped** credential storage.",
+            "  - Per-assistant Integrations UI vs **team-scoped** credential storage.",
             "  - **Organizations → Teams** (RBAC) vs **Assistants → Teams** (shared workspaces).",
             "  - **Organizations → Members** (org invite) vs **hire specialist** vs "
             "**add_team_member** (team membership).",

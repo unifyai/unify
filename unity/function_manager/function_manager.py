@@ -77,14 +77,14 @@ FUNCTIONS_COMPOSITIONAL_DESTINATION_GUIDANCE = """destination : str | None, defa
     Where this composed function (or set of functions) lives. Pass
     ``"personal"`` (the default) for one-off helper scripts and private
     automations. Pass ``"team:<id>"`` for team automation every member of the
-    space should be able to invoke. See the *Accessible shared teams* block in
-    your system prompt for available spaces and descriptions. Pick personal
+    team members should be able to invoke. See the *Accessible shared teams* block in
+    your system prompt for available teams and descriptions. Pick personal
     when in doubt; call ``request_clarification`` when the right audience is
     unclear."""
 FUNCTIONS_VENV_DESTINATION_GUIDANCE = """destination : str | None, default None
     Where the virtual env definition lives. Pass ``"personal"`` (the default)
     for envs only your private functions need. Pass ``"team:<id>"`` to share
-    the env with team-level functions in that space. See the Accessible shared teams
+    the env with team-level functions in that team. See the Accessible shared teams
     block in your system prompt; pick personal when in doubt."""
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -2652,8 +2652,8 @@ class FunctionManager(BaseFunctionManager):
             destination: Where the custom venv definitions live. Use
                 ``"personal"`` for private custom environments and
                 ``"team:<id>"`` for team-level environments shared by a
-                space. See the Accessible shared teams block in your system
-                prompt for available spaces.
+                team. See the Accessible shared teams block in your system
+                prompt for available teams.
 
         Returns:
             Dict mapping venv name to venv_id.
@@ -2771,9 +2771,9 @@ class FunctionManager(BaseFunctionManager):
                 an empty set is assumed (no custom functions).
             destination: Where the custom functions live. Use ``"personal"``
                 for private helper functions and ``"team:<id>"`` for
-                team-level functions every space member should be able to
+                team-level functions every team member should be able to
                 invoke. See the Accessible shared teams block in your system
-                prompt for available spaces.
+                prompt for available teams.
 
         Returns:
             True if sync was performed, False if already up-to-date.
