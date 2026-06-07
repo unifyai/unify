@@ -273,14 +273,16 @@ class ToolsData:
         logger: "LoopLogger",
         time_ctx: "Optional[TimeContext]" = None,
         extra_ask_tools: "Optional[Dict[str, Callable]]" = None,
+        call_counts: Optional[Dict[str, int]] = None,
     ):
         self._client = client
         self._logger = logger
         self.normalized = normalise_tools(tools)
         self.pending: Set[asyncio.Task] = set()
         self.info: Dict[asyncio.Task, ToolCallMetadata] = {}
-        # Per-tool hidden total-call quotas (counted per loop instance)
-        self.call_counts: Dict[str, int] = {}
+        self.call_counts: Dict[str, int] = (
+            call_counts if call_counts is not None else {}
+        )
         self.clarification_channels: Dict[
             str,
             Tuple[asyncio.Queue[str], asyncio.Queue[str]],

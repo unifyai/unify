@@ -10,11 +10,13 @@ class TimeoutTimer:
         max_steps: Optional[int],
         raise_on_limit: bool,
         client,
+        message_count_offset: int = 0,
     ):
         self._timeout = timeout
         self._client = client
         self._max_steps = max_steps
         self._raise_on_limit = raise_on_limit
+        self._message_count_offset = message_count_offset
         self.reset()
 
     def remaining_time(self) -> Optional[float]:
@@ -51,10 +53,11 @@ class TimeoutTimer:
         if self._max_steps is None:
             return False
 
-        ret = len(self._client.messages) >= self._max_steps
+        logical_message_count = self._message_count_offset + len(self._client.messages)
+        ret = logical_message_count >= self._max_steps
         if self._raise_on_limit and ret:
             raise RuntimeError(
                 f"Conversation exceeded max_steps={self._max_steps} "
-                f"(len(client.messages)={len(self._client.messages)})",
+                f"(len(client.messages)={logical_message_count})",
             )
         return ret
