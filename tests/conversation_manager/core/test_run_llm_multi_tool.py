@@ -258,7 +258,7 @@ async def test_run_llm_records_recent_tool_executions_for_follow_up_turns(
     cm._recent_commissioning_successes = {}
 
     fake_result = _make_multi_tool_result(
-        ("create_space", {"name": "Ops HQ"}, {"team_id": 11, "name": "Ops HQ"}),
+        ("create_team", {"name": "Ops HQ"}, {"team_id": 11, "name": "Ops HQ"}),
     )
     with patch(
         "unity.conversation_manager.conversation_manager.single_shot_tool_decision",
@@ -268,7 +268,7 @@ async def test_run_llm_records_recent_tool_executions_for_follow_up_turns(
 
     assert len(cm._recent_tool_executions) >= 1
     last = cm._recent_tool_executions[-1]
-    assert last["tool_name"] == "create_space"
+    assert last["tool_name"] == "create_team"
     assert last["origin_event_name"] == "SMSSent"
     assert "team_id" in last["result_preview"]
 
@@ -287,7 +287,7 @@ async def test_run_llm_carries_recent_tool_executions_into_next_turn_prompt(
         if len(captured_messages) == 1:
             return _make_multi_tool_result(
                 (
-                    "create_space",
+                    "create_team",
                     {"name": "Ops HQ"},
                     {"team_id": 11, "name": "Ops HQ"},
                 ),
@@ -306,7 +306,7 @@ async def test_run_llm_carries_recent_tool_executions_into_next_turn_prompt(
         str(message.get("content")) for message in captured_messages[1]
     )
     assert "<recent_tool_executions>" in second_turn_text
-    assert "tool=create_space" in second_turn_text
+    assert "tool=create_team" in second_turn_text
 
 
 def test_duplicate_act_suppression_only_blocks_immediate_followups():

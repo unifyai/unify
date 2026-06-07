@@ -43,15 +43,15 @@ class TestCoordinatorWorkspaceManager:
             "list_org_members",
             "invite_org_member",
             "delegate_to_colleague",
-            "create_space",
-            "delete_space",
-            "update_space",
-            "add_space_member",
-            "remove_space_member",
-            "list_spaces",
-            "list_space_members",
-            "list_spaces_for_assistant",
-            "commission_colleague_into_workspace",
+            "create_team",
+            "delete_team",
+            "update_team",
+            "add_team_member",
+            "remove_team_member",
+            "list_teams",
+            "list_team_members",
+            "list_teams_for_assistant",
+            "commission_colleague_into_team",
             "add_setup_checklist_item",
             "update_setup_checklist_item",
         }
@@ -779,35 +779,35 @@ class TestCoordinatorWorkspaceManager:
             or {"ok": True},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.create_space",
-            lambda **kwargs: mutation_calls.append(("create_space", kwargs))
+            "unity.coordinator_manager.workspace_manager.unify.create_team",
+            lambda *args, **kwargs: mutation_calls.append(("create_team", args, kwargs))
             or {"team_id": 11},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.delete_space",
+            "unity.coordinator_manager.workspace_manager.unify.delete_team",
             lambda *args, **kwargs: mutation_calls.append(
-                ("delete_space", args, kwargs),
+                ("delete_team", args, kwargs),
             )
             or {"ok": True},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.update_space",
+            "unity.coordinator_manager.workspace_manager.unify.update_team",
             lambda *args, **kwargs: mutation_calls.append(
-                ("update_space", args, kwargs),
+                ("update_team", args, kwargs),
             )
             or {"team_id": 11},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.add_space_member",
+            "unity.coordinator_manager.workspace_manager.unify.add_team_member",
             lambda *args, **kwargs: mutation_calls.append(
-                ("add_space_member", args, kwargs),
+                ("add_team_member", args, kwargs),
             )
             or {"membership_status": "active"},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.remove_space_member",
+            "unity.coordinator_manager.workspace_manager.unify.remove_team_member",
             lambda *args, **kwargs: mutation_calls.append(
-                ("remove_space_member", args, kwargs),
+                ("remove_team_member", args, kwargs),
             )
             or {"ok": True},
         )
@@ -820,21 +820,21 @@ class TestCoordinatorWorkspaceManager:
         tools = CoordinatorWorkspaceManager()
         results = {
             "invite_org_member": tools.invite_org_member(email="member-only@test.com"),
-            "create_space": tools.create_space(
+            "create_team": tools.create_team(
                 name="Ops",
                 description="Operations workspace.",
             ),
-            "delete_space": tools.delete_space(team_id=11),
-            "update_space": tools.update_space(team_id=11, patch={"name": "Ops v2"}),
-            "add_space_member": tools.add_space_member(team_id=11, assistant_id=42),
-            "remove_space_member": tools.remove_space_member(
+            "delete_team": tools.delete_team(team_id=11),
+            "update_team": tools.update_team(team_id=11, patch={"name": "Ops v2"}),
+            "add_team_member": tools.add_team_member(team_id=11, assistant_id=42),
+            "remove_team_member": tools.remove_team_member(
                 team_id=11,
                 assistant_id=42,
             ),
-            "commission_colleague_into_workspace": tools.commission_colleague_into_workspace(
+            "commission_colleague_into_team": tools.commission_colleague_into_team(
                 assistant_first_name="Avery",
-                space_name="Ops",
-                space_description="Operations workspace.",
+                team_name="Ops",
+                team_description="Operations workspace.",
                 assistant_about="Runs operations workflows.",
             ),
         }
@@ -858,46 +858,49 @@ class TestCoordinatorWorkspaceManager:
             lambda **_: [{"id": 7, "name": "Acme", "role_name": "Admin"}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.create_space",
-            lambda **kwargs: calls.append(kwargs) or {"team_id": 11, "name": "Ops"},
+            "unity.coordinator_manager.workspace_manager.unify.create_team",
+            lambda *args, **kwargs: calls.append((args, kwargs))
+            or {"team_id": 11, "name": "Ops"},
         )
 
-        result = CoordinatorWorkspaceManager().create_space(
+        result = CoordinatorWorkspaceManager().create_team(
             name="Ops",
             description="Operations workspace.",
         )
 
         assert result == {"team_id": 11, "name": "Ops"}
         assert calls == [
-            {
-                "name": "Ops",
-                "description": "Operations workspace.",
-                "organization_id": 7,
-                "api_key": "owner-key",  # pragma: allowlist secret
-            },
+            (
+                (7,),
+                {
+                    "name": "Ops",
+                    "description": "Operations workspace.",
+                    "api_key": "owner-key",  # pragma: allowlist secret
+                },
+            ),
         ]
 
-    def test_space_member_writes_require_reachable_space_and_assistant(
+    def test_team_member_writes_require_reachable_space_and_assistant(
         self,
         monkeypatch,
     ):
         member_calls = []
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.list_spaces",
-            lambda **_: [{"team_id": 11}],
+            "unity.coordinator_manager.workspace_manager.unify.list_teams",
+            lambda *_, **__: [{"team_id": 11}],
         )
         monkeypatch.setattr(
             "unity.coordinator_manager.workspace_manager.unify.list_assistants",
             lambda **_: [{"agent_id": 42, "organization_id": 7}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.add_space_member",
+            "unity.coordinator_manager.workspace_manager.unify.add_team_member",
             lambda *args, **kwargs: member_calls.append((args, kwargs))
             or {"membership_status": "active"},
         )
 
-        result = CoordinatorWorkspaceManager().add_space_member(
+        result = CoordinatorWorkspaceManager().add_team_member(
             team_id=11,
             assistant_id=42,
         )
@@ -905,7 +908,7 @@ class TestCoordinatorWorkspaceManager:
         assert result == {"membership_status": "active"}
         assert member_calls == [
             (
-                (11,),
+                (7, 11),
                 {
                     "assistant_id": 42,
                     "member_user_id": None,
@@ -914,24 +917,24 @@ class TestCoordinatorWorkspaceManager:
             ),
         ]
 
-    def test_space_member_writes_support_member_targeting(self, monkeypatch):
+    def test_team_member_writes_support_member_targeting(self, monkeypatch):
         member_calls = []
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.list_spaces",
-            lambda **_: [{"team_id": 11}],
+            "unity.coordinator_manager.workspace_manager.unify.list_teams",
+            lambda *_, **__: [{"team_id": 11}],
         )
         monkeypatch.setattr(
             "unity.coordinator_manager.workspace_manager.unify.list_org_members",
             lambda *_, **__: [{"user_id": "member-1"}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.add_space_member",
+            "unity.coordinator_manager.workspace_manager.unify.add_team_member",
             lambda *args, **kwargs: member_calls.append((args, kwargs))
             or {"membership_status": "active", "assistant_id": 91},
         )
 
-        result = CoordinatorWorkspaceManager().add_space_member(
+        result = CoordinatorWorkspaceManager().add_team_member(
             team_id=11,
             member_user_id="member-1",
         )
@@ -939,7 +942,7 @@ class TestCoordinatorWorkspaceManager:
         assert result == {"membership_status": "active", "assistant_id": 91}
         assert member_calls == [
             (
-                (11,),
+                (7, 11),
                 {
                     "assistant_id": None,
                     "member_user_id": "member-1",
@@ -948,20 +951,20 @@ class TestCoordinatorWorkspaceManager:
             ),
         ]
 
-    def test_space_member_writes_require_exactly_one_target_shape(self):
+    def test_team_member_writes_require_exactly_one_target_shape(self):
         tools = CoordinatorWorkspaceManager()
 
-        missing_target = tools.add_space_member(team_id=11)
+        missing_target = tools.add_team_member(team_id=11)
         assert missing_target["error_kind"] == "invalid_argument"
 
-        duplicate_target = tools.add_space_member(
+        duplicate_target = tools.add_team_member(
             team_id=11,
             assistant_id=42,
             member_user_id="member-1",
         )
         assert duplicate_target["error_kind"] == "invalid_argument"
 
-        blank_member_target = tools.add_space_member(
+        blank_member_target = tools.add_team_member(
             team_id=11,
             member_user_id="   ",
         )
@@ -974,58 +977,62 @@ class TestCoordinatorWorkspaceManager:
         calls = []
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.list_spaces",
-            lambda **_: [{"team_id": 11, "name": "Ops"}],
+            "unity.coordinator_manager.workspace_manager.unify.list_teams",
+            lambda *_, **__: [{"team_id": 11, "name": "Ops"}],
         )
         monkeypatch.setattr(
             "unity.coordinator_manager.workspace_manager.unify.list_assistants",
             lambda **_: [{"agent_id": 42, "organization_id": 7}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.update_space",
+            "unity.coordinator_manager.workspace_manager.unify.update_team",
             lambda *args, **kwargs: calls.append(("update", args, kwargs))
             or {"team_id": 11, "name": "Ops Team"},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.remove_space_member",
+            "unity.coordinator_manager.workspace_manager.unify.remove_team_member",
             lambda *args, **kwargs: calls.append(("remove", args, kwargs)) or {},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.list_space_members",
+            "unity.coordinator_manager.workspace_manager.unify.list_team_members",
             lambda *args, **kwargs: calls.append(("members", args, kwargs))
             or [{"assistant_id": 42}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.list_spaces_for_assistant",
+            "unity.coordinator_manager.workspace_manager.unify.list_teams_for_assistant",
             lambda *args, **kwargs: calls.append(("assistant_spaces", args, kwargs))
             or [{"team_id": 11}],
         )
 
         tools = CoordinatorWorkspaceManager()
 
-        assert tools.update_space(
+        assert tools.update_team(
             team_id=11,
             patch={"name": "Ops Team"},
         ) == {"team_id": 11, "name": "Ops Team"}
-        assert tools.list_space_members(team_id=11) == [{"assistant_id": 42}]
-        assert tools.list_spaces_for_assistant(assistant_id=42) == [{"team_id": 11}]
-        assert tools.remove_space_member(team_id=11, assistant_id=42) == {}
+        assert tools.list_team_members(team_id=11) == [{"assistant_id": 42}]
+        assert tools.list_teams_for_assistant(assistant_id=42) == [{"team_id": 11}]
+        assert tools.remove_team_member(team_id=11, assistant_id=42) == {}
         assert calls == [
             (
                 "update",
-                (11, {"name": "Ops Team"}),
+                (7, 11, {"name": "Ops Team"}),
                 {"api_key": "owner-key"},  # pragma: allowlist secret
             ),  # pragma: allowlist secret
-            ("members", (11,), {"api_key": "owner-key"}),  # pragma: allowlist secret
+            ("members", (7, 11), {"api_key": "owner-key"}),  # pragma: allowlist secret
             (
                 "assistant_spaces",
                 (42,),
                 {"api_key": "owner-key"},  # pragma: allowlist secret
             ),  # pragma: allowlist secret
-            ("remove", (11, 42), {"api_key": "owner-key"}),  # pragma: allowlist secret
+            (
+                "remove",
+                (7, 11, 42),
+                {"api_key": "owner-key"},  # pragma: allowlist secret
+            ),
         ]
 
-    def test_list_spaces_for_assistant_checks_reachability_before_lookup(
+    def test_list_teams_for_assistant_checks_reachability_before_lookup(
         self,
         monkeypatch,
     ):
@@ -1039,12 +1046,12 @@ class TestCoordinatorWorkspaceManager:
             lambda self, agent_id: captured.update({"agent_id": agent_id}) or True,
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.list_spaces_for_assistant",
+            "unity.coordinator_manager.workspace_manager.unify.list_teams_for_assistant",
             lambda *args, **kwargs: list_calls.append((args, kwargs))
             or [{"team_id": 11}],
         )
 
-        result = tools.list_spaces_for_assistant(assistant_id=42)
+        result = tools.list_teams_for_assistant(assistant_id=42)
 
         assert result == [{"team_id": 11}]
         assert captured == {"agent_id": 42}
@@ -1059,15 +1066,19 @@ class TestCoordinatorWorkspaceManager:
         member_calls = []
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.list_spaces",
-            lambda **_: [{"team_id": 11}],
+            "unity.coordinator_manager.workspace_manager.unify.list_teams",
+            lambda *_, **__: [{"team_id": 11}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.add_space_member",
+            "unity.coordinator_manager.workspace_manager.unify.list_assistants",
+            lambda **_: [{"agent_id": 42, "organization_id": 7}],
+        )
+        monkeypatch.setattr(
+            "unity.coordinator_manager.workspace_manager.unify.add_team_member",
             lambda *args, **kwargs: member_calls.append((args, kwargs)),
         )
 
-        result = CoordinatorWorkspaceManager().add_space_member(
+        result = CoordinatorWorkspaceManager().add_team_member(
             team_id=99,
             assistant_id=42,
         )
@@ -1077,27 +1088,27 @@ class TestCoordinatorWorkspaceManager:
         assert member_calls == []
 
     def test_space_request_errors_return_tool_error(self, monkeypatch):
-        def failing_delete_space(*_, **__):
+        def failing_delete_team(*_, **__):
             response = requests.Response()
             response.status_code = 409
             response._content = b"conflict"
             raise RequestError("https://api.unify.ai", "DELETE", response)
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.list_spaces",
-            lambda **_: [{"team_id": 11}],
+            "unity.coordinator_manager.workspace_manager.unify.list_teams",
+            lambda *_, **__: [{"team_id": 11}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.delete_space",
-            failing_delete_space,
+            "unity.coordinator_manager.workspace_manager.unify.delete_team",
+            failing_delete_team,
         )
 
-        result = CoordinatorWorkspaceManager().delete_space(team_id=11)
+        result = CoordinatorWorkspaceManager().delete_team(team_id=11)
 
         assert result["error_kind"] == "conflict"
         assert result["details"]["status_code"] == 409
 
-    def test_commission_colleague_into_workspace_creates_missing_resources(
+    def test_commission_colleague_into_team_creates_missing_resources(
         self,
         monkeypatch,
     ):
@@ -1113,35 +1124,35 @@ class TestCoordinatorWorkspaceManager:
             or {"agent_id": 42, "first_name": "Ops", "surname": "Bot"},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.list_spaces",
-            lambda **kwargs: calls.append(("list_spaces", kwargs))
+            "unity.coordinator_manager.workspace_manager.unify.list_teams",
+            lambda *args, **kwargs: calls.append(("list_teams", args, kwargs))
             or (
                 [{"team_id": 11, "name": "Ops HQ"}]
-                if any(name == "create_space" for name, *_ in calls)
+                if any(name == "create_team" for name, *_ in calls)
                 else []
             ),
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.create_space",
-            lambda **kwargs: calls.append(("create_space", kwargs))
+            "unity.coordinator_manager.workspace_manager.unify.create_team",
+            lambda *args, **kwargs: calls.append(("create_team", args, kwargs))
             or {"team_id": 11, "name": "Ops HQ"},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.list_space_members",
-            lambda *args, **kwargs: calls.append(("list_space_members", args, kwargs))
+            "unity.coordinator_manager.workspace_manager.unify.list_team_members",
+            lambda *args, **kwargs: calls.append(("list_team_members", args, kwargs))
             or [],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.add_space_member",
-            lambda *args, **kwargs: calls.append(("add_space_member", args, kwargs))
+            "unity.coordinator_manager.workspace_manager.unify.add_team_member",
+            lambda *args, **kwargs: calls.append(("add_team_member", args, kwargs))
             or {"membership_status": "active"},
         )
 
-        result = CoordinatorWorkspaceManager().commission_colleague_into_workspace(
+        result = CoordinatorWorkspaceManager().commission_colleague_into_team(
             assistant_first_name="Ops",
             assistant_surname="Bot",
-            space_name="Ops HQ",
-            space_description="Operations workspace",
+            team_name="Ops HQ",
+            team_description="Operations workspace",
             assistant_about="Leads operations workflows.",
         )
 
@@ -1151,10 +1162,10 @@ class TestCoordinatorWorkspaceManager:
                 "assistant_id": 42,
                 "assistant": {"agent_id": 42, "first_name": "Ops", "surname": "Bot"},
             },
-            "space": {
+            "team": {
                 "status": "created",
                 "team_id": 11,
-                "space": {"team_id": 11, "name": "Ops HQ"},
+                "team": {"team_id": 11, "name": "Ops HQ"},
             },
             "membership": {
                 "status": "added",
@@ -1186,47 +1197,40 @@ class TestCoordinatorWorkspaceManager:
                 },
             ),
             (
-                "list_spaces",
-                {
-                    "organization_id": 7,
-                    "api_key": "owner-key",  # pragma: allowlist secret
-                },  # pragma: allowlist secret
+                "list_teams",
+                (7,),
+                {"api_key": "owner-key"},  # pragma: allowlist secret
             ),
             (
-                "create_space",
+                "create_team",
+                (7,),
                 {
                     "name": "Ops HQ",
                     "description": "Operations workspace",
-                    "organization_id": 7,
                     "api_key": "owner-key",  # pragma: allowlist secret
                 },
             ),
             (
-                "list_spaces",
-                {
-                    "organization_id": 7,
-                    "api_key": "owner-key",  # pragma: allowlist secret
-                },  # pragma: allowlist secret
+                "list_teams",
+                (7,),
+                {"api_key": "owner-key"},  # pragma: allowlist secret
             ),
             (
-                "list_space_members",
-                (11,),
-                {
-                    "api_key": "owner-key",  # pragma: allowlist secret
-                },
+                "list_team_members",
+                (7, 11),
+                {"api_key": "owner-key"},  # pragma: allowlist secret
             ),
             (
-                "add_space_member",
-                (),
+                "add_team_member",
+                (7, 11),
                 {
-                    "team_id": 11,
                     "assistant_id": 42,
                     "api_key": "owner-key",  # pragma: allowlist secret
-                },  # pragma: allowlist secret
+                },
             ),
         ]
 
-    def test_commission_colleague_into_workspace_requires_about_when_creating(
+    def test_commission_colleague_into_team_requires_about_when_creating(
         self,
         monkeypatch,
     ):
@@ -1240,11 +1244,11 @@ class TestCoordinatorWorkspaceManager:
             lambda **kwargs: create_calls.append(kwargs) or {"agent_id": 42},
         )
 
-        result = CoordinatorWorkspaceManager().commission_colleague_into_workspace(
+        result = CoordinatorWorkspaceManager().commission_colleague_into_team(
             assistant_first_name="Ops",
             assistant_surname="Bot",
-            space_name="Ops HQ",
-            space_description="Operations workspace",
+            team_name="Ops HQ",
+            team_description="Operations workspace",
         )
 
         assert result["error_kind"] == "invalid_argument"
@@ -1268,19 +1272,19 @@ class TestCoordinatorWorkspaceManager:
             or {"agent_id": 42, "first_name": "Ops", "surname": "Bot"},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.list_spaces",
-            lambda **_: [{"team_id": 11, "name": "Ops HQ"}],
+            "unity.coordinator_manager.workspace_manager.unify.list_teams",
+            lambda *_, **__: [{"team_id": 11, "name": "Ops HQ"}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.list_space_members",
+            "unity.coordinator_manager.workspace_manager.unify.list_team_members",
             lambda *_, **__: [{"assistant_id": 42}],
         )
 
-        CoordinatorWorkspaceManager().commission_colleague_into_workspace(
+        CoordinatorWorkspaceManager().commission_colleague_into_team(
             assistant_first_name="Ops",
             assistant_surname="Bot",
-            space_name="Ops HQ",
-            space_description="Operations workspace",
+            team_name="Ops HQ",
+            team_description="Operations workspace",
             assistant_about="Runs the operations command center.",
             assistant_job_title="Operations Lead",
             assistant_timezone="Europe/London",
@@ -1300,7 +1304,7 @@ class TestCoordinatorWorkspaceManager:
             "organization_id": 7,
         }
 
-    def test_commission_colleague_into_workspace_reuses_existing_membership(
+    def test_commission_colleague_into_team_reuses_existing_membership(
         self,
         monkeypatch,
     ):
@@ -1317,31 +1321,31 @@ class TestCoordinatorWorkspaceManager:
             ],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.list_spaces",
-            lambda **_: [{"team_id": 11, "name": "Ops HQ"}],
+            "unity.coordinator_manager.workspace_manager.unify.list_teams",
+            lambda *_, **__: [{"team_id": 11, "name": "Ops HQ"}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.list_space_members",
+            "unity.coordinator_manager.workspace_manager.unify.list_team_members",
             lambda *_, **__: [{"assistant_id": 42}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.add_space_member",
+            "unity.coordinator_manager.workspace_manager.unify.add_team_member",
             lambda *args, **kwargs: add_calls.append((args, kwargs)) or {},
         )
 
-        result = CoordinatorWorkspaceManager().commission_colleague_into_workspace(
+        result = CoordinatorWorkspaceManager().commission_colleague_into_team(
             assistant_first_name="Ops",
             assistant_surname="Bot",
-            space_name="Ops HQ",
-            space_description="Operations workspace",
+            team_name="Ops HQ",
+            team_description="Operations workspace",
         )
 
         assert result["assistant"]["status"] == "reused"
-        assert result["space"]["status"] == "reused"
+        assert result["team"]["status"] == "reused"
         assert result["membership"]["status"] == "already_member"
         assert add_calls == []
 
-    def test_commission_colleague_into_workspace_reuses_explicit_ids(
+    def test_commission_colleague_into_team_reuses_explicit_ids(
         self,
         monkeypatch,
     ):
@@ -1362,15 +1366,15 @@ class TestCoordinatorWorkspaceManager:
             ),
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.list_spaces",
-            lambda **_: [{"team_id": 11, "name": "Ops HQ"}],
+            "unity.coordinator_manager.workspace_manager.unify.list_teams",
+            lambda *_, **__: [{"team_id": 11, "name": "Ops HQ"}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.list_space_members",
+            "unity.coordinator_manager.workspace_manager.unify.list_team_members",
             lambda *_, **__: [],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.add_space_member",
+            "unity.coordinator_manager.workspace_manager.unify.add_team_member",
             lambda *args, **kwargs: {"membership_status": "active"},
         )
         monkeypatch.setattr(
@@ -1378,25 +1382,25 @@ class TestCoordinatorWorkspaceManager:
             lambda **kwargs: create_calls.append(("assistant", kwargs)),
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.create_space",
+            "unity.coordinator_manager.workspace_manager.unify.create_team",
             lambda **kwargs: create_calls.append(("space", kwargs)),
         )
 
-        result = CoordinatorWorkspaceManager().commission_colleague_into_workspace(
+        result = CoordinatorWorkspaceManager().commission_colleague_into_team(
             assistant_first_name="Ignored",
             assistant_surname="Name",
-            space_name="Ignored Space Name",
-            space_description="ignored",
+            team_name="Ignored Space Name",
+            team_description="ignored",
             assistant_id=42,
             team_id=11,
         )
 
         assert result["assistant"]["status"] == "reused"
-        assert result["space"]["status"] == "reused"
+        assert result["team"]["status"] == "reused"
         assert result["membership"]["status"] == "added"
         assert create_calls == []
 
-    def test_commission_colleague_into_workspace_conflicts_on_ambiguous_assistant_name(
+    def test_commission_colleague_into_team_conflicts_on_ambiguous_assistant_name(
         self,
         monkeypatch,
     ):
@@ -1418,17 +1422,17 @@ class TestCoordinatorWorkspaceManager:
             ],
         )
 
-        result = CoordinatorWorkspaceManager().commission_colleague_into_workspace(
+        result = CoordinatorWorkspaceManager().commission_colleague_into_team(
             assistant_first_name="Ops",
             assistant_surname="Bot",
-            space_name="Ops HQ",
-            space_description="Operations workspace",
+            team_name="Ops HQ",
+            team_description="Operations workspace",
         )
 
         assert result["error_kind"] == "conflict"
         assert result["details"]["matches"] == [42, 43]
 
-    def test_commission_colleague_into_workspace_applies_same_assistant_defaults(
+    def test_commission_colleague_into_team_applies_same_assistant_defaults(
         self,
         monkeypatch,
     ):
@@ -1445,24 +1449,24 @@ class TestCoordinatorWorkspaceManager:
             or {"agent_id": 42, "first_name": "Sarah Chen", "surname": "Recruiter"},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.list_spaces",
-            lambda **_: [{"team_id": 11, "name": "Hiring Desk"}],
+            "unity.coordinator_manager.workspace_manager.unify.list_teams",
+            lambda *_, **__: [{"team_id": 11, "name": "Hiring Desk"}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.workspace_manager.unify.list_space_members",
+            "unity.coordinator_manager.workspace_manager.unify.list_team_members",
             lambda *_, **__: [{"assistant_id": 42}],
         )
 
-        result = CoordinatorWorkspaceManager().commission_colleague_into_workspace(
+        result = CoordinatorWorkspaceManager().commission_colleague_into_team(
             assistant_first_name="Sarah Chen",
             assistant_surname="Recruiter",
-            space_name="Hiring Desk",
-            space_description="Hiring workspace for sourcing and interview loops.",
+            team_name="Hiring Desk",
+            team_description="Hiring workspace for sourcing and interview loops.",
             assistant_about="Leads recruiter scorecards and candidate routing.",
         )
 
         assert result["assistant"]["status"] == "created"
-        assert result["space"]["status"] == "reused"
+        assert result["team"]["status"] == "reused"
         assert result["membership"]["status"] == "already_member"
         assert create_calls[0]["config"] == {
             "timezone": "Asia/Karachi",

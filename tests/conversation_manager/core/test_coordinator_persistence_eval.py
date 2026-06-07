@@ -115,7 +115,7 @@ class _WorkspaceAwareRecordingTools(_AssistantAwareRecordingTools):
         self._spaces = spaces
         self._memberships = memberships
 
-    def list_spaces(
+    def list_teams(
         self,
         *,
         owner_user_id: str | None = None,
@@ -125,7 +125,7 @@ class _WorkspaceAwareRecordingTools(_AssistantAwareRecordingTools):
         del owner_user_id
         return list(self._spaces)
 
-    def list_space_members(self, *, team_id: int) -> list[dict[str, Any]]:
+    def list_team_members(self, *, team_id: int) -> list[dict[str, Any]]:
         """List assistant members for a reachable shared workspace."""
 
         return list(self._memberships.get(int(team_id), []))
@@ -390,7 +390,7 @@ async def test_coordinator_persists_confirmed_colleague_setup_rows():
                 "guidance."
             ),
             required_tools=frozenset({"act", "delegate_to_colleague"}),
-            forbidden_tools=frozenset({"create_space", "add_space_member"}),
+            forbidden_tools=frozenset({"create_team", "add_team_member"}),
         )
 
         selection = await _run_target_decision(
@@ -444,18 +444,18 @@ async def test_coordinator_persists_confirmed_shared_space_guidance():
             organization=organization,
         )
         coordinator = organization.coordinator
-        space_description = (
+        team_description = (
             "Shared launch coordination memory for revenue operations, "
             "support handoffs, launch SOPs, and escalation rules."
         )
-        space = unify.create_space(
+        space = unify.create_team(
             name=f"Launch War Room {suffix}",
-            description=space_description,
+            description=team_description,
             api_key=organization.api_key,
         )
         team_id = int(space["team_id"])
         for assistant in (revenue, support):
-            unify.add_space_member(
+            unify.add_team_member(
                 team_id,
                 int(assistant["agent_id"]),
                 api_key=organization.api_key,
@@ -465,7 +465,7 @@ async def test_coordinator_persists_confirmed_shared_space_guidance():
         space_summary = TeamSummary(
             team_id=team_id,
             name=space["name"],
-            description=space_description,
+            description=team_description,
         )
         scenario = CoordinatorScenario(
             scenario_id="live-shared-space-setup-persistence",
@@ -500,8 +500,8 @@ async def test_coordinator_persists_confirmed_shared_space_guidance():
             forbidden_tools=frozenset(
                 {
                     "delegate_to_colleague",
-                    "create_space",
-                    "add_space_member",
+                    "create_team",
+                    "add_team_member",
                 },
             ),
             team_summaries=(space_summary,),

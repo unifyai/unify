@@ -83,7 +83,7 @@ def test_create_task_with_response_policy():
 
 
 @_handle_project
-def test_create_space_task_routes_to_shared_root():
+def test_create_team_task_routes_to_shared_root():
     ts = TaskScheduler()
     SESSION_DETAILS.team_ids = [987654]
 

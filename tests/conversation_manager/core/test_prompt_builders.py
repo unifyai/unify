@@ -371,8 +371,8 @@ class TestCoordinatorVoicePrompt:
         assert "Tasks/Activations" not in prompt
         assert "Context taxonomy" not in prompt
         assert "`create_assistant`" not in prompt
-        assert "`delete_space`" not in prompt
-        assert "`remove_space_member`" not in prompt
+        assert "`delete_team`" not in prompt
+        assert "`remove_team_member`" not in prompt
 
     def test_coordinator_voice_prompt_includes_console_literacy(self):
         prompt = _build_voice(is_coordinator=True)
