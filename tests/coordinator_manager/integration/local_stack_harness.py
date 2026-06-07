@@ -591,6 +591,7 @@ def credit_organization(urls: LocalStackUrls, *, organization_id: int) -> None:
 
 def create_organization(urls: LocalStackUrls, *, name: str) -> dict:
     unify_key, _admin_key = resolve_local_stack_credentials()
+    owner_user_id = bootstrap_user_id(urls, unify_key=unify_key)
     response = requests.post(
         f"{urls.orchestra_url}/organizations",
         json={"name": name},
@@ -603,11 +604,18 @@ def create_organization(urls: LocalStackUrls, *, name: str) -> dict:
         )
     body = response.json()
     org_api_key = body["api_key"]
-    return {
+    org = {
         "id": body["id"],
         "api_key": org_api_key,
         "headers": auth_headers(org_api_key),
+        "owner_user_id": owner_user_id,
     }
+    owner_coordinator = find_org_coordinator_for_user(
+        list_org_assistants(urls, org),
+        user_id=owner_user_id,
+    )
+    org["owner_coordinator"] = owner_coordinator
+    return org
 
 
 def delete_team(urls: LocalStackUrls, org: dict, team_id: int) -> None:
