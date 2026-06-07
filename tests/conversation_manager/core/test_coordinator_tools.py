@@ -1000,7 +1000,7 @@ class TestCoordinatorWorkspaceManager:
         )
         monkeypatch.setattr(
             "unity.coordinator_manager.workspace_manager.unify.list_teams_for_assistant",
-            lambda *args, **kwargs: calls.append(("assistant_spaces", args, kwargs))
+            lambda *args, **kwargs: calls.append(("assistant_teams", args, kwargs))
             or [{"team_id": 11}],
         )
 
@@ -1021,7 +1021,7 @@ class TestCoordinatorWorkspaceManager:
             ),  # pragma: allowlist secret
             ("members", (7, 11), {"api_key": "owner-key"}),  # pragma: allowlist secret
             (
-                "assistant_spaces",
+                "assistant_teams",
                 (42,),
                 {"api_key": "owner-key"},  # pragma: allowlist secret
             ),  # pragma: allowlist secret
@@ -1383,7 +1383,7 @@ class TestCoordinatorWorkspaceManager:
         )
         monkeypatch.setattr(
             "unity.coordinator_manager.workspace_manager.unify.create_team",
-            lambda **kwargs: create_calls.append(("space", kwargs)),
+            lambda **kwargs: create_calls.append(("team", kwargs)),
         )
 
         result = CoordinatorWorkspaceManager().commission_colleague_into_team(

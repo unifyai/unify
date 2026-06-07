@@ -315,7 +315,7 @@ def test_duplicate_act_suppression_only_blocks_immediate_followups():
     cm = ConversationManager.__new__(ConversationManager)
     cm._llm_gen = 7
     tool_args = {
-        "query": "Repair workspace memberships for Region and Patch spaces",
+        "query": "Repair workspace memberships for Region and Patch teams",
         "requesting_contact_id": 1,
         "response_format": None,
         "persist": False,
@@ -349,7 +349,7 @@ def test_act_duplicate_fingerprint_normalizes_optional_defaults():
 
     cm = ConversationManager.__new__(ConversationManager)
     minimal_args = {
-        "query": "Repair workspace memberships for Region and Patch spaces",
+        "query": "Repair workspace memberships for Region and Patch teams",
         "requesting_contact_id": 1,
     }
     expanded_args = {

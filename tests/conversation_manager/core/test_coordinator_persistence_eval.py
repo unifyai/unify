@@ -108,11 +108,11 @@ class _WorkspaceAwareRecordingTools(_AssistantAwareRecordingTools):
         self,
         *,
         assistants: list[dict[str, Any]],
-        spaces: list[dict[str, Any]],
+        teams: list[dict[str, Any]],
         memberships: dict[int, list[dict[str, Any]]],
     ) -> None:
         super().__init__(assistants)
-        self._spaces = spaces
+        self._teams = teams
         self._memberships = memberships
 
     def list_teams(
@@ -123,7 +123,7 @@ class _WorkspaceAwareRecordingTools(_AssistantAwareRecordingTools):
         """List shared workspaces visible to the current Coordinator."""
 
         del owner_user_id
-        return list(self._spaces)
+        return list(self._teams)
 
     def list_team_members(self, *, team_id: int) -> list[dict[str, Any]]:
         """List assistant members for a reachable shared workspace."""
@@ -284,7 +284,7 @@ def _configure_session(
     *,
     organization: LiveOrganization,
     coordinator: dict[str, Any],
-    spaces: list[TeamSummary] | None = None,
+    teams: list[TeamSummary] | None = None,
 ) -> None:
     SESSION_DETAILS.unify_key = organization.api_key
     SESSION_DETAILS.org_id = organization.organization_id
@@ -297,8 +297,8 @@ def _configure_session(
     SESSION_DETAILS.user.id = coordinator["user_id"]
     SESSION_DETAILS.user.first_name = _BOSS_CONTACT["first_name"]
     SESSION_DETAILS.user.surname = _BOSS_CONTACT["surname"]
-    SESSION_DETAILS.team_ids = [space.team_id for space in spaces or []]
-    SESSION_DETAILS.team_summaries = spaces or []
+    SESSION_DETAILS.team_ids = [team.team_id for team in teams or []]
+    SESSION_DETAILS.team_summaries = teams or []
 
 
 def _activate_assistant_context(
@@ -380,7 +380,7 @@ async def test_coordinator_persists_confirmed_colleague_setup_rows():
             ),
             masked_components=(
                 "The target colleague id is explicitly supplied.",
-                "No shared team space has been requested.",
+                "No shared team has been requested.",
             ),
             rubric=(
                 "The response should use `act` and route implementation through "
@@ -430,8 +430,8 @@ async def test_coordinator_persists_confirmed_colleague_setup_rows():
 
 
 @pytest.mark.asyncio
-async def test_coordinator_persists_confirmed_shared_space_guidance():
-    """Natural Coordinator text can select shared setup and persist space rows."""
+async def test_coordinator_persists_confirmed_shared_team_guidance():
+    """Natural Coordinator text can select shared setup and persist team rows."""
 
     with _managed_test_organization() as organization:
         suffix = uuid.uuid4().hex[:8]
@@ -448,12 +448,12 @@ async def test_coordinator_persists_confirmed_shared_space_guidance():
             "Shared launch coordination memory for revenue operations, "
             "support handoffs, launch SOPs, and escalation rules."
         )
-        space = unify.create_team(
+        team = unify.create_team(
             name=f"Launch War Room {suffix}",
             description=team_description,
             api_key=organization.api_key,
         )
-        team_id = int(space["team_id"])
+        team_id = int(team["team_id"])
         for assistant in (revenue, support):
             unify.add_team_member(
                 team_id,
@@ -462,22 +462,22 @@ async def test_coordinator_persists_confirmed_shared_space_guidance():
             )
 
         sentinel = f"LAUNCH-HANDOFF-{uuid.uuid4().hex[:10]}"
-        space_summary = TeamSummary(
+        team_summary = TeamSummary(
             team_id=team_id,
-            name=space["name"],
+            name=team["name"],
             description=team_description,
         )
         scenario = CoordinatorScenario(
-            scenario_id="live-shared-space-setup-persistence",
-            title="Confirmed shared-space setup persists",
+            scenario_id="live-shared-team-setup-persistence",
+            title="Confirmed shared-team setup persists",
             business_context=(
                 "A product launch team wants two colleagues to share one launch "
-                "handoff SOP from an existing team space."
+                "handoff SOP from an existing shared team."
             ),
             turns=(
                 DialogueTurn(
                     "user",
-                    f"{space['name']} space {team_id} already has Revenue Ops "
+                    f"{team['name']} team {team_id} already has Revenue Ops "
                     f"assistant {revenue['agent_id']} and Support Ops assistant "
                     f"{support['agent_id']} as members. Put the {sentinel} launch "
                     "handoff SOP in that shared team so both colleagues use the "
@@ -491,7 +491,7 @@ async def test_coordinator_persists_confirmed_shared_space_guidance():
                 "The user explicitly wants one shared source across colleagues.",
             ),
             rubric=(
-                "The response should treat this as shared-space setup, not "
+                "The response should treat this as shared-team setup, not "
                 "colleague-owned setup. It should use `act` with instructions to "
                 "write the handoff SOP into the supplied shared team, and must "
                 "not call `delegate_to_colleague`."
@@ -504,7 +504,7 @@ async def test_coordinator_persists_confirmed_shared_space_guidance():
                     "add_team_member",
                 },
             ),
-            team_summaries=(space_summary,),
+            team_summaries=(team_summary,),
         )
         selection_tools = _WorkspaceAwareRecordingTools(
             assistants=[
@@ -519,7 +519,7 @@ async def test_coordinator_persists_confirmed_shared_space_guidance():
                     "surname": support.get("surname"),
                 },
             ],
-            spaces=[{"team_id": team_id, "name": space["name"]}],
+            teams=[{"team_id": team_id, "name": team["name"]}],
             memberships={
                 team_id: [
                     {
@@ -561,7 +561,7 @@ async def test_coordinator_persists_confirmed_shared_space_guidance():
         _configure_session(
             organization=organization,
             coordinator=coordinator,
-            spaces=[space_summary],
+            teams=[team_summary],
         )
         with _organization_api_key(organization.api_key):
             _activate_assistant_context(
@@ -575,9 +575,9 @@ async def test_coordinator_persists_confirmed_shared_space_guidance():
                     manager.add_guidance,
                     include_class_name=True,
                 ),
-                accessible_teams=[space_summary],
+                accessible_teams=[team_summary],
                 message=act_query,
-                loop_id="coordinator-shared-space-persistence",
+                loop_id="coordinator-shared-team-persistence",
             )
 
         assert_tool_destination(messages, "add_guidance", f"team:{team_id}")
