@@ -265,7 +265,7 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         priority=6,
         domain="Coordinator Workspace Administration",
         description=(
-            "Coordinator-only workspace lifecycle operations for assistants, spaces, "
+            "Coordinator-only workspace lifecycle operations for assistants, teams, "
             "membership, and setup checklist state"
         ),
         use_when=(

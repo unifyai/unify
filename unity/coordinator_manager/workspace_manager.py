@@ -739,7 +739,7 @@ class _CoordinatorWorkspaceSession:
         such as creating a task, adding guidance, recording knowledge, preparing a
         function, sending a message, or other durable follow-up. Current-assistant
         manager primitives operate through the current assistant's available manager
-        scope, including supported shared-space scope where applicable; they do not
+        scope, including supported shared team scope where applicable; they do not
         become target-assistant-private operations just because the instruction names
         another assistant. This dispatches the assignment to the colleague's runtime
         so the colleague can perform the work with its own primitives. A successful
@@ -857,7 +857,7 @@ class _CoordinatorWorkspaceSession:
         """Create a shared workspace in the coordinator organization.
 
         Use this when the user has agreed on a concrete workspace name/purpose
-        and wants the space created now. This tool creates the workspace object;
+        and wants the team created now. This tool creates the workspace object;
         membership is a separate step via ``add_team_member`` unless a single
         composite provisioning step is better.
 
@@ -1547,10 +1547,10 @@ class _CoordinatorWorkspaceSession:
         *,
         owner_user_id: str | None = None,
     ) -> list[dict[str, Any]] | ToolError:
-        """List shared spaces visible to the active coordinator.
+        """List shared teams visible to the active coordinator.
 
         Use this to resolve ``team_id`` values, verify workspace existence, and
-        avoid duplicate space creation before mutating workspace metadata or
+        avoid duplicate team creation before mutating workspace metadata or
         membership.
 
         Parameters
@@ -1621,7 +1621,7 @@ class _CoordinatorWorkspaceSession:
         *,
         assistant_id: int,
     ) -> list[dict[str, Any]] | ToolError:
-        """List shared spaces currently attached to a colleague assistant.
+        """List shared teams currently attached to a colleague assistant.
 
         Use this when auditing a colleague's workspace footprint before changing
         access, performing cleanup, or explaining current ownership boundaries.

@@ -178,7 +178,7 @@ class BaseFileManager(BaseStateManager):
             destination; only the metadata row's destination changes. Read the
             *Accessible shared teams* block in your system prompt before
             choosing. The privacy floor is personal: when confidence is low
-            and the file would land in a space, call ``request_clarification``
+            and the file would land in a team, call ``request_clarification``
             instead of guessing toward the wider audience.
         **options : Any
             Pipeline options (forwarded as-is).
@@ -1295,7 +1295,7 @@ class BaseFileManager(BaseStateManager):
             (the default) for personal screenshots, private working files, and
             drafts. Pass ``"team:<id>"`` for shared media artifacts the team
             needs. Read the *Accessible shared teams* block before choosing;
-            when confidence is low and the file would land in a space, call
+            when confidence is low and the file would land in a team, call
             ``request_clarification`` instead of guessing toward the wider
             audience.
 
@@ -1372,7 +1372,7 @@ class BaseFileManager(BaseStateManager):
             (the default) for personal screenshots, private working files, and
             drafts. Pass ``"team:<id>"`` for shared media artifacts the team
             needs. Read the *Accessible shared teams* block before choosing;
-            when confidence is low and the file would land in a space, call
+            when confidence is low and the file would land in a team, call
             ``request_clarification`` instead of guessing toward the wider
             audience.
 
@@ -1445,9 +1445,9 @@ class BaseFileManager(BaseStateManager):
             ``"personal"`` (the default) for personal screenshots, private
             working files, and drafts. Pass ``"team:<id>"`` for shared media
             artifacts the team needs. Deleting a shared file metadata row
-            changes what every member of that space can discover. Read the
+            changes what every member of that team can discover. Read the
             *Accessible shared teams* block before choosing; when confidence
-            is low and the file would land in a space, call
+            is low and the file would land in a team, call
             ``request_clarification`` instead of guessing toward the wider
             audience.
 
@@ -1583,7 +1583,7 @@ class BaseFileManager(BaseStateManager):
             working files, and drafts. Pass ``"team:<id>"`` for shared media
             artifacts the team needs. Read the *Accessible shared teams*
             block before choosing; when confidence is low and the file would
-            land in a space, call ``request_clarification`` instead of guessing
+            land in a team, call ``request_clarification`` instead of guessing
             toward the wider audience.
 
         Returns
@@ -1728,8 +1728,8 @@ BaseFileManager.clear.__doc__ = CLEAR_METHOD_DOCSTRING + """
         Which FileRecords and Files roots to clear. Pass ``"personal"`` (the
         default) for personal screenshots, private working files, and drafts.
         Pass ``"team:<id>"`` for shared media artifacts the team needs.
-        Clearing a space removes metadata visible to every member of that
-        space. Read the *Accessible shared teams* block before choosing; when
-        confidence is low and the file data would be cleared from a space, call
+        Clearing a team removes metadata visible to every member of that
+        team. Read the *Accessible shared teams* block before choosing; when
+        confidence is low and the file data would be cleared from a team, call
         ``request_clarification`` instead of guessing toward the wider audience.
     """
