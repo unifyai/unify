@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 CoordinatorActivityEntityType = Literal[
     "human",
     "colleague",
+    "team",
     "workspace",
     "credential",
     "task",
@@ -44,6 +45,7 @@ CoordinatorActivityStage = Literal[
 CoordinatorActivitySurface = Literal[
     "authorized_humans",
     "colleagues",
+    "teams",
     "workspaces",
     "membership",
     "invitation",

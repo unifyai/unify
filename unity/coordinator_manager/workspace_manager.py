@@ -124,7 +124,7 @@ class AssistantCreateConfig(AssistantConfigPatch, total=False):
     is_local: bool
 
 
-class SpacePatch(TypedDict, total=False):
+class TeamPatch(TypedDict, total=False):
     """Editable workspace metadata fields."""
 
     name: str
@@ -139,15 +139,15 @@ COORDINATOR_TOOL_METHOD_NAMES: tuple[str, ...] = (
     "list_org_members",
     "invite_org_member",
     "delegate_to_colleague",
-    "create_space",
-    "delete_space",
-    "update_space",
-    "add_space_member",
-    "remove_space_member",
-    "list_spaces",
-    "list_space_members",
-    "list_spaces_for_assistant",
-    "commission_colleague_into_workspace",
+    "create_team",
+    "delete_team",
+    "update_team",
+    "add_team_member",
+    "remove_team_member",
+    "list_teams",
+    "list_team_members",
+    "list_teams_for_assistant",
+    "commission_colleague_into_team",
     "add_setup_checklist_item",
     "update_setup_checklist_item",
 )
@@ -160,8 +160,8 @@ class _CoordinatorWorkspaceSession:
         self._assistant_cache: list[dict[str, Any]] | None = None
         self._known_assistant_ids: set[str] = set()
         self._organization_cache: list[dict[str, Any]] | None = None
-        self._space_cache: list[dict[str, Any]] | None = None
-        self._known_space_ids: set[str] = set()
+        self._team_cache: list[dict[str, Any]] | None = None
+        self._known_team_ids: set[str] = set()
         self._activity_metadata: dict[
             str,
             tuple[
@@ -847,7 +847,7 @@ class _CoordinatorWorkspaceSession:
         )
         return result
 
-    def create_space(
+    def create_team(
         self,
         *,
         name: str,
@@ -858,7 +858,7 @@ class _CoordinatorWorkspaceSession:
 
         Use this when the user has agreed on a concrete workspace name/purpose
         and wants the space created now. This tool creates the workspace object;
-        membership is a separate step via ``add_space_member`` unless a single
+        membership is a separate step via ``add_team_member`` unless a single
         composite provisioning step is better.
 
         Parameters
@@ -872,58 +872,58 @@ class _CoordinatorWorkspaceSession:
         """
         del owner_user_id
         resolved_organization_id = self._resolve_target_organization_id(
-            require_organization=False,
-            operation_name="create_space",
+            require_organization=True,
+            operation_name="create_team",
         )
         if _is_tool_error(resolved_organization_id):
             return resolved_organization_id
         permission_error = self._require_workspace_admin_role(
             organization_id=resolved_organization_id,
-            operation_name="create_space",
+            operation_name="create_team",
         )
         if permission_error is not None:
             return permission_error
-        workspace_name = safe_activity_text(name, fallback="Workspace")
+        team_name_label = safe_activity_text(name, fallback="Team")
         activity_id = self._publish_activity(
             phase="started",
             stage="implementation",
-            title=f"Creating {workspace_name} workspace",
-            surfaces=["workspaces"],
+            title=f"Creating {team_name_label} team",
+            surfaces=["teams"],
             related_entities=[
-                activity_entity("workspace", name=workspace_name),
+                activity_entity("team", name=team_name_label),
             ],
         )
         try:
-            result = unify.create_space(
+            result = unify.create_team(
+                resolved_organization_id,
                 name=name,
                 description=description,
-                organization_id=resolved_organization_id,
                 api_key=SESSION_DETAILS.unify_key,
             )
         except RequestError as exc:
             error = _request_error_to_tool_error(exc)
             self._publish_failure(
                 activity_id,
-                title=f"Could not create {workspace_name} workspace",
+                title=f"Could not create {team_name_label} team",
                 error=error,
             )
             return error
-        self._remember_space(result)
-        self._clear_space_cache()
+        self._remember_team(result)
+        self._clear_team_cache()
         self._publish_activity(
             phase="completed",
             stage="implementation",
-            title=f"Created {safe_activity_text(_space_display_name(result), fallback=workspace_name)} workspace",
-            surfaces=["workspaces"],
-            related_entities=[_space_entity(result, fallback=workspace_name)],
+            title=f"Created {safe_activity_text(_team_display_name(result), fallback=team_name_label)} team",
+            surfaces=["teams"],
+            related_entities=[_team_entity(result, fallback=team_name_label)],
             activity_id=activity_id,
         )
         return result
 
-    def delete_space(
+    def delete_team(
         self,
         *,
-        space_id: int,
+        team_id: int,
     ) -> dict[str, Any] | ToolError:
         """Delete a reachable shared workspace after explicit confirmation.
 
@@ -933,91 +933,92 @@ class _CoordinatorWorkspaceSession:
 
         Parameters
         ----------
-        space_id : int
+        team_id : int
             Workspace identifier to delete.
         """
 
         activity_id = self._publish_activity(
             phase="started",
             stage="implementation",
-            title="Removing workspace",
-            surfaces=["workspaces"],
+            title="Removing team",
+            surfaces=["teams"],
             related_entities=[
-                activity_entity("workspace", name="Workspace", entity_id=space_id),
+                activity_entity("team", name="Team", entity_id=team_id),
             ],
         )
         resolved_organization_id = self._resolve_target_organization_id(
-            require_organization=False,
-            operation_name="delete_space",
+            require_organization=True,
+            operation_name="delete_team",
         )
         if _is_tool_error(resolved_organization_id):
             self._publish_failure(
                 activity_id,
-                title="Could not remove workspace",
+                title="Could not remove team",
                 error=resolved_organization_id,
             )
             return resolved_organization_id
         permission_error = self._require_workspace_admin_role(
             organization_id=resolved_organization_id,
-            operation_name="delete_space",
+            operation_name="delete_team",
         )
         if permission_error is not None:
             self._publish_failure(
                 activity_id,
-                title="Could not remove workspace",
+                title="Could not remove team",
                 error=permission_error,
             )
             return permission_error
-        reachable = self._space_is_reachable(
-            space_id,
+        reachable = self._team_is_reachable(
+            team_id,
         )
         if isinstance(reachable, dict):
             self._publish_failure(
                 activity_id,
-                title="Could not remove workspace",
+                title="Could not remove team",
                 error=reachable,
             )
             return reachable
         if not reachable:
-            error = _space_not_found(space_id)
+            error = _team_not_found(team_id)
             self._publish_failure(
                 activity_id,
-                title="Could not remove workspace",
+                title="Could not remove team",
                 error=error,
             )
             return error
         try:
-            result = unify.delete_space(
-                space_id,
+            result = unify.delete_team(
+                resolved_organization_id,
+                team_id,
                 api_key=SESSION_DETAILS.unify_key,
             )
         except RequestError as exc:
             error = _request_error_to_tool_error(exc)
             self._publish_failure(
                 activity_id,
-                title="Could not remove workspace",
+                title="Could not remove team",
                 error=error,
             )
             return error
-        self._known_space_ids.discard(str(space_id))
-        self._clear_space_cache()
+        self._known_team_ids.discard(str(team_id))
+        self._clear_team_cache()
         self._publish_activity(
             phase="completed",
             stage="implementation",
-            title="Removed workspace",
-            surfaces=["workspaces"],
+            title="Removed team",
+            surfaces=["teams"],
             related_entities=[
-                activity_entity("workspace", name="Workspace", entity_id=space_id),
+                activity_entity("team", name="Team", entity_id=team_id),
             ],
             activity_id=activity_id,
         )
         return result
 
-    def update_space(
+    def update_team(
         self,
         *,
-        space_id: int,
-        patch: SpacePatch,
+        team_id: int,
+        patch: TeamPatch,
     ) -> dict[str, Any] | ToolError:
         """Apply metadata updates to a reachable shared workspace.
 
@@ -1027,9 +1028,9 @@ class _CoordinatorWorkspaceSession:
 
         Parameters
         ----------
-        space_id : int
+        team_id : int
             Workspace identifier to update.
-        patch : SpacePatch
+        patch : TeamPatch
             Partial update payload for editable workspace fields.
             Accepted keys are ``name`` and ``description``.
         """
@@ -1037,55 +1038,56 @@ class _CoordinatorWorkspaceSession:
         activity_id = self._publish_activity(
             phase="started",
             stage="implementation",
-            title="Updating workspace",
-            surfaces=["workspaces"],
+            title="Updating team",
+            surfaces=["teams"],
             related_entities=[
-                activity_entity("workspace", name="Workspace", entity_id=space_id),
+                activity_entity("team", name="Team", entity_id=team_id),
             ],
         )
         resolved_organization_id = self._resolve_target_organization_id(
-            require_organization=False,
-            operation_name="update_space",
+            require_organization=True,
+            operation_name="update_team",
         )
         if _is_tool_error(resolved_organization_id):
             self._publish_failure(
                 activity_id,
-                title="Could not update workspace",
+                title="Could not update team",
                 error=resolved_organization_id,
             )
             return resolved_organization_id
         permission_error = self._require_workspace_admin_role(
             organization_id=resolved_organization_id,
-            operation_name="update_space",
+            operation_name="update_team",
         )
         if permission_error is not None:
             self._publish_failure(
                 activity_id,
-                title="Could not update workspace",
+                title="Could not update team",
                 error=permission_error,
             )
             return permission_error
-        reachable = self._space_is_reachable(
-            space_id,
+        reachable = self._team_is_reachable(
+            team_id,
         )
         if isinstance(reachable, dict):
             self._publish_failure(
                 activity_id,
-                title="Could not update workspace",
+                title="Could not update team",
                 error=reachable,
             )
             return reachable
         if not reachable:
-            error = _space_not_found(space_id)
+            error = _team_not_found(team_id)
             self._publish_failure(
                 activity_id,
-                title="Could not update workspace",
+                title="Could not update team",
                 error=error,
             )
             return error
         try:
-            result = unify.update_space(
-                space_id,
+            result = unify.update_team(
+                resolved_organization_id,
+                team_id,
                 patch,
                 api_key=SESSION_DETAILS.unify_key,
             )
@@ -1093,26 +1095,26 @@ class _CoordinatorWorkspaceSession:
             error = _request_error_to_tool_error(exc)
             self._publish_failure(
                 activity_id,
-                title="Could not update workspace",
+                title="Could not update team",
                 error=error,
             )
             return error
-        self._remember_space(result)
-        self._clear_space_cache()
+        self._remember_team(result)
+        self._clear_team_cache()
         self._publish_activity(
             phase="completed",
             stage="implementation",
-            title="Updated workspace",
-            surfaces=["workspaces"],
-            related_entities=[_space_entity(result, fallback="Workspace")],
+            title="Updated team",
+            surfaces=["teams"],
+            related_entities=[_team_entity(result, fallback="Workspace")],
             activity_id=activity_id,
         )
         return result
 
-    def add_space_member(
+    def add_team_member(
         self,
         *,
-        space_id: int,
+        team_id: int,
         assistant_id: int | None = None,
         member_user_id: str | None = None,
     ) -> dict[str, Any] | ToolError:
@@ -1125,7 +1127,7 @@ class _CoordinatorWorkspaceSession:
 
         Parameters
         ----------
-        space_id : int
+        team_id : int
             Workspace receiving the membership grant.
         assistant_id : int | None, optional
             Assistant id to add as a member.
@@ -1149,51 +1151,51 @@ class _CoordinatorWorkspaceSession:
         activity_id = self._publish_activity(
             phase="started",
             stage="implementation",
-            title="Adding colleague to workspace",
+            title="Adding colleague to team",
             surfaces=["membership"],
             related_entities=_membership_entities(
-                space_id,
+                team_id,
                 assistant_id=resolved_target_assistant_id,
                 member_user_id=normalized_member_user_id,
             ),
         )
         resolved_organization_id = self._resolve_target_organization_id(
-            require_organization=False,
-            operation_name="add_space_member",
+            require_organization=True,
+            operation_name="add_team_member",
         )
         if _is_tool_error(resolved_organization_id):
             self._publish_failure(
                 activity_id,
-                title="Could not add colleague to workspace",
+                title="Could not add colleague to team",
                 error=resolved_organization_id,
             )
             return resolved_organization_id
         permission_error = self._require_workspace_admin_role(
             organization_id=resolved_organization_id,
-            operation_name="add_space_member",
+            operation_name="add_team_member",
         )
         if permission_error is not None:
             self._publish_failure(
                 activity_id,
-                title="Could not add colleague to workspace",
+                title="Could not add colleague to team",
                 error=permission_error,
             )
             return permission_error
-        reachable_space = self._space_is_reachable(
-            space_id,
+        reachable_team = self._team_is_reachable(
+            team_id,
         )
-        if isinstance(reachable_space, dict):
+        if isinstance(reachable_team, dict):
             self._publish_failure(
                 activity_id,
-                title="Could not add colleague to workspace",
-                error=reachable_space,
+                title="Could not add colleague to team",
+                error=reachable_team,
             )
-            return reachable_space
-        if not reachable_space:
-            error = _space_not_found(space_id)
+            return reachable_team
+        if not reachable_team:
+            error = _team_not_found(team_id)
             self._publish_failure(
                 activity_id,
-                title="Could not add colleague to workspace",
+                title="Could not add colleague to team",
                 error=error,
             )
             return error
@@ -1204,7 +1206,7 @@ class _CoordinatorWorkspaceSession:
             if isinstance(reachable_assistant, dict):
                 self._publish_failure(
                     activity_id,
-                    title="Could not add colleague to workspace",
+                    title="Could not add colleague to team",
                     error=reachable_assistant,
                 )
                 return reachable_assistant
@@ -1212,7 +1214,7 @@ class _CoordinatorWorkspaceSession:
                 error = _assistant_not_found(assistant_id)
                 self._publish_failure(
                     activity_id,
-                    title="Could not add colleague to workspace",
+                    title="Could not add colleague to team",
                     error=error,
                 )
                 return error
@@ -1224,7 +1226,7 @@ class _CoordinatorWorkspaceSession:
             if isinstance(member_reachable, dict):
                 self._publish_failure(
                     activity_id,
-                    title="Could not add colleague to workspace",
+                    title="Could not add colleague to team",
                     error=member_reachable,
                 )
                 return member_reachable
@@ -1232,14 +1234,15 @@ class _CoordinatorWorkspaceSession:
                 error = _org_member_not_found(member_user_id_for_lookup)
                 self._publish_failure(
                     activity_id,
-                    title="Could not add colleague to workspace",
+                    title="Could not add colleague to team",
                     error=error,
                 )
                 return error
 
         try:
-            result = unify.add_space_member(
-                space_id,
+            result = unify.add_team_member(
+                resolved_organization_id,
+                team_id,
                 assistant_id=assistant_id,
                 member_user_id=normalized_member_user_id,
                 api_key=SESSION_DETAILS.unify_key,
@@ -1248,7 +1251,7 @@ class _CoordinatorWorkspaceSession:
             error = _request_error_to_tool_error(exc)
             self._publish_failure(
                 activity_id,
-                title="Could not add colleague to workspace",
+                title="Could not add colleague to team",
                 error=error,
             )
             return error
@@ -1258,10 +1261,10 @@ class _CoordinatorWorkspaceSession:
         self._publish_activity(
             phase="completed",
             stage="implementation",
-            title="Added colleague to workspace",
+            title="Added colleague to team",
             surfaces=["membership"],
             related_entities=_membership_entities(
-                space_id,
+                team_id,
                 assistant_id=resolved_target_assistant_id,
                 member_user_id=normalized_member_user_id,
             ),
@@ -1269,20 +1272,20 @@ class _CoordinatorWorkspaceSession:
         )
         return result
 
-    def commission_colleague_into_workspace(
+    def commission_colleague_into_team(
         self,
         *,
         assistant_first_name: str,
         assistant_surname: str | None = None,
-        space_name: str,
-        space_description: str,
+        team_name: str,
+        team_description: str,
         assistant_about: str | None = None,
         assistant_job_title: str | None = None,
         assistant_timezone: str | None = None,
         assistant_nationality: str | None = None,
         assistant_config: AssistantCreateConfig | None = None,
         assistant_id: int | None = None,
-        space_id: int | None = None,
+        team_id: int | None = None,
     ) -> dict[str, Any] | ToolError:
         """Commission a colleague into a workspace with idempotent step reporting.
 
@@ -1297,9 +1300,9 @@ class _CoordinatorWorkspaceSession:
             Colleague first name for lookup or creation.
         assistant_surname : str | None, optional
             Colleague surname for lookup or creation.
-        space_name : str
+        team_name : str
             Workspace name for lookup or creation.
-        space_description : str
+        team_description : str
             Workspace description when creation is required.
         assistant_about : str | None, optional
             Required profile summary when a new assistant must be created.
@@ -1314,47 +1317,47 @@ class _CoordinatorWorkspaceSession:
             creation is needed.
         assistant_id : int | None, optional
             Optional explicit assistant id to reuse instead of name lookup.
-        space_id : int | None, optional
+        team_id : int | None, optional
             Optional explicit workspace id to reuse instead of name lookup.
         """
         colleague_name = _display_name(
             first_name=assistant_first_name,
             surname=assistant_surname,
         )
-        workspace_name = safe_activity_text(space_name, fallback="Workspace")
+        team_name_label = safe_activity_text(team_name, fallback="Workspace")
         activity_id = self._publish_activity(
             phase="started",
             stage="implementation",
-            title=f"Commissioning {colleague_name} into {workspace_name}",
-            surfaces=["colleagues", "workspaces", "membership"],
+            title=f"Commissioning {colleague_name} into {team_name_label}",
+            surfaces=["colleagues", "teams", "membership"],
             related_entities=[
                 activity_entity(
                     "colleague",
                     name=colleague_name,
                     entity_id=assistant_id,
                 ),
-                activity_entity("workspace", name=workspace_name, entity_id=space_id),
+                activity_entity("team", name=team_name_label, entity_id=team_id),
             ],
         )
         resolved_organization_id = self._resolve_target_organization_id(
-            require_organization=False,
-            operation_name="commission_colleague_into_workspace",
+            require_organization=True,
+            operation_name="commission_colleague_into_team",
         )
         if _is_tool_error(resolved_organization_id):
             self._publish_failure(
                 activity_id,
-                title=f"Could not commission {colleague_name} into {workspace_name}",
+                title=f"Could not commission {colleague_name} into {team_name_label}",
                 error=resolved_organization_id,
             )
             return resolved_organization_id
         permission_error = self._require_workspace_admin_role(
             organization_id=resolved_organization_id,
-            operation_name="commission_colleague_into_workspace",
+            operation_name="commission_colleague_into_team",
         )
         if permission_error is not None:
             self._publish_failure(
                 activity_id,
-                title=f"Could not commission {colleague_name} into {workspace_name}",
+                title=f"Could not commission {colleague_name} into {team_name_label}",
                 error=permission_error,
             )
             return permission_error
@@ -1372,37 +1375,43 @@ class _CoordinatorWorkspaceSession:
         if _is_tool_error(assistant_step):
             self._publish_failure(
                 activity_id,
-                title=f"Could not commission {colleague_name} into {workspace_name}",
+                title=f"Could not commission {colleague_name} into {team_name_label}",
                 error=assistant_step,
             )
             return assistant_step
 
         assistant_row = assistant_step["assistant"]
         resolved_assistant_id = int(assistant_row["agent_id"])
-        space_step = self._resolve_or_create_commission_space(
-            space_name=space_name,
-            space_description=space_description,
-            space_id=space_id,
+        team_step = self._resolve_or_create_commission_team(
+            team_name=team_name,
+            team_description=team_description,
+            team_id=team_id,
             organization_id=resolved_organization_id,
         )
-        if _is_tool_error(space_step):
+        if _is_tool_error(team_step):
             self._publish_failure(
                 activity_id,
-                title=f"Could not commission {colleague_name} into {workspace_name}",
-                error=space_step,
+                title=f"Could not commission {colleague_name} into {team_name_label}",
+                error=team_step,
             )
-            return space_step
+            return team_step
 
-        space_row = space_step["space"]
-        resolved_space_id = int(space_row["space_id"])
+        team_row = team_step["team"]
+        resolved_team_id = _team_id_from_record(team_row) or 0
+        if resolved_team_id == 0:
+            return _invalid_argument(
+                message="Team record is missing a team id.",
+                details={"team": team_row},
+            )
         membership_step = self._ensure_commission_membership(
-            space_id=resolved_space_id,
+            team_id=resolved_team_id,
             assistant_id=resolved_assistant_id,
+            organization_id=resolved_organization_id,
         )
         if _is_tool_error(membership_step):
             self._publish_failure(
                 activity_id,
-                title=f"Could not commission {colleague_name} into {workspace_name}",
+                title=f"Could not commission {colleague_name} into {team_name_label}",
                 error=membership_step,
             )
             return membership_step
@@ -1413,27 +1422,27 @@ class _CoordinatorWorkspaceSession:
                 "assistant_id": resolved_assistant_id,
                 "assistant": assistant_row,
             },
-            "space": {
-                "status": space_step["status"],
-                "space_id": resolved_space_id,
-                "space": space_row,
+            "team": {
+                "status": team_step["status"],
+                "team_id": resolved_team_id,
+                "team": team_row,
             },
             "membership": {
                 "status": membership_step["status"],
-                "space_id": resolved_space_id,
+                "team_id": resolved_team_id,
                 "assistant_id": resolved_assistant_id,
             },
         }
         self._publish_activity(
             phase="completed",
             stage="implementation",
-            title=f"Commissioned {safe_activity_text(_assistant_display_name(assistant_row), fallback=colleague_name)} into {safe_activity_text(_space_display_name(space_row), fallback=workspace_name)}",
-            surfaces=["colleagues", "workspaces", "membership"],
+            title=f"Commissioned {safe_activity_text(_assistant_display_name(assistant_row), fallback=colleague_name)} into {safe_activity_text(_team_display_name(team_row), fallback=team_name_label)}",
+            surfaces=["colleagues", "teams", "membership"],
             related_entities=[
                 _assistant_entity(assistant_row, fallback=colleague_name),
-                _space_entity(space_row, fallback=workspace_name),
+                _team_entity(team_row, fallback=team_name_label),
                 *_membership_entities(
-                    resolved_space_id,
+                    resolved_team_id,
                     assistant_id=resolved_assistant_id,
                 ),
             ],
@@ -1441,10 +1450,10 @@ class _CoordinatorWorkspaceSession:
         )
         return result
 
-    def remove_space_member(
+    def remove_team_member(
         self,
         *,
-        space_id: int,
+        team_id: int,
         assistant_id: int,
     ) -> dict[str, Any] | ToolError:
         """Remove a colleague assistant from a shared workspace.
@@ -1455,7 +1464,7 @@ class _CoordinatorWorkspaceSession:
 
         Parameters
         ----------
-        space_id : int
+        team_id : int
             Workspace from which membership should be removed.
         assistant_id : int
             Assistant identifier to remove from membership.
@@ -1464,50 +1473,51 @@ class _CoordinatorWorkspaceSession:
         activity_id = self._publish_activity(
             phase="started",
             stage="implementation",
-            title="Removing colleague from workspace",
+            title="Removing colleague from team",
             surfaces=["membership"],
             related_entities=_membership_entities(
-                space_id,
+                team_id,
                 assistant_id=assistant_id,
             ),
         )
         resolved_organization_id = self._resolve_target_organization_id(
-            require_organization=False,
-            operation_name="remove_space_member",
+            require_organization=True,
+            operation_name="remove_team_member",
         )
         if _is_tool_error(resolved_organization_id):
             self._publish_failure(
                 activity_id,
-                title="Could not remove colleague from workspace",
+                title="Could not remove colleague from team",
                 error=resolved_organization_id,
             )
             return resolved_organization_id
         permission_error = self._require_workspace_admin_role(
             organization_id=resolved_organization_id,
-            operation_name="remove_space_member",
+            operation_name="remove_team_member",
         )
         if permission_error is not None:
             self._publish_failure(
                 activity_id,
-                title="Could not remove colleague from workspace",
+                title="Could not remove colleague from team",
                 error=permission_error,
             )
             return permission_error
-        invalid = self._validate_space_and_assistant(
-            space_id,
+        invalid = self._validate_team_and_assistant(
+            team_id,
             assistant_id,
         )
         if invalid is not None:
             self._publish_failure(
                 activity_id,
-                title="Could not remove colleague from workspace",
+                title="Could not remove colleague from team",
                 error=invalid,
             )
             return invalid
 
         try:
-            result = unify.remove_space_member(
-                space_id,
+            result = unify.remove_team_member(
+                resolved_organization_id,
+                team_id,
                 assistant_id,
                 api_key=SESSION_DETAILS.unify_key,
             )
@@ -1515,31 +1525,31 @@ class _CoordinatorWorkspaceSession:
             error = _request_error_to_tool_error(exc)
             self._publish_failure(
                 activity_id,
-                title="Could not remove colleague from workspace",
+                title="Could not remove colleague from team",
                 error=error,
             )
             return error
         self._publish_activity(
             phase="completed",
             stage="implementation",
-            title="Removed colleague from workspace",
+            title="Removed colleague from team",
             surfaces=["membership"],
             related_entities=_membership_entities(
-                space_id,
+                team_id,
                 assistant_id=assistant_id,
             ),
             activity_id=activity_id,
         )
         return result
 
-    def list_spaces(
+    def list_teams(
         self,
         *,
         owner_user_id: str | None = None,
     ) -> list[dict[str, Any]] | ToolError:
         """List shared spaces visible to the active coordinator.
 
-        Use this to resolve ``space_id`` values, verify workspace existence, and
+        Use this to resolve ``team_id`` values, verify workspace existence, and
         avoid duplicate space creation before mutating workspace metadata or
         membership.
 
@@ -1550,55 +1560,63 @@ class _CoordinatorWorkspaceSession:
         """
         del owner_user_id
         resolved_organization_id = self._resolve_target_organization_id(
-            require_organization=False,
-            operation_name="list_spaces",
+            require_organization=True,
+            operation_name="list_teams",
         )
         if _is_tool_error(resolved_organization_id):
             return resolved_organization_id
         try:
-            spaces = unify.list_spaces(
-                organization_id=resolved_organization_id,
+            teams = unify.list_teams(
+                resolved_organization_id,
                 api_key=SESSION_DETAILS.unify_key,
             )
         except RequestError as exc:
             return _request_error_to_tool_error(exc)
-        self._space_cache = spaces
-        self._remember_spaces(spaces)
-        return spaces
+        self._team_cache = teams
+        self._remember_teams(teams)
+        return teams
 
-    def list_space_members(
+    def list_team_members(
         self,
         *,
-        space_id: int,
+        team_id: int,
     ) -> list[dict[str, Any]] | ToolError:
-        """List members currently attached to a reachable workspace.
+        """List members currently attached to a reachable team.
 
         Use this before add/remove membership mutations to verify current
         membership, prevent duplicate operations, and confirm who already has
-        workspace access.
+        team access.
 
         Parameters
         ----------
-        space_id : int
-            Workspace identifier whose membership should be listed.
+        team_id : int
+            Team identifier whose membership should be listed.
         """
 
-        reachable = self._space_is_reachable(
-            space_id,
+        resolved_organization_id = self._resolve_target_organization_id(
+            require_organization=True,
+            operation_name="list_team_members",
+        )
+        if _is_tool_error(resolved_organization_id):
+            return resolved_organization_id
+
+        reachable = self._team_is_reachable(
+            team_id,
         )
         if isinstance(reachable, dict):
             return reachable
         if not reachable:
-            return _space_not_found(space_id)
+            return _team_not_found(team_id)
         try:
-            return unify.list_space_members(
-                space_id,
+            return unify.list_team_members(
+                resolved_organization_id,
+                team_id,
                 api_key=SESSION_DETAILS.unify_key,
             )
         except RequestError as exc:
             return _request_error_to_tool_error(exc)
 
-    def list_spaces_for_assistant(
+    def list_teams_for_assistant(
         self,
         *,
         assistant_id: int,
@@ -1614,8 +1632,8 @@ class _CoordinatorWorkspaceSession:
             Assistant identifier whose workspace memberships should be listed.
         """
         resolved_organization_id = self._resolve_target_organization_id(
-            require_organization=False,
-            operation_name="list_spaces_for_assistant",
+            require_organization=True,
+            operation_name="list_teams_for_assistant",
         )
         if _is_tool_error(resolved_organization_id):
             return resolved_organization_id
@@ -1627,7 +1645,7 @@ class _CoordinatorWorkspaceSession:
         if not reachable:
             return _assistant_not_found(assistant_id)
         try:
-            return unify.list_spaces_for_assistant(
+            return unify.list_teams_for_assistant(
                 assistant_id,
                 api_key=SESSION_DETAILS.unify_key,
             )
@@ -1835,79 +1853,80 @@ class _CoordinatorWorkspaceSession:
         self._remember_assistant(created)
         return {"status": "created", "assistant": created}
 
-    def _resolve_or_create_commission_space(
+    def _resolve_or_create_commission_team(
         self,
         *,
-        space_name: str,
-        space_description: str,
-        space_id: int | None,
+        team_name: str,
+        team_description: str,
+        team_id: int | None,
         organization_id: int | None,
     ) -> dict[str, Any] | ToolError:
-        if space_id is not None:
-            listed = self.list_spaces()
+        if team_id is not None:
+            listed = self.list_teams()
             if _is_tool_error(listed):
                 return listed
             matches = [
-                space for space in listed if str(space.get("space_id")) == str(space_id)
+                team
+                for team in listed
+                if str(_team_id_from_record(team)) == str(team_id)
             ]
             if not matches:
-                return _space_not_found(space_id)
+                return _team_not_found(team_id)
             if len(matches) > 1:
                 return _tool_conflict(
                     message=(
-                        "Multiple spaces matched the provided space_id while "
+                        "Multiple teams matched the provided team_id while "
                         "commissioning."
                     ),
-                    details={"space_id": space_id, "matches": len(matches)},
+                    details={"team_id": team_id, "matches": len(matches)},
                 )
-            space = matches[0]
-            self._remember_space(space)
-            return {"status": "reused", "space": space}
+            team = matches[0]
+            self._remember_team(team)
+            return {"status": "reused", "team": team}
 
-        listed = self.list_spaces()
+        listed = self.list_teams()
         if _is_tool_error(listed):
             return listed
         matches = [
-            space
-            for space in listed
-            if _space_name_matches(space, space_name=space_name)
+            team for team in listed if _team_name_matches(team, team_name=team_name)
         ]
         if len(matches) > 1:
             return _tool_conflict(
                 message=(
-                    "Multiple existing spaces matched the requested name. "
-                    "Pass space_id to disambiguate."
+                    "Multiple existing teams matched the requested name. "
+                    "Pass team_id to disambiguate."
                 ),
                 details={
-                    "space_name": space_name,
-                    "matches": [row.get("space_id") for row in matches],
+                    "team_name": team_name,
+                    "matches": [_team_id_from_record(row) for row in matches],
                 },
             )
         if len(matches) == 1:
-            space = matches[0]
-            self._remember_space(space)
-            return {"status": "reused", "space": space}
+            team = matches[0]
+            self._remember_team(team)
+            return {"status": "reused", "team": team}
 
         try:
-            created = unify.create_space(
-                name=space_name,
-                description=space_description,
-                organization_id=organization_id,
+            created = unify.create_team(
+                organization_id,
+                name=team_name,
+                description=team_description,
                 api_key=SESSION_DETAILS.unify_key,
             )
         except RequestError as exc:
             return _request_error_to_tool_error(exc)
-        self._clear_space_cache()
-        self._remember_space(created)
-        return {"status": "created", "space": created}
+        self._clear_team_cache()
+        self._remember_team(created)
+        return {"status": "created", "team": created}
 
     def _ensure_commission_membership(
         self,
         *,
-        space_id: int,
+        team_id: int,
         assistant_id: int,
+        organization_id: int,
     ) -> dict[str, Any] | ToolError:
-        listed = self.list_space_members(space_id=space_id)
+        listed = self.list_team_members(team_id=team_id)
         if _is_tool_error(listed):
             return listed
         if any(
@@ -1916,8 +1935,9 @@ class _CoordinatorWorkspaceSession:
         ):
             return {"status": "already_member"}
         try:
-            unify.add_space_member(
-                space_id=space_id,
+            unify.add_team_member(
+                organization_id,
+                team_id,
                 assistant_id=assistant_id,
                 api_key=SESSION_DETAILS.unify_key,
             )
@@ -1963,28 +1983,32 @@ class _CoordinatorWorkspaceSession:
         self._known_assistant_ids.update(reachable_ids)
         return str(agent_id) in reachable_ids
 
-    def _space_is_reachable(
+    def _team_is_reachable(
         self,
-        space_id: int,
+        team_id: int,
     ) -> bool | ToolError:
-        listed = self.list_spaces()
+        listed = self.list_teams()
         if _is_tool_error(listed):
             return listed
-        spaces = listed
-        reachable_ids = {str(row.get("space_id")) for row in spaces}
-        self._known_space_ids.update(reachable_ids)
-        return str(space_id) in reachable_ids
+        teams = listed
+        reachable_ids = {
+            str(resolved_team_id)
+            for row in teams
+            if (resolved_team_id := _team_id_from_record(row)) is not None
+        }
+        self._known_team_ids.update(reachable_ids)
+        return str(team_id) in reachable_ids
 
-    def _validate_space_and_assistant(
+    def _validate_team_and_assistant(
         self,
-        space_id: int,
+        team_id: int,
         assistant_id: int,
     ) -> ToolError | None:
-        reachable_space = self._space_is_reachable(space_id)
-        if isinstance(reachable_space, dict):
-            return reachable_space
-        if not reachable_space:
-            return _space_not_found(space_id)
+        reachable_team = self._team_is_reachable(team_id)
+        if isinstance(reachable_team, dict):
+            return reachable_team
+        if not reachable_team:
+            return _team_not_found(team_id)
 
         reachable_assistant = self._assistant_is_reachable(assistant_id)
         if isinstance(reachable_assistant, dict):
@@ -2107,8 +2131,8 @@ class _CoordinatorWorkspaceSession:
     def _clear_assistant_cache(self) -> None:
         self._assistant_cache = None
 
-    def _clear_space_cache(self) -> None:
-        self._space_cache = None
+    def _clear_team_cache(self) -> None:
+        self._team_cache = None
 
     def _remember_assistants(self, assistants: list[dict[str, Any]]) -> None:
         self._known_assistant_ids.update(
@@ -2122,14 +2146,14 @@ class _CoordinatorWorkspaceSession:
         if agent_id is not None:
             self._known_assistant_ids.add(str(agent_id))
 
-    def _remember_space(self, space: dict[str, Any]) -> None:
-        space_id = space.get("space_id")
-        if space_id is not None:
-            self._known_space_ids.add(str(space_id))
+    def _remember_team(self, team: dict[str, Any]) -> None:
+        team_id = _team_id_from_record(team)
+        if team_id is not None:
+            self._known_team_ids.add(str(team_id))
 
-    def _remember_spaces(self, spaces: list[dict[str, Any]]) -> None:
-        for space in spaces:
-            self._remember_space(space)
+    def _remember_teams(self, teams: list[dict[str, Any]]) -> None:
+        for team in teams:
+            self._remember_team(team)
 
     def _publish_activity(
         self,
@@ -2222,9 +2246,9 @@ def _assistant_name_matches(
     return bool(target) and candidate == target
 
 
-def _space_name_matches(space: dict[str, Any], *, space_name: str) -> bool:
-    return _normalize_lookup_text(space.get("name")) == _normalize_lookup_text(
-        space_name,
+def _team_name_matches(team: dict[str, Any], *, team_name: str) -> bool:
+    return _normalize_lookup_text(team.get("name")) == _normalize_lookup_text(
+        team_name,
     )
 
 
@@ -2271,30 +2295,30 @@ def _assistant_entity(
     )
 
 
-def _space_display_name(space: dict[str, Any]) -> str:
-    return safe_activity_text(space.get("name"), fallback="Workspace")
+def _team_display_name(team: dict[str, Any]) -> str:
+    return safe_activity_text(team.get("name"), fallback="Team")
 
 
-def _space_entity(
-    space: dict[str, Any],
+def _team_entity(
+    team: dict[str, Any],
     *,
     fallback: str,
 ):
     return activity_entity(
-        "workspace",
-        name=_space_display_name(space) or fallback,
-        entity_id=space.get("space_id") or space.get("spaceId") or space.get("id"),
+        "team",
+        name=_team_display_name(team) or fallback,
+        entity_id=_team_id_from_record(team),
     )
 
 
 def _membership_entities(
-    space_id: int,
+    team_id: int,
     *,
     assistant_id: int | None = None,
     member_user_id: str | None = None,
 ):
     entities: list[CoordinatorActivityEntity | dict[str, Any]] = [
-        activity_entity("workspace", name="Workspace", entity_id=space_id),
+        activity_entity("team", name="Team", entity_id=team_id),
     ]
     if assistant_id is not None:
         entities.append(
@@ -2330,13 +2354,26 @@ def _tool_error_message(error: ToolError) -> str:
     )
 
 
-def _space_not_found(space_id: int) -> ToolError:
-    """Build a tool error for space ids outside the reachable set."""
+def _team_id_from_record(team: dict[str, Any]) -> int | None:
+    """Return the canonical team id from an Orchestra team payload."""
+    raw_team_id = team.get("team_id")
+    if raw_team_id is None:
+        raw_team_id = team.get("id")
+    if raw_team_id is None:
+        return None
+    try:
+        return int(raw_team_id)
+    except (TypeError, ValueError):
+        return None
+
+
+def _team_not_found(team_id: int) -> ToolError:
+    """Build a tool error for team ids outside the reachable set."""
 
     return {
         "error_kind": "not_found",
-        "message": f"Space {space_id} is not reachable by this Coordinator.",
-        "details": {"space_id": space_id},
+        "message": f"Team {team_id} is not reachable by this Coordinator.",
+        "details": {"team_id": team_id},
     }
 
 
