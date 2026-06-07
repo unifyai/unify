@@ -43,7 +43,10 @@ def _assistant_id(record: dict) -> int:
 
 
 def _configure_coordinator_session(
-    *, org_api_key: str, org_id: int, orchestra_url: str
+    *,
+    org_api_key: str,
+    org_id: int,
+    orchestra_url: str,
 ):
     SESSION_DETAILS.reset()
     ManagerRegistry.clear()
@@ -74,7 +77,7 @@ def test_coordinator_team_crud_round_trip_local_stack(require_local_stack):
             description="Operations shared team for coordinator CRUD coverage",
         )
         _assert_tool_success(created, step="create_team")
-        assert "space_id" not in created
+        assert "team_id" in created
         created_team_id = _team_id(created)
 
         listed = manager.list_teams()
@@ -82,7 +85,7 @@ def test_coordinator_team_crud_round_trip_local_stack(require_local_stack):
         listed_team_ids = {_team_id(team) for team in listed}
         assert created_team_id in listed_team_ids
         for team in listed:
-            assert "space_id" not in team
+            assert "team_id" in team
             assert _team_id(team) is not None
 
         colleague = manager.create_assistant(
@@ -117,7 +120,8 @@ def test_coordinator_team_crud_round_trip_local_stack(require_local_stack):
 
         members_after_remove = manager.list_team_members(team_id=created_team_id)
         _assert_tool_success(
-            members_after_remove, step="list_team_members after remove"
+            members_after_remove,
+            step="list_team_members after remove",
         )
         remaining_ids = {
             int(member["assistant_id"])

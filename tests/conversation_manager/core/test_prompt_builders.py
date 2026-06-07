@@ -86,7 +86,7 @@ class TestCommsToolListing:
 
 
 class TestAccessibleSpacesBlock:
-    """The system prompt contains shared-space routing guidance."""
+    """The system prompt contains shared-team routing guidance."""
 
     def test_block_renders_after_bio(self):
         prompt = _build(
@@ -158,7 +158,7 @@ class TestCoordinatorPrompt:
         assert "Team Coordinator" in prompt
         assert "I propose handing it to Avery Coordinator explicitly" in prompt
         assert "inviting, removing, or changing roles for colleagues" in prompt
-        assert "creating or removing team spaces" in prompt
+        assert "creating or removing teams" in prompt
         assert (
             "placing shared credentials, integrations, or other org-level setup"
             in prompt
