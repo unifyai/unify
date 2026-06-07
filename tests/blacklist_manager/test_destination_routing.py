@@ -13,7 +13,7 @@ from unity.manager_registry import ManagerRegistry
 from unity.session_details import SESSION_DETAILS
 
 
-def _configure_spaces() -> tuple[int, int]:
+def _configure_teams() -> tuple[int, int]:
     base_team_id = 30_000_000 + uuid.uuid4().int % 1_000_000_000
     team_ids = (base_team_id, base_team_id + 1)
     SESSION_DETAILS.team_ids = list(team_ids)
@@ -34,7 +34,7 @@ def _configure_spaces() -> tuple[int, int]:
     return team_ids
 
 
-def _reset_spaces(team_ids: tuple[int, int]) -> None:
+def _reset_teams(team_ids: tuple[int, int]) -> None:
     for team_id in team_ids:
         try:
             unify.delete_context(f"Teams/{team_id}/BlackList")
@@ -48,7 +48,7 @@ def _reset_spaces(team_ids: tuple[int, int]) -> None:
 
 @_handle_project
 def test_blacklist_writes_route_to_destination_and_reads_merge_roots():
-    team_ids = _configure_spaces()
+    team_ids = _configure_teams()
     manager = BlackListManager()
     personal_detail = f"personal.{uuid.uuid4().hex}@example.com"
     shared_detail = f"shared.{uuid.uuid4().hex}@example.com"
@@ -83,7 +83,7 @@ def test_blacklist_writes_route_to_destination_and_reads_merge_roots():
         )
         assert len(shared_rows) == 1
     finally:
-        _reset_spaces(team_ids)
+        _reset_teams(team_ids)
 
 
 @_handle_project
@@ -91,7 +91,7 @@ def test_blacklist_any_visible_root_blocks_contact_detail(monkeypatch):
     from unity.conversation_manager import comms_manager
     from unity.settings import SETTINGS
 
-    team_ids = _configure_spaces()
+    team_ids = _configure_teams()
     detail = f"blocked.{uuid.uuid4().hex}@example.com"
     manager = BlackListManager()
 
@@ -110,12 +110,12 @@ def test_blacklist_any_visible_root_blocks_contact_detail(monkeypatch):
 
         assert comms_manager._is_blacklisted(Medium.EMAIL.value, detail) is True
     finally:
-        _reset_spaces(team_ids)
+        _reset_teams(team_ids)
 
 
 @_handle_project
 def test_blacklist_invalid_destination_returns_tool_error():
-    team_ids = _configure_spaces()
+    team_ids = _configure_teams()
     manager = BlackListManager()
 
     try:
@@ -126,7 +126,7 @@ def test_blacklist_invalid_destination_returns_tool_error():
             destination="team:99999999",
         )
     finally:
-        _reset_spaces(team_ids)
+        _reset_teams(team_ids)
 
     assert outcome["error_kind"] == "invalid_destination"
     assert outcome["details"]["destination"] == "team:99999999"
@@ -134,13 +134,13 @@ def test_blacklist_invalid_destination_returns_tool_error():
 
 @_handle_project
 def test_blacklist_clear_invalid_destination_returns_tool_error():
-    team_ids = _configure_spaces()
+    team_ids = _configure_teams()
     manager = BlackListManager()
 
     try:
         outcome = manager.clear(destination="team:99999999")
     finally:
-        _reset_spaces(team_ids)
+        _reset_teams(team_ids)
 
     assert outcome["error_kind"] == "invalid_destination"
     assert outcome["details"]["destination"] == "team:99999999"
@@ -169,13 +169,13 @@ def test_blacklist_clear_invalid_destination_returns_tool_error():
 )
 @_handle_project
 def test_blacklist_write_tools_return_tool_error_for_invalid_destination(call):
-    team_ids = _configure_spaces()
+    team_ids = _configure_teams()
     manager = BlackListManager()
 
     try:
         outcome = call(manager)
     finally:
-        _reset_spaces(team_ids)
+        _reset_teams(team_ids)
 
     assert outcome["error_kind"] == "invalid_destination"
     assert outcome["details"]["destination"] == "team:99999999"

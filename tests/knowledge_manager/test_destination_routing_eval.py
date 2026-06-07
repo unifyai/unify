@@ -64,7 +64,7 @@ async def _run_knowledge_update(
 
 
 @pytest.mark.asyncio
-async def test_team_knowledge_routes_to_the_matching_shared_space(llm_config):
+async def test_team_knowledge_routes_to_the_matching_shared_team(llm_config):
     """A team operational note lands in the relevant shared Knowledge root."""
 
     scenario = RoutingScenario("knowledge_shared")

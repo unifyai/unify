@@ -187,7 +187,7 @@ def test_ask_system_prompt_formatting():
 
 
 @_handle_project
-def test_ask_prompt_includes_shared_authorship_guidance_when_spaces_exist():
+def test_ask_prompt_includes_shared_authorship_guidance_when_teams_exist():
     tm = TranscriptManager()
     tools = dict(tm.get_tools("ask"))
     original_team_ids = list(SESSION_DETAILS.team_ids)

@@ -61,13 +61,13 @@ def test_updates_on_create_update_delete(monkeypatch, secret_manager_context):
 def test_dotenv_mirror_includes_personal_only(
     monkeypatch,
     secret_manager_context,
-    secret_manager_spaces,
+    secret_manager_teams,
 ):
     with tempfile.TemporaryDirectory() as td:
         dotenv_path = str(pathlib.Path(td) / ".env")
         monkeypatch.setattr(SETTINGS.secret, "DOTENV_PATH", dotenv_path)
 
-        team_id, _ = secret_manager_spaces
+        team_id, _ = secret_manager_teams
         manager = SecretManager()
 
         manager._create_secret(

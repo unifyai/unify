@@ -41,8 +41,8 @@ def seeded_dm(simulated_dm):
 
 
 @pytest.fixture
-def dashboard_manager_spaces():
-    """Assign unique shared-space memberships for dashboard routing tests."""
+def dashboard_manager_teams():
+    """Assign unique shared-team memberships for dashboard routing tests."""
     base_id = time.time_ns() % 1_000_000_000
     team_ids = (base_id, base_id + 1)
     original_team_ids = list(SESSION_DETAILS.team_ids)

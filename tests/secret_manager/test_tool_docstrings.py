@@ -133,7 +133,7 @@ def test_secret_write_tools_expose_destination_guidance():
 
         assert "destination : str | None" in doc
         assert "Accessible shared" in doc
-        assert "spaces" in doc
+        assert "teams" in doc
         assert "team:<id>" in doc
         assert "personal" in doc
 

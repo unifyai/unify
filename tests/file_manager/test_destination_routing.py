@@ -14,7 +14,7 @@ from unity.manager_registry import ManagerRegistry
 from unity.session_details import SESSION_DETAILS
 
 
-def _configure_spaces() -> tuple[int, int]:
+def _configure_teams() -> tuple[int, int]:
     base_team_id = 40_000_000 + uuid.uuid4().int % 1_000_000_000
     team_ids = (base_team_id, base_team_id + 1)
     SESSION_DETAILS.team_ids = list(team_ids)
@@ -35,7 +35,7 @@ def _configure_spaces() -> tuple[int, int]:
     return team_ids
 
 
-def _reset_spaces(team_ids: tuple[int, int], alias: str) -> None:
+def _reset_teams(team_ids: tuple[int, int], alias: str) -> None:
     for team_id in team_ids:
         for context in (
             f"Teams/{team_id}/FileRecords/{alias}",
@@ -61,7 +61,7 @@ def _compact_no_embedding_config() -> FilePipelineConfig:
 
 @_handle_project
 def test_file_ingest_routes_to_destination_and_reads_merge_roots(tmp_path):
-    team_ids = _configure_spaces()
+    team_ids = _configure_teams()
     personal_path = tmp_path / f"personal-{uuid.uuid4().hex}.txt"
     shared_path = tmp_path / f"shared-{uuid.uuid4().hex}.txt"
     personal_path.write_text("personal research note", encoding="utf-8")
@@ -104,12 +104,12 @@ def test_file_ingest_routes_to_destination_and_reads_merge_roots(tmp_path):
         assert str(personal_path) in merged_paths
         assert str(shared_path) in merged_paths
     finally:
-        _reset_spaces(team_ids, manager._fs_alias)
+        _reset_teams(team_ids, manager._fs_alias)
 
 
 @_handle_project
 def test_file_invalid_destination_returns_tool_error(tmp_path):
-    _configure_spaces()
+    _configure_teams()
     file_path = tmp_path / f"bad-{uuid.uuid4().hex}.txt"
     file_path.write_text("bad destination", encoding="utf-8")
     manager = FileManager(adapter=LocalFileSystemAdapter(None))
@@ -132,7 +132,7 @@ def test_file_invalid_destination_returns_tool_error(tmp_path):
 
 @_handle_project
 def test_file_clear_invalid_destination_returns_tool_error():
-    _configure_spaces()
+    _configure_teams()
     manager = FileManager(adapter=LocalFileSystemAdapter(None))
 
     try:
@@ -149,7 +149,7 @@ def test_file_clear_invalid_destination_returns_tool_error():
 
 @_handle_project
 def test_file_save_attachment_invalid_destination_returns_tool_error():
-    _configure_spaces()
+    _configure_teams()
     manager = FileManager(adapter=LocalFileSystemAdapter(None))
 
     try:
@@ -200,7 +200,7 @@ def test_file_save_attachment_invalid_destination_returns_tool_error():
 )
 @_handle_project
 def test_file_write_tools_return_tool_error_for_invalid_destination(tmp_path, call):
-    _configure_spaces()
+    _configure_teams()
     file_path = tmp_path / f"bad-{uuid.uuid4().hex}.txt"
     file_path.write_text("bad destination", encoding="utf-8")
     manager = FileManager(adapter=LocalFileSystemAdapter(None))

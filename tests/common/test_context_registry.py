@@ -89,7 +89,7 @@ def test_write_root_resolves_personal_and_space_destinations():
         )
 
 
-def test_write_root_resolves_all_manager_destination_tables_to_shared_spaces():
+def test_write_root_resolves_all_manager_destination_tables_to_shared_teams():
     class DestinationAwareManager:
         class Config:
             required_contexts = [
@@ -155,7 +155,7 @@ def test_invalid_destination_raises_structured_error():
     assert exc_info.value.payload["details"]["team_ids"] == [3, 7]
 
 
-def test_read_roots_returns_personal_then_sorted_spaces():
+def test_read_roots_returns_personal_then_sorted_teams():
     SESSION_DETAILS.team_ids = [7, 3]
 
     with patch("unity.common.context_registry._create_context_with_retry"):
@@ -200,7 +200,7 @@ def test_coordinator_manager_is_registered_for_coordinator_startup_provisioning(
     assert CoordinatorOnboardingManager in ContextRegistry._get_managers()
 
 
-def test_coordinator_contexts_do_not_fan_out_to_spaces():
+def test_coordinator_contexts_do_not_fan_out_to_teams():
     SESSION_DETAILS.team_ids = [7]
 
     with (

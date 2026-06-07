@@ -257,7 +257,7 @@ def test_get_info_cache_fallback_reads_accessible_space_roots():
         for _ in range(personal_max_id + 2):
             out = cm._create_contact(
                 first_name="Shared Info",
-                bio=f"space-info-marker-{team_id}",
+                bio=f"team-info-marker-{team_id}",
                 destination=f"team:{team_id}",
             )
         cid = out["details"]["contact_id"]
@@ -270,7 +270,7 @@ def test_get_info_cache_fallback_reads_accessible_space_roots():
             search_local_storage=True,
         )
         assert info == {
-            cid: {"first_name": "Shared Info", "bio": f"space-info-marker-{team_id}"},
+            cid: {"first_name": "Shared Info", "bio": f"team-info-marker-{team_id}"},
         }
         assert shared_ds[cid]["first_name"] == "Shared Info"
         with pytest.raises(KeyError):

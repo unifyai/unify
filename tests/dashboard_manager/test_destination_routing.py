@@ -1,4 +1,4 @@
-"""Destination routing coverage for DashboardManager shared-space rows."""
+"""Destination routing coverage for DashboardManager shared-team rows."""
 
 from __future__ import annotations
 
@@ -14,10 +14,10 @@ from tests.helpers import _handle_project
 
 @_handle_project
 def test_tile_writes_route_to_destination_and_reads_merge_roots(
-    dashboard_manager_spaces,
+    dashboard_manager_teams,
 ):
     """Tile rows write to one root while reads merge accessible roots."""
-    first_space, _ = dashboard_manager_spaces
+    first_team, _ = dashboard_manager_teams
     manager = fresh_dashboard_manager()
     personal_root = active_read_root()
 
@@ -25,12 +25,12 @@ def test_tile_writes_route_to_destination_and_reads_merge_roots(
     shared_tile = manager.create_tile(
         "<h1>Patch</h1>",
         title="Patch Tile",
-        destination=f"team:{first_space}",
+        destination=f"team:{first_team}",
     )
     delete_candidate = manager.create_tile(
         "<h1>Delete</h1>",
         title="Patch Tile To Delete",
-        destination=f"team:{first_space}",
+        destination=f"team:{first_team}",
     )
 
     assert personal_tile.succeeded, personal_tile.error
@@ -38,7 +38,7 @@ def test_tile_writes_route_to_destination_and_reads_merge_roots(
     assert delete_candidate.succeeded, delete_candidate.error
 
     assert "Personal Tile" in context_titles(f"{personal_root}/Dashboards/Tiles")
-    assert "Patch Tile" in context_titles(f"Teams/{first_space}/Dashboards/Tiles")
+    assert "Patch Tile" in context_titles(f"Teams/{first_team}/Dashboards/Tiles")
 
     assert manager.get_tile(shared_tile.token).title == "Patch Tile"
     tile_titles = {tile.title for tile in manager.list_tiles()}
@@ -47,13 +47,13 @@ def test_tile_writes_route_to_destination_and_reads_merge_roots(
     assert manager.update_tile(
         shared_tile.token,
         title="Patch Tile Updated",
-        destination=f"team:{first_space}",
+        destination=f"team:{first_team}",
     ).succeeded
     assert manager.get_tile(shared_tile.token).title == "Patch Tile Updated"
     assert manager.delete_tile(shared_tile.token) is False
     assert manager.delete_tile(
         delete_candidate.token,
-        destination=f"team:{first_space}",
+        destination=f"team:{first_team}",
     )
     assert manager.get_tile(delete_candidate.token) is None
 
@@ -68,21 +68,21 @@ def test_tile_writes_route_to_destination_and_reads_merge_roots(
 
 @_handle_project
 def test_dashboard_layout_writes_route_to_destination_and_reads_merge_roots(
-    dashboard_manager_spaces,
+    dashboard_manager_teams,
 ):
     """Dashboard layout rows write to one root while reads merge accessible roots."""
-    _, second_space = dashboard_manager_spaces
+    _, second_team = dashboard_manager_teams
     manager = fresh_dashboard_manager()
     personal_root = active_read_root()
 
     personal_dashboard = manager.create_dashboard("Personal Dashboard")
     shared_dashboard = manager.create_dashboard(
         "Patch Dashboard",
-        destination=f"team:{second_space}",
+        destination=f"team:{second_team}",
     )
     delete_candidate = manager.create_dashboard(
         "Patch Dashboard To Delete",
-        destination=f"team:{second_space}",
+        destination=f"team:{second_team}",
     )
 
     assert personal_dashboard.succeeded, personal_dashboard.error
@@ -93,7 +93,7 @@ def test_dashboard_layout_writes_route_to_destination_and_reads_merge_roots(
         f"{personal_root}/Dashboards/Layouts",
     )
     assert "Patch Dashboard" in context_titles(
-        f"Teams/{second_space}/Dashboards/Layouts",
+        f"Teams/{second_team}/Dashboards/Layouts",
     )
 
     assert manager.get_dashboard(shared_dashboard.token).title == "Patch Dashboard"
@@ -109,7 +109,7 @@ def test_dashboard_layout_writes_route_to_destination_and_reads_merge_roots(
     assert manager.update_dashboard(
         shared_dashboard.token,
         title="Patch Dashboard Updated",
-        destination=f"team:{second_space}",
+        destination=f"team:{second_team}",
     ).succeeded
     assert (
         manager.get_dashboard(shared_dashboard.token).title == "Patch Dashboard Updated"
@@ -117,7 +117,7 @@ def test_dashboard_layout_writes_route_to_destination_and_reads_merge_roots(
     assert manager.delete_dashboard(shared_dashboard.token) is False
     assert manager.delete_dashboard(
         delete_candidate.token,
-        destination=f"team:{second_space}",
+        destination=f"team:{second_team}",
     )
     assert manager.get_dashboard(delete_candidate.token) is None
 

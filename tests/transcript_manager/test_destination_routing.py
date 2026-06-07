@@ -133,7 +133,7 @@ def test_transcript_move_helpers_relocate_rows_and_surface_destination_errors():
 
     update = tm.update_exchange_metadata(
         exchange_id,
-        {"owner": "space"},
+        {"owner": "team"},
         destination=f"team:{team_id}",
     )
     assert update.exchange_id == exchange_id
@@ -205,18 +205,18 @@ def test_transcript_image_tools_use_the_message_root_for_duplicate_image_ids():
         ],
         synchronous=True,
     )
-    [space_image_id] = images.add_images(
+    [team_image_id] = images.add_images(
         [
             {
                 "timestamp": datetime.now(UTC),
-                "caption": "space duplicate image",
+                "caption": "team duplicate image",
                 "data": space_image_data,
             },
         ],
         synchronous=True,
         destination=f"team:{team_id}",
     )
-    assert personal_image_id == space_image_id
+    assert personal_image_id == team_image_id
 
     [message] = tm.log_messages(
         {
@@ -226,7 +226,7 @@ def test_transcript_image_tools_use_the_message_root_for_duplicate_image_ids():
             ),
             "images": [
                 {
-                    "raw_image_ref": {"image_id": space_image_id},
+                    "raw_image_ref": {"image_id": team_image_id},
                     "annotation": "shared duplicate",
                 },
             ],
@@ -239,13 +239,13 @@ def test_transcript_image_tools_use_the_message_root_for_duplicate_image_ids():
 
     assert metadata == [
         {
-            "image_id": space_image_id,
-            "caption": "space duplicate image",
+            "image_id": team_image_id,
+            "caption": "team duplicate image",
             "timestamp": metadata[0]["timestamp"],
             "annotation": "shared duplicate",
         },
     ]
-    attached = tm._attach_image_to_context(image_id=space_image_id)
+    attached = tm._attach_image_to_context(image_id=team_image_id)
     assert attached["image"] == space_image_data
 
 
