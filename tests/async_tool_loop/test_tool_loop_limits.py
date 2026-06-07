@@ -179,6 +179,7 @@ async def test_prunes_over_quota_tool_calls(llm_config, monkeypatch):
         timeout=60,
         max_steps=100,
         raise_on_limit=False,
+        enable_compression=False,
     )
 
     await handle.result()
@@ -187,10 +188,7 @@ async def test_prunes_over_quota_tool_calls(llm_config, monkeypatch):
     assert counter["n"] == 2
 
     # The first assistant message with `short_tool` requests should be
-    # pruned to two entries. Filter on tool name because the loop's
-    # auto-exposed infrastructure tools (e.g. compress_context) may
-    # produce their own assistant messages we want to skip when
-    # looking for "the message with the short_tool calls".
+    # pruned to two entries.
     first_asst_with_short_tool = next(
         m
         for m in client.messages
