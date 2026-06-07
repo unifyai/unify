@@ -42,7 +42,7 @@ def _delete_context_tree(root: str) -> None:
 
 
 @pytest.fixture(autouse=True)
-def reset_space_membership_state():
+def reset_team_membership_state():
     yield
     for team_id in SESSION_DETAILS.team_ids:
         _delete_context_tree(f"Teams/{team_id}")

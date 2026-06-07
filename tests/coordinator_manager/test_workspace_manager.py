@@ -46,22 +46,22 @@ def test_workspace_manager_delegates_reads_for_coordinator(monkeypatch):
 
 def test_workspace_manager_blocks_mutations_when_role_is_not_coordinator(monkeypatch):
     SESSION_DETAILS.is_coordinator = False
-    called = {"create_space": False}
+    called = {"create_team": False}
 
-    def _fake_create_space(**_kwargs):
-        called["create_space"] = True
+    def _fake_create_team(*_args, **_kwargs):
+        called["create_team"] = True
         return {"team_id": 99}
 
     monkeypatch.setattr(
-        "unity.coordinator_manager.workspace_manager.unify.create_space",
-        _fake_create_space,
+        "unity.coordinator_manager.workspace_manager.unify.create_team",
+        _fake_create_team,
     )
 
     manager = CoordinatorWorkspaceManager()
-    result = manager.create_space(name="Ops", description="Operations")
+    result = manager.create_team(name="Ops", description="Operations")
 
     assert result["error_kind"] == "permission_denied"
-    assert called["create_space"] is False
+    assert called["create_team"] is False
 
 
 def test_workspace_manager_exposes_rich_primitive_docstrings():
@@ -70,9 +70,9 @@ def test_workspace_manager_exposes_rich_primitive_docstrings():
     methods = (
         "create_assistant",
         "delegate_to_colleague",
-        "create_space",
-        "add_space_member",
-        "commission_colleague_into_workspace",
+        "create_team",
+        "add_team_member",
+        "commission_colleague_into_team",
         "add_setup_checklist_item",
         "update_setup_checklist_item",
     )

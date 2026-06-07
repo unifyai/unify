@@ -908,7 +908,7 @@ class TestRenderStateWithTracking:
                 {
                     "generation": 2,
                     "origin_event_name": "SMSSent",
-                    "tool_name": "create_space",
+                    "tool_name": "create_team",
                     "args_preview": '{"name":"Ops HQ"}',
                     "result_preview": '{"team_id":11}',
                 },
@@ -917,7 +917,7 @@ class TestRenderStateWithTracking:
         )
 
         assert "<recent_tool_executions>" in result.full_render
-        assert "tool=create_space" in result.full_render
+        assert "tool=create_team" in result.full_render
         assert "origin=SMSSent" in result.full_render
 
     def test_tracks_notifications(self, renderer, contact_index, notification_bar):

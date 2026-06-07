@@ -57,9 +57,9 @@ _SECONDARY_SMOKE_SCENARIOS = {
 
 _COORDINATOR_TOOLS = tuple(COORDINATOR_TOOL_METHOD_NAMES)
 _COMMISSIONING_PRIMITIVE_TOOLS = frozenset(
-    {"create_assistant", "create_space", "add_space_member"},
+    {"create_assistant", "create_team", "add_team_member"},
 )
-_COMMISSIONING_COMPOSITE_TOOLS = frozenset({"commission_colleague_into_workspace"})
+_COMMISSIONING_COMPOSITE_TOOLS = frozenset({"commission_colleague_into_team"})
 _COORDINATOR_PRIMITIVE_PREFIX = "primitives.coordinator."
 _COORDINATOR_PRIMITIVE_PATTERN = re.compile(r"primitives\.coordinator\.([a-z_]+)")
 
@@ -340,7 +340,7 @@ class _RecordingTools:
         Coordinator to provision the assistant now. The call expects enough
         concrete profile details to produce a useful colleague.
 
-        Prefer ``commission_colleague_into_workspace`` when workspace +
+        Prefer ``commission_colleague_into_team`` when workspace +
         membership must also be guaranteed in the same step.
         """
 
@@ -447,7 +447,7 @@ class _RecordingTools:
             "dedupe_key": dedupe_key,
         }
 
-    def create_space(
+    def create_team(
         self,
         *,
         name: str,
@@ -457,7 +457,7 @@ class _RecordingTools:
         """Create a shared workspace after explicit setup confirmation.
 
         Use this for confirmed workspace creation. Membership is separate unless
-        using ``commission_colleague_into_workspace``.
+        using ``commission_colleague_into_team``.
         """
 
         return {
@@ -467,7 +467,7 @@ class _RecordingTools:
             "owner_user_id": owner_user_id,
         }
 
-    def delete_space(
+    def delete_team(
         self,
         *,
         team_id: int,
@@ -475,7 +475,7 @@ class _RecordingTools:
         """Delete a reachable shared workspace after explicit confirmation."""
         return {"status": "deleted", "team_id": team_id}
 
-    def update_space(
+    def update_team(
         self,
         *,
         team_id: int,
@@ -484,7 +484,7 @@ class _RecordingTools:
         """Update metadata for a reachable shared workspace."""
         return {"status": "updated", "team_id": team_id, "patch": patch}
 
-    def add_space_member(
+    def add_team_member(
         self,
         *,
         team_id: int,
@@ -499,7 +499,7 @@ class _RecordingTools:
             "member_user_id": member_user_id,
         }
 
-    def remove_space_member(
+    def remove_team_member(
         self,
         *,
         team_id: int,
@@ -508,7 +508,7 @@ class _RecordingTools:
         """Remove a reachable assistant colleague from a reachable workspace."""
         return {"status": "removed", "team_id": team_id, "assistant_id": assistant_id}
 
-    def list_spaces(
+    def list_teams(
         self,
         *,
         owner_user_id: str | None = None,
@@ -522,7 +522,7 @@ class _RecordingTools:
             {"team_id": 3103, "name": "Launch War Room"},
         ]
 
-    def list_space_members(
+    def list_team_members(
         self,
         *,
         team_id: int,
@@ -533,18 +533,18 @@ class _RecordingTools:
             {"team_id": team_id, "assistant_id": 7004, "name": "Contractor Bot"},
         ]
 
-    def list_spaces_for_assistant(self, *, assistant_id: int) -> list[dict[str, Any]]:
+    def list_teams_for_assistant(self, *, assistant_id: int) -> list[dict[str, Any]]:
         """List shared workspaces currently attached to one assistant."""
 
         return [{"assistant_id": assistant_id, "team_id": 3101, "name": "CashOps"}]
 
-    def commission_colleague_into_workspace(
+    def commission_colleague_into_team(
         self,
         *,
         assistant_first_name: str,
         assistant_surname: str | None = None,
-        space_name: str,
-        space_description: str,
+        team_name: str,
+        team_description: str,
         assistant_about: str | None = None,
         assistant_job_title: str | None = None,
         assistant_timezone: str | None = None,
@@ -577,13 +577,13 @@ class _RecordingTools:
                     "config": merged_assistant_config or None,
                 },
             },
-            "space": {
+            "team": {
                 "status": "reused" if team_id else "created",
                 "team_id": resolved_team_id,
-                "space": {
+                "team": {
                     "team_id": resolved_team_id,
-                    "name": space_name,
-                    "description": space_description,
+                    "name": team_name,
+                    "description": team_description,
                 },
             },
             "membership": {
@@ -746,8 +746,8 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
             {
                 "act",
                 "create_assistant",
-                "create_space",
-                "add_space_member",
+                "create_team",
+                "add_team_member",
                 "delegate_to_colleague",
             },
         ),
@@ -806,8 +806,8 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
             {
                 "act",
                 "create_assistant",
-                "create_space",
-                "add_space_member",
+                "create_team",
+                "add_team_member",
                 "delegate_to_colleague",
             },
         ),
@@ -1183,11 +1183,11 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
                 "create_assistant",
                 "delete_assistant",
                 "update_assistant_config",
-                "create_space",
-                "delete_space",
-                "update_space",
-                "add_space_member",
-                "remove_space_member",
+                "create_team",
+                "delete_team",
+                "update_team",
+                "add_team_member",
+                "remove_team_member",
                 "delegate_to_colleague",
             },
         ),
@@ -1305,7 +1305,7 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
             "as sufficient post-inspection confirmation."
         ),
         forbidden_tools=frozenset(
-            {"remove_space_member", "delete_space"},
+            {"remove_team_member", "delete_team"},
         ),
     ),
     CoordinatorScenario(
@@ -1349,8 +1349,8 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
         ),
         required_tools=frozenset({"send_unify_message"}),
         required_tool_alternatives=(
-            frozenset({"create_assistant", "create_space"}),
-            frozenset({"commission_colleague_into_workspace"}),
+            frozenset({"create_assistant", "create_team"}),
+            frozenset({"commission_colleague_into_team"}),
         ),
     ),
     CoordinatorScenario(
@@ -1384,7 +1384,7 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
         ),
         required_tools=frozenset({"delegate_to_colleague"}),
         forbidden_tools=frozenset(
-            {"create_space", "add_space_member"},
+            {"create_team", "add_team_member"},
         ),
     ),
     CoordinatorScenario(
@@ -1419,8 +1419,8 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
         forbidden_tools=frozenset(
             {
                 "delegate_to_colleague",
-                "create_space",
-                "add_space_member",
+                "create_team",
+                "add_team_member",
             },
         ),
         team_summaries=(
@@ -1468,11 +1468,11 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
                 "create_assistant",
                 "delete_assistant",
                 "update_assistant_config",
-                "create_space",
-                "delete_space",
-                "update_space",
-                "add_space_member",
-                "remove_space_member",
+                "create_team",
+                "delete_team",
+                "update_team",
+                "add_team_member",
+                "remove_team_member",
                 "delegate_to_colleague",
             },
         ),
@@ -1517,11 +1517,11 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
                 "create_assistant",
                 "delete_assistant",
                 "update_assistant_config",
-                "create_space",
-                "delete_space",
-                "update_space",
-                "add_space_member",
-                "remove_space_member",
+                "create_team",
+                "delete_team",
+                "update_team",
+                "add_team_member",
+                "remove_team_member",
                 "delegate_to_colleague",
             },
         ),
@@ -1561,11 +1561,11 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
                 "create_assistant",
                 "delete_assistant",
                 "update_assistant_config",
-                "create_space",
-                "delete_space",
-                "update_space",
-                "add_space_member",
-                "remove_space_member",
+                "create_team",
+                "delete_team",
+                "update_team",
+                "add_team_member",
+                "remove_team_member",
                 "delegate_to_colleague",
             },
         ),
@@ -1612,11 +1612,11 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
                 "create_assistant",
                 "delete_assistant",
                 "update_assistant_config",
-                "create_space",
-                "delete_space",
-                "update_space",
-                "add_space_member",
-                "remove_space_member",
+                "create_team",
+                "delete_team",
+                "update_team",
+                "add_team_member",
+                "remove_team_member",
                 "delegate_to_colleague",
             },
         ),
@@ -2060,13 +2060,11 @@ async def test_coordinator_provisioning_sequence_includes_membership_step():
     act_queries = _act_queries(result)
     coordinator_mentions = _coordinator_primitive_mentions(act_queries)
     user_visible_text = _user_visible_text(result).lower()
-    has_composite_commission = (
-        "commission_colleague_into_workspace" in coordinator_mentions
-    )
+    has_composite_commission = "commission_colleague_into_team" in coordinator_mentions
     has_primitive_provisioning = {
         "create_assistant",
-        "create_space",
-        "add_space_member",
+        "create_team",
+        "add_team_member",
     }.issubset(coordinator_mentions)
     has_membership_plan_text = (
         "member" in user_visible_text or "membership" in user_visible_text
@@ -2082,13 +2080,13 @@ async def test_coordinator_provisioning_sequence_includes_membership_step():
     if has_composite_commission:
         assert any(
             "assistant_first_name" in query
-            and "space_name" in query
-            and "space_description" in query
-            and "primitives.coordinator.commission_colleague_into_workspace" in query
+            and "team_name" in query
+            and "team_description" in query
+            and "primitives.coordinator.commission_colleague_into_team" in query
             for query in act_queries
         ), _format_failure(scenario, result)
     if has_primitive_provisioning:
-        assert "add_space_member" in coordinator_mentions, _format_failure(
+        assert "add_team_member" in coordinator_mentions, _format_failure(
             scenario,
             result,
         )
@@ -2128,8 +2126,8 @@ async def test_coordinator_refines_requirements_across_discovery_sequence():
             {
                 "act",
                 "create_assistant",
-                "create_space",
-                "add_space_member",
+                "create_team",
+                "add_team_member",
                 "delegate_to_colleague",
             },
         ),
@@ -2179,8 +2177,8 @@ async def test_coordinator_refines_requirements_across_discovery_sequence():
             {
                 "act",
                 "create_assistant",
-                "create_space",
-                "add_space_member",
+                "create_team",
+                "add_team_member",
                 "delegate_to_colleague",
             },
         ),
