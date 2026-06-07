@@ -662,6 +662,8 @@ def pytest_configure(config):
 
     global _original_home
     _original_home = os.environ.get("HOME")
+    if _original_home:
+        os.environ["UNITY_REAL_HOME"] = _original_home
     test_home = os.path.join(tempfile.gettempdir(), "unity_test_home")
     os.makedirs(test_home, exist_ok=True)
     os.environ["HOME"] = test_home
