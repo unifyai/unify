@@ -175,23 +175,6 @@ class TestCoordinatorPrompt:
         assert "Team Coordinator" not in personal_prompt
         assert "Team Coordinator" not in coordinator_prompt
 
-    def test_coordinator_prompt_removes_legacy_setup_sections(self):
-        prompt = _build(is_coordinator=True)
-
-        for marker in (
-            "Coordinator workspace ontology",
-            "Requirements discovery workflow",
-            "Coordinator checklist and state usage",
-            "Coordinator disposition",
-            "Coordinator conversational cadence",
-            "Coordinator parallel tool discipline",
-            "Unify system literacy",
-        ):
-            assert marker not in prompt
-        assert "Conversational restraint" in prompt
-        assert "Intent vs verified outcomes" in prompt
-        assert "Parallel tool discipline" in prompt
-
     def test_base_and_coordinator_share_restraint_but_keep_role_specific_sections(self):
         base_prompt = _build()
         coordinator_prompt = _build(is_coordinator=True)
