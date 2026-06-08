@@ -98,7 +98,7 @@ class DataManager(BaseDataManager):
                 name="Data",
                 description=(
                     "Root namespace for pipeline/API-derived datasets. "
-                    "Sub-contexts are created dynamically as Data/<project>/<table>."
+                    "Sub-contexts are created dynamically as Data/project/table paths."
                 ),
                 fields=None,  # No fixed schema - tables created dynamically
                 unique_keys=None,
