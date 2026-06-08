@@ -1438,10 +1438,10 @@ class CoordinatorOnboardingEvent(Event):
     Emitted only while the Coordinator is in
     ``Coordinator/State.mode == 'onboarding'`` (see
     ``coordinator_onboarding_event_service`` in orchestra) so day-to-day
-    activity stays silent. The five subtypes correspond to the
-    onboarding checklist's real-action milestones: workspace OAuth
-    landed, an integration secret was saved, a task was created, an
-    action started, or a specialist was hired. The brain reacts with a
+    activity stays silent. Subtypes correspond to onboarding milestones
+    with no other user-visible feedback channel: workspace OAuth landed,
+    an integration secret was saved, or the user opened an onboarding
+    session from the call-or-chat picker. The brain reacts with a
     one-line acknowledgement that names the thing that just happened
     and previews the next pending step — see the coordinator block in
     ``prompt_builders.build_system_prompt``.

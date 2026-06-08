@@ -499,7 +499,7 @@ def _build_coordinator_workspace_tool_listing(*, is_org_workspace: bool) -> str:
     """Build the Coordinator workspace tools block for the output format section."""
     lines = [
         "- `act` is the execution path for privileged Coordinator workspace lifecycle operations.",
-        "- Inside `act`, use `primitives.coordinator.*` for assistant/team/membership/checklist reads and mutations.",
+        "- Inside `act`, use `primitives.coordinator.*` for assistant/team/membership reads and mutations.",
         "- Before running coordinator mutations inside `act`, gather identifiers and confirmation details in chat unless the request is already explicit and unambiguous.",
         "- Prefer one `act` request that executes the full confirmed setup step over fragmented no-op turns.",
     ]
@@ -589,14 +589,14 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "first turn.",
             "Rules for action subtypes (`workspace_connected`, `integration_connected`):",
             "  1. Acknowledge in one short sentence — name the thing that just happened, "
-            "stay warm, do not re-list the whole checklist.",
+            "stay warm, do not re-list every onboarding step.",
             "  2. Preview the *single* next pending onboarding step so the user has a "
             "clear handoff. The next step ALWAYS comes from the onboarding "
-            "checklist documented in the Coordinator onboarding flow (UI "
+            "steps documented in the Coordinator onboarding flow (UI "
             "reference) section below — not from generic assistant-setup "
             "priors. Concretely: ",
             '       - After `workspace_connected`: point them at "Connect '
-            'your coordinator with your apps" (the next checklist row) — '
+            'your coordinator with your apps" (the next onboarding step) — '
             "suggest opening Integrations and picking at least one app "
             "(Slack, Gmail, Notion, etc.). DO NOT suggest setting up phone "
             "numbers, email addresses, or other assistant contact details "
@@ -634,7 +634,7 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "also frame yourself as their virtual double who can take actions on their "
             "behalf to help them get things done, say you'll help them get set up, "
             "and invite them to start by connecting their workspace. Stay friendly "
-            "and concise; do not list every checklist item.",
+            "and concise; do not list every onboarding step at once.",
             "     - If prior assistant messages exist, skip the intro. Open with one "
             "short sentence recapping which onboarding steps appear complete (lean on "
             "the latest assistant messages plus any `completed_step_ids` hint in the "
@@ -1484,7 +1484,7 @@ def build_system_prompt(
             _build_coordinator_onboarding_narration_block()
         )
         # UI reference for the gradual-onboarding view: layout,
-        # checklist contents, and the user-facing affordances behind
+        # step contents, and the user-facing affordances behind
         # each step. Built unconditionally so I can answer "what do I
         # click on next?" / "how do I connect my workspace?" coherently
         # whether the user is mid-onboarding, has skipped it, or is
@@ -1658,7 +1658,7 @@ Messages from the current turn have **NEW** tag prepended:
         parts.add(coordinator_onboarding_narration_block)
 
     # Companion UI reference describing the onboarding view layout
-    # and checklist contents — used to answer the user's "what do I
+    # and step contents — used to answer the user's "what do I
     # do next?" / "where do I click?" questions. Same gating as the
     # narration block above (Coordinator, non-demo).
     if coordinator_onboarding_flow_reference_block:
@@ -1959,7 +1959,7 @@ def _build_coordinator_console_literacy_block() -> str:
             "  - Center: **Chat** (or docked **call** UI during onboarding call path).",
             "  - Top tab strip (left → right): **Chat** · **Actions** · "
             "**Dashboards** · **Integrations** · **Tasks** · **Memory**.",
-            "  - Right: onboarding checklist during Coordinator onboarding; otherwise "
+            "  - Right: Onboarding tab during Coordinator onboarding; otherwise "
             "assistant info or docked **Integrations** / **Tasks** / **Actions** "
             "panes as steps engage.",
             "",
@@ -2218,7 +2218,7 @@ def _build_coordinator_console_literacy_block() -> str:
             "Memory → Guidance).",
             "  - On a call: one surface per spoken turn; wait for acknowledgment "
             "before the next.",
-            "  - Onboarding checklist chips are inspiration only — they do not click.",
+            "  - Onboarding step chips are inspiration only — they do not click.",
             "",
             "Onboarding phase 3 (Get work done) — tour hooks",
             "-----------------------------------------------",
@@ -2245,7 +2245,7 @@ def _build_coordinator_onboarding_flow_reference_block() -> str:
     (either the user completes every step or hits "Skip onboarding"
     in the footer).
 
-    This block teaches me the layout, the checklist contents, and
+    This block teaches me the layout, the onboarding steps, and
     the exact UI affordance behind each step so I can answer plain
     questions like "what do I click on next?" or "how do I connect
     my workspace?" without guessing. It is intentionally written
@@ -2266,7 +2266,7 @@ def _build_coordinator_onboarding_flow_reference_block() -> str:
             "Assistants page in Console. Layout I should picture when "
             'answering questions about "where do I click":',
             "  - Right column: a progress bar across three phases — Meet, "
-            "Connect, Delegate — followed by an onboarding checklist grouped "
+            "Connect, Delegate — followed by onboarding steps grouped "
             "into the same three phases. Each row shows a checkbox, a "
             "title, a short description, and (for actionable rows) a "
             "primary button. Locked rows are greyed out until their "
@@ -2280,7 +2280,7 @@ def _build_coordinator_onboarding_flow_reference_block() -> str:
             "It hands the user the regular Assistants page immediately; "
             "they can come back later via Assistant info → Onboarding → "
             '"Resume onboarding".',
-            "The checklist rows in order — title, what it does, and how "
+            "The onboarding steps in order — title, what it does, and how "
             "the user advances it:",
             "  1. **Meet your coordinator** (`meet`). Auto-completes once "
             "they exchange the opening turn with me. Nothing to click — "
@@ -2335,10 +2335,10 @@ def _build_coordinator_onboarding_flow_reference_block() -> str:
             '  - When the user asks "what do I do next?", "where do I '
             'click?", or similar, I look at the most recent onboarding '
             "signals (notifications in the bar, what they have already "
-            "told me) and name the single next pending checklist row, "
+            "told me) and name the single next pending onboarding step, "
             "phrased as a one-sentence instruction that maps onto the "
             'button they will see — e.g. "Tap **Connect workspace** '
-            'in the checklist and pick Google or Microsoft." I do not '
+            'in the Onboarding tab and pick Google or Microsoft." I do not '
             "dump the whole list.",
             '  - When the user asks what a step does ("why do you need '
             'workspace access?", "what counts as an app?"), I answer '
@@ -2394,7 +2394,7 @@ def _build_coordinator_voice_opening_block() -> str:
             "caller's first name when natural. Do NOT re-introduce "
             "myself or repeat earlier framing.",
             "Either way: one short spoken line, then stop and wait. No "
-            "menus, no checklists read out loud, no platform-knowledge "
+            "menus, no onboarding steps read out loud, no platform-knowledge "
             "spiel.",
         ],
     )

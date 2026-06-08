@@ -3,8 +3,8 @@
 Symmetric with ``inactivity`` for ``InactivityFollowup``: parses the
 ``unity_system_event`` payload that orchestra publishes whenever a
 real user action lands during Coordinator onboarding (workspace
-OAuth, integration connect, task create, action start, specialist
-hire) and surfaces the request to the brain as a notification so it
+OAuth, integration connect, or session start from the picker) and
+surfaces the request to the brain as a notification so it
 composes a short acknowledgement turn.
 
 We deliberately keep the handler dumb: the brain decides the wording
@@ -107,7 +107,7 @@ def _coordinator_onboarding_notification_text(
 
     Combines the orchestra-supplied human summary (``event.message``)
     with a short tail nudge so the brain reliably (a) acknowledges
-    what just happened, (b) ties it back to the onboarding checklist,
+    what just happened, (b) ties it back to the Onboarding tab steps,
     and (c) previews the next pending step. The wording stays
     deliberately terse — extended onboarding guidance lives in the
     system-prompt rule, not the notification.
@@ -158,7 +158,7 @@ def _coordinator_onboarding_notification_text(
 
     guidance = (
         "Acknowledge this in one short sentence to the user, name the thing they "
-        "just completed, and preview the next pending onboarding checklist step. "
+        "just completed, and preview the next pending onboarding step. "
         "Stay celebratory but brief — do not re-list every prior step. If a voice "
         "call is active you MUST speak it by calling "
         'guide_voice_agent(message="...", should_speak=True) — do not send a '
