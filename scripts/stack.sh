@@ -276,6 +276,16 @@ cmd_up() {
     return 1
   fi
 
+  local runtime_file="/tmp/self-host-coordinator-runtime.json"
+  if [[ -f "$runtime_file" ]]; then
+    log_info "Resuming Coordinator runtime from prior login..."
+    if bash "$CONSOLE_LOCAL_SCRIPT" start-coordinator; then
+      log_success "Coordinator runtime resumed"
+    else
+      log_warn "Coordinator resume failed — run: unity stack coordinator"
+    fi
+  fi
+
   local console_port="${CONSOLE_PORT:-3000}"
   echo ""
   echo "=============================================="
