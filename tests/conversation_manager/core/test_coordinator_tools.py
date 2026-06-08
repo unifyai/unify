@@ -11,11 +11,6 @@ from unity.coordinator_manager.workspace_manager import (
 )
 from unity.session_details import SESSION_DETAILS
 
-_SETUP_WRAPPER_METHOD_BY_TOOL = {
-    "add_setup_checklist_item": "add_checklist_item",
-    "update_setup_checklist_item": "update_checklist_item",
-}
-
 
 class TestCoordinatorWorkspaceManager:
     def setup_method(self):
@@ -52,8 +47,6 @@ class TestCoordinatorWorkspaceManager:
             "list_team_members",
             "list_teams_for_assistant",
             "commission_colleague_into_team",
-            "add_setup_checklist_item",
-            "update_setup_checklist_item",
         }
 
     def test_coordinator_method_surface_includes_org_membership_operations(self):
@@ -66,7 +59,6 @@ class TestCoordinatorWorkspaceManager:
         manager = CoordinatorWorkspaceManager()
         assert callable(manager.list_org_members)
         assert callable(manager.invite_org_member)
-        assert callable(manager.add_setup_checklist_item)
 
     def test_list_assistants_uses_owner_key_and_current_sdk_shape(self, monkeypatch):
         calls = []
@@ -427,103 +419,6 @@ class TestCoordinatorWorkspaceManager:
         assert result["details"]["status_code"] == 409
         assert result["details"]["existing_id"] == 1939
         assert result["details"]["error"] == "assistant_already_exists"
-
-    def test_add_setup_checklist_item_forwards_explicit_status_without_coercion(
-        self,
-        monkeypatch,
-    ):
-        calls = []
-
-        def fake_add_checklist_item(*_, **kwargs):
-            calls.append(kwargs)
-            return {"outcome": "checklist item added", "details": {"item_id": 77}}
-
-        monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager."
-            "CoordinatorOnboardingManager.add_checklist_item",
-            fake_add_checklist_item,
-        )
-
-        result = CoordinatorWorkspaceManager().add_setup_checklist_item(
-            title="Connect CRM",
-            status="",
-        )
-
-        assert result == {"outcome": "checklist item added", "details": {"item_id": 77}}
-        assert calls == [
-            {
-                "title": "Connect CRM",
-                "initial_status": "",
-                "description": None,
-                "kind": None,
-                "chat_prompt": None,
-                "chat_prompt_label": None,
-            },
-        ]
-
-    @pytest.mark.parametrize(
-        ("tool_name", "tool_kwargs"),
-        [
-            ("add_setup_checklist_item", {"title": "Connect CRM", "status": "done"}),
-            ("update_setup_checklist_item", {"item_id": 7, "status": "done"}),
-        ],
-    )
-    def test_setup_wrappers_convert_request_errors_to_tool_errors(
-        self,
-        monkeypatch,
-        tool_name,
-        tool_kwargs,
-    ):
-        response = requests.Response()
-        response.status_code = 400
-        response._content = b"invalid payload"
-
-        monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager."
-            f"CoordinatorOnboardingManager.{_SETUP_WRAPPER_METHOD_BY_TOOL[tool_name]}",
-            lambda *_, **__: (_ for _ in ()).throw(
-                RequestError("https://api.unify.ai", "POST", response),
-            ),
-        )
-
-        result = getattr(CoordinatorWorkspaceManager(), tool_name)(**tool_kwargs)
-
-        assert result["error_kind"] == "invalid_argument"
-        assert result["details"]["status_code"] == 400
-
-    @pytest.mark.parametrize(
-        ("tool_name", "tool_kwargs", "expected_message"),
-        [
-            (
-                "add_setup_checklist_item",
-                {"title": "Connect CRM", "status": "done"},
-                "Failed to add setup checklist item.",
-            ),
-            (
-                "update_setup_checklist_item",
-                {"item_id": 7, "status": "done"},
-                "Failed to update setup checklist item.",
-            ),
-        ],
-    )
-    def test_setup_wrappers_convert_unexpected_errors_to_internal_tool_errors(
-        self,
-        monkeypatch,
-        tool_name,
-        tool_kwargs,
-        expected_message,
-    ):
-        monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager."
-            f"CoordinatorOnboardingManager.{_SETUP_WRAPPER_METHOD_BY_TOOL[tool_name]}",
-            lambda *_, **__: (_ for _ in ()).throw(RuntimeError("boom")),
-        )
-
-        result = getattr(CoordinatorWorkspaceManager(), tool_name)(**tool_kwargs)
-
-        assert result["error_kind"] == "internal"
-        assert result["message"] == expected_message
-        assert result["details"]["error"] == "boom"
 
     def test_delegate_to_colleague_forwards_assignment_after_reachability(
         self,

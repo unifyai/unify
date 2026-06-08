@@ -210,8 +210,7 @@ class _RecordingTools:
     """Side-effect-free replicas of the production slow-brain tool surface."""
 
     def __init__(self) -> None:
-        self._next_checklist_item_id = 1
-        self._checklist: dict[int, dict[str, Any]] = {}
+        pass
 
     async def send_unify_message(
         self,
@@ -593,60 +592,6 @@ class _RecordingTools:
             },
         }
 
-    def add_setup_checklist_item(
-        self,
-        *,
-        title: str,
-        status: str | None = None,
-        description: str | None = None,
-        kind: str | None = None,
-        chat_prompt: str | None = None,
-        chat_prompt_label: str | None = None,
-    ) -> dict[str, Any]:
-        """Add a new user-visible step to the Coordinator setup checklist."""
-
-        if status is not None and status not in {"pending", "done", "skipped"}:
-            return {
-                "error_kind": "invalid_argument",
-                "message": "Checklist status must be 'pending', 'done', or 'skipped'.",
-                "details": {"status": status},
-            }
-
-        item_id = self._next_checklist_item_id
-        self._next_checklist_item_id += 1
-        self._checklist[item_id] = {
-            "item_id": item_id,
-            "title": title,
-            "description": description,
-            "kind": kind,
-            "status": status if status is not None else "pending",
-        }
-        return {"outcome": "checklist item added", "details": {"item_id": item_id}}
-
-    def update_setup_checklist_item(
-        self,
-        *,
-        item_id: int,
-        status: str | None = None,
-        title: str | None = None,
-        description: str | None = None,
-        kind: str | None = None,
-        chat_prompt: str | None = None,
-        chat_prompt_label: str | None = None,
-    ) -> dict[str, Any]:
-        """Update one existing user-visible Coordinator setup checklist step."""
-
-        current = self._checklist.setdefault(item_id, {"item_id": item_id})
-        for key, value in {
-            "status": status,
-            "title": title,
-            "description": description,
-            "kind": kind,
-        }.items():
-            if value is not None:
-                current[key] = value
-        return {"outcome": "checklist item updated", "details": {"item_id": item_id}}
-
     def as_tools(self, *, is_coordinator: bool) -> dict[str, Callable[..., Any]]:
         tools: dict[str, Callable[..., Any]] = {
             "send_unify_message": self.send_unify_message,
@@ -1016,7 +961,7 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
             "off a one-off research task."
         ),
         screen_context=(
-            "Onboarding checklist visible on the right; Coordinator selected on the "
+            "Onboarding steps visible on the right; Coordinator selected on the "
             "left. The user is on a live call with no separate text chat pane."
         ),
         turns=(
@@ -1035,8 +980,8 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
             "The response should start the live task with `act` and may choose to send a short "
             "user-visible line (chat message in this scenario) that acknowledges the "
             "request and tells the user to watch the **Actions** tab for live progress. "
-            "It may offer screen share to find Actions. It should not dump the whole "
-            "onboarding checklist."
+            "It may offer screen share to find Actions. It should not dump every "
+            "onboarding step at once."
         ),
         forbidden_tools=frozenset(),
         required_tools=frozenset({"act"}),
@@ -1432,196 +1377,6 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
         ),
     ),
     CoordinatorScenario(
-        scenario_id="setup-checklist-update",
-        title="Checklist update after validated first slice",
-        business_context=(
-            "A B2B services company has completed the first Renewal Desk setup slice. "
-            "The Coordinator should keep setup bookkeeping current instead of only "
-            "chatting about the progress."
-        ),
-        turns=(
-            DialogueTurn(
-                "user",
-                "The read-only Salesforce connection is stored, the sample renewal "
-                "risk read matched our spreadsheet, and checklist item 3 is the "
-                "Salesforce validation step. Mark that done, but leave Gainsight and "
-                "Slack for later.",
-                new=True,
-            ),
-        ),
-        masked_components=(
-            "Checklist item 3 already exists and is the Salesforce validation step.",
-            "The user has explicitly said only the first version is ready; later "
-            "integrations remain pending.",
-        ),
-        rubric=(
-            "The response should update setup bookkeeping through "
-            "`update_setup_checklist_item` for item 3 with done status. It should "
-            "keep Gainsight and Slack as later work rather than pretending they are "
-            "done, and it must not create or delete colleagues, teams, memberships, "
-            "or colleague-owned setup rows. It may mark the first setup slice ready "
-            "if it keeps later integrations explicitly pending."
-        ),
-        required_tools=frozenset({"update_setup_checklist_item"}),
-        forbidden_tools=frozenset(
-            {
-                "create_assistant",
-                "delete_assistant",
-                "update_assistant_config",
-                "create_team",
-                "delete_team",
-                "update_team",
-                "add_team_member",
-                "remove_team_member",
-                "delegate_to_colleague",
-            },
-        ),
-    ),
-    CoordinatorScenario(
-        scenario_id="setup-checklist-progression",
-        title="Checklist progression adds the next setup slice",
-        business_context=(
-            "A coordinator has just completed one integration slice and the user wants "
-            "to continue onboarding immediately with the next slice."
-        ),
-        turns=(
-            DialogueTurn(
-                "user",
-                "Checklist item 4 was the Salesforce validation step and it is now "
-                "complete. Mark item 4 done and add the next pending step for "
-                "Gainsight read-only setup so we can continue now.",
-                new=True,
-            ),
-        ),
-        masked_components=(
-            "Checklist item 4 already exists and maps to Salesforce validation.",
-            "The user wants to continue with another integration slice now.",
-            "No assistant, workspace, or membership mutation is requested.",
-        ),
-        rubric=(
-            "The response should progress checklist bookkeeping instead of stalling on "
-            "one row: call `update_setup_checklist_item` for item 4 with done status, "
-            "and add a new pending checklist item for the Gainsight setup slice. It "
-            "should avoid unrelated workspace mutations and should not set setup "
-            "state to ready while additional slices remain."
-        ),
-        required_tools=frozenset(
-            {"update_setup_checklist_item", "add_setup_checklist_item"},
-        ),
-        required_tool_args={
-            "update_setup_checklist_item": ("status",),
-            "add_setup_checklist_item": ("title",),
-        },
-        forbidden_tools=frozenset(
-            {
-                "create_assistant",
-                "delete_assistant",
-                "update_assistant_config",
-                "create_team",
-                "delete_team",
-                "update_team",
-                "add_team_member",
-                "remove_team_member",
-                "delegate_to_colleague",
-            },
-        ),
-    ),
-    CoordinatorScenario(
-        scenario_id="setup-checklist-backfill-completed-phases",
-        title="Checklist restructure backfills completed phases in one step",
-        business_context=(
-            "A coordinator is restructuring setup into cleaner phase-based checklist rows "
-            "after earlier onboarding slices already completed."
-        ),
-        turns=(
-            DialogueTurn(
-                "user",
-                "Please restructure the checklist into phase rows. Discovery and team/workspace "
-                "setup are already complete, and keep the HubSpot integration phase as the "
-                "next pending step.",
-                new=True,
-            ),
-        ),
-        masked_components=(
-            "Discovery work already happened earlier in the session.",
-            "Colleague and workspace foundations are already in place.",
-            "HubSpot integration setup is the next active slice.",
-            "No assistant, workspace, or membership mutation is requested.",
-        ),
-        rubric=(
-            "The response should backfill completed history rows using "
-            "`add_setup_checklist_item(status='done')` and keep the next "
-            "integration slice pending. It should avoid unrelated workspace mutations "
-            "and avoid marking setup state ready while integration work remains."
-        ),
-        required_tools=frozenset({"add_setup_checklist_item"}),
-        required_tool_args={"add_setup_checklist_item": ("title", "status")},
-        forbidden_tools=frozenset(
-            {
-                "create_assistant",
-                "delete_assistant",
-                "update_assistant_config",
-                "create_team",
-                "delete_team",
-                "update_team",
-                "add_team_member",
-                "remove_team_member",
-                "delegate_to_colleague",
-            },
-        ),
-    ),
-    CoordinatorScenario(
-        scenario_id="multi-integration-onboarding-pacing",
-        title="Multi-integration setup is chunked into humane onboarding",
-        business_context=(
-            "A finance operations leader wants a new Unify rollout across many SaaS "
-            "systems and is worried the setup will take too long in one sitting."
-        ),
-        turns=(
-            DialogueTurn(
-                "user",
-                "We need NetSuite, Stripe, Salesforce, Gainsight, Zendesk, Slack, "
-                "Notion, Google Drive, Jira, and Docusign connected for Finance Ops. "
-                "Please make the setup checklist, start with the best first slice, "
-                "and don't make me sit through all ten integrations if we can pause.",
-                new=True,
-            ),
-        ),
-        masked_components=(
-            "No colleague, workspace, credential scope, or individual integration has "
-            "been confirmed yet.",
-            "The user explicitly wants a checklist and humane pacing.",
-        ),
-        rubric=(
-            "The response should behave like an onboarder: add at least one setup "
-            "checklist item, recommend the best first slice instead of trying to set "
-            "up all ten integrations at once, ask one useful next question or "
-            "confirmation, and explicitly offer to continue to the next integration "
-            "or pause after the first slice. The setup-checklist tool call should "
-            "include `chat_prompt` and `chat_prompt_label` that capture the suggested "
-            "reply for continuing, pausing, or choosing the first slice. It should "
-            "not create assistants, teams, memberships, or credentials before the "
-            "setup details are confirmed."
-        ),
-        required_tools=frozenset({"add_setup_checklist_item", "send_unify_message"}),
-        required_tool_args={
-            "add_setup_checklist_item": ("chat_prompt", "chat_prompt_label"),
-        },
-        forbidden_tools=frozenset(
-            {
-                "create_assistant",
-                "delete_assistant",
-                "update_assistant_config",
-                "create_team",
-                "delete_team",
-                "update_team",
-                "add_team_member",
-                "remove_team_member",
-                "delegate_to_colleague",
-            },
-        ),
-    ),
-    CoordinatorScenario(
         scenario_id="regular-assistant-defers-renewal-desk",
         title="Regular assistant defers team shaping",
         business_context=(
@@ -1731,22 +1486,11 @@ def _render_state(scenario: CoordinatorScenario) -> str:
         )
     masked = "\n".join(f"- {item}" for item in scenario.masked_components)
     screen = scenario.screen_context or "No active screen share context is visible."
-    coordinator_goal = (
-        "<coordinator_goal>\n"
-        "You are helping the organization shape its assistant workforce. Track "
-        "what the user is trying to delegate, which colleagues or teams should "
-        "own the work, what credentials or integrations are needed, and what "
-        "validation would prove the setup works.\n"
-        "</coordinator_goal>"
-        if scenario.is_coordinator
-        else ""
-    )
     return (
         f"<scenario_business_context>\n{scenario.business_context}\n"
         f"</scenario_business_context>\n\n"
         f"<screen_share_context>\n{screen}\n</screen_share_context>\n\n"
         f"<masked_components>\n{masked or '- None'}\n</masked_components>\n\n"
-        f"{coordinator_goal}\n\n"
         "<active_conversations>\n"
         "Conversation with Helena Morris (contact_id=1):\n"
         + "\n".join(turns)

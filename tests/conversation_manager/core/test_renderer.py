@@ -31,7 +31,6 @@ from unity.conversation_manager.domains.renderer import (
     compute_snapshot_diff,
     _get_assistant_email_role,
 )
-from unity.session_details import SESSION_DETAILS
 
 pytestmark = pytest.mark.no_unify_context
 
@@ -229,65 +228,6 @@ class TestGetAssistantEmailRole:
             mock_session.assistant.email = None
             result = _get_assistant_email_role(email)
             assert result is None
-
-
-class TestCoordinatorGoalRendering:
-    """Coordinator goal rendering is a focused state block."""
-
-    def teardown_method(self):
-        SESSION_DETAILS.reset()
-
-    def test_empty_state_renders_no_block(self, renderer):
-        assert renderer.render_coordinator_goal_state() == ""
-
-    def test_checklist_render_goal_block(self, renderer):
-        rendered = renderer.render_coordinator_goal_state(
-            coordinator_checklist=[
-                {
-                    "item_id": 1,
-                    "title": "Create support assistant",
-                    "description": "Owner approved support coverage.",
-                    "kind": "assistant",
-                    "status": "pending",
-                },
-            ],
-        )
-
-        assert rendered.startswith("<coordinator_goal>")
-        assert "checklist:" in rendered
-        assert "- [pending] #1: Create support assistant (assistant)" in rendered
-        assert "Owner approved support coverage." in rendered
-        assert rendered.endswith("</coordinator_goal>")
-        stale_tag = "<coordinator_goal_" + "state>"
-        assert stale_tag not in rendered
-
-    def test_render_state_gates_goal_block_to_coordinators(self, renderer):
-        snapshot = renderer.render_state(
-            ContactIndex(),
-            coordinator_checklist=[
-                {
-                    "item_id": 1,
-                    "title": "Create support assistant",
-                    "status": "pending",
-                },
-            ],
-        )
-
-        assert "<coordinator_goal>" not in snapshot.full_render
-
-        SESSION_DETAILS.is_coordinator = True
-        coordinator_snapshot = renderer.render_state(
-            ContactIndex(),
-            coordinator_checklist=[
-                {
-                    "item_id": 1,
-                    "title": "Create support assistant",
-                    "status": "pending",
-                },
-            ],
-        )
-
-        assert "<coordinator_goal>" in coordinator_snapshot.full_render
 
 
 # =============================================================================
