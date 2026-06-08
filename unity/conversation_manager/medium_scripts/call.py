@@ -520,8 +520,8 @@ async def entrypoint(ctx: agents.JobContext):
         else:
             _log.warning("No ipc_socket_path in job metadata — IPC disabled")
 
-        voice_provider = meta.get("voice_provider", "cartesia")
-        voice_id = meta.get("voice_id", "")
+        voice_provider = meta.get("voice_provider") or "cartesia"
+        voice_id = meta.get("voice_id") or ""
         outbound = meta.get("outbound", False)
         channel = meta.get("channel", "phone")
         assistant_bio = meta.get("assistant_bio", "")
@@ -856,12 +856,12 @@ async def entrypoint(ctx: agents.JobContext):
         stt=stt_instance,
         tts=(
             elevenlabs.TTS(
-                voice_id=voice_id if voice_id != "" else elevenlabs.DEFAULT_VOICE_ID,
+                voice_id=voice_id or elevenlabs.DEFAULT_VOICE_ID,
                 model="eleven_multilingual_v2",
             )
             if voice_provider == "elevenlabs"
             else cartesia.TTS(
-                voice=voice_id if voice_id != "" else cartesia.tts.TTSDefaultVoiceId,
+                voice=voice_id or cartesia.tts.TTSDefaultVoiceId,
             )
         ),
         vad=VAD,
@@ -1199,7 +1199,9 @@ async def entrypoint(ctx: agents.JobContext):
     @session.on("conversation_item_added")
     def _on_chat_item_added(ev):
         """Publish both user and assistant utterances from a single location."""
-        role = ev.item.role  # "user" | "assistant"
+        role = getattr(ev.item, "role", None)
+        if role not in ("user", "assistant"):
+            return
         text = ev.item.text_content or ""
         utterance_id = content_trace_id("utt", f"{role}:{text}")
         say_meta: dict | None = None
