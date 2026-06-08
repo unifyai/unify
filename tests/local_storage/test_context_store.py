@@ -111,7 +111,6 @@ def test_ensure_context_treats_400_context_already_exists_as_success(monkeypatch
     )
 
     _create_context_with_retry(
-        "Org/Coordinator/Checklist",
-        unique_keys={"item_id": "int"},
-        auto_counting={"item_id": None},
+        "Org/Coordinator/State",
+        unique_keys={"mode": "str"},
     )
