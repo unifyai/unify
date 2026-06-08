@@ -9,6 +9,19 @@
 #
 set -euo pipefail
 
+# Matches get_local_root() in unity/file_manager/settings.py (~/Unity/Local).
+SELF_HOST_DEFAULT_WORKSPACE="${SELF_HOST_DEFAULT_WORKSPACE:-$HOME/Unity/Local}"
+
+default_self_host_workspace() {
+  printf '%s' "${UNITY_LOCAL_ROOT:-$SELF_HOST_DEFAULT_WORKSPACE}"
+}
+
+ensure_self_host_workspace_dir() {
+  local workspace
+  workspace="$(default_self_host_workspace)"
+  mkdir -p "$workspace"
+}
+
 load_self_host_env_file() {
   local env_file="${1:-}"
   if [[ -z "$env_file" || ! -f "$env_file" ]]; then
@@ -90,9 +103,13 @@ append_self_host_unity_runtime_env() {
   local env_file="${2:-${SELF_HOST_ENV_FILE:-${UNITY_ENV_FILE:-${UNITY_REPO:-}/.env}}}"
   load_self_host_env_file "$env_file"
 
+  local workspace
+  workspace="$(default_self_host_workspace)"
+  ensure_self_host_workspace_dir
+  _target_array+=("UNITY_LOCAL_ROOT=$workspace")
+
   local key val
   for key in \
-    UNITY_LOCAL_ROOT \
     UNITY_WEB_TAVILY_API_KEY \
     UNITY_WEB_ENABLED \
     UNITY_ACTOR_ANTICAPTCHA_KEY \
