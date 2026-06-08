@@ -6,7 +6,7 @@ import pytest
 import requests
 from unify.utils.http import RequestError
 
-from unity.coordinator_manager.coordinator_manager import CoordinatorOnboardingManager
+from unity.coordinator_manager.coordinator_manager import CoordinatorManager
 from unity.manager_registry import ManagerRegistry
 from unity.session_details import SESSION_DETAILS
 
@@ -20,13 +20,13 @@ def reset_coordinator_manager_state():
     SESSION_DETAILS.reset()
 
 
-class TestCoordinatorOnboardingManager:
+class TestCoordinatorManager:
     def test_direct_instantiation_registers_singleton_instance(self):
-        manager = CoordinatorOnboardingManager()
-        assert ManagerRegistry.get_instance(CoordinatorOnboardingManager) is manager
+        manager = CoordinatorManager()
+        assert ManagerRegistry.get_instance(CoordinatorManager) is manager
 
     def test_personal_coordinator_has_empty_authorized_humans(self):
-        manager = CoordinatorOnboardingManager()
+        manager = CoordinatorManager()
 
         with patch(
             "unity.coordinator_manager.coordinator_manager.unify.list_org_members",
@@ -39,7 +39,7 @@ class TestCoordinatorOnboardingManager:
         SESSION_DETAILS.org_id = 7
         SESSION_DETAILS.unify_key = "owner-key"
 
-        manager = CoordinatorOnboardingManager()
+        manager = CoordinatorManager()
 
         with patch(
             "unity.coordinator_manager.coordinator_manager.unify.list_org_members",
@@ -57,7 +57,7 @@ class TestCoordinatorOnboardingManager:
         SESSION_DETAILS.org_id = 7
         SESSION_DETAILS.unify_key = "owner-key"
 
-        manager = CoordinatorOnboardingManager()
+        manager = CoordinatorManager()
 
         response = requests.Response()
         response.status_code = 500
@@ -78,7 +78,7 @@ class TestCoordinatorOnboardingManager:
         SESSION_DETAILS.org_id = 7
         SESSION_DETAILS.unify_key = "owner-key"
 
-        manager = CoordinatorOnboardingManager()
+        manager = CoordinatorManager()
 
         with patch(
             "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
@@ -106,7 +106,7 @@ class TestCoordinatorOnboardingManager:
         SESSION_DETAILS.org_id = 7
         SESSION_DETAILS.unify_key = "owner-key"
 
-        manager = CoordinatorOnboardingManager()
+        manager = CoordinatorManager()
 
         with patch(
             "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
@@ -118,7 +118,7 @@ class TestCoordinatorOnboardingManager:
         SESSION_DETAILS.org_id = 7
         SESSION_DETAILS.unify_key = "owner-key"
 
-        manager = CoordinatorOnboardingManager()
+        manager = CoordinatorManager()
 
         response = requests.Response()
         response.status_code = 500
@@ -145,7 +145,7 @@ class TestCoordinatorOnboardingManager:
         SESSION_DETAILS.org_id = 7
         SESSION_DETAILS.unify_key = "owner-key"
 
-        manager = CoordinatorOnboardingManager()
+        manager = CoordinatorManager()
 
         with patch(
             "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
@@ -178,7 +178,7 @@ class TestCoordinatorOnboardingManager:
         SESSION_DETAILS.org_id = 7
         SESSION_DETAILS.unify_key = "owner-key"
 
-        manager = CoordinatorOnboardingManager()
+        manager = CoordinatorManager()
 
         with patch(
             "unity.coordinator_manager.coordinator_manager.unify.list_org_members",

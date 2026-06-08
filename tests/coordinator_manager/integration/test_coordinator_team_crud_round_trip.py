@@ -11,7 +11,7 @@ from tests.coordinator_manager.integration.local_stack_harness import (
     delete_team,
     unique_org_name,
 )
-from unity.coordinator_manager.workspace_manager import CoordinatorWorkspaceManager
+from unity.coordinator_manager.coordinator_manager import CoordinatorManager
 from unity.manager_registry import ManagerRegistry
 from unity.session_details import SESSION_DETAILS
 
@@ -66,7 +66,7 @@ def test_coordinator_team_crud_round_trip_local_stack(require_local_stack):
         org_id=org["id"],
         orchestra_url=urls.orchestra_url,
     )
-    manager = CoordinatorWorkspaceManager()
+    manager = CoordinatorManager()
 
     created_team_id: int | None = None
     colleague_id: int | None = None

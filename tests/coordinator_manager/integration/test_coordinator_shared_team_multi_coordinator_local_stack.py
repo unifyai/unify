@@ -33,7 +33,7 @@ from unity.actor.code_act_actor import CodeActActor
 from unity.actor.environments import StateManagerEnvironment
 from unity.common.context_registry import ContextRegistry
 from unity.common.llm_helpers import methods_to_tool_dict
-from unity.coordinator_manager.workspace_manager import CoordinatorWorkspaceManager
+from unity.coordinator_manager.coordinator_manager import CoordinatorManager
 from unity.function_manager.function_manager import FunctionManager
 from unity.function_manager.primitives import PrimitiveScope, Primitives
 from unity.guidance_manager.guidance_manager import GuidanceManager
@@ -223,7 +223,7 @@ async def test_shared_team_guidance_reaches_member_coordinators_local_stack(
             coordinator=org["owner_coordinator"],
             team_summaries=[],
         )
-        manager = CoordinatorWorkspaceManager()
+        manager = CoordinatorManager()
 
         team_description = (
             "Shared launch coordination memory for revenue operations, "

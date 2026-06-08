@@ -16,10 +16,10 @@ from unity.common.single_shot import single_shot_tool_decision
 from unity.common.llm_client import new_llm_client
 from unity.conversation_manager.cm_types.mode import Mode
 from unity.conversation_manager.domains.brain import build_brain_spec
-from unity.coordinator_manager.workspace_manager import (
+from unity.coordinator_manager.coordinator_manager import (
     COORDINATOR_TOOL_METHOD_NAMES,
 )
-from unity.coordinator_manager.workspace_manager import CoordinatorWorkspaceManager
+from unity.coordinator_manager.coordinator_manager import CoordinatorManager
 from unity.function_manager.primitives.registry import get_registry
 from unity.session_details import SESSION_DETAILS, AssistantDetails, TeamSummary
 
@@ -68,11 +68,11 @@ def test_eval_coordinator_tool_surface_matches_runtime() -> None:
     """Keep eval coordinator primitive expectations in runtime lockstep."""
     expected = set(_COORDINATOR_TOOLS)
     assert "set_setup_state" not in expected
-    assert expected == set(CoordinatorWorkspaceManager._PRIMITIVE_METHODS)
+    assert expected == set(CoordinatorManager._PRIMITIVE_METHODS)
     assert expected == set(
         get_registry().primitive_methods(manager_alias="coordinator"),
     )
-    manager = CoordinatorWorkspaceManager()
+    manager = CoordinatorManager()
     assert all(
         callable(getattr(manager, method_name, None)) for method_name in expected
     )
@@ -1505,12 +1505,12 @@ def _build_brain_spec(scenario: CoordinatorScenario):
     with (
         patch(
             "unity.coordinator_manager.coordinator_manager."
-            "CoordinatorOnboardingManager.get_org_members",
+            "CoordinatorManager.get_org_members",
             return_value=list(_AUTHORIZED_HUMANS),
         ),
         patch(
             "unity.coordinator_manager.coordinator_manager."
-            "CoordinatorOnboardingManager.get_workspace_coordinator_name",
+            "CoordinatorManager.get_workspace_coordinator_name",
             return_value=scenario.workspace_coordinator_name,
         ),
     ):
