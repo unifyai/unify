@@ -25,7 +25,6 @@ from unity.coordinator_manager.activity import (
     publish_coordinator_activity,
     safe_activity_text,
 )
-from unity.coordinator_manager.coordinator_manager import CoordinatorOnboardingManager
 from unity.events.types.coordinator_activity import (
     CoordinatorActivityEntity,
     CoordinatorActivityPhase,
@@ -88,8 +87,6 @@ _DELEGATE_INTENT_SURFACES: dict[str, CoordinatorActivitySurface] = {
     "data_setup": "data",
 }
 
-ChecklistItemStatus = Literal["pending", "done", "skipped"]
-
 AssistantDesktopMode = Literal["ubuntu", "windows", "macos"]
 
 
@@ -147,8 +144,6 @@ COORDINATOR_TOOL_METHOD_NAMES: tuple[str, ...] = (
     "list_team_members",
     "list_teams_for_assistant",
     "commission_colleague_into_team",
-    "add_setup_checklist_item",
-    "update_setup_checklist_item",
 )
 
 
@@ -1577,113 +1572,6 @@ class _CoordinatorWorkspaceSession:
             )
         except RequestError as exc:
             return _request_error_to_tool_error(exc)
-
-    def add_setup_checklist_item(
-        self,
-        *,
-        title: str,
-        status: ChecklistItemStatus | None = None,
-        description: str | None = None,
-        kind: str | None = None,
-        chat_prompt: str | None = None,
-        chat_prompt_label: str | None = None,
-    ) -> dict[str, Any] | ToolError:
-        """Add a setup checklist row to the coordinator onboarding plan.
-
-        Use this when a newly discovered onboarding requirement should be tracked
-        explicitly in the Coordinator checklist. Optionally set initial status,
-        description, step kind, and a suggested chat CTA for the user.
-
-        Parameters
-        ----------
-        title : str
-            User-visible checklist item title.
-        status : ChecklistItemStatus | None, optional
-            Optional initial checklist status (``pending``, ``done``,
-            or ``skipped``).
-        description : str | None, optional
-            Optional detail text for the checklist row.
-        kind : str | None, optional
-            Optional checklist row category value.
-        chat_prompt : str | None, optional
-            Optional CTA prompt associated with the checklist row.
-        chat_prompt_label : str | None, optional
-            Optional CTA label paired with ``chat_prompt``.
-        """
-        try:
-            add_kwargs: dict[str, Any] = {
-                "title": title,
-                "description": description,
-                "kind": kind,
-                "chat_prompt": chat_prompt,
-                "chat_prompt_label": chat_prompt_label,
-            }
-            if status is not None:
-                add_kwargs["initial_status"] = status
-            return CoordinatorOnboardingManager().add_checklist_item(
-                **add_kwargs,
-            )
-        except RequestError as exc:
-            return _request_error_to_tool_error(exc)
-        except Exception as exc:
-            return {
-                "error_kind": "internal",
-                "message": "Failed to add setup checklist item.",
-                "details": {"error": str(exc)},
-            }
-
-    def update_setup_checklist_item(
-        self,
-        *,
-        item_id: int,
-        status: ChecklistItemStatus | None = None,
-        title: str | None = None,
-        description: str | None = None,
-        kind: str | None = None,
-        chat_prompt: str | None = None,
-        chat_prompt_label: str | None = None,
-    ) -> dict[str, Any] | ToolError:
-        """Update an existing setup checklist row in coordinator state.
-
-        Use this when progress changes for a known checklist row (status changes,
-        title/description edits, or CTA updates). This keeps setup bookkeeping
-        aligned with completed validation and remaining onboarding work.
-
-        Parameters
-        ----------
-        item_id : int
-            Checklist row identifier to update.
-        status : ChecklistItemStatus | None, optional
-            Optional status update (``pending``, ``done``, or ``skipped``).
-        title : str | None, optional
-            Optional replacement title text.
-        description : str | None, optional
-            Optional replacement description text.
-        kind : str | None, optional
-            Optional replacement row category.
-        chat_prompt : str | None, optional
-            Optional CTA prompt update for this row.
-        chat_prompt_label : str | None, optional
-            Optional CTA label update paired with ``chat_prompt``.
-        """
-        try:
-            return CoordinatorOnboardingManager().update_checklist_item(
-                item_id=item_id,
-                status=status,
-                title=title,
-                description=description,
-                kind=kind,
-                chat_prompt=chat_prompt,
-                chat_prompt_label=chat_prompt_label,
-            )
-        except RequestError as exc:
-            return _request_error_to_tool_error(exc)
-        except Exception as exc:
-            return {
-                "error_kind": "internal",
-                "message": "Failed to update setup checklist item.",
-                "details": {"error": str(exc)},
-            }
 
     def _resolve_or_create_commission_assistant(
         self,
