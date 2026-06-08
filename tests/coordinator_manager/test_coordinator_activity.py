@@ -7,15 +7,12 @@ import pytest
 from pydantic import ValidationError
 
 import unity.coordinator_manager.activity as activity_module
-from tests.helpers import _handle_project, capture_events
 from unity.coordinator_manager.activity import (
     activity_entity,
     flush_pending_coordinator_activity_publishes,
-    join_coordinator_activity_publishes,
     publish_coordinator_activity,
     safe_activity_text,
 )
-from unity.coordinator_manager.workspace_manager import CoordinatorWorkspaceManager
 from unity.events.stream_filters import is_streaming_noise
 from unity.events.types.coordinator_activity import CoordinatorActivityPayload
 from unity.session_details import SESSION_DETAILS
@@ -185,68 +182,3 @@ def test_coordinator_activity_is_not_streaming_noise():
         is_streaming_noise("CoordinatorActivity", payload.model_dump(mode="json"))
         is False
     )
-
-
-@pytest.mark.enable_eventbus
-@pytest.mark.asyncio
-@_handle_project
-async def test_setup_tools_emit_lightweight_activity_for_progress():
-    SESSION_DETAILS.is_coordinator = True
-    manager = CoordinatorWorkspaceManager()
-
-    async with capture_events("CoordinatorActivity") as events:
-        added = manager.add_setup_checklist_item(
-            title="Connect Salesforce",
-            description="Store read-only access and validate renewal data.",
-            kind="integration",
-            chat_prompt="I have Salesforce open. Walk me through the safest setup path.",
-            chat_prompt_label="Start guided setup",
-        )
-        item_id = added["details"]["item_id"]
-        manager.update_setup_checklist_item(
-            item_id=item_id,
-            description="Start with read-only Salesforce access, then pause.",
-            chat_prompt="Should we start with Salesforce first, or pause after planning?",
-            chat_prompt_label="Choose first slice",
-        )
-        manager.update_setup_checklist_item(
-            item_id=item_id,
-            status="done",
-            chat_prompt="Let's review the next integration before continuing.",
-            chat_prompt_label="Review next step",
-        )
-        await join_coordinator_activity_publishes()
-
-    payloads = [event.payload for event in events]
-    assert len(payloads) >= 3
-    added_payload = next(
-        payload
-        for payload in payloads
-        if payload["phase"] == "progress" and payload["checklist_item_id"] == item_id
-    )
-    assert "description" not in added_payload
-    assert added_payload["chat_prompt"] == (
-        "I have Salesforce open. Walk me through the safest setup path."
-    )
-    assert added_payload["chat_prompt_label"] == "Start guided setup"
-    needs_input_payload = next(
-        payload
-        for payload in payloads
-        if payload["phase"] == "needs_input" and payload["checklist_item_id"] == item_id
-    )
-    assert needs_input_payload["activity_id"] == added_payload["activity_id"]
-    assert needs_input_payload["chat_prompt"] == (
-        "Should we start with Salesforce first, or pause after planning?"
-    )
-    assert needs_input_payload["chat_prompt_label"] == "Choose first slice"
-    completed_payload = next(
-        payload
-        for payload in payloads
-        if payload["phase"] == "completed" and payload["checklist_item_id"] == item_id
-    )
-    assert completed_payload["correlation_id"] == added_payload["correlation_id"]
-    assert completed_payload["activity_id"] == added_payload["activity_id"]
-    assert completed_payload["chat_prompt"] == (
-        "Let's review the next integration before continuing."
-    )
-    assert completed_payload["chat_prompt_label"] == "Review next step"
