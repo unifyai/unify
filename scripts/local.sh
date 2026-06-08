@@ -289,6 +289,20 @@ start_full_cm() {
     env_suffix="-$DEPLOY_ENV"
   fi
 
+  local eventbus_publish="${EVENTBUS_PUBLISHING_ENABLED:-}"
+  local eventbus_stream="${EVENTBUS_PUBSUB_STREAMING:-}"
+  if [[ -z "$eventbus_publish" ]]; then
+    if [[ "${SELF_HOST:-0}" == "1" ]]; then
+      eventbus_publish="true"
+      eventbus_stream="true"
+    else
+      eventbus_publish="false"
+      eventbus_stream="false"
+    fi
+  elif [[ -z "$eventbus_stream" ]]; then
+    eventbus_stream="$eventbus_publish"
+  fi
+
   # Build env vars for the CM process.
   local env_vars=(
     "PUBSUB_EMULATOR_HOST=$PUBSUB_EMULATOR_HOST"
@@ -300,14 +314,16 @@ start_full_cm() {
     "UNITY_CONVERSATION_LOCAL_COMMS_MODE=$LOCAL_COMMS_MODE"
     "UNITY_CONVERSATION_LOCAL_COMMS_HOST=$LOCAL_COMMS_HOST"
     "UNITY_CONVERSATION_LOCAL_COMMS_PORT=$LOCAL_COMMS_PORT"
-    "UNITY_COMMS_URL=$(gateway_base_url)"
-    "UNITY_ADAPTERS_URL=$(gateway_base_url)"
+    "UNITY_COMMS_URL=${UNITY_COMMS_URL:-$(gateway_base_url)}"
+    "UNITY_ADAPTERS_URL=${UNITY_ADAPTERS_URL:-$(gateway_base_url)}"
     "UNITY_VALIDATE_LLM_PROVIDERS=false"
-    "EVENTBUS_PUBLISHING_ENABLED=false"
-    "EVENTBUS_PUBSUB_STREAMING=false"
+    "EVENTBUS_PUBLISHING_ENABLED=$eventbus_publish"
+    "EVENTBUS_PUBSUB_STREAMING=$eventbus_stream"
     "TEST=false"
     "UNITY_INACTIVITY_TIMEOUT_SECONDS=${UNITY_INACTIVITY_TIMEOUT_SECONDS:-0}"
   )
+  [[ -n "${UNITY_LOCAL_ROOT:-}" ]] && env_vars+=("UNITY_LOCAL_ROOT=$UNITY_LOCAL_ROOT")
+  [[ -n "${UNITY_LOCAL_SCHEDULER:-}" ]] && env_vars+=("UNITY_LOCAL_SCHEDULER=$UNITY_LOCAL_SCHEDULER")
   [[ -n "$LOCAL_COMMS_PUBLIC_URL" ]] && env_vars+=("UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL=$LOCAL_COMMS_PUBLIC_URL")
 
   # Forward API keys if present.
