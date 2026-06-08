@@ -482,40 +482,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
         """
         return self.assistant_screen_share_active
 
-    def get_coordinator_goal_context(
-        self,
-    ) -> list[dict[str, Any]] | None:
-        """Return Coordinator onboarding checklist rows for prompt rendering."""
-
-        if not self.initialized:
-            return None
-        if not SESSION_DETAILS.is_coordinator:
-            return None
-
-        from unity.coordinator_manager.coordinator_manager import (
-            CoordinatorOnboardingManager,
-        )
-        from unity.common.context_registry import ContextRegistry
-        from unity.conversation_manager.domains.managers_utils import (
-            ensure_runtime_context,
-        )
-
-        ensure_runtime_context()
-        manager = CoordinatorOnboardingManager()
-        try:
-            checklist = manager.get_checklist()
-            if not checklist:
-                return None
-            return checklist
-        except Exception as exc:
-            if ContextRegistry.is_missing_base_context_error(exc):
-                LOGGER.warning(
-                    "Coordinator context unavailable during prompt render; "
-                    "continuing without onboarding checklist.",
-                )
-                return None
-            raise
-
     def get_active_contact(self) -> dict | None:
         """Get the contact for the current active call, or fall back to the boss contact."""
         return self.call_manager.call_contact or self.contact_index.get_contact(
@@ -1684,8 +1650,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
         )
 
         _t0 = _rl_time.perf_counter()
-        _has_desktop = SESSION_DETAILS.assistant.desktop_mode in ("ubuntu", "windows")
-        coordinator_checklist = self.get_coordinator_goal_context()
         snapshot_state = self.prompt_renderer.render_state(
             self.contact_index,
             self.notifications_bar,
@@ -1700,11 +1664,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
             google_meet_active=self.call_manager.has_active_google_meet,
             teams_meet_active=self.call_manager.has_active_teams_meet,
             active_web_sessions=web_sessions,
-            coordinator_checklist=coordinator_checklist,
             managers_initialized=self.initialized,
             vm_ready=self.vm_ready,
             file_sync_complete=self.file_sync_complete,
-            has_desktop=_has_desktop,
+            has_desktop=SESSION_DETAILS.assistant.has_managed_desktop,
         )
         _render_ms = (_rl_time.perf_counter() - _t0) * 1000
 
@@ -2515,11 +2478,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
                         },
                     )
 
-            _has_desktop = SESSION_DETAILS.assistant.desktop_mode in (
-                "ubuntu",
-                "windows",
-            )
-            coordinator_checklist = self.get_coordinator_goal_context()
             snapshot_state = self.prompt_renderer.render_state(
                 self.contact_index,
                 self.notifications_bar,
@@ -2533,10 +2491,9 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 user_remote_control_active=self.user_remote_control_active,
                 google_meet_active=self.call_manager.has_active_google_meet,
                 teams_meet_active=self.call_manager.has_active_teams_meet,
-                coordinator_checklist=coordinator_checklist,
                 vm_ready=self.vm_ready,
                 file_sync_complete=self.file_sync_complete,
-                has_desktop=_has_desktop,
+                has_desktop=SESSION_DETAILS.assistant.has_managed_desktop,
             )
             brain_spec = build_brain_spec(self, snapshot_state=snapshot_state)
 

@@ -599,7 +599,6 @@ class Renderer:
         google_meet_active: bool = False,
         teams_meet_active: bool = False,
         active_web_sessions: list | None = None,
-        coordinator_checklist: list[dict[str, Any]] | None = None,
         managers_initialized: bool = True,
         vm_ready: bool = True,
         file_sync_complete: bool = True,
@@ -647,11 +646,6 @@ class Renderer:
         web_sessions_render = self.render_active_web_sessions(
             active_web_sessions or [],
         )
-        coordinator_render = ""
-        if SESSION_DETAILS.is_coordinator:
-            coordinator_render = self.render_coordinator_goal_state(
-                coordinator_checklist=coordinator_checklist,
-            )
         _web_sessions_ms = _mark_step()
 
         notif_render = self.render_notification_bar(
@@ -690,7 +684,6 @@ class Renderer:
                 infra_render,
                 meet_render,
                 web_sessions_render,
-                coordinator_render,
                 notif_render,
                 actions_render,
                 completed_render,
@@ -738,33 +731,6 @@ class Renderer:
         )
 
         return snapshot_state
-
-    @staticmethod
-    def render_coordinator_goal_state(
-        *,
-        coordinator_checklist: list[dict[str, Any]] | None = None,
-    ) -> str:
-        """Render the Coordinator's onboarding goal state for the slow brain."""
-
-        if not coordinator_checklist:
-            return ""
-
-        lines = ["<coordinator_goal>", "checklist:"]
-        for item in coordinator_checklist:
-            item_id = item.get("item_id", "?")
-            title = item.get("title", "")
-            status = item.get("status", "pending")
-            kind = item.get("kind")
-            description = item.get("description")
-            line = f"- [{status}] #{item_id}: {title}"
-            if kind:
-                line += f" ({kind})"
-            lines.append(line)
-            if description:
-                lines.append(f"  {description}")
-
-        lines.append("</coordinator_goal>")
-        return "\n".join(lines)
 
     @staticmethod
     def render_infrastructure_state(
