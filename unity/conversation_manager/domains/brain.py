@@ -232,11 +232,9 @@ def build_brain_spec(
     authorized_humans: list[dict] | None = None
     workspace_coordinator_name: str | None = None
     if cm.initialized:
-        from unity.coordinator_manager.coordinator_manager import (
-            CoordinatorOnboardingManager,
-        )
+        from unity.coordinator_manager.coordinator_manager import CoordinatorManager
 
-        coordinator_manager = CoordinatorOnboardingManager()
+        coordinator_manager = CoordinatorManager()
         if SESSION_DETAILS.is_coordinator and SESSION_DETAILS.org_id is not None:
             authorized_humans = coordinator_manager.get_org_members()
         elif not SESSION_DETAILS.is_coordinator:

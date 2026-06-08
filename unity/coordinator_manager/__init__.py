@@ -1,5 +1,5 @@
-"""Coordinator onboarding state manager."""
+"""Coordinator workspace manager and prompt-time lookups."""
 
-from .coordinator_manager import CoordinatorOnboardingManager
+from .coordinator_manager import CoordinatorManager
 
-__all__ = ["CoordinatorOnboardingManager"]
+__all__ = ["CoordinatorManager"]

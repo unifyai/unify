@@ -260,7 +260,7 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
     ManagerSpec(
         manager_alias="coordinator",
         manager_registry_key="",  # No ManagerRegistry getter - singleton via metaclass
-        primitive_class_path="unity.coordinator_manager.workspace_manager.CoordinatorWorkspaceManager",
+        primitive_class_path="unity.coordinator_manager.coordinator_manager.CoordinatorManager",
         excluded_methods=frozenset(),
         priority=6,
         domain="Coordinator Workspace Administration",
