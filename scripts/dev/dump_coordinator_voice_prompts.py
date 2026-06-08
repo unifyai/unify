@@ -228,7 +228,6 @@ def _build_fast_brain_system_prompt(
 def _build_sample_slow_brain_state(
     *,
     persona: str,
-    coordinator_checklist: list[dict] | None,
 ) -> str:
     """Render an empty-call state snapshot like the slow brain's user message."""
     is_coordinator = persona == "coordinator"
@@ -239,7 +238,6 @@ def _build_sample_slow_brain_state(
     contact_index = ContactIndex()
     snapshot = renderer.render_state(
         contact_index,
-        coordinator_checklist=coordinator_checklist if is_coordinator else None,
         managers_initialized=True,
         vm_ready=True,
         file_sync_complete=True,
@@ -412,14 +410,6 @@ def main() -> int:
         if args.include_sample_state:
             sample_state = _build_sample_slow_brain_state(
                 persona=persona,
-                coordinator_checklist=[
-                    {
-                        "item_id": 1,
-                        "title": "Create Revenue Ops assistant",
-                        "status": "pending",
-                        "notes": "Caller asked for HubSpot renewal monitoring.",
-                    },
-                ],
             )
             _write_or_print(
                 f"{label_prefix}_slow_brain_sample_state_user_message",

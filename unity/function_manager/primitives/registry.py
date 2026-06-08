@@ -266,7 +266,7 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         domain="Coordinator Workspace Administration",
         description=(
             "Coordinator-only workspace lifecycle operations for assistants, teams, "
-            "membership, and setup checklist state"
+            "membership, and Coordinator/State onboarding mode"
         ),
         use_when=(
             "The session is running as a Coordinator and needs privileged setup "
@@ -275,7 +275,7 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         examples=(
             "'Create the Regional Ops Manager colleague', "
             "'Add the supervisor to Patch 4 workspace', "
-            "'Mark setup checklist item 3 as done'"
+            "'Mark the first setup slice ready once validation passes'"
         ),
     ),
     ManagerSpec(
