@@ -189,8 +189,8 @@ def cleanup_dangling_call_processes() -> int:
     """
     Find and force-kill all dangling call processes from previous runs.
 
-    This searches for Python processes running call/unify_meet scripts
-    and immediately terminates them with SIGKILL. Since these are leftover processes
+    This searches for Python processes running call, unify_meet, or voice
+    worker scripts and immediately terminates them with SIGKILL. Since these are leftover processes
     from crashed/ungraceful shutdowns, there's no need for graceful termination.
 
     Returns
@@ -206,9 +206,9 @@ def cleanup_dangling_call_processes() -> int:
         return 0
 
     try:
-        # Find all Python processes running call scripts
+        # Find dangling voice worker and per-call agent processes
         output = subprocess.getoutput(
-            "ps -eo pid,command | grep -E 'medium_scripts/(call|unify_meet)\\.py'",
+            "ps -eo pid,command | grep -E 'medium_scripts/(call|unify_meet|worker)\\.py'",
         )
 
         # Parse PIDs and commands, excluding the grep process itself

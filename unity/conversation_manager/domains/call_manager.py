@@ -157,6 +157,10 @@ class LivekitCallManager:
         if self._worker_proc is not None and self._worker_proc.poll() is None:
             return
 
+        from unity.helpers import cleanup_dangling_call_processes
+
+        cleanup_dangling_call_processes()
+
         from unity.conversation_manager.medium_scripts.worker import (
             clear_worker_signal_files,
         )
@@ -283,8 +287,8 @@ class LivekitCallManager:
         socket_path = await self._ensure_socket_server()
 
         meta_dict = {
-            "voice_provider": self.voice_provider,
-            "voice_id": self.voice_id,
+            "voice_provider": self.voice_provider or "cartesia",
+            "voice_id": self.voice_id or "",
             "outbound": outbound,
             "channel": channel,
             "contact": contact,
