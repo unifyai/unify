@@ -73,8 +73,6 @@ def test_workspace_manager_exposes_rich_primitive_docstrings():
         "create_team",
         "add_team_member",
         "commission_colleague_into_team",
-        "add_setup_checklist_item",
-        "update_setup_checklist_item",
     )
     for method_name in methods:
         doc = inspect.getdoc(getattr(CoordinatorWorkspaceManager, method_name))
