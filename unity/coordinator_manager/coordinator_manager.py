@@ -46,10 +46,10 @@ def _coordinator_role_required_error() -> ToolError:
     }
 
 
-def _coordinator_primitive(
+def _gated_tool_call(
     implementation: Callable[..., Any],
 ) -> Callable[..., Any]:
-    """Expose a workspace session method through the coordinator role gate."""
+    """Expose a tool-call implementation through the coordinator role gate."""
 
     @functools.wraps(implementation)
     def gateway(
@@ -61,7 +61,7 @@ def _coordinator_primitive(
         permission_error = CoordinatorManager._require_coordinator_role()
         if permission_error is not None:
             return permission_error
-        return implementation(_CoordinatorWorkspaceSession(), *args, **kwargs)
+        return implementation(_CoordinatorToolCall(), *args, **kwargs)
 
     return gateway
 
@@ -150,8 +150,12 @@ COORDINATOR_TOOL_METHOD_NAMES: tuple[str, ...] = (
 )
 
 
-class _CoordinatorWorkspaceSession:
-    """Short-lived coordinator workspace session with isolated reachability caches."""
+class _CoordinatorToolCall:
+    """Per-invocation scope for one gated coordinator primitive call.
+
+    Holds reachability caches and activity metadata that must not leak across
+    separate tool invocations on the long-lived ``CoordinatorManager`` singleton.
+    """
 
     def __init__(self) -> None:
         self._assistant_cache: list[dict[str, Any]] | None = None
@@ -2177,7 +2181,13 @@ def _request_error_to_tool_error(exc: RequestError) -> ToolError:
 
 
 class CoordinatorManager(metaclass=SingletonABCMeta):
-    """Coordinator workspace lifecycle primitives and prompt-time lookups."""
+    """Singleton facade for coordinator prompt lookups and workspace tools.
+
+    Prompt-time lookups (``get_org_members``, ``get_workspace_coordinator_name``)
+    live on this singleton. Each ``primitives.coordinator.*`` tool runs on a
+    fresh :class:`_CoordinatorToolCall` so reachability caches and activity
+    metadata do not leak across invocations.
+    """
 
     _PRIMITIVE_METHODS = COORDINATOR_TOOL_METHOD_NAMES
 
@@ -2259,5 +2269,5 @@ for _method_name in COORDINATOR_TOOL_METHOD_NAMES:
     setattr(
         CoordinatorManager,
         _method_name,
-        _coordinator_primitive(getattr(_CoordinatorWorkspaceSession, _method_name)),
+        _gated_tool_call(getattr(_CoordinatorToolCall, _method_name)),
     )

@@ -7,7 +7,7 @@ from unify.utils.http import RequestError
 from unity.coordinator_manager.coordinator_manager import (
     COORDINATOR_TOOL_METHOD_NAMES,
     CoordinatorManager,
-    _CoordinatorWorkspaceSession,
+    _CoordinatorToolCall,
 )
 from unity.session_details import SESSION_DETAILS
 
@@ -147,7 +147,7 @@ class TestCoordinatorManager:
         tools = CoordinatorManager()
 
         monkeypatch.setattr(
-            _CoordinatorWorkspaceSession,
+            _CoordinatorToolCall,
             "_assistant_is_reachable",
             lambda self, agent_id: captured.update({"agent_id": agent_id}) or True,
         )
@@ -337,7 +337,7 @@ class TestCoordinatorManager:
         tools = CoordinatorManager()
 
         monkeypatch.setattr(
-            _CoordinatorWorkspaceSession,
+            _CoordinatorToolCall,
             "_assistant_is_reachable",
             lambda self, agent_id: captured.update({"agent_id": agent_id}) or True,
         )
@@ -506,7 +506,7 @@ class TestCoordinatorManager:
         tools = CoordinatorManager()
 
         monkeypatch.setattr(
-            _CoordinatorWorkspaceSession,
+            _CoordinatorToolCall,
             "_assistant_is_reachable",
             lambda self, agent_id: captured.update({"agent_id": agent_id}) or True,
         )
@@ -946,7 +946,7 @@ class TestCoordinatorManager:
         tools = CoordinatorManager()
 
         monkeypatch.setattr(
-            _CoordinatorWorkspaceSession,
+            _CoordinatorToolCall,
             "_assistant_is_reachable",
             lambda self, agent_id: captured.update({"agent_id": agent_id}) or True,
         )
