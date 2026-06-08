@@ -247,3 +247,26 @@ class TestContactIds:
         finally:
             SESSION_DETAILS.self_contact_id = original_self
             SESSION_DETAILS.boss_contact_id = original_boss
+
+
+class TestAssistantManagedDesktop:
+    def test_desktop_mode_without_url_is_not_managed(self):
+        assistant = AssistantDetails(
+            desktop_mode="ubuntu",
+            desktop_url=None,
+        )
+        assert assistant.has_managed_desktop is False
+
+    def test_desktop_mode_with_url_is_managed(self):
+        assistant = AssistantDetails(
+            desktop_mode="ubuntu",
+            desktop_url="https://unity-pool-1.vm.unify.ai",
+        )
+        assert assistant.has_managed_desktop is True
+
+    def test_non_managed_desktop_mode_is_false_even_with_url(self):
+        assistant = AssistantDetails(
+            desktop_mode="none",
+            desktop_url="https://example.com",
+        )
+        assert assistant.has_managed_desktop is False
