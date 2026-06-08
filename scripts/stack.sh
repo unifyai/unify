@@ -4,17 +4,17 @@
 # =============================================================================
 #
 # Brings up Orchestra, Comms App, Pub/Sub emulator, Adapters, Console, and
-# Unity CM for the bootstrapped personal Coordinator.
+# Unity CM for the signed-in user's personal Coordinator (after register/login).
 #
 # Usage:
-#   ./scripts/stack.sh up       Start the full self-host stack
-#   ./scripts/stack.sh down     Stop all services
-#   ./scripts/stack.sh status   Show service status
-#   ./scripts/stack.sh doctor   Check prerequisites
+#   ./scripts/stack.sh up           Start infra (no Unity CM until login)
+#   ./scripts/stack.sh coordinator  Start Unity CM for logged-in user
+#   ./scripts/stack.sh down         Stop all services
+#   ./scripts/stack.sh status       Show service status
+#   ./scripts/stack.sh doctor       Check prerequisites
 #
 # Environment:
 #   UNIFY_STACK_ROOT          Parent dir with orchestra/console/unity-deploy siblings
-#   SELF_HOST_OWNER_PASSWORD  Pin the bootstrap owner password (optional)
 #   OPENAI_API_KEY / ANTHROPIC_API_KEY  Required for Coordinator chat
 #   DEEPGRAM_API_KEY / CARTESIA_API_KEY Required for browser calls (prompted by unity setup)
 #
@@ -31,7 +31,6 @@ ORCHESTRA_REPO_PATH="${ORCHESTRA_REPO_PATH:-$UNIFY_STACK_ROOT/orchestra}"
 COMMUNICATION_REPO_PATH="${COMMUNICATION_REPO_PATH:-$UNIFY_STACK_ROOT/unity-deploy}"
 
 CONSOLE_LOCAL_SCRIPT="$CONSOLE_REPO_PATH/scripts/local.sh"
-CREDENTIALS_FILE="${SELF_HOST_CREDENTIALS_FILE:-$HOME/.unity/self-host-credentials.json}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -120,16 +119,30 @@ cmd_doctor() {
   echo "-------------"
   require_repo "Console" "$CONSOLE_REPO_PATH" || ok=false
   require_repo "Orchestra" "$ORCHESTRA_REPO_PATH" || ok=false
-  require_repo "Communication" "$COMMUNICATION_REPO_PATH" || ok=false
-  if [[ -f "$COMMUNICATION_REPO_PATH/.venv/bin/python" ]]; then
-    if "$COMMUNICATION_REPO_PATH/.venv/bin/python" -c "from unity.task_scheduler.offline_runner_contract import build_offline_run_key" &>/dev/null; then
-      log_success "Comms App unity import OK"
+  require_repo "unity-deploy" "$COMMUNICATION_REPO_PATH" || ok=false
+  if [[ ! -f "$COMMUNICATION_REPO_PATH/.venv/bin/python" ]]; then
+    if command -v uv &>/dev/null && [[ -f "$COMMUNICATION_REPO_PATH/pyproject.toml" ]]; then
+      log_info "unity-deploy/.venv missing — creating venv (first-time setup)..."
+      if (cd "$COMMUNICATION_REPO_PATH" && uv venv); then
+        log_success "unity-deploy/.venv created"
+      else
+        log_error "Failed to create unity-deploy/.venv"
+        ok=false
+      fi
     else
-      log_warn "Comms venv missing unity — auto-installs on stack up"
+      log_error "unity-deploy/.venv missing — run: cd $COMMUNICATION_REPO_PATH && uv sync"
+      ok=false
     fi
-  else
-    log_warn "communication/.venv missing — run: cd $COMMUNICATION_REPO_PATH && uv sync"
-    ok=false
+  fi
+  if [[ -f "$COMMUNICATION_REPO_PATH/.venv/bin/python" ]]; then
+    local comms_py="$COMMUNICATION_REPO_PATH/.venv/bin/python"
+    if "$comms_py" -c "import adapters.main" &>/dev/null; then
+      log_success "Adapters/Comms runtime OK"
+    elif "$comms_py" -c "from unity.task_scheduler.offline_runner_contract import build_offline_run_key" &>/dev/null; then
+      log_warn "unity-deploy package deps missing — auto-installs when Adapters/Comms start"
+    else
+      log_warn "Comms venv incomplete — auto-installs when Adapters/Comms start"
+    fi
   fi
 
   if [[ -f "$UNITY_REPO_PATH/.venv/bin/python" ]]; then
@@ -200,6 +213,13 @@ cmd_doctor() {
   fi
 
   echo ""
+  echo "Runtime"
+  echo "-------"
+  log_info "FileManager workspace: ${UNITY_LOCAL_ROOT:-$HOME/.unity/workspace}"
+  log_info "Scheduled tasks use in-process LocalActivationScheduler (stack must stay up)"
+  log_info "Live Actions stream via EventBus → Pub/Sub actions-sub"
+
+  echo ""
   if [[ "$ok" == "true" ]]; then
     log_success "Doctor passed — run: unity stack up"
     return 0
@@ -242,11 +262,6 @@ cmd_up() {
     # shellcheck disable=SC1090
     source "$SELF_HOST_ENV_SCRIPT"
     export_workspace_oauth_env "$UNITY_REPO_PATH/.env"
-  elif [[ -f "$UNITY_REPO_PATH/.env" ]]; then
-    # shellcheck disable=SC1090
-    set -a
-    source "$UNITY_REPO_PATH/.env"
-    set +a
   fi
 
   # voice.sh runs a local LiveKit server with dev credentials. unity/.env
@@ -261,31 +276,17 @@ cmd_up() {
     return 1
   fi
 
-  mkdir -p "$(dirname "$CREDENTIALS_FILE")"
-  if [[ -f /tmp/self-host-bootstrap.json ]]; then
-    cp /tmp/self-host-bootstrap.json "$CREDENTIALS_FILE"
-  fi
-
+  local console_port="${CONSOLE_PORT:-3000}"
   echo ""
   echo "=============================================="
   log_success "Self-host stack is ready"
   echo "=============================================="
   echo ""
-  if [[ -f "$CREDENTIALS_FILE" ]]; then
-    local email password console_port
-    email="$(python3 -c "import json; print(json.load(open('$CREDENTIALS_FILE'))['email'])" 2>/dev/null || echo "owner@selfhost.dev")"
-    password="$(python3 -c "import json; print(json.load(open('$CREDENTIALS_FILE'))['password'])" 2>/dev/null || echo "<see bootstrap output>")"
-    console_port="${CONSOLE_PORT:-3000}"
-    echo "  Console:   http://localhost:${console_port}"
-    echo "  Email:     $email"
-    echo "  Password:  $password"
-    echo ""
-    echo "  Credentials saved to: $CREDENTIALS_FILE"
-  else
-    log_warn "Bootstrap credentials file not found — check console local.sh output"
-  fi
+  echo "  Console:   http://localhost:${console_port}"
   echo ""
-  echo "  Sign in on the Login tab, then chat with the Coordinator."
+  echo "  Create an account on /login, then chat with your Coordinator."
+  echo "  Unity CM starts automatically after register/login, or run:"
+  echo "    unity stack coordinator"
   echo ""
 }
 
@@ -313,6 +314,15 @@ main() {
     down|stop) cmd_down "$@" ;;
     status) cmd_status "$@" ;;
     doctor|check) cmd_doctor "$@" ;;
+    coordinator|unity)
+      export SELF_HOST=1
+      if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
+        # shellcheck disable=SC1090
+        source "$SELF_HOST_ENV_SCRIPT"
+        export_workspace_oauth_env "$UNITY_REPO_PATH/.env"
+      fi
+      bash "$CONSOLE_LOCAL_SCRIPT" start-coordinator
+      ;;
     help|-h|--help)
       sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
       ;;
