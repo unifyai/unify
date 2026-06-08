@@ -24,6 +24,13 @@ import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
+skip = {
+    "UNIFY_KEY",
+    "SHARED_UNIFY_KEY",
+    "unify_key",
+    "UNITY_COMMS_URL",
+    "UNITY_ADAPTERS_URL",
+}
 key_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 seen: set[str] = set()
 for raw in path.read_text().splitlines():
@@ -34,7 +41,7 @@ for raw in path.read_text().splitlines():
         continue
     key, _, val = line.partition("=")
     key = key.strip()
-    if not key_re.match(key) or key in seen:
+    if key in skip or not key_re.match(key) or key in seen:
         continue
     seen.add(key)
     val = val.strip()
