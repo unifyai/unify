@@ -215,7 +215,7 @@ cmd_doctor() {
   echo ""
   echo "Runtime"
   echo "-------"
-  log_info "FileManager workspace: ${UNITY_LOCAL_ROOT:-$HOME/.unity/workspace}"
+  log_info "FileManager workspace: ${UNITY_LOCAL_ROOT:-$HOME/Unity/Local}"
   log_info "Scheduled tasks use in-process LocalActivationScheduler (stack must stay up)"
   log_info "Live Actions stream via EventBus → Pub/Sub actions-sub"
 
