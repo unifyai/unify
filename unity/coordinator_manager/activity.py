@@ -97,7 +97,6 @@ def publish_coordinator_activity(
     title: str,
     surfaces: Sequence[CoordinatorActivitySurface] = (),
     summary: str | None = None,
-    checklist_item_id: int | None = None,
     related_entities: Sequence[CoordinatorActivityEntity | dict] = (),
     chat_prompt: str | None = None,
     chat_prompt_label: str | None = None,
@@ -133,7 +132,6 @@ def publish_coordinator_activity(
                     max_length=_MAX_CARD_TEXT_LENGTH,
                 )
             ),
-            checklist_item_id=checklist_item_id,
             related_entities=[
                 (
                     entity
