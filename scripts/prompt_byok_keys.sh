@@ -76,9 +76,19 @@ has_env_value() {
   [[ -f "$ENV_FILE" ]] && grep -qE "^${key}=.+$" "$ENV_FILE"
 }
 
+read_env_value() {
+  local key="$1"
+  if [[ ! -f "$ENV_FILE" ]]; then
+    return 1
+  fi
+  grep -E "^${key}=" "$ENV_FILE" | head -1 | sed 's/^[^=]*=//'
+}
+
 upsert_env() {
   local key="$1"
   local val="$2"
+  val="${val//$'\n'/}"
+  val="${val//$'\r'/}"
   if [[ ! -f "$ENV_FILE" ]]; then
     touch "$ENV_FILE"
   fi
@@ -206,7 +216,7 @@ prompt_workspace_oauth() {
 
   if has_env_value MICROSOFT_BYOD_CLIENT_ID && ! has_env_value MS365_BYOD_CLIENT_ID; then
     local ms_id
-    ms_id="$(grep -E '^MICROSOFT_BYOD_CLIENT_ID=' "$ENV_FILE" | sed 's/^[^=]*=//')"
+    ms_id="$(read_env_value MICROSOFT_BYOD_CLIENT_ID)"
     upsert_env "MS365_BYOD_CLIENT_ID" "$ms_id"
     log_success "Mirrored MS365_BYOD_CLIENT_ID from MICROSOFT_BYOD_CLIENT_ID"
   fi
@@ -230,9 +240,9 @@ prompt_workspace_oauth() {
 sync_anticaptcha_keys() {
   local key=""
   if has_env_value ANTICAPTCHA_KEY; then
-    key="$(grep -E '^ANTICAPTCHA_KEY=' "$ENV_FILE" | sed 's/^[^=]*=//')"
+    key="$(read_env_value ANTICAPTCHA_KEY)"
   elif has_env_value UNITY_ACTOR_ANTICAPTCHA_KEY; then
-    key="$(grep -E '^UNITY_ACTOR_ANTICAPTCHA_KEY=' "$ENV_FILE" | sed 's/^[^=]*=//')"
+    key="$(read_env_value UNITY_ACTOR_ANTICAPTCHA_KEY)"
   fi
   if [[ -z "$key" ]]; then
     return 0
