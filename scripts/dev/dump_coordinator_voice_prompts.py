@@ -82,7 +82,7 @@ def _load_coordinator_bio() -> str:
 COORDINATOR_BIO = _load_coordinator_bio()
 
 # Sample boss/roster stand-ins — production fills these from contacts and
-# CoordinatorOnboardingManager.get_org_members().
+# CoordinatorManager.get_org_members().
 DEFAULT_BOSS = {
     "contact_id": 1,
     "first_name": "Dana",
@@ -274,7 +274,7 @@ def main() -> int:
               LiveKit Agent; conversation history and [notification] messages are appended
               at runtime.
             - Org roster (authorized_humans) is sample data here; production loads it via
-              CoordinatorOnboardingManager.get_org_members() when org_id is set.
+              CoordinatorManager.get_org_members() when org_id is set.
             """,
         ),
     )
