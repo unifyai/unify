@@ -12,6 +12,18 @@ set -euo pipefail
 # Matches get_local_root() in unity/file_manager/settings.py (~/Unity/Local).
 SELF_HOST_DEFAULT_WORKSPACE="${SELF_HOST_DEFAULT_WORKSPACE:-$HOME/Unity/Local}"
 
+# Persistent self-host state (survives reboot; unlike /tmp).
+SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+
+self_host_coordinator_runtime_file() {
+  printf '%s/coordinator-runtime.json' "$SELF_HOST_STATE_DIR"
+}
+
+export_self_host_coordinator_runtime_file() {
+  export SELF_HOST_COORDINATOR_RUNTIME_FILE="$(self_host_coordinator_runtime_file)"
+  mkdir -p "$SELF_HOST_STATE_DIR"
+}
+
 default_self_host_workspace() {
   printf '%s' "${UNITY_LOCAL_ROOT:-$SELF_HOST_DEFAULT_WORKSPACE}"
 }
