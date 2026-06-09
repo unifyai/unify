@@ -150,6 +150,22 @@ async def resolve_whatsapp_route(
     return response.json()
 
 
+async def resolve_phone_route(
+    pool_number: str,
+    sender: str,
+) -> dict[str, Any] | None:
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.get(
+            f"{SETTINGS.ORCHESTRA_URL}/admin/phone/resolve",
+            params={"pool_number": pool_number, "sender": sender},
+            headers=_admin_headers(),
+        )
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    return response.json()
+
+
 async def upsert_whatsapp_call_session(payload: dict[str, Any]) -> dict[str, Any]:
     _LOCAL_WHATSAPP_CALL_SESSIONS[payload["provider_call_sid"]] = payload
     try:
@@ -223,6 +239,24 @@ async def _assistant_for_whatsapp_route(
         resolved_assistant_id,
         reason=reason,
         medium="whatsapp",
+        metadata={"route": route, "assistant": assistant},
+    )
+    return assistant, default_contacts(assistant)
+
+
+async def _assistant_for_phone_route(
+    *,
+    route: dict[str, Any],
+    context: GatewayContext,
+    reason: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    assistant_id = str(route["assistant_id"])
+    assistant = await get_assistant(assistant_id=assistant_id)
+    resolved_assistant_id = str(assistant["assistant_id"])
+    await context.runtime_activator.activate(
+        resolved_assistant_id,
+        reason=reason,
+        medium="phone",
         metadata={"route": route, "assistant": assistant},
     )
     return assistant, default_contacts(assistant)
@@ -304,14 +338,27 @@ async def twilio_sms_webhook(
     to_number = str(form_data.get("To") or "")
     from_number = str(form_data.get("From") or "")
     body = str(form_data.get("Body") or "")
-    try:
-        assistant, contacts = await _assistant_for_phone(
-            phone_number=to_number,
+    route = await resolve_phone_route(to_number, from_number)
+    action = route.get("action") if route else None
+    if route is not None and action == "auto_reply":
+        return _inactive_message_response()
+    if action in {"reject_cold", "reject_ambiguous"}:
+        return _inactive_message_response("This number is not accepting new messages.")
+    if route and "assistant_id" in route:
+        assistant, contacts = await _assistant_for_phone_route(
+            route=route,
             context=context,
             reason="twilio_sms",
         )
-    except HTTPException:
-        return _inactive_message_response()
+    else:
+        try:
+            assistant, contacts = await _assistant_for_phone(
+                phone_number=to_number,
+                context=context,
+                reason="twilio_sms",
+            )
+        except HTTPException:
+            return _inactive_message_response()
 
     await publish_runtime_event(
         context,
@@ -322,6 +369,7 @@ async def twilio_sms_webhook(
             "to_number": to_number,
             "from_number": from_number,
             "body": body,
+            "role": route.get("role", "contact") if route else "contact",
         },
     )
     return Response(content=str(MessagingResponse()), media_type="text/xml")
@@ -335,21 +383,67 @@ async def twilio_call_webhook(
     form_data = await request.form()
     to_number = str(form_data.get("To") or "")
     from_number = str(form_data.get("From") or "")
-    try:
-        assistant, contacts = await _assistant_for_phone(
-            phone_number=to_number,
+    provider_call_sid = str(form_data.get("CallSid") or f"missing-{uuid.uuid4()}")
+    route = await resolve_phone_route(to_number, from_number)
+    if route is not None and route.get("action") in {
+        "auto_reply",
+        "reject_cold",
+        "reject_ambiguous",
+    }:
+        return _inactive_voice_response()
+    if route and "assistant_id" in route:
+        assistant, contacts = await _assistant_for_phone_route(
+            route=route,
             context=context,
             reason="twilio_call",
         )
-    except HTTPException:
-        return _inactive_voice_response()
+    else:
+        try:
+            assistant, contacts = await _assistant_for_phone(
+                phone_number=to_number,
+                context=context,
+                reason="twilio_call",
+            )
+        except HTTPException:
+            return _inactive_voice_response()
 
     assistant_id = str(assistant["assistant_id"])
-    date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    conference_name = f"Unity_{to_number.lstrip('+')}_{date_time}"
-    room_name = _room_name(assistant_id, "phone")
-    sip_uri = make_sip_uri(to_number, context.credentials)
-    await ensure_phone_dispatch_rule(to_number, room_name, context.credentials)
+    if route and "assistant_id" in route:
+        call_id = provider_call_sid.replace(":", "-")
+        conference_name = f"unity_phone_conf_{call_id}"
+        room_name = f"unity_phone_room_{assistant_id}_{call_id}"
+        sip_uri, sip_target = make_call_scoped_sip_uri(
+            to_number,
+            call_id,
+            context.credentials,
+            headers={
+                "X-Unity-Call-Session": call_id,
+                "X-Unity-Provider-Call-Sid": provider_call_sid,
+                "X-Unity-Room": room_name,
+            },
+        )
+        sip_dispatch_rule_id = await ensure_call_scoped_dispatch_rule(
+            base_phone_number=to_number,
+            sip_target=sip_target,
+            room_name=room_name,
+            call_id=call_id,
+            assistant_id=assistant_id,
+            credentials=context.credentials,
+        )
+        if not sip_dispatch_rule_id:
+            resp = VoiceResponse()
+            resp.say(
+                "This number cannot accept calls right now. Please try again later.",
+            )
+            resp.hangup()
+            return Response(content=str(resp), media_type="text/xml")
+    else:
+        date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+        conference_name = f"Unity_{to_number.lstrip('+')}_{date_time}"
+        room_name = _room_name(assistant_id, "phone")
+        sip_uri = make_sip_uri(to_number, context.credentials)
+        sip_dispatch_rule_id = None
+        await ensure_phone_dispatch_rule(to_number, room_name, context.credentials)
     await publish_runtime_event(
         context,
         assistant_id=assistant_id,
@@ -357,6 +451,8 @@ async def twilio_call_webhook(
         event={
             "contacts": contacts,
             "conference_name": conference_name,
+            "call_session_id": provider_call_sid if route else "",
+            "provider_call_sid": provider_call_sid if route else "",
             "caller_number": from_number,
             "sip_uri": sip_uri,
             "livekit_room": room_name,
@@ -368,6 +464,7 @@ async def twilio_call_webhook(
                 "call_type": "inbound",
                 "room_created": True,
                 "bridge_established": True,
+                "sip_dispatch_rule_id": sip_dispatch_rule_id,
             },
         },
     )
