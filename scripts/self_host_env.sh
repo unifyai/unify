@@ -139,3 +139,10 @@ append_self_host_unity_runtime_env() {
     fi
   done
 }
+
+if [[ -z "${SELF_HOST_RUNTIME_HELPERS_LOADED:-}" ]]; then
+  _self_host_runtime_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+  # shellcheck source=scripts/self_host_runtime.sh
+  source "$_self_host_runtime_dir/self_host_runtime.sh"
+  SELF_HOST_RUNTIME_HELPERS_LOADED=1
+fi
