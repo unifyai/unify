@@ -646,6 +646,15 @@ case "\${1:-}" in
             exit 1
         fi
         ;;
+    service)
+        shift
+        if [ -x "\$UNITY_REPO/scripts/service.sh" ]; then
+            exec bash "\$UNITY_REPO/scripts/service.sh" "\$@"
+        else
+            echo "service.sh not found at \$UNITY_REPO/scripts/service.sh" >&2
+            exit 1
+        fi
+        ;;
     voice)
         shift
         if [ -x "\$UNITY_REPO/scripts/voice.sh" ]; then
@@ -673,7 +682,10 @@ Usage:
 
   unity setup                        Bootstrap local orchestra + BYOK wizard (LLM, voice, OAuth)
   unity stack doctor                 Check self-host prerequisites
-  unity stack up|down|status         Explicit stack control (same as unity / unity stop when Console installed)
+  unity stack up|down|status         Interactive stack (Console + ingress)
+  unity service install [--boot]     Background runtime for scheduled tasks
+  unity service start|stop|status    Control runtime service
+  unity service doctor               Runtime + CM health checks
   unity status                       Show local orchestra status
   unity restart                      Restart local orchestra (preserves data)
   unity doctor                       Diagnose missing deps, keys, and PATH
