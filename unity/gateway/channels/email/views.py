@@ -43,6 +43,7 @@ from unity.gateway.channels.outlook.views import (
 )
 from unity.gateway.common.orchestra import lookup_assistant
 from unity.gateway.credentials import EnvCredentialStore
+from unity.settings import SETTINGS
 
 logger = logging.getLogger("unity.gateway.channels.email")
 
@@ -65,6 +66,13 @@ def _is_outlook_assistant(assistant: dict) -> bool:
     if provider:
         return provider == "microsoft_365"
     return bool(assistant.get("secrets", {}).get("MICROSOFT_ACCESS_TOKEN"))
+
+
+def _is_shared_coordinator_email(sender: str) -> bool:
+    return (
+        sender.strip().lower()
+        == SETTINGS.UNITY_COORDINATOR_EMAIL_ADDRESS.strip().lower()
+    )
 
 
 async def _clone_request(request: Request, body: bytes) -> StarletteRequest:
@@ -104,9 +112,12 @@ async def send_email(request: Request):
     if not sender:
         raise HTTPException(status_code=400, detail="Missing 'from' field")
 
+    forwarded = await _clone_request(request, body_bytes)
+    if _is_shared_coordinator_email(sender):
+        return await gmail_send_email(forwarded)
+
     credentials = EnvCredentialStore()
     assistant = await lookup_assistant(sender, credentials)
-    forwarded = await _clone_request(request, body_bytes)
 
     if _is_outlook_assistant(assistant):
         return await send_outlook_email(forwarded)
@@ -131,9 +142,16 @@ async def get_attachment(
     Uses ``receiver_email`` to look up the assistant and decide which
     provider-specific endpoint to call.
     """
+    if _is_shared_coordinator_email(receiver_email):
+        return await gmail_get_attachment(
+            receiver_email=receiver_email,
+            gmail_message_id=message_id,
+            attachment_id=attachment_id,
+            filename=filename,
+        )
+
     credentials = EnvCredentialStore()
     assistant = await lookup_assistant(receiver_email, credentials)
-
     if _is_outlook_assistant(assistant):
         return await get_outlook_attachment(
             user_email=receiver_email,
