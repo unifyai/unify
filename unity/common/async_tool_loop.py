@@ -868,6 +868,11 @@ class AsyncToolLoopHandle(SteerableToolHandle):
         inner_kwargs = {
             k: v for k, v in cfg.items() if k not in ("parent_lineage", "tools")
         }
+        # Parent context was already captured in the first loop pass (often
+        # embedded in compressed system messages). Re-injecting the full blob
+        # on every compression restart can immediately re-trigger compression.
+        inner_kwargs["parent_chat_context"] = None
+        cfg["parent_chat_context"] = None
 
         async def _loop_wrapper():
             return await async_tool_loop_inner(
