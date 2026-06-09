@@ -107,8 +107,6 @@ class AssistantConfigPatch(TypedDict, total=False):
     profile_photo: str | None
     profile_video: str | None
     desktop_mode: AssistantDesktopMode
-    user_desktop_id: int | None
-    user_desktop_filesys_sync: bool | None
     voice_id: str | None
     voice_provider: str | None
     timezone: str | None

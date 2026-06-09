@@ -220,13 +220,9 @@ async def _ensure_job_running(
                     "voice_provider": _s("voice_provider"),
                     "voice_id": _s("voice_id"),
                     "desktop_mode": _s("desktop_mode", "ubuntu"),
-                    "user_desktop_mode": _s("user_desktop_mode"),
-                    "user_desktop_filesys_sync": (
-                        "true"
-                        if assistant_data.get("user_desktop_filesys_sync")
-                        else "false"
+                    "user_desktops": json.dumps(
+                        assistant_data.get("user_desktops") or [],
                     ),
-                    "user_desktop_url": _s("user_desktop_url"),
                     "demo_id": _s("demo_id"),
                     "team_ids": json.dumps(assistant_data.get("team_ids") or []),
                     "org_id": _s("organization_id"),
