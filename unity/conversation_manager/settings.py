@@ -63,7 +63,7 @@ class ConversationSettings(BaseSettings):
 
     FAST_BRAIN_MODEL: str = "gpt-5.4-mini@openai"
     FAST_BRAIN_CONTEXT_WINDOW: int = 50
-    FAST_BRAIN_MOOD_CLASSIFICATION_ENABLED: bool = True
+    FAST_BRAIN_MOOD_CLASSIFICATION_ENABLED: bool = False
     FAST_BRAIN_MOOD_CLASSIFICATION_MODEL: str = "gpt-5.5-mini@openai"
     IMPL: str = "real"
     COMMS_URL: str = Field(default="", validation_alias="UNITY_COMMS_URL")
