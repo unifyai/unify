@@ -1571,6 +1571,9 @@ class CommsManager:
                     RecordingReady(
                         conference_name=event.get("conference_name", ""),
                         recording_url=event.get("recording_url", ""),
+                        call_session_id=event.get("call_session_id"),
+                        provider_call_sid=event.get("provider_call_sid"),
+                        room_name=event.get("room_name") or event.get("livekit_room"),
                     ).to_json(),
                 )
                 ack_now()
@@ -1623,6 +1626,9 @@ class CommsManager:
                     call_event = WhatsAppCallReceived(
                         contact=contact,
                         conference_name=event.get("conference_name", ""),
+                        room_name=event.get("livekit_room"),
+                        call_session_id=event.get("call_session_id"),
+                        provider_call_sid=event.get("provider_call_sid"),
                     )
                     event_topic = "app:comms:whatsapp_call_received"
 
@@ -1667,6 +1673,9 @@ class CommsManager:
                     call_event = PhoneCallReceived(
                         contact=contact,
                         conference_name=event.get("conference_name", ""),
+                        room_name=event.get("livekit_room"),
+                        call_session_id=event.get("call_session_id"),
+                        provider_call_sid=event.get("provider_call_sid"),
                     )
                     event_topic = "app:comms:call_received"
 

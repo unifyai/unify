@@ -19,7 +19,13 @@ from unity.gateway.adapters.common import (
     get_assistant,
     publish_runtime_event,
 )
-from unity.gateway.common.livekit import ensure_phone_dispatch_rule, make_sip_uri
+from unity.gateway.common.livekit import (
+    delete_sip_dispatch_rule,
+    ensure_call_scoped_dispatch_rule,
+    ensure_phone_dispatch_rule,
+    make_call_scoped_sip_uri,
+    make_sip_uri,
+)
 from unity.gateway.common.twilio import build_twilio_client, build_twilio_wa_client
 from unity.gateway.context import GatewayContext, get_gateway_context
 from unity.gateway.credentials import CredentialNotFoundError
@@ -41,6 +47,7 @@ WHATSAPP_CALL_STATUS_THREADS = {
     "canceled": "whatsapp_call_not_answered",
     "failed": "whatsapp_call_not_answered",
 }
+_LOCAL_WHATSAPP_CALL_SESSIONS: dict[str, dict[str, Any]] = {}
 
 
 def _admin_headers() -> dict[str, str]:
@@ -141,6 +148,66 @@ async def resolve_whatsapp_route(
         return None
     response.raise_for_status()
     return response.json()
+
+
+async def upsert_whatsapp_call_session(payload: dict[str, Any]) -> dict[str, Any]:
+    _LOCAL_WHATSAPP_CALL_SESSIONS[payload["provider_call_sid"]] = payload
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/call-session",
+                headers=_admin_headers(),
+                json=payload,
+            )
+        response.raise_for_status()
+        data = response.json()
+        _LOCAL_WHATSAPP_CALL_SESSIONS[payload["provider_call_sid"]] = data
+        return data
+    except httpx.TransportError:
+        return payload
+
+
+async def get_whatsapp_call_session(provider_call_sid: str) -> dict[str, Any] | None:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/call-session/{provider_call_sid}",
+                headers=_admin_headers(),
+                params={"provider": "twilio"},
+            )
+        if response.status_code == 404:
+            return _LOCAL_WHATSAPP_CALL_SESSIONS.get(provider_call_sid)
+        response.raise_for_status()
+        return response.json()
+    except httpx.TransportError:
+        return _LOCAL_WHATSAPP_CALL_SESSIONS.get(provider_call_sid)
+
+
+async def update_whatsapp_call_session(
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    provider_call_sid = payload["provider_call_sid"]
+    existing = _LOCAL_WHATSAPP_CALL_SESSIONS.get(provider_call_sid)
+    if existing:
+        metadata = dict(existing.get("metadata") or {})
+        metadata.update(payload.get("metadata") or {})
+        existing.update({k: v for k, v in payload.items() if v is not None})
+        existing["metadata"] = metadata
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.patch(
+                f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/call-session",
+                headers=_admin_headers(),
+                json=payload,
+            )
+        if response.status_code == 404:
+            return existing
+        response.raise_for_status()
+        data = response.json()
+        _LOCAL_WHATSAPP_CALL_SESSIONS[provider_call_sid] = data
+        return data
+    except httpx.TransportError:
+        return existing
 
 
 async def _assistant_for_whatsapp_route(
@@ -450,6 +517,7 @@ async def twilio_whatsapp_call_webhook(
     form_data = await request.form()
     to_raw = str(form_data.get("To") or "")
     from_raw = str(form_data.get("From") or "")
+    provider_call_sid = str(form_data.get("CallSid") or f"missing-{uuid.uuid4()}")
     pool_number = to_raw.replace("whatsapp:", "").strip()
     caller_number = from_raw.replace("whatsapp:", "").strip()
     route = await resolve_whatsapp_route(pool_number, caller_number)
@@ -466,11 +534,52 @@ async def twilio_whatsapp_call_webhook(
         reason="twilio_whatsapp_call",
     )
     assistant_id = str(assistant["assistant_id"])
-    date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    conference_name = f"Unity_WA_{pool_number.lstrip('+')}_{date_time}"
-    room_name = _room_name(assistant_id, "whatsapp_call")
-    sip_uri = make_sip_uri(pool_number, context.credentials)
-    await ensure_phone_dispatch_rule(pool_number, room_name, context.credentials)
+    call_id = provider_call_sid.replace(":", "-")
+    conference_name = f"unity_wa_conf_{call_id}"
+    room_name = f"unity_wa_room_{assistant_id}_{call_id}"
+    sip_uri, sip_target = make_call_scoped_sip_uri(
+        pool_number,
+        call_id,
+        context.credentials,
+        headers={
+            "X-Unity-Call-Session": call_id,
+            "X-Unity-Provider-Call-Sid": provider_call_sid,
+            "X-Unity-Room": room_name,
+        },
+    )
+    sip_dispatch_rule_id = await ensure_call_scoped_dispatch_rule(
+        base_phone_number=pool_number,
+        sip_target=sip_target,
+        room_name=room_name,
+        call_id=call_id,
+        assistant_id=assistant_id,
+        credentials=context.credentials,
+    )
+    if not sip_dispatch_rule_id:
+        resp = VoiceResponse()
+        resp.say("This number cannot accept calls right now. Please try again later.")
+        resp.hangup()
+        return Response(content=str(resp), media_type="text/xml")
+
+    await upsert_whatsapp_call_session(
+        {
+            "provider": "twilio",
+            "provider_call_sid": provider_call_sid,
+            "channel": "whatsapp_call",
+            "assistant_id": int(assistant_id),
+            "from_number": caller_number,
+            "to_number": pool_number,
+            "pool_number": pool_number,
+            "conference_name": conference_name,
+            "livekit_room": room_name,
+            "status": "created",
+            "metadata": {
+                "sip_uri": sip_uri,
+                "sip_target": sip_target,
+                "sip_dispatch_rule_id": sip_dispatch_rule_id,
+            },
+        },
+    )
     await publish_runtime_event(
         context,
         assistant_id=assistant_id,
@@ -478,6 +587,8 @@ async def twilio_whatsapp_call_webhook(
         event={
             "contacts": contacts,
             "conference_name": conference_name,
+            "call_session_id": provider_call_sid,
+            "provider_call_sid": provider_call_sid,
             "caller_number": caller_number,
             "sip_uri": sip_uri,
             "livekit_room": room_name,
@@ -489,6 +600,7 @@ async def twilio_whatsapp_call_webhook(
                 "call_type": "inbound",
                 "room_created": True,
                 "bridge_established": True,
+                "sip_dispatch_rule_id": sip_dispatch_rule_id,
             },
         },
     )
@@ -514,18 +626,40 @@ async def twilio_whatsapp_call_status_webhook(
 ) -> Response:
     form_data = await request.form()
     call_status = str(form_data.get("CallStatus") or "")
-    thread = WHATSAPP_CALL_STATUS_THREADS.get(call_status)
-    if thread is None:
+    provider_call_sid = str(form_data.get("CallSid") or "")
+    if call_status == "completed":
+        thread = None
+    else:
+        thread = WHATSAPP_CALL_STATUS_THREADS.get(call_status)
+    if thread is None and call_status != "completed":
         return Response(status_code=200)
 
-    from_raw = str(form_data.get("From") or "")
-    to_raw = str(form_data.get("To") or "")
-    pool_number = from_raw.replace("whatsapp:", "").strip()
-    user_number = to_raw.replace("whatsapp:", "").strip()
-    route = await resolve_whatsapp_route(pool_number, user_number)
-    if not route or "assistant_id" not in route:
+    if not provider_call_sid:
         return Response(status_code=200)
 
+    call_session = await get_whatsapp_call_session(provider_call_sid)
+    if not call_session:
+        return Response(status_code=200)
+
+    await update_whatsapp_call_session(
+        {
+            "provider": "twilio",
+            "provider_call_sid": provider_call_sid,
+            "status": call_status,
+        },
+    )
+    metadata = call_session.get("metadata") or {}
+    if call_status in {"no-answer", "busy", "canceled", "failed", "completed"}:
+        await delete_sip_dispatch_rule(
+            metadata.get("sip_dispatch_rule_id"),
+            context.credentials,
+        )
+    if call_status == "completed":
+        return Response(status_code=200)
+
+    pool_number = call_session["to_number"]
+    user_number = call_session["from_number"]
+    route = {"assistant_id": call_session["assistant_id"]}
     assistant, contacts = await _assistant_for_whatsapp_route(
         route=route,
         context=context,
@@ -541,6 +675,10 @@ async def twilio_whatsapp_call_status_webhook(
             "user_number": user_number,
             "assistant_number": pool_number,
             "call_status": call_status,
+            "call_session_id": provider_call_sid,
+            "provider_call_sid": provider_call_sid,
+            "conference_name": call_session["conference_name"],
+            "livekit_room": call_session["livekit_room"],
             "timestamp": int(time.time() * 1000),
         },
     )

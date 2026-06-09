@@ -170,6 +170,141 @@ def test_twilio_whatsapp_reject_ambiguous_returns_closed_response(
     assert gateway_context.envelope_sink.published == []
 
 
+def test_twilio_whatsapp_call_uses_call_session_room(
+    client: TestClient,
+    gateway_context: GatewayContext,
+) -> None:
+    twilio_client = MagicMock()
+    twilio_client.calls.create.return_value = SimpleNamespace(sid="SIP_CA111")
+    sessions: list[dict[str, Any]] = []
+
+    async def fake_get_assistant(*, assistant_id=None, **_kwargs):
+        return {
+            "assistant_id": assistant_id or "123",
+            "boss_contact_id": 456,
+            "self_contact_id": 789,
+            "assistant_first_name": "Unity",
+            "assistant_surname": "Assistant",
+            "assistant_email": "unity@example.com",
+            "assistant_number": "+15555550123",
+            "assistant_whatsapp_number": "",
+            "assistant_discord_bot_id": "",
+            "assistant_slack_bot_user_id": "",
+            "user_first_name": "Owner",
+            "user_surname": "User",
+            "user_email": "owner@example.com",
+            "user_number": "+15555550456",
+            "user_whatsapp_number": "+15550810002",
+            "user_discord_id": "",
+            "user_slack_user_id": "",
+        }
+
+    with (
+        patch(
+            "unity.gateway.adapters.twilio.resolve_whatsapp_route",
+            new=AsyncMock(return_value={"assistant_id": 123, "role": "owner"}),
+        ),
+        patch(
+            "unity.gateway.adapters.twilio.ensure_call_scoped_dispatch_rule",
+            new=AsyncMock(return_value="rule-CA111"),
+        ),
+        patch(
+            "unity.gateway.adapters.twilio.build_twilio_wa_client",
+            return_value=twilio_client,
+        ),
+        patch(
+            "unity.gateway.adapters.twilio.upsert_whatsapp_call_session",
+            new=AsyncMock(
+                side_effect=lambda payload: sessions.append(payload) or payload,
+            ),
+        ),
+        patch("unity.gateway.adapters.twilio.get_assistant", new=fake_get_assistant),
+    ):
+        response = client.post(
+            "/twilio/whatsapp-call",
+            data={
+                "To": "whatsapp:+15550810001",
+                "From": "whatsapp:+15550810002",
+                "CallSid": "CA111",
+            },
+        )
+
+    assert response.status_code == 200
+    assert sessions[0]["provider_call_sid"] == "CA111"
+    assert sessions[0]["livekit_room"] == "unity_wa_room_123_CA111"
+    published = gateway_context.envelope_sink.published
+    assert published[0][1]["thread"] == "whatsapp_call"
+    assert published[0][1]["event"]["livekit_room"] == "unity_wa_room_123_CA111"
+    assert published[0][1]["event"]["provider_call_sid"] == "CA111"
+
+
+def test_twilio_whatsapp_call_status_uses_session_not_route(
+    client: TestClient,
+    gateway_context: GatewayContext,
+) -> None:
+    session = {
+        "provider_call_sid": "CA111",
+        "assistant_id": 123,
+        "from_number": "+15550810002",
+        "to_number": "+15550810001",
+        "conference_name": "unity_wa_conf_CA111",
+        "livekit_room": "unity_wa_room_123_CA111",
+        "metadata": {"sip_dispatch_rule_id": "rule-CA111"},
+    }
+
+    async def fake_get_assistant(*, assistant_id=None, **_kwargs):
+        return {
+            "assistant_id": assistant_id or "123",
+            "boss_contact_id": 456,
+            "self_contact_id": 789,
+            "assistant_first_name": "Unity",
+            "assistant_surname": "Assistant",
+            "assistant_email": "unity@example.com",
+            "assistant_number": "+15555550123",
+            "assistant_whatsapp_number": "",
+            "assistant_discord_bot_id": "",
+            "assistant_slack_bot_user_id": "",
+            "user_first_name": "Owner",
+            "user_surname": "User",
+            "user_email": "owner@example.com",
+            "user_number": "+15555550456",
+            "user_whatsapp_number": "+15550810002",
+            "user_discord_id": "",
+            "user_slack_user_id": "",
+        }
+
+    with (
+        patch(
+            "unity.gateway.adapters.twilio.resolve_whatsapp_route",
+            new=AsyncMock(side_effect=AssertionError("should not reroute")),
+        ),
+        patch(
+            "unity.gateway.adapters.twilio.get_whatsapp_call_session",
+            new=AsyncMock(return_value=session),
+        ),
+        patch(
+            "unity.gateway.adapters.twilio.update_whatsapp_call_session",
+            new=AsyncMock(return_value=session),
+        ) as update_session,
+        patch(
+            "unity.gateway.adapters.twilio.delete_sip_dispatch_rule",
+            new=AsyncMock(),
+        ),
+        patch("unity.gateway.adapters.twilio.get_assistant", new=fake_get_assistant),
+    ):
+        response = client.post(
+            "/twilio/whatsapp-call-status",
+            data={"CallSid": "CA111", "CallStatus": "in-progress"},
+        )
+
+    assert response.status_code == 200
+    update_session.assert_awaited_once()
+    published = gateway_context.envelope_sink.published
+    assert published[0][1]["thread"] == "whatsapp_call_answered"
+    assert published[0][1]["event"]["livekit_room"] == "unity_wa_room_123_CA111"
+    assert published[0][1]["event"]["provider_call_sid"] == "CA111"
+
+
 def test_console_can_create_phone_with_empty_body(client: TestClient) -> None:
     twilio_client = MagicMock()
     number = MagicMock(phone_number="+15555550123")

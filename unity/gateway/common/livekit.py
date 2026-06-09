@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any
+from urllib.parse import urlencode
 
 from livekit.api import (
     CreateAgentDispatchRequest,
@@ -90,6 +91,27 @@ def make_sip_uri(phone_number: str, credentials: CredentialStore) -> str:
     sip_domain = credentials.get_optional("LIVEKIT_SIP_URI", "")
     normalized = phone_number if phone_number.startswith("+") else f"+{phone_number}"
     return f"sip:{normalized}@{sip_domain}"
+
+
+def make_call_scoped_sip_uri(
+    phone_number: str,
+    call_id: str,
+    credentials: CredentialStore,
+    *,
+    headers: dict[str, str] | None = None,
+) -> tuple[str, str]:
+    sip_domain = credentials.get_optional("LIVEKIT_SIP_URI", "")
+    normalized = phone_number if phone_number.startswith("+") else f"+{phone_number}"
+    safe_call_id = "".join(ch if ch.isalnum() else "-" for ch in call_id).strip("-")
+    sip_user = f"{normalized[1:]}-{safe_call_id}"
+    uri = f"sip:{sip_user}@{sip_domain}"
+    if headers:
+        sip_headers = {
+            key if key.lower().startswith("x-") else f"X-{key}": value
+            for key, value in headers.items()
+        }
+        uri = f"{uri}?{urlencode(sip_headers)}"
+    return uri, sip_user
 
 
 async def ensure_phone_dispatch_rule(
@@ -167,6 +189,88 @@ async def ensure_phone_dispatch_rule(
         await livekit_api.aclose()
 
 
+async def ensure_call_scoped_dispatch_rule(
+    *,
+    base_phone_number: str,
+    sip_target: str,
+    room_name: str,
+    call_id: str,
+    assistant_id: str,
+    credentials: CredentialStore,
+) -> str | None:
+    livekit_api = get_livekit_api(credentials)
+    try:
+        normalized = (
+            base_phone_number
+            if base_phone_number.startswith("+")
+            else f"+{base_phone_number}"
+        )
+        trunks = await livekit_api.sip.list_sip_inbound_trunk(
+            ListSIPInboundTrunkRequest(),
+        )
+        trunk_id = None
+        for trunk in trunks.items:
+            if normalized in list(trunk.numbers):
+                trunk_id = trunk.sip_trunk_id
+                break
+        if trunk_id is None:
+            _log.info(
+                "no inbound trunk for %s; skipping call-scoped dispatch rule",
+                normalized,
+            )
+            return None
+
+        dispatch = await livekit_api.sip.create_sip_dispatch_rule(
+            CreateSIPDispatchRuleRequest(
+                dispatch_rule=SIPDispatchRuleInfo(
+                    rule=SIPDispatchRule(
+                        dispatch_rule_direct=SIPDispatchRuleDirect(
+                            room_name=room_name,
+                        ),
+                    ),
+                    name=f"Unity_call_{call_id}",
+                    trunk_ids=[trunk_id],
+                    numbers=[sip_target],
+                    attributes={
+                        "call.id": call_id,
+                        "assistant.id": str(assistant_id),
+                    },
+                ),
+            ),
+        )
+        _log.info(
+            "created call-scoped dispatch rule: %s -> %s",
+            sip_target,
+            room_name,
+        )
+        return dispatch.sip_dispatch_rule_id
+    except Exception as exc:
+        _log.warning(
+            "failed to ensure call-scoped dispatch rule for %s: %s",
+            call_id,
+            exc,
+        )
+        return None
+    finally:
+        await livekit_api.aclose()
+
+
+async def delete_sip_dispatch_rule(
+    dispatch_rule_id: str | None,
+    credentials: CredentialStore,
+) -> None:
+    if not dispatch_rule_id:
+        return
+    livekit_api = get_livekit_api(credentials)
+    try:
+        await livekit_api.sip.delete_sip_dispatch_rule(dispatch_rule_id)
+        _log.info("deleted dispatch rule %s", dispatch_rule_id)
+    except Exception as exc:
+        _log.warning("failed to delete dispatch rule %s: %s", dispatch_rule_id, exc)
+    finally:
+        await livekit_api.aclose()
+
+
 async def create_room_and_dispatch_agent(
     room_name: str,
     agent_name: str,
@@ -208,7 +312,10 @@ async def create_room_and_dispatch_agent(
 
 __all__ = [
     "create_room_and_dispatch_agent",
+    "delete_sip_dispatch_rule",
+    "ensure_call_scoped_dispatch_rule",
     "ensure_phone_dispatch_rule",
     "get_livekit_api",
+    "make_call_scoped_sip_uri",
     "make_sip_uri",
 ]
