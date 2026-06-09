@@ -215,7 +215,17 @@ cmd_doctor() {
   echo "Runtime"
   echo "-------"
   log_info "FileManager workspace: ${UNITY_LOCAL_ROOT:-$HOME/Unity/Local}"
-  log_info "Scheduled tasks use in-process LocalActivationScheduler (stack must stay up)"
+  log_info "Scheduled tasks: LocalActivationScheduler in Coordinator CM"
+  if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
+    # shellcheck disable=SC1090
+    source "$SELF_HOST_ENV_SCRIPT"
+    self_host_runtime_doctor_line | sed 's/^/  /'
+    echo ""
+    log_info "Install background runtime: unity service install"
+    log_info "Interactive UI only: unity stack up / unity stack down"
+  else
+    log_info "Stack must stay up for scheduled tasks (or install: unity service install)"
+  fi
   log_info "Live Actions stream via EventBus → Pub/Sub actions-sub"
 
   echo ""
@@ -279,7 +289,17 @@ cmd_up() {
   local runtime_file="${SELF_HOST_COORDINATOR_RUNTIME_FILE:-}"
 
   if [[ -f "$runtime_file" ]]; then
-    log_info "Starting Coordinator runtime (saved login)..."
+    if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
+      # shellcheck disable=SC1090
+      source "$SELF_HOST_ENV_SCRIPT"
+    fi
+    if declare -F self_host_service_is_enabled &>/dev/null && self_host_service_is_enabled; then
+      export UNITY_REUSE_SERVICE_CM=1
+      log_info "Checking for service-managed Coordinator runtime..."
+    else
+      log_info "Starting Coordinator runtime (saved login)..."
+    fi
+    export UNITY_ENSURE_COORDINATOR_INGRESS=1
     if bash "$CONSOLE_LOCAL_SCRIPT" start-coordinator; then
       log_success "Coordinator runtime is ready"
     else
@@ -297,6 +317,9 @@ cmd_up() {
   echo ""
   if [[ -f "$runtime_file" ]]; then
     echo "  Open Console and chat with your Coordinator."
+    if declare -F self_host_service_is_enabled &>/dev/null && self_host_service_is_enabled; then
+      echo "  stack down stops the UI only — scheduled tasks and outbound comms keep running via unity service."
+    fi
   else
     echo "  First visit: create an account on /login — Coordinator starts automatically."
   fi
@@ -304,18 +327,40 @@ cmd_up() {
 }
 
 cmd_down() {
-  if [[ -f "$CONSOLE_LOCAL_SCRIPT" ]]; then
+  if [[ ! -f "$CONSOLE_LOCAL_SCRIPT" ]]; then
+    log_error "Missing $CONSOLE_LOCAL_SCRIPT"
+    return 1
+  fi
+
+  if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
+    # shellcheck disable=SC1090
+    source "$SELF_HOST_ENV_SCRIPT"
+  fi
+
+  if declare -F self_host_service_is_enabled &>/dev/null && self_host_service_is_enabled; then
+    bash "$CONSOLE_LOCAL_SCRIPT" stop --interactive-only
+  else
     bash "$CONSOLE_LOCAL_SCRIPT" stop
   fi
   log_success "Self-host stack stopped"
 }
 
 cmd_status() {
+  if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
+    # shellcheck disable=SC1090
+    source "$SELF_HOST_ENV_SCRIPT"
+  fi
+
   if [[ -f "$CONSOLE_LOCAL_SCRIPT" ]]; then
     bash "$CONSOLE_LOCAL_SCRIPT" status
   else
     log_error "Console local script not found"
     return 1
+  fi
+
+  if [[ -x "$UNITY_REPO_PATH/scripts/service.sh" ]]; then
+    echo ""
+    bash "$UNITY_REPO_PATH/scripts/service.sh" status
   fi
 }
 
