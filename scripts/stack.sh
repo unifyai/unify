@@ -4,11 +4,10 @@
 # =============================================================================
 #
 # Brings up Orchestra, Comms App, Pub/Sub emulator, Adapters, Console, and
-# Unity CM for the signed-in user's personal Coordinator (after register/login).
+# the Unity CM for the signed-in user's Coordinator when credentials exist.
 #
 # Usage:
-#   ./scripts/stack.sh up           Start infra (no Unity CM until login)
-#   ./scripts/stack.sh coordinator  Start Unity CM for logged-in user
+#   ./scripts/stack.sh up           Start full stack (+ Coordinator if registered)
 #   ./scripts/stack.sh down         Stop all services
 #   ./scripts/stack.sh status       Show service status
 #   ./scripts/stack.sh doctor       Check prerequisites
@@ -66,7 +65,7 @@ cmd_doctor() {
   echo "Self-host doctor"
   echo "================"
   echo ""
-  echo "Stranger path: unity setup → unity stack doctor → unity stack up"
+  echo "Stranger path: curl install → unity setup → unity → register → chat"
   echo ""
 
   echo "Infrastructure"
@@ -261,6 +260,7 @@ cmd_up() {
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
     source "$SELF_HOST_ENV_SCRIPT"
+    export_self_host_coordinator_runtime_file
     export_workspace_oauth_env "$UNITY_REPO_PATH/.env"
   fi
 
@@ -276,13 +276,14 @@ cmd_up() {
     return 1
   fi
 
-  local runtime_file="/tmp/self-host-coordinator-runtime.json"
+  local runtime_file="${SELF_HOST_COORDINATOR_RUNTIME_FILE:-}"
+
   if [[ -f "$runtime_file" ]]; then
-    log_info "Resuming Coordinator runtime from prior login..."
+    log_info "Starting Coordinator runtime (saved login)..."
     if bash "$CONSOLE_LOCAL_SCRIPT" start-coordinator; then
-      log_success "Coordinator runtime resumed"
+      log_success "Coordinator runtime is ready"
     else
-      log_warn "Coordinator resume failed — run: unity stack coordinator"
+      log_warn "Coordinator start failed — sign in at Console to refresh credentials"
     fi
   fi
 
@@ -294,9 +295,11 @@ cmd_up() {
   echo ""
   echo "  Console:   http://localhost:${console_port}"
   echo ""
-  echo "  Create an account on /login, then chat with your Coordinator."
-  echo "  Unity CM starts automatically after register/login, or run:"
-  echo "    unity stack coordinator"
+  if [[ -f "$runtime_file" ]]; then
+    echo "  Open Console and chat with your Coordinator."
+  else
+    echo "  First visit: create an account on /login — Coordinator starts automatically."
+  fi
   echo ""
 }
 
@@ -324,15 +327,6 @@ main() {
     down|stop) cmd_down "$@" ;;
     status) cmd_status "$@" ;;
     doctor|check) cmd_doctor "$@" ;;
-    coordinator|unity)
-      export SELF_HOST=1
-      if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
-        # shellcheck disable=SC1090
-        source "$SELF_HOST_ENV_SCRIPT"
-        export_workspace_oauth_env "$UNITY_REPO_PATH/.env"
-      fi
-      bash "$CONSOLE_LOCAL_SCRIPT" start-coordinator
-      ;;
     help|-h|--help)
       sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
       ;;
