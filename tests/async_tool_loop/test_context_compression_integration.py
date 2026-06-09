@@ -6,6 +6,7 @@ import asyncio
 import json
 
 import pytest
+from unittest.mock import MagicMock
 
 import unity.common._async_tool.loop as _loop_mod
 import unity.common._async_tool.context_compression as _cc_mod
@@ -857,3 +858,74 @@ async def test_compression_failure_returns_gracefully(llm_config, monkeypatch):
     result = await handle.result()
     assert isinstance(result, str)
     assert handle._compression.count == 0
+
+
+@pytest.mark.asyncio
+async def test_compression_restart_omits_parent_chat_context(monkeypatch):
+    """Compression restarts must not re-inject the original parent context blob."""
+
+    from unity.common._async_tool.context_compression import RebuildResult
+    from unity.common.async_tool_loop import AsyncToolLoopHandle
+
+    captured: dict[str, object] = {}
+
+    async def _fake_inner(_client, _message, _tools, **kwargs):
+        captured["parent_chat_context"] = kwargs.get("parent_chat_context")
+        return "done"
+
+    async def _fake_compress(_compression, _messages, _endpoint, _tools):
+        return RebuildResult(
+            system_msgs=[{"role": "system", "content": "compressed"}],
+            tools={},
+        )
+
+    monkeypatch.setattr(_atl_mod, "async_tool_loop_inner", _fake_inner)
+    monkeypatch.setattr(_atl_mod, "compress_and_rebuild", _fake_compress)
+
+    parent_ctx = [{"role": "user", "content": "large parent transcript"}]
+    handle = AsyncToolLoopHandle(
+        task=asyncio.create_task(asyncio.sleep(0)),
+        interject_queue=asyncio.Queue(),
+        cancel_event=asyncio.Event(),
+        stop_event=asyncio.Event(),
+    )
+    handle._client = MagicMock()
+    handle._client.messages = [{"role": "user", "content": "loop"}]
+    handle._client.endpoint = "gpt-4o@openai"
+    handle._loop_config = {
+        "loop_id": "test-loop",
+        "parent_lineage": [],
+        "tools": {},
+        "parent_chat_context": parent_ctx,
+        "max_consecutive_failures": 3,
+        "prune_tool_duplicates": True,
+        "interrupt_llm_with_interjections": True,
+        "propagate_chat_context": True,
+        "caller_description": None,
+        "log_steps": False,
+        "max_steps": None,
+        "timeout": None,
+        "raise_on_limit": False,
+        "include_class_in_dynamic_tool_names": False,
+        "tool_policy": None,
+        "preprocess_msgs": None,
+        "response_format": None,
+        "max_parallel_tool_calls": None,
+        "persist": False,
+        "multi_handle_coordinator": None,
+        "prompt_caching": False,
+        "time_awareness": False,
+        "extra_ask_tools": None,
+        "enable_compression": True,
+        "extra_compression_tools": None,
+        "clarification_queues": None,
+        "on_clarification_request": None,
+        "on_clarification_answer": None,
+        "on_notify": None,
+        "runtime_state": handle._runtime_state,
+    }
+
+    await handle._restart_with_compressed_context()
+    await asyncio.sleep(0)
+
+    assert captured["parent_chat_context"] is None
