@@ -11,6 +11,7 @@ from unity.conversation_manager.domains.fast_brain_mood import (
     FastBrainMoodClassifier,
 )
 from unity.conversation_manager.events import FastBrainMoodClassified
+from unity.settings import SETTINGS
 
 
 def test_mood_schema_accepts_requested_labels():
@@ -36,6 +37,10 @@ def test_mood_classification_only_runs_for_video_avatar_channels():
     assert not has_video_avatar_channel("phone_call")
     assert not has_video_avatar_channel("whatsapp_call")
     assert not has_video_avatar_channel("phone")
+
+
+def test_mood_classification_defaults_off():
+    assert SETTINGS.conversation.FAST_BRAIN_MOOD_CLASSIFICATION_ENABLED is False
 
 
 @pytest.mark.asyncio
