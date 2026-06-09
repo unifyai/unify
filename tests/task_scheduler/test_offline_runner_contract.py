@@ -9,6 +9,7 @@ breaks for that topology.
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime, timezone  # noqa: F401  (timezone used by golden ref)
 
 import pytest
@@ -359,9 +360,9 @@ def _original_communication_env_builder(
             assistant_data.get("assistant_whatsapp_number") or "",
         ),
         "ASSISTANT_DESKTOP_MODE": "none",
-        "ASSISTANT_USER_DESKTOP_MODE": "",
-        "ASSISTANT_USER_DESKTOP_FILESYS_SYNC": "False",
-        "ASSISTANT_USER_DESKTOP_URL": "",
+        "ASSISTANT_USER_DESKTOPS": json.dumps(
+            assistant_data.get("user_desktops") or [],
+        ),
         "USER_ID": str(assistant_data.get("user_id") or ""),
         "USER_FIRST_NAME": str(assistant_data.get("user_first_name") or ""),
         "USER_SURNAME": str(assistant_data.get("user_surname") or ""),
@@ -438,9 +439,9 @@ def _new_communication_env_builder(
                 assistant_data.get("assistant_whatsapp_number") or "",
             ),
             "ASSISTANT_DESKTOP_MODE": "none",
-            "ASSISTANT_USER_DESKTOP_MODE": "",
-            "ASSISTANT_USER_DESKTOP_FILESYS_SYNC": "False",
-            "ASSISTANT_USER_DESKTOP_URL": "",
+            "ASSISTANT_USER_DESKTOPS": json.dumps(
+                assistant_data.get("user_desktops") or [],
+            ),
             "USER_ID": str(assistant_data.get("user_id") or ""),
             "USER_FIRST_NAME": str(assistant_data.get("user_first_name") or ""),
             "USER_SURNAME": str(assistant_data.get("user_surname") or ""),

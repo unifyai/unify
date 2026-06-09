@@ -1035,9 +1035,8 @@ class _SessionConfigBase(Event):
     desktop_mode: str = "ubuntu"
     desktop_url: str | None = None
     user_whatsapp_number: str = ""
-    user_desktop_mode: str | None = None
-    user_desktop_filesys_sync: bool = False
-    user_desktop_url: str | None = None
+    # Per-user desktop links: each {owner_user_id, url, os, filesys_sync}.
+    user_desktops: list[dict[str, Any]] = field(default_factory=list)
     org_id: int | None = None
     org_name: str = ""
     team_ids: list[int] = field(default_factory=list)

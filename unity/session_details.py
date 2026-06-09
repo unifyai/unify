@@ -160,6 +160,81 @@ def _decode_team_summaries(value: str) -> list[TeamSummary]:
 
 
 @dataclass
+class UserDesktopLink:
+    """One user's own machine linked to this assistant.
+
+    A shared assistant can be linked to a different desktop per user, so links
+    are keyed by ``owner_user_id`` and resolved at runtime against whoever is
+    currently interacting with the assistant.
+    """
+
+    owner_user_id: str
+    url: str
+    os: str  # "ubuntu", "windows", or "macos"
+    filesys_sync: bool = False
+
+
+def normalize_user_desktops(
+    value: "list[UserDesktopLink | dict] | dict[str, UserDesktopLink | dict]",
+) -> dict[str, UserDesktopLink]:
+    """Return per-user desktop links keyed by ``owner_user_id``.
+
+    Accepts the list-of-dicts wire shape (from the bootstrap payload), an
+    already-keyed map, or runtime dataclasses, and normalises to a map.
+    """
+
+    items: list = list(value.values()) if isinstance(value, dict) else list(value)
+    desktops: dict[str, UserDesktopLink] = {}
+    for item in items:
+        if isinstance(item, UserDesktopLink):
+            link = item
+        else:
+            if not isinstance(item, dict):
+                raise ValueError("user_desktops entries must be objects")
+            if not {"owner_user_id", "url", "os"} <= set(item):
+                raise ValueError(
+                    "user_desktops entries require owner_user_id, url and os",
+                )
+            link = UserDesktopLink(
+                owner_user_id=str(item["owner_user_id"]),
+                url=str(item["url"]),
+                os=str(item["os"]),
+                filesys_sync=bool(item.get("filesys_sync", False)),
+            )
+        desktops[link.owner_user_id] = link
+    return desktops
+
+
+def _encode_user_desktops(value: dict[str, UserDesktopLink]) -> str:
+    """Encode per-user desktop links for env vars that can only carry strings."""
+
+    if not value:
+        return ""
+    return json.dumps(
+        [
+            {
+                "owner_user_id": link.owner_user_id,
+                "url": link.url,
+                "os": link.os,
+                "filesys_sync": link.filesys_sync,
+            }
+            for link in value.values()
+        ],
+    )
+
+
+def _decode_user_desktops(value: str) -> dict[str, UserDesktopLink]:
+    """Decode per-user desktop links from their environment representation."""
+
+    if not value:
+        return {}
+    decoded = json.loads(value)
+    if not isinstance(decoded, list):
+        raise ValueError("ASSISTANT_USER_DESKTOPS must be a JSON list")
+    return normalize_user_desktops(decoded)
+
+
+@dataclass
 class AssistantDetails:
     """Details about the assistant and its runtime routing identity."""
 
@@ -183,13 +258,9 @@ class AssistantDetails:
     self_contact_id: int = 0
     desktop_mode: str = "ubuntu"  # "ubuntu" or "windows" - determines VM type
     desktop_url: str | None = None  # URL for managed VM desktop access
-    user_desktop_mode: str | None = (
-        None  # "ubuntu", "windows", or "macos" if user has own desktop
-    )
-    user_desktop_filesys_sync: bool = False  # Whether to sync files to user's desktop
-    user_desktop_url: str | None = (
-        None  # URL for user's own desktop (not the managed VM)
-    )
+    # Per-user desktops keyed by owner_user_id. A shared assistant can be linked
+    # to a different machine for each user who works with it.
+    user_desktops: dict[str, UserDesktopLink] = field(default_factory=dict)
     team_ids: list[int] = field(default_factory=list)
     team_summaries: list[TeamSummary] = field(default_factory=list)
 
@@ -201,6 +272,12 @@ class AssistantDetails:
     def has_managed_desktop(self) -> bool:
         """True when a managed VM desktop is assigned and sync gates apply."""
         return self.desktop_mode in ("ubuntu", "windows") and bool(self.desktop_url)
+
+    def user_desktop_for(self, user_id: str | None) -> UserDesktopLink | None:
+        """Return the desktop the given user has linked to this assistant."""
+        if not user_id:
+            return None
+        return self.user_desktops.get(user_id)
 
 
 @dataclass
@@ -434,9 +511,7 @@ class SessionDetails:
         voice_id: str = "",
         binding_id: str = "",
         desktop_mode: str = "ubuntu",
-        user_desktop_mode: str | None = None,
-        user_desktop_filesys_sync: bool = False,
-        user_desktop_url: str | None = None,
+        user_desktops: "list[UserDesktopLink | dict] | dict[str, UserDesktopLink | dict] | None" = None,
         is_coordinator: bool = False,
     ) -> None:
         """Populate the session with runtime values.
@@ -462,9 +537,9 @@ class SessionDetails:
         self.self_contact_id = assistant_self_contact_id
         self.assistant.binding_id = binding_id
         self.assistant.desktop_mode = desktop_mode
-        self.assistant.user_desktop_mode = user_desktop_mode
-        self.assistant.user_desktop_filesys_sync = user_desktop_filesys_sync
-        self.assistant.user_desktop_url = user_desktop_url
+        self.assistant.user_desktops = (
+            normalize_user_desktops(user_desktops) if user_desktops else {}
+        )
         self.assistant.is_coordinator = is_coordinator
         self.user.id = user_id
         self.user.first_name = user_first_name
@@ -516,13 +591,9 @@ class SessionDetails:
         os.environ["ASSISTANT_SLACK_BOT_USER_ID"] = self.assistant.slack_bot_user_id
         os.environ["ASSISTANT_DESKTOP_MODE"] = self.assistant.desktop_mode
         os.environ["ASSISTANT_DESKTOP_URL"] = self.assistant.desktop_url or ""
-        os.environ["ASSISTANT_USER_DESKTOP_MODE"] = (
-            self.assistant.user_desktop_mode or ""
+        os.environ["ASSISTANT_USER_DESKTOPS"] = _encode_user_desktops(
+            self.assistant.user_desktops,
         )
-        os.environ["ASSISTANT_USER_DESKTOP_FILESYS_SYNC"] = str(
-            self.assistant.user_desktop_filesys_sync,
-        )
-        os.environ["ASSISTANT_USER_DESKTOP_URL"] = self.assistant.user_desktop_url or ""
         os.environ["ASSISTANT_IS_COORDINATOR"] = str(self.assistant.is_coordinator)
         self.export_contact_ids_to_env()
         os.environ["USER_ID"] = self.user.id
@@ -612,12 +683,8 @@ class SessionDetails:
             self.assistant.desktop_mode = val
         if val := os.environ.get("ASSISTANT_DESKTOP_URL"):
             self.assistant.desktop_url = val if val else None
-        if val := os.environ.get("ASSISTANT_USER_DESKTOP_MODE"):
-            self.assistant.user_desktop_mode = val if val else None
-        if val := os.environ.get("ASSISTANT_USER_DESKTOP_FILESYS_SYNC"):
-            self.assistant.user_desktop_filesys_sync = val == "True"
-        if val := os.environ.get("ASSISTANT_USER_DESKTOP_URL"):
-            self.assistant.user_desktop_url = val if val else None
+        if val := os.environ.get("ASSISTANT_USER_DESKTOPS"):
+            self.assistant.user_desktops = _decode_user_desktops(val)
         if val := os.environ.get("ASSISTANT_IS_COORDINATOR"):
             self.assistant.is_coordinator = val == "True"
         if val := os.environ.get("USER_ID"):
