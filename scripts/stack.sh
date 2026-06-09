@@ -305,17 +305,30 @@ cmd_up() {
   local runtime_file="${SELF_HOST_COORDINATOR_RUNTIME_FILE:-}"
 
   if [[ -f "$runtime_file" ]]; then
-    if declare -F self_host_service_is_enabled &>/dev/null && self_host_service_is_enabled; then
-      log_info "Checking for service-managed Coordinator runtime..."
-    else
-      log_info "Starting Coordinator runtime (saved login)..."
+    local cm_count="0"
+    if declare -F unity_cm_instance_count &>/dev/null; then
+      cm_count="$(unity_cm_instance_count)"
     fi
-    if ! bash "$CONSOLE_LOCAL_SCRIPT" ensure-coordinator-topics; then
-      log_warn "Coordinator Pub/Sub setup failed — sign in at Console to refresh credentials"
-    elif ! bash "$CONSOLE_LOCAL_SCRIPT" start-coordinator; then
-      log_warn "Coordinator start failed — sign in at Console to refresh credentials"
+    if declare -F self_host_headless_scheduling_ready &>/dev/null \
+      && self_host_headless_scheduling_ready \
+      && [[ "$cm_count" -eq 1 ]]; then
+      if declare -F self_host_adopt_coordinator_for_service &>/dev/null; then
+        self_host_adopt_coordinator_for_service "${SELF_HOST_COORDINATOR_AGENT_ID:-}" || true
+      fi
+      log_success "Reusing service-managed Coordinator runtime"
     else
-      log_success "Coordinator runtime is ready"
+      if declare -F self_host_service_is_enabled &>/dev/null && self_host_service_is_enabled; then
+        log_info "Checking for service-managed Coordinator runtime..."
+      else
+        log_info "Starting Coordinator runtime (saved login)..."
+      fi
+      if ! bash "$CONSOLE_LOCAL_SCRIPT" ensure-coordinator-topics; then
+        log_warn "Coordinator Pub/Sub setup failed — sign in at Console to refresh credentials"
+      elif ! bash "$CONSOLE_LOCAL_SCRIPT" start-coordinator; then
+        log_warn "Coordinator start failed — sign in at Console to refresh credentials"
+      else
+        log_success "Coordinator runtime is ready"
+      fi
     fi
   fi
 
