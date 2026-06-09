@@ -4,18 +4,21 @@
 # =============================================================================
 #
 # The runtime service keeps Orchestra, unity.gateway, and one Coordinator CM
-# alive for scheduled tasks and outbound comms primitives. The interactive
-# stack (unity stack up/down) starts Console, Pub/Sub, and unity-deploy ingress
-# without replacing the service-managed gateway or CM.
+# alive for scheduled tasks and outbound comms primitives. Self-host enables
+# this automatically on setup and stack up. The interactive stack (unity stack
+# up/down) starts Console, Pub/Sub, and unity-deploy ingress without replacing
+# the service-managed gateway or CM.
 #
 # Usage:
-#   ./scripts/service.sh install [--boot]   Register launchd/systemd user service
-#   ./scripts/service.sh uninstall          Remove registered service
-#   ./scripts/service.sh start              Start supervisor in background
-#   ./scripts/service.sh stop               Stop supervisor + service-owned runtime
-#   ./scripts/service.sh status             Show supervisor + CM status
-#   ./scripts/service.sh doctor             Health checks for runtime service
-#   ./scripts/service.sh run                Foreground supervisor (used by OS unit)
+#   ./scripts/service.sh install-boot [--boot]  Optional login boot hook (launchd/systemd)
+#   ./scripts/service.sh install [--boot]       Alias for install-boot
+#   ./scripts/service.sh uninstall              Remove boot hook + disable runtime
+#   ./scripts/service.sh disable                Stop runtime and opt out until next stack up
+#   ./scripts/service.sh start                  Recovery: start supervisor manually
+#   ./scripts/service.sh stop                   Stop supervisor + service-owned runtime
+#   ./scripts/service.sh status                 Show supervisor + CM status
+#   ./scripts/service.sh doctor                 Health checks for runtime service
+#   ./scripts/service.sh run                    Foreground supervisor (used by OS unit)
 #
 set -euo pipefail
 
@@ -171,7 +174,7 @@ service_uninstall_systemd() {
   systemctl --user daemon-reload
 }
 
-cmd_install() {
+cmd_install_boot_hook() {
   local boot_at_load="false"
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -181,8 +184,7 @@ cmd_install() {
   done
 
   load_self_host_context
-  self_host_ensure_state_dir
-  touch "$(self_host_service_marker_file)"
+  self_host_enable_runtime
 
   case "$(uname -s)" in
     Darwin)
@@ -196,18 +198,29 @@ cmd_install() {
       service_install_systemd "$boot_at_load"
       ;;
     *)
-      log_error "Unsupported OS for service install: $(uname -s)"
-      log_info "Use: unity service start (manual supervisor) instead"
+      log_error "Unsupported OS for boot hook install: $(uname -s)"
       return 1
       ;;
   esac
 
-  log_success "Self-host runtime service installed"
-  log_info "Interactive UI: unity stack up / unity stack down"
-  log_info "Runtime control: unity service start|stop|status|doctor"
-  if [[ "$boot_at_load" != "true" ]]; then
-    log_info "Start now with: unity service start"
+  log_success "Login boot hook installed"
+  if [[ "$boot_at_load" == "true" ]]; then
+    log_info "Background runtime starts automatically at login"
+  else
+    log_info "Supervisor starts on unity stack up; re-run with --boot to start at login"
   fi
+}
+
+cmd_install() {
+  cmd_install_boot_hook "$@"
+}
+
+cmd_disable() {
+  load_self_host_context
+  cmd_stop || true
+  self_host_disable_runtime
+  log_success "Background runtime disabled"
+  log_info "stack down stops everything until the next unity stack up"
 }
 
 cmd_uninstall() {
@@ -217,8 +230,8 @@ cmd_uninstall() {
     Darwin) service_uninstall_launchd ;;
     Linux) service_uninstall_systemd ;;
   esac
-  rm -f "$(self_host_service_marker_file)"
-  log_success "Self-host runtime service uninstalled"
+  self_host_disable_runtime
+  log_success "Background runtime disabled and boot hook removed"
 }
 
 ensure_runtime_backend() {
@@ -269,8 +282,7 @@ cmd_run() {
 
 cmd_start() {
   load_self_host_context
-  self_host_ensure_state_dir
-  touch "$(self_host_service_marker_file)"
+  self_host_enable_runtime
 
   if self_host_service_supervisor_is_running; then
     log_success "Runtime supervisor already running (pid $(cat "$(self_host_service_supervisor_pidfile)"))"
@@ -317,7 +329,9 @@ cmd_stop() {
       sleep 2
       kill -9 "$supervisor_pid" 2>/dev/null || true
     fi
-    rm -f "$(self_host_service_supervisor_pidfile)"
+    self_host_clear_service_supervisor_pidfile
+  else
+    self_host_clear_service_supervisor_pidfile
   fi
 
   if [[ -x "$CONSOLE_LOCAL_SCRIPT" ]]; then
@@ -326,7 +340,7 @@ cmd_stop() {
   fi
 
   log_success "Self-host runtime service stopped"
-  log_info "Scheduled tasks will not fire until: unity service start"
+  log_info "Scheduled tasks resume on the next unity stack up"
 }
 
 cmd_status() {
@@ -357,9 +371,9 @@ cmd_doctor() {
   echo ""
 
   if self_host_service_is_enabled; then
-    log_success "Service installed ($(self_host_service_marker_file))"
+    log_success "Background runtime enabled"
   else
-    log_info "Service not installed — run: unity service install"
+    log_info "Background runtime disabled — run unity stack up to re-enable"
   fi
 
   local cm_count
@@ -378,7 +392,7 @@ cmd_doctor() {
     if self_host_service_supervisor_is_running; then
       log_success "Runtime supervisor running"
     else
-      log_warn "Runtime supervisor stopped — run: unity service start"
+      log_warn "Runtime supervisor stopped — run: unity stack up"
       ok=false
     fi
   fi
@@ -412,8 +426,10 @@ main() {
   local cmd="${1:-help}"
   shift || true
   case "$cmd" in
+    install-boot) cmd_install_boot_hook "$@" ;;
     install) cmd_install "$@" ;;
     uninstall) cmd_uninstall "$@" ;;
+    disable) cmd_disable "$@" ;;
     start) cmd_start "$@" ;;
     stop) cmd_stop "$@" ;;
     status) cmd_status "$@" ;;
