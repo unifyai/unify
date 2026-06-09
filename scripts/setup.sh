@@ -370,9 +370,9 @@ main() {
     echo "  orchestra is running at $UNIFY_BASE_URL"
     echo "  Stop it any time with:  unity stop"
     echo ""
-    echo "  Next:  ${CYAN}unity stack doctor${NC}  Check self-host prerequisites"
-    echo "         ${CYAN}unity stack up${NC}      Full Console + Coordinator stack"
-    echo "  Sandbox REPL:  ${CYAN}unity${NC}"
+    echo "  Next:  ${CYAN}unity stack doctor${NC}  Check self-host prerequisites (optional)"
+    echo "         ${CYAN}unity${NC}               Start Console + Coordinator stack"
+    echo "  Dev REPL:  ${CYAN}unity sandbox${NC}"
     echo ""
 }
 
