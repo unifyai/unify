@@ -32,6 +32,15 @@ self_host_service_is_enabled() {
   [[ -f "$(self_host_service_marker_file)" ]]
 }
 
+self_host_enable_runtime() {
+  self_host_ensure_state_dir
+  touch "$(self_host_service_marker_file)"
+}
+
+self_host_disable_runtime() {
+  rm -f "$(self_host_service_marker_file)"
+}
+
 self_host_ensure_state_dir() {
   mkdir -p "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
 }
@@ -157,18 +166,34 @@ self_host_clear_runtime_state() {
   rm -f "$(self_host_runtime_state_file)"
 }
 
+unity_cm_pidfile() {
+  printf '/tmp/unity-local.pid'
+}
+
 unity_cm_process_pids() {
-  pgrep -f "[u]nity\.conversation_manager\.main" 2>/dev/null || true
+  local main_pids="" pidfile_pid="" merged=""
+  main_pids="$(pgrep -f "[u]nity\.conversation_manager\.main" 2>/dev/null || true)"
+  if [[ -f "$(unity_cm_pidfile)" ]]; then
+    pidfile_pid="$(cat "$(unity_cm_pidfile)" 2>/dev/null || true)"
+    if [[ -n "$pidfile_pid" ]] && ! kill -0 "$pidfile_pid" 2>/dev/null; then
+      pidfile_pid=""
+    fi
+  fi
+  merged="$(printf '%s\n%s' "$main_pids" "$pidfile_pid" | sed '/^$/d' | sort -u)"
+  if [[ -n "$merged" ]]; then
+    printf '%s\n' "$merged"
+  fi
 }
 
 unity_cm_instance_count() {
-  local pids
+  local pids count
   pids="$(unity_cm_process_pids)"
   if [[ -z "$pids" ]]; then
     echo 0
     return 0
   fi
-  echo "$pids" | wc -l | tr -d ' '
+  count="$(printf '%s\n' "$pids" | sed '/^$/d' | wc -l | tr -d ' ')"
+  echo "$count"
 }
 
 unity_cm_assistant_id_for_pid() {
@@ -199,13 +224,60 @@ self_host_runtime_owner_for_pid() {
   printf ''
 }
 
+self_host_clear_service_supervisor_pidfile() {
+  rm -f "$(self_host_service_supervisor_pidfile)"
+}
+
+self_host_service_supervisor_process_command() {
+  local pid="${1:-}"
+  [[ -n "$pid" ]] || return 1
+  ps -p "$pid" -o args= 2>/dev/null \
+    || ps -p "$pid" -o command= 2>/dev/null \
+    || true
+}
+
+self_host_pid_is_service_supervisor() {
+  local pid="${1:-}"
+  local cmd=""
+  cmd="$(self_host_service_supervisor_process_command "$pid")"
+  [[ -n "$cmd" ]] || return 1
+  [[ "$cmd" == *"service.sh"* && "$cmd" == *" run"* ]]
+}
+
 self_host_service_supervisor_is_running() {
-  local pidfile
+  local pidfile pid
   pidfile="$(self_host_service_supervisor_pidfile)"
   [[ -f "$pidfile" ]] || return 1
-  local pid
   pid="$(cat "$pidfile" 2>/dev/null || true)"
-  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+  if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+    self_host_clear_service_supervisor_pidfile
+    return 1
+  fi
+  if ! self_host_pid_is_service_supervisor "$pid"; then
+    self_host_clear_service_supervisor_pidfile
+    return 1
+  fi
+  return 0
+}
+
+self_host_headless_scheduling_ready() {
+  self_host_service_is_enabled \
+    && self_host_service_supervisor_is_running
+}
+
+self_host_ensure_service_supervisor() {
+  local service_script="${1:-}"
+  if ! self_host_service_is_enabled; then
+    return 0
+  fi
+  if self_host_service_supervisor_is_running; then
+    return 0
+  fi
+  self_host_clear_service_supervisor_pidfile
+  if [[ -z "$service_script" || ! -f "$service_script" ]]; then
+    return 1
+  fi
+  bash "$service_script" start
 }
 
 self_host_service_runtime_is_healthy() {
@@ -218,11 +290,10 @@ self_host_service_runtime_is_healthy() {
 
 self_host_should_preserve_runtime_on_interactive_stop() {
   self_host_service_is_enabled || return 1
-  local state_owner state_pid
-  state_owner="$(self_host_read_runtime_state 2>/dev/null | sed -n '1p' || true)"
-  state_pid="$(self_host_read_runtime_state 2>/dev/null | sed -n '2p' || true)"
-  [[ "$state_owner" == "$SELF_HOST_RUNTIME_OWNER_SERVICE" ]] \
-    && unity_cm_is_alive "$state_pid"
+  self_host_service_supervisor_is_running || return 1
+  local count
+  count="$(unity_cm_instance_count)"
+  [[ "$count" -eq 1 ]]
 }
 
 self_host_should_preserve_orchestra_on_interactive_stop() {
@@ -231,11 +302,50 @@ self_host_should_preserve_orchestra_on_interactive_stop() {
 
 self_host_should_preserve_gateway_on_interactive_stop() {
   self_host_service_is_enabled || return 1
-  local gateway_owner gateway_pid
-  gateway_owner="$(self_host_runtime_gateway_owner)"
-  gateway_pid="$(self_host_runtime_gateway_pid)"
-  [[ "$gateway_owner" == "$SELF_HOST_RUNTIME_OWNER_SERVICE" ]] \
-    && unity_cm_is_alive "$gateway_pid"
+  self_host_service_supervisor_is_running || return 1
+  self_host_gateway_is_healthy
+}
+
+self_host_service_supervisor_should_run() {
+  self_host_service_is_enabled \
+    && ! self_host_service_supervisor_is_running
+}
+
+self_host_service_supervisor_pid() {
+  if ! self_host_service_supervisor_is_running; then
+    return 1
+  fi
+  cat "$(self_host_service_supervisor_pidfile)"
+}
+
+self_host_adopt_coordinator_for_service() {
+  local coordinator_agent_id="${1:-}"
+  local cm_pid=""
+
+  cm_pid="$(cat "$(unity_cm_pidfile)" 2>/dev/null || true)"
+  [[ -n "$cm_pid" ]] || return 1
+  unity_cm_is_alive "$cm_pid" || return 1
+
+  if [[ -z "$coordinator_agent_id" ]]; then
+    coordinator_agent_id="$(unity_cm_assistant_id_for_pid "$cm_pid")"
+  fi
+  [[ -n "$coordinator_agent_id" ]] || return 1
+
+  self_host_write_runtime_state \
+    "$SELF_HOST_RUNTIME_OWNER_SERVICE" \
+    "$cm_pid" \
+    "$coordinator_agent_id"
+}
+
+self_host_apply_service_coordinator_context() {
+  if ! self_host_service_is_enabled; then
+    return 0
+  fi
+  if ! self_host_service_supervisor_is_running; then
+    return 0
+  fi
+  export UNITY_RUNTIME_OWNER="$SELF_HOST_RUNTIME_OWNER_SERVICE"
+  export UNITY_SERVICE_RUNTIME=1
 }
 
 with_unity_runtime_start_lock() {
