@@ -406,7 +406,7 @@ async def twilio_whatsapp_webhook(
     action = route.get("action") if route else None
     if route is None or action == "auto_reply":
         return _inactive_message_response()
-    if action == "reject_cold":
+    if action in {"reject_cold", "reject_ambiguous"}:
         return _inactive_message_response("This number is not accepting new messages.")
 
     assistant, contacts = await _assistant_for_whatsapp_route(
@@ -453,7 +453,11 @@ async def twilio_whatsapp_call_webhook(
     pool_number = to_raw.replace("whatsapp:", "").strip()
     caller_number = from_raw.replace("whatsapp:", "").strip()
     route = await resolve_whatsapp_route(pool_number, caller_number)
-    if route is None or route.get("action") in {"auto_reply", "reject_cold"}:
+    if route is None or route.get("action") in {
+        "auto_reply",
+        "reject_cold",
+        "reject_ambiguous",
+    }:
         return _inactive_voice_response()
 
     assistant, contacts = await _assistant_for_whatsapp_route(
