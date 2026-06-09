@@ -53,6 +53,7 @@ skip = {
     "UNIFY_KEY",
     "SHARED_UNIFY_KEY",
     "unify_key",
+    "ORCHESTRA_URL",
     "UNITY_COMMS_URL",
     "UNITY_ADAPTERS_URL",
 }
