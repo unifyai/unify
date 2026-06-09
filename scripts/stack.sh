@@ -8,7 +8,7 @@
 #
 # Usage:
 #   ./scripts/stack.sh up           Start full stack (+ Coordinator if registered)
-#   ./scripts/stack.sh down         Stop all services
+#   ./scripts/stack.sh down [--full]    Stop stack (--full stops background runtime too)
 #   ./scripts/stack.sh status       Show service status
 #   ./scripts/stack.sh doctor       Check prerequisites
 #
@@ -221,10 +221,11 @@ cmd_doctor() {
     source "$SELF_HOST_ENV_SCRIPT"
     self_host_runtime_doctor_line | sed 's/^/  /'
     echo ""
-    log_info "Install background runtime: unity service install"
-    log_info "Interactive UI only: unity stack up / unity stack down"
+    log_info "Daily driver: unity stack up / unity stack down"
+    log_info "Stop everything: unity stack down --full  (or: unity service disable)"
+    log_info "Survive reboot without Console: unity setup --boot-runtime"
   else
-    log_info "Stack must stay up for scheduled tasks (or install: unity service install)"
+    log_info "Stack must stay up for scheduled tasks until self-host runtime is wired"
   fi
   log_info "Live Actions stream via EventBus → Pub/Sub actions-sub"
 
@@ -272,6 +273,9 @@ cmd_up() {
     source "$SELF_HOST_ENV_SCRIPT"
     export_self_host_coordinator_runtime_file
     export_workspace_oauth_env "$UNITY_REPO_PATH/.env"
+    if declare -F self_host_enable_runtime &>/dev/null; then
+      self_host_enable_runtime
+    fi
   fi
 
   # voice.sh runs a local LiveKit server with dev credentials. unity/.env
@@ -286,24 +290,32 @@ cmd_up() {
     return 1
   fi
 
+  if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
+    # shellcheck disable=SC1090
+    source "$SELF_HOST_ENV_SCRIPT"
+  fi
+  if declare -F self_host_ensure_service_supervisor &>/dev/null \
+    && [[ -f "$UNITY_REPO_PATH/scripts/service.sh" ]]; then
+    log_info "Ensuring background runtime (scheduled tasks while stack is down)..."
+    if ! self_host_ensure_service_supervisor "$UNITY_REPO_PATH/scripts/service.sh"; then
+      log_warn "Background runtime failed to start — stack down will stop scheduled tasks"
+    fi
+  fi
+
   local runtime_file="${SELF_HOST_COORDINATOR_RUNTIME_FILE:-}"
 
   if [[ -f "$runtime_file" ]]; then
-    if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
-      # shellcheck disable=SC1090
-      source "$SELF_HOST_ENV_SCRIPT"
-    fi
     if declare -F self_host_service_is_enabled &>/dev/null && self_host_service_is_enabled; then
-      export UNITY_REUSE_SERVICE_CM=1
       log_info "Checking for service-managed Coordinator runtime..."
     else
       log_info "Starting Coordinator runtime (saved login)..."
     fi
-    export UNITY_ENSURE_COORDINATOR_INGRESS=1
-    if bash "$CONSOLE_LOCAL_SCRIPT" start-coordinator; then
-      log_success "Coordinator runtime is ready"
-    else
+    if ! bash "$CONSOLE_LOCAL_SCRIPT" ensure-coordinator-topics; then
+      log_warn "Coordinator Pub/Sub setup failed — sign in at Console to refresh credentials"
+    elif ! bash "$CONSOLE_LOCAL_SCRIPT" start-coordinator; then
       log_warn "Coordinator start failed — sign in at Console to refresh credentials"
+    else
+      log_success "Coordinator runtime is ready"
     fi
   fi
 
@@ -317,8 +329,13 @@ cmd_up() {
   echo ""
   if [[ -f "$runtime_file" ]]; then
     echo "  Open Console and chat with your Coordinator."
-    if declare -F self_host_service_is_enabled &>/dev/null && self_host_service_is_enabled; then
-      echo "  stack down stops the UI only — scheduled tasks and outbound comms keep running via unity service."
+    if declare -F self_host_headless_scheduling_ready &>/dev/null \
+      && self_host_headless_scheduling_ready; then
+      echo "  stack down stops the UI only — scheduled tasks keep running in the background."
+    elif declare -F self_host_service_is_enabled &>/dev/null \
+      && self_host_service_is_enabled; then
+      echo "  Background runtime is not healthy — stack down stops scheduled tasks."
+      echo "  Re-run: unity stack up"
     fi
   else
     echo "  First visit: create an account on /login — Coordinator starts automatically."
@@ -327,6 +344,27 @@ cmd_up() {
 }
 
 cmd_down() {
+  local full_stop="false"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --full) full_stop="true"; shift ;;
+      -h|--help)
+        echo "Usage: unity stack down [--full]"
+        echo ""
+        echo "  Default: stop Console and stack ingress; keep Coordinator + Orchestra for scheduled tasks."
+        echo "  --full:  stop everything, including background runtime."
+        echo ""
+        echo "  Also: unity service disable  (same as --full for background runtime)"
+        return 0
+        ;;
+      *)
+        log_error "Unknown option: $1"
+        echo "Run: unity stack down --help"
+        return 1
+        ;;
+    esac
+  done
+
   if [[ ! -f "$CONSOLE_LOCAL_SCRIPT" ]]; then
     log_error "Missing $CONSOLE_LOCAL_SCRIPT"
     return 1
@@ -337,8 +375,23 @@ cmd_down() {
     source "$SELF_HOST_ENV_SCRIPT"
   fi
 
-  if declare -F self_host_service_is_enabled &>/dev/null && self_host_service_is_enabled; then
-    bash "$CONSOLE_LOCAL_SCRIPT" stop --interactive-only
+  if [[ "$full_stop" == "true" ]]; then
+    bash "$CONSOLE_LOCAL_SCRIPT" stop
+    if [[ -x "$UNITY_REPO_PATH/scripts/service.sh" ]]; then
+      bash "$UNITY_REPO_PATH/scripts/service.sh" stop || true
+    fi
+    log_success "Self-host stack and background runtime stopped"
+    return 0
+  fi
+
+  if declare -F self_host_ensure_service_supervisor &>/dev/null \
+    && [[ -f "$UNITY_REPO_PATH/scripts/service.sh" ]]; then
+    self_host_ensure_service_supervisor "$UNITY_REPO_PATH/scripts/service.sh" || true
+  fi
+
+  if declare -F self_host_headless_scheduling_ready &>/dev/null \
+    && self_host_headless_scheduling_ready; then
+    SELF_HOST=1 bash "$CONSOLE_LOCAL_SCRIPT" stop --interactive-only
   else
     bash "$CONSOLE_LOCAL_SCRIPT" stop
   fi
