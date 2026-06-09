@@ -142,6 +142,9 @@ class PhoneCallReceived(Event):
 
     contact: dict
     conference_name: str = ""
+    room_name: str | None = None
+    call_session_id: str | None = None
+    provider_call_sid: str | None = None
 
 
 @dataclass
@@ -410,6 +413,9 @@ class RecordingReady(Event):
 
     conference_name: str
     recording_url: str
+    call_session_id: str | None = None
+    provider_call_sid: str | None = None
+    room_name: str | None = None
 
 
 @dataclass
@@ -440,6 +446,9 @@ class WhatsAppCallReceived(Event):
 
     contact: dict
     conference_name: str = ""
+    room_name: str | None = None
+    call_session_id: str | None = None
+    provider_call_sid: str | None = None
 
 
 @dataclass

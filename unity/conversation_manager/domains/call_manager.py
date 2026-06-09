@@ -91,6 +91,8 @@ class LivekitCallManager:
         self._active_job: bool = False
         self.conference_name = ""
         self.room_name = ""
+        self.call_session_id = ""
+        self.provider_call_sid = ""
         self._event_broker = event_broker
         self._socket_server: CallEventSocketServer | None = None
         self.is_outbound: bool = False
@@ -375,6 +377,7 @@ class LivekitCallManager:
         boss: dict,
         outbound: bool = False,
         channel: str = "phone_call",
+        room_name: str | None = None,
     ):
         if self.has_active_call:
             if self._clear_stale_dispatch_state():
@@ -402,7 +405,8 @@ class LivekitCallManager:
             self._start_boss_notification_rendering()
 
         medium = "whatsapp_call" if channel == "whatsapp_call" else "phone"
-        room_name = make_room_name(self.assistant_id, medium)
+        room_name = room_name or make_room_name(self.assistant_id, medium)
+        self.room_name = room_name
 
         if self._worker_proc is not None and self._worker_proc.poll() is None:
             await self._dispatch_job(room_name, channel, contact, boss, outbound)

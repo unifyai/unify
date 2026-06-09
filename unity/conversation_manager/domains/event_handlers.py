@@ -393,15 +393,20 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
     match event:
         case PhoneCallReceived() as e:
             cm.call_manager.conference_name = e.conference_name
-            await cm.call_manager.start_call(contact, boss)
+            cm.call_manager.call_session_id = e.call_session_id or ""
+            cm.call_manager.provider_call_sid = e.provider_call_sid or ""
+            await cm.call_manager.start_call(contact, boss, room_name=e.room_name)
             message_content = "<Recvieving Call...>"
             notif_content = f"Call received from {sender_name}"
         case WhatsAppCallReceived() as e:
             cm.call_manager.conference_name = e.conference_name
+            cm.call_manager.call_session_id = e.call_session_id or ""
+            cm.call_manager.provider_call_sid = e.provider_call_sid or ""
             await cm.call_manager.start_call(
                 contact,
                 boss,
                 channel="whatsapp_call",
+                room_name=e.room_name,
             )
             message_content = "<Receiving WhatsApp Call...>"
             notif_content = f"WhatsApp call received from {sender_name}"
@@ -1176,12 +1181,29 @@ async def _(
     # exchange_id so the async RecordingReady handler can find it.
     if isinstance(event, (PhoneCallEnded, WhatsAppCallEnded)):
         exchange_id = cm.call_manager.call_exchange_id
-        if exchange_id != UNASSIGNED and cm.call_manager.conference_name:
+        if exchange_id != UNASSIGNED:
+            metadata = {
+                key: value
+                for key, value in {
+                    "conference_name": cm.call_manager.conference_name,
+                    "room_name": cm.call_manager.room_name,
+                    "call_session_id": cm.call_manager.call_session_id,
+                    "provider_call_sid": cm.call_manager.provider_call_sid,
+                }.items()
+                if value
+            }
             cm.transcript_manager.update_exchange_metadata(
                 exchange_id,
-                {"conference_name": cm.call_manager.conference_name},
+                metadata,
             )
-            cm._recording_exchange_ids[cm.call_manager.conference_name] = exchange_id
+            for key in (
+                cm.call_manager.call_session_id,
+                cm.call_manager.provider_call_sid,
+                cm.call_manager.room_name,
+                cm.call_manager.conference_name,
+            ):
+                if key:
+                    cm._recording_exchange_ids[key] = exchange_id
     elif isinstance(event, GoogleMeetEnded):
         exchange_id = cm.call_manager.google_meet_exchange_id
         if exchange_id != UNASSIGNED and cm.call_manager.room_name:
@@ -1243,6 +1265,8 @@ async def _(
     # Clear all session state after cleanup.
     cm.call_manager.conference_name = None
     cm.call_manager.room_name = None
+    cm.call_manager.call_session_id = ""
+    cm.call_manager.provider_call_sid = ""
     cm.call_manager.call_start_timestamp = None
     cm.call_manager.unify_meet_start_timestamp = None
     cm.call_manager.google_meet_start_timestamp = None
@@ -1283,12 +1307,32 @@ async def _(
     *args,
     **kwargs,
 ):
-    name = event.conference_name
-    exchange_id = cm._recording_exchange_ids.pop(name, None)
+    keys = [
+        event.call_session_id,
+        event.provider_call_sid,
+        event.room_name,
+        event.conference_name,
+    ]
+    name = next((key for key in keys if key), event.conference_name)
+    exchange_id = None
+    for key in keys:
+        if key:
+            exchange_id = cm._recording_exchange_ids.pop(key, None)
+            if exchange_id is not None:
+                break
     if exchange_id is not None:
         cm.transcript_manager.update_exchange_metadata(
             exchange_id,
-            {"recording_url": event.recording_url},
+            {
+                key: value
+                for key, value in {
+                    "recording_url": event.recording_url,
+                    "recording_call_session_id": event.call_session_id,
+                    "recording_provider_call_sid": event.provider_call_sid,
+                    "recording_room_name": event.room_name,
+                }.items()
+                if value
+            },
         )
         cm._session_logger.debug(
             "recording",
