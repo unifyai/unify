@@ -86,6 +86,7 @@ class ProductionSettings(BaseSettings):
     # Infrastructure URLs
     # ─────────────────────────────────────────────────────────────────────────
     ORCHESTRA_URL: str = "https://api.unify.ai/v0"
+    UNITY_COORDINATOR_EMAIL_ADDRESS: str = "marty@unify.ai"
 
     # ─────────────────────────────────────────────────────────────────────────
     # GCP Project
