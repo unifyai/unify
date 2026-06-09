@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -8,6 +8,9 @@ from unity.conversation_manager.domains.call_manager import (
     CallConfig,
     LivekitCallManager,
 )
+from unity.conversation_manager.domains.event_handlers import EventHandler
+from unity.conversation_manager.events import RecordingReady
+from unity.gateway.common.livekit import make_call_scoped_sip_uri
 
 
 @pytest.mark.asyncio
@@ -38,3 +41,65 @@ async def test_start_call_uses_provided_room_name(monkeypatch):
     assert manager.room_name == "unity_wa_room_123_CA111"
     start_subprocess.assert_awaited_once()
     assert start_subprocess.await_args.args[0] == "unity_wa_room_123_CA111"
+
+
+class _FakeCredentials:
+    def get_optional(self, name: str, default: str = "") -> str:
+        if name == "LIVEKIT_SIP_URI":
+            return "tenant.sip.livekit.cloud"
+        return default
+
+
+def test_local_call_scoped_sip_uri_uses_unique_target_and_headers():
+    uri, sip_target = make_call_scoped_sip_uri(
+        "+15550800000",
+        "CA:111",
+        _FakeCredentials(),
+        headers={
+            "Unity-Call-Session": "CA-111",
+            "X-Unity-Room": "unity_wa_room_123_CA-111",
+        },
+    )
+
+    assert sip_target == "15550800000-CA-111"
+    assert uri.startswith("sip:15550800000-CA-111@tenant.sip.livekit.cloud?")
+    assert "X-Unity-Call-Session=CA-111" in uri
+    assert "X-Unity-Room=unity_wa_room_123_CA-111" in uri
+
+
+@pytest.mark.parametrize(
+    ("recording_keys", "expected_exchange_id"),
+    [
+        ({"CA111": 10, "unity_wa_room_123_CA111": 20, "legacy_conf": 30}, 10),
+        ({"unity_wa_room_123_CA111": 20, "legacy_conf": 30}, 20),
+        ({"legacy_conf": 30}, 30),
+    ],
+)
+@pytest.mark.asyncio
+async def test_recording_ready_prefers_call_session_then_room_then_conference(
+    recording_keys,
+    expected_exchange_id,
+):
+    transcript_manager = MagicMock()
+    cm = MagicMock()
+    cm._recording_exchange_ids = dict(recording_keys)
+    cm.transcript_manager = transcript_manager
+    cm._session_logger = MagicMock()
+
+    await EventHandler.handle_event(
+        RecordingReady(
+            conference_name="legacy_conf",
+            recording_url="https://storage.googleapis.com/bucket/call.mp3",
+            call_session_id="CA111",
+            provider_call_sid="CA111",
+            room_name="unity_wa_room_123_CA111",
+        ),
+        cm,
+    )
+
+    transcript_manager.update_exchange_metadata.assert_called_once()
+    exchange_id, metadata = transcript_manager.update_exchange_metadata.call_args.args
+    assert exchange_id == expected_exchange_id
+    assert metadata["recording_url"].endswith("/call.mp3")
+    assert metadata["recording_call_session_id"] == "CA111"
+    assert metadata["recording_room_name"] == "unity_wa_room_123_CA111"
