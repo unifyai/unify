@@ -305,6 +305,49 @@ def test_twilio_whatsapp_call_status_uses_session_not_route(
     assert published[0][1]["event"]["provider_call_sid"] == "CA111"
 
 
+def test_twilio_whatsapp_completed_status_cleans_rule_without_publish(
+    client: TestClient,
+    gateway_context: GatewayContext,
+) -> None:
+    session = {
+        "provider_call_sid": "CA111",
+        "assistant_id": 123,
+        "from_number": "+15550810002",
+        "to_number": "+15550810001",
+        "conference_name": "unity_wa_conf_CA111",
+        "livekit_room": "unity_wa_room_123_CA111",
+        "metadata": {"sip_dispatch_rule_id": "rule-CA111"},
+    }
+
+    with (
+        patch(
+            "unity.gateway.adapters.twilio.get_whatsapp_call_session",
+            new=AsyncMock(return_value=session),
+        ),
+        patch(
+            "unity.gateway.adapters.twilio.update_whatsapp_call_session",
+            new=AsyncMock(return_value=session),
+        ) as update_session,
+        patch(
+            "unity.gateway.adapters.twilio.delete_sip_dispatch_rule",
+            new=AsyncMock(),
+        ) as delete_rule,
+        patch(
+            "unity.gateway.adapters.twilio._assistant_for_whatsapp_route",
+            new=AsyncMock(side_effect=AssertionError("completed should not publish")),
+        ),
+    ):
+        response = client.post(
+            "/twilio/whatsapp-call-status",
+            data={"CallSid": "CA111", "CallStatus": "completed"},
+        )
+
+    assert response.status_code == 200
+    update_session.assert_awaited_once()
+    delete_rule.assert_awaited_once_with("rule-CA111", gateway_context.credentials)
+    assert gateway_context.envelope_sink.published == []
+
+
 def test_console_can_create_phone_with_empty_body(client: TestClient) -> None:
     twilio_client = MagicMock()
     number = MagicMock(phone_number="+15555550123")
