@@ -680,12 +680,10 @@ Usage:
   unity sandbox                      Dev/eval REPL (see sandboxes/conversation_manager/README.md)
   unity --live-voice                 Sandbox with live voice in the browser
 
-  unity setup                        Bootstrap local orchestra + BYOK wizard (LLM, voice, OAuth)
-  unity stack doctor                 Check self-host prerequisites
-  unity stack up|down|status         Interactive stack (Console + ingress)
-  unity service install [--boot]     Background runtime for scheduled tasks
-  unity service start|stop|status    Control runtime service
-  unity service doctor               Runtime + CM health checks
+  unity setup [--boot-runtime]       Bootstrap orchestra + enable background scheduling
+  unity stack up|down|status         Console + ingress (down keeps scheduled tasks running)
+  unity stack down --full            Stop everything (or: unity service disable)
+  unity service status|stop|disable  Background runtime control (advanced)
   unity status                       Show local orchestra status
   unity restart                      Restart local orchestra (preserves data)
   unity doctor                       Diagnose missing deps, keys, and PATH
