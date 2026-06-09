@@ -45,6 +45,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 UNITY_REPO_PATH="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 
+if [[ -f "$UNITY_REPO_PATH/scripts/self_host_env.sh" ]]; then
+  # shellcheck disable=SC1090
+  source "$UNITY_REPO_PATH/scripts/self_host_env.sh"
+fi
+
 PUBSUB_EMULATOR_HOST_EXPLICIT="${PUBSUB_EMULATOR_HOST+x}"
 PUBSUB_EMULATOR_HOST="${PUBSUB_EMULATOR_HOST:-localhost:8085}"
 GCP_PROJECT_ID="${GCP_PROJECT_ID:-local-test-project}"
@@ -199,6 +204,12 @@ is_gateway_running() {
 start_gateway() {
   if is_gateway_running; then
     log_success "Unity gateway already running (PID $(cat "$GATEWAY_PIDFILE"))"
+    if [[ -n "${UNITY_RUNTIME_GATEWAY_OWNER:-}" ]] \
+      && declare -F self_host_write_gateway_state &>/dev/null; then
+      self_host_write_gateway_state \
+        "$UNITY_RUNTIME_GATEWAY_OWNER" \
+        "$(cat "$GATEWAY_PIDFILE")"
+    fi
     return 0
   fi
 
@@ -230,6 +241,25 @@ start_gateway() {
     tail -30 "$GATEWAY_LOGFILE" 2>/dev/null
     return 1
   fi
+  if command -v curl >/dev/null 2>&1; then
+    local attempt=0
+    while (( attempt < 15 )); do
+      if curl -sf "$(gateway_base_url)/health" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 1
+      ((attempt++)) || true
+    done
+    if ! curl -sf "$(gateway_base_url)/health" >/dev/null 2>&1; then
+      log_error "Unity gateway health check failed at $(gateway_base_url)/health"
+      tail -30 "$GATEWAY_LOGFILE" 2>/dev/null
+      return 1
+    fi
+  fi
+  if [[ -n "${UNITY_RUNTIME_GATEWAY_OWNER:-}" ]] \
+    && declare -F self_host_write_gateway_state &>/dev/null; then
+    self_host_write_gateway_state "$UNITY_RUNTIME_GATEWAY_OWNER" "$pid"
+  fi
   log_success "Unity gateway running (PID $pid)"
   log_info "Gateway URL: $(gateway_base_url)"
   log_info "Local ingress URL: $(local_comms_base_url)"
@@ -237,6 +267,32 @@ start_gateway() {
     log_info "Public callback URL: $GATEWAY_PUBLIC_URL"
   else
     log_warn "Public callback URL not set. Use UNITY_GATEWAY_PUBLIC_URL for provider webhooks."
+  fi
+}
+
+stop_gateway() {
+  if [[ "${UNITY_ALLOW_RUNTIME_STOP:-0}" != "1" ]] \
+    && declare -F self_host_should_preserve_gateway_on_interactive_stop &>/dev/null \
+    && self_host_should_preserve_gateway_on_interactive_stop; then
+    log_info "Unity gateway is managed by unity service — not stopping"
+    return 0
+  fi
+
+  if [[ -f "$GATEWAY_PIDFILE" ]]; then
+    local gateway_pid
+    gateway_pid=$(cat "$GATEWAY_PIDFILE")
+    if kill -0 "$gateway_pid" 2>/dev/null; then
+      log_info "Stopping Unity gateway (PID $gateway_pid)..."
+      kill "$gateway_pid" 2>/dev/null || true
+      sleep 2
+      kill -9 "$gateway_pid" 2>/dev/null || true
+    fi
+    rm -f "$GATEWAY_PIDFILE"
+  fi
+  if declare -F self_host_patch_runtime_state &>/dev/null; then
+    self_host_patch_runtime_state \
+      "gateway_owner=" \
+      "gateway_pid="
   fi
 }
 
@@ -278,6 +334,29 @@ start_echo() {
 # =============================================================================
 
 start_full_cm() {
+  if [[ "${UNITY_RUNTIME_START_LOCK_HELD:-0}" == "1" ]]; then
+    __start_full_cm_locked
+    return $?
+  fi
+  if declare -F with_unity_runtime_start_lock &>/dev/null \
+    && { [[ "${SELF_HOST:-0}" == "1" ]] || [[ -n "${UNITY_RUNTIME_OWNER:-}" ]]; }; then
+    UNITY_RUNTIME_START_LOCK_HELD=1 with_unity_runtime_start_lock 30 bash "$0" __start_full_cm_locked
+    return $?
+  fi
+  __start_full_cm_locked
+}
+
+__start_full_cm_locked() {
+  if is_running; then
+    local mode
+    mode="$(get_mode)"
+    log_success "Unity already running in $mode mode (PID $(cat "$PIDFILE"))"
+    return 0
+  fi
+  __start_full_cm_impl
+}
+
+__start_full_cm_impl() {
   log_info "Starting ConversationManager for assistant=$ASSISTANT_ID ..."
 
   cd "$UNITY_REPO_PATH"
@@ -358,6 +437,11 @@ start_full_cm() {
   log_success "ConversationManager running (PID $pid)"
   log_info "Full LLM-powered responses enabled."
   log_info "Comms backend: $(describe_comms_backend)"
+
+  if [[ -n "${UNITY_RUNTIME_OWNER:-}" ]] \
+    && declare -F self_host_write_runtime_state &>/dev/null; then
+    self_host_write_runtime_state "$UNITY_RUNTIME_OWNER" "$pid" "$ASSISTANT_ID"
+  fi
 }
 
 # =============================================================================
@@ -403,6 +487,12 @@ cmd_start() {
     fi
   fi
 
+  if [[ "$mode" == "echo" ]] && is_running; then
+    mode="$(get_mode)"
+    log_success "Unity already running in $mode mode (PID $(cat "$PIDFILE"))"
+    return 0
+  fi
+
   if [[ "$mode" == "full" ]]; then
     if ! has_llm_keys; then
       log_warn "LLM keys not found — full CM mode may fail at LLM calls."
@@ -433,6 +523,13 @@ cmd_start() {
 }
 
 cmd_stop() {
+  if [[ "${UNITY_ALLOW_RUNTIME_STOP:-0}" != "1" ]] \
+    && declare -F self_host_should_preserve_runtime_on_interactive_stop &>/dev/null \
+    && self_host_should_preserve_runtime_on_interactive_stop; then
+    log_info "Coordinator runtime is managed by unity service — not stopping"
+    return 0
+  fi
+
   if [[ -f "$PIDFILE" ]]; then
     local pid
     pid=$(cat "$PIDFILE")
@@ -446,17 +543,10 @@ cmd_stop() {
     fi
     rm -f "$PIDFILE" "$MODEFILE"
   fi
-  if [[ -f "$GATEWAY_PIDFILE" ]]; then
-    local gateway_pid
-    gateway_pid=$(cat "$GATEWAY_PIDFILE")
-    if kill -0 "$gateway_pid" 2>/dev/null; then
-      log_info "Stopping Unity gateway (PID $gateway_pid)..."
-      kill "$gateway_pid" 2>/dev/null || true
-      sleep 2
-      kill -9 "$gateway_pid" 2>/dev/null || true
-    fi
-    rm -f "$GATEWAY_PIDFILE"
+  if declare -F self_host_clear_runtime_state &>/dev/null; then
+    self_host_clear_runtime_state
   fi
+  stop_gateway
   log_success "Unity stopped"
 }
 
@@ -507,6 +597,21 @@ cmd_gateway_doctor() {
   run_gateway_doctor
 }
 
+cmd_start_gateway() {
+  if ! check_python; then
+    return 1
+  fi
+  start_gateway
+}
+
+cmd_stop_gateway() {
+  stop_gateway
+}
+
+cmd_gateway_url() {
+  gateway_base_url
+}
+
 cmd_help() {
   echo "Usage: $0 [command] [options]"
   echo ""
@@ -516,6 +621,12 @@ cmd_help() {
   echo "  status    Show status"
   echo "  gateway-doctor"
   echo "            Run gateway config checks"
+  echo "  start-gateway"
+  echo "            Start unity.gateway (outbound + inbound HTTP)"
+  echo "  stop-gateway"
+  echo "            Stop unity.gateway"
+  echo "  gateway-url"
+  echo "            Print the local gateway base URL"
   echo "  check     Quick check (exit 0 if running)"
   echo ""
   echo "Start Options:"
@@ -559,7 +670,11 @@ main() {
     stop)    cmd_stop ;;
     status)  cmd_status ;;
     gateway-doctor) cmd_gateway_doctor ;;
+    start-gateway) cmd_start_gateway ;;
+    stop-gateway) cmd_stop_gateway ;;
+    gateway-url) cmd_gateway_url ;;
     check)   cmd_check ;;
+    __start_full_cm_locked) __start_full_cm_locked ;;
     help|--help|-h) cmd_help ;;
     *)
       log_error "Unknown command: $cmd"
