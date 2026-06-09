@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Callable, Sequence
@@ -304,6 +305,38 @@ def create_app(
     @app.get("/health", include_in_schema=False)
     async def health() -> dict:
         return {"status": "ok"}
+
+    @app.get("/features", include_in_schema=False)
+    async def features() -> dict:
+        """Per-channel availability for this deployment.
+
+        Reports whether each contact channel has the provider credentials it
+        needs to be provisioned/used, so upstream services (Orchestra → Console)
+        can gate the corresponding UI instead of letting a user provision a
+        channel that would fail at runtime. Deployment-level signal only: it
+        reflects configured credentials, not per-assistant connection state, and
+        carries no secrets (booleans only, no auth required like ``/health``).
+        """
+
+        def configured(*names: str) -> bool:
+            return all(bool(os.environ.get(name, "").strip()) for name in names)
+
+        twilio = configured("TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN")
+        twilio_wa = configured("TWILIO_WA_ACCOUNT_SID", "TWILIO_WA_AUTH_TOKEN")
+        return {
+            # Assistant phone (Twilio number provisioning + SMS/voice webhooks).
+            "phone": twilio,
+            # Assistant WhatsApp (Twilio WhatsApp sender).
+            "whatsapp": twilio_wa,
+            # Assistant Discord (interaction verification key; bot pool lives in
+            # Orchestra, but without this key the deployment can't run Discord).
+            "discord": configured("DISCORD_PUBLIC_KEY"),
+            # Slack Events ingress.
+            "slack": configured("SLACK_SIGNING_SECRET"),
+            # User-side phone / WhatsApp verification codes (Twilio social verify).
+            "social_verify_phone": twilio,
+            "social_verify_whatsapp": twilio_wa,
+        }
 
     return app
 
