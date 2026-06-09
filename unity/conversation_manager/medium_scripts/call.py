@@ -93,6 +93,12 @@ DEPLETED_CREDITS_FAST_BRAIN_RESPONSE = (
     "until you top up. Please add credits in billing, then I'll pick this back up."
 )
 
+VIDEO_AVATAR_CHANNELS = frozenset({"unify_meet", "google_meet", "teams_meet"})
+
+
+def has_video_avatar_channel(channel: str) -> bool:
+    return channel in VIDEO_AVATAR_CHANNELS
+
 
 class FastBrainCreditGateMonitor:
     """Polls credit state off the voice response path."""
@@ -879,6 +885,9 @@ async def entrypoint(ctx: agents.JobContext):
     _dedup_in_flight = False
     generation_seq = 0
     user_state_seq = 0
+    mood_turn_index = 0
+    mood_classification_queue: asyncio.Queue[dict] = asyncio.Queue()
+    mood_classification_task: asyncio.Task | None = None
     _was_quiescent = True
     _pending_reply_timer: asyncio.TimerHandle | None = None
     _NOTIFY_COALESCE_S = 0.05
@@ -998,6 +1007,8 @@ async def entrypoint(ctx: agents.JobContext):
     async def _on_job_shutdown():
         if credit_gate_task is not None:
             await utils.aio.cancel_and_wait(credit_gate_task)
+        if mood_classification_task is not None:
+            await utils.aio.cancel_and_wait(mood_classification_task)
         if audio_bridge is not None:
             await asyncio.to_thread(audio_bridge.stop)
         await delete_livekit_room(ctx.room.name)
@@ -1196,6 +1207,97 @@ async def entrypoint(ctx: agents.JobContext):
                 ),
             )
 
+    def _fast_brain_text_transcript() -> str:
+        lines: list[str] = []
+        for item in session.history.items:
+            role = getattr(item, "role", None)
+            if role not in ("user", "assistant"):
+                continue
+            text = (getattr(item, "text_content", None) or "").strip()
+            if not text:
+                continue
+            speaker = "User" if role == "user" else "Assistant"
+            lines.append(f"{speaker}: {text}")
+        return "\n".join(lines)
+
+    def _mood_classification_enabled() -> bool:
+        return (
+            SETTINGS.conversation.FAST_BRAIN_MOOD_CLASSIFICATION_ENABLED
+            and has_video_avatar_channel(channel)
+        )
+
+    async def _run_mood_classifications() -> None:
+        from unity.conversation_manager.domains.fast_brain_mood import (
+            FastBrainMoodClassifier,
+        )
+
+        classifier = FastBrainMoodClassifier(
+            SETTINGS.conversation.FAST_BRAIN_MOOD_CLASSIFICATION_MODEL,
+        )
+        while True:
+            item = await mood_classification_queue.get()
+            try:
+                try:
+                    classification = await classifier.evaluate(
+                        transcript=item["transcript"],
+                        trigger_role=item["trigger_role"],
+                        trigger_text=item["trigger_text"],
+                    )
+                    if classification is None:
+                        continue
+
+                    mood = classification.mood.value
+                    avatar_mood = classification.avatar_mood
+                    await ctx.room.local_participant.publish_data(
+                        json.dumps(
+                            {
+                                "type": "mood_classification",
+                                "mood": mood,
+                                "avatarMood": avatar_mood,
+                                "turnIndex": item["turn_index"],
+                                "triggerRole": item["trigger_role"],
+                            },
+                        ).encode(),
+                        topic="agent_status",
+                        reliable=True,
+                    )
+                    event = FastBrainMoodClassified(
+                        contact=contact,
+                        channel=channel,
+                        mood=mood,
+                        avatar_mood=avatar_mood,
+                        trigger_role=item["trigger_role"],
+                        trigger_utterance_id=item["trigger_utterance_id"],
+                        turn_index=item["turn_index"],
+                        model=SETTINGS.conversation.FAST_BRAIN_MOOD_CLASSIFICATION_MODEL,
+                    )
+                    await event_broker.publish(event.topic, event.to_json())
+                except Exception as e:
+                    _log.error(f"Mood classification failed: {e}")
+            finally:
+                mood_classification_queue.task_done()
+
+    def _enqueue_mood_classification(
+        role: str,
+        text: str,
+        utterance_id: str,
+    ) -> None:
+        nonlocal mood_turn_index
+        if not _mood_classification_enabled():
+            return
+        if not text.strip():
+            return
+        mood_turn_index += 1
+        mood_classification_queue.put_nowait(
+            {
+                "transcript": _fast_brain_text_transcript(),
+                "trigger_role": role,
+                "trigger_text": text,
+                "trigger_utterance_id": utterance_id,
+                "turn_index": mood_turn_index,
+            },
+        )
+
     @session.on("conversation_item_added")
     def _on_chat_item_added(ev):
         """Publish both user and assistant utterances from a single location."""
@@ -1307,6 +1409,7 @@ async def entrypoint(ctx: agents.JobContext):
                     event.to_json(),
                 ),
             )
+        _enqueue_mood_classification(role, text, utterance_id)
 
     audio_bridge: MeetAudioBridge | None = None
     if channel in ("google_meet", "teams_meet"):
@@ -1327,6 +1430,11 @@ async def entrypoint(ctx: agents.JobContext):
         credit_gate_monitor.run(),
         name="fast_brain_credit_gate_monitor",
     )
+    if _mood_classification_enabled():
+        mood_classification_task = asyncio.create_task(
+            _run_mood_classifications(),
+            name="fast_brain_mood_classifier",
+        )
 
     async def _capture_screenshots_for_llm(chat_ctx) -> None:
         """Capture fresh screenshots and inject them into the LLM's chat_ctx.

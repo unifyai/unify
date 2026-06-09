@@ -23,6 +23,10 @@ class ConversationSettings(BaseSettings):
             (utterances, notifications, etc.) the fast brain keeps in its
             rolling context window. Also used as the limit when hydrating
             historical events at call start.
+        FAST_BRAIN_MOOD_CLASSIFICATION_ENABLED: Enable structured mood
+            classification after voice user and assistant turns.
+        FAST_BRAIN_MOOD_CLASSIFICATION_MODEL: LLM model used for voice avatar
+            mood classification.
         BLACKLIST_CHECKS_ENABLED: Enable blacklist filtering and unknown contact
             creation for inbound messages. Default False for fast inbound path.
             When False, no BlackListManager or ContactManager initialization
@@ -59,6 +63,8 @@ class ConversationSettings(BaseSettings):
 
     FAST_BRAIN_MODEL: str = "gpt-5.4-mini@openai"
     FAST_BRAIN_CONTEXT_WINDOW: int = 50
+    FAST_BRAIN_MOOD_CLASSIFICATION_ENABLED: bool = True
+    FAST_BRAIN_MOOD_CLASSIFICATION_MODEL: str = "gpt-5.5-mini@openai"
     IMPL: str = "real"
     COMMS_URL: str = Field(default="", validation_alias="UNITY_COMMS_URL")
     ADAPTERS_URL: str = Field(default="", validation_alias="UNITY_ADAPTERS_URL")
