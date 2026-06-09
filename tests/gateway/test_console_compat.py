@@ -24,6 +24,10 @@ class FakeCredentials:
     async def get(self, name: str) -> str:
         return f"credential:{name}"
 
+    def get_optional(self, name: str, default: str = "") -> str:
+        del name
+        return default
+
 
 class FakeStorage:
     async def write_bytes(
@@ -141,6 +145,29 @@ def test_console_can_read_phone_country_metadata(client: TestClient) -> None:
     assert response.status_code == 200
     assert response.json()["success"] is True
     assert "US" in response.json()["countries"]
+
+
+def test_twilio_whatsapp_reject_ambiguous_returns_closed_response(
+    client: TestClient,
+    gateway_context: GatewayContext,
+) -> None:
+    with patch(
+        "unity.gateway.adapters.twilio.resolve_whatsapp_route",
+        new=AsyncMock(return_value={"action": "reject_ambiguous"}),
+    ):
+        response = client.post(
+            "/twilio/whatsapp",
+            data={
+                "To": "whatsapp:+15550810001",
+                "From": "whatsapp:+15550810002",
+                "Body": "Hello",
+            },
+        )
+
+    assert response.status_code == 200
+    assert "text/xml" in response.headers["content-type"]
+    assert "This number is not accepting new messages." in response.text
+    assert gateway_context.envelope_sink.published == []
 
 
 def test_console_can_create_phone_with_empty_body(client: TestClient) -> None:
