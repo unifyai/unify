@@ -400,6 +400,9 @@ case "\${1:-}" in
         exec bash "\$UNITY_REPO/scripts/setup.sh" "\$@"
         ;;
     stop)
+        if [ -d "\$CONSOLE_REPO" ] && [ -x "\$UNITY_REPO/scripts/stack.sh" ]; then
+            exec bash "\$UNITY_REPO/scripts/stack.sh" down "\$@"
+        fi
         if [ -x "\$ORCHESTRA_REPO/scripts/local.sh" ]; then
             exec bash "\$ORCHESTRA_REPO/scripts/local.sh" stop
         else
@@ -656,26 +659,21 @@ case "\${1:-}" in
         cat <<'HELP'
 Unity CLI
 
-Two-terminal layout (the recommended way to live with your assistant):
+Two-terminal layout (self-host install with Console):
 
-  Terminal 1 (chat):     unity
-  Terminal 2 (logs):     unity logs
-
-The chat terminal is where you talk to the assistant. The logs terminal
-streams everything the runtime is doing in the background — useful for
-seeing tool calls, plans, and reasoning unfold while you work.
+  Terminal 1:     unity              Start stack + open Console (Coordinator auto-starts after login)
+  Terminal 2:     unity logs         Tail runtime logs (sandbox dev mode)
 
 Usage:
-  unity                              Start the full runtime locally (install-and-live).
-                                     State persists in the 'Assistants' workspace.
-  unity --live-voice                 Same, with live voice calls in the browser.
-  unity logs                         Tail the runtime log in a second terminal.
+  unity                              Start self-host stack (Console + infra + Coordinator if registered)
+  unity start                        Same as bare \`unity\`
+  unity stop                         Stop self-host stack (or sandbox orchestra if no Console)
+  unity sandbox                      Dev/eval REPL (see sandboxes/conversation_manager/README.md)
+  unity --live-voice                 Sandbox with live voice in the browser
 
   unity setup                        Bootstrap local orchestra + BYOK wizard (LLM, voice, OAuth)
-  unity stack doctor                 Check self-host prerequisites (run before stack up)
-  unity stack up                     Start full self-host stack (Console + Coordinator)
-  unity stack down                   Stop self-host stack
-  unity stop                         Stop local orchestra (preserves data)
+  unity stack doctor                 Check self-host prerequisites
+  unity stack up|down|status         Explicit stack control (same as unity / unity stop when Console installed)
   unity status                       Show local orchestra status
   unity restart                      Restart local orchestra (preserves data)
   unity doctor                       Diagnose missing deps, keys, and PATH
@@ -696,6 +694,23 @@ Dev / eval mode (different workspace, simulated managers, real-comms, etc.):
   argument is forwarded to that sandbox, so flags like --project_name,
   --overwrite, --real-comms still work.
 HELP
+        ;;
+    sandbox)
+        shift
+        cd "\$UNITY_REPO"
+        # shellcheck disable=SC1091
+        source .venv/bin/activate
+        exec python -m sandboxes.conversation_manager.sandbox "\$@"
+        ;;
+    ""|start)
+        if [ -d "\$CONSOLE_REPO" ] && [ -x "\$UNITY_REPO/scripts/stack.sh" ]; then
+            [ -n "\${1:-}" ] && shift
+            exec bash "\$UNITY_REPO/scripts/stack.sh" up "\$@"
+        fi
+        cd "\$UNITY_REPO"
+        # shellcheck disable=SC1091
+        source .venv/bin/activate
+        exec python -m sandboxes.conversation_manager.sandbox "\$@"
         ;;
     *)
         cd "\$UNITY_REPO"
@@ -847,13 +862,9 @@ print_next_steps() {
 
     # ---- Step: the two-terminal flow ----
     if [ "$CREATE_CLI" = "true" ]; then
-        echo "  $step. Run your assistant in two terminals:"
+        echo "  $step. Start Unity (opens Console in your browser after stack is ready):"
         echo ""
-        echo -e "     ${BOLD}Terminal 1${NC} — chat with your assistant"
-        echo -e "         ${CYAN}\$ unity${NC}"
-        echo ""
-        echo -e "     ${BOLD}Terminal 2${NC} — stream the live runtime log"
-        echo -e "         ${CYAN}\$ unity logs${NC}"
+        echo -e "     ${CYAN}\$ unity${NC}"
         echo ""
         case "${PATH_STATUS:-}" in
             appended)
@@ -873,16 +884,14 @@ print_next_steps() {
                 echo ""
                 ;;
         esac
-        echo "     State persists across runs in the \`Assistants\` workspace."
-        echo "     Stop with Ctrl+C in Terminal 1; \`unity\` again picks up where you left off."
+        echo "     First visit: register on /login — your Coordinator starts automatically."
+        echo "     Next time: run \`unity\` again; chat resumes without extra steps."
         echo ""
         echo "  Also available:"
         echo -e "     ${CYAN}\$ unity stack doctor${NC}     Check self-host prerequisites"
-        echo -e "     ${CYAN}\$ unity stack up${NC}           Full self-host (Console + Coordinator + voice)"
-        echo -e "     ${CYAN}\$ unity --live-voice${NC}     Talk to your assistant in the browser (sandbox)"
-        echo -e "     ${CYAN}\$ unity voice setup${NC}      Re-run LiveKit + voice BYOK prompts"
-        echo -e "     ${CYAN}\$ unity status${NC}           Local orchestra status"
-        echo -e "     ${CYAN}\$ unity stop${NC}             Stop local orchestra"
+        echo -e "     ${CYAN}\$ unity sandbox${NC}          Dev REPL (no Console)"
+        echo -e "     ${CYAN}\$ unity --live-voice${NC}     Sandbox with browser voice calls"
+        echo -e "     ${CYAN}\$ unity stop${NC}             Stop the self-host stack"
         echo -e "     ${CYAN}\$ unity help${NC}             Subcommand reference"
     else
         echo "  $step. Activate the venv and start the runtime:"
