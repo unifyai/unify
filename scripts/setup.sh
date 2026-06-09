@@ -11,6 +11,9 @@
 # `unity setup` if you need to re-bootstrap (e.g., Docker wasn't running the
 # first time, or you wiped ~/.unity).
 #
+# Options:
+#   --boot-runtime   Install a login boot hook so background scheduling survives reboot
+#
 # Environment (all optional):
 #   UNITY_HOME              Install root (default: ~/.unity)
 #   ORCHESTRA_PORT          Orchestra FastAPI port (default: 8000)
@@ -336,6 +339,25 @@ setup_voice_defaults() {
 
 # --- Main -----------------------------------------------------------------
 main() {
+    local boot_runtime="false"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --boot-runtime) boot_runtime="true"; shift ;;
+            -h|--help)
+                echo "Usage: unity setup [--boot-runtime]"
+                echo ""
+                echo "  Bootstraps local Orchestra, wires unity/.env, and enables background scheduling."
+                echo "  --boot-runtime  Also install a login hook so the runtime survives reboot."
+                exit 0
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                echo "Run: unity setup --help"
+                exit 1
+                ;;
+        esac
+    done
+
     echo ""
     echo -e "${BOLD}Unity setup${NC} — bootstrapping local orchestra + voice"
     echo ""
@@ -364,6 +386,17 @@ main() {
         UNITY_REPO="$UNITY_REPO" bash "$UNITY_REPO/scripts/prompt_byok_keys.sh" || true
     fi
 
+    if [[ -f "$UNITY_REPO/scripts/self_host_env.sh" ]]; then
+        # shellcheck disable=SC1090
+        source "$UNITY_REPO/scripts/self_host_env.sh"
+        self_host_enable_runtime
+        if [[ "$boot_runtime" == "true" && -x "$UNITY_REPO/scripts/service.sh" ]]; then
+            log_info "Installing login boot hook for background runtime..."
+            bash "$UNITY_REPO/scripts/service.sh" install-boot --boot || \
+                log_warn "Boot hook install failed — stack up still enables background scheduling"
+        fi
+    fi
+
     echo ""
     echo -e "${GREEN}${BOLD}Setup complete.${NC}"
     echo ""
@@ -371,8 +404,13 @@ main() {
     echo "  Stop it any time with:  unity stop"
     echo ""
     echo "  Next:  ${CYAN}unity stack doctor${NC}  Check self-host prerequisites (optional)"
-    echo "         ${CYAN}unity${NC}               Start Console + Coordinator stack"
+    echo "         ${CYAN}unity stack up${NC}     Console + Coordinator (scheduled tasks enabled)"
+    echo "         ${CYAN}unity stack down${NC}   UI off; tasks keep running"
     echo "  Dev REPL:  ${CYAN}unity sandbox${NC}"
+    if [[ "$boot_runtime" != "true" ]]; then
+        echo ""
+        echo "  Optional: ${CYAN}unity setup --boot-runtime${NC}  Keep scheduled tasks across reboot"
+    fi
     echo ""
 }
 
