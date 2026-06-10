@@ -162,6 +162,62 @@ ensure_pubsub_emulator() {
   return 1
 }
 
+_rclone_works() {
+  command -v rclone &>/dev/null && rclone version &>/dev/null 2>&1
+}
+
+_try_install_rclone() {
+  if [[ "$ENSURE_PREREQS_AUTO_INSTALL" != "1" ]]; then
+    return 1
+  fi
+  case "$(uname -s)" in
+    Darwin)
+      if command -v brew &>/dev/null; then
+        _ensure_prereqs_log_info "Installing rclone via Homebrew..."
+        if brew install rclone &>/dev/null; then
+          _rclone_works && return 0
+        fi
+      fi
+      ;;
+    Linux)
+      if command -v apt-get &>/dev/null; then
+        _ensure_prereqs_log_info "Installing rclone via apt..."
+        if sudo apt-get install -y rclone &>/dev/null; then
+          _rclone_works && return 0
+        fi
+      fi
+      ;;
+  esac
+  return 1
+}
+
+ensure_rclone() {
+  if _rclone_works; then
+    return 0
+  fi
+  if _try_install_rclone; then
+    _ensure_prereqs_log_success "rclone installed"
+    return 0
+  fi
+  _ensure_prereqs_log_error "rclone is required for desktop file sync"
+  _ensure_prereqs_log_info "macOS:  brew install rclone"
+  _ensure_prereqs_log_info "Ubuntu: sudo apt install rclone"
+  return 1
+}
+
+ensure_docker() {
+  if command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then
+    return 0
+  fi
+  _ensure_prereqs_log_error "Docker is required for the self-host desktop container"
+  _ensure_prereqs_log_info "Install Docker Desktop and ensure the daemon is running"
+  return 1
+}
+
 ensure_self_host_prereqs() {
   ensure_java && ensure_pubsub_emulator
+}
+
+ensure_self_host_desktop_prereqs() {
+  ensure_docker && ensure_rclone
 }
