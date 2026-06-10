@@ -1223,6 +1223,7 @@ _ALIAS_TO_GETTER: dict[str, str] = {
     "secrets": "get_secret_manager",
     "web": "get_web_searcher",
     "files": "get_file_manager",
+    "integrations": "",
     "computer": "",
     "actor": "",
     "coordinator": "",
@@ -1395,6 +1396,11 @@ class Primitives:
         return self._get_manager("computer")
 
     @property
+    def integrations(self) -> Any:
+        """Provider-backed SaaS app integrations."""
+        return self._get_manager("integrations")
+
+    @property
     def actor(self) -> Any:
         """Actor delegation primitives (run)."""
         return self._get_manager("actor")
@@ -1445,4 +1451,6 @@ def get_primitive_callable(
     manager = getattr(primitives, manager_alias, None)
     if manager is None:
         return None
+    if manager_alias == "integrations" and primitive_data.get("integration_tool_id"):
+        return manager.callable_for_tool(primitive_data)
     return getattr(manager, method_name, None)
