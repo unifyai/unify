@@ -1,7 +1,10 @@
 """Tests for ToolSurfaceRegistry."""
 
+import hashlib
+
 import pytest
 
+from unity.function_manager.hash_utils import stable_hash_for_rows
 from unity.function_manager.primitives.scope import PrimitiveScope
 from unity.function_manager.primitives.registry import (
     get_registry,
@@ -270,6 +273,21 @@ def test_collect_primitives_returns_expected_fields():
         assert row["is_primitive"] is True
 
 
+def test_integrations_discovery_primitive_is_collected():
+    """Integration catalog discovery is visible without exposing runtime helpers."""
+    registry = get_registry()
+    primitives = registry.collect_primitives(PrimitiveScope.single("integrations"))
+
+    row = primitives["primitives.integrations.search_integrations"]
+    assert row["primitive_method"] == "search_integrations"
+    assert (
+        row["primitive_class"] == "unity.integrations.primitives.IntegrationPrimitives"
+    )
+    assert "support" in row["docstring"].lower()
+    assert "primitives.integrations.search_tools" not in primitives
+    assert "primitives.integrations.execute_tool" not in primitives
+
+
 def test_collect_primitives_matches_get_primitive_sources():
     """collect_primitives() discovers a superset of get_primitive_sources().
 
@@ -353,6 +371,26 @@ def test_compute_hash_for_manager():
     hash2 = registry.compute_hash_for_manager("files")
     assert hash1 == hash2
     assert len(hash1) == 16  # 16-char hex
+
+
+def test_static_primitive_hash_projection_matches_legacy_payload():
+    """Static primitive hashes keep the historical name|argspec|docstring payload."""
+    rows = [
+        {"name": "b", "argspec": "(b: str)", "docstring": "B"},
+        {"name": "a", "argspec": "(a: str)", "docstring": "A"},
+    ]
+
+    expected = hashlib.sha256("a|(a: str)|A\nb|(b: str)|B".encode()).hexdigest()[:16]
+
+    assert (
+        stable_hash_for_rows(
+            rows,
+            fields=("name", "argspec", "docstring"),
+            digest_chars=16,
+            projection="delimited",
+        )
+        == expected
+    )
 
 
 def test_compute_hash_different_for_different_managers():
