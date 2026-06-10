@@ -25,6 +25,12 @@ from unity.conversation_manager.domains.coordinator_delegate import (
 from unity.conversation_manager.domains.inactivity import (
     _handle_inactivity_followup_event,
 )
+from unity.conversation_manager.domains.integration_sync import (
+    _handle_integration_tools_sync_completed,
+    _handle_integration_tools_sync_failed,
+    _handle_integration_tools_sync_requested,
+    _schedule_startup_integration_sync,
+)
 from unity.conversation_manager.domains.task_activation import (
     _consume_startup_wake_reasons,
     _handle_task_due_event,
@@ -2185,6 +2191,7 @@ async def _(event: StartupEvent, cm: "ConversationManager", *args, **kwargs):
         # Manager initialization runs in parallel
         asyncio.create_task(managers_utils.init_conv_manager(cm))
         asyncio.create_task(managers_utils.listen_to_operations(cm))
+        _schedule_startup_integration_sync(cm)
     except Exception as e:
         cm._session_logger.error("startup", f"Error in startup sequence: {e}")
         traceback.print_exc()
@@ -2334,6 +2341,39 @@ async def _(
     # while the user's action is still in the foreground (a delayed
     # narration during onboarding reads as stale).
     if await _handle_coordinator_onboarding_event(event, cm):
+        await cm.request_llm_run(delay=0)
+
+
+@EventHandler.register(IntegrationToolsSyncRequested)
+async def _(
+    event: IntegrationToolsSyncRequested,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    if await _handle_integration_tools_sync_requested(event, cm):
+        await cm.request_llm_run(delay=0)
+
+
+@EventHandler.register(IntegrationToolsSyncCompleted)
+async def _(
+    event: IntegrationToolsSyncCompleted,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    if await _handle_integration_tools_sync_completed(event, cm):
+        await cm.request_llm_run(delay=0)
+
+
+@EventHandler.register(IntegrationToolsSyncFailed)
+async def _(
+    event: IntegrationToolsSyncFailed,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    if await _handle_integration_tools_sync_failed(event, cm):
         await cm.request_llm_run(delay=0)
 
 
