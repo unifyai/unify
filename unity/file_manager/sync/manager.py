@@ -10,7 +10,7 @@ from unity.logger import LOGGER
 from unity.common.hierarchical_logger import ICONS
 
 from .config import SyncConfig
-from .rclone import RcloneSync, SyncResult
+from .rclone import RcloneSync, SyncResult, truncate_for_log
 
 
 class SyncManager:
@@ -78,7 +78,8 @@ class SyncManager:
         result = await self._rclone.bisync(force_resync=True)
         if not result.success:
             LOGGER.error(
-                f"{ICONS['file_sync']} [FileSync] Initial bisync failed: {result.errors}",
+                f"{ICONS['file_sync']} [FileSync] Initial bisync failed: "
+                f"{truncate_for_log(str(result.errors))}",
             )
             # Continue anyway - remote might be empty on first run
 
@@ -308,7 +309,8 @@ class SyncManager:
                         )
                     else:
                         LOGGER.error(
-                            f"{ICONS['file_sync']} [FileSync] Polling: bisync failed: {result.errors}",
+                            f"{ICONS['file_sync']} [FileSync] Polling: bisync failed: "
+                            f"{truncate_for_log(str(result.errors))}",
                         )
 
             except asyncio.CancelledError:
