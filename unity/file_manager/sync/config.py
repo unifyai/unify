@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import List
 from urllib.parse import urlparse
@@ -93,10 +94,11 @@ class SyncConfig:
         ssh_user = "unityuser"
 
         ssh_key_path = f"/tmp/.unity_vm_key_{assistant_id}"
+        remote_root = "/Local" if os.environ.get("SELF_HOST") == "1" else "/Unity/Local"
 
         LOGGER.debug(
             f"{ICONS['file_sync']} [FileSync] Config: host={ssh_host}, port=2222, user={ssh_user}, "
-            f"local=~/Unity/Local, remote=/Unity/Local",
+            f"local=~/Unity/Local, remote={remote_root}",
         )
 
         return cls(
@@ -104,6 +106,7 @@ class SyncConfig:
             ssh_host=ssh_host,
             ssh_user=ssh_user,
             ssh_key_path=ssh_key_path,
+            remote_root=remote_root,
         )
 
     @staticmethod
