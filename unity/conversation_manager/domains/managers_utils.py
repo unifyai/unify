@@ -1939,17 +1939,20 @@ def _init_managers(
         )
 
 
-async def _start_file_sync() -> None:
+async def _start_file_sync() -> bool:
     """Start file sync with managed VM after managers are initialized.
 
-    This starts rclone-based file synchronization between ~ (assistant home)
-    and /home (managed VM) if a desktop_url is configured in SESSION_DETAILS.
+    This starts rclone-based file synchronization between the assistant local
+    workspace and the managed desktop when ``desktop_url`` is configured in
+    ``SESSION_DETAILS``.
 
-    Runs asynchronously and logs success/failure.
+    Returns
+    -------
+    bool
+        True when sync started successfully, False otherwise.
     """
     from unity.session_details import SESSION_DETAILS
 
-    # Only sync when a desktop_url is configured
     if not SESSION_DETAILS.assistant.desktop_url:
         LOGGER.debug(
             f"{ICONS['managers_worker']} [ManagersWorker] No desktop_url configured, skipping file sync",
@@ -1958,43 +1961,22 @@ async def _start_file_sync() -> None:
             LOGGER,
             "⏱️ [StartupTiming] managers.file_sync skipped reason=no_desktop_url",
         )
-        return
+        return False
 
+    _file_sync_t0 = perf_counter()
     try:
-        _file_sync_t0 = perf_counter()
         from unity.file_manager.managers.local import LocalFileManager
 
-        # Get LocalFileManager singleton (may already exist from manager init)
         local_fm = LocalFileManager()
         adapter = local_fm._adapter
 
-        # Check if adapter supports sync (LocalFileSystemAdapter does)
         if not hasattr(adapter, "start_sync"):
             LOGGER.debug(
                 f"{ICONS['managers_worker']} [ManagersWorker] Adapter does not support file sync",
             )
-            return
+            return False
 
-        if adapter._enable_sync:
-            LOGGER.debug(
-                f"{ICONS['managers_worker']} [ManagersWorker] Starting file sync with managed VM...",
-            )
-            success = await adapter.start_sync()
-            log_startup_timing(
-                LOGGER,
-                "⏱️ [StartupTiming] managers.file_sync.start_sync duration=%.2fs success=%s",
-                perf_counter() - _file_sync_t0,
-                success,
-            )
-            if success:
-                LOGGER.debug(
-                    f"{ICONS['managers_worker']} [ManagersWorker] File sync started successfully",
-                )
-            else:
-                LOGGER.debug(
-                    f"{ICONS['managers_worker']} [ManagersWorker] File sync not enabled or failed to start",
-                )
-        else:
+        if not adapter._enable_sync:
             LOGGER.debug(
                 f"{ICONS['managers_worker']} [ManagersWorker] File sync disabled by configuration",
             )
@@ -2003,22 +1985,42 @@ async def _start_file_sync() -> None:
                 "⏱️ [StartupTiming] managers.file_sync skipped reason=adapter_disabled duration=%.2fs",
                 perf_counter() - _file_sync_t0,
             )
+            return False
+
+        LOGGER.debug(
+            f"{ICONS['managers_worker']} [ManagersWorker] Starting file sync with managed VM...",
+        )
+        success = await adapter.start_sync()
+        log_startup_timing(
+            LOGGER,
+            "⏱️ [StartupTiming] managers.file_sync.start_sync duration=%.2fs success=%s",
+            perf_counter() - _file_sync_t0,
+            success,
+        )
+        if success:
+            LOGGER.debug(
+                f"{ICONS['managers_worker']} [ManagersWorker] File sync started successfully",
+            )
+        else:
+            LOGGER.debug(
+                f"{ICONS['managers_worker']} [ManagersWorker] File sync not enabled or failed to start",
+            )
+        return bool(success)
 
     except Exception as e:
-        # File sync failure should not block manager initialization
         LOGGER.error(
             f"{ICONS['managers_worker']} [ManagersWorker] Failed to start file sync: {e}",
         )
         import traceback
 
         traceback.print_exc()
+        return False
     finally:
-        if SESSION_DETAILS.assistant.desktop_url:
-            log_startup_timing(
-                LOGGER,
-                "⏱️ [StartupTiming] managers.file_sync.total duration=%.2fs",
-                perf_counter() - _file_sync_t0,
-            )
+        log_startup_timing(
+            LOGGER,
+            "⏱️ [StartupTiming] managers.file_sync.total duration=%.2fs",
+            perf_counter() - _file_sync_t0,
+        )
 
 
 async def _register_computer_act_completed_callback(cm: "ConversationManager") -> None:
