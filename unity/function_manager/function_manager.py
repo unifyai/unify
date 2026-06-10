@@ -1,5 +1,6 @@
 import ast
 import asyncio
+import hashlib
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -50,6 +51,7 @@ from .types.function import Function
 from .types.meta import FunctionsMeta
 from .types.venv import VirtualEnv
 from .base import BaseFunctionManager
+from .hash_utils import stable_hash_for_rows
 from ..common.model_to_fields import model_to_fields
 from ..file_manager.managers.local import LocalFileManager
 from ..image_manager.image_manager import ImageHandle
@@ -1837,6 +1839,191 @@ class FunctionManager(BaseFunctionManager):
             return base
         return f"({base}) and ({excl})"
 
+    def _integration_owner_scope(self) -> Dict[str, Any]:
+        """Best-effort owner scope for provider-backed integration searches."""
+        try:
+            from unity.integrations.primitives import (
+                integration_owner_scope_from_session,
+            )
+
+            scope = integration_owner_scope_from_session()
+        except Exception:
+            scope = {"owner_scope": "assistant"}
+        return scope
+
+    @staticmethod
+    def _provider_integration_function_id(tool_id: str) -> int:
+        """Return the stable FunctionManager row ID for a provider-backed tool.
+
+        Provider-backed tools are materialized rows in ``Functions/Primitives``,
+        so they need the same integer ``function_id`` shape as static primitive
+        methods. The canonical execution identifier remains
+        ``integration_tool_id``; this hash-derived value only lets the row
+        participate in existing FunctionManager storage, search, and filtering
+        paths.
+        """
+
+        digest = hashlib.sha256(
+            f"IntegrationPrimitives.provider_backed:{tool_id}".encode(),
+        ).digest()
+        # Match the static primitive ID shape: first 32 hash bits masked into
+        # PostgreSQL's signed int32 positive range. This is deterministic but,
+        # like static primitive IDs, not mathematically collision-proof.
+        return int.from_bytes(digest[:4], "big") & 0x7FFFFFFF
+
+    @staticmethod
+    def _integration_schema_argspec(input_schema: Dict[str, Any]) -> str:
+        properties = (
+            input_schema.get("properties") if isinstance(input_schema, dict) else None
+        )
+        required = (
+            set(input_schema.get("required") or [])
+            if isinstance(input_schema, dict)
+            else set()
+        )
+        if not isinstance(properties, dict) or not properties:
+            return "(**kwargs) -> dict"
+        parts: list[str] = []
+        for name, schema in properties.items():
+            if not isinstance(name, str):
+                continue
+            type_name = "Any"
+            if isinstance(schema, dict):
+                raw_type = schema.get("type")
+                if isinstance(raw_type, str):
+                    type_name = {
+                        "string": "str",
+                        "integer": "int",
+                        "number": "float",
+                        "boolean": "bool",
+                        "array": "list",
+                        "object": "dict",
+                    }.get(raw_type, raw_type)
+            default = "" if name in required else " = None"
+            parts.append(f"{name}: {type_name}{default}")
+        return f"({', '.join(parts)}) -> dict" if parts else "(**kwargs) -> dict"
+
+    def _integration_tool_to_function_row(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        tool_id = item["tool_id"]
+        name = item["canonical_name"]
+        app = item.get("app_display_name") or item.get("app_slug") or "integration"
+        tool = item.get("tool_display_name") or name.rsplit(".", 1)[-1]
+        backend = item.get("backend_id") or item.get("provider_backend") or "provider"
+        provider_app_id = item.get("provider_app_id") or item.get("app_slug")
+        provider_tool_id = item.get("provider_tool_id") or item.get(
+            "provider_action_id",
+        )
+        app_icon_url = item.get("app_icon_url") or item.get("icon_url")
+        activation = item.get("activation_state", "connected_ready")
+        provider_error_status = item.get("provider_error_status") or item.get(
+            "provider_error_code",
+        )
+        required_scopes = item.get("required_scopes") or []
+        granted_scopes = item.get("granted_scopes") or []
+        action_class = item.get("action_class", "read")
+        confirmation_required = bool(item.get("confirmation_required", False))
+        input_schema = item.get("input_schema") or item.get("input_schema_json") or {}
+        output_schema = (
+            item.get("output_schema") or item.get("output_schema_json") or {}
+        )
+        examples = item.get("examples") or item.get("examples_json") or []
+        example_prompts = item.get("example_prompts") or []
+        guidance_ids = item.get("guidance_ids") or []
+        input_summary = (
+            json.dumps(input_schema, sort_keys=True)
+            if input_schema
+            else "schema available via get_tool_schema"
+        )
+        output_summary = (
+            json.dumps(output_schema, sort_keys=True)
+            if output_schema
+            else "provider response envelope"
+        )
+        examples_summary = (
+            json.dumps(examples[:2], sort_keys=True) if examples else "none provided"
+        )
+        prompt_summary = (
+            "; ".join(str(prompt) for prompt in example_prompts[:3])
+            if example_prompts
+            else f"User asks to use {app} for {tool}."
+        )
+        docstring = (
+            f"{tool}\n\n"
+            f"Provider-backed integration tool for {app} via {backend}.\n\n"
+            f"Provider app ID: {provider_app_id or 'unknown'}.\n"
+            f"Provider tool/action ID: {provider_tool_id or 'unknown'}.\n"
+            f"App icon URL: {app_icon_url or 'none'}.\n"
+            f"Use when: {item.get('description', 'the user asks for this provider action')}\n\n"
+            f"Activation state: {activation}. `connected_ready` means this tool can "
+            "be executed; `not_connected`, `missing_scope`, `expired`, `error`, "
+            "and `disabled_by_policy` are blocked states that should be explained "
+            "to the user with the required Console action.\n"
+            f"Required scopes: {', '.join(required_scopes) if required_scopes else 'none'}.\n"
+            f"Granted scopes: {', '.join(granted_scopes) if granted_scopes else 'unknown or none'}.\n"
+            f"Action class: {action_class}.\n"
+            f"Confirmation required: {confirmation_required}.\n"
+            f"Provider error status: {provider_error_status or 'none'}.\n"
+            f"Input schema summary: {input_summary}.\n"
+            f"Output schema summary: {output_summary}.\n"
+            f"Example user prompts: {prompt_summary}\n"
+            f"Example call arguments: {examples_summary}\n"
+            f"Guidance IDs: {guidance_ids if guidance_ids else 'none'}.\n\n"
+            "Safety notes: inspect schema before execution when arguments are "
+            "unclear. Do not invent credentials, tokens, scopes, or provider "
+            "connection IDs. For write, destructive, bulk-export, or sensitive "
+            "actions, require the approved confirmation flow before execution."
+        )
+        row = {
+            "function_id": self._provider_integration_function_id(tool_id),
+            "language": "python",
+            "name": name,
+            "argspec": self._integration_schema_argspec(input_schema),
+            "docstring": docstring,
+            "implementation": None,
+            "depends_on": [],
+            "precondition": None,
+            "embedding_text": " ".join(
+                [
+                    name,
+                    app,
+                    tool,
+                    item.get("description", ""),
+                    activation,
+                    action_class,
+                    " ".join(required_scopes),
+                ],
+            ),
+            "guidance_ids": guidance_ids,
+            "verify": confirmation_required
+            or action_class in {"write", "destructive", "bulk_export"},
+            "is_primitive": True,
+            "primitive_class": "unity.integrations.primitives.IntegrationPrimitives",
+            "primitive_method": item.get("function_manager_name")
+            or name.replace(".", "__"),
+            "integration_source": "provider_backed",
+            "integration_tool_id": tool_id,
+            "backend_id": backend,
+            "app_slug": item.get("app_slug"),
+            "integration_metadata": {
+                "source_type": "third_party",
+                "namespace": "primitives.integrations",
+                "provider_app_id": provider_app_id,
+                "provider_tool_id": provider_tool_id,
+                "provider_error_status": provider_error_status,
+                "app_display_name": app,
+                "app_icon_url": app_icon_url,
+                "activation_state": activation,
+                "connection_id": item.get("connection_id"),
+                "required_scopes": required_scopes,
+                "granted_scopes": granted_scopes,
+                "action_class": action_class,
+                "confirmation_required": confirmation_required,
+                "schema_available": item.get("schema_available", True),
+                "match_reason": item.get("match_reason"),
+            },
+        }
+        return Function.model_validate(row).model_dump(include=set(row.keys()))
+
     def _function_context_for_root(self, root_context: str, table_name: str) -> str:
         """Return a concrete Functions context under a registry root."""
         return f"{root_context.strip('/')}/{table_name}"
@@ -2155,8 +2342,9 @@ class FunctionManager(BaseFunctionManager):
     #  Primitives sync                                                   #
     # ------------------------------------------------------------------ #
 
-    def _get_stored_primitives_hash_by_manager(self) -> Dict[str, str]:
-        """Retrieve the per-manager primitives hashes from the Meta context."""
+    def _get_stored_hash_map(self, field_name: str) -> Dict[str, str]:
+        """Read a hash map field from the singleton Functions/Meta row."""
+
         try:
             logs = unify.get_logs(
                 context=self._meta_ctx,
@@ -2164,16 +2352,14 @@ class FunctionManager(BaseFunctionManager):
                 limit=1,
             )
             if logs:
-                return logs[0].entries.get("primitives_hash_by_manager", {}) or {}
+                return logs[0].entries.get(field_name, {}) or {}
         except Exception:
             pass
         return {}
 
-    def _store_primitives_hash_by_manager(
-        self,
-        hash_by_manager: Dict[str, str],
-    ) -> None:
-        """Store the per-manager primitives hashes in the Meta context."""
+    def _store_hash_map(self, field_name: str, hashes: Dict[str, str]) -> None:
+        """Store a hash map field on the singleton Functions/Meta row."""
+
         try:
             logs = unify.get_logs(
                 context=self._meta_ctx,
@@ -2184,20 +2370,298 @@ class FunctionManager(BaseFunctionManager):
                 unify.update_logs(
                     logs=[logs[0].id],
                     context=self._meta_ctx,
-                    entries={"primitives_hash_by_manager": hash_by_manager},
+                    entries={field_name: hashes},
                     overwrite=True,
                 )
             else:
                 unity_create_logs(
                     context=self._meta_ctx,
                     entries=[
-                        {"meta_id": 1, "primitives_hash_by_manager": hash_by_manager},
+                        {"meta_id": 1, field_name: hashes},
                     ],
                     stamp_authoring=True,
                     add_to_all_context=self.include_in_multi_assistant_table,
                 )
         except Exception as e:
-            logger.warning(f"Failed to store primitives hash: {e}")
+            logger.warning("Failed to store %s hash map: %s", field_name, e)
+
+    def _get_stored_primitives_hash_by_manager(self) -> Dict[str, str]:
+        """Retrieve the per-manager primitives hashes from the Meta context."""
+
+        return self._get_stored_hash_map("primitives_hash_by_manager")
+
+    def _store_primitives_hash_by_manager(
+        self,
+        hash_by_manager: Dict[str, str],
+    ) -> None:
+        """Store the per-manager primitives hashes in the Meta context."""
+
+        self._store_hash_map("primitives_hash_by_manager", hash_by_manager)
+
+    def _get_stored_integration_tool_hash_by_app(self) -> Dict[str, str]:
+        """Retrieve per-app hashes for materialized provider-backed tools."""
+
+        return self._get_stored_hash_map("integration_tool_hash_by_app")
+
+    def _store_integration_tool_hash_by_app(self, hash_by_app: Dict[str, str]) -> None:
+        """Store per-app hashes for materialized provider-backed tools."""
+
+        self._store_hash_map("integration_tool_hash_by_app", hash_by_app)
+
+    @staticmethod
+    def _integration_hash_key(*, backend_id: str | None, app_slug: str) -> str:
+        return f"{backend_id or 'provider'}:{app_slug}"
+
+    @staticmethod
+    def _hash_integration_rows(rows: List[Dict[str, Any]]) -> str:
+        hash_fields = (
+            "name",
+            "argspec",
+            "docstring",
+            "embedding_text",
+            "function_id",
+            "primitive_class",
+            "primitive_method",
+            "integration_source",
+            "integration_tool_id",
+            "backend_id",
+            "app_slug",
+            "integration_metadata",
+            "verify",
+        )
+        return stable_hash_for_rows(rows, fields=hash_fields)
+
+    def _delete_provider_integration_rows_for_apps(
+        self,
+        app_keys: List[tuple[str | None, str]],
+    ) -> int:
+        """Delete materialized provider-backed primitive rows for the given apps."""
+        if not app_keys:
+            return 0
+        clauses = [
+            (
+                'integration_source == "provider_backed" '
+                f'and backend_id == "{backend_id or "provider"}" '
+                f'and app_slug == "{app_slug}"'
+            )
+            for backend_id, app_slug in app_keys
+        ]
+        filter_expr = " or ".join(f"({clause})" for clause in clauses)
+        try:
+            logs = unify.get_logs(
+                context=self._primitives_ctx,
+                filter=filter_expr,
+                exclude_fields=list_private_fields(self._primitives_ctx),
+            )
+            if not logs:
+                return 0
+            unify.delete_logs(
+                context=self._primitives_ctx,
+                logs=[lg.id for lg in logs],
+            )
+            return len(logs)
+        except Exception as e:
+            logger.warning(f"Failed to delete provider integration rows: {e}")
+            return 0
+
+    def sync_provider_integration_tools(
+        self,
+        *,
+        app_slug: str | None = None,
+        connection_id: str | None = None,
+        limit: int = 500,
+    ) -> Dict[str, Any]:
+        """Materialize active provider-backed tools into the Primitives context.
+
+        This is an explicit sync path, not a FunctionManager query-time search.
+        It mirrors ``sync_primitives``: build expected rows, compare stable
+        hashes, and only delete/upsert the affected app rows when changed.
+        """
+        if not self._include_primitives or not self._primitive_scope.includes(
+            "integrations",
+        ):
+            return {
+                "status": "skipped",
+                "reason": "integrations_not_in_scope",
+                "apps": [],
+            }
+        if limit <= 0:
+            return {
+                "status": "error",
+                "error": {
+                    "code": "invalid_page_limit",
+                    "message": "Provider integration tool sync requires a positive page limit.",
+                },
+                "apps": [],
+            }
+
+        try:
+            from unity.integrations import ops as integration_ops
+        except Exception as exc:
+            return {"status": "error", "error": str(exc), "apps": []}
+
+        owner_scope = self._integration_owner_scope()
+        try:
+            from unity.integrations.sync_state import normalize_app_slug
+        except Exception:
+            normalize_app_slug = lambda value: value.strip().lower()  # type: ignore[assignment]
+        connections = integration_ops.list_connections(**owner_scope)
+        if isinstance(connections, dict) and connections.get("error"):
+            return {"status": "error", "error": connections.get("error"), "apps": []}
+
+        normalized_app = (
+            normalize_app_slug(app_slug)
+            if isinstance(app_slug, str) and app_slug
+            else None
+        )
+        active_connections = []
+        for connection in connections or []:
+            if connection.get("status") != "connected":
+                continue
+            raw_conn_app = connection.get("canonical_app_slug")
+            conn_app = (
+                normalize_app_slug(raw_conn_app)
+                if isinstance(raw_conn_app, str)
+                else raw_conn_app
+            )
+            if normalized_app and conn_app != normalized_app:
+                continue
+            if connection_id and connection.get("connection_id") != connection_id:
+                continue
+            active_connections.append(connection)
+
+        current_hashes = self._get_stored_integration_tool_hash_by_app()
+        new_hashes = dict(current_hashes)
+        changed_apps: list[dict[str, Any]] = []
+        unchanged_apps: list[dict[str, Any]] = []
+        removed_apps: list[str] = []
+
+        if normalized_app and not active_connections:
+            app_keys_to_remove: list[tuple[str | None, str]] = []
+            for key in list(new_hashes):
+                if key.endswith(f":{normalized_app}"):
+                    backend_id, _sep, _app = key.partition(":")
+                    app_keys_to_remove.append((backend_id or None, normalized_app))
+                    new_hashes.pop(key, None)
+                    removed_apps.append(key)
+            if not app_keys_to_remove:
+                app_keys_to_remove = [(None, normalized_app)]
+            removed = self._delete_provider_integration_rows_for_apps(
+                app_keys_to_remove,
+            )
+            if removed_apps:
+                self._store_integration_tool_hash_by_app(new_hashes)
+            return {
+                "status": "removed" if removed or removed_apps else "unchanged",
+                "apps": [],
+                "removed_apps": removed_apps,
+                "rows_deleted": removed,
+            }
+
+        tools_response: list[dict[str, Any]] = []
+        offset = 0
+        total_tools: int | None = None
+        max_pages = 10_000
+        page_count = 0
+        while total_tools is None or offset < total_tools:
+            page = integration_ops.get_tools(
+                limit=limit,
+                offset=offset,
+                activation_state="connected_ready",
+                include_unconnected=False,
+                canonical_app_slug=normalized_app,
+                **owner_scope,
+            )
+            if isinstance(page, dict) and page.get("error"):
+                return {"status": "error", "error": page.get("error"), "apps": []}
+            page_has_total = isinstance(page, dict)
+            if page_has_total:
+                page_items = list(page.get("items") or [])
+                total_tools = int(page.get("total") or 0)
+            else:
+                # Backward-compatible fallback for older Orchestra deployments.
+                page_items = list(page or [])
+            tools_response.extend(page_items)
+            page_count += 1
+            if page_count > max_pages:
+                return {
+                    "status": "error",
+                    "error": {
+                        "code": "provider_tool_pagination_exceeded",
+                        "message": "Provider tool list pagination exceeded the safety page limit.",
+                    },
+                    "apps": [],
+                }
+            if not page_items:
+                break
+            if not page_has_total and len(page_items) < limit:
+                break
+            offset += limit
+
+        active_app_slugs = {
+            normalize_app_slug(connection["canonical_app_slug"])
+            for connection in active_connections
+            if isinstance(connection.get("canonical_app_slug"), str)
+        }
+        rows_by_key: dict[str, list[Dict[str, Any]]] = {}
+        key_to_app: dict[str, tuple[str | None, str]] = {}
+        for item in tools_response or []:
+            raw_item_app = item.get("app_slug")
+            item_app = (
+                normalize_app_slug(raw_item_app)
+                if isinstance(raw_item_app, str)
+                else raw_item_app
+            )
+            if not item_app or item_app not in active_app_slugs:
+                continue
+            item = {**item, "app_slug": item_app}
+            row = self._integration_tool_to_function_row(item)
+            backend_id = row.get("backend_id") or "provider"
+            key = self._integration_hash_key(backend_id=backend_id, app_slug=item_app)
+            rows_by_key.setdefault(key, []).append(row)
+            key_to_app[key] = (backend_id, item_app)
+
+        for key, rows in rows_by_key.items():
+            expected_hash = self._hash_integration_rows(rows)
+            if current_hashes.get(key) == expected_hash:
+                unchanged_apps.append({"key": key, "rows": len(rows)})
+                continue
+            backend_id, item_app = key_to_app[key]
+            deleted = self._delete_provider_integration_rows_for_apps(
+                [(backend_id, item_app)],
+            )
+            self._insert_primitives(rows)
+            new_hashes[key] = expected_hash
+            changed_apps.append(
+                {"key": key, "rows": len(rows), "rows_deleted": deleted},
+            )
+
+        if not normalized_app:
+            active_keys = set(rows_by_key)
+            for key in list(new_hashes):
+                if key not in active_keys and key in current_hashes:
+                    _backend, _sep, old_app = key.partition(":")
+                    deleted = self._delete_provider_integration_rows_for_apps(
+                        [(_backend, old_app)],
+                    )
+                    new_hashes.pop(key, None)
+                    removed_apps.append(key)
+                    if deleted:
+                        logger.debug(
+                            "Removed %s stale provider integration rows for %s",
+                            deleted,
+                            key,
+                        )
+
+        if changed_apps or removed_apps:
+            self._store_integration_tool_hash_by_app(new_hashes)
+
+        return {
+            "status": "synced" if changed_apps or removed_apps else "unchanged",
+            "apps": changed_apps,
+            "unchanged_apps": unchanged_apps,
+            "removed_apps": removed_apps,
+        }
 
     def _delete_primitives_for_managers(self, manager_aliases: List[str]) -> None:
         """Delete primitive rows for specific managers."""
@@ -2215,8 +2679,16 @@ class FunctionManager(BaseFunctionManager):
             if not class_paths:
                 return
 
-            # Build filter using OR clauses (in [] syntax may not work for strings)
-            clauses = [f'primitive_class == "{cp}"' for cp in class_paths]
+            # Build filter using OR clauses (in [] syntax may not work for strings).
+            # Provider-backed integration rows share the IntegrationPrimitives runtime
+            # bridge, but their lifecycle is owned by sync_provider_integration_tools().
+            # Static primitive sync must not delete those materialized rows.
+            clauses = []
+            for cp in class_paths:
+                clause = f'primitive_class == "{cp}"'
+                if cp == "unity.integrations.primitives.IntegrationPrimitives":
+                    clause = f'({clause}) and integration_source != "provider_backed"'
+                clauses.append(clause)
             filter_expr = " or ".join(clauses)
             logs = unify.get_logs(
                 context=self._primitives_ctx,
@@ -2239,26 +2711,10 @@ class FunctionManager(BaseFunctionManager):
         if not primitives:
             return
 
-        entries = []
-        for data in primitives:
-            entry = {
-                "name": data["name"],
-                "function_id": data[
-                    "function_id"
-                ],  # Explicit stable ID from collect_primitives()
-                "argspec": data["argspec"],
-                "docstring": data["docstring"],
-                "embedding_text": data["embedding_text"],
-                "implementation": None,
-                "depends_on": [],
-                "precondition": None,
-                "verify": False,
-                "is_primitive": True,
-                "guidance_ids": [],
-                "primitive_class": data.get("primitive_class"),
-                "primitive_method": data.get("primitive_method"),
-            }
-            entries.append(entry)
+        entries = [
+            Function.model_validate(data).model_dump(include=set(data.keys()))
+            for data in primitives
+        ]
 
         try:
             unity_create_logs(
@@ -3942,6 +4398,17 @@ class FunctionManager(BaseFunctionManager):
                 "third_party_imports": ent.get("third_party_imports", []),
                 "is_primitive": ent.get("is_primitive", False),
             }
+            for key in (
+                "primitive_class",
+                "primitive_method",
+                "integration_source",
+                "integration_tool_id",
+                "backend_id",
+                "app_slug",
+                "integration_metadata",
+            ):
+                if key in ent:
+                    data[key] = ent.get(key)
             if include_implementations:
                 data["implementation"] = ent.get("implementation")
             metadata[name] = data
