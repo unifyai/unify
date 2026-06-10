@@ -149,6 +149,7 @@ def test_valid_manager_aliases_contains_expected():
         "web",
         "data",
         "files",
+        "integrations",
         "computer",
         "actor",
         "coordinator",
