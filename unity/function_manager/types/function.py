@@ -98,6 +98,42 @@ class Function(AuthoredRow):
         description="Method name on the primitive class.",
     )
 
+    # Integration routing fields. Keep only values that current sync/execution
+    # paths filter on at top level; source-specific details live in
+    # integration_metadata so Function rows do not become a sparse union of
+    # provider-only and native-only columns.
+    integration_source: Optional[str] = Field(
+        None,
+        description=(
+            "Internal routing source for integration primitives, e.g. "
+            "'provider_backed', 'native_function', 'native_mcp', "
+            "'native_computer', or 'native_guidance'."
+        ),
+    )
+    integration_tool_id: Optional[str] = Field(
+        None,
+        description=(
+            "Stable provider/control-plane tool identifier for integration execution. "
+            "For provider-backed rows this is the canonical runtime ID; function_id "
+            "is only the FunctionManager integer row key."
+        ),
+    )
+    backend_id: Optional[str] = Field(
+        None,
+        description="Integration backend identifier retained for provider row cleanup filters.",
+    )
+    app_slug: Optional[str] = Field(None, description="Canonical integration app slug.")
+    integration_metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Nested source-specific integration metadata. Provider rows store "
+            "backend/provider IDs, activation/connection/scopes/action safety, "
+            "schema availability, icon URL, and match reason here. Native rows "
+            "can store manifest slug, capabilities, secrets, tier/quality, and "
+            "deployment status without adding more sparse top-level fields."
+        ),
+    )
+
     venv_id: Optional[int] = Field(
         None,
         description=(

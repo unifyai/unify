@@ -39,3 +39,11 @@ class FunctionsMeta(AuthoredRow):
         "",
         description="Hash of all source-defined custom function signatures.",
     )
+    integration_tool_hash_by_app: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Per-app hash of materialized provider-backed integration tool rows. "
+            "Keys are scoped app identifiers and values change when searchable, "
+            "prompting, or execution metadata changes."
+        ),
+    )
