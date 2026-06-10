@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,6 +25,30 @@ class SyncResult:
     files_transferred: int = 0
     bytes_transferred: int = 0
     errors: List[str] = field(default_factory=list)
+
+
+LOG_OUTPUT_MAX_CHARS = 500
+LOG_OUTPUT_HEAD_CHARS = 200
+
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
+_BISYNC_LOCK_ERROR = re.compile(r"prior lock file found:\s*(\S+\.lck)")
+
+
+def truncate_for_log(text: str, limit: int = LOG_OUTPUT_MAX_CHARS) -> str:
+    """Trim long rclone output for log lines.
+
+    rclone failures can dump the full per-file diff listing; logging that on
+    every retry floods the log. Callers keep the full text on `SyncResult`
+    (recovery matching needs it) and truncate only what gets logged.
+
+    Keeps both the head and the tail of the output: rclone prints its
+    NOTICE/INFO preamble first and the actual ERROR last, so a head-only
+    cut would hide the part that explains the failure.
+    """
+    if len(text) <= limit:
+        return text
+    tail_chars = limit - LOG_OUTPUT_HEAD_CHARS
+    return f"{text[:LOG_OUTPUT_HEAD_CHARS]}... (truncated) ...{text[-tail_chars:]}"
 
 
 class RcloneSync:
@@ -150,20 +176,29 @@ set_modtime = false
                 LOGGER.debug(
                     f"{ICONS['file_sync']} [FileSync] Using --resync for bisync initialization",
                 )
-                return await self._run_with_retry(
-                    self._build_cmd([*base_args, "--resync"]),
-                    operation="bisync",
-                    max_retries=max_retries,
-                )
+                base_args = [*base_args, "--resync"]
 
-            # Try without --resync, auto-recover if rclone says it needs it
             result = await self._run_with_retry(
                 self._build_cmd(base_args),
                 operation="bisync",
                 max_retries=max_retries,
             )
 
-            if not result.success and self._needs_resync_recovery(result.errors):
+            # A bisync killed mid-run (e.g. CM stopped during a poll) leaves a
+            # lock file behind that never expires; clear it and retry once.
+            if not result.success and self._clear_stale_bisync_lock(result.errors):
+                result = await self._run_with_retry(
+                    self._build_cmd(base_args),
+                    operation="bisync (lock recovery)",
+                    max_retries=max_retries,
+                )
+
+            # Auto-recover with --resync if rclone says the baseline is gone
+            if (
+                not force_resync
+                and not result.success
+                and self._needs_resync_recovery(result.errors)
+            ):
                 LOGGER.warning(
                     f"{ICONS['file_sync']} [FileSync] Bisync state corrupted, recovering with --resync...",
                 )
@@ -184,7 +219,78 @@ set_modtime = false
             # Also catch empty listing errors that precede the resync message
             if "empty prior path" in error_lower:
                 return True
+            # Safety abort ("all files were changed on PathN") means the
+            # baseline listings disagree with reality (e.g. mtimes were not
+            # preserved on an earlier transfer). rclone suggests --force, but
+            # re-baselining with --resync is the safe recovery here: without
+            # it every subsequent poll fails with the same abort.
+            if "all files were changed" in error_lower:
+                return True
         return False
+
+    def _clear_stale_bisync_lock(self, errors: List[str]) -> bool:
+        """Delete a leftover bisync lock file if its owning process is dead.
+
+        rclone leaves its lock file behind when a bisync run is killed
+        mid-flight, and the lock effectively never expires, so every later
+        run fails instantly with "prior lock file found". The lock JSON
+        records the owning PID; if that process is gone, deleting the lock
+        is exactly the recovery rclone's error message prescribes.
+
+        Returns True if a stale lock was removed and the bisync is worth
+        retrying. Leaves the lock alone (and returns False) if the owning
+        process is still running.
+        """
+        for error in errors:
+            match = _BISYNC_LOCK_ERROR.search(_ANSI_ESCAPE.sub("", error))
+            if not match:
+                continue
+            lock_path = Path(match.group(1))
+            if not lock_path.exists():
+                # Already cleaned up (e.g. by hand); the retry can proceed.
+                return True
+            owner_pid = self._read_lock_owner_pid(lock_path)
+            if owner_pid is not None and self._pid_is_running(owner_pid):
+                LOGGER.warning(
+                    f"{ICONS['file_sync']} [FileSync] Bisync lock {lock_path} is held by "
+                    f"live process {owner_pid}; leaving it in place",
+                )
+                return False
+            try:
+                lock_path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                LOGGER.error(
+                    f"{ICONS['file_sync']} [FileSync] Failed to remove stale bisync lock "
+                    f"{lock_path}: {e}",
+                )
+                return False
+            LOGGER.warning(
+                f"{ICONS['file_sync']} [FileSync] Removed stale bisync lock {lock_path} "
+                f"(owner pid {owner_pid} is gone), retrying...",
+            )
+            return True
+        return False
+
+    @staticmethod
+    def _read_lock_owner_pid(lock_path: Path) -> Optional[int]:
+        """Read the owning PID recorded in an rclone bisync lock file."""
+        try:
+            return int(json.loads(lock_path.read_text())["PID"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+    @staticmethod
+    def _pid_is_running(pid: int) -> bool:
+        """Check whether a process with the given PID exists."""
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
 
     async def sync_single_file(self, local_path: str) -> SyncResult:
         """Sync a single file to remote (for on-write sync).
@@ -287,18 +393,16 @@ set_modtime = false
                         f"{ICONS['file_sync']} [FileSync] {operation} succeeded",
                     )
                     if stdout_str:
-                        # Truncate long output
-                        output = stdout_str[:500]
-                        if len(stdout_str) > 500:
-                            output += "... (truncated)"
                         LOGGER.debug(
-                            f"{ICONS['file_sync']} [FileSync] stdout: {output}",
+                            f"{ICONS['file_sync']} [FileSync] stdout: "
+                            f"{truncate_for_log(stdout_str)}",
                         )
                     return SyncResult(success=True)
                 else:
                     last_error = f"Exit code {proc.returncode}: {stderr_str}"
                     LOGGER.error(
-                        f"{ICONS['file_sync']} [FileSync] {operation} failed: {last_error}",
+                        f"{ICONS['file_sync']} [FileSync] {operation} failed: "
+                        f"{truncate_for_log(last_error)}",
                     )
 
             except FileNotFoundError:
