@@ -244,25 +244,41 @@ self_host_pid_is_service_supervisor() {
   [[ "$cmd" == *"service.sh"* && "$cmd" == *" run"* ]]
 }
 
-self_host_service_supervisor_is_running() {
-  local pidfile pid
-  pidfile="$(self_host_service_supervisor_pidfile)"
-  [[ -f "$pidfile" ]] || return 1
-  pid="$(cat "$pidfile" 2>/dev/null || true)"
-  if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
-    self_host_clear_service_supervisor_pidfile
-    return 1
+self_host_find_service_supervisor_pid() {
+  local pid=""
+  pid="$(pgrep -f "[s]ervice\.sh run" 2>/dev/null | head -1 || true)"
+  if [[ -n "$pid" ]] && self_host_pid_is_service_supervisor "$pid"; then
+    printf '%s' "$pid"
+    return 0
   fi
-  if ! self_host_pid_is_service_supervisor "$pid"; then
-    self_host_clear_service_supervisor_pidfile
-    return 1
-  fi
+  return 1
+}
+
+self_host_repair_service_supervisor_pidfile() {
+  local pid=""
+  pid="$(self_host_find_service_supervisor_pid 2>/dev/null || true)"
+  [[ -n "$pid" ]] || return 1
+  self_host_ensure_state_dir
+  printf '%s' "$pid" >"$(self_host_service_supervisor_pidfile)"
   return 0
 }
 
+self_host_service_supervisor_is_running() {
+  local pidfile pid
+  pidfile="$(self_host_service_supervisor_pidfile)"
+  if [[ -f "$pidfile" ]]; then
+    pid="$(cat "$pidfile" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null \
+      && self_host_pid_is_service_supervisor "$pid"; then
+      return 0
+    fi
+    self_host_clear_service_supervisor_pidfile
+  fi
+  self_host_repair_service_supervisor_pidfile
+}
+
 self_host_headless_scheduling_ready() {
-  self_host_service_is_enabled \
-    && self_host_service_supervisor_is_running
+  self_host_should_preserve_background_on_interactive_stop
 }
 
 self_host_ensure_service_supervisor() {
@@ -288,16 +304,20 @@ self_host_service_runtime_is_healthy() {
   [[ "$count" -eq 1 ]]
 }
 
-self_host_should_preserve_runtime_on_interactive_stop() {
+self_host_should_preserve_background_on_interactive_stop() {
   self_host_service_is_enabled || return 1
-  self_host_service_supervisor_is_running || return 1
+  self_host_service_supervisor_is_running
+}
+
+self_host_should_preserve_runtime_on_interactive_stop() {
+  self_host_should_preserve_background_on_interactive_stop || return 1
   local count
   count="$(unity_cm_instance_count)"
   [[ "$count" -eq 1 ]]
 }
 
 self_host_should_preserve_orchestra_on_interactive_stop() {
-  self_host_should_preserve_runtime_on_interactive_stop
+  self_host_should_preserve_background_on_interactive_stop
 }
 
 self_host_should_preserve_gateway_on_interactive_stop() {

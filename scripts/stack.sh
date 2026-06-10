@@ -101,6 +101,13 @@ cmd_doctor() {
     else
       log_success "Pub/Sub emulator ready"
     fi
+    if [[ "${SELF_HOST_DESKTOP:-1}" == "1" ]]; then
+      if ! ensure_rclone; then
+        ok=false
+      else
+        log_success "rclone ready (desktop file sync)"
+      fi
+    fi
   else
     log_warn "ensure_prereqs.sh missing — checking Java/gcloud manually"
     if ! command -v gcloud &>/dev/null; then
@@ -267,6 +274,8 @@ cmd_up() {
   export COMMUNICATION_REPO_PATH
   export UNITY_REPO_PATH
   export CONSOLE_REPO_PATH
+  export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
+  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNITY_HOME}"
 
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
@@ -285,21 +294,17 @@ cmd_up() {
   export LIVEKIT_API_KEY="devkey"  # pragma: allowlist secret
   export LIVEKIT_API_SECRET="secret"  # pragma: allowlist secret
 
-  if ! bash "$CONSOLE_LOCAL_SCRIPT" start --self-host; then
-    log_error "Self-host stack failed to start"
-    return 1
-  fi
-
-  if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
-    # shellcheck disable=SC1090
-    source "$SELF_HOST_ENV_SCRIPT"
-  fi
   if declare -F self_host_ensure_service_supervisor &>/dev/null \
     && [[ -f "$UNITY_REPO_PATH/scripts/service.sh" ]]; then
     log_info "Ensuring background runtime (scheduled tasks while stack is down)..."
     if ! self_host_ensure_service_supervisor "$UNITY_REPO_PATH/scripts/service.sh"; then
       log_warn "Background runtime failed to start — stack down will stop scheduled tasks"
     fi
+  fi
+
+  if ! bash "$CONSOLE_LOCAL_SCRIPT" start --self-host; then
+    log_error "Self-host stack failed to start"
+    return 1
   fi
 
   local runtime_file="${SELF_HOST_COORDINATOR_RUNTIME_FILE:-}"
@@ -309,19 +314,18 @@ cmd_up() {
     if declare -F unity_cm_instance_count &>/dev/null; then
       cm_count="$(unity_cm_instance_count)"
     fi
-    if declare -F self_host_headless_scheduling_ready &>/dev/null \
-      && self_host_headless_scheduling_ready \
-      && [[ "$cm_count" -eq 1 ]]; then
+    if [[ "$cm_count" -eq 1 ]]; then
       if declare -F self_host_adopt_coordinator_for_service &>/dev/null; then
         self_host_adopt_coordinator_for_service "${SELF_HOST_COORDINATOR_AGENT_ID:-}" || true
       fi
-      log_success "Reusing service-managed Coordinator runtime"
-    else
-      if declare -F self_host_service_is_enabled &>/dev/null && self_host_service_is_enabled; then
-        log_info "Checking for service-managed Coordinator runtime..."
-      else
-        log_info "Starting Coordinator runtime (saved login)..."
+      if ! bash "$CONSOLE_LOCAL_SCRIPT" ensure-coordinator-topics; then
+        log_warn "Coordinator Pub/Sub setup failed — sign in at Console to refresh credentials"
       fi
+      log_success "Reusing Coordinator runtime"
+    elif [[ "$cm_count" -gt 1 ]]; then
+      log_error "Multiple Coordinator runtimes detected — run: unity stack down --full"
+    else
+      log_info "Starting Coordinator runtime (saved login)..."
       if ! bash "$CONSOLE_LOCAL_SCRIPT" ensure-coordinator-topics; then
         log_warn "Coordinator Pub/Sub setup failed — sign in at Console to refresh credentials"
       elif ! bash "$CONSOLE_LOCAL_SCRIPT" start-coordinator; then
@@ -383,12 +387,18 @@ cmd_down() {
     return 1
   fi
 
+  export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
+  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNITY_HOME}"
+
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
     source "$SELF_HOST_ENV_SCRIPT"
   fi
 
   if [[ "$full_stop" == "true" ]]; then
+    if [[ -x "$UNITY_REPO_PATH/scripts/self_host_desktop.sh" ]]; then
+      bash "$UNITY_REPO_PATH/scripts/self_host_desktop.sh" stop || true
+    fi
     bash "$CONSOLE_LOCAL_SCRIPT" stop
     if [[ -x "$UNITY_REPO_PATH/scripts/service.sh" ]]; then
       bash "$UNITY_REPO_PATH/scripts/service.sh" stop || true
