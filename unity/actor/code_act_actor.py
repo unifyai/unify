@@ -2054,6 +2054,34 @@ class CodeActActor(BaseCodeActActor):
                 self.function_manager.exclude_compositional_ids = frozenset(
                     _excl_compositional,
                 )
+            try:
+                from unity.integration_status import build_function_filter_scope
+
+                function_scope = build_function_filter_scope()
+                if function_scope:
+                    current = getattr(self.function_manager, "filter_scope", None)
+                    self.function_manager.filter_scope = (
+                        f"({current}) and ({function_scope})"
+                        if current
+                        else function_scope
+                    )
+            except Exception:
+                pass
+
+        if self.guidance_manager is not None:
+            try:
+                from unity.integration_status import build_guidance_filter_scope
+
+                guidance_scope = build_guidance_filter_scope()
+                if guidance_scope:
+                    current = getattr(self.guidance_manager, "filter_scope", None)
+                    self.guidance_manager.filter_scope = (
+                        f"({current}) and ({guidance_scope})"
+                        if current
+                        else guidance_scope
+                    )
+            except Exception:
+                pass
 
         # Create persistent pools that survive across act() calls
         from unity.function_manager.function_manager import VenvPool
@@ -4456,8 +4484,18 @@ class CodeActActor(BaseCodeActActor):
                 "    session_created, duration_ms).\n"
             )
 
+        integration_summary = ""
+        try:
+            from unity.integration_status import enabled_summary_for_prompt
+
+            integration_summary = enabled_summary_for_prompt()
+        except Exception:
+            integration_summary = ""
         effective_guidelines = (
-            "\n\n".join(filter(None, [self._base_guidelines, guidelines])) or None
+            "\n\n".join(
+                filter(None, [self._base_guidelines, guidelines, integration_summary]),
+            )
+            or None
         )
 
         logger.debug(f"⏱️ [CodeActActor.act +{_act_ms()}] building system prompt")

@@ -496,6 +496,56 @@ def enabled_function_ids() -> set[int]:
     return ids
 
 
+def build_function_filter_scope() -> str | None:
+    """Return a FunctionManager filter that hides disabled package functions.
+
+    Normal user functions and primitives must remain searchable. Therefore this
+    helper excludes known disabled integration package function IDs instead of
+    positively allowing only enabled package IDs.
+    """
+    try:
+        from unity.integration_status.discovery import discover_available_packages
+
+        packages = discover_available_packages()
+    except Exception:
+        return None
+
+    if not packages:
+        return None
+
+    enabled = get_enabled_integrations()
+    disabled_function_names: set[str] = set()
+    for pkg in packages:
+        slug = pkg.get("slug")
+        if slug and slug not in enabled:
+            disabled_function_names.update(pkg.get("function_names", []))
+
+    if not disabled_function_names:
+        return None
+
+    try:
+        from unity.manager_registry import ManagerRegistry
+
+        fm = ManagerRegistry.get_function_manager()
+        quoted = ", ".join(repr(n) for n in sorted(disabled_function_names))
+        rows = fm.filter(filter=f"name in ({quoted})", limit=10000)
+    except Exception:
+        return None
+
+    ids: set[int] = set()
+    for row in rows or []:
+        fid = (
+            row.get("function_id")
+            if isinstance(row, dict)
+            else getattr(row, "function_id", None)
+        )
+        if isinstance(fid, int):
+            ids.add(fid)
+    if not ids:
+        return None
+    return "function_id not in (" + ", ".join(str(i) for i in sorted(ids)) + ")"
+
+
 def enabled_guidance_ids() -> set[int]:
     """Resolve enabled integrations' guidance titles → GuidanceManager ids.
 
@@ -654,6 +704,7 @@ def enabled_summary_for_prompt() -> str:
 
 __all__ = [
     "build_guidance_filter_scope",
+    "build_function_filter_scope",
     "enabled_function_ids",
     "enabled_guidance_ids",
     "enabled_summary_for_prompt",
