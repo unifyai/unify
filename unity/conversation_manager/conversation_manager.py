@@ -31,6 +31,7 @@ from unity.conversation_manager.domains.comms_utils import publish_system_error
 from unity.conversation_manager.domains.event_handlers import EventHandler
 from unity.conversation_manager.domains.renderer import Renderer
 from unity.conversation_manager.events import *
+from unity.integrations.sync_state import IntegrationSyncCoordinator
 from unity.common.prompt_helpers import now as prompt_now
 
 from unity.common.llm_client import new_llm_client
@@ -222,6 +223,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.chat_history = []
         self.contact_index = ContactIndex()
         self.notifications_bar = NotificationBar()
+        self.integration_sync_coordinator = IntegrationSyncCoordinator()
         self.in_flight_actions: dict[
             int,
             dict,
@@ -1694,6 +1696,9 @@ class ConversationManager(metaclass=SingletonABCMeta):
             )
         _t0 = _rl_time.perf_counter()
         input_message = brain_spec.state_message()
+        integration_sync_context = self.integration_sync_coordinator.prompt_summary()
+        if integration_sync_context:
+            input_message = f"{input_message}\n\n{integration_sync_context}"
         _state_message_ms = (_rl_time.perf_counter() - _t0) * 1000
         _t0 = _rl_time.perf_counter()
         system_prompt = brain_spec.system_prompt
