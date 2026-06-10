@@ -1485,6 +1485,44 @@ class CoordinatorOnboardingEvent(Event):
 
 
 @dataclass
+class IntegrationToolsSyncRequested(Event):
+    """A connected provider app needs its active tools warmed in Unity."""
+
+    topic: ClassVar[str | None] = "app:comms:integration_tools_sync_requested"
+
+    app_slug: str
+    app_display_name: str | None = None
+    connection_id: str | None = None
+    message: str = ""
+
+
+@dataclass
+class IntegrationToolsSyncCompleted(Event):
+    """Unity finished preparing active provider tools for an app."""
+
+    topic: ClassVar[str | None] = "app:comms:integration_tools_sync_completed"
+
+    app_slug: str
+    app_display_name: str | None = None
+    connection_id: str | None = None
+    tool_count: int | None = None
+    message: str = ""
+
+
+@dataclass
+class IntegrationToolsSyncFailed(Event):
+    """Unity failed to prepare active provider tools for an app."""
+
+    topic: ClassVar[str | None] = "app:comms:integration_tools_sync_failed"
+
+    app_slug: str
+    app_display_name: str | None = None
+    connection_id: str | None = None
+    error: str = ""
+    message: str = ""
+
+
+@dataclass
 class FileSyncComplete(Event):
     """The initial rclone bisync between the container and the managed VM has
     finished.  All files from the assistant's persistent disk are now available
