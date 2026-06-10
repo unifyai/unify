@@ -2642,23 +2642,33 @@ async def _(
 
     asyncio.ensure_future(_ensure_desktop_session(cm))
     _t0 = time.perf_counter()
-    await managers_utils._start_file_sync()
+    file_sync_started = await managers_utils._start_file_sync()
     log_startup_timing(
         LOGGER,
-        "⏱️ [StartupTiming] desktop_ready.start_file_sync duration=%.2fs",
+        "⏱️ [StartupTiming] desktop_ready.start_file_sync duration=%.2fs success=%s",
         time.perf_counter() - _t0,
+        file_sync_started,
     )
 
-    _t0 = time.perf_counter()
-    await cm.event_broker.publish(
-        FileSyncComplete.topic,
-        FileSyncComplete().to_json(),
+    publish_file_sync_complete = (
+        file_sync_started or os.environ.get("SELF_HOST", "0") != "1"
     )
-    log_startup_timing(
-        LOGGER,
-        "⏱️ [StartupTiming] desktop_ready.publish_file_sync_complete duration=%.2fs",
-        time.perf_counter() - _t0,
-    )
+    if publish_file_sync_complete:
+        _t0 = time.perf_counter()
+        await cm.event_broker.publish(
+            FileSyncComplete.topic,
+            FileSyncComplete().to_json(),
+        )
+        log_startup_timing(
+            LOGGER,
+            "⏱️ [StartupTiming] desktop_ready.publish_file_sync_complete duration=%.2fs",
+            time.perf_counter() - _t0,
+        )
+    else:
+        cm._session_logger.info(
+            "file_sync",
+            "Self-host file sync did not start — deferring FileSyncComplete",
+        )
 
     _t0 = time.perf_counter()
     await comms_utils.publish_assistant_desktop_ready(
