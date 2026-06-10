@@ -291,6 +291,7 @@ class LocalCommsIngress:
                     "contacts": payload.get("contacts") or [],
                     "event_type": event_type,
                     "message": payload.get("message", "") or "",
+                    "extra_event_fields": payload.get("extra_event_fields") or {},
                     "task_id": payload.get("task_id"),
                     "source_task_log_id": payload.get("source_task_log_id"),
                     "activation_revision": payload.get("activation_revision", "") or "",

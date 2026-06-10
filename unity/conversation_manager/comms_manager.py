@@ -64,6 +64,11 @@ from unity.conversation_manager.domains.coordinator_delegate import (
 from unity.conversation_manager.domains.inactivity import (
     _inactivity_followup_event_from_payload,
 )
+from unity.conversation_manager.domains.integration_sync import (
+    _integration_tools_sync_completed_from_payload,
+    _integration_tools_sync_failed_from_payload,
+    _integration_tools_sync_requested_from_payload,
+)
 from unity.conversation_manager.events import *
 from unity.conversation_manager.metrics import pubsub_e2e_latency
 from unity.session_details import SESSION_DETAILS
@@ -804,6 +809,18 @@ class CommsManager:
                         reason=r,
                     ),
                     "coordinator_onboarding_event": lambda r: _coordinator_onboarding_event_from_payload(
+                        event,
+                        message=r,
+                    ),
+                    "integration_tools_sync_requested": lambda r: _integration_tools_sync_requested_from_payload(
+                        event,
+                        message=r,
+                    ),
+                    "integration_tools_sync_completed": lambda r: _integration_tools_sync_completed_from_payload(
+                        event,
+                        message=r,
+                    ),
+                    "integration_tools_sync_failed": lambda r: _integration_tools_sync_failed_from_payload(
                         event,
                         message=r,
                     ),
