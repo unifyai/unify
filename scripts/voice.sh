@@ -87,18 +87,24 @@ is_livekit_running() {
 
 start_livekit() {
     if is_livekit_running; then
-        log_success "livekit-server already running (pid $(cat "$VOICE_PIDFILE"))"
-        return 0
+        if (echo > "/dev/tcp/127.0.0.1/7880") 2>/dev/null; then
+            log_success "livekit-server already running (pid $(cat "$VOICE_PIDFILE"))"
+            return 0
+        fi
+        log_warn "Stale livekit pidfile — restarting livekit-server"
+        rm -f "$VOICE_PIDFILE"
     fi
     log_info "Starting livekit-server in --dev mode (logs -> $VOICE_LOGFILE)..."
-    # `setsid` (where available) detaches into a new session so the server
-    # survives the parent shell exiting.
-    local launcher="bash -c"
+    # Detach so the server survives stack/console shell exit. Linux uses
+    # setsid; macOS has no setsid, so nohup is the reliable fallback.
+    local pid=""
     if command -v setsid >/dev/null 2>&1; then
-        launcher="setsid bash -c"
+        setsid bash -c "exec livekit-server --dev >>\"$VOICE_LOGFILE\" 2>&1" &
+        pid=$!
+    else
+        nohup livekit-server --dev >>"$VOICE_LOGFILE" 2>&1 &
+        pid=$!
     fi
-    $launcher "exec livekit-server --dev" >"$VOICE_LOGFILE" 2>&1 &
-    local pid=$!
     disown "$pid" 2>/dev/null || true
     echo "$pid" >"$VOICE_PIDFILE"
 
