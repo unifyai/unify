@@ -115,7 +115,7 @@ def _build_desktop_image(
 ) -> bool:
     """Build the desktop Docker image. Returns True on success."""
     progress = progress or (lambda _m: None)
-    dockerfile = repo_root / "desktop" / "Dockerfile"
+    dockerfile = repo_root / "deploy" / "desktop" / "Dockerfile"
     if not dockerfile.exists():
         progress(f"[desktop] Missing Dockerfile at {dockerfile}")
         return False
@@ -427,7 +427,7 @@ def try_start_desktop_direct(
             summary=(
                 f"Docker image '{DESKTOP_IMAGE_TAG}' not found. "
                 "Run with --agent-service-bootstrap auto to build it automatically, "
-                f"or build manually: docker build -t {DESKTOP_IMAGE_TAG} -f desktop/Dockerfile ."
+                f"or build manually: docker build -t {DESKTOP_IMAGE_TAG} -f deploy/desktop/Dockerfile ."
             ),
         )
 
@@ -559,7 +559,9 @@ def diagnose_desktop_setup(
     if not _desktop_image_exists():
         lines.append(f"Issue: Docker image '{DESKTOP_IMAGE_TAG}' not found.")
         lines.append("  Build it with:")
-        lines.append(f"    docker build -t {DESKTOP_IMAGE_TAG} -f desktop/Dockerfile .")
+        lines.append(
+            f"    docker build -t {DESKTOP_IMAGE_TAG} -f deploy/desktop/Dockerfile .",
+        )
         lines.append("")
     else:
         lines.append(f"Image '{DESKTOP_IMAGE_TAG}': OK")
