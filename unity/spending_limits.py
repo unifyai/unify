@@ -43,9 +43,10 @@ _spend_client: Optional[AsyncSpendClient] = None
 
 def _charges_billing() -> bool:
     """Whether Unify platform billing gates apply (mirrors Orchestra settings)."""
+    from unity.settings import SETTINGS
+
     is_self_host = os.environ.get("SELF_HOST", "0") == "1"
-    is_staging = os.environ.get("STAGING", "False") == "True"
-    return not is_staging and not is_self_host
+    return SETTINGS.DEPLOY_ENV == "production" and not is_self_host
 
 
 def _get_api_key() -> Optional[str]:
