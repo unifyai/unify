@@ -1987,6 +1987,113 @@ def get_verification_examples_for_environments(
 
 
 # ---------------------------------------------------------------------------
+# 6b. Integration Primitive Examples
+# ---------------------------------------------------------------------------
+
+
+def get_primitives_integrations_function_manager_search_example() -> str:
+    """Example: discover provider tools through FunctionManager first."""
+
+    return """
+# Example: Discover provider-backed tools through FunctionManager
+#
+# FunctionManager is the primary actor-facing search surface for integration
+# tools. Results include normal functions, system primitives, and materialized
+# provider rows named primitives.integrations.<app>.<tool>.
+async def find_recent_hubspot_contacts() -> dict:
+    # In the tool loop, first search FunctionManager:
+    #   FunctionManager_search_functions(query="recent HubSpot leads contacts", n=5)
+    #
+    # Suppose the result includes:
+    #   name="primitives.integrations.hubspot.search_contacts"
+    #   integration_tool_id="composio:hubspot:search_contacts"
+    #   activation_state="connected_ready"
+    #   required_scopes=["crm.objects.contacts.read"]
+    #   schema_available=True
+    #
+    # Then call the concrete primitive directly.
+    return await primitives.integrations.hubspot.search_contacts(
+        query="recent leads created or updated this week",
+        limit=25,
+    )
+"""
+
+
+def get_primitives_integrations_catalog_status_example() -> str:
+    """Example: answer support and connection questions with catalog discovery."""
+
+    return """
+# Example: Search supported integrations before asking the user to connect
+async def check_if_slack_is_ready() -> dict:
+    discovery = await primitives.integrations.search_integrations(
+        query="Slack",
+        limit=3,
+    )
+    # If results is empty, Slack is not currently supported in Integrations.
+    # If connection_status is not connected, ask the user to connect Slack in Console.
+    # If sync_status is not materialized, explain that tools are still syncing.
+    # If sync_status is materialized, search FunctionManager for executable rows
+    # such as primitives.integrations.slack.send_message.
+    return discovery
+"""
+
+
+def get_primitives_integrations_materialized_schema_example() -> str:
+    """Example: use FunctionManager row metadata for provider tool arguments."""
+
+    return """
+# Example: Inspect the FunctionManager row metadata before calling a synced tool
+#
+# FunctionManager search returns materialized integration rows with docstring,
+# argspec, activation_state, connection_id, action_class, and schema_available.
+async def inspect_salesforce_query_tool() -> dict:
+    # Suppose FunctionManager selected:
+    #   name="primitives.integrations.salesforce.query_records"
+    #   argspec="(object_name: str, where: str = None, limit: int = None) -> dict"
+    #   docstring="Query Records for Salesforce..."
+    #   activation_state="connected_ready"
+    return {
+        "call": "primitives.integrations.salesforce.query_records",
+        "args": {"object_name": "Lead", "limit": 25},
+    }
+"""
+
+
+def get_primitives_integrations_activation_state_example() -> str:
+    """Example: handle blocked activation states as first-class outcomes."""
+
+    return """
+# Example: Call the concrete synced integration primitive
+async def search_gmail_for_invoices() -> dict:
+    # If FunctionManager did not return a Gmail row, Gmail is not connected or
+    # its tools have not synced yet. Ask the user to connect it in Console.
+    return await primitives.integrations.gmail.search_emails(
+        query="from:acme invoice newer_than:30d",
+    )
+"""
+
+
+def get_primitives_integrations_confirmation_example() -> str:
+    """Example: require confirmation for write or sensitive provider actions."""
+
+    return """
+# Example: Confirmation-gated write action
+async def send_approved_slack_update(channel: str, text: str) -> dict:
+    # Check the selected FunctionManager row metadata first. If it says
+    # confirmation_required=True or action_class="write", ask before sending.
+    confirmation_required = True
+    if confirmation_required:
+        return {
+            "status": "confirmation_required",
+            "message": "Ask the user to confirm the exact Slack message before sending.",
+            "proposed_action": {"channel": channel, "text": text},
+        }
+
+    return await primitives.integrations.slack.send_message(channel=channel, text=text)
+"""
+
+
+# ---------------------------------------------------------------------------
 # 7. Example Function Map (for ToolSurfaceRegistry)
 # ---------------------------------------------------------------------------
 
@@ -2030,6 +2137,12 @@ def get_example_function_map() -> dict[str, callable]:
         "get_primitives_dashboards_live_data_example": get_primitives_dashboards_live_data_example,
         "get_primitives_dashboards_rich_live_data_example": get_primitives_dashboards_rich_live_data_example,
         "get_primitives_dashboards_composition_example": get_primitives_dashboards_composition_example,
+        # Integrations
+        "get_primitives_integrations_function_manager_search_example": get_primitives_integrations_function_manager_search_example,
+        "get_primitives_integrations_catalog_status_example": get_primitives_integrations_catalog_status_example,
+        "get_primitives_integrations_materialized_schema_example": get_primitives_integrations_materialized_schema_example,
+        "get_primitives_integrations_activation_state_example": get_primitives_integrations_activation_state_example,
+        "get_primitives_integrations_confirmation_example": get_primitives_integrations_confirmation_example,
     }
 
 
