@@ -1,0 +1,256 @@
+from __future__ import annotations
+
+import asyncio
+from types import SimpleNamespace
+
+import pytest
+
+from unity.function_manager.function_manager import FunctionManager
+from unity.conversation_manager.domains.integration_sync import (
+    _handle_integration_tools_sync_failed,
+    _handle_integration_tools_sync_requested,
+    _handle_integration_tools_sync_completed,
+    _schedule_startup_integration_sync,
+)
+from unity.conversation_manager.domains.notifications import NotificationBar
+from unity.conversation_manager.events import (
+    IntegrationToolsSyncCompleted,
+    IntegrationToolsSyncFailed,
+    IntegrationToolsSyncRequested,
+)
+from unity.integrations.sync_state import IntegrationSyncCoordinator
+
+
+class FakeIntegrationOps:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def list_connections(self, **scope):
+        self.calls.append(("list_connections", (), scope))
+        return [
+            {
+                "connection_id": "conn-salesforce",
+                "canonical_app_slug": "salesforce",
+                "status": "connected",
+            },
+            {
+                "connection_id": "conn-slack",
+                "canonical_app_slug": "slack",
+                "status": "pending",
+            },
+        ]
+
+
+class FakeFunctionManager:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def sync_provider_integration_tools(self, **kwargs):
+        self.calls.append(kwargs)
+        return {"status": "synced", "apps": [{"key": "composio:salesforce", "rows": 3}]}
+
+
+class FakeEventBroker:
+    def __init__(self) -> None:
+        self.published: list[tuple[str, dict]] = []
+
+    async def publish(self, topic, payload):
+        self.published.append((topic, payload))
+
+
+@pytest.mark.anyio
+async def test_sync_coordinator_materializes_connected_apps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = FakeIntegrationOps()
+    function_manager = FakeFunctionManager()
+    monkeypatch.setattr(
+        "unity.integrations.ops.list_connections",
+        client.list_connections,
+    )
+    monkeypatch.setattr(
+        "unity.manager_registry.ManagerRegistry.get_function_manager",
+        lambda **kwargs: function_manager,
+    )
+    coordinator = IntegrationSyncCoordinator(
+        owner_scope={"owner_scope": "assistant", "assistant_id": 42},
+    )
+
+    states = await coordinator.schedule_connected_apps()
+    assert [state.app_slug for state in states] == ["salesforce"]
+
+    await coordinator._tasks["salesforce"]
+
+    assert coordinator.snapshot()["salesforce"].status == "ready"
+    assert coordinator.snapshot()["salesforce"].tool_count == 3
+    assert client.calls == [
+        ("list_connections", (), {"owner_scope": "assistant", "assistant_id": 42}),
+    ]
+    assert function_manager.calls == [{"app_slug": "salesforce"}]
+
+
+@pytest.mark.anyio
+async def test_sync_requested_handler_schedules_domain_sync(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    function_manager = FakeFunctionManager()
+    event_broker = FakeEventBroker()
+    monkeypatch.setattr(
+        "unity.manager_registry.ManagerRegistry.get_function_manager",
+        lambda **kwargs: function_manager,
+    )
+    monkeypatch.setattr(
+        "unity.integrations.ops.list_connections",
+        FakeIntegrationOps().list_connections,
+    )
+    cm = SimpleNamespace(
+        integration_sync_coordinator=IntegrationSyncCoordinator(owner_scope={}),
+        notifications_bar=NotificationBar(),
+        event_broker=event_broker,
+    )
+
+    should_wake = await _handle_integration_tools_sync_requested(
+        IntegrationToolsSyncRequested(
+            app_slug="Salesforce",
+            app_display_name="Salesforce",
+        ),
+        cm,
+    )
+    await cm.integration_sync_coordinator._tasks["salesforce"]
+    await asyncio.sleep(0)
+
+    assert should_wake is True
+    assert cm.integration_sync_coordinator.snapshot()["salesforce"].status == "ready"
+    assert cm.notifications_bar.notifications[-1].type == "Integrations"
+    assert function_manager.calls == [{"app_slug": "salesforce"}]
+    assert event_broker.published[-1][0].endswith("integration_tools_sync_completed")
+
+
+@pytest.mark.anyio
+async def test_sync_failed_handler_surfaces_failed_state() -> None:
+    cm = SimpleNamespace(
+        integration_sync_coordinator=IntegrationSyncCoordinator(owner_scope={}),
+        notifications_bar=NotificationBar(),
+    )
+
+    should_wake = await _handle_integration_tools_sync_failed(
+        IntegrationToolsSyncFailed(
+            app_slug="salesforce",
+            app_display_name="Salesforce",
+            error="provider unavailable",
+        ),
+        cm,
+    )
+
+    assert should_wake is True
+    state = cm.integration_sync_coordinator.snapshot()["salesforce"]
+    assert state.status == "failed"
+    assert state.error == "provider unavailable"
+    assert cm.notifications_bar.notifications[-1].type == "Integrations"
+
+
+@pytest.mark.anyio
+async def test_startup_sync_schedules_connected_apps_without_brain_action_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    function_manager = FakeFunctionManager()
+    event_broker = FakeEventBroker()
+    monkeypatch.setattr(
+        "unity.manager_registry.ManagerRegistry.get_function_manager",
+        lambda **kwargs: function_manager,
+    )
+    monkeypatch.setattr(
+        "unity.integrations.ops.list_connections",
+        FakeIntegrationOps().list_connections,
+    )
+    cm = SimpleNamespace(
+        integration_sync_coordinator=IntegrationSyncCoordinator(
+            owner_scope={"owner_scope": "assistant", "assistant_id": 42},
+        ),
+        event_broker=event_broker,
+    )
+
+    _schedule_startup_integration_sync(cm)
+    for _ in range(5):
+        await asyncio.sleep(0)
+        if "salesforce" in cm.integration_sync_coordinator._tasks:
+            break
+    await cm.integration_sync_coordinator._tasks["salesforce"]
+    await asyncio.sleep(0)
+
+    assert function_manager.calls == [{"app_slug": "salesforce"}]
+    assert event_broker.published[-1][0].endswith("integration_tools_sync_completed")
+
+
+def test_provider_tool_row_is_materialized_as_integration_namespace_primitive() -> None:
+    fm = object.__new__(FunctionManager)
+    row = fm._integration_tool_to_function_row(
+        {
+            "tool_id": "composio:salesforce:query_records",
+            "backend_id": "composio",
+            "provider_app_id": "salesforce",
+            "provider_tool_id": "QUERY_RECORDS",
+            "canonical_name": "primitives.integrations.salesforce.query_records",
+            "app_slug": "salesforce",
+            "app_display_name": "Salesforce",
+            "tool_display_name": "Query Records",
+            "description": "Query Salesforce records.",
+            "activation_state": "connected_ready",
+            "connection_id": "conn-salesforce",
+            "required_scopes": ["records.read"],
+            "granted_scopes": ["records.read"],
+            "action_class": "read",
+            "confirmation_required": False,
+            "input_schema": {
+                "type": "object",
+                "required": ["object_name"],
+                "properties": {
+                    "object_name": {"type": "string"},
+                    "limit": {"type": "integer"},
+                },
+            },
+        },
+    )
+
+    assert row["name"] == "primitives.integrations.salesforce.query_records"
+    assert row["argspec"] == "(object_name: str, limit: int = None) -> dict"
+    assert (
+        row["primitive_class"] == "unity.integrations.primitives.IntegrationPrimitives"
+    )
+    assert row["integration_source"] == "provider_backed"
+    assert row["integration_tool_id"] == "composio:salesforce:query_records"
+    assert row["integration_metadata"]["namespace"] == "primitives.integrations"
+    assert "_integration_distance" not in row
+
+
+def test_provider_tool_row_hash_is_order_stable() -> None:
+    rows = [
+        {"name": "b", "docstring": "B", "integration_tool_id": "tool-b"},
+        {"name": "a", "docstring": "A", "integration_tool_id": "tool-a"},
+    ]
+    assert FunctionManager._hash_integration_rows(
+        rows,
+    ) == FunctionManager._hash_integration_rows(
+        list(reversed(rows)),
+    )
+
+
+@pytest.mark.anyio
+async def test_sync_completion_surfaces_state_without_deferred_action_resume() -> None:
+    cm = SimpleNamespace(
+        integration_sync_coordinator=IntegrationSyncCoordinator(owner_scope={}),
+        notifications_bar=NotificationBar(),
+    )
+
+    should_wake = await _handle_integration_tools_sync_completed(
+        IntegrationToolsSyncCompleted(
+            app_slug="salesforce",
+            app_display_name="Salesforce",
+            tool_count=12,
+        ),
+        cm,
+    )
+
+    assert should_wake is True
+    assert cm.integration_sync_coordinator.snapshot()["salesforce"].status == "ready"
+    assert cm.notifications_bar.notifications[-1].type == "Integrations"
