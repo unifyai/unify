@@ -14,4 +14,10 @@ export DBUS_SESSION_BUS_ADDRESS
 # Refresh apt cache for runtime package installs by the agent
 apt-get update
 
+bash /app/desktop/inject-ssh-public-key.sh
+
+mkdir -p /Unity/Local
+chown -R unityuser:unityuser /Unity/Local
+chmod 755 /Unity/Local
+
 exec /usr/bin/supervisord -n -c /app/desktop/supervisord.conf
