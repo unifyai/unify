@@ -1,0 +1,22 @@
+# Local reverse proxy for self-host desktop URL contract.
+# desktop_url = http://127.0.0.1:8090
+#   /desktop/custom.html -> noVNC on host:6080
+#   /api/*               -> agent-service on host:13000 (container :3000)
+:8090 {
+	log {
+		output stdout
+		format console
+	}
+	# Heal browsers that cached the old custom.html, which redirected to the
+	# root /vnc.html path instead of the proxied /desktop/vnc.html.
+	redir /vnc.html /desktop{uri}
+	handle_path /desktop/* {
+		# custom.html is a redirect shim that gets hot-patched; never let
+		# browsers cache it or they replay stale bootstrap logic.
+		header /custom.html Cache-Control no-store
+		reverse_proxy host.docker.internal:6080
+	}
+	handle_path /api/* {
+		reverse_proxy host.docker.internal:13000
+	}
+}
