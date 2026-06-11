@@ -279,7 +279,6 @@ def build_brain_spec(
         assistant_has_discord=bool(cm.assistant_discord_bot_id),
         assistant_has_slack=bool(cm.assistant_slack_bot_user_id),
         assistant_has_teams=bool(cm.assistant_has_teams),
-        user_desktop_control=SETTINGS.conversation.USER_DESKTOP_CONTROL_ENABLED,
         has_linked_user_desktop=SESSION_DETAILS.assistant.user_desktop_for(
             acting_user_id,
         )

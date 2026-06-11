@@ -32,20 +32,14 @@ import os
 # Pydantic's BaseSettings reads env vars once at instantiation; if SETTINGS
 # is already constructed when pytest_configure() later sets these vars, the
 # overrides are silently ignored and prompts/feature flags fall back to
-# production defaults. Tests like
-# test_can_you_use_my_computer / test_email_to_email then fail because the
-# system prompt branches on the wrong flag value
-# (USER_DESKTOP_CONTROL_ENABLED defaults False, send_email tool gated by
-# empty ASSISTANT_EMAIL, etc.).
+# production defaults. Tests like test_email_to_email then fail because the
+# system prompt branches on the wrong value (e.g. send_email tool gated by
+# empty ASSISTANT_EMAIL).
 #
 # pytest_configure() below still reassigns these defensively in case a
 # downstream test reimports SETTINGS, but the authoritative point of
 # truth is *here*, before any unity import in this conftest.
 # ─────────────────────────────────────────────────────────────────────────────
-os.environ.setdefault(
-    "UNITY_CONVERSATION_USER_DESKTOP_CONTROL_ENABLED",
-    "true",
-)
 os.environ.setdefault("ASSISTANT_EMAIL", "assistant@test.example.com")
 os.environ.setdefault("ASSISTANT_NUMBER", "+15550001000")
 os.environ.setdefault("ASSISTANT_WHATSAPP_NUMBER", "+15550001000")
@@ -225,23 +219,6 @@ def pytest_configure(config):
     os.environ.setdefault("ASSISTANT_EMAIL", "assistant@test.example.com")
     os.environ.setdefault("ASSISTANT_NUMBER", "+15550001000")
     os.environ.setdefault("ASSISTANT_WHATSAPP_NUMBER", "+15550001000")
-
-    # Enable user-desktop-control feature for prompts (powers the
-    # "Yes — install a quick remote-access tool from unify.ai" Q&A in
-    # prompt_builders.py:desktop_access_faq, gated on
-    # SETTINGS.conversation.USER_DESKTOP_CONTROL_ENABLED).
-    #
-    # Onboarding tests like test_can_you_use_my_computer
-    # ("I need help with something on my laptop — can you actually
-    # access it?") assert the LLM answers with the remote-access
-    # affirmation, which only appears in the prompt when the flag is
-    # True. Default in production is False (most agents don't yet
-    # have the desktop installer surfaced), but for the test surface
-    # we want the more-capable answer exposed so the Q&A is exercised.
-    os.environ.setdefault(
-        "UNITY_CONVERSATION_USER_DESKTOP_CONTROL_ENABLED",
-        "true",
-    )
 
 
 # =============================================================================

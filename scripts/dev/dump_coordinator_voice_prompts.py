@@ -178,7 +178,6 @@ def _build_slow_brain_system_prompt(
         assistant_has_whatsapp=False,
         assistant_has_discord=False,
         assistant_has_teams=False,
-        user_desktop_control=SETTINGS.conversation.USER_DESKTOP_CONTROL_ENABLED,
         runtime_setup_note=None,
         team_summaries=team_summaries,
         is_coordinator=is_coordinator,
@@ -219,7 +218,6 @@ def _build_fast_brain_system_prompt(
         contact_rolling_summary="",
         demo_mode=demo_mode,
         channel=channel,
-        user_desktop_control=SETTINGS.conversation.USER_DESKTOP_CONTROL_ENABLED,
         is_coordinator=is_coordinator,
         is_org_workspace=is_org_workspace,
     ).flatten()
@@ -380,8 +378,7 @@ def main() -> int:
 
     meta = (
         f"persona={persona} workspace={args.workspace} demo_mode={demo_mode} "
-        f"channel={args.channel} user_desktop_control="
-        f"{SETTINGS.conversation.USER_DESKTOP_CONTROL_ENABLED}"
+        f"channel={args.channel}"
     )
     print(f"# Voice prompts ({meta})\n")
 
