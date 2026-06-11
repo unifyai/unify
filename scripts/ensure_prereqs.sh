@@ -131,8 +131,51 @@ _pubsub_emulator_installed() {
   return 1
 }
 
+_gcloud_works() {
+  command -v gcloud &>/dev/null && gcloud --version &>/dev/null 2>&1
+}
+
+_activate_gcloud_sdk() {
+  local candidate
+  for candidate in \
+    "$HOME/google-cloud-sdk/bin/gcloud" \
+    "/usr/local/google-cloud-sdk/bin/gcloud" \
+    "/usr/lib/google-cloud-sdk/bin/gcloud"; do
+    if [[ -x "$candidate" ]]; then
+      export PATH="$(dirname "$candidate"):$PATH"
+      _gcloud_works && return 0
+    fi
+  done
+  return 1
+}
+
+_try_install_gcloud() {
+  if [[ "$ENSURE_PREREQS_AUTO_INSTALL" != "1" ]]; then
+    return 1
+  fi
+  if _activate_gcloud_sdk; then
+    return 0
+  fi
+  _ensure_prereqs_log_info "Installing Google Cloud SDK (required for Pub/Sub emulator)..."
+  if curl -fsSL https://sdk.cloud.google.com | bash -s -- \
+    --disable-prompts \
+    --install-dir="$HOME/google-cloud-sdk" >/dev/null 2>&1; then
+    export PATH="$HOME/google-cloud-sdk/bin:$PATH"
+    _gcloud_works && return 0
+  fi
+  return 1
+}
+
 ensure_gcloud() {
-  if command -v gcloud &>/dev/null; then
+  if _gcloud_works; then
+    return 0
+  fi
+  if _activate_gcloud_sdk; then
+    _ensure_prereqs_log_success "gcloud found (Google Cloud SDK)"
+    return 0
+  fi
+  if _try_install_gcloud; then
+    _ensure_prereqs_log_success "gcloud installed"
     return 0
   fi
   _ensure_prereqs_log_error "gcloud CLI is required for the Pub/Sub emulator"
@@ -214,8 +257,60 @@ ensure_docker() {
   return 1
 }
 
+_node_works() {
+  if ! command -v node &>/dev/null || ! command -v npm &>/dev/null; then
+    return 1
+  fi
+  local major
+  major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+  [[ "$major" -ge 20 ]]
+}
+
+_try_install_node() {
+  if [[ "$ENSURE_PREREQS_AUTO_INSTALL" != "1" ]]; then
+    return 1
+  fi
+  case "$(uname -s)" in
+    Darwin)
+      if command -v brew &>/dev/null; then
+        _ensure_prereqs_log_info "Installing Node.js via Homebrew..."
+        if brew install node &>/dev/null; then
+          _node_works && return 0
+        fi
+      fi
+      ;;
+    Linux)
+      if command -v apt-get &>/dev/null; then
+        _ensure_prereqs_log_info "Installing Node.js via apt..."
+        if sudo apt-get install -y nodejs npm &>/dev/null; then
+          _node_works && return 0
+        fi
+      fi
+      ;;
+  esac
+  return 1
+}
+
+ensure_node() {
+  if _node_works; then
+    return 0
+  fi
+  if _try_install_node; then
+    _ensure_prereqs_log_success "Node.js installed ($(node --version 2>/dev/null))"
+    return 0
+  fi
+  _ensure_prereqs_log_error "Node.js 20+ and npm are required for Console"
+  _ensure_prereqs_log_info "macOS:  brew install node"
+  _ensure_prereqs_log_info "Ubuntu: sudo apt install nodejs npm  (or use nvm/fnm for Node 20+)"
+  return 1
+}
+
+ensure_self_host_stack_prereqs() {
+  ensure_node && ensure_java && ensure_pubsub_emulator
+}
+
 ensure_self_host_prereqs() {
-  ensure_java && ensure_pubsub_emulator
+  ensure_self_host_stack_prereqs
 }
 
 ensure_self_host_desktop_prereqs() {
