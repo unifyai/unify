@@ -84,6 +84,49 @@ class TestCommsToolListing:
         assert "`make_call`: Start an outbound" not in prompt
         assert "`send_unify_message`" in prompt
 
+    def test_coordinator_comms_listing_is_boss_only(self):
+        prompt = _build(
+            is_coordinator=True,
+            assistant_has_phone=True,
+            assistant_has_email=True,
+            assistant_has_whatsapp=True,
+            assistant_has_discord=True,
+            assistant_has_slack=True,
+            assistant_has_teams=True,
+        )
+
+        assert "`send_sms`: Send an SMS message to my boss only" in prompt
+        assert "`send_email`: Send an email to my boss only" in prompt
+        assert (
+            "`send_unify_message`: Send a Unify platform message to my boss only"
+            in prompt
+        )
+        assert "`send_slack_message`: Send a Slack DM to my boss only" in prompt
+        assert (
+            "`send_teams_message`: Send a Teams direct message to my boss only"
+            in prompt
+        )
+        assert (
+            "`create_teams_meet`: Create a Microsoft Teams meeting with my boss only"
+            in prompt
+        )
+        assert "`send_slack_channel_message`" not in prompt
+        assert "`create_teams_channel`" not in prompt
+
+    def test_regular_comms_listing_keeps_contact_targeting(self):
+        prompt = _build(
+            is_coordinator=False,
+            assistant_has_phone=True,
+            assistant_has_email=True,
+            assistant_has_slack=True,
+            assistant_has_teams=True,
+        )
+
+        assert "`send_sms`: Send an SMS message to a contact" in prompt
+        assert "`send_email`: Send an email to a contact" in prompt
+        assert "`send_slack_channel_message`: Post into a Slack channel" in prompt
+        assert "`create_teams_channel`: Create a new channel" in prompt
+
 
 class TestAccessibleSpacesBlock:
     """The system prompt contains shared-team routing guidance."""
@@ -185,6 +228,46 @@ class TestCoordinatorPrompt:
         assert "Concurrent action and acknowledgment" in coordinator_prompt
         assert "Onboarding reference" in base_prompt
         assert "Onboarding reference" not in coordinator_prompt
+
+    def test_coordinator_direct_comms_guidance_is_boss_only(self):
+        prompt = _build(
+            is_coordinator=True,
+            assistant_has_phone=True,
+            assistant_has_email=True,
+            assistant_has_whatsapp=True,
+            assistant_has_discord=True,
+            assistant_has_slack=True,
+            assistant_has_teams=True,
+        )
+
+        assert "Boss-only direct communication" in prompt
+        assert "only for communicating directly with my boss" in prompt
+        assert "They do not accept ``contact_id``" in prompt
+        assert "always target the boss contact (``contact_id==1``" in prompt
+        assert (
+            "Communication with anyone else is never handled by direct tools" in prompt
+        )
+        assert "delegated third-party communication work goes through ``act``" in prompt
+        assert (
+            "send a message, draft a reply, place a call, or invite someone else on their behalf"
+            in prompt
+        )
+        assert "contact_id=5" not in prompt
+        assert "Use the contact_id visible in active_conversations" not in prompt
+        assert "send_slack_channel_message" not in prompt
+
+    def test_regular_direct_comms_guidance_keeps_contact_id_examples(self):
+        prompt = _build(
+            is_coordinator=False,
+            assistant_has_phone=True,
+            assistant_has_email=True,
+            assistant_has_teams=True,
+        )
+
+        assert "Contact-addressed communication tools" in prompt
+        assert "Use the contact_id visible in active_conversations" in prompt
+        assert 'send_sms(contact_id=5, content="Hi"' in prompt
+        assert "Boss-only direct communication" not in prompt
 
 
 class TestPromptSectionOwnershipMatrix:

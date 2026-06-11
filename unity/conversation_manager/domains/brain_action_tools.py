@@ -241,6 +241,9 @@ class ConversationManagerBrainActionTools:
             event_broker=self._event_broker,
         )
 
+    def _boss_contact_id(self) -> int:
+        return int(SESSION_DETAILS.boss_contact_id)
+
     @wraps(CommsPrimitives.send_sms)
     async def send_sms(
         self,
@@ -251,6 +254,32 @@ class ConversationManagerBrainActionTools:
     ) -> dict[str, Any]:
         return await self._comms.send_sms(
             contact_id=contact_id,
+            content=content,
+            phone_number=phone_number,
+        )
+
+    async def send_sms_to_boss(
+        self,
+        *,
+        content: str,
+        phone_number: str | None = None,
+    ) -> dict[str, Any]:
+        """Send an SMS message directly to my boss only.
+
+        This Coordinator direct communication tool is restricted to the boss
+        contact (``contact_id==1`` in the normal runtime). It cannot be used
+        to text anyone else. If my boss asks me to draft or send an SMS on
+        their behalf, route that work through ``act`` instead.
+
+        Parameters
+        ----------
+        content : str
+            Message body to send to my boss.
+        phone_number : str | None, optional
+            Boss phone number to attach if the boss contact is missing one.
+        """
+        return await self._comms.send_sms(
+            contact_id=self._boss_contact_id(),
             content=content,
             phone_number=phone_number,
         )
@@ -271,6 +300,37 @@ class ConversationManagerBrainActionTools:
             attachment_filepath=attachment_filepath,
         )
 
+    async def send_whatsapp_to_boss(
+        self,
+        *,
+        content: str,
+        whatsapp_number: str | None = None,
+        attachment_filepath: str | None = None,
+    ) -> dict[str, Any]:
+        """Send a WhatsApp message directly to my boss only.
+
+        This Coordinator direct communication tool is restricted to the boss
+        contact (``contact_id==1`` in the normal runtime). It cannot be used
+        to WhatsApp anyone else. If my boss asks me to draft or send a
+        WhatsApp message on their behalf, route that work through ``act``
+        instead.
+
+        Parameters
+        ----------
+        content : str
+            Message body to send to my boss.
+        whatsapp_number : str | None, optional
+            Boss WhatsApp number to attach if the boss contact is missing one.
+        attachment_filepath : str | None, optional
+            Workspace-relative path for one attachment.
+        """
+        return await self._comms.send_whatsapp(
+            contact_id=self._boss_contact_id(),
+            content=content,
+            whatsapp_number=whatsapp_number,
+            attachment_filepath=attachment_filepath,
+        )
+
     @wraps(CommsPrimitives.send_discord_message)
     async def send_discord_message(
         self,
@@ -281,6 +341,32 @@ class ConversationManagerBrainActionTools:
     ) -> dict[str, Any]:
         return await self._comms.send_discord_message(
             contact_id=contact_id,
+            content=content,
+            discord_id=discord_id,
+        )
+
+    async def send_discord_message_to_boss(
+        self,
+        *,
+        content: str,
+        discord_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Send a Discord direct message to my boss only.
+
+        This Coordinator direct communication tool is restricted to the boss
+        contact (``contact_id==1`` in the normal runtime). It cannot be used
+        to DM anyone else. If my boss asks me to draft or send a Discord
+        message on their behalf, route that work through ``act`` instead.
+
+        Parameters
+        ----------
+        content : str
+            Message body to send to my boss.
+        discord_id : str | None, optional
+            Boss Discord ID to attach if the boss contact is missing one.
+        """
+        return await self._comms.send_discord_message(
+            contact_id=self._boss_contact_id(),
             content=content,
             discord_id=discord_id,
         )
@@ -313,6 +399,41 @@ class ConversationManagerBrainActionTools:
     ) -> dict[str, Any]:
         return await self._comms.send_slack_message(
             contact_id=contact_id,
+            content=content,
+            team_id=team_id,
+            slack_user_id=slack_user_id,
+            thread_ts=thread_ts,
+        )
+
+    async def send_slack_message_to_boss(
+        self,
+        *,
+        content: str,
+        team_id: str,
+        slack_user_id: str | None = None,
+        thread_ts: str | None = None,
+    ) -> dict[str, Any]:
+        """Send a Slack direct message to my boss only.
+
+        This Coordinator direct communication tool is restricted to the boss
+        contact (``contact_id==1`` in the normal runtime). It cannot be used
+        to DM anyone else or post in channels. If my boss asks me to draft or
+        send Slack messages on their behalf, route that work through ``act``
+        instead.
+
+        Parameters
+        ----------
+        content : str
+            Message body to send to my boss.
+        team_id : str
+            Slack workspace/team ID from the inbound boss DM annotation.
+        slack_user_id : str | None, optional
+            Boss Slack user ID to attach if the boss contact is missing one.
+        thread_ts : str | None, optional
+            Existing boss DM thread timestamp to reply inside.
+        """
+        return await self._comms.send_slack_message(
+            contact_id=self._boss_contact_id(),
             content=content,
             team_id=team_id,
             slack_user_id=slack_user_id,
@@ -359,6 +480,49 @@ class ConversationManagerBrainActionTools:
             attachment_filepath=attachment_filepath,
         )
 
+    async def send_teams_message_to_boss(
+        self,
+        *,
+        content: str,
+        chat_id: str | None = None,
+        email_address: str | None = None,
+        attachment_filepath: str | None = None,
+    ) -> dict[str, Any]:
+        """Send a Microsoft Teams message directly to my boss only.
+
+        This Coordinator direct communication tool is restricted to the boss
+        contact (``contact_id==1`` in the normal runtime). It cannot be used
+        to start group chats or post in Teams channels. If my boss asks me to
+        draft or send Teams messages on their behalf, route that work through
+        ``act`` instead.
+
+        Parameters
+        ----------
+        content : str
+            Message body to send to my boss.
+        chat_id : str | None, optional
+            Existing boss Teams chat ID to reply inside. Omit to create or
+            reuse a 1:1 chat with my boss.
+        email_address : str | None, optional
+            Boss email address to attach if the boss contact is missing one.
+        attachment_filepath : str | None, optional
+            Workspace-relative path for one attachment.
+        """
+        recipient: int | dict[str, int | str]
+        if email_address:
+            recipient = {
+                "contact_id": self._boss_contact_id(),
+                "email_address": email_address,
+            }
+        else:
+            recipient = self._boss_contact_id()
+        return await self._comms.send_teams_message(
+            contact_id=recipient,
+            content=content,
+            chat_id=chat_id,
+            attachment_filepath=attachment_filepath,
+        )
+
     @wraps(CommsPrimitives.create_teams_channel)
     async def create_teams_channel(
         self,
@@ -401,6 +565,64 @@ class ConversationManagerBrainActionTools:
             location=location,
         )
 
+    async def create_teams_meet_with_boss(
+        self,
+        *,
+        mode: str = "scheduled",
+        subject: str | None = None,
+        start: str | None = None,
+        duration_minutes: int = 30,
+        timezone: str = "UTC",
+        email_address: str | None = None,
+        body_html: str | None = None,
+        location: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a Microsoft Teams meeting with my boss only.
+
+        This Coordinator direct communication tool is restricted to the boss
+        contact (``contact_id==1`` in the normal runtime). Scheduled meetings
+        invite only my boss. If my boss asks me to schedule or host meetings
+        with other people on their behalf, route that work through ``act``
+        instead.
+
+        Parameters
+        ----------
+        mode : str, optional
+            ``"scheduled"`` (default) or ``"instant"``.
+        subject : str | None, optional
+            Meeting subject. Required for scheduled meetings.
+        start : str | None, optional
+            ISO-8601 start timestamp for scheduled meetings.
+        duration_minutes : int, optional
+            Meeting duration in minutes for scheduled meetings.
+        timezone : str, optional
+            Timezone name forwarded to Microsoft Graph.
+        email_address : str | None, optional
+            Boss email address to attach if the boss contact is missing one.
+        body_html : str | None, optional
+            Meeting body, sent to Graph as HTML.
+        location : str | None, optional
+            Display-name location for the calendar event.
+        """
+        attendee: int | dict[str, int | str]
+        if email_address:
+            attendee = {
+                "contact_id": self._boss_contact_id(),
+                "email_address": email_address,
+            }
+        else:
+            attendee = self._boss_contact_id()
+        return await self._comms.create_teams_meet(
+            mode=mode,
+            subject=subject,
+            start=start,
+            duration_minutes=duration_minutes,
+            timezone=timezone,
+            attendee_contact_ids=[attendee] if mode == "scheduled" else None,
+            body_html=body_html,
+            location=location,
+        )
+
     @wraps(CommsPrimitives.send_unify_message)
     async def send_unify_message(
         self,
@@ -412,6 +634,32 @@ class ConversationManagerBrainActionTools:
         return await self._comms.send_unify_message(
             content=content,
             contact_id=contact_id,
+            attachment_filepath=attachment_filepath,
+        )
+
+    async def send_unify_message_to_boss(
+        self,
+        *,
+        content: str,
+        attachment_filepath: str | None = None,
+    ) -> dict[str, Any]:
+        """Send a Unify inbox message directly to my boss only.
+
+        This Coordinator direct communication tool is restricted to the boss
+        contact (``contact_id==1`` in the normal runtime). It cannot be used
+        to message anyone else. If my boss asks me to draft or send Unify
+        messages on their behalf, route that work through ``act`` instead.
+
+        Parameters
+        ----------
+        content : str
+            Message body to send to my boss.
+        attachment_filepath : str | None, optional
+            Workspace-relative path for one attachment.
+        """
+        return await self._comms.send_unify_message(
+            content=content,
+            contact_id=self._boss_contact_id(),
             attachment_filepath=attachment_filepath,
         )
 
@@ -427,6 +675,37 @@ class ConversationManagerBrainActionTools:
         return await self._comms.send_api_response(
             content=content,
             contact_id=contact_id,
+            attachment_filepaths=attachment_filepaths,
+            tags=tags,
+        )
+
+    async def send_api_response_to_boss(
+        self,
+        *,
+        content: str,
+        attachment_filepaths: list[str] | None = None,
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Reply to the pending API message with the boss as transcript anchor.
+
+        This Coordinator direct communication tool never exposes a recipient
+        choice. The response is anchored to the boss contact
+        (``contact_id==1`` in the normal runtime). If my boss asks me to
+        perform communication work on their behalf, route that work through
+        ``act`` instead.
+
+        Parameters
+        ----------
+        content : str
+            Response text to send back to the waiting API caller.
+        attachment_filepaths : list[str] | None, optional
+            Workspace-local file paths to upload and attach to the API response.
+        tags : list[str] | None, optional
+            API routing tags to return; omit to echo inbound tags.
+        """
+        return await self._comms.send_api_response(
+            content=content,
+            contact_id=self._boss_contact_id(),
             attachment_filepaths=attachment_filepaths,
             tags=tags,
         )
@@ -455,6 +734,52 @@ class ConversationManagerBrainActionTools:
             attachment_filepath=attachment_filepath,
         )
 
+    async def send_email_to_boss(
+        self,
+        *,
+        subject: str,
+        body: str,
+        email_id_to_reply_to: str | None = None,
+        email_address: str | None = None,
+        attachment_filepath: str | None = None,
+    ) -> dict[str, Any]:
+        """Send an email directly to my boss only.
+
+        This Coordinator direct communication tool is restricted to the boss
+        contact (``contact_id==1`` in the normal runtime). It cannot be used
+        to email anyone else, cc anyone else, bcc anyone else, or reply-all to
+        a thread. If my boss asks me to draft or send email on their behalf,
+        route that work through ``act`` instead.
+
+        Parameters
+        ----------
+        subject : str
+            Subject line for the email to my boss.
+        body : str
+            Email body content to send to my boss.
+        email_id_to_reply_to : str | None, optional
+            Existing boss email ID to reply to for threading.
+        email_address : str | None, optional
+            Boss email address to attach if the boss contact is missing one.
+        attachment_filepath : str | None, optional
+            Workspace-relative path for one attachment.
+        """
+        recipient: int | dict[str, int | str]
+        if email_address:
+            recipient = {
+                "contact_id": self._boss_contact_id(),
+                "email_address": email_address,
+            }
+        else:
+            recipient = self._boss_contact_id()
+        return await self._comms.send_email(
+            to=[recipient],
+            subject=subject,
+            body=body,
+            email_id_to_reply_to=email_id_to_reply_to,
+            attachment_filepath=attachment_filepath,
+        )
+
     @wraps(CommsPrimitives.make_call)
     async def make_call(
         self,
@@ -469,6 +794,32 @@ class ConversationManagerBrainActionTools:
             phone_number=phone_number,
         )
 
+    async def make_call_to_boss(
+        self,
+        *,
+        context: str,
+        phone_number: str | None = None,
+    ) -> dict[str, Any]:
+        """Start an outbound phone call to my boss only.
+
+        This Coordinator direct communication tool is restricted to the boss
+        contact (``contact_id==1`` in the normal runtime). It cannot be used
+        to call anyone else. If my boss asks me to call someone on their
+        behalf, route that work through ``act`` instead.
+
+        Parameters
+        ----------
+        context : str
+            Mission briefing for the voice agent speaking with my boss.
+        phone_number : str | None, optional
+            Boss phone number to attach if the boss contact is missing one.
+        """
+        return await self._comms.make_call(
+            contact_id=self._boss_contact_id(),
+            context=context,
+            phone_number=phone_number,
+        )
+
     @wraps(CommsPrimitives.make_whatsapp_call)
     async def make_whatsapp_call(
         self,
@@ -479,6 +830,32 @@ class ConversationManagerBrainActionTools:
     ) -> dict[str, Any]:
         return await self._comms.make_whatsapp_call(
             contact_id=contact_id,
+            context=context,
+            whatsapp_number=whatsapp_number,
+        )
+
+    async def make_whatsapp_call_to_boss(
+        self,
+        *,
+        context: str,
+        whatsapp_number: str | None = None,
+    ) -> dict[str, Any]:
+        """Start a WhatsApp voice call to my boss only.
+
+        This Coordinator direct communication tool is restricted to the boss
+        contact (``contact_id==1`` in the normal runtime). It cannot be used
+        to call anyone else. If my boss asks me to call someone on their
+        behalf, route that work through ``act`` instead.
+
+        Parameters
+        ----------
+        context : str
+            Mission briefing for the voice agent speaking with my boss.
+        whatsapp_number : str | None, optional
+            Boss WhatsApp number to attach if the boss contact is missing one.
+        """
+        return await self._comms.make_whatsapp_call(
+            contact_id=self._boss_contact_id(),
             context=context,
             whatsapp_number=whatsapp_number,
         )
@@ -1536,9 +1913,18 @@ class ConversationManagerBrainActionTools:
         """Return the static tools dict for start_async_tool_loop."""
         from unity.settings import SETTINGS
 
+        is_coordinator = SESSION_DETAILS.is_coordinator
         tools: dict[str, Callable[..., Any]] = {
-            "send_unify_message": self.send_unify_message,
-            "send_api_response": self.send_api_response,
+            "send_unify_message": (
+                self.send_unify_message_to_boss
+                if is_coordinator
+                else self.send_unify_message
+            ),
+            "send_api_response": (
+                self.send_api_response_to_boss
+                if is_coordinator
+                else self.send_api_response
+            ),
             "wait": self.wait,
         }
         call_or_meet_in_progress = (
@@ -1553,8 +1939,6 @@ class ConversationManagerBrainActionTools:
             tools["join_teams_meet"] = self.join_teams_meet
         if self._cm.call_manager.has_active_google_meet:
             tools["leave_google_meet"] = self.leave_google_meet
-            from unity.session_details import SESSION_DETAILS
-
             if SESSION_DETAILS.assistant.desktop_url:
                 if not self._cm.call_manager.has_gmeet_presenting:
                     tools["start_google_meet_screenshare"] = (
@@ -1566,8 +1950,6 @@ class ConversationManagerBrainActionTools:
                     )
         if self._cm.call_manager.has_active_teams_meet:
             tools["leave_teams_meet"] = self.leave_teams_meet
-            from unity.session_details import SESSION_DETAILS
-
             if SESSION_DETAILS.assistant.desktop_url:
                 if not self._cm.call_manager.has_teams_presenting:
                     tools["start_teams_meet_screenshare"] = (
@@ -1578,25 +1960,56 @@ class ConversationManagerBrainActionTools:
                         self.stop_teams_meet_screenshare
                     )
         if self._cm.assistant_number:
-            tools["send_sms"] = self.send_sms
+            tools["send_sms"] = (
+                self.send_sms_to_boss if is_coordinator else self.send_sms
+            )
             if not call_or_meet_in_progress:
-                tools["make_call"] = self.make_call
+                tools["make_call"] = (
+                    self.make_call_to_boss if is_coordinator else self.make_call
+                )
         if self._cm.assistant_whatsapp_number:
-            tools["send_whatsapp"] = self.send_whatsapp
+            tools["send_whatsapp"] = (
+                self.send_whatsapp_to_boss if is_coordinator else self.send_whatsapp
+            )
             if not call_or_meet_in_progress:
-                tools["make_whatsapp_call"] = self.make_whatsapp_call
+                tools["make_whatsapp_call"] = (
+                    self.make_whatsapp_call_to_boss
+                    if is_coordinator
+                    else self.make_whatsapp_call
+                )
         if self._cm.assistant_email:
-            tools["send_email"] = self.send_email
+            tools["send_email"] = (
+                self.send_email_to_boss if is_coordinator else self.send_email
+            )
         if self._cm.assistant_discord_bot_id:
-            tools["send_discord_message"] = self.send_discord_message
-            tools["send_discord_channel_message"] = self.send_discord_channel_message
+            tools["send_discord_message"] = (
+                self.send_discord_message_to_boss
+                if is_coordinator
+                else self.send_discord_message
+            )
+            if not is_coordinator:
+                tools["send_discord_channel_message"] = (
+                    self.send_discord_channel_message
+                )
         if self._cm.assistant_slack_bot_user_id:
-            tools["send_slack_message"] = self.send_slack_message
-            tools["send_slack_channel_message"] = self.send_slack_channel_message
+            tools["send_slack_message"] = (
+                self.send_slack_message_to_boss
+                if is_coordinator
+                else self.send_slack_message
+            )
+            if not is_coordinator:
+                tools["send_slack_channel_message"] = self.send_slack_channel_message
         if self._cm.assistant_has_teams:
-            tools["send_teams_message"] = self.send_teams_message
-            tools["create_teams_channel"] = self.create_teams_channel
-            tools["create_teams_meet"] = self.create_teams_meet
+            tools["send_teams_message"] = (
+                self.send_teams_message_to_boss
+                if is_coordinator
+                else self.send_teams_message
+            )
+            if is_coordinator:
+                tools["create_teams_meet"] = self.create_teams_meet_with_boss
+            else:
+                tools["create_teams_channel"] = self.create_teams_channel
+                tools["create_teams_meet"] = self.create_teams_meet
         if getattr(self._cm.mode, "is_voice", False):
             tools["guide_voice_agent"] = self.guide_voice_agent
         if SETTINGS.DEMO_MODE:

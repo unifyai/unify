@@ -417,6 +417,57 @@ def _build_comms_tool_listing(
 ) -> str:
     """Build the communication tools block for the output format section."""
     lines: list[str] = []
+    if is_coordinator:
+        if assistant_has_phone:
+            lines.append("- `send_sms`: Send an SMS message to my boss only")
+        if assistant_has_whatsapp:
+            lines.append(
+                "- `send_whatsapp`: Send a WhatsApp message to my boss only",
+            )
+        if assistant_has_email:
+            lines.append("- `send_email`: Send an email to my boss only")
+        lines.append(
+            "- `send_unify_message`: Send a Unify platform message to my boss only",
+        )
+        if assistant_has_discord:
+            lines.append(
+                "- `send_discord_message`: Send a Discord direct message to my boss only",
+            )
+        if assistant_has_slack:
+            lines.append(
+                "- `send_slack_message`: Send a Slack DM to my boss only. Pass "
+                '`team_id` (from the inbound `[team_id="..."]` annotation) so '
+                "the right workspace bot token is used; pass `thread_ts` to "
+                "reply inside an existing boss DM thread.",
+            )
+        if assistant_has_teams:
+            lines.append(
+                "- `send_teams_message`: Send a Teams direct message to my boss "
+                "only. Pass `chat_id` when replying in an existing boss chat; "
+                "omit it to create or reuse a 1:1 chat with my boss.",
+            )
+            lines.append(
+                "- `create_teams_meet`: Create a Microsoft Teams meeting with "
+                "my boss only. Scheduled meetings invite only my boss.",
+            )
+        lines.append(
+            "- `send_api_response`: Reply to a programmatic API message (use when the inbound medium is `api_message`). Supports optional `attachment_filepaths` and `tags`; transcript ownership is anchored to my boss.",
+        )
+        if assistant_has_phone:
+            lines.append("- `make_call`: Start an outbound phone call to my boss only")
+        if assistant_has_whatsapp:
+            lines.append(
+                "- `make_whatsapp_call`: Start a WhatsApp voice call to my boss only. "
+                "If call permission hasn't been granted yet, a call invite is sent instead.",
+            )
+        lines.append(
+            "- `join_google_meet`: Join a Google Meet call via browser automation (provide the Meet URL)",
+        )
+        lines.append(
+            "- `join_teams_meet`: Join a Microsoft Teams meeting via browser automation (provide the Teams meeting URL)",
+        )
+        return "\n".join(lines)
+
     if assistant_has_phone:
         lines.append("- `send_sms`: Send an SMS message to a contact")
     if assistant_has_whatsapp:
@@ -530,6 +581,11 @@ def _build_coordinator_act_query_guidance_block() -> str:
 When composing ``act`` queries for colleague lifecycle, workspace setup, or
 delegated follow-up work:
 
+- Use ``act`` for execution, validation reads, delegated follow-up, or
+  persistent work that genuinely needs another tool loop. Do not use ``act``
+  for preliminary advice, console orientation, discovery questions, or
+  unconfirmed setup designs; handle those directly in the current chat unless
+  the user explicitly asks me to start persistent execution.
 - Prefer one ``act`` query that covers the full confirmed plan (for example
   create the colleague, commission them into the workspace, then delegate
   colleague-owned follow-up) instead of many tiny fragmented actions.
@@ -538,6 +594,12 @@ delegated follow-up work:
   through ``primitives.coordinator.delegate_to_colleague`` inside ``act``.
   Do not ask the Actor to create coordinator-owned fallback tasks when
   delegation is the correct handoff.
+- Direct communication tools are only for speaking with my boss. If my boss
+  asks or explicitly permits me to draft a message/reply, send a message,
+  place a call, or invite someone else on their behalf, do that third-party
+  communication through ``act`` instead of direct communication tools. Do not
+  use ``act`` merely for ordinary discussion, setup planning, or clarifying
+  questions that can be handled in the current chat.
 - ``delegate_to_colleague`` returns an async delegation receipt
   (``accepted``, ``completion_status``, ``receipt_type``, ``message``), not
   proof that the colleague already created tasks, queued messages, or finished
@@ -1494,7 +1556,9 @@ def build_system_prompt(
     whatsapp_change_notice = _build_whatsapp_number_change_notice(
         assistant_has_whatsapp,
     )
-    slack_guidelines = _build_slack_guidelines(assistant_has_slack)
+    slack_guidelines = _build_slack_guidelines(
+        assistant_has_slack and not is_coordinator,
+    )
     coordinator_guidelines = _build_coordinator_guidelines(is_coordinator)
     comms_tool_listing = _build_comms_tool_listing(
         assistant_has_phone,
@@ -1753,7 +1817,6 @@ Messages from the current turn have **NEW** tag prepended:
             else 0
         )
         available_tool_names.insert(idx, "send_whatsapp")
-        # Place make_whatsapp_call after make_call if present, else at end
         if "make_call" in available_tool_names:
             available_tool_names.insert(
                 available_tool_names.index("make_call") + 1,
@@ -1774,63 +1837,96 @@ Messages from the current turn have **NEW** tag prepended:
     if assistant_has_slack:
         idx = available_tool_names.index("send_unify_message")
         available_tool_names.insert(idx, "send_slack_message")
-        available_tool_names.insert(idx + 1, "send_slack_channel_message")
+        if not is_coordinator:
+            available_tool_names.insert(idx + 1, "send_slack_channel_message")
     if assistant_has_teams:
         idx = available_tool_names.index("send_unify_message")
         available_tool_names.insert(idx, "send_teams_message")
-        available_tool_names.insert(idx + 1, "create_teams_channel")
-        available_tool_names.insert(idx + 2, "create_teams_meet")
-    contact_addressed_tool_names = [
-        tool_name
-        for tool_name in available_tool_names
-        if tool_name not in {"create_teams_channel", "create_teams_meet"}
-    ]
-    contact_addressed_tool_names_str = ", ".join(contact_addressed_tool_names)
+        if is_coordinator:
+            available_tool_names.insert(idx + 1, "create_teams_meet")
+        else:
+            available_tool_names.insert(idx + 1, "create_teams_channel")
+            available_tool_names.insert(idx + 2, "create_teams_meet")
 
-    inline_detail_examples: list[str] = []
-    if assistant_has_phone:
-        inline_detail_examples.append(
-            '`send_sms(contact_id=5, content="Hi", phone_number="+15551234567")`',
-        )
-    if assistant_has_whatsapp:
-        inline_detail_examples.append(
-            '`send_whatsapp(contact_id=5, content="Hi", phone_number="+15551234567")`',
-        )
-    if assistant_has_email:
-        inline_detail_examples.append(
-            '`send_email(to=[{{"contact_id": 5, "email_address": "alice@example.com"}}], ...)`',
-        )
-    if assistant_has_discord:
-        inline_detail_examples.append(
-            '`send_discord_message(contact_id=5, content="Hi", discord_id="123456789")`',
-        )
-    if assistant_has_slack:
-        inline_detail_examples.append(
-            '`send_slack_message(contact_id=5, content="Hi", team_id="T01ABC", slack_user_id="U01ABC234")`',
-        )
-    if assistant_has_teams:
-        inline_detail_examples.append(
-            '`send_teams_message(contact_id=[{{"contact_id": 5, "email_address": "alice@example.com"}}], content="Hi")`',
-        )
-    # Note: send_teams_message's `chat_id` / `team_id` / `channel_id` / `thread_id`
-    # are NOT contact-level details — they are per-thread identifiers surfaced on
-    # each inbound Teams message (see the tool description). They must not be
-    # listed here under the inline-contact-detail guidance. The inline-email
-    # example above applies only when starting a **new** Teams chat (find-or-
-    # create mode), which uses the same `{{contact_id, email_address}}` shape
-    # as `send_email`.
-    inline_detail_line = ""
-    if inline_detail_examples:
-        examples_str = " or ".join(inline_detail_examples)
-        inline_detail_line = f"""
+    if is_coordinator:
+        direct_tool_names_str = ", ".join(available_tool_names)
+        communication_target_block = f"""**Boss-only direct communication:**
+- Direct communication tools ({direct_tool_names_str}) are only for communicating directly with my boss. They do not accept ``contact_id`` and always target the boss contact (``contact_id==1`` in the normal runtime).
+- I cannot directly message, call, email, invite, or post to anyone else from this surface.
+- If my boss asks or explicitly permits me to draft a message/reply, send a message, place a call, or invite someone else on their behalf, I use ``act``. ``act`` is the execution path for delegated third-party communication work, not a reason to outsource ordinary discussion, setup planning, or clarifying questions.
+- If the boss contact is missing a needed detail (phone number, email address, WhatsApp number, Slack user ID, Discord ID), I can provide the boss detail inline on the direct tool when available. I do not use inline details for anyone else."""
+    else:
+        contact_addressed_tool_names = [
+            tool_name
+            for tool_name in available_tool_names
+            if tool_name not in {"create_teams_channel", "create_teams_meet"}
+        ]
+        contact_addressed_tool_names_str = ", ".join(contact_addressed_tool_names)
+
+        inline_detail_examples: list[str] = []
+        if assistant_has_phone:
+            inline_detail_examples.append(
+                '`send_sms(contact_id=5, content="Hi", phone_number="+15551234567")`',
+            )
+        if assistant_has_whatsapp:
+            inline_detail_examples.append(
+                '`send_whatsapp(contact_id=5, content="Hi", phone_number="+15551234567")`',
+            )
+        if assistant_has_email:
+            inline_detail_examples.append(
+                '`send_email(to=[{{"contact_id": 5, "email_address": "alice@example.com"}}], ...)`',
+            )
+        if assistant_has_discord:
+            inline_detail_examples.append(
+                '`send_discord_message(contact_id=5, content="Hi", discord_id="123456789")`',
+            )
+        if assistant_has_slack:
+            inline_detail_examples.append(
+                '`send_slack_message(contact_id=5, content="Hi", team_id="T01ABC", slack_user_id="U01ABC234")`',
+            )
+        if assistant_has_teams:
+            inline_detail_examples.append(
+                '`send_teams_message(contact_id=[{{"contact_id": 5, "email_address": "alice@example.com"}}], content="Hi")`',
+            )
+        # Note: send_teams_message's `chat_id` / `team_id` / `channel_id` /
+        # `thread_id` are per-thread identifiers surfaced on inbound Teams
+        # messages, not contact-level details.
+        inline_detail_line = ""
+        if inline_detail_examples:
+            examples_str = " or ".join(inline_detail_examples)
+            inline_detail_line = f"""
 - If a contact is in active_conversations but is **missing** the needed detail (e.g. phone number for SMS/call, email for email), you can provide it inline: {examples_str}. The detail will be saved to the contact automatically.
 - **Do not** use inline details to overwrite an existing value — the system will reject it. Use `act` to update the contact first if the stored detail is wrong."""
 
-    teams_workspace_tool_note = (
-        "\n- `create_teams_channel` and `create_teams_meet` are Teams workspace actions and rely on Teams-side identifiers, not contact_id."
-        if assistant_has_teams
-        else ""
-    )
+        teams_workspace_tool_note = (
+            "\n- `create_teams_channel` and `create_teams_meet` are Teams workspace actions and rely on Teams-side identifiers, not contact_id."
+            if assistant_has_teams
+            else ""
+        )
+        communication_target_block = f"""**Contact actions:**
+- Contact-addressed communication tools ({contact_addressed_tool_names_str}) require a contact_id. Use the contact_id visible in active_conversations when available.{inline_detail_line}{teams_workspace_tool_note}
+- If the contact is NOT in active_conversations at all, use `act` to find or create the contact. For example: `act(query="Find Ved's contact_id. His phone number is +1234567890. If he doesn't exist in the contacts, create a new contact and return the id.")`. `act` handles searching, creation, deduplication, and merging flexibly.
+- **Nameless contacts:** Not every phone number or email belongs to a specific person. Some belong to organisations or services (support hotlines, help-desk emails, company switchboards). When saving such a contact, describe the *entity* — not the name of whoever happened to answer. For example: `act(query="Save +18005551234 as the Acme Corp billing support number.")` — not `act(query="Add Sarah with number +18005551234.")`. Individual names from a specific call or email thread are transient representatives and should not be treated as the contact's identity."""
+
+    if is_coordinator:
+        response_policy_block = f"""**should_respond policy:**
+The boss contact still has a `should_respond` attribute that determines whether I am permitted to send direct outbound messages to my boss:
+- If `should_respond="True"`: I can send {channels_str} to my boss.
+- If `should_respond="False"`: I CANNOT send direct outbound communication to my boss. If I attempt to do so, the system will block it and return an error.
+
+When the boss contact has `should_respond="False"`, I explain that direct communication is blocked based on the boss contact's response policy. Communication with anyone else is never handled by direct tools; actual third-party message, call, or invite work belongs in `act` when my boss asks or explicitly permits it."""
+    else:
+        response_policy_block = f"""**should_respond policy:**
+Each contact has a `should_respond` attribute (True/False) that determines whether I am permitted to send outbound messages to them:
+- If `should_respond="True"`: I can send {channels_str} to this contact.
+- If `should_respond="False"`: I CANNOT send any outbound communication to this contact. If I attempt to do so, the system will block it and return an error.
+
+When a contact has `should_respond="False"`:
+- Check their `response_policy` for context on why (e.g., opted out, do-not-contact list, specific instructions).
+- Inform my boss that I cannot contact this person and explain why based on the response_policy.
+- Do NOT repeatedly attempt to contact them - the system will block all attempts.
+
+This is a hard constraint, not a suggestion. Even if my boss asks me to contact someone with `should_respond="False"`, I must explain that I cannot do so and suggest they update the contact's settings if appropriate."""
 
     parts.add(
         f"""Communication guidelines
@@ -1845,22 +1941,9 @@ Communicate naturally and casually. Keep responses short.
 - Inbound `api_message` messages may include tags (shown as `[Tags: ...]`). These are opaque routing labels set by the developer.
 - When replying via `send_api_response`, echo the same tags back by default (omit the `tags` parameter and they are echoed automatically). Only override tags when the developer explicitly asks for different ones. This ensures the reply reaches the correct inbound channel on the developer's side.
 
-**Contact actions:**
-- Contact-addressed communication tools ({contact_addressed_tool_names_str}) require a contact_id. Use the contact_id visible in active_conversations when available.{inline_detail_line}{teams_workspace_tool_note}
-- If the contact is NOT in active_conversations at all, use `act` to find or create the contact. For example: `act(query="Find Ved's contact_id. His phone number is +1234567890. If he doesn't exist in the contacts, create a new contact and return the id.")`. `act` handles searching, creation, deduplication, and merging flexibly.
-- **Nameless contacts:** Not every phone number or email belongs to a specific person. Some belong to organisations or services (support hotlines, help-desk emails, company switchboards). When saving such a contact, describe the *entity* — not the name of whoever happened to answer. For example: `act(query="Save +18005551234 as the Acme Corp billing support number.")` — not `act(query="Add Sarah with number +18005551234.")`. Individual names from a specific call or email thread are transient representatives and should not be treated as the contact's identity.
+{communication_target_block}
 
-**should_respond policy:**
-Each contact has a `should_respond` attribute (True/False) that determines whether I am permitted to send outbound messages to them:
-- If `should_respond="True"`: I can send {channels_str} to this contact.
-- If `should_respond="False"`: I CANNOT send any outbound communication to this contact. If I attempt to do so, the system will block it and return an error.
-
-When a contact has `should_respond="False"`:
-- Check their `response_policy` for context on why (e.g., opted out, do-not-contact list, specific instructions).
-- Inform my boss that I cannot contact this person and explain why based on the response_policy.
-- Do NOT repeatedly attempt to contact them - the system will block all attempts.
-
-This is a hard constraint, not a suggestion. Even if my boss asks me to contact someone with `should_respond="False"`, I must explain that I cannot do so and suggest they update the contact's settings if appropriate.""",
+{response_policy_block}""",
     )
 
     # Multilingual communication
@@ -1869,6 +1952,11 @@ This is a hard constraint, not a suggestion. Even if my boss asks me to contact 
         guidance_language_note = """
 
 **``guide_voice_agent`` matches the call's language.** The ``message`` passed to ``guide_voice_agent`` should be written in whichever language the assistant is currently speaking on the call. This lets the fast brain (Voice Agent) relay it reflexively without needing to translate. If no call is active or the language is unclear, default to English."""
+    outbound_language_note = (
+        "**Outbound messages match my boss's language** when I communicate with my boss directly. If my boss asks me to send a message, draft a reply, place a call, or invite someone else on their behalf, that delegated third-party communication work goes through ``act``."
+        if is_coordinator
+        else "**Outbound messages match the recipient's language**, not the sender's. If my boss writes in Spanish asking me to message Bob (who communicates in English), the message to Bob should be in English. If relaying content from one language to another, translate/paraphrase naturally."
+    )
 
     parts.add(
         f"""Multilingual communication
@@ -1878,7 +1966,7 @@ When contacts communicate in a non-English language, I match their language in m
 **Internal operations always use English.** Regardless of what language contacts or my boss use:
 - All ``act`` queries — ``act`` is an internal interface to the Actor, not a user-facing message. The query must always be English.
 {guidance_language_note}
-**Outbound messages match the recipient's language**, not the sender's. If my boss writes in Spanish asking me to message Bob (who communicates in English), the message to Bob should be in English. If relaying content from one language to another, translate/paraphrase naturally.""",
+{outbound_language_note}""",
     )
 
     # 12. Proactive meeting offers (non-voice, non-demo only).
