@@ -1,4 +1,5 @@
 import asyncio
+import traceback
 
 from unity.common.diagnostic_logging import staging_diagnostics_enabled
 from unity.common.startup_timing import log_startup_timing
@@ -19,6 +20,12 @@ def log_task_exc(task: asyncio.Task) -> None:
                 task_name,
                 trace_meta,
                 e,
+            )
+            LOGGER.error(
+                "Slow-brain task traceback text task=%s trace_meta=%s:\n%s",
+                task_name,
+                trace_meta,
+                traceback.format_exc(),
             )
             return
         LOGGER.exception("Slow-brain task failed: %s", e)
