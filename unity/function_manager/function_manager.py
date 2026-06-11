@@ -2661,6 +2661,33 @@ class FunctionManager(BaseFunctionManager):
         removed_apps: list[str] = []
 
         if normalized_app and not active_connections:
+            if connection_id:
+                result = {
+                    "status": "error",
+                    "error": {
+                        "code": "provider_connection_not_active",
+                        "message": (
+                            "No connected provider account matched the requested "
+                            f"{normalized_app} connection."
+                        ),
+                    },
+                    "apps": [],
+                    "removed_apps": [],
+                    "rows_deleted": 0,
+                }
+                log_staging_diagnostic(
+                    logger,
+                    (
+                        "Provider integration sync failed app_slug=%s "
+                        "connection_id=%s reason=provider_connection_not_active "
+                        "connections=%d duration=%.2fs"
+                    ),
+                    normalized_app,
+                    connection_id,
+                    len(connections or []),
+                    _sync_duration(),
+                )
+                return result
             app_keys_to_remove: list[tuple[str | None, str]] = []
             for key in list(new_hashes):
                 if key.endswith(f":{normalized_app}"):
@@ -2693,12 +2720,7 @@ class FunctionManager(BaseFunctionManager):
                 removed,
                 _sync_duration(),
             )
-            return {
-                "status": "removed" if removed or removed_apps else "unchanged",
-                "apps": [],
-                "removed_apps": removed_apps,
-                "rows_deleted": removed,
-            }
+            return result
 
         tools_response: list[dict[str, Any]] = []
         offset = 0

@@ -553,3 +553,25 @@ def test_disconnect_cleanup_removes_materialized_rows(monkeypatch) -> None:
     assert result["status"] == "removed"
     assert result["removed_apps"] == ["composio:hubspot"]
     assert fm._deleted_apps == [("composio", "hubspot")]
+
+
+def test_missing_active_connection_for_specific_sync_returns_error(monkeypatch) -> None:
+    client = FakeIntegrationOps()
+    client.connections = []
+    monkeypatch.setattr(
+        "unity.integrations.ops.list_connections",
+        client.list_connections,
+    )
+    monkeypatch.setattr("unity.integrations.ops.get_tools", client.get_tools)
+    fm = _fake_function_manager()
+
+    result = fm.sync_provider_integration_tools(
+        app_slug="hubspot",
+        connection_id="conn-missing",
+    )
+
+    assert result["status"] == "error"
+    assert result["error"]["code"] == "provider_connection_not_active"
+    assert result["apps"] == []
+    assert result["rows_deleted"] == 0
+    assert getattr(fm, "_deleted_apps", []) == []
