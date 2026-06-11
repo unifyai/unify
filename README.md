@@ -40,19 +40,30 @@ Full architectural comparison with diagrams is [further down](#where-unity-sits-
 
 ## Install
 
-**Prerequisites:** Python 3.12+, Docker, and an LLM provider key (OpenAI or Anthropic). macOS, Linux, or WSL2.
+**Prerequisites:** Docker, and an LLM provider key (OpenAI or Anthropic). macOS, Linux, or WSL2.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/unifyai/unity/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/unifyai/unity/staging/scripts/install.sh | bash
 ```
 
-The installer prompts you inline for an OpenAI or Anthropic key and writes it into `~/.unity/unity/.env`. **Open a new terminal** (so the installer-added PATH entry takes effect), then run in two:
+This pulls prebuilt images via Docker Compose, runs a BYOK wizard, and opens Console at http://127.0.0.1:3000. Register, then chat with your Coordinator. See [`deploy/selfhost/README.md`](deploy/selfhost/README.md) for compose commands and developer source install (`--source-install`).
+
+<details>
+<summary>Developer source install (clone repos + uv)</summary>
+
+Requires Python 3.12+ in addition to Docker:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/unifyai/unity/staging/scripts/install.sh | bash -s -- --source-install
+```
+
+The source installer clones `unity`, `unify`, `unillm`, `console`, and `orchestra` under `~/.unity/`, syncs Python deps with `uv`, and runs `unity setup`. **Open a new terminal**, then:
 
 | Terminal 1 — chat | Terminal 2 — live logs |
 |---|---|
 | `unity` | `unity logs` |
 
-That's it. You're chatting with a local assistant called `Unity`. State persists across runs *and* across reboots — Ctrl+C, come back tomorrow, `unity` again resumes from where you left off.
+</details>
 
 ```text
 > What did I leave half-finished on the indexer rewrite last week?
