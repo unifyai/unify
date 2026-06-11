@@ -2502,11 +2502,54 @@ class FunctionManager(BaseFunctionManager):
             )
             return None
 
+    def _delete_provider_integration_rows_for_connection(
+        self,
+        *,
+        app_slug: str,
+        connection_id: str,
+    ) -> tuple[int, list[str]]:
+        filter_expr = (
+            'integration_source == "provider_backed" ' f'and app_slug == "{app_slug}"'
+        )
+        try:
+            logs = unify.get_logs(
+                context=self._primitives_ctx,
+                filter=filter_expr,
+                exclude_fields=list_private_fields(self._primitives_ctx),
+            )
+            ids_to_delete: list[int] = []
+            removed_keys: set[str] = set()
+            for log in logs or []:
+                entries = getattr(log, "entries", None) or {}
+                metadata = entries.get("integration_metadata") or {}
+                if metadata.get("connection_id") != connection_id:
+                    continue
+                ids_to_delete.append(log.id)
+                removed_keys.add(
+                    self._integration_hash_key(
+                        backend_id=entries.get("backend_id") or "provider",
+                        app_slug=app_slug,
+                    ),
+                )
+            if not ids_to_delete:
+                return 0, []
+            unify.delete_logs(context=self._primitives_ctx, logs=ids_to_delete)
+            return len(ids_to_delete), sorted(removed_keys)
+        except Exception as exc:
+            logger.warning(
+                "Failed to delete provider integration rows for connection %s/%s: %s",
+                app_slug,
+                connection_id,
+                exc,
+            )
+            return 0, []
+
     def sync_provider_integration_tools(
         self,
         *,
         app_slug: str | None = None,
         connection_id: str | None = None,
+        operation: str = "materialize",
         limit: int = 500,
     ) -> Dict[str, Any]:
         """Materialize active provider-backed tools into the Primitives context.
@@ -2521,6 +2564,10 @@ class FunctionManager(BaseFunctionManager):
 
         def _sync_duration() -> float:
             return perf_counter() - sync_start
+
+        operation = (
+            "cleanup" if str(operation).strip().lower() == "cleanup" else "materialize"
+        )
 
         if not self._include_primitives or not self._primitive_scope.includes(
             "integrations",
@@ -2633,11 +2680,12 @@ class FunctionManager(BaseFunctionManager):
         log_staging_diagnostic(
             logger,
             (
-                "Provider integration sync started app_slug=%s connection_id=%s "
+                "Provider integration sync started app_slug=%s connection_id=%s operation=%s "
                 "owner_scope=%s connections=%d active_connections=%d active_apps=%s"
             ),
             normalized_app or "-",
             connection_id or "-",
+            operation,
             {
                 key: owner_scope.get(key)
                 for key in (
@@ -2659,6 +2707,58 @@ class FunctionManager(BaseFunctionManager):
         changed_apps: list[dict[str, Any]] = []
         unchanged_apps: list[dict[str, Any]] = []
         removed_apps: list[str] = []
+
+        if normalized_app and operation == "cleanup":
+            if connection_id:
+                removed, removed_keys = (
+                    self._delete_provider_integration_rows_for_connection(
+                        app_slug=normalized_app,
+                        connection_id=connection_id,
+                    )
+                )
+                hash_keys_to_remove = [
+                    key for key in new_hashes if key.endswith(f":{normalized_app}")
+                ]
+                removed_keys = sorted(set([*removed_keys, *hash_keys_to_remove]))
+                for key in hash_keys_to_remove:
+                    new_hashes.pop(key, None)
+            else:
+                app_keys_to_remove: list[tuple[str | None, str]] = []
+                removed_keys = []
+                for key in list(new_hashes):
+                    if key.endswith(f":{normalized_app}"):
+                        backend_id, _sep, _app = key.partition(":")
+                        app_keys_to_remove.append((backend_id or None, normalized_app))
+                        removed_keys.append(key)
+                        new_hashes.pop(key, None)
+                if not app_keys_to_remove:
+                    app_keys_to_remove = [(None, normalized_app)]
+                removed = self._delete_provider_integration_rows_for_apps(
+                    app_keys_to_remove,
+                )
+            if removed or removed_keys:
+                self._store_integration_tool_hash_by_app(new_hashes)
+            result = {
+                "status": "removed",
+                "apps": [],
+                "removed_apps": removed_keys,
+                "rows_deleted": removed,
+            }
+            log_staging_diagnostic(
+                logger,
+                (
+                    "Provider integration sync completed app_slug=%s "
+                    "operation=cleanup connection_id=%s status=%s "
+                    "removed_apps=%s rows_deleted=%d duration=%.2fs"
+                ),
+                normalized_app,
+                connection_id or "-",
+                result["status"],
+                removed_keys,
+                removed,
+                _sync_duration(),
+            )
+            return result
 
         if normalized_app and not active_connections:
             if connection_id:
@@ -2968,6 +3068,26 @@ class FunctionManager(BaseFunctionManager):
         except Exception as e:
             logger.warning(f"Failed to delete primitives for {manager_aliases}: {e}")
 
+    def _delete_primitives_by_function_ids(self, function_ids: list[int]) -> None:
+        if not function_ids:
+            return
+        ids = sorted(set(function_ids))
+        filter_expr = (
+            f"function_id == {ids[0]}"
+            if len(ids) == 1
+            else f"function_id in [{', '.join(str(function_id) for function_id in ids)}]"
+        )
+        logs = unify.get_logs(
+            context=self._primitives_ctx,
+            filter=filter_expr,
+            exclude_fields=list_private_fields(self._primitives_ctx),
+        )
+        if logs:
+            unify.delete_logs(
+                context=self._primitives_ctx,
+                logs=[log.id for log in logs],
+            )
+
     def _insert_primitives(self, primitives: List[Dict[str, Any]]) -> None:
         """Insert primitive rows into the Primitives context with explicit IDs."""
         if not primitives:
@@ -2979,6 +3099,13 @@ class FunctionManager(BaseFunctionManager):
         ]
 
         try:
+            self._delete_primitives_by_function_ids(
+                [
+                    entry["function_id"]
+                    for entry in entries
+                    if isinstance(entry.get("function_id"), int)
+                ],
+            )
             unity_create_logs(
                 context=self._primitives_ctx,
                 entries=entries,

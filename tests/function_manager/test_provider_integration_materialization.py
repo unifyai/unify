@@ -362,6 +362,11 @@ def test_insert_primitives_preserves_validated_integration_metadata(
         "unity.function_manager.function_manager.unity_create_logs",
         fake_create_logs,
     )
+    monkeypatch.setattr(
+        FunctionManager,
+        "_delete_primitives_by_function_ids",
+        lambda self, function_ids: None,
+    )
     fm = _fake_function_manager()
     fm._primitives_ctx = "Functions/Primitives"
     row = fm._integration_tool_to_function_row(
@@ -398,6 +403,11 @@ def test_insert_primitives_preserves_static_primitive_null_shape(monkeypatch) ->
         "unity.function_manager.function_manager.unity_create_logs",
         fake_create_logs,
     )
+    monkeypatch.setattr(
+        FunctionManager,
+        "_delete_primitives_by_function_ids",
+        lambda self, function_ids: None,
+    )
     fm = _fake_function_manager()
     fm._primitives_ctx = "Functions/Primitives"
 
@@ -425,6 +435,47 @@ def test_insert_primitives_preserves_static_primitive_null_shape(monkeypatch) ->
     assert captured[0]["implementation"] is None
     assert captured[0]["precondition"] is None
     assert captured[0]["depends_on"] == []
+
+
+def test_insert_primitives_replaces_exact_function_ids(monkeypatch) -> None:
+    deleted_ids: list[int] = []
+    captured: list[dict] = []
+
+    monkeypatch.setattr(
+        FunctionManager,
+        "_delete_primitives_by_function_ids",
+        lambda self, function_ids: deleted_ids.extend(function_ids),
+    )
+    monkeypatch.setattr(
+        "unity.function_manager.function_manager.unity_create_logs",
+        lambda **kwargs: captured.extend(kwargs["entries"]),
+    )
+    fm = _fake_function_manager()
+    fm._primitives_ctx = "Functions/Primitives"
+
+    FunctionManager._insert_primitives(
+        fm,
+        [
+            {
+                "name": "primitives.integrations.search_integrations",
+                "function_id": 123,
+                "argspec": "(query: str) -> dict",
+                "docstring": "Search integrations.",
+                "embedding_text": "Function Name: primitives.integrations.search_integrations",
+                "implementation": None,
+                "depends_on": [],
+                "precondition": None,
+                "verify": False,
+                "is_primitive": True,
+                "guidance_ids": [],
+                "primitive_class": "unity.integrations.primitives.IntegrationPrimitives",
+                "primitive_method": "search_integrations",
+            },
+        ],
+    )
+
+    assert deleted_ids == [123]
+    assert captured[0]["function_id"] == 123
 
 
 def test_static_primitive_sync_delete_spares_provider_backed_rows(monkeypatch) -> None:
@@ -553,6 +604,59 @@ def test_disconnect_cleanup_removes_materialized_rows(monkeypatch) -> None:
     assert result["status"] == "removed"
     assert result["removed_apps"] == ["composio:hubspot"]
     assert fm._deleted_apps == [("composio", "hubspot")]
+
+
+def test_connection_cleanup_deletes_only_matching_materialized_rows(
+    monkeypatch,
+) -> None:
+    client = FakeIntegrationOps()
+    client.connections = []
+    deleted_logs: list[int] = []
+    logs = [
+        SimpleNamespace(
+            id=11,
+            entries={
+                "backend_id": "composio",
+                "app_slug": "hubspot",
+                "integration_metadata": {"connection_id": "conn-1"},
+            },
+        ),
+        SimpleNamespace(
+            id=22,
+            entries={
+                "backend_id": "composio",
+                "app_slug": "hubspot",
+                "integration_metadata": {"connection_id": "conn-2"},
+            },
+        ),
+    ]
+    monkeypatch.setattr(
+        "unity.integrations.ops.list_connections",
+        client.list_connections,
+    )
+    monkeypatch.setattr("unity.integrations.ops.get_tools", client.get_tools)
+    monkeypatch.setattr("unify.get_logs", lambda **_kwargs: logs)
+    monkeypatch.setattr(
+        "unify.delete_logs",
+        lambda **kwargs: deleted_logs.extend(kwargs["logs"]),
+    )
+    fm = _fake_function_manager()
+    fm._primitives_ctx = "Functions/Primitives"
+    fm._get_stored_integration_tool_hash_by_app = lambda: {
+        "composio:hubspot": "old-hash",
+    }
+
+    result = fm.sync_provider_integration_tools(
+        app_slug="hubspot",
+        connection_id="conn-1",
+        operation="cleanup",
+    )
+
+    assert result["status"] == "removed"
+    assert result["removed_apps"] == ["composio:hubspot"]
+    assert result["rows_deleted"] == 1
+    assert deleted_logs == [11]
+    assert fm._stored_hashes == {}
 
 
 def test_missing_active_connection_for_specific_sync_returns_error(monkeypatch) -> None:
