@@ -17,7 +17,8 @@ from unity.common.prompt_helpers import now as prompt_now
 from unity.integrations import ops as integration_ops
 from unity.integrations.primitives import integration_owner_scope_from_session
 
-IntegrationSyncStatus = Literal["pending", "syncing", "ready", "failed"]
+IntegrationSyncOperation = Literal["materialize", "cleanup"]
+IntegrationSyncStatus = Literal["pending", "syncing", "ready", "failed", "removed"]
 logger = logging.getLogger(__name__)
 
 
@@ -27,6 +28,7 @@ class IntegrationSyncState:
     status: IntegrationSyncStatus = "pending"
     app_display_name: str | None = None
     connection_id: str | None = None
+    operation: IntegrationSyncOperation = "materialize"
     message: str = ""
     tool_count: int | None = None
     error: str | None = None
@@ -83,7 +85,7 @@ class IntegrationSyncCoordinator:
         states = [
             state
             for state in self._states.values()
-            if state.status in {"syncing", "failed"} or state.status == "ready"
+            if state.status in {"syncing", "failed", "ready"}
         ]
         if not states:
             return ""
@@ -108,6 +110,7 @@ class IntegrationSyncCoordinator:
         *,
         app_display_name: str | None = None,
         connection_id: str | None = None,
+        operation: IntegrationSyncOperation = "materialize",
         message: str = "",
         tool_count: int | None = None,
         error: str | None = None,
@@ -121,6 +124,7 @@ class IntegrationSyncCoordinator:
             or (existing.app_display_name if existing else None),
             connection_id=connection_id
             or (existing.connection_id if existing else None),
+            operation=operation,
             message=message,
             tool_count=tool_count,
             error=error,
@@ -134,6 +138,7 @@ class IntegrationSyncCoordinator:
         *,
         app_display_name: str | None = None,
         connection_id: str | None = None,
+        operation: IntegrationSyncOperation = "materialize",
     ) -> asyncio.Task:
         normalized = normalize_app_slug(app_slug)
         existing_task = self._tasks.get(normalized)
@@ -144,10 +149,15 @@ class IntegrationSyncCoordinator:
             "syncing",
             app_display_name=app_display_name,
             connection_id=connection_id,
+            operation=operation,
             message=f"{app_display_name or normalized} tools are syncing.",
         )
         task = asyncio.create_task(
-            self.sync_app(normalized, connection_id=connection_id),
+            self.sync_app(
+                normalized,
+                connection_id=connection_id,
+                operation=operation,
+            ),
         )
         self._tasks[normalized] = task
         return task
@@ -157,6 +167,7 @@ class IntegrationSyncCoordinator:
         app_slug: str,
         *,
         connection_id: str | None = None,
+        operation: IntegrationSyncOperation = "materialize",
     ) -> IntegrationSyncState:
         normalized = normalize_app_slug(app_slug)
         existing = self._states.get(normalized)
@@ -166,6 +177,7 @@ class IntegrationSyncCoordinator:
             app_display_name=existing.app_display_name if existing else None,
             connection_id=connection_id
             or (existing.connection_id if existing else None),
+            operation=operation,
         )
         with integration_sync_timing(
             logger,
@@ -182,6 +194,7 @@ class IntegrationSyncCoordinator:
                 )
                 if target_connection_id is not None:
                     sync_kwargs["connection_id"] = target_connection_id
+                sync_kwargs["operation"] = operation
                 result = await asyncio.to_thread(
                     lambda: ManagerRegistry.get_function_manager(
                         primitive_scope=PrimitiveScope.single("integrations"),
@@ -193,7 +206,12 @@ class IntegrationSyncCoordinator:
                         "Integration sync coordinator failed app_slug=%s",
                         normalized,
                     )
-                return self.set_status(normalized, "failed", error=str(exc))
+                return self.set_status(
+                    normalized,
+                    "failed",
+                    error=str(exc),
+                    operation=operation,
+                )
 
             changed_rows = 0
             unchanged_rows = 0
@@ -238,13 +256,36 @@ class IntegrationSyncCoordinator:
                     if isinstance(error_payload, dict)
                     else str(error_payload or "Integration tool sync failed")
                 )
-                state = self.set_status(normalized, "failed", error=str(error))
+                state = self.set_status(
+                    normalized,
+                    "failed",
+                    error=str(error),
+                    operation=operation,
+                )
                 log_staging_diagnostic(
                     logger,
                     "Integration sync coordinator mapped app_slug=%s status=%s error=%s",
                     normalized,
                     state.status,
                     state.error,
+                )
+                return state
+
+            if isinstance(result, dict) and result.get("status") == "removed":
+                state = self.set_status(
+                    normalized,
+                    "removed",
+                    connection_id=connection_id
+                    or (existing.connection_id if existing else None),
+                    tool_count=0,
+                    operation=operation,
+                )
+                log_staging_diagnostic(
+                    logger,
+                    "Integration sync coordinator mapped app_slug=%s status=%s rows_deleted=%d",
+                    normalized,
+                    state.status,
+                    rows_deleted,
                 )
                 return state
 
@@ -255,7 +296,12 @@ class IntegrationSyncCoordinator:
                 for item in [*changed, *unchanged]:
                     if isinstance(item, dict):
                         tool_count += int(item.get("rows") or 0)
-            state = self.set_status(normalized, "ready", tool_count=tool_count)
+            state = self.set_status(
+                normalized,
+                "ready",
+                tool_count=tool_count,
+                operation=operation,
+            )
             log_staging_diagnostic(
                 logger,
                 "Integration sync coordinator mapped app_slug=%s status=%s tool_count=%d",
