@@ -77,6 +77,13 @@ else
   LOCAL_COMMS_ENABLED="false"
 fi
 
+# Self-host routes adapter traffic through unity.gateway, which delivers
+# envelopes to the CM local ingress HTTP surface (8787 by default).
+if [[ "${SELF_HOST:-0}" == "1" ]]; then
+  LOCAL_COMMS_MODE="local"
+  LOCAL_COMMS_ENABLED="true"
+fi
+
 LOCAL_COMMS_HOST="${UNITY_CONVERSATION_LOCAL_COMMS_HOST:-127.0.0.1}"
 LOCAL_COMMS_PORT="${UNITY_CONVERSATION_LOCAL_COMMS_PORT:-8787}"
 LOCAL_COMMS_PUBLIC_URL="${UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL:-}"
