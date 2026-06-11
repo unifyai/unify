@@ -188,6 +188,7 @@ def build_brain_spec(
     snapshot_state: "SnapshotState",
     screenshots: list[ScreenshotEntry] | None = None,
     screenshot_paths: list[str] | None = None,
+    acting_user_id: str | None = None,
 ) -> BrainSpec:
     """
     Build the prompt + response model inputs for a single Main CM Brain run.
@@ -207,7 +208,12 @@ def build_brain_spec(
         paired with the user utterance that triggered capture and a timestamp.
     screenshot_paths : list[str] | None
         Relative file paths corresponding to each screenshot (parallel list).
+    acting_user_id : str | None
+        The user acting in this turn (the inbound message sender when it maps to
+        a system user, else the workspace owner). Used to resolve the *speaker's*
+        linked desktop. Falls back to the session owner when not provided.
     """
+    acting_user_id = acting_user_id or SESSION_DETAILS.user.id
     from unity.settings import SETTINGS
 
     _brain_t0 = perf_counter()
@@ -275,9 +281,10 @@ def build_brain_spec(
         assistant_has_teams=bool(cm.assistant_has_teams),
         user_desktop_control=SETTINGS.conversation.USER_DESKTOP_CONTROL_ENABLED,
         has_linked_user_desktop=SESSION_DETAILS.assistant.user_desktop_for(
-            SESSION_DETAILS.user.id,
+            acting_user_id,
         )
         is not None,
+        acting_user_id=acting_user_id,
         runtime_setup_note=runtime_setup_note,
         team_summaries=getattr(cm, "team_summaries", []),
         is_coordinator=SESSION_DETAILS.is_coordinator,

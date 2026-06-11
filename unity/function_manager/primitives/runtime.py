@@ -689,10 +689,12 @@ class _UserDesktopFactory:
         Parameters
         ----------
         user_id : str, optional
-            Which user's machine to control.  Defaults to the current
-            session's primary user; when several users have linked desktops
-            it must be given explicitly.  Must match a desktop the user
-            linked to this assistant in the Console.
+            Which user's machine to control.  Defaults to the session's
+            primary user, falling back to the sole linked desktop when only
+            one exists.  When several users have linked desktops it must be
+            given explicitly — pass the acting user's id (surfaced in the
+            system prompt) to target the person currently being helped.  Must
+            match a desktop the user linked to this assistant in the Console.
 
         Returns
         -------
@@ -982,7 +984,9 @@ class ComputerPrimitives(metaclass=SingletonABCMeta):
             return next(iter(desktops.values()))
         raise ValueError(
             "Multiple users have linked desktops; specify which one via "
-            f"user_id. Linked users: {sorted(desktops)}.",
+            "user_id. Pass the acting user's id (the person currently being "
+            f"helped, surfaced in the system prompt). Linked users: "
+            f"{sorted(desktops)}.",
         )
 
     def _get_user_desktop_backend(self, link: Any) -> "ComputerBackend":
