@@ -1,5 +1,6 @@
 import asyncio
 
+from unity.common.diagnostic_logging import staging_diagnostics_enabled
 from unity.common.startup_timing import log_startup_timing
 from unity.logger import LOGGER
 
@@ -10,6 +11,16 @@ def log_task_exc(task: asyncio.Task) -> None:
     except asyncio.CancelledError:
         pass
     except Exception as e:
+        if staging_diagnostics_enabled():
+            task_name = task.get_name()
+            trace_meta = getattr(task, "_unity_trace_meta", {}) or {}
+            LOGGER.exception(
+                "Slow-brain task failed task=%s trace_meta=%s error=%s",
+                task_name,
+                trace_meta,
+                e,
+            )
+            return
         LOGGER.exception("Slow-brain task failed: %s", e)
 
 
@@ -109,6 +120,9 @@ class Debouncer:
                 self.running_task_started_at - wait_t0,
             )
             self.running_task = asyncio.create_task(async_fn(*args, **kwargs))
+            if label:
+                self.running_task.set_name(f"{self._name or 'Debouncer'}:{label}")
+            self.running_task._unity_trace_meta = dict(self.running_task_trace_meta)
             self.running_task.add_done_callback(log_task_exc)
             self.pending_task = None
             self._pending_label = ""

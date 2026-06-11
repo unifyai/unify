@@ -7,6 +7,7 @@ from typing import Any, Optional
 from unity.logger import LOGGER
 from unity.common.hierarchical_logger import DEFAULT_ICON
 from unity.common.startup_timing import log_startup_timing
+from unity.common.diagnostic_logging import staging_diagnostics_enabled
 from unity.session_details import SESSION_DETAILS
 from unity.settings import SETTINGS
 from unity.manager_registry import SingletonABCMeta
@@ -85,6 +86,32 @@ ACT_FOLLOWUP_ARGUMENT_DEFAULTS: dict[str, Any] = {
     "persist": False,
     "include_conversation_context": True,
 }
+
+
+def _log_slow_brain_single_shot_failure(
+    *,
+    run_id: str,
+    request_id: str,
+    origin_event_name: str,
+    message_count: int,
+    tool_count: int,
+    state_chars: int,
+) -> None:
+    if not staging_diagnostics_enabled():
+        return
+    LOGGER.exception(
+        (
+            "Slow-brain single-shot failed "
+            "run_id=%s request_id=%s origin_event=%s "
+            "message_count=%d tool_count=%d state_chars=%d"
+        ),
+        run_id,
+        request_id or "-",
+        origin_event_name or "-",
+        message_count,
+        tool_count,
+        state_chars,
+    )
 
 
 def _render_action_context(
@@ -1863,19 +1890,30 @@ class ConversationManager(metaclass=SingletonABCMeta):
         )
         self._active_llm_trace_meta = trace_meta
         try:
-            result = await single_shot_tool_decision(
-                client,
-                messages,
-                tools,
-                tool_choice="required" if tools else "auto",
-                response_format=response_model,
-                exclusive_tools={
-                    "make_call",
-                    "make_whatsapp_call",
-                    "join_google_meet",
-                    "join_teams_meet",
-                },
-            )
+            try:
+                result = await single_shot_tool_decision(
+                    client,
+                    messages,
+                    tools,
+                    tool_choice="required" if tools else "auto",
+                    response_format=response_model,
+                    exclusive_tools={
+                        "make_call",
+                        "make_whatsapp_call",
+                        "join_google_meet",
+                        "join_teams_meet",
+                    },
+                )
+            except Exception:
+                _log_slow_brain_single_shot_failure(
+                    run_id=run_id,
+                    request_id=request_id,
+                    origin_event_name=origin_event_name,
+                    message_count=len(messages),
+                    tool_count=len(tools),
+                    state_chars=len(input_message),
+                )
+                raise
         finally:
             self._active_llm_trace_meta = None
             if hasattr(client, "_pending_thinking_log"):
