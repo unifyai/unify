@@ -36,4 +36,6 @@ def test_staging_slow_brain_single_shot_failure_logs_traceback(
     assert "run_id=llmrun-000001" in caplog.text
     assert "request_id=llmreq-000001" in caplog.text
     assert "origin_event=IntegrationToolsSyncRequested" in caplog.text
+    assert "Slow-brain single-shot traceback text" in caplog.text
+    assert "Traceback (most recent call last)" in caplog.text
     assert any(record.exc_info for record in caplog.records)
