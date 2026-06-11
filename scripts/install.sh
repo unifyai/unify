@@ -16,6 +16,8 @@
 #   --skip-deps       Skip system-dependency checks (PortAudio, etc.)
 #   --skip-setup      Skip the local orchestra spin-up at the end
 #                     (just install the code; run `unity setup` later)
+#   --source-install  Clone repos and install from source (developer path)
+#   --compose         Docker Compose install with prebuilt images (default)
 #   -h, --help        Show this help
 # ============================================================================
 
@@ -50,6 +52,7 @@ PYTHON_VERSION="3.12"
 CREATE_CLI=true
 CHECK_DEPS=true
 RUN_SETUP=true
+SOURCE_INSTALL=false
 CLI_DIR="${CLI_DIR:-$HOME/.local/bin}"
 REPO_BASE="https://github.com/unifyai"
 
@@ -63,6 +66,8 @@ while [[ $# -gt 0 ]]; do
         --no-cli) CREATE_CLI=false; shift ;;
         --skip-deps) CHECK_DEPS=false; shift ;;
         --skip-setup) RUN_SETUP=false; shift ;;
+        --source-install) SOURCE_INSTALL=true; shift ;;
+        --compose) SOURCE_INSTALL=false; shift ;;
         -h|--help)
             sed -n '2,20p' "$0" | sed 's|^# ||;s|^#$||'
             exit 0 ;;
@@ -1032,6 +1037,25 @@ print_next_steps() {
 # Main
 # ----------------------------------------------------------------------------
 main() {
+    if [[ "$SOURCE_INSTALL" != "true" ]]; then
+        local compose_install=""
+        if [[ -n "$INSTALL_SCRIPT_DIR" && -f "$INSTALL_SCRIPT_DIR/install-compose.sh" ]]; then
+            compose_install="$INSTALL_SCRIPT_DIR/install-compose.sh"
+        elif [[ -f "${HOME}/Unify/unity/scripts/install-compose.sh" ]]; then
+            compose_install="${HOME}/Unify/unity/scripts/install-compose.sh"
+        else
+            local tmp_install
+            tmp_install="$(mktemp -t unity-install-compose.XXXXXX.sh)"
+            if curl -fsSL "https://raw.githubusercontent.com/unifyai/unity/${BRANCH:-staging}/scripts/install-compose.sh" -o "$tmp_install"; then
+                compose_install="$tmp_install"
+            fi
+        fi
+        if [[ -n "$compose_install" ]]; then
+            exec bash "$compose_install" "$@"
+        fi
+        log_warn "install-compose.sh not found — falling back to source install"
+    fi
+
     print_banner
     detect_os
     ensure_uv
