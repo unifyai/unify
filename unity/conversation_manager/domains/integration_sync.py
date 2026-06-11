@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from unity.common.prompt_helpers import now as prompt_now
 from unity.conversation_manager.events import (
@@ -13,14 +13,23 @@ from unity.conversation_manager.events import (
 )
 from unity.integrations.sync_state import normalize_app_slug
 
+if TYPE_CHECKING:
+    from unity.conversation_manager.conversation_manager import ConversationManager
 
-def _payload_value(payload: dict[str, Any], key: str) -> Any:
-    value = payload.get(key)
-    if value not in (None, ""):
-        return value
-    extra = payload.get("extra_event_fields")
-    if isinstance(extra, dict):
-        return extra.get(key)
+
+def _payload_value(payload: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = payload.get(key)
+        if value not in (None, ""):
+            return value
+    for extra_key in ("extra_event_fields", "extraEventFields"):
+        extra = payload.get(extra_key)
+        if not isinstance(extra, dict):
+            continue
+        for key in keys:
+            value = extra.get(key)
+            if value not in (None, ""):
+                return value
     return None
 
 
@@ -28,30 +37,37 @@ def _payload_details(payload: dict[str, Any]) -> dict[str, Any]:
     details = payload.get("details")
     if isinstance(details, dict):
         return details
-    extra = payload.get("extra_event_fields")
-    if isinstance(extra, dict):
-        details = extra.get("details")
-        if isinstance(details, dict):
-            return details
+    for extra_key in ("extra_event_fields", "extraEventFields"):
+        extra = payload.get(extra_key)
+        if isinstance(extra, dict):
+            details = extra.get("details")
+            if isinstance(details, dict):
+                return details
     return {}
 
 
 def _app_event_fields(payload: dict[str, Any]) -> tuple[str, str | None, str | None]:
     details = _payload_details(payload)
     app_slug = (
-        _payload_value(payload, "app_slug")
-        or _payload_value(payload, "canonical_app_slug")
+        _payload_value(payload, "app_slug", "appSlug")
+        or _payload_value(payload, "canonical_app_slug", "canonicalAppSlug")
         or details.get("app_slug")
+        or details.get("appSlug")
         or details.get("canonical_app_slug")
+        or details.get("canonicalAppSlug")
         or ""
     )
     app_display_name = (
-        _payload_value(payload, "app_display_name")
+        _payload_value(payload, "app_display_name", "appDisplayName")
         or details.get("app_display_name")
+        or details.get("appDisplayName")
         or details.get("display_name")
+        or details.get("displayName")
     )
-    connection_id = _payload_value(payload, "connection_id") or details.get(
-        "connection_id",
+    connection_id = (
+        _payload_value(payload, "connection_id", "connectionId")
+        or details.get("connection_id")
+        or details.get("connectionId")
     )
     return (
         str(app_slug),
@@ -231,7 +247,3 @@ async def _handle_integration_tools_sync_failed(
         prompt_now(as_string=False),
     )
     return True
-
-
-if False:  # pragma: no cover
-    from unity.conversation_manager.conversation_manager import ConversationManager

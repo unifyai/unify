@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -10,6 +11,7 @@ from unity.conversation_manager.domains.integration_sync import (
     _handle_integration_tools_sync_failed,
     _handle_integration_tools_sync_requested,
     _handle_integration_tools_sync_completed,
+    _integration_tools_sync_requested_from_payload,
     _schedule_startup_integration_sync,
 )
 from unity.conversation_manager.domains.notifications import NotificationBar
@@ -19,6 +21,7 @@ from unity.conversation_manager.events import (
     IntegrationToolsSyncRequested,
 )
 from unity.integrations.sync_state import IntegrationSyncCoordinator
+from unity.integrations.primitives import integration_owner_scope_from_session
 
 
 class FakeIntegrationOps:
@@ -86,7 +89,44 @@ async def test_sync_coordinator_materializes_connected_apps(
     assert client.calls == [
         ("list_connections", (), {"owner_scope": "assistant", "assistant_id": 42}),
     ]
-    assert function_manager.calls == [{"app_slug": "salesforce"}]
+    assert function_manager.calls == [
+        {"app_slug": "salesforce", "connection_id": "conn-salesforce"},
+    ]
+
+
+def test_assistant_owner_scope_omits_unrelated_owner_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "unity.session_details.SESSION_DETAILS",
+        SimpleNamespace(
+            assistant=SimpleNamespace(agent_id=2103),
+            user=SimpleNamespace(id="user-123"),
+            org=SimpleNamespace(id=9),
+            team=SimpleNamespace(id=7),
+        ),
+    )
+
+    assert integration_owner_scope_from_session() == {
+        "owner_scope": "assistant",
+        "assistant_id": 2103,
+    }
+
+
+def test_sync_requested_payload_parses_camel_case_metadata() -> None:
+    event = _integration_tools_sync_requested_from_payload(
+        {
+            "appSlug": "gmail",
+            "appDisplayName": "Gmail",
+            "connectionId": "conn-gmail",
+            "message": "sync gmail tools",
+        },
+    )
+
+    assert event is not None
+    assert event.app_slug == "gmail"
+    assert event.app_display_name == "Gmail"
+    assert event.connection_id == "conn-gmail"
 
 
 @pytest.mark.anyio
@@ -113,6 +153,7 @@ async def test_sync_requested_handler_schedules_domain_sync(
         IntegrationToolsSyncRequested(
             app_slug="Salesforce",
             app_display_name="Salesforce",
+            connection_id="conn-salesforce",
         ),
         cm,
     )
@@ -122,8 +163,12 @@ async def test_sync_requested_handler_schedules_domain_sync(
     assert should_wake is True
     assert cm.integration_sync_coordinator.snapshot()["salesforce"].status == "ready"
     assert cm.notifications_bar.notifications[-1].type == "Integrations"
-    assert function_manager.calls == [{"app_slug": "salesforce"}]
+    assert function_manager.calls == [
+        {"app_slug": "salesforce", "connection_id": "conn-salesforce"},
+    ]
     assert event_broker.published[-1][0].endswith("integration_tools_sync_completed")
+    published = json.loads(event_broker.published[-1][1])
+    assert published["payload"]["connection_id"] == "conn-salesforce"
 
 
 @pytest.mark.anyio
@@ -178,7 +223,9 @@ async def test_startup_sync_schedules_connected_apps_without_brain_action_tools(
     await cm.integration_sync_coordinator._tasks["salesforce"]
     await asyncio.sleep(0)
 
-    assert function_manager.calls == [{"app_slug": "salesforce"}]
+    assert function_manager.calls == [
+        {"app_slug": "salesforce", "connection_id": "conn-salesforce"},
+    ]
     assert event_broker.published[-1][0].endswith("integration_tools_sync_completed")
 
 

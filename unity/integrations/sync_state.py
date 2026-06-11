@@ -146,18 +146,26 @@ class IntegrationSyncCoordinator:
             connection_id=connection_id,
             message=f"{app_display_name or normalized} tools are syncing.",
         )
-        task = asyncio.create_task(self.sync_app(normalized))
+        task = asyncio.create_task(
+            self.sync_app(normalized, connection_id=connection_id),
+        )
         self._tasks[normalized] = task
         return task
 
-    async def sync_app(self, app_slug: str) -> IntegrationSyncState:
+    async def sync_app(
+        self,
+        app_slug: str,
+        *,
+        connection_id: str | None = None,
+    ) -> IntegrationSyncState:
         normalized = normalize_app_slug(app_slug)
         existing = self._states.get(normalized)
         self.set_status(
             normalized,
             "syncing",
             app_display_name=existing.app_display_name if existing else None,
-            connection_id=existing.connection_id if existing else None,
+            connection_id=connection_id
+            or (existing.connection_id if existing else None),
         )
         with integration_sync_timing(
             logger,
@@ -168,10 +176,16 @@ class IntegrationSyncCoordinator:
                 from unity.function_manager.primitives.scope import PrimitiveScope
                 from unity.manager_registry import ManagerRegistry
 
+                sync_kwargs = {"app_slug": normalized}
+                target_connection_id = connection_id or (
+                    existing.connection_id if existing else None
+                )
+                if target_connection_id is not None:
+                    sync_kwargs["connection_id"] = target_connection_id
                 result = await asyncio.to_thread(
                     lambda: ManagerRegistry.get_function_manager(
                         primitive_scope=PrimitiveScope.single("integrations"),
-                    ).sync_provider_integration_tools(app_slug=normalized),
+                    ).sync_provider_integration_tools(**sync_kwargs),
                 )
             except Exception as exc:
                 if staging_diagnostics_enabled():
