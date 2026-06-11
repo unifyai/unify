@@ -3,7 +3,7 @@
 # stack.sh — Self-host stack
 # =============================================================================
 #
-# Brings up Orchestra, Comms App, Pub/Sub emulator, Adapters, Console, and
+# Brings up Orchestra, unity.gateway, Pub/Sub emulator, Console, and
 # the Unity CM for the signed-in user's Coordinator when credentials exist.
 #
 # Usage:
@@ -13,7 +13,7 @@
 #   ./scripts/stack.sh doctor       Check prerequisites
 #
 # Environment:
-#   UNIFY_STACK_ROOT          Parent dir with orchestra/console/unity-deploy siblings
+#   UNIFY_STACK_ROOT          Parent dir with orchestra/console/unity siblings
 #   OPENAI_API_KEY / ANTHROPIC_API_KEY  Required for Coordinator chat
 #   DEEPGRAM_API_KEY / CARTESIA_API_KEY Required for browser calls (prompted by unity setup)
 #
@@ -27,7 +27,6 @@ SELF_HOST_ENV_SCRIPT="$UNITY_REPO_PATH/scripts/self_host_env.sh"
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$UNITY_REPO_PATH/.." && pwd -P)}"
 CONSOLE_REPO_PATH="${CONSOLE_REPO_PATH:-$UNIFY_STACK_ROOT/console}"
 ORCHESTRA_REPO_PATH="${ORCHESTRA_REPO_PATH:-$UNIFY_STACK_ROOT/orchestra}"
-COMMUNICATION_REPO_PATH="${COMMUNICATION_REPO_PATH:-$UNIFY_STACK_ROOT/unity-deploy}"
 
 CONSOLE_LOCAL_SCRIPT="$CONSOLE_REPO_PATH/scripts/local.sh"
 
@@ -125,34 +124,15 @@ cmd_doctor() {
   echo "-------------"
   require_repo "Console" "$CONSOLE_REPO_PATH" || ok=false
   require_repo "Orchestra" "$ORCHESTRA_REPO_PATH" || ok=false
-  require_repo "unity-deploy" "$COMMUNICATION_REPO_PATH" || ok=false
-  if [[ ! -f "$COMMUNICATION_REPO_PATH/.venv/bin/python" ]]; then
-    if command -v uv &>/dev/null && [[ -f "$COMMUNICATION_REPO_PATH/pyproject.toml" ]]; then
-      log_info "unity-deploy/.venv missing — creating venv (first-time setup)..."
-      if (cd "$COMMUNICATION_REPO_PATH" && uv venv); then
-        log_success "unity-deploy/.venv created"
-      else
-        log_error "Failed to create unity-deploy/.venv"
-        ok=false
-      fi
-    else
-      log_error "unity-deploy/.venv missing — run: cd $COMMUNICATION_REPO_PATH && uv sync"
-      ok=false
-    fi
-  fi
-  if [[ -f "$COMMUNICATION_REPO_PATH/.venv/bin/python" ]]; then
-    local comms_py="$COMMUNICATION_REPO_PATH/.venv/bin/python"
-    if "$comms_py" -c "import adapters.main" &>/dev/null; then
-      log_success "Adapters/Comms runtime OK"
-    elif "$comms_py" -c "from unity.task_scheduler.offline_runner_contract import build_offline_run_key" &>/dev/null; then
-      log_warn "unity-deploy package deps missing — auto-installs when Adapters/Comms start"
-    else
-      log_warn "Comms venv incomplete — auto-installs when Adapters/Comms start"
-    fi
-  fi
 
   if [[ -f "$UNITY_REPO_PATH/.venv/bin/python" ]]; then
-    log_success "Unity venv found"
+    local unity_py="$UNITY_REPO_PATH/.venv/bin/python"
+    if "$unity_py" -c "import unity.gateway" &>/dev/null; then
+      log_success "Unity venv + unity.gateway OK"
+    else
+      log_error "unity.gateway not importable — run: cd $UNITY_REPO_PATH && uv sync"
+      ok=false
+    fi
   else
     log_warn "Unity .venv missing — run: cd $UNITY_REPO_PATH && uv sync"
     ok=false
@@ -271,7 +251,6 @@ cmd_up() {
 
   export SELF_HOST=1
   export ORCHESTRA_REPO_PATH
-  export COMMUNICATION_REPO_PATH
   export UNITY_REPO_PATH
   export CONSOLE_REPO_PATH
   export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"

@@ -3,7 +3,7 @@
 # Unity Installer
 # ============================================================================
 # Installs Unity (https://github.com/unifyai/unity) locally on macOS / Linux /
-# WSL2. Clones unity, unify, unillm, and orchestra as siblings under
+# WSL2. Clones unity, unify, unillm, orchestra, and console as siblings under
 # $UNITY_HOME and editable-installs the Python repos with uv.
 #
 # Quick install:
@@ -36,7 +36,6 @@ UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
 UNITY_REPO="${UNITY_HOME}/unity"
 UNIFY_REPO="${UNITY_HOME}/unify"
 UNILLM_REPO="${UNITY_HOME}/unillm"
-UNITY_DEPLOY_REPO="${UNITY_HOME}/unity-deploy"
 CONSOLE_REPO="${UNITY_HOME}/console"
 BRANCH="main"
 PYTHON_VERSION="3.12"
@@ -51,7 +50,7 @@ REPO_BASE="https://github.com/unifyai"
 # ----------------------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --dir) UNITY_HOME="$2"; UNITY_REPO="$UNITY_HOME/unity"; UNIFY_REPO="$UNITY_HOME/unify"; UNILLM_REPO="$UNITY_HOME/unillm"; UNITY_DEPLOY_REPO="$UNITY_HOME/unity-deploy"; CONSOLE_REPO="$UNITY_HOME/console"; shift 2 ;;
+        --dir) UNITY_HOME="$2"; UNITY_REPO="$UNITY_HOME/unity"; UNIFY_REPO="$UNITY_HOME/unify"; UNILLM_REPO="$UNITY_HOME/unillm"; CONSOLE_REPO="$UNITY_HOME/console"; shift 2 ;;
         --branch) BRANCH="$2"; shift 2 ;;
         --no-cli) CREATE_CLI=false; shift ;;
         --skip-deps) CHECK_DEPS=false; shift ;;
@@ -274,7 +273,6 @@ do_install() {
     clone_or_update "unify" "$UNIFY_REPO"
     clone_or_update "unillm" "$UNILLM_REPO"
     clone_or_update "unity" "$UNITY_REPO"
-    clone_or_update "unity-deploy" "$UNITY_DEPLOY_REPO"
     clone_or_update "console" "$CONSOLE_REPO"
 
     log_info "Syncing dependencies via uv (this pulls Python 3.12 if missing, may take a few minutes)..."
@@ -385,7 +383,6 @@ set -e
 UNITY_HOME="${UNITY_HOME}"
 UNITY_REPO="${UNITY_REPO}"
 ORCHESTRA_REPO="\$UNITY_HOME/orchestra"
-UNITY_DEPLOY_REPO="${UNITY_DEPLOY_REPO}"
 CONSOLE_REPO="${CONSOLE_REPO}"
 export UNITY_HOME
 
@@ -484,7 +481,6 @@ case "\${1:-}" in
         pull_repo unify          "\$UNITY_HOME/unify"
         pull_repo unillm         "\$UNITY_HOME/unillm"
         pull_repo orchestra      "\$ORCHESTRA_REPO"
-        pull_repo unity-deploy   "\$UNITY_DEPLOY_REPO"
         pull_repo console        "\$CONSOLE_REPO"
 
         printf '\\n  %s>%s syncing Python dependencies (uv sync)\\n' "\$BOLD" "\$NC"
@@ -525,7 +521,6 @@ case "\${1:-}" in
                 ;;
         esac
         [ -d "\$ORCHESTRA_REPO" ]                    && pass "orchestra repo at \$ORCHESTRA_REPO"         || { warn "orchestra repo missing at \$ORCHESTRA_REPO"; fix "Run: unity setup"; }
-        [ -d "\$UNITY_DEPLOY_REPO" ]                 && pass "unity-deploy repo at \$UNITY_DEPLOY_REPO"   || { warn "unity-deploy repo missing at \$UNITY_DEPLOY_REPO"; fix "Re-run install.sh"; }
         [ -d "\$CONSOLE_REPO" ]                      && pass "console repo at \$CONSOLE_REPO"           || { warn "console repo missing at \$CONSOLE_REPO";       fix "Re-run install.sh"; }
         [ -f "\$UNITY_REPO/.env" ]                   && pass ".env at \$UNITY_REPO/.env"                  || { fail ".env missing at \$UNITY_REPO/.env";          fix "Re-run install.sh"; }
         [ -d "\$UNITY_REPO/.venv" ]                  && pass "Python venv at \$UNITY_REPO/.venv"          || { warn "Python venv missing at \$UNITY_REPO/.venv";  fix "Run: cd \$UNITY_REPO && uv sync"; }
