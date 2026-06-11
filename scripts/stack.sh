@@ -80,16 +80,14 @@ cmd_doctor() {
     log_success "Docker is available"
   fi
 
-  if ! command -v node &>/dev/null || ! command -v npm &>/dev/null; then
-    log_error "Node.js 20+ and npm are required for Console"
-    ok=false
-  else
-    log_success "Node.js/npm found"
-  fi
-
   if [[ -f "$ENSURE_PREREQS_SCRIPT" ]]; then
     # shellcheck disable=SC1090
     source "$ENSURE_PREREQS_SCRIPT"
+    if ! ensure_node; then
+      ok=false
+    else
+      log_success "Node.js/npm ready"
+    fi
     if ! ensure_java; then
       ok=false
     else
@@ -100,7 +98,7 @@ cmd_doctor() {
     else
       log_success "Pub/Sub emulator ready"
     fi
-    if [[ "${SELF_HOST_DESKTOP:-1}" == "1" ]]; then
+    if [[ "${SELF_HOST_DESKTOP:-0}" == "1" ]]; then
       if ! ensure_rclone; then
         ok=false
       else
