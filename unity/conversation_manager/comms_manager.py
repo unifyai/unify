@@ -1585,6 +1585,7 @@ class CommsManager:
                     call_event = UnifyMeetReceived(
                         contact=next(c for c in contacts if c["contact_id"] == 1),
                         room_name=event.get("livekit_room"),
+                        opening_config=event.get("opening_config"),
                     )
                     event_topic = "app:comms:unify_meet_received"
                 elif thread == "whatsapp_call":

@@ -477,6 +477,29 @@ def _hydrate_session_details_from_metadata(meta: dict) -> None:
         SESSION_DETAILS.assistant.surname = parts[1] if len(parts) > 1 else ""
 
 
+_CALL_OPENING_MODES = {"speak", "simulated", "silent"}
+
+
+def _normalize_call_opening_config(raw: object) -> dict:
+    if raw in (None, ""):
+        return {"mode": "speak"}
+    if isinstance(raw, str):
+        raw = json.loads(raw)
+    if not isinstance(raw, dict):
+        raise ValueError("opening_config must be an object")
+
+    mode = str(raw.get("mode", "speak")).strip()
+    if mode not in _CALL_OPENING_MODES:
+        raise ValueError("opening_config.mode must be one of speak, simulated, silent")
+
+    config = {"mode": mode}
+    if raw.get("simulated_utterance") is not None:
+        config["simulated_utterance"] = str(raw["simulated_utterance"])
+    if raw.get("source") is not None:
+        config["source"] = str(raw["source"])
+    return config
+
+
 def _configure_child_logging() -> None:
     """Ensure Unity's LOGGER works in LiveKit's pre-warmed child processes.
 
@@ -533,6 +556,7 @@ async def entrypoint(ctx: agents.JobContext):
         assistant_bio = meta.get("assistant_bio", "")
         contact = meta.get("contact", {})
         boss = meta.get("boss", {})
+        opening_config = _normalize_call_opening_config(meta.get("opening_config"))
         _hydrate_session_details_from_metadata(meta)
     else:
         _log.warning(
@@ -546,6 +570,9 @@ async def entrypoint(ctx: agents.JobContext):
         assistant_bio = SESSION_DETAILS.assistant.about
         contact = json.loads(SESSION_DETAILS.voice_call.contact_json or "{}")
         boss = json.loads(SESSION_DETAILS.voice_call.boss_json or "{}")
+        opening_config = _normalize_call_opening_config(
+            os.environ.get("OPENING_CONFIG"),
+        )
 
     # Browser-meet diarization config (Google Meet / Teams Meet)
     meet_session_id: str = ""
@@ -568,7 +595,7 @@ async def entrypoint(ctx: agents.JobContext):
             meet_agent_service_url = os.environ.get("AGENT_SERVICE_URL", "")
 
     _log.config(
-        f"voice_provider={voice_provider} voice_id={voice_id} outbound={outbound} channel={channel}",
+        f"voice_provider={voice_provider} voice_id={voice_id} outbound={outbound} channel={channel} opening_mode={opening_config['mode']}",
     )
 
     _log.session_start("Connecting to room…")
@@ -1010,6 +1037,26 @@ async def entrypoint(ctx: agents.JobContext):
         user_utterance_event = InboundUnifyMeetUtterance
         assistant_utterance_event = OutboundUnifyMeetUtterance
 
+    async def _publish_assistant_utterance(text: str) -> None:
+        if channel == "google_meet":
+            event = OutboundGoogleMeetUtterance(
+                contact=contact,
+                content=text,
+                participant_names=_get_meet_participant_names() or None,
+            )
+        elif channel == "teams_meet":
+            event = OutboundTeamsMeetUtterance(
+                contact=contact,
+                content=text,
+                participant_names=_get_meet_participant_names() or None,
+            )
+        else:
+            event = assistant_utterance_event(contact, content=text)
+        await event_broker.publish(
+            f"app:comms:{channel}_utterance",
+            event.to_json(),
+        )
+
     credit_gate_task: asyncio.Task | None = None
 
     # Register cleanup as a LiveKit shutdown callback so it runs on any
@@ -1399,26 +1446,7 @@ async def entrypoint(ctx: agents.JobContext):
                 _publish_user_utterance(text),
             )
         else:
-            if channel == "google_meet":
-                event = OutboundGoogleMeetUtterance(
-                    contact=contact,
-                    content=text,
-                    participant_names=_get_meet_participant_names() or None,
-                )
-            elif channel == "teams_meet":
-                event = OutboundTeamsMeetUtterance(
-                    contact=contact,
-                    content=text,
-                    participant_names=_get_meet_participant_names() or None,
-                )
-            else:
-                event = assistant_utterance_event(contact, content=text)
-            asyncio.create_task(
-                event_broker.publish(
-                    f"app:comms:{channel}_utterance",
-                    event.to_json(),
-                ),
-            )
+            asyncio.create_task(_publish_assistant_utterance(text))
         _enqueue_mood_classification(role, text, utterance_id)
 
     audio_bridge: MeetAudioBridge | None = None
@@ -1934,38 +1962,64 @@ async def entrypoint(ctx: agents.JobContext):
     if outbound:
         _log.info("Outbound call — waiting for callee to answer…")
         await call_answered_flag.wait()
-        _log.call_status("call_answered — generating greeting")
+        _log.call_status("call_answered — opening turn")
 
-    from unity.common.llm_client import new_llm_client
-
-    credit_gate_state = credit_gate_monitor.state
-    if credit_gate_state.allowed:
-        greeting_client = new_llm_client(
-            model=SETTINGS.conversation.FAST_BRAIN_MODEL,
-            origin="fast_brain_greeting",
-            reasoning_effort="low",
-        )
-        greeting_messages = build_opening_greeting_messages(
-            system_prompt=system_prompt,
-            history_messages=_extract_chat_messages(session.history),
-        )
-        greeting_text = await greeting_client.generate(messages=greeting_messages)
-    else:
-        _log.info("Credit gate greeting served from cached state")
-        greeting_text = DEPLETED_CREDITS_FAST_BRAIN_RESPONSE
-
-    if channel != "phone":
+    async def _publish_ready_to_speak() -> None:
+        if channel == "phone":
+            return
         await ctx.room.local_participant.publish_data(
             json.dumps({"type": "ready_to_speak"}).encode(),
             topic="agent_status",
             reliable=True,
         )
 
-    session.say(
-        greeting_text,
-        allow_interruptions=True,
-        add_to_chat_ctx=True,
-    )
+    opening_mode = opening_config["mode"]
+    if opening_mode == "speak":
+        from unity.common.llm_client import new_llm_client
+
+        credit_gate_state = credit_gate_monitor.state
+        if credit_gate_state.allowed:
+            greeting_client = new_llm_client(
+                model=SETTINGS.conversation.FAST_BRAIN_MODEL,
+                origin="fast_brain_greeting",
+                reasoning_effort="low",
+            )
+            greeting_messages = build_opening_greeting_messages(
+                system_prompt=system_prompt,
+                history_messages=_extract_chat_messages(session.history),
+            )
+            greeting_text = await greeting_client.generate(messages=greeting_messages)
+        else:
+            _log.info("Credit gate greeting served from cached state")
+            greeting_text = DEPLETED_CREDITS_FAST_BRAIN_RESPONSE
+
+        await _publish_ready_to_speak()
+        session.say(
+            greeting_text,
+            allow_interruptions=True,
+            add_to_chat_ctx=True,
+        )
+    elif opening_mode == "simulated":
+        simulated_utterance = opening_config.get("simulated_utterance", "").strip()
+        if not simulated_utterance:
+            raise ValueError("simulated opening requires simulated_utterance")
+        await _publish_ready_to_speak()
+        assistant._chat_ctx.add_message(role="assistant", content=[simulated_utterance])
+        session.history.add_message(role="assistant", content=[simulated_utterance])
+        _log.assistant_speech(
+            simulated_utterance,
+            source=opening_config.get("source", "simulated_opening"),
+            llm_log_path="",
+        )
+        await _publish_assistant_utterance(simulated_utterance)
+        _enqueue_mood_classification(
+            "assistant",
+            simulated_utterance,
+            content_trace_id("utt", f"assistant:{simulated_utterance}"),
+        )
+    else:
+        _log.info("Opening turn suppressed by call opening config")
+        await _publish_ready_to_speak()
 
     # Inject the initializing-state system message *after* the greeting has
     # been generated and spoken.  Placing it before the greeting caused the

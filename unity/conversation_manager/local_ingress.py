@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import secrets
 import time
 
@@ -254,16 +255,22 @@ class LocalCommsIngress:
         room_name = payload.get("room_name", "") or payload.get("livekit_room", "")
         if not room_name:
             raise web.HTTPBadRequest(text="room_name is required")
+        event = {
+            "assistant_id": self._current_assistant_id(),
+            "contacts": payload.get("contacts") or [],
+            "livekit_room": room_name,
+            "timestamp": int(time.time() * 1000),
+        }
+        opening_config = payload.get("opening_config")
+        if isinstance(opening_config, str) and opening_config:
+            opening_config = json.loads(opening_config)
+        if isinstance(opening_config, dict):
+            event["opening_config"] = opening_config
         await self._dispatch_payload(
             {
                 "thread": "unify_meet",
                 "publish_timestamp": time.time(),
-                "event": {
-                    "assistant_id": self._current_assistant_id(),
-                    "contacts": payload.get("contacts") or [],
-                    "livekit_room": room_name,
-                    "timestamp": int(time.time() * 1000),
-                },
+                "event": event,
             },
         )
         return web.json_response({"success": True})

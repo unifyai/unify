@@ -832,11 +832,23 @@ class TestUnifyMeetHandlers:
         event = UnifyMeetReceived(
             contact={"contact_id": 1},  # Boss contact
             room_name="room_123",
+            opening_config={
+                "mode": "simulated",
+                "simulated_utterance": "Hi, I'm Marty.",
+                "source": "marty_onboarding_intro",
+            },
         )
 
         await EventHandler.handle_event(event, mock_cm)
 
         mock_cm.call_manager.start_unify_meet.assert_called_once()
+        assert mock_cm.call_manager.start_unify_meet.await_args.kwargs[
+            "opening_config"
+        ] == {
+            "mode": "simulated",
+            "simulated_utterance": "Hi, I'm Marty.",
+            "source": "marty_onboarding_intro",
+        }
 
     @pytest.mark.asyncio
     async def test_unify_meet_started_sets_mode(self, mock_cm):
