@@ -506,6 +506,51 @@ class TestExternalAppIntegration:
 
 
 # ---------------------------------------------------------------------------
+# Tests – seeing/controlling the user's machine (screen-share → linked desktop)
+# ---------------------------------------------------------------------------
+
+
+class TestUserMachineAccess:
+    """Precedence guidance for seeing/controlling the *user's* machine.
+
+    Default (no linked desktop, control disabled) is unchanged from the
+    screen-share-only behaviour; a linked desktop unlocks the direct-control
+    path while keeping screen share as the first option.
+    """
+
+    def test_block_absent_when_feature_off(self):
+        prompt = _build(user_desktop_control=False, has_linked_user_desktop=False)
+        assert "Seeing and controlling the user's machine" not in prompt
+        # Default capability copy: assistant only controls its own computer.
+        assert "I cannot control the user's computer — only my own" in prompt
+
+    def test_linked_desktop_enables_direct_control_block(self):
+        prompt = _build(has_linked_user_desktop=True)
+        assert "Seeing and controlling the user's machine" in prompt
+        # Screen share remains the first-priority option.
+        assert "Active screen share / webcam first" in prompt
+        assert "linked to me" in prompt
+        # Capability bullet reflects the linked machine.
+        assert "my boss's own machine, which they've linked to me" in prompt
+
+    def test_screen_share_still_offered_with_linked_desktop(self):
+        """Linking a desktop must not remove the screen-share-first guidance."""
+        prompt = _build(has_linked_user_desktop=True)
+        assert "Want to share your screen?" in prompt
+        # Proactive meeting/screen-share offers are untouched.
+        assert "Proactive meeting offers" in prompt
+
+    def test_control_enabled_without_link_offers_setup(self):
+        prompt = _build(user_desktop_control=True, has_linked_user_desktop=False)
+        assert "Seeing and controlling the user's machine" in prompt
+        assert "has not linked a desktop to me yet" in prompt
+
+    def test_faq_reflects_linked_desktop(self):
+        prompt = _build(has_linked_user_desktop=True)
+        assert "you've linked a desktop to me" in prompt
+
+
+# ---------------------------------------------------------------------------
 # Tests – proactive meeting offers
 # ---------------------------------------------------------------------------
 

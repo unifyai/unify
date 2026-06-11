@@ -274,6 +274,10 @@ def build_brain_spec(
         assistant_has_slack=bool(cm.assistant_slack_bot_user_id),
         assistant_has_teams=bool(cm.assistant_has_teams),
         user_desktop_control=SETTINGS.conversation.USER_DESKTOP_CONTROL_ENABLED,
+        has_linked_user_desktop=SESSION_DETAILS.assistant.user_desktop_for(
+            SESSION_DETAILS.user.id,
+        )
+        is not None,
         runtime_setup_note=runtime_setup_note,
         team_summaries=getattr(cm, "team_summaries", []),
         is_coordinator=SESSION_DETAILS.is_coordinator,
