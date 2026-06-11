@@ -6,7 +6,7 @@
 # The runtime service keeps Orchestra, unity.gateway, and one Coordinator CM
 # alive for scheduled tasks and outbound comms primitives. Self-host enables
 # this automatically on setup and stack up. The interactive stack (unity stack
-# up/down) starts Console, Pub/Sub, and unity-deploy ingress without replacing
+# up/down) starts Console, Pub/Sub, and unity.gateway without replacing
 # the service-managed gateway or CM.
 #
 # Usage:
@@ -29,7 +29,6 @@ SELF_HOST_ENV_SCRIPT="$UNITY_REPO_PATH/scripts/self_host_env.sh"
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$UNITY_REPO_PATH/.." && pwd -P)}"
 CONSOLE_REPO_PATH="${CONSOLE_REPO_PATH:-$UNIFY_STACK_ROOT/console}"
 ORCHESTRA_REPO_PATH="${ORCHESTRA_REPO_PATH:-$UNIFY_STACK_ROOT/orchestra}"
-COMMUNICATION_REPO_PATH="${COMMUNICATION_REPO_PATH:-$UNIFY_STACK_ROOT/unity-deploy}"
 
 CONSOLE_LOCAL_SCRIPT="$CONSOLE_REPO_PATH/scripts/local.sh"
 SERVICE_LABEL="${UNITY_SERVICE_LABEL:-ai.unify.unity.runtime}"
@@ -50,7 +49,6 @@ load_self_host_context() {
   export UNITY_REPO_PATH
   export CONSOLE_REPO_PATH
   export ORCHESTRA_REPO_PATH
-  export COMMUNICATION_REPO_PATH
   export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
@@ -109,8 +107,6 @@ service_install_launchd() {
     <string>${CONSOLE_REPO_PATH}</string>
     <key>ORCHESTRA_REPO_PATH</key>
     <string>${ORCHESTRA_REPO_PATH}</string>
-    <key>COMMUNICATION_REPO_PATH</key>
-    <string>${COMMUNICATION_REPO_PATH}</string>
   </dict>
 </dict>
 </plist>
@@ -147,7 +143,6 @@ Environment=UNITY_HOME=${UNITY_HOME:-$HOME/.unity}
 Environment=UNITY_REPO_PATH=${UNITY_REPO_PATH}
 Environment=CONSOLE_REPO_PATH=${CONSOLE_REPO_PATH}
 Environment=ORCHESTRA_REPO_PATH=${ORCHESTRA_REPO_PATH}
-Environment=COMMUNICATION_REPO_PATH=${COMMUNICATION_REPO_PATH}
 
 [Install]
 WantedBy=default.target
