@@ -177,7 +177,6 @@ class CoordinatorScenario:
     masked_components: tuple[str, ...] = ()
     screen_context: str | None = None
     is_coordinator: bool = True
-    coordinator_name: str | None = None
     mode: Mode = Mode.TEXT
     forbidden_tools: frozenset[str] = field(default_factory=frozenset)
     required_tools: frozenset[str] = field(default_factory=frozenset)
@@ -1401,15 +1400,14 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
             ),
         ),
         masked_components=(
-            "Coordinator admin tools are not exposed to this regular assistant.",
+            "Marty admin tools are not exposed to this regular assistant.",
             "No automatic cross-chat relay channel is provided.",
         ),
         is_coordinator=False,
-        coordinator_name="Avery Coordinator",
         rubric=(
-            "The response should explicitly name Avery Coordinator for team-shaping "
+            "The response should explicitly name Marty for team-shaping "
             "work, avoid implying act can bypass Coordinator boundaries, and offer "
-            "a concise handoff summary the user can take to the Coordinator."
+            "a concise handoff summary the user can take to Marty."
         ),
     ),
 )
@@ -1502,17 +1500,10 @@ def _build_brain_spec(scenario: CoordinatorScenario):
     _configure_session(scenario)
     snapshot_state = SimpleNamespace(full_render=_render_state(scenario))
     cm = _fake_conversation_manager(scenario)
-    with (
-        patch(
-            "unity.coordinator_manager.coordinator_manager."
-            "CoordinatorManager.get_org_members",
-            return_value=list(_AUTHORIZED_HUMANS),
-        ),
-        patch(
-            "unity.coordinator_manager.coordinator_manager."
-            "CoordinatorManager.get_coordinator_name",
-            return_value=scenario.coordinator_name,
-        ),
+    with patch(
+        "unity.coordinator_manager.coordinator_manager."
+        "CoordinatorManager.get_org_members",
+        return_value=list(_AUTHORIZED_HUMANS),
     ):
         return build_brain_spec(cm, snapshot_state=snapshot_state)
 

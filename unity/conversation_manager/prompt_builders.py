@@ -17,6 +17,8 @@ from ..common.prompt_helpers import now, PromptParts
 # Internal helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+COORDINATOR_NAME = "Marty"
+
 # Shared guardrails for any text that becomes live speech (fast brain turns or
 # slow-brain ``guide_voice_agent`` verbatim ``message`` when SPEAK).
 _SPOKEN_OUTPUT_FOR_LIVE_TTS = """**Spoken output — write for the ear, not the page.**
@@ -86,6 +88,18 @@ def _build_boss_details_block(
     return "\n".join(lines)
 
 
+def _user_display_name(first_name: str, surname: str) -> str:
+    name = " ".join(part.strip() for part in (first_name, surname) if part.strip())
+    return name or "the user"
+
+
+def _build_marty_identity_block(*, first_name: str, surname: str) -> str:
+    user_name = _user_display_name(first_name, surname)
+    return f"""Marty identity
+--------------
+{COORDINATOR_NAME} is {user_name}'s personal, private assistant. {COORDINATOR_NAME} has privileged access to {user_name}'s own personal workspace and may have access to {user_name}'s inbox, calendar, files, folders, and organization workspace resources when {user_name} has granted approval. {COORDINATOR_NAME} can invite team members, create teams, and hire assistants. {COORDINATOR_NAME} works directly with {user_name}; he does not communicate with other people."""
+
+
 def _build_authorized_humans_block(
     *,
     contact_id: int,
@@ -151,22 +165,20 @@ The following people are members of this organization. I work with all of them a
 Admins can authorize org-membership and shared-workspace lifecycle changes. Members can request these changes, but execution requires admin authorization."""
 
 
-def _build_coordinator_deferral_block(
+def _build_marty_deferral_block(
     *,
-    coordinator_name: str | None,
+    first_name: str,
+    surname: str,
     is_org_workspace: bool,
 ) -> str:
-    """Build the block that names the user's Coordinator alongside the assistant.
+    """Build the block that names Marty alongside the assistant.
 
-    The Coordinator is a unified stand-in: it can take any request the user
+    Marty is a unified stand-in: he can take any request the user
     would normally bring to me, AND it owns the org-admin / setup surfaces
     that I do not. This block helps me route shaping-the-team work to it
     when that is the natural fit, without pretending I cannot help with the
     everyday request myself.
     """
-    if coordinator_name is None:
-        return ""
-
     coordinator_surface = [
         "- inviting, removing, or changing roles for colleagues",
         "- creating or removing teams and managing who belongs to them",
@@ -177,14 +189,12 @@ def _build_coordinator_deferral_block(
             "- organization-wide configuration (members, billing handoffs, spending limits)",
         )
     coordinator_surface_block = "\n".join(coordinator_surface)
-    return f"""Coordinator
------------
-The user also has a Coordinator named {coordinator_name}. {coordinator_name} is a unified stand-in: any request the user could bring to me they could also bring to {coordinator_name}, AND {coordinator_name} owns the setup and admin surfaces I don't.
+    return f"""{_build_marty_identity_block(first_name=first_name, surname=surname)}
 
-{coordinator_name} is the natural place for:
+{COORDINATOR_NAME} is the natural place for:
 {coordinator_surface_block}
 
-When the user's request fits that list, I propose handing it to {coordinator_name} explicitly — naming them and offering a concise hand-off summary — rather than fumbling at the boundary myself. For day-to-day work the user brings to me, I handle it directly; I do not redirect them to {coordinator_name} unnecessarily."""
+When the user's request fits that list, I propose handing it to {COORDINATOR_NAME} explicitly — naming him and offering a concise hand-off summary — rather than fumbling at the boundary myself. For day-to-day work the user brings to me, I handle it directly; I do not redirect them to {COORDINATOR_NAME} unnecessarily."""
 
 
 def _build_voice_output_block(*, is_internal_call: bool = False) -> str:
@@ -337,11 +347,11 @@ def _build_slack_guidelines(assistant_has_slack: bool) -> str:
 
 
 def _build_coordinator_guidelines(is_coordinator: bool) -> str:
-    """Extra guidance for the org's coordinator assistant."""
+    """Extra guidance for Marty in org routing fallback cases."""
     if not is_coordinator:
         return ""
     return (
-        "- **Coordinator role:** I am the org's coordinator. When a Slack "
+        f"- **{COORDINATOR_NAME} role:** I am {COORDINATOR_NAME}, the org user's personal assistant. When a Slack "
         "message is routed to me as a fallback (no token matched, or the "
         "token was ambiguous), the inbound message will include a "
         "`[Routing: …]` annotation explaining why. In that case:\n"
@@ -353,7 +363,7 @@ def _build_coordinator_guidelines(is_coordinator: bool) -> str:
         "  - If the boss is asking general/admin questions about the org, "
         "answer them directly.\n"
         "  - Never claim to be a different assistant — I am the "
-        "coordinator stepping in."
+        f"{COORDINATOR_NAME} session stepping in."
     )
 
 
@@ -495,11 +505,11 @@ def _build_comms_tool_listing(
 
 
 def _build_coordinator_admin_tool_listing(*, is_org_workspace: bool) -> str:
-    """Build the Coordinator admin tools block for the output format section."""
+    """Build Marty's admin tools block for the output format section."""
     lines = [
-        "- `act` is the execution path for privileged Coordinator lifecycle operations.",
+        f"- `act` is the execution path for privileged {COORDINATOR_NAME} lifecycle operations.",
         "- Inside `act`, use `primitives.coordinator.*` for assistant/team/membership reads and mutations.",
-        "- Before running coordinator mutations inside `act`, gather identifiers and confirmation details in chat unless the request is already explicit and unambiguous.",
+        f"- Before running {COORDINATOR_NAME} mutations inside `act`, gather identifiers and confirmation details in chat unless the request is already explicit and unambiguous.",
         "- Prefer one `act` request that executes the full confirmed setup step over fragmented no-op turns.",
     ]
     if is_org_workspace:
@@ -508,15 +518,15 @@ def _build_coordinator_admin_tool_listing(*, is_org_workspace: bool) -> str:
         )
     else:
         lines.append(
-            "- Organization membership actions are unavailable in personal Coordinator sessions. If the user asks for org actions, direct them to switch to that organization's Coordinator.",
+            f"- Organization membership actions are unavailable in personal {COORDINATOR_NAME} sessions. If the user asks for org actions, direct them to switch to that organization's {COORDINATOR_NAME}.",
         )
     return "\n".join(lines)
 
 
 def _build_coordinator_act_query_guidance_block() -> str:
-    """Build Coordinator-specific guidance for composing ``act`` queries."""
-    return """Coordinator act query guidance
--------------------------------
+    """Build Marty-specific guidance for composing ``act`` queries."""
+    return f"""{COORDINATOR_NAME} act query guidance
+-----------------------
 When composing ``act`` queries for colleague lifecycle, workspace setup, or
 delegated follow-up work:
 
@@ -545,10 +555,10 @@ delegated follow-up work:
 
 
 def _build_coordinator_knowledge_tool_listing() -> str:
-    """Build the Coordinator's supporting knowledge/action tools block."""
+    """Build Marty's supporting knowledge/action tools block."""
     return "\n".join(
         [
-            "- `act`: Use for discovery, execution, and validation across domains. Coordinator lifecycle operations are executed through `act` using `primitives.coordinator.*`.",
+            f"- `act`: Use for discovery, execution, and validation across domains. {COORDINATOR_NAME} lifecycle operations are executed through `act` using `primitives.coordinator.*`.",
             "- `ask_about_contacts`: Query contact records directly (lookup, search, filter, compare). Faster than `act` for purely contact-related questions.",
             "- `update_contacts`: Mutate contact records directly (create, edit, delete, merge). Faster than `act` for purely contact-related changes.",
             "- `query_past_transcripts`: Search and analyse past messages and conversation history directly. Faster than `act` for purely transcript-related questions.",
@@ -558,12 +568,12 @@ def _build_coordinator_knowledge_tool_listing() -> str:
 
 
 def _build_coordinator_onboarding_narration_block() -> str:
-    """Reactive-narration guidance for the Coordinator onboarding flow.
+    """Reactive-narration guidance for Marty's onboarding flow.
 
     Orchestra publishes a ``coordinator_onboarding_event`` system event
     every time a real onboarding milestone lands (workspace OAuth,
     integration connect, task create, action start, specialist hire)
-    *while the Coordinator is still in onboarding mode*. The
+    *while Marty is still in onboarding mode*. The
     notifications bar surfaces each event tagged with subtype + a
     short human summary; this block tells the brain how to react.
 
@@ -573,8 +583,8 @@ def _build_coordinator_onboarding_narration_block() -> str:
     """
     return "\n".join(
         [
-            "Coordinator onboarding narration",
-            "--------------------------------",
+            f"{COORDINATOR_NAME} onboarding narration",
+            "--------------------------",
             "While the user is onboarding you, you receive a "
             "`[CoordinatorOnboarding]` notification whenever an "
             "onboarding milestone really lands. Treat each notification "
@@ -584,14 +594,14 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  - `workspace_connected`: workspace OAuth (Google / Microsoft) just succeeded.",
             "  - `integration_connected`: a new integration secret was saved.",
             "  - `onboarding_session_started`: the user just resolved the onboarding "
-            "picker — they're sitting in front of the Coordinator and you owe them the "
+            f"picker — they're sitting in front of {COORDINATOR_NAME} and you owe them the "
             "first turn.",
             "Rules for action subtypes (`workspace_connected`, `integration_connected`):",
             "  1. Acknowledge in one short sentence — name the thing that just happened, "
             "stay warm, do not re-list every onboarding step.",
             "  2. Preview the *single* next pending onboarding step so the user has a "
             "clear handoff. The next step ALWAYS comes from the onboarding "
-            "steps documented in the Coordinator onboarding flow (UI "
+            f"steps documented in the {COORDINATOR_NAME} onboarding flow (UI "
             "reference) section below — not from generic assistant-setup "
             "priors. Concretely: ",
             '       - After `workspace_connected`: point them at "Connect '
@@ -723,13 +733,10 @@ A: Yes — you've linked a desktop to me, so I can work directly on it. (When th
 A: Not directly — but you can view and control *my* computer through the Meet window ("Show assistant screen" → "Enable mouse and keyboard control"). If you need me to do something on my machine, just ask and I'll do it. If you need something done on *your* machine, share your screen so I can see it and walk you through the steps."""
 
 
-def _build_base_app_management_faq(coordinator_name: str | None) -> str:
+def _build_base_app_management_faq() -> str:
     """Build app-management FAQ text for non-coordinator onboarding."""
-    if coordinator_name:
-        return f"""**Q: Can you help me manage my apps and online services?**
-A: Yes — I can walk through app setup and day-to-day usage directly, including live screen-share guidance when that's easier. If a credential needs to be shared across the team or org (rather than scoped to just me), {coordinator_name} is the right person to place it, and I'll happily hand that part off."""
-    return """**Q: Can you help me manage my apps and online services?**
-A: Yes. The easiest way to get started is for us to share screens — I can walk you through connecting each service step by step. Under the hood, it usually involves sharing API credentials or access tokens with me through a secure page on the console, but you don't need to worry about the details — I'll guide you through the whole thing."""
+    return f"""**Q: Can you help me manage my apps and online services?**
+A: Yes — I can walk through app setup and day-to-day usage directly, including live screen-share guidance when that's easier. Under the hood, app access usually goes through secure Integrations/Secrets pages on the console for API credentials or access tokens, never through chat. If a credential needs to be shared across the team or org (rather than scoped to just me), {COORDINATOR_NAME} is the right person to place it, and I'll happily hand that part off."""
 
 
 def _build_base_onboarding_reference(
@@ -835,7 +842,7 @@ def _build_base_output_format(
     coordinator_admin_section = ""
     if coordinator_admin_tool_listing:
         coordinator_admin_section = f"""
-**Coordinator admin tools:**
+**{COORDINATOR_NAME} admin tools:**
 {coordinator_admin_tool_listing}
 """
 
@@ -1067,7 +1074,6 @@ Examples of requests that should use the direct tools:
 
 def _build_act_capabilities_block(
     *,
-    coordinator_name: str | None,
     has_linked_user_desktop: bool = False,
 ) -> str:
     """Build act-capabilities guidance for non-demo mode."""
@@ -1075,10 +1081,7 @@ def _build_act_capabilities_block(
         software_desktop_capability = "- **Software & desktop**: Any application, browser, or tool on my computer — and my boss's own machine, which they've linked to me (I drive it through `act` when no screen share is active)"
     else:
         software_desktop_capability = "- **Software & desktop**: Any application, browser, or tool on my computer (I cannot control the user's computer — only my own)"
-    if coordinator_name:
-        external_apps_capability = f"- **External apps & services**: I can guide setup and day-to-day usage directly, including live screen-share walkthroughs when helpful. If a credential must be shared across the team or organization, route that placement to {coordinator_name}."
-    else:
-        external_apps_capability = "- **External apps & services**: Integration with any service that offers an API (cloud storage, communication platforms, project management tools, CRMs, etc.) — by connecting through stored credentials and the service's Python SDK, with no manual setup needed on the user's end"
+    external_apps_capability = f"- **External apps & services**: I can guide setup and day-to-day usage directly, including live screen-share walkthroughs when helpful. Personal integrations use stored credentials and the service's Python SDK. If a credential must be shared across the team or organization, route that placement to {COORDINATOR_NAME}."
     act_intro = "The `act` tool CREATES NEW WORK. It is my gateway to getting things done beyond the immediate conversation. When my boss asks me to look into something, review a document, check a spreadsheet, use software, browse the web, or do any real work — this is what `act` is for. From my boss's perspective, I'm going away to do the work. From my perspective, I'm delegating to `act`. My boss does not need to know about `act` — they just need to see results."
     return f"""Act capabilities
 ----------------
@@ -1393,7 +1396,6 @@ def build_system_prompt(
     runtime_setup_note: str | None = None,
     team_summaries: list[TeamSummary] | None = None,
     authorized_humans: list[dict[str, Any]] | None = None,
-    coordinator_name: str | None = None,
     is_org_workspace: bool = True,
 ) -> PromptParts:
     """Build the system prompt for the ConversationManager LLM.
@@ -1449,8 +1451,6 @@ def build_system_prompt(
         Whether the current assistant is a Coordinator session.
     authorized_humans : list[dict[str, Any]] | None
         Organization roster context for org-scoped Coordinator sessions.
-    coordinator_name : str | None
-        Name of the user's Coordinator for regular-assistant setup deferral.
     is_org_workspace : bool
         Whether the active workspace is organization-scoped (vs personal).
 
@@ -1593,6 +1593,13 @@ def build_system_prompt(
 ---
 {bio}""",
     )
+    if is_coordinator:
+        parts.add(
+            _build_marty_identity_block(
+                first_name=first_name,
+                surname=surname,
+            ),
+        )
 
     # 3. Accessible shared teams.
     parts.add(build_accessible_teams_block(team_summaries or []))
@@ -1681,7 +1688,6 @@ Messages from the current turn have **NEW** tag prepended:
         parts.add(_build_direct_specialist_tools_block())
         parts.add(
             _build_act_capabilities_block(
-                coordinator_name=coordinator_name,
                 has_linked_user_desktop=has_linked_user_desktop,
             ),
         )
@@ -1890,19 +1896,19 @@ When contacts communicate in a non-English language, I match their language in m
         desktop_access_faq = _build_desktop_access_faq(
             has_linked_user_desktop,
         )
-        app_management_faq = _build_base_app_management_faq(coordinator_name)
+        app_management_faq = _build_base_app_management_faq()
         parts.add(
             _build_base_onboarding_reference(
                 desktop_access_faq=desktop_access_faq,
                 app_management_faq=app_management_faq,
             ),
         )
-        coordinator_reference = _build_coordinator_deferral_block(
-            coordinator_name=coordinator_name,
+        coordinator_reference = _build_marty_deferral_block(
+            first_name=first_name,
+            surname=surname,
             is_org_workspace=is_org_workspace,
         )
-        if coordinator_reference:
-            parts.add(coordinator_reference)
+        parts.add(coordinator_reference)
 
     # 15. Voice calls guide (when on a voice call).
     if is_voice_call:
@@ -1981,7 +1987,7 @@ def build_ask_handle_prompt(
 
 
 def _build_coordinator_console_literacy_block() -> str:
-    """Console product literacy for the org Coordinator assistant.
+    """Console product literacy for Marty.
 
     Teaches layout, per-surface semantics, left-sidebar selection scope,
     shared workspaces (Teams), account and org administration navigation,
@@ -1990,8 +1996,8 @@ def _build_coordinator_console_literacy_block() -> str:
     """
     return "\n".join(
         [
-            "Coordinator Console literacy",
-            "-----------------------------",
+            f"{COORDINATOR_NAME} Console literacy",
+            "----------------------",
             "The Console (unify.ai → Assistants) is how my boss watches assistants "
             "work, connects systems, and inspects stored context. I explain what "
             "each surface means and how to open it — especially on voice calls "
@@ -2008,9 +2014,9 @@ def _build_coordinator_console_literacy_block() -> str:
             "short paths using tab names below. I guide verbally only — I cannot "
             "click their screen. I never ask them to read secrets or tokens aloud.",
             "",
-            "Layout (Coordinator selected in the left sidebar)",
-            "------------------------------------------------",
-            "  - Left sidebar: **Coordinator** pinned at the top (green **Unify "
+            f"Layout ({COORDINATOR_NAME} selected in the left sidebar)",
+            "------------------------------------------",
+            f"  - Left sidebar: **{COORDINATOR_NAME}** pinned at the top (green **Unify "
             "swirl** logo). Other assistants appear under **Teams** (grouped by "
             "shared workspace) or **Independent colleagues**. Search and **+ New** "
             "hire more assistants. The highlighted row or green ring on the "
@@ -2018,7 +2024,7 @@ def _build_coordinator_console_literacy_block() -> str:
             "  - Center: **Chat** (or docked **call** UI during onboarding call path).",
             "  - Top tab strip (left → right): **Chat** · **Actions** · "
             "**Dashboards** · **Integrations** · **Tasks** · **Memory**.",
-            "  - Right: Onboarding tab during Coordinator onboarding; otherwise "
+            f"  - Right: Onboarding tab during {COORDINATOR_NAME} onboarding; otherwise "
             "assistant info or docked **Integrations** / **Tasks** / **Actions** "
             "panes as steps engage.",
             "",
@@ -2027,7 +2033,7 @@ def _build_coordinator_console_literacy_block() -> str:
             "Clicking an assistant in the left sidebar switches the **whole** Console "
             "to that assistant's context. Chat, Actions, Tasks, Integrations, and "
             "every **Memory** sub-tab reflect **only** the selected assistant.",
-            "  - **Coordinator** (swirl selected) → my chat, my Actions, my Memory, etc.",
+            f"  - **{COORDINATOR_NAME}** (swirl selected) → my chat, my Actions, my Memory, etc.",
             "  - A **colleague** selected → that colleague's tabs and Memory views.",
             "There is no org-wide Memory or Guidance view. If I point my boss at "
             "Guidance for a specific assistant, I name them first when it is not "
@@ -2102,22 +2108,22 @@ def _build_coordinator_console_literacy_block() -> str:
             "credentials, or SOPs that should not be visible to teammates.",
             "  - **Shared workspace** (`team:<id>`): durable team context — shared "
             "Guidance, Knowledge, scheduled tasks, and **credentials** that every "
-            "**current member** may use at runtime (Coordinators and specialist "
+            f"**current member** may use at runtime ({COORDINATOR_NAME} assistants and specialist "
             "colleagues in that workspace).",
-            "Sharing across teammates (including another member's Coordinator):",
+            f"Sharing across teammates (including another member's {COORDINATOR_NAME}):",
             "  - There is no org-wide Integrations or Memory view. To share a token, "
-            "SOP, or playbook with a teammate's Coordinator or specialists on the "
+            f"SOP, or playbook with a teammate's {COORDINATOR_NAME} or specialists on the "
             "same team, I use a **shared workspace**: add the right **members** "
             "first, then store the item in that workspace — never in chat and not "
             "only on my personal vault if the intent is team-wide.",
-            "  - Adding an **org member** grants **their personal Coordinator** "
+            f"  - Adding an **org member** grants **their personal {COORDINATOR_NAME}** "
             "access to the workspace (they must already be in the org). Adding a "
             "**specialist colleague** grants that assistant access.",
             "Before I place credentials or team SOPs in a shared workspace, I "
             "surface consequences in plain language:",
             "  - **Who can use it:** every **current member** of that workspace — "
             "not only the person who asked. Specialists in the team share the "
-            "same credentials and Guidance as Coordinators in that team.",
+            f"same credentials and Guidance as {COORDINATOR_NAME} assistants in that team.",
             "  - **Revocation:** removing a member ends their access; the shared "
             "content stays for remaining members.",
             "  - **Not cross-org:** workspaces and membership are limited to this "
@@ -2127,9 +2133,9 @@ def _build_coordinator_console_literacy_block() -> str:
             "scope** assistants in the workspace can draw on — I describe outcomes, "
             "not a fictional global team tab.",
             "Org-shaped setup (create workspace, add members, team credentials) "
-            "belongs in the **organization** Coordinator session. If the user asks "
-            "for org-wide sharing while only a personal Coordinator session is "
-            "active, I tell them to open that organization's Coordinator first.",
+            f"belongs in the **organization** {COORDINATOR_NAME} session. If the user asks "
+            f"for org-wide sharing while only a personal {COORDINATOR_NAME} session is "
+            f"active, I tell them to open that organization's {COORDINATOR_NAME} first.",
             "",
             "Console account & org administration",
             "------------------------------------",
@@ -2144,7 +2150,7 @@ def _build_coordinator_console_literacy_block() -> str:
             "  1. **Console (self-serve UI):** my boss clicks profile menu → "
             "Organizations (or Usage/Billing). I can **screen-share walk** them "
             "there step by step.",
-            "  2. **Coordinator (org workspace session):** I run the same outcome "
+            f"  2. **{COORDINATOR_NAME} (org workspace session):** I run the same outcome "
             "via `act` and `primitives.coordinator.*` when I am authorized "
             "(e.g. `invite_org_member`, `list_org_members`, shared-workspace "
             "membership primitives).",
@@ -2155,15 +2161,15 @@ def _build_coordinator_console_literacy_block() -> str:
             "I do not present Console as the only path when I can execute it myself.",
             "  - **Console-only** (no coordinator primitive): create organization, "
             "view Usage charts, manage Billing payment method — I guide + screen share.",
-            "  - **Coordinator-only until they switch workspace:** org membership "
-            "and org-scoped mutations require the **organization** Coordinator "
-            "session (not the personal Coordinator); then Console **or** `act` apply.",
+            f"  - **{COORDINATOR_NAME}-only until they switch workspace:** org membership "
+            f"and org-scoped mutations require the **organization** {COORDINATOR_NAME} "
+            f"session (not the personal {COORDINATOR_NAME}); then Console **or** `act` apply.",
             "  - **Admin authorization:** membership and workspace lifecycle changes "
             "need Owner/Admin approval per org rules; Members may request — I surface "
             "consequences, then execute via `act` or guide Console once confirmed.",
             "  - **Workspace switcher:** **Personal** vs each **Organization** "
             "the user belongs to. The active workspace scopes assistants, "
-            "which Coordinator is live, and whether billing/usage are personal "
+            f"which {COORDINATOR_NAME} session is live, and whether billing/usage are personal "
             "or org-wide.",
             "  - **Profile menu** (typical entries):",
             "    · **Account** → `/account` — personal profile and preferences.",
@@ -2183,10 +2189,10 @@ def _build_coordinator_console_literacy_block() -> str:
             "",
             "Personal workspace vs organization",
             "-----------------------------------",
-            "  - **Personal workspace:** solo context — personal Coordinator, "
+            f"  - **Personal workspace:** solo context — personal {COORDINATOR_NAME}, "
             "personal assistants, personal usage/billing scope.",
             "  - **Organization workspace:** select the org in the workspace "
-            "switcher — org Coordinator, org members, org-scoped assistants.",
+            f"switcher — org {COORDINATOR_NAME}, org members, org-scoped assistants.",
             "  - **Create organization:** profile → **Organizations**, or on "
             "the personal empty state **+ Create organization** (name dialog). "
             "I **guide** this in Console; I **cannot** create an org inside "
@@ -2214,7 +2220,7 @@ def _build_coordinator_console_literacy_block() -> str:
             "  - **Path A — Console:** profile → **Organizations** → **Members** "
             "→ **Invite** (email + role Admin / Member / Viewer — not Owner). "
             "Offer screen share to walk them there.",
-            "  - **Path B — Coordinator:** in the **org workspace** session I use "
+            f"  - **Path B — {COORDINATOR_NAME}:** in the **org workspace** session I use "
             "`invite_org_member` (and `list_org_members` to check roster). Same "
             "outcome as the UI invite email; I gather email + role, confirm "
             "consequences, then run `act` when authorized.",
@@ -2222,11 +2228,11 @@ def _build_coordinator_console_literacy_block() -> str:
             "I name **both** paths unless one is unavailable. If they prefer "
             "hands-on UI, screen share Path A; if they prefer I handle it, Path B "
             "after explicit email/role (and admin authorization if needed).",
-            "  - **Personal Coordinator session:** neither path runs org "
+            f"  - **Personal {COORDINATOR_NAME} session:** neither path runs org "
             "primitives — I tell them to switch to that org in the workspace "
             "switcher first; then both paths apply again.",
             "  - **Consequences (either path):** org **membership** — their "
-            "personal Coordinator in that org, access per role, billing visibility "
+            f"personal {COORDINATOR_NAME} in that org, access per role, billing visibility "
             "rules. **Not** hiring a specialist, **not** `add_team_member` alone "
             "(team-only), **not** a Memory → Contacts record.",
             "",
@@ -2296,7 +2302,7 @@ def _build_coordinator_console_literacy_block() -> str:
 
 
 def _build_coordinator_onboarding_flow_reference_block() -> str:
-    """Reference for the Coordinator-led gradual-onboarding UI.
+    """Reference for the Marty-led gradual-onboarding UI.
 
     The onboarding screen is a Console view that takes over the
     Assistants page while ``Coordinator/State.mode == 'onboarding'``
@@ -2311,7 +2317,7 @@ def _build_coordinator_onboarding_flow_reference_block() -> str:
     from the user's perspective ("you click", "you'll see") because
     that is how it will be quoted back in replies.
 
-    Built unconditionally for the Coordinator. When the user is
+    Built unconditionally for Marty. When the user is
     past onboarding (working mode) the surface still exists behind
     "Skip onboarding" → "Resume onboarding", so the reference
     remains accurate; the flow-mode-aware narration block above is
@@ -2319,8 +2325,8 @@ def _build_coordinator_onboarding_flow_reference_block() -> str:
     """
     return "\n".join(
         [
-            "Coordinator onboarding flow (UI reference)",
-            "------------------------------------------",
+            f"{COORDINATOR_NAME} onboarding flow (UI reference)",
+            "-----------------------------------",
             "The user reaches me through a dedicated onboarding view on the "
             "Assistants page in Console. Layout I should picture when "
             'answering questions about "where do I click":',
@@ -2341,26 +2347,26 @@ def _build_coordinator_onboarding_flow_reference_block() -> str:
             '"Resume onboarding".',
             "The onboarding steps in order — title, what it does, and how "
             "the user advances it:",
-            "  1. **Meet your coordinator** (`meet`). Auto-completes once "
+            f"  1. **Meet {COORDINATOR_NAME}** (`meet`). Auto-completes once "
             "they exchange the opening turn with me. Nothing to click — "
             "saying anything in the chat (or starting the call) clears "
             "this step.",
-            "  2. **Connect your coordinator** (`connect`, grouping row). "
+            f"  2. **Connect {COORDINATOR_NAME}** (`connect`, grouping row). "
             "Itself has no button; it ticks when both children are done. "
             "Children:",
-            "     - **Give your coordinator access to your workspace** "
+            f"     - **Give {COORDINATOR_NAME} access to your workspace** "
             '(`workspace`). Primary button "Connect workspace" opens '
             "the workspace OAuth dialog (Google Workspace or Microsoft "
             "365). Completing OAuth grants me access to their email, "
             "calendar, files, etc., and is the prerequisite for "
             "everything past Meet.",
-            "     - **Connect your coordinator with your apps** (`apps`). "
+            f"     - **Connect {COORDINATOR_NAME} with your apps** (`apps`). "
             'Primary button "Open integrations" splits the right pane '
             "open to the Integrations side panel. They install at least "
             "one app (Slack, Gmail, Notion, etc.) by clicking its tile "
             "and walking through that app's OAuth flow.",
             "  3. **Get work done** (`work`, grouping row). Children, in " "order:",
-            "     - **Ask your coordinator to do something now** (`act`). "
+            f"     - **Ask {COORDINATOR_NAME} to do something now** (`act`). "
             "This is point-in-time work: the user hands me a one-off job "
             "that runs immediately, and watches it execute live in the "
             'Actions panel (which opens automatically). Three static "try '
@@ -2415,7 +2421,7 @@ def _build_coordinator_onboarding_flow_reference_block() -> str:
 
 
 def _build_coordinator_voice_opening_block() -> str:
-    """Voice-only session-opening guidance for the Coordinator.
+    """Voice-only session-opening guidance for Marty.
 
     The slow-brain ``coordinator_onboarding_event`` reactive block
     cannot help during a voice call's *opening* turn: the call agent
@@ -2425,7 +2431,7 @@ def _build_coordinator_voice_opening_block() -> str:
     line is shaped correctly.
 
     Gated only on ``is_coordinator`` — the rule is benign for both
-    onboarding and working-mode Coordinator calls (fresh history ⇒
+    onboarding and working-mode Marty calls (fresh history ⇒
     intro is appropriate either way; resumed history ⇒ skipping the
     intro is appropriate either way). The "onboarding recap" framing
     on the chat side is replaced here by the more general
@@ -2436,12 +2442,12 @@ def _build_coordinator_voice_opening_block() -> str:
     """
     return "\n".join(
         [
-            "Coordinator opening turn",
-            "------------------------",
+            f"{COORDINATOR_NAME} opening turn",
+            "------------------",
             "Before I open this call I look at the conversation history.",
             "  - If there are no prior assistant turns, I introduce myself "
             "briefly — address the caller by their first name (from Boss "
-            "details), name my role as their coordinator assistant, "
+            f"details), name myself as {COORDINATOR_NAME}, "
             "also frame myself as their virtual double who can take actions "
             "on their behalf to help them get things done, say I'll help "
             "them get set up, and suggest connecting their workspace as "
@@ -2636,8 +2642,15 @@ I let the results speak for themselves rather than narrating steps or repeating 
 ---
 {bio}""",
     )
+    if is_coordinator:
+        parts.add(
+            _build_marty_identity_block(
+                first_name=boss_first_name,
+                surname=boss_surname,
+            ),
+        )
 
-    # Coordinator opening turn — shapes the very first spoken line
+    # Marty opening turn — shapes the very first spoken line
     # so a fresh call gets a proper introduction and a resumed call
     # skips the intro. Gated on ``is_coordinator`` only: the rule is
     # neutral across onboarding vs working mode (history empty →
