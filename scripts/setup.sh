@@ -4,8 +4,8 @@
 # ============================================================================
 # Spins up a local orchestra instance (Postgres+pgvector in Docker +
 # FastAPI server) and wires Unity's .env to use it. Idempotent: safe to
-# re-run. The unified orchestra repo provides the local backend used by
-# open-source installs.
+# re-run. Sibling repos (including orchestra) are cloned by install.sh;
+# setup syncs orchestra and installs runtime dependencies.
 #
 # Usually called automatically by scripts/install.sh; re-run directly via
 # `unity setup` if you need to re-bootstrap (e.g., Docker wasn't running the
@@ -31,6 +31,7 @@ CONSOLE_REPO="${CONSOLE_REPO:-${UNITY_HOME}/console}"
 ORCHESTRA_PORT="${ORCHESTRA_PORT:-8000}"
 ORCHESTRA_DB_PORT="${ORCHESTRA_DB_PORT:-55432}"
 CONSOLE_PORT="${CONSOLE_PORT:-3000}"
+UNITY_BRANCH="${UNITY_BRANCH:-main}"
 
 # Ensure user-local tool dirs are on PATH. `uv` and tools `uv` installs
 # (e.g. poetry) land here, and in a fresh shell they may not be picked up.
@@ -43,6 +44,52 @@ log_info()    { echo -e "${CYAN}→${NC} $1"; }
 log_success() { echo -e "${GREEN}✓${NC} $1"; }
 log_warn()    { echo -e "${YELLOW}⚠${NC} $1"; }
 log_error()   { echo -e "${RED}✗${NC} $1"; }
+
+has_env_value() {
+    local key="$1"
+    [[ -f "$UNITY_REPO/.env" ]] && grep -qE "^${key}=.+$" "$UNITY_REPO/.env"
+}
+
+log_stage() {
+    echo ""
+    echo -e "${BOLD}$1${NC}"
+}
+
+_load_install_progress() {
+    if [[ -f "$UNITY_REPO/scripts/install_progress.sh" ]]; then
+        # shellcheck disable=SC1091
+        source "$UNITY_REPO/scripts/install_progress.sh"
+        return 0
+    fi
+    progress_step_begin() { log_info "$2"; }
+    progress_step_update() { :; }
+    progress_step_end_success() { log_success "Done: $2"; }
+    progress_step_end_fail() { log_error "Failed: $2"; return 1; }
+    progress_step_run() { local _s="$1" _l="$2"; shift 2; log_info "$_l"; "$@"; }
+    progress_repo_line() { log_success "[$1] $2"; }
+    progress_repo_fail() { log_error "[$1] $2"; }
+}
+
+SHALLOW_CLONE_DEPTH="${SHALLOW_CLONE_DEPTH:-1}"
+
+_sync_orchestra_repo() {
+    if git -C "$ORCHESTRA_REPO" rev-parse --is-shallow-repository 2>/dev/null | grep -q true; then
+        git -C "$ORCHESTRA_REPO" fetch --depth "$SHALLOW_CLONE_DEPTH" origin "$UNITY_BRANCH" || return 1
+    else
+        git -C "$ORCHESTRA_REPO" fetch origin "$UNITY_BRANCH" || return 1
+    fi
+    git -C "$ORCHESTRA_REPO" checkout "$UNITY_BRANCH" 2>/dev/null || {
+        log_warn "[orchestra] Couldn't checkout $UNITY_BRANCH (uncommitted changes?). Leaving as-is."
+        return 0
+    }
+    if ! git -C "$ORCHESTRA_REPO" reset --hard "origin/$UNITY_BRANCH" 2>/dev/null; then
+        git -C "$ORCHESTRA_REPO" pull --ff-only origin "$UNITY_BRANCH" 2>/dev/null || {
+            log_warn "[orchestra] Fast-forward pull skipped; leaving as-is."
+            return 0
+        }
+    fi
+    return 0
+}
 
 # --- Docker ---------------------------------------------------------------
 detect_os() {
@@ -137,19 +184,19 @@ ensure_poetry() {
     log_success "poetry installed: $(poetry --version 2>/dev/null)"
 }
 
-# --- orchestra clone + install --------------------------------------------
+# --- orchestra repo (cloned by install.sh; sync here) ----------------------
 ensure_orchestra_repo() {
     if [ -d "$ORCHESTRA_REPO/.git" ]; then
-        log_info "Updating orchestra at $ORCHESTRA_REPO..."
-        git -C "$ORCHESTRA_REPO" fetch --quiet origin main
-        git -C "$ORCHESTRA_REPO" checkout --quiet main 2>/dev/null || log_warn "Couldn't checkout main (uncommitted changes?)"
-        git -C "$ORCHESTRA_REPO" pull --quiet --ff-only origin main 2>/dev/null || log_warn "Non-ff pull skipped in orchestra; leaving as-is."
+        _sync_orchestra_repo || return 1
     else
-        log_info "Cloning unifyai/orchestra into $ORCHESTRA_REPO..."
+        log_warn "[orchestra] Missing at $ORCHESTRA_REPO — install.sh should have cloned it."
         mkdir -p "$UNITY_HOME"
-        git clone --quiet --branch main https://github.com/unifyai/orchestra.git "$ORCHESTRA_REPO"
+        if ! git clone --quiet --depth "$SHALLOW_CLONE_DEPTH" --single-branch \
+            --branch "$UNITY_BRANCH" "https://github.com/unifyai/orchestra.git" "$ORCHESTRA_REPO" 2>/dev/null; then
+            return 1
+        fi
     fi
-    log_success "orchestra: $(git -C "$ORCHESTRA_REPO" rev-parse --short HEAD)"
+    return 0
 }
 
 # --- Python 3.12 selection for poetry --------------------------------------
@@ -183,7 +230,7 @@ find_python312() {
 }
 
 install_orchestra_deps() {
-    log_info "Installing orchestra dependencies via poetry (first-time: a few minutes)..."
+    log_info "Installing orchestra dependencies via poetry (first run may take several minutes)..."
 
     local py312
     py312="$(find_python312)" || {
@@ -239,6 +286,7 @@ start_local_orchestra() {
     export ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS=0
     export ORCHESTRA_PORT
     export ORCHESTRA_DB_PORT
+    export ORCHESTRA_PREFIX="${ORCHESTRA_PREFIX:-orchestra}"
     export ORCHESTRA_REPO_PATH="$ORCHESTRA_REPO"
 
     # Run orchestra's local.sh; tee to terminal AND a log file so we can
@@ -407,6 +455,28 @@ setup_voice_defaults() {
     fi
 }
 
+ensure_console_npm_deps() {
+    if [ ! -d "$CONSOLE_REPO" ]; then
+        return 0
+    fi
+    local prereqs_script="$UNITY_REPO/scripts/ensure_prereqs.sh"
+    if [ -f "$prereqs_script" ]; then
+        # shellcheck disable=SC1090
+        source "$prereqs_script"
+        ensure_node || return 1
+    elif ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+        log_error "Node.js 20+ and npm are required for Console"
+        return 1
+    fi
+    if [ -d "$CONSOLE_REPO/node_modules" ]; then
+        log_success "Console npm dependencies already installed"
+        return 0
+    fi
+    log_info "Installing Console npm dependencies (first run may take a few minutes)..."
+    (cd "$CONSOLE_REPO" && npm install --no-fund --no-audit)
+    log_success "Console npm dependencies installed"
+}
+
 # --- Main -----------------------------------------------------------------
 main() {
     local boot_runtime="false"
@@ -437,6 +507,8 @@ main() {
         exit 1
     fi
 
+    _load_install_progress
+
     if [ "${UNITY_SKIP_ORCHESTRA:-0}" = "1" ]; then
         log_warn "UNITY_SKIP_ORCHESTRA=1 — skipping orchestra spin-up."
         log_info "Set ORCHESTRA_URL + UNIFY_KEY manually in $UNITY_REPO/.env to point at a remote backend."
@@ -445,16 +517,54 @@ main() {
 
     ensure_docker || exit 1
     ensure_poetry || exit 1
-    ensure_orchestra_repo
-    install_orchestra_deps || exit 1
-    start_local_orchestra || exit 1
+    if [[ -f "$UNITY_REPO/scripts/ensure_prereqs.sh" ]]; then
+        # shellcheck disable=SC1090
+        source "$UNITY_REPO/scripts/ensure_prereqs.sh"
+        ensure_self_host_stack_prereqs || exit 1
+    fi
+
+    progress_step_begin 3 "Syncing orchestra repo (branch $UNITY_BRANCH)"
+    progress_step_update 40
+    if ! ensure_orchestra_repo; then
+        progress_step_end_fail
+        exit 1
+    fi
+    progress_step_end_success
+    progress_repo_line "orchestra" "$(git -C "$ORCHESTRA_REPO" rev-parse --short HEAD)"
+
+    if ! progress_step_run 4 "Installing orchestra Python dependencies (poetry)" \
+        install_orchestra_deps; then
+        exit 1
+    fi
+
+    progress_step_begin 5 "Starting local orchestra (Docker + migrations)"
+    if ! start_local_orchestra; then
+        progress_step_end_fail
+        exit 1
+    fi
+    progress_step_end_success
+
     wire_unity_env
     bootstrap_console_env
-    setup_voice_defaults
+
+    if ! progress_step_run 6 "Installing Console npm dependencies" \
+        ensure_console_npm_deps; then
+        exit 1
+    fi
+
+    if ! progress_step_run 7 "Setting up local voice (LiveKit)" \
+        setup_voice_defaults; then
+        exit 1
+    fi
 
     if [[ -x "$UNITY_REPO/scripts/prompt_byok_keys.sh" ]]; then
-        log_info "BYOK wizard (LLM, voice, optional workspace OAuth)..."
-        UNITY_REPO="$UNITY_REPO" bash "$UNITY_REPO/scripts/prompt_byok_keys.sh" || true
+        if has_env_value UNITY_BYOK_CONFIGURED; then
+            log_success "BYOK already configured — skipping wizard"
+        else
+            echo ""
+            log_info "BYOK wizard (LLM, voice, optional workspace OAuth)..."
+            UNITY_REPO="$UNITY_REPO" bash "$UNITY_REPO/scripts/prompt_byok_keys.sh" || true
+        fi
     fi
 
     if [[ -f "$UNITY_REPO/scripts/self_host_env.sh" ]]; then
