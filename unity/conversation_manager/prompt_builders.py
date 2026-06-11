@@ -1125,6 +1125,7 @@ def _build_user_machine_access_block(
     *,
     user_desktop_control: bool,
     has_linked_user_desktop: bool,
+    acting_user_id: str | None = None,
 ) -> str | None:
     """Build the precedence guidance for seeing/controlling the *user's* machine.
 
@@ -1135,7 +1136,24 @@ def _build_user_machine_access_block(
         return None
 
     if has_linked_user_desktop:
-        linked_clause = "**Linked desktop.** My boss has a desktop linked to me. When there is no active screen share, I can see and control it directly: I dispatch `act` with a clear description of what to do on their linked machine (e.g. take a screenshot and describe it, or perform the action they asked for). A linked desktop means full access to their machine, so I act carefully, respect any consent rules, and confirm before anything destructive or irreversible."
+        target_note = (
+            f" The linked machine belongs to the person I'm talking with "
+            f"(user_id `{acting_user_id}`); if several people have linked "
+            f"desktops, I target theirs with "
+            f'`user_desktop.session(user_id="{acting_user_id}")` and use '
+            f"`user_desktop.list_linked()` to confirm."
+            if acting_user_id
+            else ""
+        )
+        linked_clause = (
+            "**Linked desktop.** My boss has a desktop linked to me. When there "
+            "is no active screen share, I can see and control it directly: I "
+            "dispatch `act` with a clear description of what to do on their "
+            "linked machine (e.g. take a screenshot and describe it, or perform "
+            "the action they asked for). A linked desktop means full access to "
+            "their machine, so I act carefully, respect any consent rules, and "
+            "confirm before anything destructive or irreversible." + target_note
+        )
         fallback_clause = "**Neither available.** If there is somehow no active share and the linked desktop cannot be reached, I say so plainly and offer to start a screen share instead."
     else:
         linked_clause = '**Linked desktop.** My boss has not linked a desktop to me yet, so I cannot drive their machine directly. If they want me to work on their computer without sharing each time, they can link it from the console (hover my name → ⋮ → "Connect your desktop").'
@@ -1385,6 +1403,7 @@ def build_system_prompt(
     is_coordinator: bool = False,
     user_desktop_control: bool = False,
     has_linked_user_desktop: bool = False,
+    acting_user_id: str | None = None,
     runtime_setup_note: str | None = None,
     team_summaries: list[TeamSummary] | None = None,
     authorized_humans: list[dict[str, Any]] | None = None,
@@ -1434,6 +1453,10 @@ def build_system_prompt(
         Whether the active user has a desktop linked to this assistant. When True,
         the assistant can drive that machine via ``act`` (when no screen share is
         active); when False the prompt is unchanged from the screen-share default.
+    acting_user_id : str | None
+        The acting user's id for this turn. When more than one desktop is linked,
+        the prompt uses it so the assistant targets the *current speaker's*
+        machine (``user_desktop.session(user_id=...)``).
     runtime_setup_note : str | None
         Optional guidance about background setup/readiness.
     team_summaries : list[TeamSummary] | None
@@ -1682,6 +1705,7 @@ Messages from the current turn have **NEW** tag prepended:
         user_machine_access_block = _build_user_machine_access_block(
             user_desktop_control=user_desktop_control,
             has_linked_user_desktop=has_linked_user_desktop,
+            acting_user_id=acting_user_id,
         )
         if user_machine_access_block:
             parts.add(user_machine_access_block)

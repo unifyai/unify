@@ -1540,6 +1540,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
             else:
                 COST_ATTRIBUTION.set([SESSION_DETAILS.user.id])
 
+        # The acting user for this turn: the inbound message sender when it maps
+        # to a system user (boss or provisioned org member), else the workspace
+        # owner. Drives per-user linked-desktop resolution in the prompt so a
+        # shared assistant reflects the *speaker's* machine, not the owner's.
+        acting_user_id = attributed_user_id or SESSION_DETAILS.user.id
+
         # Re-bind the billing context for THIS turn so credit deductions are
         # attributed to the assistant (and the acting member, in org context).
         # This must run for personal workspaces too: the context set once at
@@ -1552,7 +1558,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             is_voice = self.mode.is_voice
             unillm.set_billing_context(
                 assistant_id=SESSION_DETAILS.assistant.agent_id,
-                user_id=attributed_user_id or SESSION_DETAILS.user.id,
+                user_id=acting_user_id,
                 organization_id=SESSION_DETAILS.org_id,
                 source="call" if is_voice else "chat",
                 label="Voice reply" if is_voice else "Chat reply",
@@ -1677,6 +1683,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             snapshot_state=snapshot_state,
             screenshots=screenshots,
             screenshot_paths=screenshot_paths,
+            acting_user_id=acting_user_id,
         )
         _brain_spec_ms = (_rl_time.perf_counter() - _t0) * 1000
 

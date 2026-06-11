@@ -549,6 +549,56 @@ class TestUserMachineAccess:
         prompt = _build(has_linked_user_desktop=True)
         assert "you've linked a desktop to me" in prompt
 
+    def test_acting_user_id_surfaced_for_targeting(self):
+        """When linked + an acting user id is known, the block tells the model
+        which user_id to target so a shared assistant drives the speaker's
+        machine (not the owner's)."""
+        prompt = _build(has_linked_user_desktop=True, acting_user_id="user-42")
+        assert 'user_desktop.session(user_id="user-42")' in prompt
+        assert "user_desktop.list_linked()" in prompt
+
+    def test_acting_user_id_absent_keeps_block_generic(self):
+        prompt = _build(has_linked_user_desktop=True, acting_user_id=None)
+        assert "Seeing and controlling the user's machine" in prompt
+        assert "user_desktop.session(user_id=" not in prompt
+
+
+class TestPerUserDesktopResolution:
+    """``AssistantDetails.user_desktop_for`` keys linked desktops by the acting
+    user, so N users x M assistants resolves the speaker's own machine."""
+
+    @staticmethod
+    def _assistant_with_links() -> object:
+        from unity.session_details import AssistantDetails, UserDesktopLink
+
+        a = AssistantDetails()
+        a.user_desktops = {
+            "user-A": UserDesktopLink(
+                owner_user_id="user-A",
+                url="http://a",
+                os="macos",
+            ),
+            "user-B": UserDesktopLink(
+                owner_user_id="user-B",
+                url="http://b",
+                os="ubuntu",
+            ),
+        }
+        return a
+
+    def test_resolves_speakers_own_link(self):
+        a = self._assistant_with_links()
+        assert a.user_desktop_for("user-B").url == "http://b"
+        assert a.user_desktop_for("user-A").url == "http://a"
+
+    def test_unlinked_speaker_returns_none(self):
+        a = self._assistant_with_links()
+        assert a.user_desktop_for("user-C") is None
+
+    def test_missing_user_id_returns_none(self):
+        a = self._assistant_with_links()
+        assert a.user_desktop_for(None) is None
+
 
 # ---------------------------------------------------------------------------
 # Tests – proactive meeting offers
