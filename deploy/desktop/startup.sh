@@ -1,23 +1,39 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-export XDG_RUNTIME_DIR=/tmp/runtime-root
-mkdir -p $XDG_RUNTIME_DIR
-chmod 700 $XDG_RUNTIME_DIR
-
-# Start DBus (required by portals and audio)
 mkdir -p /run/dbus
-dbus-daemon --system --fork
-eval "$(dbus-launch)"
-export DBUS_SESSION_BUS_ADDRESS
+rm -f /run/dbus/pid
+if ! pgrep -x dbus-daemon >/dev/null 2>&1; then
+  dbus-daemon --system --fork
+fi
 
-# Refresh apt cache for runtime package installs by the agent
-apt-get update
+mkdir -p /tmp/runtime-unityuser
+chown unityuser:unityuser /tmp/runtime-unityuser
+chmod 700 /tmp/runtime-unityuser
 
 bash /app/desktop/inject-ssh-public-key.sh
 
-mkdir -p /Unity/Local
-chown -R unityuser:unityuser /Unity/Local
+mkdir -p /Unity/Local /Unity/.config /Unity/.local /Unity/.cache /Unity/.vnc /Unity/.dbus
+for dir in Desktop Downloads Documents Music Pictures Videos Templates Public; do
+  mkdir -p "/Unity/$dir"
+done
+touch /Unity/.ICEauthority
+chown -R unityuser:unityuser \
+  /Unity/Local /Unity/.config /Unity/.local /Unity/.cache /Unity/.vnc /Unity/.dbus \
+  /Unity/.ICEauthority \
+  /Unity/Desktop /Unity/Downloads /Unity/Documents /Unity/Music \
+  /Unity/Pictures /Unity/Videos /Unity/Templates /Unity/Public
+chmod 700 /Unity/.dbus /Unity/.vnc
+chmod 600 /Unity/.ICEauthority
 chmod 755 /Unity/Local
+
+if [[ -d /root/.cache/ms-playwright && ! -e /Unity/.cache/ms-playwright ]]; then
+  ln -sfn /root/.cache/ms-playwright /Unity/.cache/ms-playwright
+  chown -h unityuser:unityuser /Unity/.cache/ms-playwright
+fi
+
+chown unityuser:unityuser /var/log/magnitude 2>/dev/null || true
+
+apt-get update
 
 exec /usr/bin/supervisord -n -c /app/desktop/supervisord.conf
