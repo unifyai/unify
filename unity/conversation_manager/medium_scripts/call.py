@@ -834,6 +834,16 @@ async def entrypoint(ctx: agents.JobContext):
     )
 
     assistant_name = SESSION_DETAILS.assistant.name
+    # The acting user on this call is the person we're talking with when they map
+    # to a system user (boss or provisioned org member), else the workspace owner.
+    # Drives per-speaker linked-desktop resolution so the guardrail relaxes only
+    # for someone who has actually linked their machine to this assistant.
+    call_acting_user_id = (
+        contact.get("user_id") if contact.get("is_system") else None
+    ) or SESSION_DETAILS.user.id
+    call_has_linked_user_desktop = (
+        SESSION_DETAILS.assistant.user_desktop_for(call_acting_user_id) is not None
+    )
     system_prompt = build_voice_agent_prompt(
         bio=assistant_bio,
         assistant_name=assistant_name or None,
@@ -851,7 +861,7 @@ async def entrypoint(ctx: agents.JobContext):
         contact_rolling_summary=contact.get("rolling_summary", ""),
         demo_mode=SETTINGS.DEMO_MODE,
         channel=channel,
-        user_desktop_control=SETTINGS.conversation.USER_DESKTOP_CONTROL_ENABLED,
+        has_linked_user_desktop=call_has_linked_user_desktop,
         is_coordinator=SESSION_DETAILS.is_coordinator,
         is_org_workspace=SESSION_DETAILS.org_id is not None,
     ).flatten()

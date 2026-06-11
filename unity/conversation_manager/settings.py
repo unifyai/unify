@@ -40,11 +40,6 @@ class ConversationSettings(BaseSettings):
             speech, a lightweight LLM check compares the proposed speech against
             recent fast brain utterances and suppresses it when the information
             has already been communicated. Default True.
-        USER_DESKTOP_CONTROL_ENABLED: Enable prompts that claim the assistant
-            can remotely control the user's computer. When False (default),
-            prompts clarify that the assistant can only control its own VM and
-            the user can optionally view/control the assistant's desktop — not
-            the other way around.
         INGRESS_TRANSPORT: Selector for the inbound transport
             (``unity.gateway.IngressTransport`` implementation) that
             CommsManager consumes. ``""`` (default) and ``"legacy"`` both
@@ -73,7 +68,6 @@ class ConversationSettings(BaseSettings):
     BLACKLIST_CHECKS_ENABLED: bool = False
     SPEECH_URGENCY_PREEMPT_ENABLED: bool = True
     SPEECH_DEDUP_ENABLED: bool = True
-    USER_DESKTOP_CONTROL_ENABLED: bool = False
     ASSISTANT_SESSION_GROUP: str = "infra.unify.ai"
     ASSISTANT_SESSION_VERSION: str = "v1alpha1"
     ASSISTANT_SESSION_PLURAL: str = "assistantsessions"

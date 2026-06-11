@@ -714,16 +714,12 @@ I communicate with my boss and their contacts directly through different mediums
 
 
 def _build_desktop_access_faq(
-    user_desktop_control: bool,
     has_linked_user_desktop: bool = False,
 ) -> str:
     """Build desktop access FAQ text for onboarding sections."""
     if has_linked_user_desktop:
         return """**Q: Can you access my computer directly?**
 A: Yes — you've linked a desktop to me, so I can work directly on it. (When there's no active screen share I drive the linked machine; if you'd rather keep an eye on things live, just share your screen on a call.)"""
-    if user_desktop_control:
-        return """**Q: Can you access my computer directly?**
-A: Yes — just install a quick remote access tool from unify.ai and I can work directly on your laptop or desktop."""
     return """**Q: Can you access my computer directly?**
 A: Not directly — but you can view and control *my* computer through the Meet window ("Show assistant screen" → "Enable mouse and keyboard control"). If you need me to do something on my machine, just ask and I'll do it. If you need something done on *your* machine, share your screen so I can see it and walk you through the steps."""
 
@@ -1073,14 +1069,11 @@ Examples of requests that should use the direct tools:
 def _build_act_capabilities_block(
     *,
     workspace_coordinator_name: str | None,
-    user_desktop_control: bool,
     has_linked_user_desktop: bool = False,
 ) -> str:
     """Build act-capabilities guidance for non-demo mode."""
     if has_linked_user_desktop:
         software_desktop_capability = "- **Software & desktop**: Any application, browser, or tool on my computer — and my boss's own machine, which they've linked to me (I drive it through `act` when no screen share is active)"
-    elif user_desktop_control:
-        software_desktop_capability = "- **Software & desktop**: Any application, browser, or tool on my computer — including remote access to my boss's machine if granted"
     else:
         software_desktop_capability = "- **Software & desktop**: Any application, browser, or tool on my computer (I cannot control the user's computer — only my own)"
     if workspace_coordinator_name:
@@ -1123,41 +1116,36 @@ Examples of questions that should trigger `act`:
 
 def _build_user_machine_access_block(
     *,
-    user_desktop_control: bool,
     has_linked_user_desktop: bool,
     acting_user_id: str | None = None,
 ) -> str | None:
     """Build the precedence guidance for seeing/controlling the *user's* machine.
 
-    Returns ``None`` when neither a linked desktop nor user-desktop control is in
-    play, so the prompt is byte-for-byte unchanged from the screen-share default.
+    Returns ``None`` when no desktop is linked, so the prompt is byte-for-byte
+    unchanged from the screen-share default.
     """
-    if not (has_linked_user_desktop or user_desktop_control):
+    if not has_linked_user_desktop:
         return None
 
-    if has_linked_user_desktop:
-        target_note = (
-            f" The linked machine belongs to the person I'm talking with "
-            f"(user_id `{acting_user_id}`); if several people have linked "
-            f"desktops, I target theirs with "
-            f'`user_desktop.session(user_id="{acting_user_id}")` and use '
-            f"`user_desktop.list_linked()` to confirm."
-            if acting_user_id
-            else ""
-        )
-        linked_clause = (
-            "**Linked desktop.** My boss has a desktop linked to me. When there "
-            "is no active screen share, I can see and control it directly: I "
-            "dispatch `act` with a clear description of what to do on their "
-            "linked machine (e.g. take a screenshot and describe it, or perform "
-            "the action they asked for). A linked desktop means full access to "
-            "their machine, so I act carefully, respect any consent rules, and "
-            "confirm before anything destructive or irreversible." + target_note
-        )
-        fallback_clause = "**Neither available.** If there is somehow no active share and the linked desktop cannot be reached, I say so plainly and offer to start a screen share instead."
-    else:
-        linked_clause = '**Linked desktop.** My boss has not linked a desktop to me yet, so I cannot drive their machine directly. If they want me to work on their computer without sharing each time, they can link it from the console (hover my name → ⋮ → "Connect your desktop").'
-        fallback_clause = '**Neither available.** I let them know I can\'t see their screen right now and offer to start a screen share so I can — and I can mention linking their desktop (⋮ menu on my name → "Connect your desktop") for direct access without sharing each time.'
+    target_note = (
+        f" The linked machine belongs to the person I'm talking with "
+        f"(user_id `{acting_user_id}`); if several people have linked "
+        f"desktops, I target theirs with "
+        f'`user_desktop.session(user_id="{acting_user_id}")` and use '
+        f"`user_desktop.list_linked()` to confirm."
+        if acting_user_id
+        else ""
+    )
+    linked_clause = (
+        "**Linked desktop.** My boss has a desktop linked to me. When there "
+        "is no active screen share, I can see and control it directly: I "
+        "dispatch `act` with a clear description of what to do on their "
+        "linked machine (e.g. take a screenshot and describe it, or perform "
+        "the action they asked for). A linked desktop means full access to "
+        "their machine, so I act carefully, respect any consent rules, and "
+        "confirm before anything destructive or irreversible." + target_note
+    )
+    fallback_clause = "**Neither available.** If there is somehow no active share and the linked desktop cannot be reached, I say so plainly and offer to start a screen share instead."
 
     return f"""Seeing and controlling the user's machine
 -----------------------------------------
@@ -1401,7 +1389,6 @@ def build_system_prompt(
     assistant_has_slack: bool = False,
     assistant_has_teams: bool = False,
     is_coordinator: bool = False,
-    user_desktop_control: bool = False,
     has_linked_user_desktop: bool = False,
     acting_user_id: str | None = None,
     runtime_setup_note: str | None = None,
@@ -1447,8 +1434,6 @@ def build_system_prompt(
         Whether the assistant has Discord configured.
     assistant_has_teams : bool
         Whether the assistant has Microsoft Teams configured.
-    user_desktop_control : bool
-        Whether the user has enabled remote control access for setup/help flows.
     has_linked_user_desktop : bool
         Whether the active user has a desktop linked to this assistant. When True,
         the assistant can drive that machine via ``act`` (when no screen share is
@@ -1698,12 +1683,10 @@ Messages from the current turn have **NEW** tag prepended:
         parts.add(
             _build_act_capabilities_block(
                 workspace_coordinator_name=workspace_coordinator_name,
-                user_desktop_control=user_desktop_control,
                 has_linked_user_desktop=has_linked_user_desktop,
             ),
         )
         user_machine_access_block = _build_user_machine_access_block(
-            user_desktop_control=user_desktop_control,
             has_linked_user_desktop=has_linked_user_desktop,
             acting_user_id=acting_user_id,
         )
@@ -1906,7 +1889,6 @@ When contacts communicate in a non-English language, I match their language in m
     #     paths in favor of live look-up).
     if not is_coordinator:
         desktop_access_faq = _build_desktop_access_faq(
-            user_desktop_control,
             has_linked_user_desktop,
         )
         app_management_faq = _build_base_app_management_faq(workspace_coordinator_name)
@@ -2497,7 +2479,7 @@ def build_voice_agent_prompt(
     participants: list[dict] | None = None,
     demo_mode: bool = False,
     channel: str = "phone",
-    user_desktop_control: bool = False,
+    has_linked_user_desktop: bool = False,
     is_coordinator: bool = False,
     is_org_workspace: bool = True,
 ) -> PromptParts:
@@ -2547,6 +2529,11 @@ def build_voice_agent_prompt(
         ``"unify_meet"`` for a Unify Meet video call,
         ``"google_meet"`` for a Google Meet call joined via browser,
         ``"teams_meet"`` for a Microsoft Teams meeting joined via browser.
+    has_linked_user_desktop : bool
+        Whether the person on this call has a desktop linked to this assistant.
+        When True the screen-share guardrail relaxes (the assistant can drive
+        their machine via ``act``); when False the prompt keeps the default
+        "I can only see, not control your screen" guardrail.
     is_coordinator : bool
         Whether to render the compact Coordinator identity and privacy guidance
         used by live voice calls.
@@ -2938,7 +2925,7 @@ I use this context to personalize the conversation, but I don't explicitly refer
             '"Show assistant screen" (shows my desktop to the user; once visible, '
             '"Enable mouse and keyboard control" lets them operate it directly). '
             "Mic and camera toggles are bottom-left; settings and text chat are bottom-right."
-            if user_desktop_control
+            if has_linked_user_desktop
             else '- **Bottom bar**: "Share your screen" (shares the user\'s own screen with me — '
             "I can see it but NOT interact with it), "
             '"Show assistant screen" (shows *my* desktop to the user; once visible, '
@@ -2966,7 +2953,7 @@ When I need to direct the user to a **console page** specifically (e.g. hover ov
 
         no_user_desktop_control_guardrail = (
             ""
-            if user_desktop_control
+            if has_linked_user_desktop
             else """
 
 **I cannot control the user's screen or act within their accounts.** I can only *see* screenshots from their screen share. I have no ability to click, type, or interact with their machine in any way. More broadly, when the user is working in their own accounts or services (e.g. Google Cloud Console, admin panels, third-party dashboards), I cannot perform actions there on their behalf — I can only observe and guide them through the steps verbally. I must not offer to do things that require access I do not have."""
