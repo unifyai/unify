@@ -16,6 +16,9 @@ from unity.integrations.sync_state import normalize_app_slug
 if TYPE_CHECKING:
     from unity.conversation_manager.conversation_manager import ConversationManager
 
+MATERIALIZE_OPERATION = "materialize"
+CLEANUP_OPERATION = "cleanup"
+
 
 def _payload_value(payload: dict[str, Any], *keys: str) -> Any:
     for key in keys:
@@ -76,6 +79,14 @@ def _app_event_fields(payload: dict[str, Any]) -> tuple[str, str | None, str | N
     )
 
 
+def _sync_operation(payload: dict[str, Any]) -> str:
+    raw = _payload_value(payload, "operation")
+    normalized = str(raw or "").strip().lower()
+    if normalized == CLEANUP_OPERATION:
+        return CLEANUP_OPERATION
+    return MATERIALIZE_OPERATION
+
+
 def _tool_count(payload: dict[str, Any]) -> int | None:
     value = _payload_value(payload, "tool_count")
     try:
@@ -98,6 +109,7 @@ def _integration_tools_sync_requested_from_payload(
         app_slug=app_slug,
         app_display_name=app_display_name,
         connection_id=connection_id,
+        operation=_sync_operation(payload),
         message=message or str(payload.get("message") or ""),
     )
 
@@ -117,6 +129,7 @@ def _integration_tools_sync_completed_from_payload(
         app_display_name=app_display_name,
         connection_id=connection_id,
         tool_count=_tool_count(payload),
+        operation=_sync_operation(payload),
         message=message or str(payload.get("message") or ""),
     )
 
@@ -139,6 +152,7 @@ def _integration_tools_sync_failed_from_payload(
         app_display_name=app_display_name,
         connection_id=connection_id,
         error=str(error),
+        operation=_sync_operation(payload),
         message=message or str(payload.get("message") or ""),
     )
 
@@ -159,6 +173,16 @@ async def _publish_sync_result(
                 app_display_name=state.app_display_name,
                 connection_id=state.connection_id,
                 tool_count=state.tool_count,
+                operation=state.operation,
+            )
+        elif state.status == "removed":
+            event = IntegrationToolsSyncCompleted(
+                app_slug=state.app_slug,
+                app_display_name=state.app_display_name,
+                connection_id=state.connection_id,
+                tool_count=0,
+                operation=state.operation,
+                message="Integration tools removed.",
             )
         else:
             event = IntegrationToolsSyncFailed(
@@ -166,6 +190,7 @@ async def _publish_sync_result(
                 app_display_name=state.app_display_name,
                 connection_id=state.connection_id,
                 error=state.error or "Integration tool sync failed",
+                operation=state.operation,
             )
     await cm.event_broker.publish(event.topic, event.to_json())
 
@@ -199,12 +224,17 @@ async def _handle_integration_tools_sync_requested(
         event.app_slug,
         app_display_name=event.app_display_name,
         connection_id=event.connection_id,
+        operation=event.operation,
     )
     _track_sync_task(cm, task, normalize_app_slug(event.app_slug))
     state = coordinator.snapshot()[normalize_app_slug(event.app_slug)]
     cm.notifications_bar.push_notif(
         "Integrations",
-        f"{state.display_name} tools are syncing and will be available shortly.",
+        (
+            f"{state.display_name} tools are being removed."
+            if event.operation == CLEANUP_OPERATION
+            else f"{state.display_name} tools are syncing and will be available shortly."
+        ),
         event.timestamp,
     )
     return True
@@ -215,16 +245,22 @@ async def _handle_integration_tools_sync_completed(
     cm: "ConversationManager",
 ) -> bool:
     app_slug = normalize_app_slug(event.app_slug)
+    status = "removed" if event.operation == CLEANUP_OPERATION else "ready"
     state = cm.integration_sync_coordinator.set_status(
         app_slug,
-        "ready",
+        status,
         app_display_name=event.app_display_name,
         connection_id=event.connection_id,
         tool_count=event.tool_count,
+        operation=event.operation,
     )
     cm.notifications_bar.push_notif(
         "Integrations",
-        f"{state.display_name} tools are ready.",
+        (
+            f"{state.display_name} tools were removed."
+            if state.status == "removed"
+            else f"{state.display_name} tools are ready."
+        ),
         event.timestamp,
     )
     return True
@@ -240,6 +276,7 @@ async def _handle_integration_tools_sync_failed(
         app_display_name=event.app_display_name,
         connection_id=event.connection_id,
         error=event.error,
+        operation=event.operation,
     )
     cm.notifications_bar.push_notif(
         "Integrations",

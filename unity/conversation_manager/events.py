@@ -1486,13 +1486,14 @@ class CoordinatorOnboardingEvent(Event):
 
 @dataclass
 class IntegrationToolsSyncRequested(Event):
-    """A connected provider app needs its active tools warmed in Unity."""
+    """A provider app needs its FunctionManager tools materialized or cleaned up."""
 
     topic: ClassVar[str | None] = "app:comms:integration_tools_sync_requested"
 
     app_slug: str
     app_display_name: str | None = None
     connection_id: str | None = None
+    operation: str = "materialize"
     message: str = ""
 
 
@@ -1506,6 +1507,7 @@ class IntegrationToolsSyncCompleted(Event):
     app_display_name: str | None = None
     connection_id: str | None = None
     tool_count: int | None = None
+    operation: str = "materialize"
     message: str = ""
 
 
@@ -1519,6 +1521,7 @@ class IntegrationToolsSyncFailed(Event):
     app_display_name: str | None = None
     connection_id: str | None = None
     error: str = ""
+    operation: str = "materialize"
     message: str = ""
 
 
