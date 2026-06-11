@@ -64,6 +64,10 @@ from unity.function_manager.primitives.scope import (
 )
 from unity.function_manager.primitives.registry import get_registry
 from unity.common.startup_timing import log_startup_timing
+from unity.common.diagnostic_logging import (
+    log_staging_diagnostic,
+    staging_diagnostics_enabled,
+)
 from .custom_functions import (
     compute_custom_functions_hash,
     compute_custom_venvs_hash,
@@ -2464,6 +2468,40 @@ class FunctionManager(BaseFunctionManager):
             logger.warning(f"Failed to delete provider integration rows: {e}")
             return 0
 
+    def _count_provider_integration_rows_for_app(
+        self,
+        *,
+        backend_id: str | None,
+        app_slug: str,
+    ) -> int | None:
+        """Count materialized provider-backed rows for one app."""
+        filter_expr = (
+            'integration_source == "provider_backed" '
+            f'and backend_id == "{backend_id or "provider"}" '
+            f'and app_slug == "{app_slug}"'
+        )
+        try:
+            return len(
+                unify.get_logs(
+                    context=self._primitives_ctx,
+                    filter=filter_expr,
+                    exclude_fields=list_private_fields(self._primitives_ctx),
+                ),
+            )
+        except Exception as exc:
+            log_staging_diagnostic(
+                logger,
+                (
+                    "Provider integration write verification failed "
+                    "backend_id=%s app_slug=%s error=%s"
+                ),
+                backend_id or "provider",
+                app_slug,
+                exc,
+                level=logging.WARNING,
+            )
+            return None
+
     def sync_provider_integration_tools(
         self,
         *,
@@ -2477,15 +2515,41 @@ class FunctionManager(BaseFunctionManager):
         It mirrors ``sync_primitives``: build expected rows, compare stable
         hashes, and only delete/upsert the affected app rows when changed.
         """
+        from time import perf_counter
+
+        sync_start = perf_counter()
+
+        def _sync_duration() -> float:
+            return perf_counter() - sync_start
+
         if not self._include_primitives or not self._primitive_scope.includes(
             "integrations",
         ):
+            log_staging_diagnostic(
+                logger,
+                (
+                    "Provider integration sync skipped app_slug=%s "
+                    "reason=integrations_not_in_scope duration=%.2fs"
+                ),
+                app_slug or "-",
+                _sync_duration(),
+            )
             return {
                 "status": "skipped",
                 "reason": "integrations_not_in_scope",
                 "apps": [],
             }
         if limit <= 0:
+            log_staging_diagnostic(
+                logger,
+                (
+                    "Provider integration sync failed app_slug=%s "
+                    "reason=invalid_page_limit limit=%d duration=%.2fs"
+                ),
+                app_slug or "-",
+                limit,
+                _sync_duration(),
+            )
             return {
                 "status": "error",
                 "error": {
@@ -2498,6 +2562,16 @@ class FunctionManager(BaseFunctionManager):
         try:
             from unity.integrations import ops as integration_ops
         except Exception as exc:
+            log_staging_diagnostic(
+                logger,
+                (
+                    "Provider integration sync failed app_slug=%s "
+                    "reason=integration_ops_import_error error=%s duration=%.2fs"
+                ),
+                app_slug or "-",
+                exc,
+                _sync_duration(),
+            )
             return {"status": "error", "error": str(exc), "apps": []}
 
         owner_scope = self._integration_owner_scope()
@@ -2507,6 +2581,28 @@ class FunctionManager(BaseFunctionManager):
             normalize_app_slug = lambda value: value.strip().lower()  # type: ignore[assignment]
         connections = integration_ops.list_connections(**owner_scope)
         if isinstance(connections, dict) and connections.get("error"):
+            log_staging_diagnostic(
+                logger,
+                (
+                    "Provider integration sync failed app_slug=%s "
+                    "reason=list_connections_error owner_scope=%s error=%s "
+                    "duration=%.2fs"
+                ),
+                app_slug or "-",
+                {
+                    key: owner_scope.get(key)
+                    for key in (
+                        "owner_scope",
+                        "assistant_id",
+                        "user_id",
+                        "org_id",
+                        "team_ids",
+                    )
+                    if key in owner_scope
+                },
+                connections.get("error"),
+                _sync_duration(),
+            )
             return {"status": "error", "error": connections.get("error"), "apps": []}
 
         normalized_app = (
@@ -2529,6 +2625,34 @@ class FunctionManager(BaseFunctionManager):
             if connection_id and connection.get("connection_id") != connection_id:
                 continue
             active_connections.append(connection)
+        active_app_slugs_for_log = [
+            connection.get("canonical_app_slug")
+            for connection in active_connections
+            if connection.get("canonical_app_slug")
+        ]
+        log_staging_diagnostic(
+            logger,
+            (
+                "Provider integration sync started app_slug=%s connection_id=%s "
+                "owner_scope=%s connections=%d active_connections=%d active_apps=%s"
+            ),
+            normalized_app or "-",
+            connection_id or "-",
+            {
+                key: owner_scope.get(key)
+                for key in (
+                    "owner_scope",
+                    "assistant_id",
+                    "user_id",
+                    "org_id",
+                    "team_ids",
+                )
+                if key in owner_scope
+            },
+            len(connections or []),
+            len(active_connections),
+            active_app_slugs_for_log,
+        )
 
         current_hashes = self._get_stored_integration_tool_hash_by_app()
         new_hashes = dict(current_hashes)
@@ -2551,6 +2675,24 @@ class FunctionManager(BaseFunctionManager):
             )
             if removed_apps:
                 self._store_integration_tool_hash_by_app(new_hashes)
+            result = {
+                "status": "removed" if removed or removed_apps else "unchanged",
+                "apps": [],
+                "removed_apps": removed_apps,
+                "rows_deleted": removed,
+            }
+            log_staging_diagnostic(
+                logger,
+                (
+                    "Provider integration sync completed app_slug=%s status=%s "
+                    "removed_apps=%s rows_deleted=%d duration=%.2fs"
+                ),
+                normalized_app,
+                result["status"],
+                removed_apps,
+                removed,
+                _sync_duration(),
+            )
             return {
                 "status": "removed" if removed or removed_apps else "unchanged",
                 "apps": [],
@@ -2573,6 +2715,17 @@ class FunctionManager(BaseFunctionManager):
                 **owner_scope,
             )
             if isinstance(page, dict) and page.get("error"):
+                log_staging_diagnostic(
+                    logger,
+                    (
+                        "Provider integration sync failed app_slug=%s "
+                        "reason=get_tools_error offset=%d error=%s duration=%.2fs"
+                    ),
+                    normalized_app or "-",
+                    offset,
+                    page.get("error"),
+                    _sync_duration(),
+                )
                 return {"status": "error", "error": page.get("error"), "apps": []}
             page_has_total = isinstance(page, dict)
             if page_has_total:
@@ -2583,7 +2736,29 @@ class FunctionManager(BaseFunctionManager):
                 page_items = list(page or [])
             tools_response.extend(page_items)
             page_count += 1
+            log_staging_diagnostic(
+                logger,
+                (
+                    "Provider integration sync get_tools page app_slug=%s "
+                    "page=%d offset=%d page_size=%d total=%s"
+                ),
+                normalized_app or "-",
+                page_count,
+                offset,
+                len(page_items),
+                total_tools if total_tools is not None else "-",
+            )
             if page_count > max_pages:
+                log_staging_diagnostic(
+                    logger,
+                    (
+                        "Provider integration sync failed app_slug=%s "
+                        "reason=pagination_exceeded pages=%d duration=%.2fs"
+                    ),
+                    normalized_app or "-",
+                    page_count,
+                    _sync_duration(),
+                )
                 return {
                     "status": "error",
                     "error": {
@@ -2620,17 +2795,68 @@ class FunctionManager(BaseFunctionManager):
             key = self._integration_hash_key(backend_id=backend_id, app_slug=item_app)
             rows_by_key.setdefault(key, []).append(row)
             key_to_app[key] = (backend_id, item_app)
+        log_staging_diagnostic(
+            logger,
+            (
+                "Provider integration sync filtered tools app_slug=%s "
+                "raw_tools=%d active_apps=%s rows_by_key=%s"
+            ),
+            normalized_app or "-",
+            len(tools_response),
+            sorted(active_app_slugs),
+            {key: len(rows) for key, rows in rows_by_key.items()},
+        )
 
         for key, rows in rows_by_key.items():
             expected_hash = self._hash_integration_rows(rows)
             if current_hashes.get(key) == expected_hash:
                 unchanged_apps.append({"key": key, "rows": len(rows)})
+                log_staging_diagnostic(
+                    logger,
+                    (
+                        "Provider integration sync hash decision key=%s "
+                        "decision=unchanged rows=%d"
+                    ),
+                    key,
+                    len(rows),
+                )
                 continue
             backend_id, item_app = key_to_app[key]
             deleted = self._delete_provider_integration_rows_for_apps(
                 [(backend_id, item_app)],
             )
+            log_staging_diagnostic(
+                logger,
+                (
+                    "Provider integration sync hash decision key=%s "
+                    "decision=changed rows=%d rows_deleted=%d"
+                ),
+                key,
+                len(rows),
+                deleted,
+            )
+            log_staging_diagnostic(
+                logger,
+                "Provider integration sync insert attempt key=%s rows=%d",
+                key,
+                len(rows),
+            )
             self._insert_primitives(rows)
+            if staging_diagnostics_enabled():
+                observed_rows = self._count_provider_integration_rows_for_app(
+                    backend_id=backend_id,
+                    app_slug=item_app,
+                )
+                if observed_rows is not None and observed_rows != len(rows):
+                    logger.warning(
+                        (
+                            "Provider integration write verification mismatch "
+                            "key=%s expected_rows=%d observed_rows=%d"
+                        ),
+                        key,
+                        len(rows),
+                        observed_rows,
+                    )
             new_hashes[key] = expected_hash
             changed_apps.append(
                 {"key": key, "rows": len(rows), "rows_deleted": deleted},
@@ -2656,12 +2882,26 @@ class FunctionManager(BaseFunctionManager):
         if changed_apps or removed_apps:
             self._store_integration_tool_hash_by_app(new_hashes)
 
-        return {
+        result = {
             "status": "synced" if changed_apps or removed_apps else "unchanged",
             "apps": changed_apps,
             "unchanged_apps": unchanged_apps,
             "removed_apps": removed_apps,
         }
+        log_staging_diagnostic(
+            logger,
+            (
+                "Provider integration sync completed app_slug=%s status=%s "
+                "changed_apps=%s unchanged_apps=%s removed_apps=%s duration=%.2fs"
+            ),
+            normalized_app or "-",
+            result["status"],
+            changed_apps,
+            unchanged_apps,
+            removed_apps,
+            _sync_duration(),
+        )
+        return result
 
     def _delete_primitives_for_managers(self, manager_aliases: List[str]) -> None:
         """Delete primitive rows for specific managers."""

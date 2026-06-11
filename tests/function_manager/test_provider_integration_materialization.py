@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 
 from unity.function_manager.function_manager import FunctionManager
 from unity.function_manager.primitives.scope import PrimitiveScope
+from unity.settings import SETTINGS
 
 MOCK_TOOL = {
     "tool_id": "composio:hubspot:search_contacts",
@@ -87,6 +89,13 @@ def _fake_function_manager() -> FunctionManager:
     fm._inserted_rows = []
     fm._insert_primitives = lambda rows: fm._inserted_rows.extend(rows)
     return fm
+
+
+def _capture_function_manager_logs(caplog):
+    sync_logger = logging.getLogger("unity.function_manager.function_manager")
+    sync_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.INFO, logger="unity.function_manager.function_manager")
+    return sync_logger
 
 
 def test_materializes_connected_provider_tools_with_active_only_search(
@@ -174,6 +183,76 @@ def test_materialization_excludes_unconnected_tools(monkeypatch) -> None:
 
     assert result["status"] == "unchanged"
     assert fm._inserted_rows == []
+
+
+def test_staging_sync_logs_zero_row_state(monkeypatch, caplog) -> None:
+    monkeypatch.setattr(SETTINGS, "DEPLOY_ENV", "staging")
+    client = FakeIntegrationOps()
+    client.results = []
+    monkeypatch.setattr(
+        "unity.integrations.ops.list_connections",
+        client.list_connections,
+    )
+    monkeypatch.setattr("unity.integrations.ops.get_tools", client.get_tools)
+    fm = _fake_function_manager()
+    sync_logger = _capture_function_manager_logs(caplog)
+
+    try:
+        result = fm.sync_provider_integration_tools(app_slug="hubspot")
+    finally:
+        sync_logger.removeHandler(caplog.handler)
+
+    assert result["status"] == "unchanged"
+    assert "Provider integration sync filtered tools" in caplog.text
+    assert "raw_tools=0" in caplog.text
+    assert "status=unchanged" in caplog.text
+
+
+def test_staging_sync_logs_skipped_state(monkeypatch, caplog) -> None:
+    monkeypatch.setattr(SETTINGS, "DEPLOY_ENV", "staging")
+    fm = _fake_function_manager()
+    fm._include_primitives = False
+    sync_logger = _capture_function_manager_logs(caplog)
+
+    try:
+        result = fm.sync_provider_integration_tools(app_slug="hubspot")
+    finally:
+        sync_logger.removeHandler(caplog.handler)
+
+    assert result["status"] == "skipped"
+    assert "Provider integration sync skipped" in caplog.text
+    assert "reason=integrations_not_in_scope" in caplog.text
+
+
+def test_staging_sync_logs_insert_mismatch(monkeypatch, caplog) -> None:
+    monkeypatch.setattr(SETTINGS, "DEPLOY_ENV", "staging")
+    client = FakeIntegrationOps()
+    monkeypatch.setattr(
+        "unity.integrations.ops.list_connections",
+        client.list_connections,
+    )
+    monkeypatch.setattr("unity.integrations.ops.get_tools", client.get_tools)
+    monkeypatch.setattr(
+        "unity.function_manager.function_manager.list_private_fields",
+        lambda _context: [],
+    )
+    monkeypatch.setattr("unify.get_logs", lambda **_kwargs: [])
+    fm = _fake_function_manager()
+    fm._primitives_ctx = "Functions/Primitives"
+    fm._insert_primitives = lambda _rows: None
+    sync_logger = _capture_function_manager_logs(caplog)
+
+    try:
+        result = fm.sync_provider_integration_tools(app_slug="hubspot")
+    finally:
+        sync_logger.removeHandler(caplog.handler)
+
+    assert result["status"] == "synced"
+    assert "Provider integration sync insert attempt key=composio:hubspot rows=1" in (
+        caplog.text
+    )
+    assert "Provider integration write verification mismatch" in caplog.text
+    assert "expected_rows=1 observed_rows=0" in caplog.text
 
 
 def test_materialization_pages_app_scoped_provider_tools(monkeypatch) -> None:
