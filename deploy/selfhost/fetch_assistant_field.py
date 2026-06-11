@@ -13,7 +13,9 @@ def main() -> int:
         print("", file=sys.stdout)
         return 0
     unify_key, agent_id, field = sys.argv[1], sys.argv[2], sys.argv[3]
-    orchestra_url = os.environ.get("ORCHESTRA_URL", "http://orchestra:8000/v0").rstrip("/")
+    orchestra_url = os.environ.get("ORCHESTRA_URL", "http://orchestra:8000/v0").rstrip(
+        "/",
+    )
     req = urllib.request.Request(
         f"{orchestra_url}/assistant",
         headers={"Authorization": f"Bearer {unify_key}"},
