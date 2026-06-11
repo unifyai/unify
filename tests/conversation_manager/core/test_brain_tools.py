@@ -24,6 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from unity.common.llm_helpers import method_to_schema
 from unity.contact_manager.simulated import SimulatedContactManager
 from unity.conversation_manager.domains.brain_tools import (
     ConversationManagerBrainTools,
@@ -44,6 +45,7 @@ from unity.conversation_manager.task_actions import (
     STEERING_OPERATIONS,
     parse_action_name,
 )
+from unity.session_details import SESSION_DETAILS
 
 # =============================================================================
 # Fixtures
@@ -94,6 +96,7 @@ def mock_cm():
     cm.assistant_email_provider = "google_workspace"
     cm.assistant_whatsapp_number = ""
     cm.assistant_discord_bot_id = ""
+    cm.assistant_slack_bot_user_id = ""
     cm.initialized = True
     cm.call_manager.has_active_call = False
     cm.call_manager.has_active_google_meet = False
@@ -125,6 +128,17 @@ def brain_action_tools(mock_cm):
         mock_broker.return_value.publish = AsyncMock()
         tools = ConversationManagerBrainActionTools(mock_cm)
         yield tools
+
+
+@pytest.fixture
+def coordinator_session():
+    previous_is_coordinator = SESSION_DETAILS.is_coordinator
+    previous_boss_contact_id = SESSION_DETAILS.boss_contact_id
+    SESSION_DETAILS.is_coordinator = True
+    SESSION_DETAILS.boss_contact_id = 1
+    yield
+    SESSION_DETAILS.is_coordinator = previous_is_coordinator
+    SESSION_DETAILS.boss_contact_id = previous_boss_contact_id
 
 
 @pytest.fixture
@@ -407,6 +421,276 @@ class TestActionToolsAsTools:
         assert "make_whatsapp_call" in tools
         assert "send_discord_message" in tools
         assert "send_discord_channel_message" in tools
+
+    def test_coordinator_comms_schemas_are_boss_only(
+        self,
+        brain_action_tools,
+        mock_cm,
+        coordinator_session,
+    ):
+        """Coordinator direct comms tools do not expose arbitrary recipients."""
+        mock_cm.assistant_whatsapp_number = "+15555557777"
+        mock_cm.assistant_discord_bot_id = "discord-bot-123"
+        mock_cm.assistant_slack_bot_user_id = "slack-bot-123"
+        mock_cm.assistant_has_teams = True
+
+        tools = brain_action_tools.as_tools()
+
+        assert "send_discord_channel_message" not in tools
+        assert "send_slack_channel_message" not in tools
+        assert "create_teams_channel" not in tools
+        assert "create_teams_meet" in tools
+
+        contact_id_tools = {
+            "send_sms",
+            "send_whatsapp",
+            "send_discord_message",
+            "send_slack_message",
+            "send_teams_message",
+            "send_unify_message",
+            "send_api_response",
+            "make_call",
+            "make_whatsapp_call",
+        }
+        for tool_name in contact_id_tools:
+            schema = method_to_schema(
+                tools[tool_name],
+                tool_name=tool_name,
+                include_class_name=False,
+            )
+            props = schema["function"]["parameters"]["properties"]
+            assert "contact_id" not in props
+            assert "boss" in schema["function"]["description"].lower()
+
+        email_schema = method_to_schema(
+            tools["send_email"],
+            tool_name="send_email",
+            include_class_name=False,
+        )
+        email_props = email_schema["function"]["parameters"]["properties"]
+        assert {"to", "cc", "bcc", "reply_all", "contact_id"}.isdisjoint(
+            email_props,
+        )
+        assert {"subject", "body"}.issubset(email_props)
+
+        teams_schema = method_to_schema(
+            tools["send_teams_message"],
+            tool_name="send_teams_message",
+            include_class_name=False,
+        )
+        teams_props = teams_schema["function"]["parameters"]["properties"]
+        assert {"contact_id", "team_id", "channel_id", "chat_topic"}.isdisjoint(
+            teams_props,
+        )
+        assert {"content", "chat_id"}.issubset(teams_props)
+
+        meet_schema = method_to_schema(
+            tools["create_teams_meet"],
+            tool_name="create_teams_meet",
+            include_class_name=False,
+        )
+        meet_props = meet_schema["function"]["parameters"]["properties"]
+        assert "attendee_contact_ids" not in meet_props
+        assert "email_address" in meet_props
+
+    @pytest.mark.asyncio
+    async def test_coordinator_comms_wrappers_force_boss_recipient(
+        self,
+        brain_action_tools,
+        mock_cm,
+        coordinator_session,
+    ):
+        """Coordinator exposed tools delegate to CommsPrimitives with the boss contact."""
+        mock_cm.assistant_whatsapp_number = "+15555557777"
+        mock_cm.assistant_discord_bot_id = "discord-bot-123"
+        mock_cm.assistant_slack_bot_user_id = "slack-bot-123"
+        mock_cm.assistant_has_teams = True
+        tools = brain_action_tools.as_tools()
+
+        brain_action_tools._comms.send_sms = AsyncMock(return_value={"status": "ok"})
+        brain_action_tools._comms.send_whatsapp = AsyncMock(
+            return_value={"status": "ok"},
+        )
+        brain_action_tools._comms.send_discord_message = AsyncMock(
+            return_value={"status": "ok"},
+        )
+        brain_action_tools._comms.send_slack_message = AsyncMock(
+            return_value={"status": "ok"},
+        )
+        brain_action_tools._comms.send_teams_message = AsyncMock(
+            return_value={"status": "ok"},
+        )
+        brain_action_tools._comms.send_unify_message = AsyncMock(
+            return_value={"status": "ok"},
+        )
+        brain_action_tools._comms.send_api_response = AsyncMock(
+            return_value={"status": "ok"},
+        )
+        brain_action_tools._comms.send_email = AsyncMock(return_value={"status": "ok"})
+        brain_action_tools._comms.make_call = AsyncMock(return_value={"status": "ok"})
+        brain_action_tools._comms.make_whatsapp_call = AsyncMock(
+            return_value={"status": "ok"},
+        )
+        brain_action_tools._comms.create_teams_meet = AsyncMock(
+            return_value={"status": "ok"},
+        )
+
+        await tools["send_sms"](content="hello", phone_number="+15550000001")
+        brain_action_tools._comms.send_sms.assert_called_once_with(
+            contact_id=SESSION_DETAILS.boss_contact_id,
+            content="hello",
+            phone_number="+15550000001",
+        )
+
+        await tools["send_whatsapp"](content="hello")
+        brain_action_tools._comms.send_whatsapp.assert_called_once_with(
+            contact_id=SESSION_DETAILS.boss_contact_id,
+            content="hello",
+            whatsapp_number=None,
+            attachment_filepath=None,
+        )
+
+        await tools["send_discord_message"](content="hello", discord_id="D1")
+        brain_action_tools._comms.send_discord_message.assert_called_once_with(
+            contact_id=SESSION_DETAILS.boss_contact_id,
+            content="hello",
+            discord_id="D1",
+        )
+
+        await tools["send_slack_message"](content="hello", team_id="T1")
+        brain_action_tools._comms.send_slack_message.assert_called_once_with(
+            contact_id=SESSION_DETAILS.boss_contact_id,
+            content="hello",
+            team_id="T1",
+            slack_user_id=None,
+            thread_ts=None,
+        )
+
+        await tools["send_unify_message"](content="hello")
+        brain_action_tools._comms.send_unify_message.assert_called_once_with(
+            content="hello",
+            contact_id=SESSION_DETAILS.boss_contact_id,
+            attachment_filepath=None,
+        )
+
+        await tools["send_api_response"](content="done", tags=["route"])
+        brain_action_tools._comms.send_api_response.assert_called_once_with(
+            content="done",
+            contact_id=SESSION_DETAILS.boss_contact_id,
+            attachment_filepaths=None,
+            tags=["route"],
+        )
+
+        await tools["make_call"](context="briefing")
+        brain_action_tools._comms.make_call.assert_called_once_with(
+            contact_id=SESSION_DETAILS.boss_contact_id,
+            context="briefing",
+            phone_number=None,
+        )
+
+        await tools["make_whatsapp_call"](context="briefing")
+        brain_action_tools._comms.make_whatsapp_call.assert_called_once_with(
+            contact_id=SESSION_DETAILS.boss_contact_id,
+            context="briefing",
+            whatsapp_number=None,
+        )
+
+        await tools["send_email"](
+            subject="Hi",
+            body="Body",
+            email_address="boss@example.com",
+        )
+        brain_action_tools._comms.send_email.assert_called_once_with(
+            to=[
+                {
+                    "contact_id": SESSION_DETAILS.boss_contact_id,
+                    "email_address": "boss@example.com",
+                },
+            ],
+            subject="Hi",
+            body="Body",
+            email_id_to_reply_to=None,
+            attachment_filepath=None,
+        )
+
+        await tools["send_teams_message"](
+            content="hello",
+            chat_id="chat-1",
+            email_address="boss@example.com",
+        )
+        brain_action_tools._comms.send_teams_message.assert_called_once_with(
+            contact_id={
+                "contact_id": SESSION_DETAILS.boss_contact_id,
+                "email_address": "boss@example.com",
+            },
+            content="hello",
+            chat_id="chat-1",
+            attachment_filepath=None,
+        )
+
+        await tools["create_teams_meet"](
+            subject="Sync",
+            email_address="boss@example.com",
+        )
+        brain_action_tools._comms.create_teams_meet.assert_called_once_with(
+            mode="scheduled",
+            subject="Sync",
+            start=None,
+            duration_minutes=30,
+            timezone="UTC",
+            attendee_contact_ids=[
+                {
+                    "contact_id": SESSION_DETAILS.boss_contact_id,
+                    "email_address": "boss@example.com",
+                },
+            ],
+            body_html=None,
+            location=None,
+        )
+
+    def test_regular_comms_schemas_keep_contact_addressed_surface(
+        self,
+        brain_action_tools,
+        mock_cm,
+    ):
+        """Regular assistants keep the existing contact-addressed comms surface."""
+        previous_is_coordinator = SESSION_DETAILS.is_coordinator
+        SESSION_DETAILS.is_coordinator = False
+        mock_cm.assistant_whatsapp_number = "+15555557777"
+        mock_cm.assistant_discord_bot_id = "discord-bot-123"
+        mock_cm.assistant_slack_bot_user_id = "slack-bot-123"
+        mock_cm.assistant_has_teams = True
+        try:
+            tools = brain_action_tools.as_tools()
+        finally:
+            SESSION_DETAILS.is_coordinator = previous_is_coordinator
+
+        assert "send_discord_channel_message" in tools
+        assert "send_slack_channel_message" in tools
+        assert "create_teams_channel" in tools
+
+        sms_props = method_to_schema(
+            tools["send_sms"],
+            tool_name="send_sms",
+            include_class_name=False,
+        )["function"]["parameters"]["properties"]
+        assert "contact_id" in sms_props
+
+        email_props = method_to_schema(
+            tools["send_email"],
+            tool_name="send_email",
+            include_class_name=False,
+        )["function"]["parameters"]["properties"]
+        assert {"to", "cc", "bcc", "reply_all"}.issubset(email_props)
+
+        teams_props = method_to_schema(
+            tools["send_teams_message"],
+            tool_name="send_teams_message",
+            include_class_name=False,
+        )["function"]["parameters"]["properties"]
+        assert {"contact_id", "team_id", "channel_id", "chat_topic"}.issubset(
+            teams_props,
+        )
 
 
 class TestWaitTool:

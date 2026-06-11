@@ -227,6 +227,21 @@ class _RecordingTools:
             "attachment_filepath": attachment_filepath,
         }
 
+    async def send_unify_message_to_boss(
+        self,
+        *,
+        content: str,
+        attachment_filepath: str | None = None,
+    ) -> dict[str, Any]:
+        """Send a Unify chat message directly to the boss only."""
+
+        return {
+            "status": "sent",
+            "contact_id": _BOSS_CONTACT["contact_id"],
+            "content": content,
+            "attachment_filepath": attachment_filepath,
+        }
+
     async def send_api_response(
         self,
         *,
@@ -240,6 +255,23 @@ class _RecordingTools:
         return {
             "status": "sent",
             "contact_id": contact_id,
+            "content": content,
+            "attachment_filepaths": attachment_filepaths,
+            "tags": tags,
+        }
+
+    async def send_api_response_to_boss(
+        self,
+        *,
+        content: str,
+        attachment_filepaths: list[str] | None = None,
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Send a response for an API-originated conversation anchored to the boss."""
+
+        return {
+            "status": "sent",
+            "contact_id": _BOSS_CONTACT["contact_id"],
             "content": content,
             "attachment_filepaths": attachment_filepaths,
             "tags": tags,
@@ -593,8 +625,16 @@ class _RecordingTools:
 
     def as_tools(self, *, is_coordinator: bool) -> dict[str, Callable[..., Any]]:
         tools: dict[str, Callable[..., Any]] = {
-            "send_unify_message": self.send_unify_message,
-            "send_api_response": self.send_api_response,
+            "send_unify_message": (
+                self.send_unify_message_to_boss
+                if is_coordinator
+                else self.send_unify_message
+            ),
+            "send_api_response": (
+                self.send_api_response_to_boss
+                if is_coordinator
+                else self.send_api_response
+            ),
             "wait": self.wait,
             "act": self.act,
             "ask_about_contacts": self.ask_about_contacts,
@@ -605,7 +645,6 @@ class _RecordingTools:
             "cm_list_in_flight_actions": self.cm_list_in_flight_actions,
             "cm_list_notifications": self.cm_list_notifications,
         }
-        del is_coordinator
         return tools
 
 

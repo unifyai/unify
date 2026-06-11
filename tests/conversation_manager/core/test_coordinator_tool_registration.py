@@ -44,7 +44,7 @@ async def test_run_llm_registers_workspace_tools_only_for_coordinator(
     """Coordinator lifecycle primitives are not registered as direct slow-brain tools."""
 
     cm = initialized_cm.cm
-    cm.initialized = False
+    cm.initialized = True
     captured_tool_names: list[set[str]] = []
 
     async def fake_single_shot_tool_decision(_client, _messages, tools, **_kwargs):
