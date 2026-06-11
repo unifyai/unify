@@ -5,13 +5,20 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
+import logging
 from typing import Any, Literal
 
+from unity.common.diagnostic_logging import (
+    integration_sync_timing,
+    log_staging_diagnostic,
+    staging_diagnostics_enabled,
+)
 from unity.common.prompt_helpers import now as prompt_now
 from unity.integrations import ops as integration_ops
 from unity.integrations.primitives import integration_owner_scope_from_session
 
 IntegrationSyncStatus = Literal["pending", "syncing", "ready", "failed"]
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -152,35 +159,97 @@ class IntegrationSyncCoordinator:
             app_display_name=existing.app_display_name if existing else None,
             connection_id=existing.connection_id if existing else None,
         )
-        try:
-            from unity.function_manager.primitives.scope import PrimitiveScope
-            from unity.manager_registry import ManagerRegistry
+        with integration_sync_timing(
+            logger,
+            "coordinator.sync_app",
+            f"app_slug={normalized}",
+        ):
+            try:
+                from unity.function_manager.primitives.scope import PrimitiveScope
+                from unity.manager_registry import ManagerRegistry
 
-            result = await asyncio.to_thread(
-                lambda: ManagerRegistry.get_function_manager(
-                    primitive_scope=PrimitiveScope.single("integrations"),
-                ).sync_provider_integration_tools(app_slug=normalized),
+                result = await asyncio.to_thread(
+                    lambda: ManagerRegistry.get_function_manager(
+                        primitive_scope=PrimitiveScope.single("integrations"),
+                    ).sync_provider_integration_tools(app_slug=normalized),
+                )
+            except Exception as exc:
+                if staging_diagnostics_enabled():
+                    logger.exception(
+                        "Integration sync coordinator failed app_slug=%s",
+                        normalized,
+                    )
+                return self.set_status(normalized, "failed", error=str(exc))
+
+            changed_rows = 0
+            unchanged_rows = 0
+            removed_count = 0
+            rows_deleted = 0
+            raw_status = type(result).__name__
+            raw_error: Any = None
+            if isinstance(result, dict):
+                raw_status = str(result.get("status") or "missing")
+                raw_error = result.get("error")
+                for item in result.get("apps") or []:
+                    if isinstance(item, dict):
+                        changed_rows += int(item.get("rows") or 0)
+                for item in result.get("unchanged_apps") or []:
+                    if isinstance(item, dict):
+                        unchanged_rows += int(item.get("rows") or 0)
+                removed_count = len(result.get("removed_apps") or [])
+                rows_deleted = int(result.get("rows_deleted") or 0)
+                for item in result.get("apps") or []:
+                    if isinstance(item, dict):
+                        rows_deleted += int(item.get("rows_deleted") or 0)
+            log_staging_diagnostic(
+                logger,
+                (
+                    "Integration sync coordinator result app_slug=%s raw_status=%s "
+                    "changed_rows=%d unchanged_rows=%d removed_apps=%d "
+                    "rows_deleted=%d error=%s"
+                ),
+                normalized,
+                raw_status,
+                changed_rows,
+                unchanged_rows,
+                removed_count,
+                rows_deleted,
+                raw_error,
             )
-        except Exception as exc:
-            return self.set_status(normalized, "failed", error=str(exc))
 
-        if isinstance(result, dict) and result.get("status") == "error":
-            error_payload = result.get("error")
-            error = (
-                error_payload.get("message")
-                if isinstance(error_payload, dict)
-                else str(error_payload or "Integration tool sync failed")
+            if isinstance(result, dict) and result.get("status") == "error":
+                error_payload = result.get("error")
+                error = (
+                    error_payload.get("message")
+                    if isinstance(error_payload, dict)
+                    else str(error_payload or "Integration tool sync failed")
+                )
+                state = self.set_status(normalized, "failed", error=str(error))
+                log_staging_diagnostic(
+                    logger,
+                    "Integration sync coordinator mapped app_slug=%s status=%s error=%s",
+                    normalized,
+                    state.status,
+                    state.error,
+                )
+                return state
+
+            tool_count = 0
+            if isinstance(result, dict):
+                changed = result.get("apps") or []
+                unchanged = result.get("unchanged_apps") or []
+                for item in [*changed, *unchanged]:
+                    if isinstance(item, dict):
+                        tool_count += int(item.get("rows") or 0)
+            state = self.set_status(normalized, "ready", tool_count=tool_count)
+            log_staging_diagnostic(
+                logger,
+                "Integration sync coordinator mapped app_slug=%s status=%s tool_count=%d",
+                normalized,
+                state.status,
+                tool_count,
             )
-            return self.set_status(normalized, "failed", error=str(error))
-
-        tool_count = 0
-        if isinstance(result, dict):
-            changed = result.get("apps") or []
-            unchanged = result.get("unchanged_apps") or []
-            for item in [*changed, *unchanged]:
-                if isinstance(item, dict):
-                    tool_count += int(item.get("rows") or 0)
-        return self.set_status(normalized, "ready", tool_count=tool_count)
+            return state
 
     async def schedule_connected_apps(self) -> list[IntegrationSyncState]:
         connections = await asyncio.to_thread(
