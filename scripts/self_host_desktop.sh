@@ -166,6 +166,7 @@ _start_desktop_container() {
     -v "${SELF_HOST_DESKTOP_VOLUME}:/Unity/Local"
     -e "UNITY_SSH_PUBLIC_KEY=${ssh_public_key}"
     -e "UNIFY_KEY=${unify_key}"
+    -e "UNITY_LOCAL_ROOT=/Unity/Local"
     -e "ORCHESTRA_URL=${orchestra_url}"
     --add-host=host.docker.internal:host-gateway
   )
