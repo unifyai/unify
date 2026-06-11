@@ -221,11 +221,7 @@ case "$cmd" in
         ensure_livekit_installed || exit 1
         start_livekit            || exit 1
         wire_voice_env           || exit 1
-        if [ -x "$UNITY_REPO/scripts/prompt_byok_keys.sh" ]; then
-            UNITY_REPO="$UNITY_REPO" bash "$UNITY_REPO/scripts/prompt_byok_keys.sh" || true
-        else
-            report_byok_status
-        fi
+        report_byok_status
         ;;
     stop)
         stop_livekit

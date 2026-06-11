@@ -63,7 +63,7 @@ log_info()    { echo -e "${CYAN}→${NC} $1"; }
 log_success() { echo -e "${GREEN}✓${NC} $1"; }
 log_warn()    { echo -e "${YELLOW}⚠${NC} $1"; }
 
-NON_INTERACTIVE=false
+NON_INTERACTIVE="${NON_INTERACTIVE:-false}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --non-interactive) NON_INTERACTIVE=true; shift ;;
@@ -327,9 +327,59 @@ prompt_research_and_computer() {
   echo ""
 }
 
+import_shell_env_keys() {
+  local key val
+  for key in OPENAI_API_KEY ANTHROPIC_API_KEY DEEPGRAM_API_KEY CARTESIA_API_KEY \
+    UNITY_WEB_TAVILY_API_KEY ANTICAPTCHA_KEY; do
+    val="${!key:-}"
+    [[ -z "$val" ]] && continue
+    if ! has_env_value "$key"; then
+      upsert_env "$key" "$val"
+      log_success "Imported $key from environment into $ENV_FILE"
+    fi
+  done
+}
+
+mark_byok_configured() {
+  upsert_env "UNITY_BYOK_CONFIGURED" "1"
+}
+
+run_non_interactive_byok() {
+  import_shell_env_keys
+  prompt_llm_key
+  prompt_secret \
+    "Speech-to-text (required for browser calls)" \
+    "DEEPGRAM_API_KEY" \
+    "Free tier: https://console.deepgram.com"
+  prompt_secret \
+    "Text-to-speech (required for browser calls)" \
+    "CARTESIA_API_KEY" \
+    "Free credits: https://play.cartesia.ai"
+  if has_env_value CARTESIA_API_KEY && ! has_env_value VOICE_PROVIDER; then
+    upsert_env "VOICE_PROVIDER" "cartesia"
+  fi
+  ensure_oauth_signing_key
+  sync_anticaptcha_keys
+  mark_byok_configured
+  log_success "BYOK keys synced (non-interactive)"
+}
+
 main() {
   if [[ ! -d "$UNITY_REPO" ]]; then
     log_warn "Unity repo not found at $UNITY_REPO — skipping BYOK prompts"
+    exit 0
+  fi
+
+  if [[ "$NON_INTERACTIVE" == "true" ]]; then
+    run_non_interactive_byok
+    exit 0
+  fi
+
+  if [[ "${UNITY_BYOK_FORCE:-0}" != "1" ]] && has_env_value UNITY_BYOK_CONFIGURED; then
+    import_shell_env_keys
+    sync_anticaptcha_keys
+    log_success "BYOK already configured in $ENV_FILE — skipping wizard"
+    log_info "Set UNITY_BYOK_FORCE=1 to run the wizard again"
     exit 0
   fi
 
@@ -342,6 +392,7 @@ main() {
   echo "  Optional:  Tavily (web search), AntiCaptcha (computer use)"
   echo ""
 
+  import_shell_env_keys
   prompt_llm_key
   prompt_secret \
     "Speech-to-text (required for browser calls)" \
@@ -366,6 +417,7 @@ main() {
 
   prompt_workspace_oauth
   prompt_research_and_computer
+  mark_byok_configured
 }
 
 main "$@"
