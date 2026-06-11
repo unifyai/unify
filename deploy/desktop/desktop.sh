@@ -1,30 +1,41 @@
 #!/bin/bash
-# Virtual desktop: TigerVNC (display + VNC server), XFCE4 DE, noVNC proxy
+# Virtual desktop: TigerVNC (display :99), XFCE4, noVNC proxy.
+# Runs as unityuser with HOME=/Unity so the session matches pool VM layout.
 
-# Set VNC password (UNIFY_KEY shared with agent-service and developers)
-mkdir -p /root/.vnc
-echo "${UNIFY_KEY:-changeme}" | vncpasswd -f > /root/.vnc/passwd
-chmod 600 /root/.vnc/passwd
+set -euo pipefail
 
-# Start TigerVNC (combined X display server + VNC server in one process)
+export HOME="${HOME:-/Unity}"
+export DISPLAY="${DISPLAY:-:99}"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/runtime-unityuser}"
+
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR"
+
+rm -f /tmp/.X99-lock
+rm -f /tmp/.X11-unix/X99
+
+mkdir -p "$HOME/.vnc"
+echo "${UNIFY_KEY:-changeme}" | vncpasswd -f >"$HOME/.vnc/passwd"
+chmod 600 "$HOME/.vnc/passwd"
+
 Xtigervnc :99 -geometry 1920x1080 -depth 24 \
-    -rfbport 5900 -rfbauth /root/.vnc/passwd \
-    -AlwaysShared -desktop "Unity Desktop" &
+  -rfbport 5900 -rfbauth "$HOME/.vnc/passwd" \
+  -AlwaysShared -desktop "Unity Desktop" &
 sleep 2
 
-# XFCE desktop session
-startxfce4 &
+eval "$(dbus-launch --sh-syntax)"
+export DBUS_SESSION_BUS_ADDRESS
 
-# Disable screen blanking and DPMS (prevents black screen over VNC)
+startxfce4 &
+sleep 2
+
 xset s off
 xset -dpms
 xset s noblank
 
-# Desktop portals
 /usr/libexec/xdg-desktop-portal &
 /usr/libexec/xdg-desktop-portal-gtk &
 
 mkdir -p /tmp/unify/assistant/install
 
-# noVNC proxy (foreground — keeps this process alive for supervisord)
 exec websockify --web=/opt/novnc 6080 localhost:5900
