@@ -73,8 +73,7 @@ RUN uv pip install --system --no-cache .
 # Link pre-built magnitude into the workspace (agent-service references ../magnitude)
 RUN ln -sfn /opt/magnitude magnitude
 
-# Ensure entrypoint script is executable
-RUN chmod +x /app/deploy/entrypoint.sh || true
+RUN chmod +x /app/deploy/entrypoint.sh /app/deploy/selfhost/*.sh 2>/dev/null || true
 
 # Build agent-service
 WORKDIR /app/agent-service
