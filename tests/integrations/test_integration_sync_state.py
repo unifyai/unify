@@ -47,10 +47,14 @@ class FakeIntegrationOps:
 class FakeFunctionManager:
     def __init__(self) -> None:
         self.calls: list[dict] = []
+        self.result = {
+            "status": "synced",
+            "apps": [{"key": "composio:salesforce", "rows": 3}],
+        }
 
     def sync_provider_integration_tools(self, **kwargs):
         self.calls.append(kwargs)
-        return {"status": "synced", "apps": [{"key": "composio:salesforce", "rows": 3}]}
+        return self.result
 
 
 class FakeEventBroker:
@@ -90,7 +94,11 @@ async def test_sync_coordinator_materializes_connected_apps(
         ("list_connections", (), {"owner_scope": "assistant", "assistant_id": 42}),
     ]
     assert function_manager.calls == [
-        {"app_slug": "salesforce", "connection_id": "conn-salesforce"},
+        {
+            "app_slug": "salesforce",
+            "connection_id": "conn-salesforce",
+            "operation": "materialize",
+        },
     ]
 
 
@@ -127,6 +135,24 @@ def test_sync_requested_payload_parses_camel_case_metadata() -> None:
     assert event.app_slug == "gmail"
     assert event.app_display_name == "Gmail"
     assert event.connection_id == "conn-gmail"
+    assert event.operation == "materialize"
+
+
+def test_sync_requested_payload_parses_cleanup_operation() -> None:
+    event = _integration_tools_sync_requested_from_payload(
+        {
+            "extraEventFields": {
+                "appSlug": "gmail",
+                "connectionId": "conn-gmail",
+                "operation": "cleanup",
+            },
+        },
+    )
+
+    assert event is not None
+    assert event.app_slug == "gmail"
+    assert event.connection_id == "conn-gmail"
+    assert event.operation == "cleanup"
 
 
 @pytest.mark.anyio
@@ -164,11 +190,69 @@ async def test_sync_requested_handler_schedules_domain_sync(
     assert cm.integration_sync_coordinator.snapshot()["salesforce"].status == "ready"
     assert cm.notifications_bar.notifications[-1].type == "Integrations"
     assert function_manager.calls == [
-        {"app_slug": "salesforce", "connection_id": "conn-salesforce"},
+        {
+            "app_slug": "salesforce",
+            "connection_id": "conn-salesforce",
+            "operation": "materialize",
+        },
     ]
     assert event_broker.published[-1][0].endswith("integration_tools_sync_completed")
     published = json.loads(event_broker.published[-1][1])
     assert published["payload"]["connection_id"] == "conn-salesforce"
+    assert published["payload"]["operation"] == "materialize"
+
+
+@pytest.mark.anyio
+async def test_cleanup_sync_maps_to_removed_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    function_manager = FakeFunctionManager()
+    function_manager.result = {
+        "status": "removed",
+        "apps": [],
+        "removed_apps": ["composio:gmail"],
+        "rows_deleted": 2,
+    }
+    event_broker = FakeEventBroker()
+    monkeypatch.setattr(
+        "unity.manager_registry.ManagerRegistry.get_function_manager",
+        lambda **kwargs: function_manager,
+    )
+    monkeypatch.setattr(
+        "unity.integrations.ops.list_connections",
+        FakeIntegrationOps().list_connections,
+    )
+    cm = SimpleNamespace(
+        integration_sync_coordinator=IntegrationSyncCoordinator(owner_scope={}),
+        notifications_bar=NotificationBar(),
+        event_broker=event_broker,
+    )
+
+    should_wake = await _handle_integration_tools_sync_requested(
+        IntegrationToolsSyncRequested(
+            app_slug="Gmail",
+            app_display_name="Gmail",
+            connection_id="conn-gmail",
+            operation="cleanup",
+        ),
+        cm,
+    )
+    await cm.integration_sync_coordinator._tasks["gmail"]
+    await asyncio.sleep(0)
+
+    assert should_wake is True
+    state = cm.integration_sync_coordinator.snapshot()["gmail"]
+    assert state.status == "removed"
+    assert cm.integration_sync_coordinator.prompt_summary() == ""
+    assert function_manager.calls == [
+        {
+            "app_slug": "gmail",
+            "connection_id": "conn-gmail",
+            "operation": "cleanup",
+        },
+    ]
+    published = json.loads(event_broker.published[-1][1])
+    assert published["payload"]["operation"] == "cleanup"
 
 
 @pytest.mark.anyio
@@ -224,7 +308,11 @@ async def test_startup_sync_schedules_connected_apps_without_brain_action_tools(
     await asyncio.sleep(0)
 
     assert function_manager.calls == [
-        {"app_slug": "salesforce", "connection_id": "conn-salesforce"},
+        {
+            "app_slug": "salesforce",
+            "connection_id": "conn-salesforce",
+            "operation": "materialize",
+        },
     ]
     assert event_broker.published[-1][0].endswith("integration_tools_sync_completed")
 
