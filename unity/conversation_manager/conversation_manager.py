@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import json
+import traceback
 from datetime import datetime
 from typing import Any, Optional
 
@@ -112,6 +113,28 @@ def _log_slow_brain_single_shot_failure(
         tool_count,
         state_chars,
     )
+    LOGGER.error(
+        "Slow-brain single-shot traceback text:\n%s",
+        traceback.format_exc(),
+    )
+
+
+def _append_context_to_state_message(message: dict, context: str) -> dict:
+    if not context:
+        return message
+    updated = dict(message)
+    content = updated.get("content")
+    if isinstance(content, str):
+        updated["content"] = f"{content}\n\n{context}"
+        return updated
+    if isinstance(content, list):
+        updated["content"] = [
+            *content,
+            {"type": "text", "text": f"\n\n{context}"},
+        ]
+        return updated
+    updated["content"] = f"{content or ''}\n\n{context}"
+    return updated
 
 
 def _render_action_context(
@@ -1724,8 +1747,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
         _t0 = _rl_time.perf_counter()
         input_message = brain_spec.state_message()
         integration_sync_context = self.integration_sync_coordinator.prompt_summary()
-        if integration_sync_context:
-            input_message = f"{input_message}\n\n{integration_sync_context}"
+        input_message = _append_context_to_state_message(
+            input_message,
+            integration_sync_context,
+        )
         _state_message_ms = (_rl_time.perf_counter() - _t0) * 1000
         _t0 = _rl_time.perf_counter()
         system_prompt = brain_spec.system_prompt
