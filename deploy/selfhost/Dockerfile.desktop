@@ -1,0 +1,28 @@
+# Self-host desktop image — pool-VM layout with unityuser and /Unity/Local workspace.
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV HOME=/Unity
+ENV UNITY_LOCAL_ROOT=/Unity/Local
+ENV AGENT_SERVICE_PORT=13000
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl gnupg openssh-server supervisor tigervnc-standalone-server \
+    xfce4 xfce4-terminal dbus-x11 python3 python3-pip websockify \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -u 1000 -d /Unity unityuser \
+    && mkdir -p /Unity/Local \
+    && chown -R unityuser:unityuser /Unity
+
+WORKDIR /app
+COPY deploy/desktop/ /app/desktop/
+RUN chmod +x /app/desktop/*.sh /app/desktop/startup.sh 2>/dev/null || true
+
+EXPOSE 5900 6080 2222 13000
+USER root
+CMD ["/app/desktop/startup.sh"]

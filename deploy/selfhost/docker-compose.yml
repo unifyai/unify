@@ -1,0 +1,240 @@
+# Self-host docker compose stack.
+# Copy to ~/.unity/ by install-compose.sh; keys live in .env beside this file.
+
+name: unity-selfhost
+
+x-unity-image: &unity_image
+  image: ${UNITY_IMAGE:-ghcr.io/unifyai/unity-selfhost:staging}
+
+x-console-image: &console_image
+  image: ${CONSOLE_IMAGE:-ghcr.io/unifyai/console-selfhost:staging}
+
+x-orchestra-image: &orchestra_image
+  image: ${ORCHESTRA_IMAGE:-ghcr.io/unifyai/orchestra:staging}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: orchestra
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orchestra}
+      POSTGRES_DB: orchestra
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orchestra -d orchestra"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  orchestra-migrate:
+    <<: *orchestra_image
+    command: alembic upgrade head
+    environment:
+      ORCHESTRA_DB_HOST: postgres
+      ORCHESTRA_DB_PORT: 5432
+      ORCHESTRA_DB_USER: orchestra
+      ORCHESTRA_DB_PASS: ${POSTGRES_PASSWORD:-orchestra}
+      ORCHESTRA_DB_BASE: orchestra
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  orchestra-seed:
+    <<: *orchestra_image
+    command: python /app/src/deploy/selfhost/compose_seed.py
+    environment:
+      ORCHESTRA_DB_HOST: postgres
+      ORCHESTRA_DB_PORT: 5432
+      ORCHESTRA_DB_USER: orchestra
+      ORCHESTRA_DB_PASS: ${POSTGRES_PASSWORD:-orchestra}
+      ORCHESTRA_DB_BASE: orchestra
+    depends_on:
+      orchestra-migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  orchestra:
+    <<: *orchestra_image
+    environment:
+      ORCHESTRA_HOST: 0.0.0.0
+      ORCHESTRA_PORT: 8000
+      ORCHESTRA_DB_HOST: postgres
+      ORCHESTRA_DB_PORT: 5432
+      ORCHESTRA_DB_USER: orchestra
+      ORCHESTRA_DB_PASS: ${POSTGRES_PASSWORD:-orchestra}
+      ORCHESTRA_DB_BASE: orchestra
+      ORCHESTRA_ADMIN_KEY: ${ORCHESTRA_ADMIN_KEY}
+      SELF_HOST: "1"
+      SELF_HOST_LOCAL_BUCKET_DIR: /data/local-bucket
+      ORCHESTRA_WORKERS_COUNT: "2"
+    volumes:
+      - local-bucket:/data/local-bucket
+    depends_on:
+      orchestra-seed:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v0/health', timeout=5)\"",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  pubsub-emulator:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
+    command:
+      - gcloud
+      - beta
+      - emulators
+      - pubsub
+      - start
+      - --host-port=0.0.0.0:8085
+      - --project=${PUBSUB_GCP_PROJECT_ID:-local-test-project}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8085 || exit 0"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  livekit:
+    image: livekit/livekit-server:latest
+    command: ["--dev", "--bind", "0.0.0.0"]
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "7882:7882/udp"
+    restart: unless-stopped
+
+  gateway:
+    <<: *unity_image
+    entrypoint: ["/bin/bash", "/app/deploy/selfhost/gateway-entrypoint.sh"]
+    environment:
+      ORCHESTRA_URL: http://orchestra:8000/v0
+      ORCHESTRA_ADMIN_KEY: ${ORCHESTRA_ADMIN_KEY}
+      UNITY_GATEWAY_HOST: 0.0.0.0
+      UNITY_GATEWAY_PORT: 8001
+      UNITY_GATEWAY_SINGLE_URL: "true"
+      UNITY_COMMS_URL: http://gateway:8001
+      UNITY_ADAPTERS_URL: http://gateway:8001
+      UNITY_GATEWAY_LOCAL_INGRESS_URL: http://unity-cm:8787
+      LIVEKIT_URL: ws://livekit:7880
+      LIVEKIT_API_KEY: devkey
+      LIVEKIT_API_SECRET: secret
+    depends_on:
+      orchestra:
+        condition: service_healthy
+      pubsub-emulator:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8001/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  console:
+    <<: *console_image
+    ports:
+      - "${CONSOLE_PORT:-3000}:3000"
+    environment:
+      SELF_HOST: "1"
+      NEXT_PUBLIC_SELF_HOST: "1"
+      SELF_HOST_RUNTIME_MODE: compose
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://127.0.0.1:3000}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      ORCHESTRA_URL: http://orchestra:8000/v0
+      ORCHESTRA_ADMIN_KEY: ${ORCHESTRA_ADMIN_KEY}
+      LOCAL_ADAPTERS_URL: http://gateway:8001
+      UNITY_ADAPTERS_URL: http://gateway:8001
+      UNITY_COMMS_URL: http://gateway:8001
+      SELF_HOST_DESKTOP_URL: http://127.0.0.1:8090
+      SELF_HOST_COORDINATOR_RUNTIME_FILE: /runtime/coordinator-runtime.json
+      PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
+      GCP_PROJECT_ID: ${PUBSUB_GCP_PROJECT_ID:-local-test-project}
+      LIVEKIT_URL: ws://127.0.0.1:7880
+      LIVEKIT_API_KEY: devkey
+      LIVEKIT_API_SECRET: secret
+    volumes:
+      - runtime:/runtime
+    depends_on:
+      orchestra:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
+
+  unity-cm:
+    <<: *unity_image
+    entrypoint: ["/bin/bash", "/app/deploy/selfhost/cm-entrypoint.sh"]
+    environment:
+      SELF_HOST: "1"
+      SELF_HOST_COORDINATOR_RUNTIME_FILE: /runtime/coordinator-runtime.json
+      ORCHESTRA_URL: http://orchestra:8000/v0
+      ORCHESTRA_ADMIN_KEY: ${ORCHESTRA_ADMIN_KEY}
+      PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
+      GCP_PROJECT_ID: ${PUBSUB_GCP_PROJECT_ID:-local-test-project}
+      PUBSUB_TOPIC_SUFFIX: "-staging"
+      UNITY_COMMS_URL: http://gateway:8001
+      UNITY_ADAPTERS_URL: http://gateway:8001
+      UNITY_CONVERSATION_LOCAL_COMMS_HOST: 0.0.0.0
+      UNITY_CONVERSATION_LOCAL_COMMS_PORT: 8787
+      UNITY_DESKTOP_SHARED_MOUNT: "1"
+      UNITY_LOCAL_ROOT: /Unity/Local
+      SELF_HOST_DESKTOP_URL: http://127.0.0.1:8090
+      LIVEKIT_URL: ws://livekit:7880
+      LIVEKIT_API_KEY: devkey
+      LIVEKIT_API_SECRET: secret
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-}
+      CARTESIA_API_KEY: ${CARTESIA_API_KEY:-}
+      UNIFY_MODEL: ${UNIFY_MODEL:-}
+      UNITY_WEB_TAVILY_API_KEY: ${UNITY_WEB_TAVILY_API_KEY:-}
+      UNITY_WEB_ENABLED: ${UNITY_WEB_ENABLED:-}
+      ANTICAPTCHA_KEY: ${ANTICAPTCHA_KEY:-}
+      UNITY_ACTOR_ANTICAPTCHA_KEY: ${UNITY_ACTOR_ANTICAPTCHA_KEY:-}
+    volumes:
+      - runtime:/runtime
+      - ${UNITY_WORKSPACE_HOST:-./workspace}:/Unity/Local
+    depends_on:
+      orchestra:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+      pubsub-emulator:
+        condition: service_started
+    restart: unless-stopped
+
+  desktop:
+    image: ${DESKTOP_IMAGE:-ghcr.io/unifyai/unity-desktop-selfhost:staging}
+    environment:
+      HOME: /Unity
+      UNITY_LOCAL_ROOT: /Unity/Local
+      AGENT_SERVICE_PORT: "13000"
+      UNIFY_KEY: ${PLACEHOLDER_UNIFY_KEY:-local-placeholder}
+    volumes:
+      - ${UNITY_WORKSPACE_HOST:-./workspace}:/Unity/Local
+    restart: unless-stopped
+
+  desktop-proxy:
+    image: caddy:2-alpine
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - desktop
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  local-bucket:
+  runtime:
