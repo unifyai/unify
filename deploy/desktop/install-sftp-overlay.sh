@@ -10,14 +10,30 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server
 rm -rf /var/lib/apt/lists/*
 
 if ! id unityuser &>/dev/null; then
-  useradd -m -d /Unity -s /usr/sbin/nologin unityuser
+  useradd -m -d /Unity -s /bin/bash unityuser
 fi
 
-mkdir -p /Unity/Local /Unity/.ssh
+mkdir -p /Unity/.ssh /Unity/Local /Unity/.config /Unity/.local /Unity/.cache /Unity/.vnc \
+  /Unity/Desktop /Unity/Downloads /Unity/Documents /Unity/Music \
+  /Unity/Pictures /Unity/Videos /Unity/Templates /Unity/Public
 chown root:root /Unity
 chmod 755 /Unity
-chown -R unityuser:unityuser /Unity/Local /Unity/.ssh
+for dir in Desktop Downloads Documents Music Pictures Videos Templates Public; do
+  mkdir -p "/Unity/$dir"
+done
+chown -R unityuser:unityuser /Unity/.ssh /Unity/Local /Unity/.config /Unity/.local /Unity/.cache /Unity/.vnc \
+  /Unity/Desktop /Unity/Downloads /Unity/Documents /Unity/Music \
+  /Unity/Pictures /Unity/Videos /Unity/Templates /Unity/Public
+chmod 700 /Unity/.ssh
 chmod 755 /Unity/Local
+
+cat >/Unity/.bashrc <<'BASHRC'
+if [[ -d /Unity ]] && [[ $- == *i* ]] && [[ -n "$DISPLAY" ]] && [[ -z "$UNITY_SHELL_INIT" ]]; then
+    export UNITY_SHELL_INIT=1
+    cd /Unity
+fi
+BASHRC
+chown unityuser:unityuser /Unity/.bashrc
 
 mkdir -p /var/run/sshd
 
