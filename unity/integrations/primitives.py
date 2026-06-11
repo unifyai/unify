@@ -43,6 +43,7 @@ def integration_owner_scope_from_session() -> dict[str, Any]:
         team_id = getattr(getattr(SESSION_DETAILS, "team", None), "id", None)
         if assistant_id is not None:
             scope["assistant_id"] = assistant_id
+            return scope
         if user_id:
             scope["user_id"] = user_id
         if org_id is not None:
@@ -52,6 +53,32 @@ def integration_owner_scope_from_session() -> dict[str, Any]:
     except Exception:
         pass
     return scope
+
+
+def _canonical_owner_scope(scope: dict[str, Any]) -> dict[str, Any]:
+    owner_scope = scope.get("owner_scope") or "assistant"
+    scoped_ids = {
+        "assistant": ("assistant_id",),
+        "user": ("user_id",),
+        "org": ("org_id",),
+        "team": ("team_id",),
+    }.get(str(owner_scope), ())
+    if not scoped_ids:
+        scope.setdefault("owner_scope", "assistant")
+        return scope
+    return {
+        key: value
+        for key, value in scope.items()
+        if key == "owner_scope"
+        or key in scoped_ids
+        or key
+        not in {
+            "assistant_id",
+            "user_id",
+            "org_id",
+            "team_id",
+        }
+    }
 
 
 class _IntegrationAppNamespace:
@@ -113,7 +140,7 @@ class IntegrationPrimitives:
             if value is not None:
                 scope[key] = value
         scope.setdefault("owner_scope", "assistant")
-        return scope
+        return _canonical_owner_scope(scope)
 
     async def search_integrations(
         self,
