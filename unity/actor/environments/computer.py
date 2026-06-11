@@ -251,6 +251,10 @@ class ComputerEnvironment(BaseEnvironment):
             "unless that user has clearly asked you to do something on *their* "
             'computer (e.g. "open the file on my laptop", "click submit on my '
             'screen").  For everything else, use your own desktop.\n'
+            "- **Clarify when unsure.** If the request is ambiguous -- which "
+            "machine, which file or target, or whether they mean *their* "
+            "computer rather than yours -- ask a brief clarifying question "
+            "before acting rather than guessing.\n"
             "- **Confirm before consequential actions.** Their machine may hold "
             "personal data and live sessions.  Before anything destructive, "
             "irreversible, or that sends/deletes/purchases on their behalf, "
