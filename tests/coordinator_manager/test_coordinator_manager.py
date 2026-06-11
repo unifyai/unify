@@ -74,7 +74,7 @@ class TestCoordinatorManager:
 
         assert list_members.call_count == 2
 
-    def test_workspace_coordinator_name_uses_user_assistant_listing(self):
+    def test_coordinator_name_uses_user_assistant_listing(self):
         SESSION_DETAILS.org_id = 7
         SESSION_DETAILS.unify_key = "owner-key"
 
@@ -95,14 +95,14 @@ class TestCoordinatorManager:
                 },
             ],
         ) as list_assistants:
-            assert manager.get_workspace_coordinator_name() == "Avery Coordinator"
-            assert manager.get_workspace_coordinator_name() == "Avery Coordinator"
+            assert manager.get_coordinator_name() == "Avery Coordinator"
+            assert manager.get_coordinator_name() == "Avery Coordinator"
 
         list_assistants.assert_called_once_with(
             api_key="owner-key",  # pragma: allowlist secret
         )
 
-    def test_workspace_coordinator_name_returns_none_when_no_coordinator_exists(self):
+    def test_coordinator_name_returns_none_when_no_coordinator_exists(self):
         SESSION_DETAILS.org_id = 7
         SESSION_DETAILS.unify_key = "owner-key"
 
@@ -112,9 +112,9 @@ class TestCoordinatorManager:
             "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
             return_value=[{"first_name": "Patch", "surname": "One"}],
         ):
-            assert manager.get_workspace_coordinator_name() is None
+            assert manager.get_coordinator_name() is None
 
-    def test_workspace_coordinator_name_failures_do_not_poison_cache(self):
+    def test_coordinator_name_failures_do_not_poison_cache(self):
         SESSION_DETAILS.org_id = 7
         SESSION_DETAILS.unify_key = "owner-key"
 
@@ -136,12 +136,12 @@ class TestCoordinatorManager:
                 ],
             ],
         ) as list_assistants:
-            assert manager.get_workspace_coordinator_name() is None
-            assert manager.get_workspace_coordinator_name() == "Avery Coordinator"
+            assert manager.get_coordinator_name() is None
+            assert manager.get_coordinator_name() == "Avery Coordinator"
 
         assert list_assistants.call_count == 2
 
-    def test_workspace_coordinator_name_cache_follows_api_key_identity(self):
+    def test_coordinator_name_cache_follows_api_key_identity(self):
         SESSION_DETAILS.org_id = 7
         SESSION_DETAILS.unify_key = "owner-key"
 
@@ -166,11 +166,11 @@ class TestCoordinatorManager:
                 ],
             ],
         ) as list_assistants:
-            assert manager.get_workspace_coordinator_name() == "Avery Coordinator"
+            assert manager.get_coordinator_name() == "Avery Coordinator"
             SESSION_DETAILS.org_id = 8
-            assert manager.get_workspace_coordinator_name() == "Avery Coordinator"
+            assert manager.get_coordinator_name() == "Avery Coordinator"
             SESSION_DETAILS.unify_key = "admin-key"
-            assert manager.get_workspace_coordinator_name() == "Blair Coordinator"
+            assert manager.get_coordinator_name() == "Blair Coordinator"
 
         assert list_assistants.call_count == 2
 

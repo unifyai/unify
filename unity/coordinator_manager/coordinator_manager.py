@@ -1,7 +1,7 @@
-"""Coordinator workspace primitives and prompt-time lookups.
+"""Coordinator admin primitives and prompt-time lookups.
 
 Coordinator-only tools are exposed under ``primitives.coordinator`` for the
-actor loop. Prompt-time org roster and workspace Coordinator name lookups live
+actor loop. Prompt-time org roster and Coordinator name lookups live
 on the same ``CoordinatorManager`` singleton without the coordinator role gate
 applied to tool primitives.
 """
@@ -41,7 +41,7 @@ _CACHE_EMPTY = object()
 def _coordinator_role_required_error() -> ToolError:
     return {
         "error_kind": "permission_denied",
-        "message": "Coordinator workspace primitives are only available in Coordinator sessions.",
+        "message": "Coordinator admin primitives are only available in Coordinator sessions.",
         "details": {"is_coordinator": bool(SESSION_DETAILS.is_coordinator)},
     }
 
@@ -1852,7 +1852,7 @@ class _CoordinatorToolCall:
         if require_organization:
             return _invalid_argument(
                 message=(
-                    f"`{operation_name}` requires an organization workspace Coordinator. "
+                    f"`{operation_name}` requires an organization Coordinator. "
                     "Switch to the target organization workspace and try again."
                 ),
                 details={
@@ -2179,9 +2179,9 @@ def _request_error_to_tool_error(exc: RequestError) -> ToolError:
 
 
 class CoordinatorManager(metaclass=SingletonABCMeta):
-    """Singleton facade for coordinator prompt lookups and workspace tools.
+    """Singleton facade for coordinator prompt lookups and admin tools.
 
-    Prompt-time lookups (``get_org_members``, ``get_workspace_coordinator_name``)
+    Prompt-time lookups (``get_org_members``, ``get_coordinator_name``)
     live on this singleton. Each ``primitives.coordinator.*`` tool runs on a
     fresh :class:`_CoordinatorToolCall` so reachability caches and activity
     metadata do not leak across invocations.
@@ -2192,8 +2192,8 @@ class CoordinatorManager(metaclass=SingletonABCMeta):
     def __init__(self) -> None:
         self._org_members_cache_key: tuple[int | None, str] | object = _CACHE_EMPTY
         self._org_members_cache: list[dict[str, Any]] | object = _CACHE_EMPTY
-        self._workspace_coordinator_name_cache_key: str | None | object = _CACHE_EMPTY
-        self._workspace_coordinator_name_cache: str | None | object = _CACHE_EMPTY
+        self._coordinator_name_cache_key: str | None | object = _CACHE_EMPTY
+        self._coordinator_name_cache: str | None | object = _CACHE_EMPTY
 
     def get_org_members(self) -> list[dict[str, Any]]:
         """Return authorized humans in the Coordinator's organization for prompts."""
@@ -2221,15 +2221,15 @@ class CoordinatorManager(metaclass=SingletonABCMeta):
         self._org_members_cache = members
         return members
 
-    def get_workspace_coordinator_name(self) -> str | None:
-        """Return the display name for the active workspace Coordinator."""
+    def get_coordinator_name(self) -> str | None:
+        """Return the display name for the user's Coordinator."""
 
-        cache_key = _workspace_coordinator_cache_key()
+        cache_key = _coordinator_cache_key()
         if (
-            self._workspace_coordinator_name_cache_key == cache_key
-            and self._workspace_coordinator_name_cache is not _CACHE_EMPTY
+            self._coordinator_name_cache_key == cache_key
+            and self._coordinator_name_cache is not _CACHE_EMPTY
         ):
-            return self._workspace_coordinator_name_cache  # type: ignore[return-value]
+            return self._coordinator_name_cache  # type: ignore[return-value]
 
         try:
             assistants = unify.list_assistants(api_key=SESSION_DETAILS.unify_key)
@@ -2244,8 +2244,8 @@ class CoordinatorManager(metaclass=SingletonABCMeta):
             ),
             None,
         )
-        self._workspace_coordinator_name_cache_key = cache_key
-        self._workspace_coordinator_name_cache = coordinator_name
+        self._coordinator_name_cache_key = cache_key
+        self._coordinator_name_cache = coordinator_name
         return coordinator_name
 
     @staticmethod
@@ -2259,7 +2259,7 @@ def _org_members_cache_key() -> tuple[int | None, str]:
     return SESSION_DETAILS.org_id, SESSION_DETAILS.unify_key
 
 
-def _workspace_coordinator_cache_key() -> str | None:
+def _coordinator_cache_key() -> str | None:
     return SESSION_DETAILS.unify_key
 
 

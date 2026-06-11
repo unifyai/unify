@@ -505,7 +505,7 @@ def create_user(
 
 
 def add_org_member(urls: LocalStackUrls, org: dict, *, user_id: str) -> None:
-    """Add an organization member and provision their workspace coordinator."""
+    """Add an organization member and provision their Coordinator."""
 
     response = requests.post(
         f"{urls.orchestra_url}/organizations/{org['id']}/members",
@@ -541,7 +541,7 @@ def find_org_coordinator_for_user(
     *,
     user_id: str,
 ) -> dict:
-    """Return the org-scoped workspace coordinator owned by ``user_id``."""
+    """Return the org-scoped Coordinator owned by ``user_id``."""
 
     for assistant in assistants:
         if not assistant.get("is_coordinator"):
