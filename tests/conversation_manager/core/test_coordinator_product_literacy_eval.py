@@ -177,7 +177,7 @@ class CoordinatorScenario:
     masked_components: tuple[str, ...] = ()
     screen_context: str | None = None
     is_coordinator: bool = True
-    workspace_coordinator_name: str | None = None
+    coordinator_name: str | None = None
     mode: Mode = Mode.TEXT
     forbidden_tools: frozenset[str] = field(default_factory=frozenset)
     required_tools: frozenset[str] = field(default_factory=frozenset)
@@ -1401,11 +1401,11 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
             ),
         ),
         masked_components=(
-            "Coordinator workspace tools are not exposed to this regular assistant.",
+            "Coordinator admin tools are not exposed to this regular assistant.",
             "No automatic cross-chat relay channel is provided.",
         ),
         is_coordinator=False,
-        workspace_coordinator_name="Avery Coordinator",
+        coordinator_name="Avery Coordinator",
         rubric=(
             "The response should explicitly name Avery Coordinator for team-shaping "
             "work, avoid implying act can bypass Coordinator boundaries, and offer "
@@ -1510,8 +1510,8 @@ def _build_brain_spec(scenario: CoordinatorScenario):
         ),
         patch(
             "unity.coordinator_manager.coordinator_manager."
-            "CoordinatorManager.get_workspace_coordinator_name",
-            return_value=scenario.workspace_coordinator_name,
+            "CoordinatorManager.get_coordinator_name",
+            return_value=scenario.coordinator_name,
         ),
     ):
         return build_brain_spec(cm, snapshot_state=snapshot_state)

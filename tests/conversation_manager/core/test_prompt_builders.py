@@ -114,7 +114,7 @@ class TestAccessibleSpacesBlock:
 class TestCoordinatorPrompt:
     """Coordinator sessions use a unified base prompt plus org-context surfaces."""
 
-    def test_org_coordinator_prompt_lists_org_roster_and_workspace_tools(self):
+    def test_org_coordinator_prompt_lists_org_roster_and_admin_tools(self):
         prompt = _build(
             is_coordinator=True,
             authorized_humans=[
@@ -136,10 +136,10 @@ class TestCoordinatorPrompt:
         assert "Authorized humans" in prompt
         assert "Dana Owner; email: dana@acme.com; role: admin" in prompt
         assert "Francis Lead; email: francis@acme.com; role: member" in prompt
-        assert "**Coordinator workspace tools:**" in prompt
+        assert "**Coordinator admin tools:**" in prompt
         assert "`primitives.coordinator.list_org_members`" in prompt
         assert "always target the active workspace organization" in prompt
-        assert "Team Coordinator\n----------------" not in prompt
+        assert "Coordinator\n-----------" not in prompt
 
     def test_personal_coordinator_uses_boss_details_and_routes_org_work_to_switch(
         self,
@@ -149,13 +149,13 @@ class TestCoordinatorPrompt:
         assert "Boss details" in prompt
         assert "Authorized humans\n-----------------" not in prompt
         assert "Organization membership actions are unavailable" in prompt
-        assert "switch to that organization's workspace coordinator" in prompt
+        assert "switch to that organization's Coordinator" in prompt
         assert "list_accessible_organizations" not in prompt
 
     def test_regular_assistant_gets_updated_coordinator_reference_block(self):
-        prompt = _build(workspace_coordinator_name="Avery Coordinator")
+        prompt = _build(coordinator_name="Avery Coordinator")
 
-        assert "Team Coordinator" in prompt
+        assert "Coordinator\n-----------" in prompt
         assert "I propose handing it to Avery Coordinator explicitly" in prompt
         assert "inviting, removing, or changing roles for colleagues" in prompt
         assert "creating or removing teams" in prompt
@@ -166,14 +166,14 @@ class TestCoordinatorPrompt:
         assert "I cannot forward it automatically" not in prompt
 
     def test_coordinator_reference_block_is_absent_without_name_or_on_coordinator(self):
-        personal_prompt = _build(workspace_coordinator_name=None)
+        personal_prompt = _build(coordinator_name=None)
         coordinator_prompt = _build(
             is_coordinator=True,
-            workspace_coordinator_name="Avery Coordinator",
+            coordinator_name="Avery Coordinator",
         )
 
-        assert "Team Coordinator" not in personal_prompt
-        assert "Team Coordinator" not in coordinator_prompt
+        assert "Coordinator\n-----------" not in personal_prompt
+        assert "Coordinator\n-----------" not in coordinator_prompt
 
     def test_base_and_coordinator_share_restraint_but_keep_role_specific_sections(self):
         base_prompt = _build()
@@ -203,22 +203,22 @@ class TestPromptSectionOwnershipMatrix:
                     "Concurrent action and acknowledgment\n------------------------------------",
                 ),
                 "absent": (
-                    "**Coordinator workspace tools:**",
+                    "**Coordinator admin tools:**",
                     "Authorized humans\n-----------------",
-                    "Team Coordinator\n----------------",
+                    "Coordinator\n-----------",
                     "Demo mode\n---------",
                 ),
             },
             {
                 "name": "regular_non_demo_with_org",
-                "kwargs": {"workspace_coordinator_name": "Avery Coordinator"},
+                "kwargs": {"coordinator_name": "Avery Coordinator"},
                 "present": (
                     "Act capabilities\n----------------",
                     "Concurrent action and acknowledgment\n------------------------------------",
-                    "Team Coordinator\n----------------",
+                    "Coordinator\n-----------",
                 ),
                 "absent": (
-                    "**Coordinator workspace tools:**",
+                    "**Coordinator admin tools:**",
                     "Authorized humans\n-----------------",
                     "Demo mode\n---------",
                 ),
@@ -228,10 +228,10 @@ class TestPromptSectionOwnershipMatrix:
                 "kwargs": {"demo_mode": True},
                 "present": ("Demo mode\n---------",),
                 "absent": (
-                    "**Coordinator workspace tools:**",
+                    "**Coordinator admin tools:**",
                     "Authorized humans\n-----------------",
                     "Act capabilities\n----------------",
-                    "Team Coordinator\n----------------",
+                    "Coordinator\n-----------",
                     "Concurrent action and acknowledgment\n------------------------------------",
                 ),
             },
@@ -239,14 +239,14 @@ class TestPromptSectionOwnershipMatrix:
                 "name": "regular_demo_with_org",
                 "kwargs": {
                     "demo_mode": True,
-                    "workspace_coordinator_name": "Avery Coordinator",
+                    "coordinator_name": "Avery Coordinator",
                 },
                 "present": (
                     "Demo mode\n---------",
-                    "Team Coordinator\n----------------",
+                    "Coordinator\n-----------",
                 ),
                 "absent": (
-                    "**Coordinator workspace tools:**",
+                    "**Coordinator admin tools:**",
                     "Authorized humans\n-----------------",
                     "Act capabilities\n----------------",
                     "Concurrent action and acknowledgment\n------------------------------------",
@@ -256,10 +256,10 @@ class TestPromptSectionOwnershipMatrix:
                 "name": "coordinator_non_demo_with_org",
                 "kwargs": {
                     "is_coordinator": True,
-                    "workspace_coordinator_name": "Avery Coordinator",
+                    "coordinator_name": "Avery Coordinator",
                 },
                 "present": (
-                    "**Coordinator workspace tools:**",
+                    "**Coordinator admin tools:**",
                     "Authorized humans\n-----------------",
                     "Act capabilities\n----------------",
                     "Concurrent action and acknowledgment\n------------------------------------",
@@ -268,7 +268,7 @@ class TestPromptSectionOwnershipMatrix:
                     "Proactive meeting offers\n------------------------",
                 ),
                 "absent": (
-                    "Team Coordinator\n----------------",
+                    "Coordinator\n-----------",
                     "Demo mode\n---------",
                     "Onboarding reference\n--------------------",
                     "Console knowledge\n-----------------",
@@ -279,15 +279,15 @@ class TestPromptSectionOwnershipMatrix:
                 "kwargs": {
                     "is_coordinator": True,
                     "demo_mode": True,
-                    "workspace_coordinator_name": "Avery Coordinator",
+                    "coordinator_name": "Avery Coordinator",
                 },
                 "present": (
                     "Authorized humans\n-----------------",
                     "Demo mode\n---------",
                 ),
                 "absent": (
-                    "**Coordinator workspace tools:**",
-                    "Team Coordinator\n----------------",
+                    "**Coordinator admin tools:**",
+                    "Coordinator\n-----------",
                     "Act capabilities\n----------------",
                     "Concurrent action and acknowledgment\n------------------------------------",
                 ),
@@ -299,17 +299,17 @@ class TestPromptSectionOwnershipMatrix:
                     "is_org_workspace": False,
                 },
                 "present": (
-                    "**Coordinator workspace tools:**",
+                    "**Coordinator admin tools:**",
                     "Boss details\n------------",
                     "Organization membership actions are unavailable",
-                    "switch to that organization's workspace coordinator",
+                    "switch to that organization's Coordinator",
                     "Coordinator Console literacy\n-----------------------------",
                     "Console account & org administration",
                     "Proactive meeting offers\n------------------------",
                 ),
                 "absent": (
                     "Authorized humans\n-----------------",
-                    "Team Coordinator\n----------------",
+                    "Coordinator\n-----------",
                     "Onboarding reference\n--------------------",
                     "Console knowledge\n-----------------",
                 ),
@@ -348,7 +348,7 @@ class TestCoordinatorVoicePrompt:
     def test_coordinator_voice_prompt_excludes_slow_brain_literacy(self):
         prompt = _build_voice(is_coordinator=True)
 
-        assert "Coordinator workspace tools" not in prompt
+        assert "Coordinator admin tools" not in prompt
         assert "Unify system literacy" not in prompt
         assert "Requirements discovery workflow" not in prompt
         assert "Tasks/Activations" not in prompt
@@ -490,7 +490,7 @@ class TestExternalAppIntegration:
         assert "Can you help me manage my apps and online services?" in prompt
 
     def test_org_assistant_onboarding_allows_direct_setup_with_shared_handoff(self):
-        prompt = _build(workspace_coordinator_name="Avery Coordinator")
+        prompt = _build(coordinator_name="Avery Coordinator")
 
         assert "I can walk through app setup and day-to-day usage directly" in prompt
         assert (

@@ -151,9 +151,9 @@ The following people are members of this organization. I work with all of them a
 Admins can authorize org-membership and shared-workspace lifecycle changes. Members can request these changes, but execution requires admin authorization."""
 
 
-def _build_workspace_coordinator_deferral_block(
+def _build_coordinator_deferral_block(
     *,
-    workspace_coordinator_name: str | None,
+    coordinator_name: str | None,
     is_org_workspace: bool,
 ) -> str:
     """Build the block that names the user's Coordinator alongside the assistant.
@@ -164,10 +164,9 @@ def _build_workspace_coordinator_deferral_block(
     when that is the natural fit, without pretending I cannot help with the
     everyday request myself.
     """
-    if workspace_coordinator_name is None:
+    if coordinator_name is None:
         return ""
 
-    scope_label = "organization" if is_org_workspace else "workspace"
     coordinator_surface = [
         "- inviting, removing, or changing roles for colleagues",
         "- creating or removing teams and managing who belongs to them",
@@ -178,14 +177,14 @@ def _build_workspace_coordinator_deferral_block(
             "- organization-wide configuration (members, billing handoffs, spending limits)",
         )
     coordinator_surface_block = "\n".join(coordinator_surface)
-    return f"""Team Coordinator
-----------------
-The user also has a Coordinator named {workspace_coordinator_name} in this {scope_label}. {workspace_coordinator_name} is a unified stand-in: any request the user could bring to me they could also bring to {workspace_coordinator_name}, AND {workspace_coordinator_name} owns the setup and admin surfaces I don't.
+    return f"""Coordinator
+-----------
+The user also has a Coordinator named {coordinator_name}. {coordinator_name} is a unified stand-in: any request the user could bring to me they could also bring to {coordinator_name}, AND {coordinator_name} owns the setup and admin surfaces I don't.
 
-{workspace_coordinator_name} is the natural place for:
+{coordinator_name} is the natural place for:
 {coordinator_surface_block}
 
-When the user's request fits that list, I propose handing it to {workspace_coordinator_name} explicitly — naming them and offering a concise hand-off summary — rather than fumbling at the boundary myself. For day-to-day work the user brings to me, I handle it directly; I do not redirect them to {workspace_coordinator_name} unnecessarily."""
+When the user's request fits that list, I propose handing it to {coordinator_name} explicitly — naming them and offering a concise hand-off summary — rather than fumbling at the boundary myself. For day-to-day work the user brings to me, I handle it directly; I do not redirect them to {coordinator_name} unnecessarily."""
 
 
 def _build_voice_output_block(*, is_internal_call: bool = False) -> str:
@@ -495,10 +494,10 @@ def _build_comms_tool_listing(
     return "\n".join(lines)
 
 
-def _build_coordinator_workspace_tool_listing(*, is_org_workspace: bool) -> str:
-    """Build the Coordinator workspace tools block for the output format section."""
+def _build_coordinator_admin_tool_listing(*, is_org_workspace: bool) -> str:
+    """Build the Coordinator admin tools block for the output format section."""
     lines = [
-        "- `act` is the execution path for privileged Coordinator workspace lifecycle operations.",
+        "- `act` is the execution path for privileged Coordinator lifecycle operations.",
         "- Inside `act`, use `primitives.coordinator.*` for assistant/team/membership reads and mutations.",
         "- Before running coordinator mutations inside `act`, gather identifiers and confirmation details in chat unless the request is already explicit and unambiguous.",
         "- Prefer one `act` request that executes the full confirmed setup step over fragmented no-op turns.",
@@ -509,7 +508,7 @@ def _build_coordinator_workspace_tool_listing(*, is_org_workspace: bool) -> str:
         )
     else:
         lines.append(
-            "- Organization membership actions are unavailable in personal workspace coordinator sessions. If the user asks for org actions, direct them to switch to that organization's workspace coordinator.",
+            "- Organization membership actions are unavailable in personal Coordinator sessions. If the user asks for org actions, direct them to switch to that organization's Coordinator.",
         )
     return "\n".join(lines)
 
@@ -724,11 +723,11 @@ A: Yes — you've linked a desktop to me, so I can work directly on it. (When th
 A: Not directly — but you can view and control *my* computer through the Meet window ("Show assistant screen" → "Enable mouse and keyboard control"). If you need me to do something on my machine, just ask and I'll do it. If you need something done on *your* machine, share your screen so I can see it and walk you through the steps."""
 
 
-def _build_base_app_management_faq(workspace_coordinator_name: str | None) -> str:
+def _build_base_app_management_faq(coordinator_name: str | None) -> str:
     """Build app-management FAQ text for non-coordinator onboarding."""
-    if workspace_coordinator_name:
+    if coordinator_name:
         return f"""**Q: Can you help me manage my apps and online services?**
-A: Yes — I can walk through app setup and day-to-day usage directly, including live screen-share guidance when that's easier. If a credential needs to be shared across the team or org (rather than scoped to just me), {workspace_coordinator_name} is the right person to place it, and I'll happily hand that part off."""
+A: Yes — I can walk through app setup and day-to-day usage directly, including live screen-share guidance when that's easier. If a credential needs to be shared across the team or org (rather than scoped to just me), {coordinator_name} is the right person to place it, and I'll happily hand that part off."""
     return """**Q: Can you help me manage my apps and online services?**
 A: Yes. The easiest way to get started is for us to share screens — I can walk you through connecting each service step by step. Under the hood, it usually involves sharing API credentials or access tokens with me through a secure page on the console, but you don't need to worry about the details — I'll guide you through the whole thing."""
 
@@ -829,15 +828,15 @@ def _build_base_output_format(
     comms_tool_listing: str,
     action_steering_tool_listing: str,
     sms_call_note: str,
-    coordinator_workspace_tool_listing: str = "",
+    coordinator_admin_tool_listing: str = "",
     coordinator_knowledge_tool_listing: str = "",
 ) -> str:
     """Build output format block for non-demo system prompts."""
-    coordinator_workspace_section = ""
-    if coordinator_workspace_tool_listing:
-        coordinator_workspace_section = f"""
-**Coordinator workspace tools:**
-{coordinator_workspace_tool_listing}
+    coordinator_admin_section = ""
+    if coordinator_admin_tool_listing:
+        coordinator_admin_section = f"""
+**Coordinator admin tools:**
+{coordinator_admin_tool_listing}
 """
 
     knowledge_tool_listing = (
@@ -863,7 +862,7 @@ All actions are performed by calling the available tools. The tools I have acces
 **Communication tools:**
 {comms_tool_listing}
 
-{coordinator_workspace_section}
+{coordinator_admin_section}
 **Knowledge and action tools:**
 {knowledge_tool_listing}
 
@@ -1068,7 +1067,7 @@ Examples of requests that should use the direct tools:
 
 def _build_act_capabilities_block(
     *,
-    workspace_coordinator_name: str | None,
+    coordinator_name: str | None,
     has_linked_user_desktop: bool = False,
 ) -> str:
     """Build act-capabilities guidance for non-demo mode."""
@@ -1076,8 +1075,8 @@ def _build_act_capabilities_block(
         software_desktop_capability = "- **Software & desktop**: Any application, browser, or tool on my computer — and my boss's own machine, which they've linked to me (I drive it through `act` when no screen share is active)"
     else:
         software_desktop_capability = "- **Software & desktop**: Any application, browser, or tool on my computer (I cannot control the user's computer — only my own)"
-    if workspace_coordinator_name:
-        external_apps_capability = f"- **External apps & services**: I can guide setup and day-to-day usage directly, including live screen-share walkthroughs when helpful. If a credential must be shared across the team or organization, route that placement to {workspace_coordinator_name}."
+    if coordinator_name:
+        external_apps_capability = f"- **External apps & services**: I can guide setup and day-to-day usage directly, including live screen-share walkthroughs when helpful. If a credential must be shared across the team or organization, route that placement to {coordinator_name}."
     else:
         external_apps_capability = "- **External apps & services**: Integration with any service that offers an API (cloud storage, communication platforms, project management tools, CRMs, etc.) — by connecting through stored credentials and the service's Python SDK, with no manual setup needed on the user's end"
     act_intro = "The `act` tool CREATES NEW WORK. It is my gateway to getting things done beyond the immediate conversation. When my boss asks me to look into something, review a document, check a spreadsheet, use software, browse the web, or do any real work — this is what `act` is for. From my boss's perspective, I'm going away to do the work. From my perspective, I'm delegating to `act`. My boss does not need to know about `act` — they just need to see results."
@@ -1394,7 +1393,7 @@ def build_system_prompt(
     runtime_setup_note: str | None = None,
     team_summaries: list[TeamSummary] | None = None,
     authorized_humans: list[dict[str, Any]] | None = None,
-    workspace_coordinator_name: str | None = None,
+    coordinator_name: str | None = None,
     is_org_workspace: bool = True,
 ) -> PromptParts:
     """Build the system prompt for the ConversationManager LLM.
@@ -1450,8 +1449,8 @@ def build_system_prompt(
         Whether the current assistant is a Coordinator session.
     authorized_humans : list[dict[str, Any]] | None
         Organization roster context for org-scoped Coordinator sessions.
-    workspace_coordinator_name : str | None
-        Name of the active workspace Coordinator for regular-assistant setup deferral.
+    coordinator_name : str | None
+        Name of the user's Coordinator for regular-assistant setup deferral.
     is_org_workspace : bool
         Whether the active workspace is organization-scoped (vs personal).
 
@@ -1513,14 +1512,14 @@ def build_system_prompt(
         else " I cannot make a call and join a Google Meet or Microsoft Teams meeting at the same time."
     )
     input_format_example = _build_input_format_example()
-    coordinator_workspace_tool_listing = ""
+    coordinator_admin_tool_listing = ""
     coordinator_knowledge_tool_listing = ""
     coordinator_onboarding_narration_block = ""
     coordinator_onboarding_flow_reference_block = ""
     coordinator_console_literacy_block = ""
     coordinator_act_query_guidance_block = ""
     if is_coordinator and not demo_mode:
-        coordinator_workspace_tool_listing = _build_coordinator_workspace_tool_listing(
+        coordinator_admin_tool_listing = _build_coordinator_admin_tool_listing(
             is_org_workspace=coordinator_has_org_context,
         )
         coordinator_knowledge_tool_listing = _build_coordinator_knowledge_tool_listing()
@@ -1646,7 +1645,7 @@ Messages from the current turn have **NEW** tag prepended:
                 comms_tool_listing=comms_tool_listing,
                 action_steering_tool_listing=action_steering_tool_listing,
                 sms_call_note=sms_call_note,
-                coordinator_workspace_tool_listing=coordinator_workspace_tool_listing,
+                coordinator_admin_tool_listing=coordinator_admin_tool_listing,
                 coordinator_knowledge_tool_listing=coordinator_knowledge_tool_listing,
             ),
         )
@@ -1682,7 +1681,7 @@ Messages from the current turn have **NEW** tag prepended:
         parts.add(_build_direct_specialist_tools_block())
         parts.add(
             _build_act_capabilities_block(
-                workspace_coordinator_name=workspace_coordinator_name,
+                coordinator_name=coordinator_name,
                 has_linked_user_desktop=has_linked_user_desktop,
             ),
         )
@@ -1891,15 +1890,15 @@ When contacts communicate in a non-English language, I match their language in m
         desktop_access_faq = _build_desktop_access_faq(
             has_linked_user_desktop,
         )
-        app_management_faq = _build_base_app_management_faq(workspace_coordinator_name)
+        app_management_faq = _build_base_app_management_faq(coordinator_name)
         parts.add(
             _build_base_onboarding_reference(
                 desktop_access_faq=desktop_access_faq,
                 app_management_faq=app_management_faq,
             ),
         )
-        coordinator_reference = _build_workspace_coordinator_deferral_block(
-            workspace_coordinator_name=workspace_coordinator_name,
+        coordinator_reference = _build_coordinator_deferral_block(
+            coordinator_name=coordinator_name,
             is_org_workspace=is_org_workspace,
         )
         if coordinator_reference:
@@ -2129,7 +2128,7 @@ def _build_coordinator_console_literacy_block() -> str:
             "not a fictional global team tab.",
             "Org-shaped setup (create workspace, add members, team credentials) "
             "belongs in the **organization** Coordinator session. If the user asks "
-            "for org-wide sharing while only a personal-workspace Coordinator is "
+            "for org-wide sharing while only a personal Coordinator session is "
             "active, I tell them to open that organization's Coordinator first.",
             "",
             "Console account & org administration",
@@ -2157,8 +2156,8 @@ def _build_coordinator_console_literacy_block() -> str:
             "  - **Console-only** (no coordinator primitive): create organization, "
             "view Usage charts, manage Billing payment method — I guide + screen share.",
             "  - **Coordinator-only until they switch workspace:** org membership "
-            "and org-scoped mutations require the **organization** workspace "
-            "Coordinator (not personal workspace); then Console **or** `act` apply.",
+            "and org-scoped mutations require the **organization** Coordinator "
+            "session (not the personal Coordinator); then Console **or** `act` apply.",
             "  - **Admin authorization:** membership and workspace lifecycle changes "
             "need Owner/Admin approval per org rules; Members may request — I surface "
             "consequences, then execute via `act` or guide Console once confirmed.",
@@ -2223,7 +2222,7 @@ def _build_coordinator_console_literacy_block() -> str:
             "I name **both** paths unless one is unavailable. If they prefer "
             "hands-on UI, screen share Path A; if they prefer I handle it, Path B "
             "after explicit email/role (and admin authorization if needed).",
-            "  - **Personal workspace Coordinator:** neither path runs org "
+            "  - **Personal Coordinator session:** neither path runs org "
             "primitives — I tell them to switch to that org in the workspace "
             "switcher first; then both paths apply again.",
             "  - **Consequences (either path):** org **membership** — their "

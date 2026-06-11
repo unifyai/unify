@@ -567,7 +567,7 @@ class TestCoordinatorManager:
         result = CoordinatorManager().list_org_members()
 
         assert result["error_kind"] == "invalid_argument"
-        assert "requires an organization workspace Coordinator" in result["message"]
+        assert "requires an organization Coordinator" in result["message"]
         assert calls == []
 
     def test_invite_org_member_happy_path(self, monkeypatch):
@@ -619,7 +619,7 @@ class TestCoordinatorManager:
         )
 
         assert result["error_kind"] == "invalid_argument"
-        assert "requires an organization workspace Coordinator" in result["message"]
+        assert "requires an organization Coordinator" in result["message"]
         assert calls == []
 
     def test_invite_org_member_rejects_unknown_role_name(self, monkeypatch):

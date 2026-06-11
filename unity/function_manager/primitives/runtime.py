@@ -1407,7 +1407,7 @@ class Primitives:
 
     @property
     def coordinator(self) -> "_AsyncPrimitiveWrapper":
-        """Coordinator workspace primitives (assistant/team lifecycle)."""
+        """Coordinator admin primitives (assistant/team lifecycle)."""
         return self._get_manager("coordinator")
 
 

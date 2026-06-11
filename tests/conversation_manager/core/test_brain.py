@@ -90,6 +90,7 @@ def _make_cm():
         assistant_email="assistant@acme.com",
         assistant_whatsapp_number="",
         assistant_discord_bot_id="",
+        assistant_slack_bot_user_id="",
         assistant_has_teams=False,
         team_summaries=[],
     )
@@ -157,6 +158,7 @@ class TestBrainSpecStateMessage:
             assistant_email="",
             assistant_whatsapp_number="",
             assistant_discord_bot_id="",
+            assistant_slack_bot_user_id="",
             assistant_has_teams=False,
             team_summaries=[],
         )
@@ -391,7 +393,7 @@ class TestScreenshotEntryLocalMessageId:
 class TestBuildBrainSpecCoordinatorPrompt:
     """BrainSpec prompt construction carries Coordinator awareness."""
 
-    def test_org_assistant_prompt_names_the_org_coordinator(self):
+    def test_org_assistant_prompt_names_the_coordinator(self):
         SESSION_DETAILS.org_id = 7
         SESSION_DETAILS.unify_key = "owner-key"
 
@@ -408,11 +410,10 @@ class TestBuildBrainSpecCoordinatorPrompt:
             spec = build_brain_spec(_make_cm(), _make_snapshot())
 
         prompt = spec.system_prompt.flatten()
-        assert "Team Coordinator" in prompt
+        assert "Coordinator\n-----------" in prompt
         assert "Avery Coordinator" in prompt
-        assert "Escalate to Avery Coordinator" in prompt
+        assert "I propose handing it to Avery Coordinator explicitly" in prompt
         list_assistants.assert_called_once_with(
-            list_all_org=True,
             api_key="owner-key",  # pragma: allowlist secret
         )
 
@@ -434,7 +435,7 @@ class TestBuildBrainSpecCoordinatorPrompt:
 
         prompt = spec.system_prompt.flatten()
         assert "Authorized humans" in prompt
-        assert "Team Coordinator" not in prompt
+        assert "Coordinator\n-----------" not in prompt
         assert "I cannot forward it automatically" not in prompt
         list_org_members.assert_called_once_with(
             7,
@@ -442,7 +443,7 @@ class TestBuildBrainSpecCoordinatorPrompt:
         )
         list_assistants.assert_not_called()
 
-    def test_personal_assistant_queries_personal_workspace_coordinator(self):
+    def test_personal_assistant_queries_personal_coordinator(self):
         SESSION_DETAILS.org_id = None
         SESSION_DETAILS.unify_key = "owner-key"
         SESSION_DETAILS.assistant.is_coordinator = False
@@ -454,7 +455,7 @@ class TestBuildBrainSpecCoordinatorPrompt:
             spec = build_brain_spec(_make_cm(), _make_snapshot())
 
         prompt = spec.system_prompt.flatten()
-        assert "Team Coordinator" not in prompt
+        assert "Coordinator\n-----------" not in prompt
         assert "Escalate to Avery Coordinator" not in prompt
         list_assistants.assert_called_once_with(
             api_key="owner-key",  # pragma: allowlist secret

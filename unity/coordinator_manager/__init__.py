@@ -1,4 +1,4 @@
-"""Coordinator workspace manager and prompt-time lookups."""
+"""Coordinator admin manager and prompt-time lookups."""
 
 from .coordinator_manager import CoordinatorManager
 
