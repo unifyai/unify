@@ -428,6 +428,7 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
                 contact,
                 boss,
                 e.room_name,
+                opening_config=e.opening_config,
             )
             message_content = "<Recieving Call...>"
             notif_content = f"Call received from {sender_name}"

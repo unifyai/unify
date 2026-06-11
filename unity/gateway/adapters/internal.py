@@ -189,16 +189,23 @@ async def unify_meet_webhook(
         reason="unify_meet",
     )
     assistant_id = str(assistant_data["assistant_id"])
+    event_data: dict[str, Any] = {
+        "contacts": contacts,
+        "assistant_id": assistant_id,
+        "livekit_room": room_name,
+        "livekit_agent_name": payload.get("livekit_agent_name") or room_name,
+    }
+    opening_config = payload.get("opening_config")
+    if opening_config not in (None, ""):
+        opening_config = parse_json_field(opening_config)
+    if isinstance(opening_config, dict):
+        event_data["opening_config"] = opening_config
+
     await publish_runtime_event(
         context,
         assistant_id=assistant_id,
         thread="unify_meet",
-        event={
-            "contacts": contacts,
-            "assistant_id": assistant_id,
-            "livekit_room": room_name,
-            "livekit_agent_name": payload.get("livekit_agent_name") or room_name,
-        },
+        event=event_data,
     )
     return Response(status_code=200)
 

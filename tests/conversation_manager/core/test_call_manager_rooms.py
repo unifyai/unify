@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -41,6 +42,61 @@ async def test_start_call_uses_provided_room_name(monkeypatch):
     assert manager.room_name == "unity_wa_room_123_CA111"
     start_subprocess.assert_awaited_once()
     assert start_subprocess.await_args.args[0] == "unity_wa_room_123_CA111"
+
+
+@pytest.mark.asyncio
+async def test_start_unify_meet_passes_opening_config_to_worker(monkeypatch):
+    manager = LivekitCallManager(
+        CallConfig(
+            assistant_id="123",
+            user_id="user-123",
+            assistant_bio="",
+            assistant_number="+15550000000",
+            voice_provider="test",
+            voice_id="voice",
+        ),
+    )
+    monkeypatch.setattr(manager, "_ensure_socket_server", AsyncMock(return_value=None))
+    dispatch_job = AsyncMock()
+    start_subprocess = AsyncMock()
+    monkeypatch.setattr(manager, "_dispatch_job", dispatch_job)
+    monkeypatch.setattr(manager, "_start_call_subprocess", start_subprocess)
+
+    opening_config = {
+        "mode": "simulated",
+        "simulated_utterance": "Hi, I'm Marty.",
+        "source": "marty_onboarding_intro",
+    }
+    contact = {"contact_id": 1, "is_system": False}
+    boss = {"contact_id": 1}
+
+    manager._worker_proc = MagicMock()
+    manager._worker_proc.poll.return_value = None
+    await manager.start_unify_meet(
+        contact,
+        boss,
+        "unity_123_meet",
+        opening_config=opening_config,
+    )
+
+    dispatch_job.assert_awaited_once()
+    assert dispatch_job.await_args.kwargs["extra_metadata"] == {
+        "opening_config": opening_config,
+    }
+
+    manager._worker_proc = None
+    manager._active_job = False
+    await manager.start_unify_meet(
+        contact,
+        boss,
+        "unity_123_meet",
+        opening_config=opening_config,
+    )
+
+    start_subprocess.assert_awaited_once()
+    assert json.loads(
+        start_subprocess.await_args.kwargs["extra_env"]["opening_config"],
+    ) == (opening_config)
 
 
 class _FakeCredentials:

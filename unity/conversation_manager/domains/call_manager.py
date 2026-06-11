@@ -443,6 +443,8 @@ class LivekitCallManager:
         contact: dict | None,
         boss: dict | None,
         room_name: str | None,
+        *,
+        opening_config: dict | None = None,
     ):
         if self.has_active_call:
             if self._clear_stale_dispatch_state():
@@ -470,9 +472,20 @@ class LivekitCallManager:
 
         room_name = room_name or make_room_name(self.assistant_id, "meet")
         self.room_name = room_name
+        extra_metadata = {"opening_config": opening_config} if opening_config else None
+        extra_env = (
+            {"opening_config": json.dumps(opening_config)} if opening_config else None
+        )
 
         if self._worker_proc is not None and self._worker_proc.poll() is None:
-            await self._dispatch_job(room_name, "unify_meet", contact, boss, False)
+            await self._dispatch_job(
+                room_name,
+                "unify_meet",
+                contact,
+                boss,
+                False,
+                extra_metadata=extra_metadata,
+            )
         else:
             await self._start_call_subprocess(
                 room_name,
@@ -480,6 +493,7 @@ class LivekitCallManager:
                 contact,
                 boss,
                 False,
+                extra_env=extra_env,
             )
 
     # ------------------------------------------------------------------

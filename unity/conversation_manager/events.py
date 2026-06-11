@@ -175,6 +175,7 @@ class UnifyMeetReceived(Event):
 
     contact: dict
     room_name: str | None = None
+    opening_config: dict | None = None
 
 
 @dataclass

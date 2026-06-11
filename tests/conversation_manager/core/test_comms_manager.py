@@ -821,6 +821,11 @@ class TestUnifyMeetHandling:
                     "livekit_agent_name": "TestAgent",
                     "livekit_room": "room_123",
                     "contacts": contacts,
+                    "opening_config": {
+                        "mode": "simulated",
+                        "simulated_utterance": "Hi, I'm Marty.",
+                        "source": "marty_onboarding_intro",
+                    },
                 },
             )
 
@@ -834,6 +839,11 @@ class TestUnifyMeetHandling:
             event = Event.from_json(msg["data"])
             assert isinstance(event, UnifyMeetReceived)
             assert event.room_name == "room_123"
+            assert event.opening_config == {
+                "mode": "simulated",
+                "simulated_utterance": "Hi, I'm Marty.",
+                "source": "marty_onboarding_intro",
+            }
 
     @pytest.mark.asyncio
     @patch(
