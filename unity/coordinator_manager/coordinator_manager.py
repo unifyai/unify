@@ -1,7 +1,7 @@
 """Coordinator admin primitives and prompt-time lookups.
 
 Coordinator-only tools are exposed under ``primitives.coordinator`` for the
-actor loop. Prompt-time org roster and Coordinator name lookups live
+actor loop. Prompt-time org roster lookups live
 on the same ``CoordinatorManager`` singleton without the coordinator role gate
 applied to tool primitives.
 """
@@ -2181,10 +2181,10 @@ def _request_error_to_tool_error(exc: RequestError) -> ToolError:
 class CoordinatorManager(metaclass=SingletonABCMeta):
     """Singleton facade for coordinator prompt lookups and admin tools.
 
-    Prompt-time lookups (``get_org_members``, ``get_coordinator_name``)
-    live on this singleton. Each ``primitives.coordinator.*`` tool runs on a
-    fresh :class:`_CoordinatorToolCall` so reachability caches and activity
-    metadata do not leak across invocations.
+    Prompt-time lookups live on this singleton. Each
+    ``primitives.coordinator.*`` tool runs on a fresh
+    :class:`_CoordinatorToolCall` so reachability caches and activity metadata
+    do not leak across invocations.
     """
 
     _PRIMITIVE_METHODS = COORDINATOR_TOOL_METHOD_NAMES
@@ -2192,8 +2192,6 @@ class CoordinatorManager(metaclass=SingletonABCMeta):
     def __init__(self) -> None:
         self._org_members_cache_key: tuple[int | None, str] | object = _CACHE_EMPTY
         self._org_members_cache: list[dict[str, Any]] | object = _CACHE_EMPTY
-        self._coordinator_name_cache_key: str | None | object = _CACHE_EMPTY
-        self._coordinator_name_cache: str | None | object = _CACHE_EMPTY
 
     def get_org_members(self) -> list[dict[str, Any]]:
         """Return authorized humans in the Coordinator's organization for prompts."""
@@ -2221,33 +2219,6 @@ class CoordinatorManager(metaclass=SingletonABCMeta):
         self._org_members_cache = members
         return members
 
-    def get_coordinator_name(self) -> str | None:
-        """Return the display name for the user's Coordinator."""
-
-        cache_key = _coordinator_cache_key()
-        if (
-            self._coordinator_name_cache_key == cache_key
-            and self._coordinator_name_cache is not _CACHE_EMPTY
-        ):
-            return self._coordinator_name_cache  # type: ignore[return-value]
-
-        try:
-            assistants = unify.list_assistants(api_key=SESSION_DETAILS.unify_key)
-        except RequestError:
-            return None
-
-        coordinator_name = next(
-            (
-                _assistant_display_name(assistant)
-                for assistant in assistants
-                if assistant.get("is_coordinator") is True
-            ),
-            None,
-        )
-        self._coordinator_name_cache_key = cache_key
-        self._coordinator_name_cache = coordinator_name
-        return coordinator_name
-
     @staticmethod
     def _require_coordinator_role() -> ToolError | None:
         if SESSION_DETAILS.is_coordinator:
@@ -2257,10 +2228,6 @@ class CoordinatorManager(metaclass=SingletonABCMeta):
 
 def _org_members_cache_key() -> tuple[int | None, str]:
     return SESSION_DETAILS.org_id, SESSION_DETAILS.unify_key
-
-
-def _coordinator_cache_key() -> str | None:
-    return SESSION_DETAILS.unify_key
 
 
 for _method_name in COORDINATOR_TOOL_METHOD_NAMES:

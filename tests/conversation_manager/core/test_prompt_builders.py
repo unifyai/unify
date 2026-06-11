@@ -136,10 +136,10 @@ class TestCoordinatorPrompt:
         assert "Authorized humans" in prompt
         assert "Dana Owner; email: dana@acme.com; role: admin" in prompt
         assert "Francis Lead; email: francis@acme.com; role: member" in prompt
-        assert "**Coordinator admin tools:**" in prompt
+        assert "**Marty admin tools:**" in prompt
         assert "`primitives.coordinator.list_org_members`" in prompt
         assert "always target the active workspace organization" in prompt
-        assert "Coordinator\n-----------" not in prompt
+        assert "Marty identity" in prompt
 
     def test_personal_coordinator_uses_boss_details_and_routes_org_work_to_switch(
         self,
@@ -149,14 +149,15 @@ class TestCoordinatorPrompt:
         assert "Boss details" in prompt
         assert "Authorized humans\n-----------------" not in prompt
         assert "Organization membership actions are unavailable" in prompt
-        assert "switch to that organization's Coordinator" in prompt
+        assert "switch to that organization's Marty" in prompt
         assert "list_accessible_organizations" not in prompt
 
-    def test_regular_assistant_gets_updated_coordinator_reference_block(self):
-        prompt = _build(coordinator_name="Avery Coordinator")
+    def test_regular_assistant_gets_marty_reference_block(self):
+        prompt = _build()
 
-        assert "Coordinator\n-----------" in prompt
-        assert "I propose handing it to Avery Coordinator explicitly" in prompt
+        assert "Marty identity" in prompt
+        assert "Marty is Alice Smith's personal, private assistant" in prompt
+        assert "I propose handing it to Marty explicitly" in prompt
         assert "inviting, removing, or changing roles for colleagues" in prompt
         assert "creating or removing teams" in prompt
         assert (
@@ -165,15 +166,11 @@ class TestCoordinatorPrompt:
         )
         assert "I cannot forward it automatically" not in prompt
 
-    def test_coordinator_reference_block_is_absent_without_name_or_on_coordinator(self):
-        personal_prompt = _build(coordinator_name=None)
-        coordinator_prompt = _build(
-            is_coordinator=True,
-            coordinator_name="Avery Coordinator",
-        )
+    def test_marty_handoff_guidance_is_absent_on_marty_sessions(self):
+        coordinator_prompt = _build(is_coordinator=True)
 
-        assert "Coordinator\n-----------" not in personal_prompt
-        assert "Coordinator\n-----------" not in coordinator_prompt
+        assert "Marty identity" in coordinator_prompt
+        assert "I propose handing it to Marty explicitly" not in coordinator_prompt
 
     def test_base_and_coordinator_share_restraint_but_keep_role_specific_sections(self):
         base_prompt = _build()
@@ -183,7 +180,7 @@ class TestCoordinatorPrompt:
         assert "Intent vs verified outcomes" in coordinator_prompt
         assert "Console knowledge" in base_prompt
         assert "Console knowledge" not in coordinator_prompt
-        assert "Coordinator Console literacy" in coordinator_prompt
+        assert "Marty Console literacy" in coordinator_prompt
         assert "Concurrent action and acknowledgment" in base_prompt
         assert "Concurrent action and acknowledgment" in coordinator_prompt
         assert "Onboarding reference" in base_prompt
@@ -203,22 +200,21 @@ class TestPromptSectionOwnershipMatrix:
                     "Concurrent action and acknowledgment\n------------------------------------",
                 ),
                 "absent": (
-                    "**Coordinator admin tools:**",
+                    "**Marty admin tools:**",
                     "Authorized humans\n-----------------",
-                    "Coordinator\n-----------",
                     "Demo mode\n---------",
                 ),
             },
             {
                 "name": "regular_non_demo_with_org",
-                "kwargs": {"coordinator_name": "Avery Coordinator"},
+                "kwargs": {},
                 "present": (
                     "Act capabilities\n----------------",
                     "Concurrent action and acknowledgment\n------------------------------------",
-                    "Coordinator\n-----------",
+                    "Marty identity\n--------------",
                 ),
                 "absent": (
-                    "**Coordinator admin tools:**",
+                    "**Marty admin tools:**",
                     "Authorized humans\n-----------------",
                     "Demo mode\n---------",
                 ),
@@ -228,10 +224,9 @@ class TestPromptSectionOwnershipMatrix:
                 "kwargs": {"demo_mode": True},
                 "present": ("Demo mode\n---------",),
                 "absent": (
-                    "**Coordinator admin tools:**",
+                    "**Marty admin tools:**",
                     "Authorized humans\n-----------------",
                     "Act capabilities\n----------------",
-                    "Coordinator\n-----------",
                     "Concurrent action and acknowledgment\n------------------------------------",
                 ),
             },
@@ -239,14 +234,13 @@ class TestPromptSectionOwnershipMatrix:
                 "name": "regular_demo_with_org",
                 "kwargs": {
                     "demo_mode": True,
-                    "coordinator_name": "Avery Coordinator",
                 },
                 "present": (
                     "Demo mode\n---------",
-                    "Coordinator\n-----------",
+                    "Marty identity\n--------------",
                 ),
                 "absent": (
-                    "**Coordinator admin tools:**",
+                    "**Marty admin tools:**",
                     "Authorized humans\n-----------------",
                     "Act capabilities\n----------------",
                     "Concurrent action and acknowledgment\n------------------------------------",
@@ -256,19 +250,18 @@ class TestPromptSectionOwnershipMatrix:
                 "name": "coordinator_non_demo_with_org",
                 "kwargs": {
                     "is_coordinator": True,
-                    "coordinator_name": "Avery Coordinator",
                 },
                 "present": (
-                    "**Coordinator admin tools:**",
+                    "**Marty admin tools:**",
                     "Authorized humans\n-----------------",
                     "Act capabilities\n----------------",
                     "Concurrent action and acknowledgment\n------------------------------------",
-                    "Coordinator Console literacy\n-----------------------------",
+                    "Marty identity\n--------------",
+                    "Marty Console literacy\n----------------------",
                     "Console account & org administration",
                     "Proactive meeting offers\n------------------------",
                 ),
                 "absent": (
-                    "Coordinator\n-----------",
                     "Demo mode\n---------",
                     "Onboarding reference\n--------------------",
                     "Console knowledge\n-----------------",
@@ -279,15 +272,14 @@ class TestPromptSectionOwnershipMatrix:
                 "kwargs": {
                     "is_coordinator": True,
                     "demo_mode": True,
-                    "coordinator_name": "Avery Coordinator",
                 },
                 "present": (
+                    "Marty identity\n--------------",
                     "Authorized humans\n-----------------",
                     "Demo mode\n---------",
                 ),
                 "absent": (
-                    "**Coordinator admin tools:**",
-                    "Coordinator\n-----------",
+                    "**Marty admin tools:**",
                     "Act capabilities\n----------------",
                     "Concurrent action and acknowledgment\n------------------------------------",
                 ),
@@ -299,17 +291,17 @@ class TestPromptSectionOwnershipMatrix:
                     "is_org_workspace": False,
                 },
                 "present": (
-                    "**Coordinator admin tools:**",
+                    "**Marty admin tools:**",
                     "Boss details\n------------",
                     "Organization membership actions are unavailable",
-                    "switch to that organization's Coordinator",
-                    "Coordinator Console literacy\n-----------------------------",
+                    "switch to that organization's Marty",
+                    "Marty identity\n--------------",
+                    "Marty Console literacy\n----------------------",
                     "Console account & org administration",
                     "Proactive meeting offers\n------------------------",
                 ),
                 "absent": (
                     "Authorized humans\n-----------------",
-                    "Coordinator\n-----------",
                     "Onboarding reference\n--------------------",
                     "Console knowledge\n-----------------",
                 ),
@@ -348,7 +340,7 @@ class TestCoordinatorVoicePrompt:
     def test_coordinator_voice_prompt_excludes_slow_brain_literacy(self):
         prompt = _build_voice(is_coordinator=True)
 
-        assert "Coordinator admin tools" not in prompt
+        assert "Marty admin tools" not in prompt
         assert "Unify system literacy" not in prompt
         assert "Requirements discovery workflow" not in prompt
         assert "Tasks/Activations" not in prompt
@@ -360,7 +352,9 @@ class TestCoordinatorVoicePrompt:
     def test_coordinator_voice_prompt_includes_console_literacy(self):
         prompt = _build_voice(is_coordinator=True)
 
-        assert "Coordinator Console literacy" in prompt
+        assert "Marty identity" in prompt
+        assert "Marty is Dana Owner's personal, private assistant" in prompt
+        assert "Marty Console literacy" in prompt
         assert "Left sidebar — selection drives everything" in prompt
         assert "Shared workspaces (Teams in the left sidebar)" in prompt
         assert "Console account & org administration" in prompt
@@ -368,7 +362,7 @@ class TestCoordinatorVoicePrompt:
         assert "Invite org member (both paths)" in prompt
         assert "mention **both in the same reply**" in prompt
         assert "Unify internal operator tools only" in prompt
-        assert "Coordinator onboarding flow (UI reference)" in prompt
+        assert "Marty onboarding flow (UI reference)" in prompt
         assert "Console knowledge\n-----------------" not in prompt
 
 
@@ -476,7 +470,7 @@ class TestExternalAppIntegration:
     def test_onboarding_has_app_integration_qa(self):
         prompt = _build()
         assert "Can you help me manage my apps and online services?" in prompt
-        assert "secure page on the console" in prompt
+        assert "secure Integrations/Secrets pages on the console" in prompt
         assert "API credentials or access tokens" in prompt
         assert "service's Python SDK" in prompt
 
@@ -490,14 +484,14 @@ class TestExternalAppIntegration:
         assert "Can you help me manage my apps and online services?" in prompt
 
     def test_org_assistant_onboarding_allows_direct_setup_with_shared_handoff(self):
-        prompt = _build(coordinator_name="Avery Coordinator")
+        prompt = _build()
 
         assert "I can walk through app setup and day-to-day usage directly" in prompt
         assert (
             "If a credential needs to be shared across the team or org (rather than "
-            "scoped to just me), Avery Coordinator is the right person to place it"
+            "scoped to just me), Marty is the right person to place it"
         ) in prompt
-        assert "Avery Coordinator owns that setup" not in prompt
+        assert "Marty owns that setup" not in prompt
         assert "I cannot forward it automatically" not in prompt
 
     def test_act_capabilities_absent_in_demo_mode(self):
@@ -643,7 +637,7 @@ class TestConsoleKnowledge:
 
     def test_coordinator_uses_console_literacy_not_base_block(self):
         prompt = _build(is_coordinator=True)
-        assert "Coordinator Console literacy" in prompt
+        assert "Marty Console literacy" in prompt
         assert "hover over my name in the left sidebar → ⋮ → **Secrets**" not in prompt
         assert "Memory → Guidance" in prompt
         assert "Secrets (on the Integrations tab)" in prompt

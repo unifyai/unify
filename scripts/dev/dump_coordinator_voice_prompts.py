@@ -132,10 +132,6 @@ REGULAR_ASSISTANT = {
     "email": "sam@acme.com",
 }
 
-# Stand-in name for the user's Coordinator on regular-assistant dumps. Lets the
-# Coordinator deferral block render with realistic text.
-REGULAR_COORDINATOR_NAME = "Pat"
-
 
 def _build_slow_brain_system_prompt(
     *,
@@ -148,7 +144,6 @@ def _build_slow_brain_system_prompt(
     is_org_workspace: bool,
     demo_mode: bool,
     authorized_humans: list[dict] | None,
-    coordinator_name: str | None,
     team_summaries: list[TeamSummary],
 ) -> str:
     """Mirror ``unity/conversation_manager/domains/brain.py::build_brain_spec``."""
@@ -184,7 +179,6 @@ def _build_slow_brain_system_prompt(
         authorized_humans=(
             authorized_humans if (is_coordinator and is_org_workspace) else None
         ),
-        coordinator_name=coordinator_name,
         is_org_workspace=is_org_workspace,
     ).flatten()
 
@@ -369,8 +363,6 @@ def main() -> int:
         if (persona == "coordinator" and is_org_workspace)
         else None
     )
-    coordinator_name = REGULAR_COORDINATOR_NAME if persona == "regular" else None
-
     if args.write_dir is not None:
         args.write_dir.mkdir(parents=True, exist_ok=True)
 
@@ -393,7 +385,6 @@ def main() -> int:
             is_org_workspace=is_org_workspace,
             demo_mode=demo_mode,
             authorized_humans=authorized_humans,
-            coordinator_name=coordinator_name,
             team_summaries=[],
         )
         _write_or_print(
