@@ -39,7 +39,7 @@ def list_connections(**scope: Any) -> Any:
 
 
 def search_apps(
-    query: str,
+    query: Optional[str] = None,
     *,
     limit: int = 10,
     offset: int = 0,
@@ -83,7 +83,7 @@ def get_tools(
 
 
 def search_tools(
-    query: str,
+    query: Optional[str] = None,
     *,
     limit: int = 20,
     offset: int = 0,

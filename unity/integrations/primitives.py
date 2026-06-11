@@ -144,7 +144,7 @@ class IntegrationPrimitives:
 
     async def search_integrations(
         self,
-        query: str,
+        query: Optional[str] = None,
         *,
         include_tools: bool = False,
         limit: int = 10,
@@ -168,9 +168,10 @@ class IntegrationPrimitives:
 
         Parameters
         ----------
-        query : str
+        query : str, optional
             Natural-language app search query, such as ``"Slack"`` or
-            ``"CRM integrations"``.
+            ``"Salesforce"``. If omitted, returns the default catalog
+            page from Orchestra.
         include_tools : bool, default False
             Include a short preview of already-materialized FunctionManager rows
             for each matched app. This is a preview only; executable discovery
@@ -477,7 +478,7 @@ class IntegrationPrimitives:
 
     async def search_tools(
         self,
-        query: str,
+        query: Optional[str] = None,
         *,
         owner_scope: Optional[str] = None,
         org_id: Optional[int] = None,
@@ -496,9 +497,10 @@ class IntegrationPrimitives:
 
         Parameters
         ----------
-        query : str
+        query : str, optional
             Natural-language query such as ``"recent HubSpot leads"`` or
-            ``"Slack send message"``.
+            ``"Slack send message"``. If omitted, returns the default tool
+            page from Orchestra.
         owner_scope : str, optional
             Effective connection owner lane. Defaults to the current session's
             owner scope.

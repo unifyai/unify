@@ -50,11 +50,11 @@ class FakeIntegrationClient:
         self.calls.append(("list_connections", (), scope))
         return [{"connection_id": "conn-1"}]
 
-    def search_tools(self, query, **payload):
+    def search_tools(self, query=None, **payload):
         self.calls.append(("search_tools", (query,), payload))
         return list(self.search_results)
 
-    def search_apps(self, query, **payload):
+    def search_apps(self, query=None, **payload):
         self.calls.append(("search_apps", (query,), payload))
         return list(self.app_results)
 
@@ -553,6 +553,25 @@ async def test_search_integrations_returns_supported_empty_result_without_tool_s
             "search_apps",
             ("UnsupportedApp",),
             {"owner_scope": "assistant", "limit": 10},
+        ),
+    ]
+
+
+@pytest.mark.anyio
+async def test_search_integrations_allows_omitted_query(monkeypatch) -> None:
+    client = FakeIntegrationClient()
+    patch_ops_from_client(monkeypatch, client)
+    primitives = IntegrationPrimitives(owner_scope={})
+
+    result = await primitives.search_integrations(limit=2)
+
+    assert result["status"] == "ok"
+    assert result["query"] is None
+    assert client.calls == [
+        (
+            "search_apps",
+            (None,),
+            {"owner_scope": "assistant", "limit": 2},
         ),
     ]
 
