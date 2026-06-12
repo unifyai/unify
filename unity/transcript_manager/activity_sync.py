@@ -3,23 +3,23 @@
 The transcript hook calls :func:`touch_assistant_activity` after every
 ``log_messages`` invocation so orchestra's inactivity-followup routine
 sees fresh ``last_correspondence_at`` and clears any pending
-``last_followup_sent_at`` (allowing the next silence to re-trigger a
-follow-up).
+``last_followup_sent_at`` (allowing the next silence to re-arm a
+re-engagement follow-up).
 
-The brain-driven lifecycle primitives
-:func:`terminate_assistant_via_orchestra` and
-:func:`cancel_assistant_termination_via_orchestra` live alongside it:
-they form the same family of "tell orchestra what just happened to
-this assistant's correspondence lifecycle" calls.
+The brain-driven opt-out helpers
+:func:`opt_out_of_inactivity_followups_via_orchestra` and
+:func:`opt_in_to_inactivity_followups_via_orchestra` live alongside it:
+they tell orchestra whether this Coordinator should keep receiving
+inactivity follow-ups.
 
-All three calls are best-effort: any failure is swallowed and logged
-at WARN. The transcript log path and the brain primitive path must
-never break because of an orchestra HTTP hiccup.
+All calls are best-effort: any failure is swallowed and logged at WARN.
+The transcript log path and the brain primitive path must never break
+because of an orchestra HTTP hiccup.
 
 Endpoints:
     POST /admin/assistant/{assistant_id}/touch-activity
-    POST /admin/assistant/{assistant_id}/terminate
-    POST /admin/assistant/{assistant_id}/cancel-termination
+    POST /admin/assistant/{assistant_id}/opt-out-followups
+    POST /admin/assistant/{assistant_id}/opt-in-followups
 """
 
 from __future__ import annotations
@@ -90,16 +90,16 @@ def touch_assistant_activity(assistant_id: int | str | None) -> bool:
         return False
 
 
-def _post_lifecycle_admin_action(
+def _post_followup_admin_action(
     assistant_id: int | str | None,
     action_path: str,
     *,
     label: str,
 ) -> bool:
-    """Shared helper for terminate / cancel-termination POSTs.
+    """Shared helper for opt-out / opt-in inactivity-followup POSTs.
 
     :param assistant_id: Assistant agent_id (coerced to int).
-    :param action_path: Trailing path segment, e.g. ``"terminate"``.
+    :param action_path: Trailing path segment, e.g. ``"opt-out-followups"``.
     :param label: Short label used in log messages.
     :return: True on 2xx, False otherwise (including swallowed exceptions).
     """
@@ -147,38 +147,38 @@ def _post_lifecycle_admin_action(
         return False
 
 
-def terminate_assistant_via_orchestra(assistant_id: int | str | None) -> bool:
-    """Mark this assistant for auto-cleanup after orchestra's grace period.
+def opt_out_of_inactivity_followups_via_orchestra(
+    assistant_id: int | str | None,
+) -> bool:
+    """Stop orchestra from sending inactivity follow-ups via this Coordinator.
 
-    Called by the brain when the boss declines further engagement
-    (e.g. "no longer interested"). Sets
-    ``termination_initiated_at`` server-side; orchestra's daily cron
-    deprovisions contacts and hard-deletes the assistant once the
-    grace period elapses.
+    Called by the brain when the boss explicitly declines further
+    follow-ups (e.g. "no longer interested", "stop contacting me").
+    Sets ``inactivity_followup_opted_out`` server-side; nothing is
+    deleted — the user simply won't be followed up with again until they
+    opt back in.
 
     Best-effort: returns True on 2xx, False otherwise. Swallows any
-    exception so the brain's call site never breaks because of an
-    HTTP hiccup.
+    exception so the brain's call site never breaks because of an HTTP
+    hiccup.
     """
-    return _post_lifecycle_admin_action(
+    return _post_followup_admin_action(
         assistant_id,
-        "terminate",
-        label="terminate_assistant_via_orchestra",
+        "opt-out-followups",
+        label="opt_out_of_inactivity_followups_via_orchestra",
     )
 
 
-def cancel_assistant_termination_via_orchestra(
+def opt_in_to_inactivity_followups_via_orchestra(
     assistant_id: int | str | None,
 ) -> bool:
-    """Cancel an in-flight termination because the boss re-engaged.
+    """Re-enable inactivity follow-ups via this Coordinator.
 
-    Called by the brain when the boss had previously declined and now
-    contradicts that decision in conversation. Clears
-    ``termination_initiated_at`` server-side; the assistant is no
-    longer on the auto-cleanup path.
+    Called by the brain when the boss re-engages after having previously
+    opted out. Clears ``inactivity_followup_opted_out`` server-side.
     """
-    return _post_lifecycle_admin_action(
+    return _post_followup_admin_action(
         assistant_id,
-        "cancel-termination",
-        label="cancel_assistant_termination_via_orchestra",
+        "opt-in-followups",
+        label="opt_in_to_inactivity_followups_via_orchestra",
     )
