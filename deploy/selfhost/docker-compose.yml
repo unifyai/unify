@@ -70,6 +70,16 @@ services:
         condition: service_completed_successfully
     restart: "no"
 
+  # The named volume is created root-owned; orchestra (uid 999) and the
+  # gateway (uid 1000) both create bucket directories at its root.
+  local-bucket-init:
+    <<: *orchestra_image
+    user: "0"
+    command: ["chmod", "0777", "/data/local-bucket"]
+    volumes:
+    - local-bucket:/data/local-bucket
+    restart: "no"
+
   orchestra:
     <<: *orchestra_image
     environment:
@@ -84,11 +94,14 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       SELF_HOST: "1"
       SELF_HOST_LOCAL_BUCKET_DIR: /data/local-bucket
+      ORCHESTRA_PUBLIC_URL: http://orchestra:8000
       ORCHESTRA_WORKERS_COUNT: "2"
     volumes:
     - local-bucket:/data/local-bucket
     depends_on:
       orchestra-seed:
+        condition: service_completed_successfully
+      local-bucket-init:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v0/health', timeout=5)\""]
@@ -135,6 +148,8 @@ services:
       UNITY_GATEWAY_HOST: 0.0.0.0
       UNITY_GATEWAY_PORT: 8001
       UNITY_GATEWAY_SINGLE_URL: "true"
+      UNITY_GATEWAY_STORAGE_DIR: /data/local-bucket
+      UNITY_GATEWAY_STORAGE_PUBLIC_URL: http://orchestra:8000/v0/storage/local
       UNITY_COMMS_URL: http://gateway:8001
       UNITY_ADAPTERS_URL: http://gateway:8001
       UNITY_GATEWAY_LOCAL_INGRESS_URL: http://livekit:8787
@@ -145,11 +160,15 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+    volumes:
+    - local-bucket:/data/local-bucket
     depends_on:
       orchestra:
         condition: service_healthy
       pubsub-emulator:
         condition: service_started
+      local-bucket-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8001/health"]
       interval: 5s
