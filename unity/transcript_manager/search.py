@@ -8,6 +8,12 @@ from ..common.colleague_cache import (
     CURRENT_ASSISTANT_FALLBACK_LABEL,
     UNKNOWN_COLLEAGUE_LABEL,
 )
+from ..common.federated_search import (
+    FederatedSearchContext,
+    SortSpec,
+    federated_filter,
+    federated_ranked_search,
+)
 from ..common.filter_utils import normalize_filter_expr
 from ..common.search_utils import (
     is_plain_identifier,
@@ -245,22 +251,22 @@ def filter_messages(
     offset: int = 0,
     limit: int | None = 100,
 ) -> Dict[str, Any]:
-    normalized = normalize_filter_expr(filter)
-    collected: list[dict] = []
-    fetch_limit = (offset + limit) if limit is not None else 1000
-    for context in self._read_transcript_contexts():
-        logs = unify.get_logs(
-            context=context,
-            filter=normalized,
-            offset=0,
-            limit=fetch_limit,
-            sorting={"timestamp": "descending"},
-            from_fields=list(Message.model_fields.keys()),
-        )
-        collected.extend(dict(lg.entries) for lg in logs)
-    collected.sort(key=lambda row: row.get("timestamp"), reverse=True)
-    window = collected[offset : (offset + limit) if limit is not None else None]
-    results = [Message(**row) for row in window]
+    rows = federated_filter(
+        [
+            FederatedSearchContext(
+                context=context,
+                source=context,
+                allowed_fields=list(Message.model_fields.keys()),
+            )
+            for context in self._read_transcript_contexts()
+        ],
+        filter=normalize_filter_expr(filter),
+        sorting=[SortSpec("timestamp", direction="descending")],
+        offset=offset,
+        limit=limit if limit is not None else 1000,
+        annotate=False,
+    )
+    results = [Message(**row) for row in rows]
     return format_contacts_and_messages(self, results)
 
 
@@ -272,17 +278,20 @@ def search_messages(
 ) -> Dict[str, Any]:
     # Default behaviour: when references is None/empty, return most recent
     if not references:
-        collected: list[dict] = []
-        for context in self._read_transcript_contexts():
-            logs = unify.get_logs(
-                context=context,
-                limit=k,
-                from_fields=list(Message.model_fields.keys()),
-                sorting={"timestamp": "descending"},
-            )
-            collected.extend(dict(lg.entries) for lg in logs)
-        collected.sort(key=lambda row: row.get("timestamp"), reverse=True)
-        results = [Message(**row) for row in collected[:k]]
+        rows = federated_filter(
+            [
+                FederatedSearchContext(
+                    context=context,
+                    source=context,
+                    allowed_fields=list(Message.model_fields.keys()),
+                )
+                for context in self._read_transcript_contexts()
+            ],
+            sorting=[SortSpec("timestamp", direction="descending")],
+            limit=k,
+            annotate=False,
+        )
+        results = [Message(**row) for row in rows]
         return format_contacts_and_messages(self, results)
 
     transcript_contexts = self._read_transcript_contexts()
@@ -309,26 +318,37 @@ def search_messages(
     oversample = max(k * OVERSAMPLE_FACTOR, BASE_OVERSAMPLE_MIN)
 
     if not has_contact_terms:
-        scored_rows: list[tuple[float, dict]] = []
+        msg_terms_by_context = {}
         for context, msg_terms, _, _ in terms_by_context:
             if not msg_terms:
                 ensure_vector_column(context, "_content_emb", "content")
                 msg_terms = [("_content_emb", next(iter(references.values())))]
-            context_rows, score_key = fetch_top_k_by_terms_with_score(
-                context,
-                msg_terms,
-                k=oversample,
-                allowed_fields=list(Message.model_fields.keys()),
+            msg_terms_by_context[context] = msg_terms
+
+        def fetcher(spec, _references, fetch_limit):
+            return fetch_top_k_by_terms_with_score(
+                spec.context,
+                msg_terms_by_context[spec.context],
+                k=fetch_limit,
+                allowed_fields=list(spec.allowed_fields),
             )
-            for row in context_rows:
-                try:
-                    score = float(row.get(score_key, 0.0))
-                except Exception:
-                    score = 0.0
-                scored_rows.append((score, row))
-        scored_rows.sort(key=lambda item: item[0])
+
+        rows = federated_ranked_search(
+            [
+                FederatedSearchContext(
+                    context=context,
+                    source=context,
+                    allowed_fields=list(Message.model_fields.keys()),
+                )
+                for context in msg_terms_by_context
+            ],
+            references,
+            limit=k,
+            fetcher=fetcher,
+            annotate=False,
+        )
         results = []
-        for _, row in scored_rows[:k]:
+        for row in rows:
             try:
                 results.append(Message(**row))
             except Exception:

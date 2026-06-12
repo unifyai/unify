@@ -50,6 +50,14 @@ from unity.common.context_registry import (
     ContextRegistry,
     TableContext,
 )
+from unity.common.federated_search import (
+    FederatedSearchContext,
+    default_ranked_fetcher,
+    federated_filter,
+    federated_ranked_search,
+    federated_reduce,
+)
+from unity.common.filter_utils import normalize_filter_expr
 from unity.common.tool_outcome import ToolErrorException
 from unity.common.model_to_fields import model_to_fields
 from unity.common.llm_client import new_llm_client
@@ -1502,31 +1510,16 @@ class FileManager(BaseFileManager):
                 group_by=group_by,
             )
 
-        metric_norm = metric.strip().lower()
-        values = []
-        for ctx in self._read_file_records_contexts():
-            try:
-                values.append(
-                    self._data_manager.reduce(
-                        context=ctx,
-                        metric=metric,
-                        columns=columns,
-                        filter=filter,
-                        group_by=group_by,
-                    ),
-                )
-            except Exception:
-                continue
-        if not values:
-            return 0 if metric_norm in {"count", "sum"} else None
-        if group_by is not None or metric_norm not in {"count", "sum", "min", "max"}:
-            return values[0]
-        if metric_norm in {"count", "sum"}:
-            return sum(value or 0 for value in values)
-        filtered_values = [value for value in values if value is not None]
-        if not filtered_values:
-            return None
-        return min(filtered_values) if metric_norm == "min" else max(filtered_values)
+        return federated_reduce(
+            [
+                FederatedSearchContext(context=ctx, source=ctx)
+                for ctx in self._read_file_records_contexts()
+            ],
+            metric=metric,
+            columns=columns,
+            filter=normalize_filter_expr(filter),
+            group_by=group_by,
+        )
 
     @functools.wraps(BaseFileManager.list_columns, updated=())
     @read_only
@@ -1564,18 +1557,17 @@ class FileManager(BaseFileManager):
                 offset=offset,
             )
 
-        rows: List[Dict[str, Any]] = []
-        target_count = offset + limit
-        last_error: Exception | None = None
-        for ctx in self._read_file_records_contexts():
-            context_offset = 0
+        errors: list[Exception] = []
+
+        def fetcher(spec, row_filter, _sorting, fetch_limit):
             context_rows: list[dict[str, Any]] = []
             try:
-                while len(context_rows) < target_count:
-                    page_limit = min(1000, target_count - len(context_rows))
+                context_offset = 0
+                while len(context_rows) < fetch_limit:
+                    page_limit = min(1000, fetch_limit - len(context_rows))
                     page = self._data_manager.filter(
-                        context=ctx,
-                        filter=filter,
+                        context=spec.context,
+                        filter=row_filter,
                         columns=columns,
                         limit=page_limit,
                         offset=context_offset,
@@ -1585,12 +1577,23 @@ class FileManager(BaseFileManager):
                         break
                     context_offset += page_limit
             except Exception as exc:
-                last_error = exc
-                continue
-            rows.extend(context_rows)
-        if not rows and last_error is not None:
-            raise last_error
-        return rows[offset:target_count]
+                errors.append(exc)
+            return context_rows
+
+        rows = federated_filter(
+            [
+                FederatedSearchContext(context=ctx, source=ctx)
+                for ctx in self._read_file_records_contexts()
+            ],
+            filter=filter,
+            offset=offset,
+            limit=limit,
+            fetcher=fetcher,
+            annotate=False,
+        )
+        if not rows and errors:
+            raise errors[-1]
+        return rows
 
     @functools.wraps(BaseFileManager.search_files, updated=())
     @read_only
@@ -1613,25 +1616,34 @@ class FileManager(BaseFileManager):
                 columns=columns,
             )
 
-        rows: List[Dict[str, Any]] = []
-        last_error: Exception | None = None
-        for ctx in self._read_file_records_contexts():
+        errors: list[Exception] = []
+
+        def fetcher(spec, refs, fetch_limit):
             try:
-                rows.extend(
-                    self._data_manager.search(
-                        context=ctx,
-                        references=references or {},
-                        k=limit,
-                        filter=filter,
-                        columns=columns,
-                    ),
-                )
+                return default_ranked_fetcher(spec, refs, fetch_limit)
             except Exception as exc:
-                last_error = exc
-                continue
-        if not rows and last_error is not None:
-            raise last_error
-        return rows[:limit]
+                errors.append(exc)
+                return [], ""
+
+        rows = federated_ranked_search(
+            [
+                FederatedSearchContext(
+                    context=ctx,
+                    source=ctx,
+                    row_filter=normalize_filter_expr(filter),
+                    allowed_fields=columns,
+                )
+                for ctx in self._read_file_records_contexts()
+            ],
+            references,
+            limit=limit,
+            fetcher=fetcher,
+            backfill=True,
+            annotate=False,
+        )
+        if not rows and errors:
+            raise errors[-1]
+        return rows
 
     # ---------- Per-file join and multi-join tools (read-only) -------------- #
     @functools.wraps(BaseFileManager.filter_join, updated=())

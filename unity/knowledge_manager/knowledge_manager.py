@@ -4,7 +4,6 @@ import asyncio
 import uuid
 import unify
 import functools
-import statistics
 from typing import Any, Dict, List, Optional, Type, Union, TYPE_CHECKING
 from pydantic import BaseModel
 
@@ -40,7 +39,8 @@ from ..settings import SETTINGS
 from ..common.read_only_ask_guard import ReadOnlyAskGuardHandle
 from ..common.context_registry import ContextRegistry, TableContext
 from ..common.llm_client import new_llm_client
-from ..common.metrics_utils import reduce_logs
+from ..common.federated_search import FederatedSearchContext, federated_reduce
+from ..common.filter_utils import normalize_filter_expr
 from ..events.event_bus import EVENT_BUS, Event
 
 KNOWLEDGE_TABLE = "Knowledge"
@@ -2088,66 +2088,18 @@ class KnowledgeManager(BaseKnowledgeManager):
             * With grouping             → nested ``dict`` keyed by group values.
         """
         contexts = self._read_contexts_for_table(table)
-        if len(contexts) > 1 and group_by is None and not isinstance(filter, dict):
-            rows_by_table = self._filter(
-                filter=filter,
-                tables=[table],
-                limit=1000,
+        key_names = [keys] if isinstance(keys, str) else list(keys)
+        result_by_key: dict[str, Any] = {}
+        for key in key_names:
+            key_filter = filter.get(key) if isinstance(filter, dict) else filter
+            result_by_key[key] = federated_reduce(
+                [FederatedSearchContext(context=ctx, source=ctx) for ctx in contexts],
+                metric=metric,
+                columns=key,
+                filter=normalize_filter_expr(key_filter),
+                group_by=group_by,
             )
-            rows = rows_by_table.get(table, [])
-            metric_name = metric.lower()
-            requested_keys = [keys] if isinstance(keys, str) else list(keys)
-
-            def compute(values: list[Any]) -> Any:
-                numeric_values = [
-                    value for value in values if isinstance(value, (int, float))
-                ]
-                if metric_name == "count":
-                    return len([value for value in values if value is not None])
-                if not numeric_values:
-                    return None
-                if metric_name == "sum":
-                    return sum(numeric_values)
-                if metric_name == "mean":
-                    return statistics.mean(numeric_values)
-                if metric_name == "median":
-                    return statistics.median(numeric_values)
-                if metric_name == "min":
-                    return min(numeric_values)
-                if metric_name == "max":
-                    return max(numeric_values)
-                if metric_name == "var":
-                    return (
-                        statistics.variance(numeric_values)
-                        if len(numeric_values) > 1
-                        else 0
-                    )
-                if metric_name == "std":
-                    return (
-                        statistics.stdev(numeric_values)
-                        if len(numeric_values) > 1
-                        else 0
-                    )
-                if metric_name == "mode":
-                    return statistics.mode(numeric_values)
-                raise ValueError(f"Unsupported reduction metric: {metric}")
-
-            reduced = {
-                key: compute([row.get(key) for row in rows]) for key in requested_keys
-            }
-            return reduced[requested_keys[0]] if isinstance(keys, str) else reduced
-
-        if len(contexts) == 1:
-            ctx = contexts[0]
-        else:
-            ctx = self._ctx_for_table(table)
-        return reduce_logs(
-            context=ctx,
-            metric=metric,
-            keys=keys,
-            filter=filter,
-            group_by=group_by,
-        )
+        return result_by_key[keys] if isinstance(keys, str) else result_by_key
 
     @read_only
     def _filter_join(

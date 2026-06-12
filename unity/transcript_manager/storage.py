@@ -4,6 +4,7 @@ from typing import Dict, Optional, Set
 
 import unify
 
+from ..common.federated_search import FederatedSearchContext, federated_count
 from ..common.log_utils import log as unity_log
 from ..common.context_registry import ContextRegistry
 from ..common.context_store import TableStore
@@ -47,16 +48,13 @@ def list_columns(
 
 def num_messages(self) -> int:
     """Return the total number of messages in transcripts."""
-    total = 0
-    for context in self._read_transcript_contexts():
-        ret = unify.get_logs_metric(
-            metric="count",
-            key="message_id",
-            context=context,
-        )
-        if ret is not None:
-            total += int(ret)
-    return total
+    return federated_count(
+        [
+            FederatedSearchContext(context=context, source=context)
+            for context in self._read_transcript_contexts()
+        ],
+        key="message_id",
+    )
 
 
 def clear(self) -> None:

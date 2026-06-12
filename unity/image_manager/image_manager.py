@@ -19,10 +19,11 @@ import unify
 
 from ..common.model_to_fields import model_to_fields
 from ..common.embed_utils import ensure_vector_column
-from ..common.semantic_search import (
-    backfill_rows,
-    ensure_vector_for_source,
-    fetch_top_k_by_terms_with_score,
+from ..common.federated_search import (
+    CONTEXT_FIELD,
+    FederatedSearchContext,
+    federated_filter,
+    federated_ranked_search,
 )
 from .base import BaseImageManager
 from .prompt_builders import build_image_ask_prompt
@@ -742,35 +743,39 @@ class ImageManager(BaseImageManager):
         limit: int = 100,
         destination: str | None = None,
     ) -> List[Image]:
-        normalized = normalize_filter_expr(filter)
         contexts = (
             [self._image_context_for_destination(destination)]
             if destination is not None
             else self._read_image_contexts()
         )
-        logs = []
-        log_contexts: list[str] = []
-        fetch_limit = (offset + limit) if limit is not None else 1000
-        for context in contexts:
-            context_logs = unify.get_logs(
-                context=context,
-                filter=normalized,
-                offset=0,
-                limit=fetch_limit,
-                from_fields=list(self._BUILTIN_FIELDS),
-            )
-            logs.extend(context_logs)
-            log_contexts.extend([context] * len(context_logs))
-        # Write-through to local DataStore mirror (preserve local-only columns)
-        try:
-            for lg, row_context in zip(logs, log_contexts):
-                self._put_preserve_temp(getattr(lg, "entries", {}) or {}, row_context)
-        except Exception:
-            pass
-        return [
-            Image(**lg.entries)
-            for lg in logs[offset : (offset + limit) if limit is not None else None]
-        ]
+        rows = federated_filter(
+            [
+                FederatedSearchContext(
+                    context=context,
+                    source=context,
+                    allowed_fields=list(self._BUILTIN_FIELDS),
+                )
+                for context in contexts
+            ],
+            filter=normalize_filter_expr(filter),
+            offset=offset,
+            limit=limit if limit is not None else 1000,
+        )
+        images: list[Image] = []
+        for row in rows:
+            row_context = row.get(CONTEXT_FIELD)
+            clean = {
+                key: value
+                for key, value in row.items()
+                if not key.startswith("_federated_")
+            }
+            # Write-through to local DataStore mirror (preserve local-only columns)
+            try:
+                self._put_preserve_temp(clean, row_context)
+            except Exception:
+                pass
+            images.append(Image(**clean))
+        return images
 
     def search_images(
         self,
@@ -785,41 +790,34 @@ class ImageManager(BaseImageManager):
             if destination is not None
             else self._read_image_contexts()
         )
-        ranked_rows: list[tuple[float, dict, str]] = []
-        fetch_limit = k
-        for context in contexts:
-            caption_term = (
-                ensure_vector_for_source(context, "caption"),
-                reference_text,
-            )
-            initial, score_key = fetch_top_k_by_terms_with_score(
-                context,
-                [caption_term],
-                k=fetch_limit,
-                allowed_fields=list(self._BUILTIN_FIELDS),
-            )
-            context_rows = backfill_rows(
-                context,
-                initial,
-                fetch_limit,
-                unique_id_field="image_id",
-                allowed_fields=list(self._BUILTIN_FIELDS),
-            )
-            for row in context_rows:
-                try:
-                    score = float(row.get(score_key, 2.0))
-                except Exception:
-                    score = 2.0
-                ranked_rows.append((score, row, context))
-        ranked_rows.sort(key=lambda item: item[0])
-        selected_rows = ranked_rows[:k]
-        # Write-through to local DataStore mirror (preserve local-only columns)
-        try:
-            for _, r, row_context in selected_rows:
-                self._put_preserve_temp(r, row_context)
-        except Exception:
-            pass
-        return [Image(**r) for _, r, _ in selected_rows]
+        rows = federated_ranked_search(
+            [
+                FederatedSearchContext(
+                    context=context,
+                    source=context,
+                    allowed_fields=list(self._BUILTIN_FIELDS),
+                )
+                for context in contexts
+            ],
+            {"caption": reference_text},
+            limit=k,
+            backfill=True,
+        )
+        images: list[Image] = []
+        for row in rows:
+            row_context = row.get(CONTEXT_FIELD)
+            clean = {
+                key: value
+                for key, value in row.items()
+                if not key.startswith("_federated_")
+            }
+            # Write-through to local DataStore mirror (preserve local-only columns)
+            try:
+                self._put_preserve_temp(clean, row_context)
+            except Exception:
+                pass
+            images.append(Image(**clean))
+        return images
 
     def get_images(
         self,

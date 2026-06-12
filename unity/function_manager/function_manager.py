@@ -40,7 +40,11 @@ from unify.utils.http import RequestError as _UnifyRequestError
 from ..common.authorship import strip_authoring_assistant_id
 from ..common.log_utils import create_logs as unity_create_logs
 from ..common.embed_utils import ensure_vector_column, list_private_fields
-from ..common.search_utils import table_search_top_k
+from ..common.federated_search import (
+    FederatedSearchContext,
+    federated_filter,
+    federated_ranked_search,
+)
 from ..common.tool_outcome import ToolErrorException
 from .execution_env import ENVIRONMENT_MODULES, create_base_globals
 from .dependency_analysis import (
@@ -5067,41 +5071,46 @@ class FunctionManager(BaseFunctionManager):
         if _return_callable and _namespace is None:
             raise ValueError("_namespace required when _return_callable=True")
 
-        normalized = self._scoped_filter(normalize_filter_expr(filter))
-
-        # Query both contexts with the same limit (yielding up to 2x results).
-        per_ctx_limit = limit + offset
-        compositional_rows: List[Dict[str, Any]] = []
-        for context in self._read_compositional_contexts():
-            compositional_rows.extend(
-                self._get_logs_with_retry(
-                    context,
-                    filter=normalized,
-                    limit=per_ctx_limit,
-                ),
+        caller_filter = normalize_filter_expr(filter)
+        contexts = [
+            FederatedSearchContext(
+                context=context,
+                source="compositional",
+                row_filter=self._scoped_filter(None),
             )
+            for context in self._read_compositional_contexts()
+        ]
 
-        primitive_rows: List[Dict[str, Any]] = []
         if self._include_primitives:
             self.sync_primitives()
-            # Combine caller filter with the scoped primitive filter (scope + exclusions).
-            primitive_base = self._scoped_primitive_filter()
-            prim_filter = normalize_filter_expr(filter)
-            if prim_filter:
-                prim_filter = f"({prim_filter}) and ({primitive_base})"
-            else:
-                prim_filter = primitive_base
-            for context in self._read_function_contexts(FUNCTIONS_PRIMITIVES_TABLE):
-                primitive_rows.extend(
-                    self._get_logs_with_retry(
-                        context,
-                        filter=prim_filter,
-                        limit=per_ctx_limit,
-                    ),
+            contexts.extend(
+                FederatedSearchContext(
+                    context=context,
+                    source="primitives",
+                    row_filter=self._scoped_primitive_filter(),
                 )
+                for context in self._read_function_contexts(FUNCTIONS_PRIMITIVES_TABLE)
+            )
 
-        # Stack compositional first, primitives last, then apply offset+limit.
-        rows = (compositional_rows + primitive_rows)[offset : offset + limit]
+        def fetcher(spec, row_filter, _sorting, fetch_limit):
+            combined = row_filter
+            if combined and spec.row_filter:
+                combined = f"({combined}) and ({spec.row_filter})"
+            elif spec.row_filter:
+                combined = spec.row_filter
+            return self._get_logs_with_retry(
+                spec.context,
+                filter=combined,
+                limit=fetch_limit,
+            )
+
+        rows = federated_filter(
+            contexts,
+            filter=caller_filter,
+            offset=offset,
+            limit=limit,
+            fetcher=fetcher,
+        )
 
         if not _return_callable:
             # Strip implementations if not requested (reduces payload size)
@@ -5148,49 +5157,35 @@ class FunctionManager(BaseFunctionManager):
 
         allowed_fields = list(Function.model_fields.keys())
 
-        compositional_rows = []
-        for context in self._read_compositional_contexts():
-            compositional_rows.extend(
-                table_search_top_k(
-                    context=context,
-                    references={"embedding_text": query},
-                    k=n,
-                    allowed_fields=allowed_fields,
-                    unique_id_field="function_id",
-                    row_filter=self._scoped_filter(None),
-                ),
+        contexts = [
+            FederatedSearchContext(
+                context=context,
+                source="compositional",
+                row_filter=self._scoped_filter(None),
+                allowed_fields=allowed_fields,
             )
+            for context in self._read_compositional_contexts()
+        ]
 
-        # Optionally search primitives context.
-        primitive_rows: list = []
         if self._include_primitives:
             self.sync_primitives()
-            primitive_filter = self._scoped_primitive_filter()
-            for context in self._read_function_contexts(FUNCTIONS_PRIMITIVES_TABLE):
-                primitive_rows.extend(
-                    table_search_top_k(
-                        context=context,
-                        references={"embedding_text": query},
-                        k=n,
-                        allowed_fields=allowed_fields,
-                        unique_id_field="function_id",
-                        row_filter=primitive_filter,
-                    ),
+            contexts.extend(
+                FederatedSearchContext(
+                    context=context,
+                    source="primitives",
+                    row_filter=self._scoped_primitive_filter(),
+                    allowed_fields=allowed_fields,
                 )
+                for context in self._read_function_contexts(FUNCTIONS_PRIMITIVES_TABLE)
+            )
 
-        # Merge and sort by the private score column (lower distance = better match)
-        all_rows = compositional_rows + primitive_rows
-        sort_key: str | None = None
-        for row in all_rows:
-            for key in row.keys():
-                if key.startswith("_"):
-                    sort_key = key
-                    break
-            if sort_key:
-                break
-        if sort_key:
-            all_rows.sort(key=lambda r: r.get(sort_key, float("inf")))
-        results = all_rows[:n]
+        results = federated_ranked_search(
+            contexts,
+            {"embedding_text": query},
+            limit=n,
+            unique_id_field="function_id",
+            backfill=True,
+        )
 
         if not _return_callable:
             # Strip implementations if not requested (reduces payload size)

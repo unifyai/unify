@@ -1,5 +1,3 @@
-from collections import Counter
-from statistics import mean, median, mode, pstdev, pvariance
 from typing import List, Dict, Optional, Callable, Any, Tuple, Type, Union
 from pydantic import BaseModel
 import asyncio
@@ -55,10 +53,15 @@ from .ops import (
     delete_contact as _op_delete,
     merge_contacts as _op_merge,
 )
-from .search import (
-    filter_contacts as _srch_filter,
-    search_contacts as _srch_search,
+from ..common.federated_search import (
+    CONTEXT_FIELD,
+    FederatedSearchContext,
+    federated_count,
+    federated_filter,
+    federated_ranked_search,
+    federated_reduce,
 )
+from ..common.filter_utils import normalize_filter_expr
 
 
 class ContactManager(BaseContactManager):
@@ -676,93 +679,6 @@ class ContactManager(BaseContactManager):
         cols = self._get_columns()
         return cols if include_types else list(cols)
 
-    @staticmethod
-    def _compute_metric(metric: str, values: list[Any]) -> Any:
-        """Compute one supported reduction metric over already-filtered values."""
-
-        metric_name = metric.strip().lower()
-        cleaned = [value for value in values if value is not None]
-        if metric_name == "count":
-            return len(cleaned)
-        if not cleaned:
-            return None
-        if metric_name == "sum":
-            return sum(cleaned)
-        if metric_name == "mean":
-            return mean(cleaned)
-        if metric_name == "var":
-            return pvariance(cleaned)
-        if metric_name == "std":
-            return pstdev(cleaned)
-        if metric_name == "min":
-            return min(cleaned)
-        if metric_name == "max":
-            return max(cleaned)
-        if metric_name == "median":
-            return median(cleaned)
-        if metric_name == "mode":
-            try:
-                return mode(cleaned)
-            except Exception:
-                counts = Counter(cleaned)
-                return counts.most_common(1)[0][0]
-        raise ValueError(f"Unsupported reduction metric {metric!r}.")
-
-    def _reduce_rows_by_group(
-        self,
-        *,
-        rows: list[dict[str, Any]],
-        metric: str,
-        key: str,
-        group_by: list[str],
-    ) -> dict[Any, Any]:
-        """Build the nested grouped metric payload for one key."""
-
-        def build(level_rows: list[dict[str, Any]], level: int) -> Any:
-            if level >= len(group_by):
-                return self._compute_metric(
-                    metric,
-                    [row.get(key) for row in level_rows],
-                )
-            group_key = group_by[level]
-            buckets: dict[Any, list[dict[str, Any]]] = {}
-            for row in level_rows:
-                buckets.setdefault(row.get(group_key), []).append(row)
-            return {
-                bucket_key: build(bucket_rows, level + 1)
-                for bucket_key, bucket_rows in buckets.items()
-            }
-
-        grouped = build(rows, 0)
-        return grouped if isinstance(grouped, dict) else {}
-
-    def _contact_rows_for_reduce(
-        self,
-        *,
-        fields: list[str],
-        filter: Optional[str],
-    ) -> list[dict[str, Any]]:
-        """Fetch matching Contacts rows across every readable root."""
-
-        rows: list[dict[str, Any]] = []
-        from_fields = list(dict.fromkeys(fields))
-        for context in self._read_contact_contexts():
-            offset = 0
-            page_size = 1000
-            while True:
-                logs = unify.get_logs(
-                    context=context,
-                    filter=filter,
-                    offset=offset,
-                    limit=page_size,
-                    from_fields=from_fields,
-                )
-                rows.extend(log.entries for log in logs)
-                if len(logs) < page_size:
-                    break
-                offset += page_size
-        return rows
-
     @read_only
     def _reduce(
         self,
@@ -813,20 +729,21 @@ class ContactManager(BaseContactManager):
 
         for key in keys_list:
             key_filter = filter.get(key) if isinstance(filter, dict) else filter
-            fields = [key, *group_fields]
-            rows = self._contact_rows_for_reduce(fields=fields, filter=key_filter)
-            if group_fields:
-                result_by_key[key] = self._reduce_rows_by_group(
-                    rows=rows,
-                    metric=metric,
-                    key=key,
-                    group_by=group_fields,
+            contexts = [
+                FederatedSearchContext(
+                    context=context,
+                    source=context,
+                    allowed_fields=[key, *group_fields],
                 )
-            else:
-                result_by_key[key] = self._compute_metric(
-                    metric,
-                    [row.get(key) for row in rows],
-                )
+                for context in self._read_contact_contexts()
+            ]
+            result_by_key[key] = federated_reduce(
+                contexts,
+                metric=metric,
+                columns=key,
+                filter=normalize_filter_expr(key_filter),
+                group_by=group_fields or None,
+            )
 
         if isinstance(keys, str):
             return result_by_key[keys]
@@ -902,22 +819,44 @@ class ContactManager(BaseContactManager):
                         if count_ids > 0:
                             eff_limit = min(eff_limit, count_ids)
 
-        visible_contacts: list[Contact] = []
-        per_root_limit = max(offset + eff_limit, eff_limit)
-        target_count = offset + limit
-        for context in self._read_contact_contexts():
-            result = _srch_filter(
-                self,
-                filter=filter,
+        from_fields = list(self._BUILTIN_FIELDS)
+        if getattr(self, "_known_custom_fields", None):
+            from_fields.extend(sorted(self._known_custom_fields))
+
+        def fetcher(spec, row_filter, _sorting, fetch_limit):
+            logs = unify.get_logs(
+                context=spec.context,
+                filter=row_filter,
                 offset=0,
-                limit=per_root_limit,
-                context=context,
-                data_store=self._data_store_for_context(context),
+                limit=fetch_limit,
+                from_fields=list(spec.allowed_fields),
             )
-            visible_contacts.extend(result.get("contacts", []))
-            if len(visible_contacts) >= target_count and eff_limit == limit:
-                break
-        return self._pack_contacts(visible_contacts[offset : offset + limit])
+            rows = [lg.entries for lg in logs]
+            store = self._data_store_for_context(spec.context)
+            try:
+                for row in rows:
+                    store.put(row)
+            except Exception:
+                pass
+            return rows
+
+        contexts = [
+            FederatedSearchContext(
+                context=context,
+                source=context,
+                allowed_fields=from_fields,
+            )
+            for context in self._read_contact_contexts()
+        ]
+        rows = federated_filter(
+            contexts,
+            filter=normalize_filter_expr(filter),
+            offset=offset,
+            limit=eff_limit,
+            fetcher=fetcher,
+            annotate=False,
+        )
+        return self._pack_contacts([Contact(**row) for row in rows])
 
     @read_only
     def _search_contacts(
@@ -958,17 +897,47 @@ class ContactManager(BaseContactManager):
         - When multiple terms are provided, results are ranked by the sum of cosines across
           all terms to favour contacts similar across several fields.
         """
-        visible_contacts: list[Contact] = []
-        for context in self._read_contact_contexts():
-            result = _srch_search(
-                self,
-                references=references,
-                k=k,
+        allowed_fields = list(self._BUILTIN_FIELDS)
+        if getattr(self, "_known_custom_fields", None):
+            allowed_fields.extend(sorted(self._known_custom_fields))
+
+        from ..session_details import SESSION_DETAILS
+
+        system_filter = (
+            f"contact_id != {int(SESSION_DETAILS.self_contact_id)} "
+            f"and contact_id != {int(SESSION_DETAILS.boss_contact_id)}"
+        )
+        contexts = [
+            FederatedSearchContext(
                 context=context,
-                data_store=self._data_store_for_context(context),
+                source=context,
+                row_filter=system_filter,
+                allowed_fields=allowed_fields,
             )
-            visible_contacts.extend(result.get("contacts", []))
-        return self._pack_contacts(visible_contacts[:k])
+            for context in self._read_contact_contexts()
+        ]
+        rows = federated_ranked_search(
+            contexts,
+            references,
+            limit=k,
+            backfill=True,
+        )
+
+        visible_contacts: list[Contact] = []
+        for row in rows:
+            source_context = row.get(CONTEXT_FIELD)
+            clean = {
+                key: value
+                for key, value in row.items()
+                if not key.startswith("_federated_")
+            }
+            if source_context:
+                try:
+                    self._data_store_for_context(source_context).put(clean)
+                except Exception:
+                    pass
+            visible_contacts.append(Contact(**clean))
+        return self._pack_contacts(visible_contacts)
 
     # Mutation tools
     def _create_contact(
@@ -1539,16 +1508,13 @@ class ContactManager(BaseContactManager):
         int
             The total number of contacts.
         """
-        total = 0
-        for context in self._read_contact_contexts():
-            ret = unify.get_logs_metric(
-                metric="count",
-                key="contact_id",
-                context=context,
-            )
-            if ret is not None:
-                total += int(ret)
-        return total
+        return federated_count(
+            [
+                FederatedSearchContext(context=context, source=context)
+                for context in self._read_contact_contexts()
+            ],
+            key="contact_id",
+        )
 
     def _get_columns(self) -> Dict[str, str]:
         return _storage_get_columns(self)
