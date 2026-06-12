@@ -179,6 +179,9 @@ generate_secrets() {
   if ! grep -qE '^POSTGRES_PASSWORD=.+$' "$env_file" 2>/dev/null; then
     upsert_env_value "$env_file" "POSTGRES_PASSWORD" "$(openssl rand -hex 16)"
   fi
+  if ! grep -qE '^INTEGRATION_CONFIRMATION_SECRET=.+$' "$env_file" 2>/dev/null; then
+    upsert_env_value "$env_file" "INTEGRATION_CONFIRMATION_SECRET" "$(openssl rand -hex 32)"
+  fi
 }
 
 run_byok_wizard() {

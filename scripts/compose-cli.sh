@@ -95,7 +95,8 @@ cmd_doctor() {
   fi
   if [[ -f "$ENV_FILE" ]]; then
     log_ok ".env present"
-    for key in ORCHESTRA_ADMIN_KEY NEXTAUTH_SECRET JWT_SECRET POSTGRES_PASSWORD; do
+    for key in ORCHESTRA_ADMIN_KEY NEXTAUTH_SECRET JWT_SECRET POSTGRES_PASSWORD \
+      INTEGRATION_CONFIRMATION_SECRET; do
       if _has_env "$key"; then
         log_ok "Secret configured ($key)"
       else
@@ -116,6 +117,11 @@ cmd_doctor() {
       log_ok "Voice BYOK keys configured"
     else
       log_warn "Voice calls need DEEPGRAM_API_KEY and CARTESIA_API_KEY"
+    fi
+    if _has_env COMPOSIO_API_KEY; then
+      log_ok "Composio app integrations configured"
+    else
+      log_info "COMPOSIO_API_KEY not set — third-party app integrations disabled (optional)"
     fi
   else
     log_err ".env missing at $ENV_FILE"

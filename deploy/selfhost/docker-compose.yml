@@ -50,12 +50,16 @@ services:
     - |
       from sqlalchemy import create_engine
       from sqlalchemy.orm import sessionmaker
-      from orchestra.services.self_host_bootstrap import ensure_platform_billing_defaults
+      from orchestra.services.self_host_bootstrap import (
+          ensure_platform_billing_defaults,
+          ensure_provider_integration_backends,
+      )
       from orchestra.settings import settings
       engine = create_engine(str(settings.db_url))
       sf = sessionmaker(bind=engine)
       with sf() as session:
           ensure_platform_billing_defaults(session)
+          ensure_provider_integration_backends(session)
           session.commit()
       print("Self-host billing defaults ensured.")
     environment:
@@ -65,6 +69,7 @@ services:
       ORCHESTRA_DB_PASS: ${POSTGRES_PASSWORD:-orchestra}
       ORCHESTRA_DB_BASE: orchestra
       SELF_HOST: "1"
+      COMPOSIO_API_KEY: ${COMPOSIO_API_KEY:-}
     depends_on:
       orchestra-migrate:
         condition: service_completed_successfully
@@ -92,6 +97,8 @@ services:
       ORCHESTRA_DB_BASE: orchestra
       ORCHESTRA_ADMIN_KEY: ${ORCHESTRA_ADMIN_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      COMPOSIO_API_KEY: ${COMPOSIO_API_KEY:-}
+      INTEGRATION_CONFIRMATION_SECRET: ${INTEGRATION_CONFIRMATION_SECRET}
       SELF_HOST: "1"
       SELF_HOST_LOCAL_BUCKET_DIR: /data/local-bucket
       ORCHESTRA_PUBLIC_URL: http://orchestra:8000
@@ -109,6 +116,27 @@ services:
       timeout: 5s
       retries: 30
     restart: unless-stopped
+
+  orchestra-integrations-bootstrap:
+    <<: *orchestra_image
+    command:
+    - /bin/bash
+    - -c
+    - |
+      if [ -z "$${COMPOSIO_API_KEY:-}" ]; then
+        echo "COMPOSIO_API_KEY not set; skipping provider integration catalog sync."
+        exit 0
+      fi
+      python3 scripts/cloud_bootstrap_provider_integrations.py \
+        --manifest deploy/integrations/bootstrap.selfhost.toml
+    environment:
+      ORCHESTRA_URL: http://orchestra:8000/v0
+      ORCHESTRA_ADMIN_KEY: ${ORCHESTRA_ADMIN_KEY}
+      COMPOSIO_API_KEY: ${COMPOSIO_API_KEY:-}
+    depends_on:
+      orchestra:
+        condition: service_healthy
+    restart: "no"
 
   pubsub-emulator:
     image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
