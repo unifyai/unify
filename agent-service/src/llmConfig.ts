@@ -4,10 +4,20 @@ export interface LlmConfigEnv {
   UNITY_COMMS_URL?: string;
   UNITY_GATEWAY_URL?: string;
   UNITY_AGENT_SERVICE_LLM_MODEL?: string;
+  UNIFY_MODEL?: string;
   UNIFY_KEY?: string;
 }
 
-const DEFAULT_MODEL = 'claude-4.6-sonnet@anthropic';
+/** Matches ``ProductionSettings.UNIFY_MODEL`` in ``unity/settings.py``. */
+const DEFAULT_UNIFY_MODEL = 'deepseek-v4-max@deepseek';
+
+export function resolveAgentServiceModel(env: LlmConfigEnv = process.env): string {
+  return (
+    env.UNITY_AGENT_SERVICE_LLM_MODEL?.trim() ||
+    env.UNIFY_MODEL?.trim() ||
+    DEFAULT_UNIFY_MODEL
+  );
+}
 
 function cleanUrl(value: string): string {
   return value.trim().replace(/\/+$/, '');
@@ -42,7 +52,7 @@ export function getLlmConfig(env: LlmConfigEnv = process.env): any {
   return {
     provider: 'openai-generic' as const,
     options: {
-      model: env.UNITY_AGENT_SERVICE_LLM_MODEL?.trim() || DEFAULT_MODEL,
+      model: resolveAgentServiceModel(env),
       baseUrl: resolveUnillmBaseUrl(env),
       headers: {
         'Authorization': `Bearer ${apiKey}`,
