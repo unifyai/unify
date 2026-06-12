@@ -182,6 +182,8 @@ class TestCoordinatorPrompt:
         assert "**Marty admin tools:**" in prompt
         assert "`primitives.coordinator.list_org_members`" in prompt
         assert "always target the active workspace organization" in prompt
+        assert "Marty\n----" in prompt
+        assert "Role / specialization: Coordinator." in prompt
         assert "Marty identity" in prompt
 
     def test_personal_coordinator_uses_boss_details_and_routes_org_work_to_switch(
@@ -339,6 +341,7 @@ class TestPromptSectionOwnershipMatrix:
                     "Authorized humans\n-----------------",
                     "Act capabilities\n----------------",
                     "Concurrent action and acknowledgment\n------------------------------------",
+                    "Marty\n----",
                     "Marty identity\n--------------",
                     "Marty Console literacy\n----------------------",
                     "Console account & org administration",
@@ -357,6 +360,7 @@ class TestPromptSectionOwnershipMatrix:
                     "demo_mode": True,
                 },
                 "present": (
+                    "Marty\n----",
                     "Marty identity\n--------------",
                     "Authorized humans\n-----------------",
                     "Demo mode\n---------",
@@ -378,6 +382,7 @@ class TestPromptSectionOwnershipMatrix:
                     "Boss details\n------------",
                     "Organization membership actions are unavailable",
                     "switch to that organization's Marty",
+                    "Marty\n----",
                     "Marty identity\n--------------",
                     "Marty Console literacy\n----------------------",
                     "Console account & org administration",
@@ -404,7 +409,7 @@ class TestPromptSectionOwnershipMatrix:
 
 
 class TestCoordinatorVoicePrompt:
-    """Coordinator voice calls rely on shared bio and base voice scaffolding."""
+    """Coordinator voice calls use Marty intro scaffolding plus optional user about."""
 
     def test_regular_voice_prompt_unchanged_when_flag_is_false(self):
         omitted = _build_voice()
@@ -413,12 +418,21 @@ class TestCoordinatorVoicePrompt:
         assert omitted == explicit_false
         assert "Coordinator voice role" not in omitted
 
-    def test_coordinator_voice_prompt_does_not_add_extra_role_block_after_bio(self):
+    def test_coordinator_voice_prompt_uses_marty_intro_and_optional_user_about(self):
         prompt = _build_voice(is_coordinator=True)
 
-        assert "Bio\n---\nI help Acme configure its Unify team." in prompt
+        assert "Marty\n----" in prompt
+        assert "Role / specialization: Coordinator." in prompt
+        assert "About me\n--------\nI help Acme configure its Unify team." in prompt
+        assert "Bio\n---" not in prompt
         assert "Coordinator voice role" not in prompt
-        assert prompt.index("Bio\n---") < prompt.index("Brevity\n-------")
+        assert prompt.index("Marty\n----") < prompt.index("Brevity\n-------")
+
+    def test_coordinator_voice_prompt_omits_user_about_when_empty(self):
+        prompt = _build_voice(is_coordinator=True, bio="")
+
+        assert "Marty\n----" in prompt
+        assert "About me\n--------" not in prompt
 
     def test_coordinator_voice_prompt_excludes_slow_brain_literacy(self):
         prompt = _build_voice(is_coordinator=True)
