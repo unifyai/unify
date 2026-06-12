@@ -75,14 +75,16 @@ services:
         condition: service_completed_successfully
     restart: "no"
 
-  # The named volume is created root-owned; orchestra (uid 999) and the
-  # gateway (uid 1000) both create bucket directories at its root.
-  local-bucket-init:
+  # Named volumes are created root-owned; orchestra (uid 999) and the
+  # gateway (uid 1000) create bucket directories at the local-bucket root,
+  # and the console (uid 1001) writes the coordinator runtime file.
+  volumes-init:
     <<: *orchestra_image
     user: "0"
-    command: ["chmod", "0777", "/data/local-bucket"]
+    command: ["chmod", "0777", "/data/local-bucket", "/data/runtime"]
     volumes:
     - local-bucket:/data/local-bucket
+    - runtime:/data/runtime
     restart: "no"
 
   orchestra:
@@ -108,7 +110,7 @@ services:
     depends_on:
       orchestra-seed:
         condition: service_completed_successfully
-      local-bucket-init:
+      volumes-init:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v0/health', timeout=5)\""]
@@ -195,7 +197,7 @@ services:
         condition: service_healthy
       pubsub-emulator:
         condition: service_started
-      local-bucket-init:
+      volumes-init:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8001/health"]
