@@ -46,7 +46,12 @@ def wrap_str_placeholders(expr: str) -> str:
     return pattern.sub(_repl, expr)
 
 
-def ensure_vector_for_source(context: str, source_expr: str) -> str:
+def ensure_vector_for_source(
+    context: str,
+    source_expr: str,
+    *,
+    project: Optional[str] = None,
+) -> str:
     """Ensure an embedding column exists for source_expr within context and return its name.
 
     - If source_expr is a plain identifier, use that column directly and create `_{col}_emb`.
@@ -61,6 +66,7 @@ def ensure_vector_for_source(context: str, source_expr: str) -> str:
             embed_column=embed_column_name,
             source_column=source_column_name,
             derived_expr=None,
+            project=project,
         )
     else:
         expr_hash = hashlib.sha256(source_expr.encode("utf-8")).hexdigest()[:10]
@@ -72,6 +78,7 @@ def ensure_vector_for_source(context: str, source_expr: str) -> str:
             embed_column=embed_column_name,
             source_column=source_column_name,
             derived_expr=sanitized_expr,
+            project=project,
         )
     return embed_column_name
 
@@ -119,6 +126,8 @@ def ensure_mean_cosine_column(
     context: str,
     terms: List[Tuple[str, str]],
     seed: str,
+    *,
+    project: Optional[str] = None,
 ) -> str:
     """Create a mean-of-cosines derived column over provided (embed_col, ref_text) terms.
 
@@ -146,6 +155,7 @@ def ensure_mean_cosine_column(
         context=context,
         key=sum_key,
         equation=sum_equation,
+        project=project,
     )
 
     return sum_key
@@ -155,6 +165,8 @@ def ensure_mean_cosine_column_piecewise(
     context: str,
     terms: List[Tuple[str, str]],
     seed: str,
+    *,
+    project: Optional[str] = None,
 ) -> str:
     """Create a mean-of-cosines derived column using a single zero-shot equation.
 
@@ -164,7 +176,7 @@ def ensure_mean_cosine_column_piecewise(
 
     Returns the created (or existing) mean column key.
     """
-    return ensure_mean_cosine_column(context, terms, seed)
+    return ensure_mean_cosine_column(context, terms, seed, project=project)
 
 
 def ensure_mean_cosine_column_piecewise_named(
@@ -173,6 +185,7 @@ def ensure_mean_cosine_column_piecewise_named(
     seed: str,
     *,
     public_prefix: str = "score_",
+    project: Optional[str] = None,
 ) -> str:
     """Create a private mean-of-cosines column for the provided terms.
 
@@ -182,7 +195,7 @@ def ensure_mean_cosine_column_piecewise_named(
 
     Returns the created (or existing) private sum column key.
     """
-    return ensure_mean_cosine_column(context, terms, seed)
+    return ensure_mean_cosine_column(context, terms, seed, project=project)
 
 
 def fetch_top_k_by_terms_with_score(
@@ -192,6 +205,7 @@ def fetch_top_k_by_terms_with_score(
     k: int = 10,
     row_filter: Optional[str] = None,
     allowed_fields: Optional[List[str]] = None,
+    project: Optional[str] = None,
 ) -> tuple[list[dict], str]:
     """Return top-k rows plus the private score column key for provided terms.
 
@@ -202,11 +216,55 @@ def fetch_top_k_by_terms_with_score(
     if len(terms) == 0:
         return [], ""
 
+    if len(terms) == 1:
+        # Single-term searches rank via the inline cosine ANN fast-path with
+        # the backend-computed distance surfaced per row. This is fully
+        # read-only (no derived score column is created), which both avoids
+        # per-query column bloat and works against public-read contexts.
+        embed_col, ref_text = terms[0]
+        escaped_ref = escape_single_quotes(ref_text)
+        sorting = {
+            f"cosine({embed_col}, embed('{escaped_ref}', model='{EMBED_MODEL}'))": "ascending",
+        }
+        score_key = "_sort_distance"
+        if allowed_fields is not None:
+            from_fields = list(dict.fromkeys([*allowed_fields, score_key]))
+            logs = unify.get_logs(
+                context=context,
+                project=project,
+                filter=row_filter,
+                sorting=sorting,
+                limit=k,
+                from_fields=from_fields,
+                return_sort_distance=True,
+            )
+        else:
+            exclude_fields = [
+                f
+                for f in list_private_fields(context, project=project)
+                if f != score_key
+            ]
+            logs = unify.get_logs(
+                context=context,
+                project=project,
+                filter=row_filter,
+                sorting=sorting,
+                limit=k,
+                exclude_fields=exclude_fields,
+                return_sort_distance=True,
+            )
+        return [lg.entries for lg in logs], score_key
+
     canonical = "|".join(f"{i}:{col}=>{txt}" for i, (col, txt) in enumerate(terms))
     import hashlib as _hashlib
 
     sum_hash = _hashlib.sha1(canonical.encode("utf-8")).hexdigest()[:12]
-    sum_key = ensure_mean_cosine_column_piecewise_named(context, terms, sum_hash)
+    sum_key = ensure_mean_cosine_column_piecewise_named(
+        context,
+        terms,
+        sum_hash,
+        project=project,
+    )
 
     # Build read projection
     if allowed_fields is not None:
@@ -214,6 +272,7 @@ def fetch_top_k_by_terms_with_score(
         from_fields = list(dict.fromkeys([*allowed_fields, sum_key]))
         logs = unify.get_logs(
             context=context,
+            project=project,
             filter=row_filter,
             sorting={sum_key: "ascending"},
             limit=k,
@@ -221,9 +280,12 @@ def fetch_top_k_by_terms_with_score(
         )
     else:
         # Exclude all private fields except the score key we need to read
-        exclude_fields = [f for f in list_private_fields(context) if f != sum_key]
+        exclude_fields = [
+            f for f in list_private_fields(context, project=project) if f != sum_key
+        ]
         logs = unify.get_logs(
             context=context,
+            project=project,
             filter=row_filter,
             sorting={sum_key: "ascending"},
             limit=k,
@@ -281,6 +343,7 @@ def fetch_top_k_by_terms(
     k: int = 10,
     row_filter: Optional[str] = None,
     allowed_fields: Optional[List[str]] = None,
+    project: Optional[str] = None,
 ) -> List[dict]:
     """Return top-k rows ranked by semantic similarity given pre-embedded terms.
 
@@ -297,6 +360,7 @@ def fetch_top_k_by_terms(
         if allowed_fields is not None:
             logs = unify.get_logs(
                 context=context,
+                project=project,
                 filter=row_filter,
                 sorting={
                     f"cosine({embed_col}, embed('{escaped_ref}', model='{EMBED_MODEL}'))": "ascending",
@@ -307,12 +371,13 @@ def fetch_top_k_by_terms(
         else:
             logs = unify.get_logs(
                 context=context,
+                project=project,
                 filter=row_filter,
                 sorting={
                     f"cosine({embed_col}, embed('{escaped_ref}', model='{EMBED_MODEL}'))": "ascending",
                 },
                 limit=k,
-                exclude_fields=list_private_fields(context),
+                exclude_fields=list_private_fields(context, project=project),
             )
         return [lg.entries for lg in logs]
 
@@ -322,9 +387,10 @@ def fetch_top_k_by_terms(
         if row_filter is not None:
             any_rows = unify.get_logs(
                 context=context,
+                project=project,
                 filter=row_filter,
                 limit=1,
-                exclude_fields=list_private_fields(context),
+                exclude_fields=list_private_fields(context, project=project),
             )
             if not any_rows:
                 return []
@@ -336,11 +402,17 @@ def fetch_top_k_by_terms(
     import hashlib as _hashlib
 
     sum_hash = _hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
-    sum_key = ensure_mean_cosine_column_piecewise(context, terms, sum_hash)
+    sum_key = ensure_mean_cosine_column_piecewise(
+        context,
+        terms,
+        sum_hash,
+        project=project,
+    )
 
     if allowed_fields is not None:
         logs = unify.get_logs(
             context=context,
+            project=project,
             filter=row_filter,
             sorting={sum_key: "ascending"},
             limit=k,
@@ -349,10 +421,11 @@ def fetch_top_k_by_terms(
     else:
         logs = unify.get_logs(
             context=context,
+            project=project,
             filter=row_filter,
             sorting={sum_key: "ascending"},
             limit=k,
-            exclude_fields=list_private_fields(context),
+            exclude_fields=list_private_fields(context, project=project),
         )
     return [lg.entries for lg in logs]
 
@@ -364,6 +437,7 @@ def fetch_top_k_by_references(
     k: int = 10,
     row_filter: Optional[str] = None,
     allowed_fields: Optional[List[str]] = None,
+    project: Optional[str] = None,
 ) -> List[dict]:
     """Return top-k rows from a context ranked by semantic similarity to reference text(s).
 
@@ -407,7 +481,7 @@ def fetch_top_k_by_references(
     # Collect (embed_col, ref_text) pairs
     terms: List[Tuple[str, str]] = []
     for source_expr, ref_text in references.items():
-        embed_col = ensure_vector_for_source(context, source_expr)
+        embed_col = ensure_vector_for_source(context, source_expr, project=project)
         terms.append((embed_col, ref_text))
 
     return fetch_top_k_by_terms(
@@ -416,6 +490,7 @@ def fetch_top_k_by_references(
         k=k,
         row_filter=row_filter,
         allowed_fields=allowed_fields,
+        project=project,
     )
 
 
@@ -427,6 +502,7 @@ def backfill_rows(
     row_filter: Optional[str] = None,
     unique_id_field: Optional[str] = None,
     allowed_fields: Optional[List[str]] = None,
+    project: Optional[str] = None,
 ) -> List[dict]:
     """Backfill similarity results with additional rows to reach k.
 
@@ -456,7 +532,7 @@ def backfill_rows(
     # Determine unique id column if not supplied
     if unique_id_field is None:
         try:
-            ctx_info = unify.get_context(context)
+            ctx_info = unify.get_context(context, project=project)
             unique_id_field = ctx_info.get("unique_keys")
             if isinstance(unique_id_field, list):
                 unique_id_field = unique_id_field[0] if unique_id_field else None
@@ -496,6 +572,7 @@ def backfill_rows(
             )
             fallback_logs = unify.get_logs(
                 context=context,
+                project=project,
                 filter=row_filter,
                 offset=offset,
                 limit=batch_size,
@@ -506,10 +583,11 @@ def backfill_rows(
             try:
                 fallback_logs = unify.get_logs(
                     context=context,
+                    project=project,
                     filter=row_filter,
                     offset=offset,
                     limit=batch_size,
-                    exclude_fields=list_private_fields(context),
+                    exclude_fields=list_private_fields(context, project=project),
                     sorting=sorting,
                 )
             except Exception as e:

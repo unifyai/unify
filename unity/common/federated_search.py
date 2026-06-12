@@ -28,12 +28,18 @@ _DECOMPOSABLE_METRICS = {"count", "sum", "min", "max", "mean"}
 
 @dataclass(frozen=True)
 class FederatedSearchContext:
-    """One context participating in a federated read."""
+    """One context participating in a federated read.
+
+    ``project`` addresses contexts living outside the active project (for
+    example the public-read builtins catalogue); ``None`` means the active
+    project.
+    """
 
     context: str
     source: str
     row_filter: Optional[str] = None
     allowed_fields: Optional[Sequence[str]] = None
+    project: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -102,7 +108,14 @@ def default_ranked_fetcher(
 ) -> tuple[list[dict], str]:
     """Fetch ranked rows from one context and expose the score column."""
     terms = [
-        (ensure_vector_for_source(spec.context, source_expr), str(ref_text))
+        (
+            ensure_vector_for_source(
+                spec.context,
+                source_expr,
+                project=spec.project,
+            ),
+            str(ref_text),
+        )
         for source_expr, ref_text in references.items()
     ]
     return fetch_top_k_by_terms_with_score(
@@ -111,6 +124,7 @@ def default_ranked_fetcher(
         k=limit,
         row_filter=spec.row_filter,
         allowed_fields=list(spec.allowed_fields) if spec.allowed_fields else None,
+        project=spec.project,
     )
 
 
@@ -159,6 +173,7 @@ def default_filter_fetcher(
             page_limit = _PAGE_SIZE
         kwargs: dict[str, Any] = {
             "context": spec.context,
+            "project": spec.project,
             "filter": combined_filter,
             "sorting": backend,
             "limit": page_limit,
@@ -412,6 +427,7 @@ def federated_ranked_search(
                 allowed_fields=(
                     list(spec.allowed_fields) if spec.allowed_fields else None
                 ),
+                project=spec.project,
             )
             if annotate:
                 rows = filled[:before] + [
@@ -449,7 +465,7 @@ def default_metric_fetcher(
         return empty
 
     try:
-        unify.get_context(spec.context)
+        unify.get_context(spec.context, project=spec.project)
     except Exception as exc:
         if _is_missing_context_error(exc):
             return _empty()
@@ -458,6 +474,7 @@ def default_metric_fetcher(
     try:
         return reduce_logs(
             context=spec.context,
+            project=spec.project,
             metric=metric,
             keys=list(keys) if isinstance(keys, (list, tuple)) else keys,
             filter=_combine_filters(filter, spec.row_filter),

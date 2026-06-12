@@ -128,6 +128,14 @@ def prepare_shared_project() -> None:
         if "already exists" not in str(e).lower():
             print(f"Note: unity.init() returned: {e}", file=sys.stderr)
 
+    # Seed the global builtins catalogue (public-read primitives project).
+    # Hash-guarded, so this is a no-op in all but the first run after a
+    # primitive surface change.
+    from unity.function_manager.builtins_catalog import seed_builtin_primitives
+
+    seed_builtin_primitives()
+    print("Seeded builtins primitives catalogue")
+
     print(f"Prepared shared project '{PROJECT}'")
 
 

@@ -170,16 +170,19 @@ def test_materializes_connected_provider_tools_with_active_only_search(
     assert "Signature: (query: str, limit: int = 10) -> dict" in row["embedding_text"]
     assert "crm.objects.contacts.read" not in row["embedding_text"]
     metadata = row["integration_metadata"]
-    assert metadata["activation_state"] == "connected_ready"
     assert metadata["required_scopes"] == ["crm.objects.contacts.read"]
-    assert metadata["connection_id"] == "conn-1"
     assert metadata["action_class"] == "read"
     assert metadata["confirmation_required"] is False
     assert metadata["schema_available"] is True
     assert metadata["provider_app_id"] == "hubspot"
     assert metadata["provider_tool_id"] == "hubspot.search_contacts"
     assert metadata["app_icon_url"] == "https://provider.example/icons/hubspot.png"
-    assert metadata.get("provider_error_status") is None
+    # Per-user connection state never lands on catalogue rows.
+    assert "connection_id" not in metadata
+    assert "activation_state" not in metadata
+    assert "granted_scopes" not in metadata
+    assert "provider_error_status" not in metadata
+    assert "match_reason" not in metadata
     assert row["integration_source"] == "provider_backed"
     assert row["depends_on"] == []
 
@@ -378,7 +381,7 @@ def test_materialization_pages_app_scoped_provider_tools(monkeypatch) -> None:
     ]
 
 
-def test_materialized_rows_include_pipedream_metadata_and_provider_error_status(
+def test_materialized_rows_include_pipedream_metadata_without_user_state(
     monkeypatch,
 ) -> None:
     client = FakeIntegrationOps()
@@ -427,8 +430,9 @@ def test_materialized_rows_include_pipedream_metadata_and_provider_error_status(
     assert metadata["provider_app_id"] == "slack"
     assert metadata["provider_tool_id"] == "slack-send-message"
     assert metadata["app_icon_url"] == "https://provider.example/icons/slack.png"
-    assert metadata["activation_state"] == "connected_ready"
-    assert metadata["provider_error_status"] == "provider_request_failed"
+    # Connection state and provider errors are runtime concerns, not row data.
+    assert "activation_state" not in metadata
+    assert "provider_error_status" not in metadata
     assert row["verify"] is True
 
 
@@ -471,8 +475,8 @@ def test_insert_primitives_preserves_validated_integration_metadata(
     assert "precondition" in captured[0]
     assert captured[0]["precondition"] is None
     assert "integration_metadata" in captured[0]
-    assert captured[0]["integration_metadata"]["provider_error_status"] is None
-    assert captured[0]["integration_metadata"]["match_reason"] is None
+    assert "provider_error_status" not in captured[0]["integration_metadata"]
+    assert "match_reason" not in captured[0]["integration_metadata"]
 
 
 def test_insert_primitives_preserves_static_primitive_null_shape(monkeypatch) -> None:
@@ -560,41 +564,6 @@ def test_insert_primitives_replaces_exact_function_ids(monkeypatch) -> None:
     assert captured[0]["function_id"] == 123
 
 
-def test_static_primitive_sync_delete_spares_provider_backed_rows(monkeypatch) -> None:
-    deleted: list[int] = []
-
-    class FakeRegistry:
-        def manager_specs(self, _scope):
-            return [
-                SimpleNamespace(
-                    manager_alias="integrations",
-                    primitive_class_path="unity.integrations.primitives.IntegrationPrimitives",
-                ),
-            ]
-
-    def fake_get_logs(**kwargs):
-        assert 'integration_source != "provider_backed"' in kwargs["filter"]
-        return [
-            SimpleNamespace(
-                id=7,
-                entries={"name": "primitives.integrations.search_tools"},
-            ),
-        ]
-
-    def fake_delete_logs(**kwargs):
-        deleted.extend(kwargs["logs"])
-
-    monkeypatch.setattr("unify.get_logs", fake_get_logs)
-    monkeypatch.setattr("unify.delete_logs", fake_delete_logs)
-    fm = _fake_function_manager()
-    fm._registry = FakeRegistry()
-    fm._primitives_ctx = "Functions/Primitives"
-
-    FunctionManager._delete_primitives_for_managers(fm, ["integrations"])
-
-    assert deleted == [7]
-
-
 def test_function_manager_queries_do_not_call_integration_ops(monkeypatch) -> None:
     primitive_row = {
         **FunctionManager.__new__(FunctionManager)._integration_tool_to_function_row(
@@ -619,18 +588,15 @@ def test_function_manager_queries_do_not_call_integration_ops(monkeypatch) -> No
         ),
     )
     monkeypatch.setattr(
-        "unity.function_manager.function_manager.table_search_top_k",
-        lambda **kwargs: (
-            [primitive_row] if kwargs.get("context") == "Functions/Primitives" else []
-        ),
+        "unity.function_manager.function_manager.federated_ranked_search",
+        lambda contexts, references, **kwargs: [dict(primitive_row)],
     )
     fm = _fake_function_manager()
     fm._read_compositional_contexts = lambda: []
-    fm._read_function_contexts = lambda _table_name: ["Functions/Primitives"]
+    fm._primitives_ctx = "Functions/Primitives"
     fm._scoped_filter = lambda expr: expr
     fm._scoped_primitive_filter = lambda: "is_primitive == True"
     fm._get_logs_with_retry = lambda context, **kwargs: [primitive_row]
-    fm.sync_primitives = lambda: False
 
     assert (
         "primitives.integrations.hubspot.search_contacts"
@@ -688,42 +654,17 @@ def test_disconnect_cleanup_removes_materialized_rows(monkeypatch) -> None:
     assert fm._deleted_apps == [("composio", "hubspot")]
 
 
-def test_connection_cleanup_deletes_only_matching_materialized_rows(
+def test_connection_cleanup_removes_app_rows_when_last_connection_drops(
     monkeypatch,
 ) -> None:
     client = FakeIntegrationOps()
     client.connections = []
-    deleted_logs: list[int] = []
-    logs = [
-        SimpleNamespace(
-            id=11,
-            entries={
-                "backend_id": "composio",
-                "app_slug": "hubspot",
-                "integration_metadata": {"connection_id": "conn-1"},
-            },
-        ),
-        SimpleNamespace(
-            id=22,
-            entries={
-                "backend_id": "composio",
-                "app_slug": "hubspot",
-                "integration_metadata": {"connection_id": "conn-2"},
-            },
-        ),
-    ]
     monkeypatch.setattr(
         "unity.integrations.ops.list_connections",
         client.list_connections,
     )
     monkeypatch.setattr("unity.integrations.ops.get_tools", client.get_tools)
-    monkeypatch.setattr("unify.get_logs", lambda **_kwargs: logs)
-    monkeypatch.setattr(
-        "unify.delete_logs",
-        lambda **kwargs: deleted_logs.extend(kwargs["logs"]),
-    )
     fm = _fake_function_manager()
-    fm._primitives_ctx = "Functions/Primitives"
     fm._get_stored_integration_tool_hash_by_app = lambda: {
         "composio:hubspot": "old-hash",
     }
@@ -736,9 +677,44 @@ def test_connection_cleanup_deletes_only_matching_materialized_rows(
 
     assert result["status"] == "removed"
     assert result["removed_apps"] == ["composio:hubspot"]
-    assert result["rows_deleted"] == 1
-    assert deleted_logs == [11]
+    assert fm._deleted_apps == [("composio", "hubspot")]
     assert fm._stored_hashes == {}
+
+
+def test_connection_cleanup_keeps_rows_while_other_connection_remains(
+    monkeypatch,
+) -> None:
+    client = FakeIntegrationOps()
+    client.connections = [
+        {
+            "connection_id": "conn-2",
+            "canonical_app_slug": "hubspot",
+            "status": "connected",
+        },
+    ]
+    monkeypatch.setattr(
+        "unity.integrations.ops.list_connections",
+        client.list_connections,
+    )
+    monkeypatch.setattr("unity.integrations.ops.get_tools", client.get_tools)
+    fm = _fake_function_manager()
+    fm._get_stored_integration_tool_hash_by_app = lambda: {
+        "composio:hubspot": "old-hash",
+    }
+
+    result = fm.sync_provider_integration_tools(
+        app_slug="hubspot",
+        connection_id="conn-1",
+        operation="cleanup",
+    )
+
+    # Rows are connection-agnostic: another live connection still serves the
+    # app, so nothing is deleted and the hash map is untouched.
+    assert result["status"] == "removed"
+    assert result["removed_apps"] == []
+    assert result["rows_deleted"] == 0
+    assert getattr(fm, "_deleted_apps", []) == []
+    assert not hasattr(fm, "_stored_hashes")
 
 
 def test_missing_active_connection_for_specific_sync_returns_error(monkeypatch) -> None:
