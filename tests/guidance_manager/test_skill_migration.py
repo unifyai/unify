@@ -23,11 +23,14 @@ from pathlib import Path
 import pytest
 
 from scripts.skill_migration.builtins_import import (
+    MANIFEST_PATH,
     PinnedSkill,
     build_snapshot_entries,
     check_drift,
     directory_integrity_hash,
     load_manifest,
+    pin_skills_at_head,
+    write_manifest,
     write_snapshot,
 )
 from scripts.skill_migration.skill_to_guidance import (
@@ -460,6 +463,83 @@ def test_check_drift_reports_upstream_removal(tmp_path: Path):
     drifts = check_drift([pin], workdir=tmp_path / "work")
     assert len(drifts) == 1
     assert drifts[0]["status"] == "removed-upstream"
+
+
+def test_pin_skills_at_head_round_trips_through_manifest(tmp_path: Path):
+    repo, sha = _make_skill_repo(tmp_path)
+
+    pins = pin_skills_at_head(
+        str(repo),
+        ["skills/arxiv-search", "skills/ffmpeg-frames"],
+        source="test",
+        workdir=tmp_path / "pin-work",
+    )
+    assert [pin.key for pin in pins] == ["test/arxiv-search", "test/ffmpeg-frames"]
+    assert all(pin.commit == sha for pin in pins)
+
+    manifest = tmp_path / "manifest.json"
+    write_manifest(pins, manifest)
+    assert load_manifest(manifest) == sorted(pins, key=lambda p: p.key)
+
+    # The generated pins are immediately importable (integrity verifies).
+    entries = build_snapshot_entries(pins, workdir=tmp_path / "import-work")
+    assert set(entries) == {"test/arxiv-search", "test/ffmpeg-frames"}
+
+
+# --------------------------------------------------------------------------- #
+# Default builtins library (committed manifest + snapshot)                     #
+# --------------------------------------------------------------------------- #
+
+DEFAULT_ANTHROPIC_SKILLS = {
+    "algorithmic-art",
+    "brand-guidelines",
+    "canvas-design",
+    "doc-coauthoring",
+    "docx",
+    "frontend-design",
+    "internal-comms",
+    "pdf",
+    "pptx",
+    "slack-gif-creator",
+    "theme-factory",
+    "web-artifacts-builder",
+    "webapp-testing",
+    "xlsx",
+}
+EXCLUDED_ANTHROPIC_SKILLS = {"mcp-builder", "claude-api", "skill-creator"}
+
+
+def test_default_manifest_pins_the_anthropic_library():
+    pins = load_manifest(MANIFEST_PATH)
+
+    assert {pin.key for pin in pins} == {
+        f"anthropic/{name}" for name in DEFAULT_ANTHROPIC_SKILLS
+    }
+    for pin in pins:
+        assert pin.source == "anthropic"
+        assert pin.repo == "https://github.com/anthropics/skills"
+        assert pin.path == f"skills/{pin.key.split('/', 1)[1]}"
+    # Deliberately excluded skills must never sneak into the default library.
+    excluded_keys = {f"anthropic/{name}" for name in EXCLUDED_ANTHROPIC_SKILLS}
+    assert not excluded_keys & {pin.key for pin in pins}
+    # The whole library is pinned at one commit of the upstream repo.
+    assert len({pin.commit for pin in pins}) == 1
+
+
+def test_default_snapshot_matches_default_manifest():
+    pins = load_manifest(MANIFEST_PATH)
+    snapshot = load_snapshot()
+
+    assert set(snapshot) == {pin.key for pin in pins}
+    for pin in pins:
+        entry = snapshot[pin.key]
+        skill_name = pin.key.split("/", 1)[1]
+        assert entry["title"] == f"[anthropic] {skill_name}"
+        assert entry["content"].strip()
+        assert "Source: anthropic" in entry["content"]  # provenance footer
+    # Stable ids derived from the snapshot titles are collision-free.
+    ids = {stable_guidance_id(entry["title"]) for entry in snapshot.values()}
+    assert len(ids) == len(snapshot)
 
 
 # --------------------------------------------------------------------------- #

@@ -3,6 +3,10 @@ from __future__ import annotations
 from unity.guidance_manager.guidance_manager import GuidanceManager
 from tests.helpers import _handle_project
 
+# Reads federate over the tenant contexts plus the read-only builtins
+# library, so whole-view assertions scope to tenant rows explicitly.
+TENANT_ONLY = "is_builtin == False"
+
 
 def _seed(gm: GuidanceManager) -> dict[str, int]:
     """Create three guidance entries and return their IDs keyed by title."""
@@ -76,7 +80,7 @@ def test_exclude_ids_multiple():
 
     gm.exclude_ids = frozenset({ids["Alpha"], ids["Gamma"]})
 
-    rows = gm.filter()
+    rows = gm.filter(filter=TENANT_ONLY)
     assert len(rows) == 1
     assert rows[0].guidance_id == ids["Beta"]
 
@@ -126,7 +130,9 @@ def test_search_respects_exclude_ids():
 
     gm.exclude_ids = frozenset({ids["Beta"]})
 
-    results = gm.search(references={"title": "procedures"}, k=10)
+    # k spans the full federated view (tenant rows + builtins library) so
+    # the assertion checks exclusion rather than ranking position.
+    results = gm.search(references={"title": "procedures"}, k=30)
     returned_ids = {r.guidance_id for r in results}
     assert ids["Beta"] not in returned_ids
     assert ids["Alpha"] in returned_ids
@@ -141,9 +147,11 @@ def test_search_respects_exclude_ids():
 @_handle_project
 def test_num_items_respects_filter_scope():
     gm = GuidanceManager()
+    builtin_count = gm._num_items()
     ids = _seed(gm)
-    assert gm._num_items() == 3
+    assert gm._num_items() == builtin_count + 3
 
+    # The scope applies to every federated source, builtins included.
     gm.filter_scope = f"guidance_id == {ids['Alpha']}"
     assert gm._num_items() == 1
 
@@ -153,10 +161,11 @@ def test_num_items_respects_filter_scope():
 @_handle_project
 def test_num_items_respects_exclude_ids():
     gm = GuidanceManager()
+    builtin_count = gm._num_items()
     ids = _seed(gm)
 
     gm.exclude_ids = frozenset({ids["Alpha"], ids["Gamma"]})
-    assert gm._num_items() == 1
+    assert gm._num_items() == builtin_count + 1
 
     gm.exclude_ids = None
 
@@ -173,13 +182,13 @@ def test_clearing_scope_restores_full_view():
     assert len(gm.filter()) == 1
 
     gm.filter_scope = None
-    assert len(gm.filter()) == 3
+    assert len(gm.filter(filter=TENANT_ONLY)) == 3
 
     gm.exclude_ids = frozenset({ids["Alpha"], ids["Beta"]})
-    assert len(gm.filter()) == 1
+    assert len(gm.filter(filter=TENANT_ONLY)) == 1
 
     gm.exclude_ids = None
-    assert len(gm.filter()) == 3
+    assert len(gm.filter(filter=TENANT_ONLY)) == 3
 
 
 # -- limit correctness with scoping ----------------------------------------

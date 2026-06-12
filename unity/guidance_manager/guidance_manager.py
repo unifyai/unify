@@ -31,6 +31,12 @@ from ..common.context_registry import TableContext, ContextRegistry
 
 GUIDANCE_TABLE = "Guidance"
 FUNCTIONS_COMPOSITIONAL_TABLE = "Functions/Compositional"
+
+# Content cap for search/filter result payloads. Entries (notably imported
+# builtin skills) can run to 100KB+; returning them wholesale from list-style
+# reads floods the caller's context window. Reads above this cap return a
+# preview and the full text is fetched per entry via ``get_guidance``.
+GUIDANCE_PREVIEW_CHARS = 2000
 GUIDANCE_DESTINATION_GUIDANCE = """destination : str | None, default None
     Where this guidance lives. Pass ``"personal"`` (the default) for private
     working preferences and individual reminders. Pass ``"team:<id>"`` for
@@ -232,6 +238,19 @@ class GuidanceManager(BaseGuidanceManager):
                 "content) and the personal copy can then be updated or "
                 "deleted freely.",
             )
+
+    @staticmethod
+    def _with_content_preview(row: Guidance) -> Guidance:
+        """Return *row* with content truncated to the list-read preview cap."""
+        if len(row.content) <= GUIDANCE_PREVIEW_CHARS:
+            return row
+        preview = (
+            row.content[:GUIDANCE_PREVIEW_CHARS]
+            + f"\n\n… [content preview truncated at {GUIDANCE_PREVIEW_CHARS:,} "
+            f"of {len(row.content):,} chars — fetch the full entry with "
+            f"get_guidance(guidance_id={row.guidance_id})]"
+        )
+        return row.model_copy(update={"content": preview})
 
     def _num_items(self) -> int:
         return federated_count(
@@ -893,7 +912,7 @@ class GuidanceManager(BaseGuidanceManager):
             backfill=True,
             annotate=False,
         )
-        return [Guidance(**r) for r in rows]
+        return [self._with_content_preview(Guidance(**r)) for r in rows]
 
     @functools.wraps(BaseGuidanceManager.filter, updated=())
     def filter(
@@ -921,7 +940,34 @@ class GuidanceManager(BaseGuidanceManager):
             limit=limit,
             annotate=False,
         )
-        return [Guidance(**row) for row in rows]
+        return [self._with_content_preview(Guidance(**row)) for row in rows]
+
+    @functools.wraps(BaseGuidanceManager.get_guidance, updated=())
+    def get_guidance(
+        self,
+        *,
+        guidance_id: int,
+    ) -> Guidance:
+        from_fields = list(self._BUILTIN_FIELDS)
+        rows = federated_filter(
+            [
+                *(
+                    FederatedSearchContext(
+                        context=context,
+                        source=context,
+                        allowed_fields=from_fields,
+                    )
+                    for context in self._read_guidance_contexts()
+                ),
+                self._builtins_read_spec(allowed_fields=from_fields),
+            ],
+            filter=self._scoped_filter(f"guidance_id == {int(guidance_id)}"),
+            limit=1,
+            annotate=False,
+        )
+        if not rows:
+            raise ValueError(f"No guidance found with guidance_id {guidance_id}.")
+        return Guidance(**rows[0])
 
 
 def _append_destination_guidance(method_name: str) -> None:
