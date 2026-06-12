@@ -128,22 +128,31 @@ def _coordinator_onboarding_notification_text(
         if isinstance(medium_raw, str) and medium_raw:
             medium = medium_raw
         completed_steps = details.get("completed_step_ids")
-        completed_hint = ""
+        joined = ""
         if isinstance(completed_steps, list) and completed_steps:
             joined = ", ".join(str(item) for item in completed_steps if item)
-            if joined:
-                completed_hint = (
-                    f" The console reports these onboarding steps as already done: "
-                    f"{joined}."
-                )
+        completed_hint = (
+            f" These onboarding steps are already done (derived from the "
+            f"user's account state — steps finished in earlier sessions are "
+            f"included): {joined}."
+            if joined
+            else (
+                " No onboarding steps are done yet — connecting their "
+                "workspace is the first step."
+            )
+        )
         guidance = (
-            "Open the session with exactly one short message. If you have *no* "
-            "prior assistant messages in the transcript history, introduce "
-            "yourself briefly as the user's coordinator assistant, say you'll "
-            "help them get set up, and invite them to start by connecting their "
-            "workspace. If prior assistant messages exist, skip the intro and "
-            "open with a one-sentence recap of what's been done so far plus the "
-            "single next step — do NOT re-introduce yourself."
+            "Open the session with exactly one short message. The next step "
+            "to propose is always the FIRST onboarding step that is not "
+            "listed as already done below — never suggest a step the list "
+            "marks as done (e.g. do not say 'connect your workspace' when "
+            "`workspace` is already done). If you have *no* prior assistant "
+            "messages in the transcript history, introduce yourself briefly "
+            "as the user's coordinator assistant, say you'll help them get "
+            "set up, and invite them to take that next pending step. If "
+            "prior assistant messages exist, skip the intro and open with a "
+            "one-sentence recap of what's been done so far plus the single "
+            "next pending step — do NOT re-introduce yourself."
         )
         medium_note = ""
         if medium == "call":
