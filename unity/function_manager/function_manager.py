@@ -2682,6 +2682,43 @@ class FunctionManager(BaseFunctionManager):
         return " and ".join(clauses)
 
     @staticmethod
+    def _legacy_provider_integration_filter(
+        *,
+        backend_id: str | None = None,
+        app_slug: str | None = None,
+    ) -> str:
+        clauses = ['integration_source == "provider_backed"']
+        if backend_id is not None:
+            clauses.append(f'backend_id == {json.dumps(backend_id or "provider")}')
+        if app_slug is not None:
+            clauses.append(f"app_slug == {json.dumps(app_slug)}")
+        return " and ".join(clauses)
+
+    def _provider_row_matches_app_keys(
+        self,
+        row: Dict[str, Any] | None,
+        app_keys: List[tuple[str | None, str]],
+    ) -> bool:
+        if not row:
+            return False
+        if is_provider_backed_function(row):
+            backend_id = integration_backend_id(row) or "provider"
+            app_slug = integration_app_slug(row) or ""
+        elif row.get("integration_source") == "provider_backed":
+            backend_id = str(row.get("backend_id") or "provider")
+            app_slug = str(row.get("app_slug") or "")
+        else:
+            return False
+        return any(
+            app_slug == expected_app
+            and (
+                expected_backend is None
+                or backend_id == (expected_backend or "provider")
+            )
+            for expected_backend, expected_app in app_keys
+        )
+
+    @staticmethod
     def _hash_integration_rows(rows: List[Dict[str, Any]]) -> str:
         hash_fields = (
             "name",
@@ -2703,13 +2740,15 @@ class FunctionManager(BaseFunctionManager):
         """Delete materialized provider-backed primitive rows for the given apps."""
         if not app_keys:
             return 0
-        app_key_set = {
-            self._integration_hash_key(backend_id=backend_id, app_slug=app_slug)
-            for backend_id, app_slug in app_keys
-        }
         filter_expr = " or ".join(
-            f"({self._provider_integration_filter(backend_id=backend_id or 'provider', app_slug=app_slug)})"
+            clause
             for backend_id, app_slug in app_keys
+            for clause in (
+                f"({self._provider_integration_filter(backend_id=backend_id, app_slug=app_slug)})",
+                # TODO: Remove this legacy top-level row cleanup after deployed
+                # projects no longer contain pre-metadata provider primitive rows.
+                f"({self._legacy_provider_integration_filter(backend_id=backend_id, app_slug=app_slug)})",
+            )
         )
         try:
             logs = unify.get_logs(
@@ -2720,12 +2759,10 @@ class FunctionManager(BaseFunctionManager):
             ids_to_delete = [
                 lg.id
                 for lg in logs or []
-                if is_provider_backed_function(getattr(lg, "entries", None))
-                and self._integration_hash_key(
-                    backend_id=integration_backend_id(lg.entries) or "provider",
-                    app_slug=integration_app_slug(lg.entries) or "",
+                if self._provider_row_matches_app_keys(
+                    getattr(lg, "entries", None),
+                    app_keys,
                 )
-                in app_key_set
             ]
             if not ids_to_delete:
                 return 0
