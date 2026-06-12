@@ -257,13 +257,29 @@ EOF
   log_ok "Installed unity CLI at $shim"
 }
 
+# Compose gives the caller's shell environment precedence over --env-file
+# values during ${VAR} interpolation, so stray exports (direnv, dotfiles, CI)
+# would silently override the stack's secrets. Run compose under a minimal
+# environment so $UNITY_HOME/.env is the single source of truth.
+compose_cmd() {
+  env -i \
+    PATH="$PATH" \
+    HOME="$HOME" \
+    TERM="${TERM:-}" \
+    ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} \
+    ${DOCKER_CONFIG:+DOCKER_CONFIG="$DOCKER_CONFIG"} \
+    ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
+    ${DOCKER_CERT_PATH:+DOCKER_CERT_PATH="$DOCKER_CERT_PATH"} \
+    ${DOCKER_TLS_VERIFY:+DOCKER_TLS_VERIFY="$DOCKER_TLS_VERIFY"} \
+    docker compose -f "$UNITY_HOME/docker-compose.yml" --env-file "$UNITY_HOME/.env" "$@"
+}
+
 verify_orchestra_seed() {
-  local compose=(docker compose -f "$UNITY_HOME/docker-compose.yml" --env-file "$UNITY_HOME/.env")
   local seed_status=""
   log_info "Waiting for orchestra billing seed..."
   local i
   for i in $(seq 1 45); do
-    seed_status="$("${compose[@]}" ps -a --format '{{.Service}}\t{{.State}}\t{{.ExitCode}}' 2>/dev/null \
+    seed_status="$(compose_cmd ps -a --format '{{.Service}}\t{{.State}}\t{{.ExitCode}}' 2>/dev/null \
       | awk '$1=="orchestra-seed"{print $2"\t"$3; exit}')"
     if [[ "$seed_status" == "exited	0" ]]; then
       log_ok "Orchestra billing seed completed"
@@ -281,9 +297,9 @@ verify_orchestra_seed() {
 
 pull_and_start() {
   log_info "Pulling images (first run may take several minutes)..."
-  docker compose -f "$UNITY_HOME/docker-compose.yml" --env-file "$UNITY_HOME/.env" pull
+  compose_cmd pull
   log_info "Starting stack..."
-  docker compose -f "$UNITY_HOME/docker-compose.yml" --env-file "$UNITY_HOME/.env" up -d
+  compose_cmd up -d
   verify_orchestra_seed
   log_ok "Stack started"
 }
