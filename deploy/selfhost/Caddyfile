@@ -10,6 +10,6 @@
 		reverse_proxy desktop:6080
 	}
 	handle_path /api/* {
-		reverse_proxy desktop:13000
+		reverse_proxy desktop:3000
 	}
 }
