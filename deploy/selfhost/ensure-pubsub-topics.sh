@@ -14,13 +14,14 @@ fi
 emulator_url="http://${emulator_host#http://}"
 emulator_url="${emulator_url%/}"
 
-topic_name="unity-${agent_id}-${suffix}"
+topic_name="unity-${agent_id}${suffix}"
 
-curl -sf -o /dev/null -X PUT \
-  "${emulator_url}/v1/projects/${project_id}/topics/${topic_name}" || {
-  echo "Failed to create topic ${topic_name}" >&2
+topic_http="$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
+  "${emulator_url}/v1/projects/${project_id}/topics/${topic_name}")"
+if [[ "$topic_http" != "200" && "$topic_http" != "409" ]]; then
+  echo "Failed to create topic ${topic_name} (HTTP ${topic_http})" >&2
   exit 1
-}
+fi
 
 outbound_sub="${topic_name}-outbound-sub"
 curl -sf -o /dev/null \
@@ -57,7 +58,11 @@ curl -sf -o /dev/null \
   -X DELETE "${emulator_url}/v1/projects/${project_id}/subscriptions/${inbound_sub}" \
   2>/dev/null || true
 
-curl -sf -o /dev/null \
+inbound_http="$(curl -s -o /dev/null -w "%{http_code}" \
   -X PUT "${emulator_url}/v1/projects/${project_id}/subscriptions/${inbound_sub}" \
   -H "Content-Type: application/json" \
-  -d "{\"topic\":\"projects/${project_id}/topics/${topic_name}\",\"filter\":\"attributes.thread = \\\"inbound\\\"\"}"
+  -d "{\"topic\":\"projects/${project_id}/topics/${topic_name}\",\"filter\":\"attributes.thread = \\\"inbound\\\"\"}")"
+if [[ "$inbound_http" != "200" && "$inbound_http" != "409" ]]; then
+  echo "Failed to create inbound subscription ${inbound_sub} (HTTP ${inbound_http})" >&2
+  exit 1
+fi
