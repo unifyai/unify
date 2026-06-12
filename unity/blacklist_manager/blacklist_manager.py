@@ -8,6 +8,13 @@ import unify
 from ..common.log_utils import log as unity_log
 from ..common.data_store import DataStore
 from ..common.model_to_fields import model_to_fields
+from ..common.federated_search import (
+    CONTEXT_FIELD,
+    SOURCE_FIELD,
+    FederatedSearchContext,
+    default_filter_fetcher,
+    federated_filter,
+)
 from ..common.filter_utils import normalize_filter_expr
 from ..common.tool_outcome import ToolErrorException
 from ..blacklist_manager.types.blacklist import BlackList
@@ -145,41 +152,42 @@ class BlackListManager(BaseBlackListManager):
         offset: int = 0,
         limit: int = 100,
     ) -> Dict[str, Any]:
-        normalized = normalize_filter_expr(filter)
-        rows: list[dict[str, Any]] = []
-        target_count = offset + limit
-        last_error: Exception | None = None
-        for context in self._read_blacklist_contexts():
-            destination = self._destination_for_context(context)
-            context_offset = 0
-            context_rows: list[dict[str, Any]] = []
+        errors: list[Exception] = []
+
+        def fetcher(spec, row_filter, sorting, fetch_limit):
             try:
-                while len(context_rows) < target_count:
-                    page_limit = min(1000, target_count - len(context_rows))
-                    logs = unify.get_logs(
-                        context=context,
-                        filter=normalized,
-                        offset=context_offset,
-                        limit=page_limit,
-                        from_fields=list(self._BUILTIN_FIELDS),
-                    )
-                    if not logs:
-                        break
-                    context_rows.extend(log.entries for log in logs)
-                    if len(logs) < page_limit:
-                        break
-                    context_offset += page_limit
+                return default_filter_fetcher(spec, row_filter, sorting, fetch_limit)
             except Exception as exc:
-                last_error = exc
-                continue
-            store = self._data_store_for_context(context)
-            for row in context_rows:
-                row["destination"] = destination
-                rows.append(row)
-                store.put(row)
-        if not rows and last_error is not None:
-            raise last_error
-        rows = rows[offset:target_count]
+                errors.append(exc)
+                return []
+
+        annotated_rows = federated_filter(
+            [
+                FederatedSearchContext(
+                    context=context,
+                    source=self._destination_for_context(context),
+                    allowed_fields=list(self._BUILTIN_FIELDS),
+                )
+                for context in self._read_blacklist_contexts()
+            ],
+            filter=normalize_filter_expr(filter),
+            offset=offset,
+            limit=limit,
+            fetcher=fetcher,
+        )
+        if not annotated_rows and errors:
+            raise errors[-1]
+
+        rows: list[dict[str, Any]] = []
+        for annotated in annotated_rows:
+            row = {
+                key: value
+                for key, value in annotated.items()
+                if not key.startswith("_federated_")
+            }
+            row["destination"] = annotated[SOURCE_FIELD]
+            self._data_store_for_context(annotated[CONTEXT_FIELD]).put(row)
+            rows.append(row)
 
         entries = [BlackList(**r) for r in rows]
         return {

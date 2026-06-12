@@ -3,8 +3,12 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING
 
+from ..common.federated_search import (
+    FederatedSearchContext,
+    federated_filter,
+    federated_ranked_search,
+)
 from ..common.filter_utils import normalize_filter_expr
-from ..common.search_utils import table_search_top_k
 from ..common.grouping_helpers import maybe_group_rows
 from ..common.embed_utils import list_private_fields
 from .storage import contexts_for_table, table_contexts_for_read, ctx_for_table
@@ -67,56 +71,55 @@ def filter(
     else:
         resolved_tables = list(tables)
 
-    def _fetch_one(table_name: str, ctx: str) -> tuple[str, List[Dict[str, Any]], str]:
-        excl = list_private_fields(ctx)
-        normalized = normalize_filter_expr(filter)
+    normalized = normalize_filter_expr(filter)
+
+    def fetcher(spec, row_filter, _sorting, fetch_limit):
+        excl = list_private_fields(spec.context)
         # Delegate to DataManager.filter
         rows = dm.filter(
-            ctx,
-            filter=normalized,
-            limit=limit + offset,
+            spec.context,
+            filter=row_filter,
+            limit=fetch_limit,
             offset=0,
         )
         # Exclude private fields from results
-        filtered_rows = [
-            {k: v for k, v in row.items() if k not in excl} for row in rows
-        ]
-        return table_name, filtered_rows, ctx
+        return [{k: v for k, v in row.items() if k not in excl} for row in rows]
+
+    def _fetch_table(table_name: str) -> tuple[str, List[Dict[str, Any]]]:
+        table_rows = federated_filter(
+            [
+                FederatedSearchContext(context=ctx, source=ctx)
+                for ctx in contexts_for_table(knowledge_manager, table_name)
+            ],
+            filter=normalized,
+            offset=offset,
+            limit=limit,
+            fetcher=fetcher,
+            annotate=False,
+        )
+        return table_name, table_rows
 
     results: Dict[str, List[Dict[str, Any]]] = {}
-
-    # Parallelise when scanning multiple tables to reduce wall-clock time
-    if len(resolved_tables) <= 1 and resolved_tables:
-        name = resolved_tables[0]
-        merged_rows: List[Dict[str, Any]] = []
-        exclude_fields: set[str] = set()
-        for ctx in contexts_for_table(knowledge_manager, name):
-            _, rows, row_context = _fetch_one(name, ctx)
-            merged_rows.extend(rows)
-            exclude_fields.update(list_private_fields(row_context))
-        results[name] = maybe_group_rows(
-            rows=merged_rows[offset : offset + limit],
-            exclude_fields=exclude_fields,
-            enabled=getattr(knowledge_manager, "_group_results", False),
-        )
-        return results
-
-    max_workers = min(8, max(1, len(resolved_tables)))
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {
-            pool.submit(_fetch_one, table_name, context): table_name
-            for table_name in resolved_tables
-            for context in contexts_for_table(knowledge_manager, table_name)
-        }
-        for fut in as_completed(futures):
-            name, rows, row_context = fut.result()
-            existing = results.setdefault(name, [])
-            existing.extend(rows)
+    if len(resolved_tables) <= 1:
+        for table_name in resolved_tables:
+            name, rows = _fetch_table(table_name)
+            results[name] = rows
+    else:
+        # Parallelise when scanning multiple tables to reduce wall-clock time
+        max_workers = min(8, max(1, len(resolved_tables)))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [
+                pool.submit(_fetch_table, table_name) for table_name in resolved_tables
+            ]
+            for fut in as_completed(futures):
+                name, rows = fut.result()
+                results[name] = rows
 
     return {
         name: maybe_group_rows(
-            rows=rows[offset : offset + limit],
+            rows=rows,
             exclude_fields=set().union(
+                set(),
                 *(
                     set(list_private_fields(ctx))
                     for ctx in contexts_for_table(knowledge_manager, name)
@@ -167,24 +170,27 @@ def search(
 
     normalized = normalize_filter_expr(filter)
 
-    rows: List[Dict[str, Any]] = []
-    exclude_fields: set[str] = set()
-    for context in contexts_for_table(knowledge_manager, table):
-        rows.extend(
-            table_search_top_k(
+    table_contexts = contexts_for_table(knowledge_manager, table)
+    rows = federated_ranked_search(
+        [
+            FederatedSearchContext(
                 context=context,
-                references=references,
-                k=k,
+                source=context,
                 row_filter=normalized,
-            ),
-        )
+            )
+            for context in table_contexts
+        ],
+        references,
+        limit=k,
+        backfill=True,
+        annotate=False,
+    )
+    exclude_fields: set[str] = set()
+    for context in table_contexts:
         exclude_fields.update(list_private_fields(context))
-    sort_key = next((key for row in rows for key in row if key.startswith("_")), None)
-    if sort_key:
-        rows.sort(key=lambda row: row.get(sort_key, float("inf")))
 
     return maybe_group_rows(
-        rows=rows[:k],
+        rows=rows,
         exclude_fields=exclude_fields,
         enabled=getattr(knowledge_manager, "_group_results", False),
     )

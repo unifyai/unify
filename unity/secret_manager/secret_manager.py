@@ -33,7 +33,13 @@ from .types import Secret
 from .base import BaseSecretManager
 from .prompt_builders import build_ask_prompt, build_update_prompt
 from ..common.filter_utils import normalize_filter_expr
-from ..common.search_utils import table_search_top_k, is_plain_identifier
+from ..common.search_utils import is_plain_identifier
+from ..common.federated_search import (
+    SOURCE_FIELD,
+    FederatedSearchContext,
+    federated_filter,
+    federated_ranked_search,
+)
 from ..common.context_registry import (
     ContextRegistry,
     PERSONAL_DESTINATION,
@@ -1058,29 +1064,23 @@ class SecretManager(BaseSecretManager):
         # Sanitize references to avoid embedding sensitive fields like "value"
         safe_refs = self._sanitize_secret_references(references)
 
-        rows: list[dict[str, Any]] = []
-        remaining = k
+        contexts: list[FederatedSearchContext] = []
         for context in self._read_secret_contexts():
-            if remaining <= 0:
-                break
             self._ensure_description_vector(context)
-            context_rows = table_search_top_k(
-                context=context,
-                references=safe_refs,
-                k=remaining,
-                allowed_fields=[
-                    "secret_id",
-                    "name",
-                    "description",
-                ],  # Never return the secret value
-                row_filter=None,
-                unique_id_field="name",
+            contexts.append(
+                FederatedSearchContext(
+                    context=context,
+                    source=self._destination_for_context(context),
+                    # Never return the secret value.
+                    allowed_fields=["secret_id", "name", "description"],
+                ),
             )
-            destination = self._destination_for_context(context)
-            for row in context_rows:
-                row["destination"] = destination
-            rows.extend(context_rows)
-            remaining = k - len(rows)
+        rows = federated_ranked_search(
+            contexts,
+            safe_refs,
+            limit=k,
+            backfill=True,
+        )
         return [
             Secret(
                 secret_id=(
@@ -1089,7 +1089,7 @@ class SecretManager(BaseSecretManager):
                 name=r.get("name"),
                 value="",
                 description=r.get("description") or "",
-                destination=r.get("destination") or PERSONAL_DESTINATION,
+                destination=r.get(SOURCE_FIELD) or PERSONAL_DESTINATION,
             )
             for r in rows
         ]
@@ -1120,35 +1120,38 @@ class SecretManager(BaseSecretManager):
         """
         normalized = normalize_filter_expr(filter)
         normalized, destination_filter = self._split_destination_filter(normalized)
-        logs: list[tuple[Any, str]] = []
-        fetch_limit = offset + limit
+        contexts = []
         for context in self._read_secret_contexts():
             destination = self._destination_for_context(context)
             if destination_filter and destination not in destination_filter:
                 continue
-            context_logs = unify.get_logs(
-                context=context,
-                filter=normalized,
-                offset=0,
-                limit=fetch_limit,
-                from_fields=["secret_id", "name", "description"],
+            contexts.append(
+                FederatedSearchContext(
+                    context=context,
+                    source=destination,
+                    # Never expose values in read tools.
+                    allowed_fields=["secret_id", "name", "description"],
+                ),
             )
-            logs.extend((log, destination) for log in context_logs)
-        logs = logs[offset : offset + limit]
-        # Never expose values in read tools
+        rows = federated_filter(
+            contexts,
+            filter=normalized,
+            offset=offset,
+            limit=limit,
+        )
         return [
             Secret(
                 secret_id=(
-                    int(lg.entries.get("secret_id"))
-                    if lg.entries.get("secret_id") is not None
+                    int(row.get("secret_id"))
+                    if row.get("secret_id") is not None
                     else -1
                 ),
-                name=lg.entries.get("name"),
+                name=row.get("name"),
                 value="",
-                description=lg.entries.get("description") or "",
-                destination=destination,
+                description=row.get("description") or "",
+                destination=row.get(SOURCE_FIELD) or PERSONAL_DESTINATION,
             )
-            for lg, destination in logs
+            for row in rows
         ]
 
     def _list_secret_keys(self) -> List[str]:

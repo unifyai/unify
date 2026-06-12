@@ -12,7 +12,12 @@ from ..common.log_utils import log as unity_log
 from ..common.tool_outcome import ToolErrorException, ToolOutcome
 from ..common.model_to_fields import model_to_fields
 from ..common.context_store import TableStore
-from ..common.search_utils import table_search_top_k
+from ..common.federated_search import (
+    FederatedSearchContext,
+    federated_count,
+    federated_filter,
+    federated_ranked_search,
+)
 from .base import BaseGuidanceManager
 from .types.guidance import Guidance
 from ..manager_registry import ManagerRegistry
@@ -183,17 +188,14 @@ class GuidanceManager(BaseGuidanceManager):
         return " and ".join(f"({p})" for p in parts)
 
     def _num_items(self) -> int:
-        total = 0
-        for context in self._read_guidance_contexts():
-            ret = unify.get_logs_metric(
-                metric="count",
-                key="guidance_id",
-                filter=self._scoped_filter(None),
-                context=context,
-            )
-            if ret is not None:
-                total += int(ret)
-        return total
+        return federated_count(
+            [
+                FederatedSearchContext(context=context, source=context)
+                for context in self._read_guidance_contexts()
+            ],
+            key="guidance_id",
+            filter=self._scoped_filter(None),
+        )
 
     @functools.wraps(BaseGuidanceManager.clear, updated=())
     def clear(self) -> None:
@@ -819,25 +821,21 @@ class GuidanceManager(BaseGuidanceManager):
         k: int = 10,
     ) -> List[Guidance]:
         allowed_fields = list(self._BUILTIN_FIELDS)
-        rows: list[dict[str, Any]] = []
-        for context in self._read_guidance_contexts():
-            rows.extend(
-                table_search_top_k(
+        rows = federated_ranked_search(
+            [
+                FederatedSearchContext(
                     context=context,
-                    references=references,
-                    k=k,
-                    allowed_fields=allowed_fields,
-                    unique_id_field="guidance_id",
+                    source=context,
                     row_filter=self._scoped_filter(None),
-                ),
-            )
-        sort_key = next(
-            (key for row in rows for key in row if key.startswith("_")),
-            None,
+                    allowed_fields=allowed_fields,
+                )
+                for context in self._read_guidance_contexts()
+            ],
+            references,
+            limit=k,
+            backfill=True,
+            annotate=False,
         )
-        if sort_key:
-            rows.sort(key=lambda row: row.get(sort_key, float("inf")))
-        rows = rows[:k]
         return [Guidance(**r) for r in rows]
 
     @functools.wraps(BaseGuidanceManager.filter, updated=())
@@ -849,19 +847,21 @@ class GuidanceManager(BaseGuidanceManager):
         limit: int = 100,
     ) -> List[Guidance]:
         from_fields = list(self._BUILTIN_FIELDS)
-        normalized = self._scoped_filter(normalize_filter_expr(filter))
-        logs = []
-        for context in self._read_guidance_contexts():
-            logs.extend(
-                unify.get_logs(
+        rows = federated_filter(
+            [
+                FederatedSearchContext(
                     context=context,
-                    filter=normalized,
-                    offset=0,
-                    limit=offset + limit,
-                    from_fields=from_fields,
-                ),
-            )
-        return [Guidance(**lg.entries) for lg in logs[offset : offset + limit]]
+                    source=context,
+                    allowed_fields=from_fields,
+                )
+                for context in self._read_guidance_contexts()
+            ],
+            filter=self._scoped_filter(normalize_filter_expr(filter)),
+            offset=offset,
+            limit=limit,
+            annotate=False,
+        )
+        return [Guidance(**row) for row in rows]
 
 
 def _append_destination_guidance(method_name: str) -> None:

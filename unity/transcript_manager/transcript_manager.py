@@ -3,8 +3,6 @@ from __future__ import annotations
 import asyncio
 import functools
 import threading
-from collections import Counter
-from statistics import mean, median, pvariance, pstdev
 from typing import List, Dict, Optional, Type, Union, Any, Callable, Literal
 
 import unify
@@ -66,8 +64,11 @@ from ..common.context_registry import (
     TEAM_CONTEXT_PREFIX,
     TableContext,
 )
+from ..common.federated_search import (
+    FederatedSearchContext,
+    federated_reduce,
+)
 from ..common.model_to_fields import model_to_fields
-from ..common.metrics_utils import reduce_logs
 from ..common.tool_outcome import ToolErrorException, ToolOutcome
 
 TRANSCRIPTS_TABLE = "Transcripts"
@@ -999,7 +1000,6 @@ class TranscriptManager(BaseTranscriptManager):
             * Multiple keys, no grouping → ``dict[key -> scalar]``.
             * With grouping             → nested ``dict`` keyed by group values.
         """
-        metric_name = metric.strip().lower()
         key_names = [keys] if isinstance(keys, str) else list(keys)
         group_fields = (
             []
@@ -1007,91 +1007,23 @@ class TranscriptManager(BaseTranscriptManager):
             else ([group_by] if isinstance(group_by, str) else list(group_by))
         )
 
-        def _metric_value(rows: list[dict[str, Any]], key: str) -> Any:
-            values = [row.get(key) for row in rows if row.get(key) is not None]
-            if metric_name == "count":
-                return len(values)
-            if not values:
-                return None
-            if metric_name == "mode":
-                return Counter(values).most_common(1)[0][0]
-
-            numeric_values = [float(value) for value in values]
-            if metric_name == "sum":
-                return sum(numeric_values)
-            if metric_name == "mean":
-                return mean(numeric_values)
-            if metric_name == "var":
-                return pvariance(numeric_values)
-            if metric_name == "std":
-                return pstdev(numeric_values)
-            if metric_name == "min":
-                return min(numeric_values)
-            if metric_name == "max":
-                return max(numeric_values)
-            if metric_name == "median":
-                return median(numeric_values)
-            return reduce_logs(
-                context=self._transcripts_ctx,
-                metric=metric,
-                keys=key,
-                filter=filter,
-                group_by=group_by,
-            )
-
-        def _nest_grouped_values(grouped_values: dict[tuple[Any, ...], Any]) -> dict:
-            nested: dict[Any, Any] = {}
-            for group_key, value in grouped_values.items():
-                cursor = nested
-                for part in group_key[:-1]:
-                    cursor = cursor.setdefault(part, {})
-                cursor[group_key[-1]] = value
-            return nested
-
-        def _rows_for_key(key: str) -> list[dict[str, Any]]:
-            if isinstance(filter, dict):
-                filter_expr = filter.get(key)
-            else:
-                filter_expr = filter
-            normalized_filter = normalize_filter_expr(filter_expr)
-            fields = list(dict.fromkeys([key, *group_fields]))
-            rows: list[dict[str, Any]] = []
-            for context in self._read_transcript_contexts():
-                offset = 0
-                batch_size = 1000
-                while True:
-                    logs = unify.get_logs(
+        result_by_key: dict[str, Any] = {}
+        for key in key_names:
+            key_filter = filter.get(key) if isinstance(filter, dict) else filter
+            result_by_key[key] = federated_reduce(
+                [
+                    FederatedSearchContext(
                         context=context,
-                        filter=normalized_filter,
-                        offset=offset,
-                        limit=batch_size,
-                        from_fields=fields,
+                        source=context,
+                        allowed_fields=list(dict.fromkeys([key, *group_fields])),
                     )
-                    if not logs:
-                        break
-                    rows.extend(dict(log.entries) for log in logs)
-                    if len(logs) < batch_size:
-                        break
-                    offset += batch_size
-            return rows
-
-        def _reduce_key(key: str) -> Any:
-            rows = _rows_for_key(key)
-            if not group_fields:
-                return _metric_value(rows, key)
-
-            buckets: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
-            for row in rows:
-                group_key = tuple(row.get(field) for field in group_fields)
-                buckets.setdefault(group_key, []).append(row)
-            return _nest_grouped_values(
-                {
-                    group_key: _metric_value(bucket_rows, key)
-                    for group_key, bucket_rows in buckets.items()
-                },
+                    for context in self._read_transcript_contexts()
+                ],
+                metric=metric,
+                columns=key,
+                filter=normalize_filter_expr(key_filter),
+                group_by=group_fields or None,
             )
-
-        result_by_key = {key: _reduce_key(key) for key in key_names}
         return result_by_key[keys] if isinstance(keys, str) else result_by_key
 
     @read_only

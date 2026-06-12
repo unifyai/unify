@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import functools
 import logging
-from collections import Counter, defaultdict
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 
@@ -39,7 +38,6 @@ from unity.data_manager.ops.table_ops import (
 from unity.data_manager.ops.query_ops import (
     filter_impl,
     search_impl,
-    reduce_impl,
 )
 from unity.data_manager.ops.mutation_ops import (
     insert_rows_impl,
@@ -54,6 +52,17 @@ from unity.data_manager.ops.join_ops import (
     search_multi_join_impl,
 )
 from unity.common.embed_utils import ensure_vector_column as _ensure_vector_column
+from unity.common.federated_search import (
+    FederatedSearchContext,
+    SortSpec,
+    default_ranked_fetcher,
+    federated_filter,
+    federated_ranked_search,
+    federated_reduce,
+    reduce_grouped_rows,
+    reduce_rows,
+)
+from unity.common.filter_utils import normalize_filter_expr
 from unity.common.join_utils import rewrite_join_paths
 from unity.data_manager.ops.ingest_ops import run_ingest
 from unity.common.context_registry import (
@@ -469,116 +478,6 @@ class DataManager(BaseDataManager):
             rewritten_joins.append(rewritten_step)
         return rewritten_joins
 
-    def _collect_read_rows(
-        self,
-        contexts: list[str],
-        *,
-        filter: Optional[str],
-    ) -> list[dict[str, Any]]:
-        """Fetch all matching rows from readable contexts for local reductions."""
-
-        rows: list[dict[str, Any]] = []
-        last_error: Exception | None = None
-        for resolved in contexts:
-            offset = 0
-            while True:
-                try:
-                    page = filter_impl(
-                        resolved,
-                        filter=filter,
-                        limit=1000,
-                        offset=offset,
-                    )
-                except Exception as exc:
-                    last_error = exc
-                    break
-                rows.extend(page)
-                if len(page) < 1000:
-                    break
-                offset += 1000
-        if not rows and last_error is not None:
-            raise last_error
-        return rows
-
-    def _reduce_rows(
-        self,
-        rows: list[dict[str, Any]],
-        *,
-        metric: str,
-        columns: Union[str, List[str]],
-    ) -> Any:
-        """Compute ungrouped reductions over already-fetched merged rows."""
-
-        metric_norm = metric.strip().lower()
-        column_names = columns if isinstance(columns, list) else [columns]
-
-        def values_for(column_name: str) -> list[Any]:
-            return [
-                row[column_name]
-                for row in rows
-                if column_name in row and row[column_name] is not None
-            ]
-
-        def reduce_one(column_name: str) -> Any:
-            values = values_for(column_name)
-            if metric_norm == "count":
-                return len(rows)
-            if not values:
-                return None
-            if metric_norm == "sum":
-                return sum(value or 0 for value in values)
-            if metric_norm == "min":
-                return min(values)
-            if metric_norm == "max":
-                return max(values)
-            if metric_norm == "mean":
-                return sum(values) / len(values)
-            if metric_norm == "median":
-                ordered = sorted(values)
-                mid = len(ordered) // 2
-                if len(ordered) % 2:
-                    return ordered[mid]
-                return (ordered[mid - 1] + ordered[mid]) / 2
-            if metric_norm == "mode":
-                return Counter(values).most_common(1)[0][0]
-            if metric_norm in {"var", "std"}:
-                mean = sum(values) / len(values)
-                variance = sum((value - mean) ** 2 for value in values) / len(values)
-                return variance if metric_norm == "var" else variance**0.5
-            raise ValueError(f"Unsupported reduction metric {metric!r}.")
-
-        if isinstance(columns, list):
-            return {
-                column_name: reduce_one(column_name) for column_name in column_names
-            }
-        return reduce_one(column_names[0])
-
-    def _reduce_grouped_rows(
-        self,
-        rows: list[dict[str, Any]],
-        *,
-        metric: str,
-        columns: Union[str, List[str]],
-        group_by: Union[str, List[str]],
-    ) -> dict[Any, Any]:
-        """Compute grouped reductions over merged rows."""
-
-        group_columns = group_by if isinstance(group_by, list) else [group_by]
-
-        def reduce_group(group_rows: list[dict[str, Any]], depth: int) -> Any:
-            if depth >= len(group_columns):
-                return self._reduce_rows(group_rows, metric=metric, columns=columns)
-            grouped: dict[Any, list[dict[str, Any]]] = defaultdict(list)
-            group_column = group_columns[depth]
-            for row in group_rows:
-                grouped[row.get(group_column)].append(row)
-            return {
-                group_value: reduce_group(child_rows, depth + 1)
-                for group_value, child_rows in grouped.items()
-            }
-
-        return reduce_group(rows, 0)
-
     @staticmethod
     def _tool_error(exc: ToolErrorException) -> Dict[str, Any]:
         """Return the structured tool-error payload carried by *exc*."""
@@ -821,18 +720,17 @@ class DataManager(BaseDataManager):
                 return_ids_only=return_ids_only,
             )
 
-        rows: List[Dict[str, Any]] = []
-        target_count = offset + limit
-        last_error: Exception | None = None
-        for resolved in resolved_contexts:
-            context_offset = 0
+        errors: list[Exception] = []
+
+        def fetcher(spec, row_filter, _sorting, fetch_limit):
             context_rows: list[dict[str, Any]] = []
             try:
-                while len(context_rows) < target_count:
-                    page_limit = min(1000, target_count - len(context_rows))
+                context_offset = 0
+                while len(context_rows) < fetch_limit:
+                    page_limit = min(1000, fetch_limit - len(context_rows))
                     page = filter_impl(
-                        resolved,
-                        filter=filter,
+                        spec.context,
+                        filter=row_filter,
                         columns=columns,
                         exclude_columns=exclude_columns,
                         limit=page_limit,
@@ -846,17 +744,32 @@ class DataManager(BaseDataManager):
                         break
                     context_offset += page_limit
             except Exception as exc:
-                last_error = exc
-                continue
-            rows.extend(context_rows)
-        if not rows and last_error is not None:
-            raise last_error
+                errors.append(exc)
+            return context_rows
+
+        sorting = None
         if order_by:
-            rows.sort(
-                key=lambda row: (row.get(order_by) is None, row.get(order_by)),
-                reverse=descending,
-            )
-        return rows[offset:target_count]
+            sorting = [
+                SortSpec(
+                    order_by,
+                    direction="descending" if descending else "ascending",
+                ),
+            ]
+        rows = federated_filter(
+            [
+                FederatedSearchContext(context=resolved, source=resolved)
+                for resolved in resolved_contexts
+            ],
+            filter=filter,
+            sorting=sorting,
+            offset=offset,
+            limit=limit,
+            fetcher=fetcher,
+            annotate=False,
+        )
+        if not rows and errors:
+            raise errors[-1]
+        return rows
 
     @functools.wraps(BaseDataManager.search, updated=())
     def search(
@@ -868,25 +781,47 @@ class DataManager(BaseDataManager):
         filter: Optional[str] = None,
         columns: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        rows: List[Dict[str, Any]] = []
-        last_error: Exception | None = None
-        for resolved in self._resolve_contexts_for_read(context):
+        resolved_contexts = self._resolve_contexts_for_read(context)
+        if len(resolved_contexts) == 1:
+            return search_impl(
+                resolved_contexts[0],
+                references=references,
+                k=k,
+                filter=filter,
+                columns=columns,
+            )
+
+        if k < 1 or k > 1000:
+            raise ValueError("k must be between 1 and 1000")
+
+        errors: list[Exception] = []
+
+        def fetcher(spec, refs, fetch_limit):
             try:
-                rows.extend(
-                    search_impl(
-                        resolved,
-                        references=references,
-                        k=k,
-                        filter=filter,
-                        columns=columns,
-                    ),
-                )
+                return default_ranked_fetcher(spec, refs, fetch_limit)
             except Exception as exc:
-                last_error = exc
-                continue
-        if not rows and last_error is not None:
-            raise last_error
-        return rows[:k]
+                errors.append(exc)
+                return [], ""
+
+        rows = federated_ranked_search(
+            [
+                FederatedSearchContext(
+                    context=resolved,
+                    source=resolved,
+                    row_filter=normalize_filter_expr(filter),
+                    allowed_fields=columns,
+                )
+                for resolved in resolved_contexts
+            ],
+            references,
+            limit=k,
+            fetcher=fetcher,
+            backfill=True,
+            annotate=False,
+        )
+        if not rows and errors:
+            raise errors[-1]
+        return rows
 
     @functools.wraps(BaseDataManager.reduce, updated=())
     def reduce(
@@ -898,27 +833,16 @@ class DataManager(BaseDataManager):
         filter: Optional[str] = None,
         group_by: Optional[Union[str, List[str]]] = None,
     ) -> Any:
-        resolved_contexts = self._resolve_contexts_for_read(context)
-        if len(resolved_contexts) == 1:
-            return reduce_impl(
-                resolved_contexts[0],
-                metric=metric,
-                columns=columns,
-                filter=filter,
-                group_by=group_by,
-            )
-
-        if group_by is not None:
-            rows = self._collect_read_rows(resolved_contexts, filter=filter)
-            return self._reduce_grouped_rows(
-                rows,
-                metric=metric,
-                columns=columns,
-                group_by=group_by,
-            )
-
-        rows = self._collect_read_rows(resolved_contexts, filter=filter)
-        return self._reduce_rows(rows, metric=metric, columns=columns)
+        return federated_reduce(
+            [
+                FederatedSearchContext(context=resolved, source=resolved)
+                for resolved in self._resolve_contexts_for_read(context)
+            ],
+            metric=metric,
+            columns=columns,
+            filter=normalize_filter_expr(filter),
+            group_by=group_by,
+        )
 
     # ──────────────────────────────────────────────────────────────────────────
     # Join Operations
@@ -1021,13 +945,13 @@ class DataManager(BaseDataManager):
             limit=None,
         )
         if group_by is not None:
-            return self._reduce_grouped_rows(
+            return reduce_grouped_rows(
                 rows,
                 metric=metric,
                 columns=columns,
                 group_by=group_by,
             )
-        return self._reduce_rows(rows, metric=metric, columns=columns)
+        return reduce_rows(rows, metric=metric, columns=columns)
 
     @functools.wraps(BaseDataManager.search_join, updated=())
     def search_join(
