@@ -30,6 +30,7 @@ from unity.gateway.channels.discord.gateway import (
 from unity.gateway.channels.discord.gateway import (
     _assistant_topic,
     _default_contacts,
+    _ensure_job_running,
 )
 from unity.gateway.common import pubsub as shared_pubsub
 
@@ -186,6 +187,53 @@ class TestDefaultContacts:
         contacts = _default_contacts({})
         assert all(c["first_name"] == "" for c in contacts)
         assert all(c["email_address"] == "" for c in contacts)
+
+
+class TestEnsureJobRunning:
+    """The /infra/job/start contract requires self_contact_id and
+    boss_contact_id as form fields; omitting them returns 422."""
+
+    @pytest.mark.asyncio
+    async def test_payload_includes_contact_ids(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from unity.gateway.channels.discord import gateway as gw
+
+        stub_secret = SimpleNamespace(get_secret_value=lambda: "admin-key")
+        monkeypatch.setattr(
+            gw,
+            "SETTINGS",
+            SimpleNamespace(
+                conversation=SimpleNamespace(COMMS_URL="https://comms.example.com"),
+                ORCHESTRA_ADMIN_KEY=stub_secret,
+            ),
+        )
+
+        captured: dict = {}
+
+        async def _post(url, *args, **kwargs):
+            captured["url"] = url
+            captured["data"] = kwargs["data"]
+            return MagicMock(status_code=200)
+
+        httpx_client = AsyncMock()
+        httpx_client.__aenter__.return_value = httpx_client
+        httpx_client.post = _post
+
+        with patch.object(gw.httpx, "AsyncClient", return_value=httpx_client):
+            await _ensure_job_running(
+                {
+                    "agent_id": "42",
+                    "api_key": "key-42",  # pragma: allowlist secret
+                    "self_contact_id": 789,
+                    "boss_contact_id": 790,
+                },
+            )
+
+        assert captured["url"].endswith("/infra/job/start")
+        assert captured["data"]["self_contact_id"] == "789"
+        assert captured["data"]["boss_contact_id"] == "790"
 
 
 class TestAlreadyPublished:
