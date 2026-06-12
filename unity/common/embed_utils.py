@@ -112,7 +112,7 @@ def _cross_process_column_lock(context: str, key: str, timeout: float = 600.0):
         lock_file.close()
 
 
-def list_private_fields(context: str) -> list[str]:
+def list_private_fields(context: str, *, project: str | None = None) -> list[str]:
     """
     Return a list of private field names for a context.
 
@@ -121,7 +121,7 @@ def list_private_fields(context: str) -> list[str]:
     very large, so they should be excluded from payloads returned to clients.
     """
     try:
-        fields = unify.get_fields(context=context)
+        fields = unify.get_fields(context=context, project=project)
         return [name for name in fields.keys() if name.startswith("_")]
     except Exception:
         # If field introspection fails (e.g. offline tests), fall back to none
@@ -141,6 +141,7 @@ def ensure_derived_column(
     referenced_logs_context: str | None = None,
     derived: bool | None = None,
     from_ids: list[int] | None = None,
+    project: str | None = None,
 ) -> None:
     """
     Ensure a derived column exists with the given equation.
@@ -154,7 +155,7 @@ def ensure_derived_column(
     # Fast path: if field already exists and we are not doing targeted
     # derived logs creation using from_ids, return without locking or logging
     try:
-        fields = unify.get_fields(context=context)
+        fields = unify.get_fields(context=context, project=project)
         if key in fields and not from_ids:
             return
     except Exception:
@@ -173,7 +174,7 @@ def ensure_derived_column(
             # We intentionally do this to avoid redundant calls to create
             # duplicate embeddings that will get rejected by the backend
             # due to duplication constraint
-            existing = unify.get_fields(context=context)
+            existing = unify.get_fields(context=context, project=project)
             if key in existing and not from_ids:
                 return
 
@@ -195,6 +196,7 @@ def ensure_derived_column(
                     equation=equation,
                     referenced_logs=referenced_logs,
                     derived=derived,
+                    project=project,
                 )
                 id_count = len(from_ids) if from_ids else None
                 logger.debug(
@@ -234,6 +236,7 @@ def ensure_vector_column(
     *,
     async_embeddings: bool = False,
     from_ids: list[int] | None = None,
+    project: str | None = None,
 ) -> None:
     """
     Ensure that a vector column exists in the given context. If it does not,
@@ -257,11 +260,12 @@ def ensure_vector_column(
             equation=derived_expr,
             derived=True,
             from_ids=from_ids,
+            project=project,
         )
 
     # Early return if the embedding column already exists and
     # we are not doing targetted derived logs creation using from_ids
-    existing = unify.get_fields(context=context)
+    existing = unify.get_fields(context=context, project=project)
     if embed_column in existing and not from_ids:
         return
 
@@ -273,4 +277,5 @@ def ensure_vector_column(
         equation=embed_expr,
         derived=True,
         from_ids=from_ids,
+        project=project,
     )

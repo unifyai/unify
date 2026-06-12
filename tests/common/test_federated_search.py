@@ -238,6 +238,7 @@ def test_default_filter_fetcher_combines_context_and_caller_filters(monkeypatch)
     assert calls == [
         {
             "context": "assistant/Guidance",
+            "project": None,
             "filter": "('github' in title) and (is_builtin == False)",
             "sorting": {"priority": "descending"},
             "limit": 5,
@@ -322,6 +323,7 @@ def test_federated_ranked_search_backfills_to_limit_across_contexts(monkeypatch)
         row_filter,
         unique_id_field,
         allowed_fields,
+        project=None,
     ):
         backfill_calls.append((context, len(initial_rows), k, row_filter))
         if context == "ctx/a":

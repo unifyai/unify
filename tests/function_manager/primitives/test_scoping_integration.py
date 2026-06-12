@@ -198,9 +198,6 @@ def test_search_functions_respects_scope(scoped_function_manager_factory):
     scope = PrimitiveScope.single("files")
     fm = scoped_function_manager_factory(scope)
 
-    # Sync primitives (scoped)
-    fm.sync_primitives()
-
     # Search for something generic
     results = fm.search_functions(query="data operations", n=20)
 
@@ -219,7 +216,6 @@ def test_list_primitives_respects_scope(scoped_function_manager_factory):
     scope = PrimitiveScope(scoped_managers=frozenset({"files", "contacts"}))
     fm = scoped_function_manager_factory(scope)
 
-    fm.sync_primitives()
     primitives = fm.list_primitives()
 
     # All primitives should be from files or contacts
@@ -231,47 +227,26 @@ def test_list_primitives_respects_scope(scoped_function_manager_factory):
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 4. Primitives Syncing Scoping
+# 4. Catalogue Read Scoping
 # ────────────────────────────────────────────────────────────────────────────
 
 
 @_handle_project
-def test_sync_primitives_only_syncs_scoped_managers(scoped_function_manager_factory):
-    """sync_primitives() should only sync primitives for scoped managers."""
+def test_catalog_reads_only_scoped_managers(scoped_function_manager_factory):
+    """Catalogue reads should be filtered to scoped managers."""
     # Create FM with files-only scope
     scope = PrimitiveScope.single("files")
     fm = scoped_function_manager_factory(scope)
 
-    fm.sync_primitives()
     primitives = fm.list_primitives()
 
-    # Should only have FileManager primitives
-    assert len(primitives) > 0, "Should have synced some primitives"
+    # Should only see FileManager primitives despite the catalogue holding all
+    assert len(primitives) > 0, "Should read some primitives from the catalogue"
     for name, data in primitives.items():
         assert "FileManager" in data.get(
             "primitive_class",
             "",
         ), f"Primitive {name} should be from FileManager"
-
-
-@_handle_project
-def test_per_manager_hash_tracking(scoped_function_manager_factory):
-    """FunctionManager should track hashes per-manager for efficient syncing."""
-    scope = PrimitiveScope.all_managers()
-    fm = scoped_function_manager_factory(scope)
-
-    # Sync primitives
-    fm.sync_primitives()
-
-    # Check that per-manager hashes are stored
-    stored_hashes = fm._get_stored_primitives_hash_by_manager()
-
-    # Should have a hash for each scoped manager
-    for alias in scope.scoped_managers:
-        assert alias in stored_hashes, f"Should have hash for {alias}"
-        assert (
-            len(stored_hashes[alias]) == 16
-        ), f"Hash for {alias} should be 16-char hex"
 
 
 # ────────────────────────────────────────────────────────────────────────────

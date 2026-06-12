@@ -645,9 +645,9 @@ class ToolSurfaceRegistry:
     def get_function_id(self, manager_alias: str, method_name: str) -> int:
         """Compute the stable function_id for a primitive method.
 
-        This returns the same ID that ``collect_primitives`` / ``sync_primitives``
-        store in the ``Functions/Primitives`` database context, without requiring
-        a DB round-trip.
+        This returns the same ID that ``collect_primitives`` produces for rows
+        stored in the builtins primitives catalogue, without requiring a DB
+        round-trip.
 
         Args:
             manager_alias: Canonical manager alias (e.g., ``"contacts"``).

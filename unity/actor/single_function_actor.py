@@ -456,7 +456,6 @@ class SingleFunctionActor(BaseActor):
 
     def _get_primitive_by_name(self, primitive_name: str) -> Dict[str, Any]:
         """Get a primitive by its qualified name (e.g., 'ContactManager.ask')."""
-        self._function_manager.sync_primitives()
         primitives = self._function_manager.list_primitives()
         if primitive_name not in primitives:
             raise ValueError(f"No primitive found with name '{primitive_name}'")

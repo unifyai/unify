@@ -1,12 +1,14 @@
 """
 Tests for action primitives in FunctionManager.
 
-Tests the primitives registry, sync mechanism, and semantic search
-that includes both user-defined functions and action primitives.
+Tests the primitives registry, the global builtins catalogue reads, and
+semantic search that includes both user-defined functions and action
+primitives.
 
-Primitives are stored in a separate context (Functions/Primitives) with
-stable hash-based function_id values, while user-defined functions are in
-Functions/Compositional with auto-incrementing IDs.
+Static primitives are stored once platform-wide in the public-read
+builtins catalogue project with stable hash-based function_id values,
+while user-defined functions live in per-assistant Functions/Compositional
+contexts with auto-incrementing IDs.
 """
 
 import asyncio
@@ -232,49 +234,30 @@ def test_collect_primitives_includes_file_manager():
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 2. FunctionManager primitives sync tests
+# 2. Builtins catalogue read tests
 # ────────────────────────────────────────────────────────────────────────────
 
 
 @_handle_project
-def test_sync_primitives_inserts_rows(function_manager_factory):
-    """sync_primitives() should insert primitive rows into the Primitives context."""
+def test_list_primitives_reads_builtins_catalog(function_manager_factory):
+    """list_primitives() should read static rows from the global catalogue."""
     function_manager = function_manager_factory()
 
-    # Initially no primitives
-    primitives_before = function_manager.list_primitives()
-
-    # Sync primitives
-    did_sync = function_manager.sync_primitives()
-    assert did_sync is True
-
-    # Now should have primitives with integer IDs
-    primitives_after = function_manager.list_primitives()
-    assert len(primitives_after) > 0
+    primitives = function_manager.list_primitives()
+    assert len(primitives) > 0
 
     # Verify they have integer function_ids
-    for name, data in primitives_after.items():
+    for name, data in primitives.items():
         assert isinstance(data["function_id"], int)
 
 
-@_handle_project
-def test_sync_primitives_is_idempotent(function_manager_factory):
-    """Calling sync_primitives() twice should not duplicate rows."""
-    function_manager = function_manager_factory()
+def test_seed_builtin_primitives_is_idempotent():
+    """Re-seeding the already-converged catalogue should be a no-op."""
+    from unity.function_manager.builtins_catalog import seed_builtin_primitives
 
-    # First sync
-    function_manager.sync_primitives()
-    count1 = len(function_manager.list_primitives())
-
-    # Reset the session flag to force re-check
-    function_manager._primitives_synced = False
-
-    # Second sync (should be no-op since hash matches)
-    did_sync = function_manager.sync_primitives()
-    assert did_sync is False  # No sync needed
-
-    count2 = len(function_manager.list_primitives())
-    assert count1 == count2
+    # The session-start seeding already converged the catalogue, so this
+    # run must detect matching hashes and write nothing.
+    assert seed_builtin_primitives() is False
 
 
 @_handle_project
@@ -282,7 +265,6 @@ def test_list_primitives_returns_primitive_metadata(function_manager_factory):
     """list_primitives() should return primitive metadata with integer function_ids."""
     function_manager = function_manager_factory()
 
-    function_manager.sync_primitives()
     primitives = function_manager.list_primitives()
 
     for name, data in primitives.items():
@@ -295,25 +277,29 @@ def test_list_primitives_returns_primitive_metadata(function_manager_factory):
 
 
 @_handle_project
-def test_primitives_have_stable_ids_in_database(function_manager_factory):
-    """Primitives stored in database should have consistent IDs across syncs."""
+def test_primitives_have_stable_ids_in_catalog(function_manager_factory):
+    """Catalogue rows should expose the same stable IDs as the registry."""
+    from unity.function_manager.primitives import PrimitiveScope
+
     function_manager = function_manager_factory()
 
-    # First sync
-    function_manager.sync_primitives()
-    first_sync = function_manager.list_primitives()
+    registry = get_registry()
+    expected = {
+        name: row["function_id"]
+        for name, row in registry.collect_primitives(
+            PrimitiveScope.all_managers(),
+        ).items()
+    }
+    stored = function_manager.list_primitives()
+    assert stored
 
-    # Clear and re-sync
-    function_manager.clear()
-    function_manager.sync_primitives()
-    second_sync = function_manager.list_primitives()
-
-    # IDs should be identical
-    for name in first_sync:
-        assert name in second_sync, f"Primitive {name} missing after re-sync"
-        assert first_sync[name]["function_id"] == second_sync[name]["function_id"], (
-            f"Primitive {name} ID changed from {first_sync[name]['function_id']} "
-            f"to {second_sync[name]['function_id']}"
+    for name, data in stored.items():
+        if data.get("integration_source") == "provider_backed":
+            continue
+        assert name in expected, f"Unexpected catalogue primitive {name}"
+        assert data["function_id"] == expected[name], (
+            f"Primitive {name} ID {data['function_id']} does not match "
+            f"registry ID {expected[name]}"
         )
 
 
@@ -345,9 +331,6 @@ def test_search_includes_primitives_by_default(function_manager_factory):
 def test_search_returns_primitives_by_default(function_manager_factory):
     """search_functions returns both primitives and user functions by default."""
     function_manager = function_manager_factory()
-
-    # First sync primitives so they exist
-    function_manager.sync_primitives()
 
     # Add a user function
     implementation = '''
@@ -398,36 +381,19 @@ def update_contact_email(contact_id: int, email: str) -> str:
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 4. Clear and re-sync tests
+# 4. Clear behaviour
 # ────────────────────────────────────────────────────────────────────────────
 
 
 @_handle_project
-def test_clear_removes_primitives(function_manager_factory):
-    """clear() should remove primitives along with user functions."""
+def test_clear_preserves_builtins_catalog(function_manager_factory):
+    """clear() drops per-assistant state but never the global catalogue."""
     function_manager = function_manager_factory()
 
-    function_manager.sync_primitives()
-    assert len(function_manager.list_primitives()) > 0
-
-    function_manager.clear()
-
-    # After clear, primitives should be gone (until next sync)
-    # Note: list_primitives doesn't trigger sync, so should be empty
-    primitives = function_manager.list_primitives()
-    assert len(primitives) == 0
-
-
-@_handle_project
-def test_sync_after_clear_restores_primitives(function_manager_factory):
-    """Syncing after clear should restore primitives."""
-    function_manager = function_manager_factory()
-
-    function_manager.sync_primitives()
     count_before = len(function_manager.list_primitives())
+    assert count_before > 0
 
     function_manager.clear()
-    function_manager.sync_primitives()
 
     count_after = len(function_manager.list_primitives())
     assert count_after == count_before

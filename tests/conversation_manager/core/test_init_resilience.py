@@ -112,13 +112,12 @@ class TestDegradableStepResilience:
         assert cm.initialized is True
 
     @pytest.mark.asyncio
-    async def test_primitive_sync_failure(self, resilience_cm):
+    async def test_function_manager_warmup_failure(self, resilience_cm):
         cm = resilience_cm
         with patch(
             "unity.conversation_manager.domains.managers_utils.ManagerRegistry.get_function_manager",
         ) as mock_fm:
             mock_instance = MagicMock()
-            mock_instance.sync_primitives.side_effect = RuntimeError("sync error")
             mock_instance.warm_embeddings.side_effect = RuntimeError("warm error")
             mock_fm.return_value = mock_instance
             await _init(cm, "resilience_prim")

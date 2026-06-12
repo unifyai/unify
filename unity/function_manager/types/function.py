@@ -138,11 +138,14 @@ class Function(AuthoredRow):
     integration_metadata: Dict[str, Any] = Field(
         default_factory=dict,
         description=(
-            "Nested source-specific integration metadata. Provider rows store "
-            "backend/provider IDs, activation/connection/scopes/action safety, "
-            "schema availability, icon URL, and match reason here. Native rows "
-            "can store manifest slug, capabilities, secrets, tier/quality, and "
-            "deployment status without adding more sparse top-level fields."
+            "Nested source-specific integration metadata, catalogue-level "
+            "only. Provider rows store backend/provider IDs, required "
+            "scopes, action safety, schema availability, and icon URL here; "
+            "per-user connection state (connection ids, activation, granted "
+            "scopes) is resolved live and never stored on rows. Native rows "
+            "can store manifest slug, capabilities, secrets, tier/quality, "
+            "and deployment status without adding more sparse top-level "
+            "fields."
         ),
     )
 

@@ -46,6 +46,7 @@ from ..common.federated_search import (
     federated_filter,
     federated_ranked_search,
 )
+from .builtins_catalog import BUILTINS_PRIMITIVES_CONTEXT, builtins_project
 from ..common.tool_outcome import ToolErrorException
 from .execution_env import ENVIRONMENT_MODULES, create_base_globals
 from .dependency_analysis import (
@@ -68,7 +69,6 @@ from unity.function_manager.primitives.scope import (
     default_runtime_scope,
 )
 from unity.function_manager.primitives.registry import get_registry
-from unity.common.startup_timing import log_startup_timing
 from unity.common.diagnostic_logging import (
     log_staging_diagnostic,
     staging_diagnostics_enabled,
@@ -1728,8 +1728,7 @@ class FunctionManager(BaseFunctionManager):
         )
         self._meta_ctx = ContextRegistry.get_context(self, FUNCTIONS_META_TABLE)
 
-        # Track whether primitives, custom venvs, and custom functions have been synced
-        self._primitives_synced = False
+        # Track whether custom venvs and custom functions have been synced
         self._custom_venvs_synced = False
         self._custom_functions_synced = False
         self._custom_venvs_synced_contexts: set[str] = set()
@@ -1847,6 +1846,68 @@ class FunctionManager(BaseFunctionManager):
         if not excl:
             return base
         return f"({base}) and ({excl})"
+
+    def _primitive_read_specs(
+        self,
+        *,
+        allowed_fields: Optional[List[str]] = None,
+    ) -> List[FederatedSearchContext]:
+        """Return the federated sources holding this deployment's primitives.
+
+        Static primitives live once platform-wide in the public-read builtins
+        catalogue project; the per-assistant ``Functions/Primitives`` context
+        holds only materialized provider-backed integration tool rows. Both
+        are scope-filtered at read time.
+        """
+        scoped = self._scoped_primitive_filter()
+        return [
+            FederatedSearchContext(
+                context=BUILTINS_PRIMITIVES_CONTEXT,
+                source="primitives",
+                row_filter=scoped,
+                allowed_fields=allowed_fields,
+                project=builtins_project(),
+            ),
+            FederatedSearchContext(
+                context=self._primitives_ctx,
+                source="primitives",
+                row_filter=f'({scoped}) and integration_source == "provider_backed"',
+                allowed_fields=allowed_fields,
+            ),
+        ]
+
+    def _primitive_logs(
+        self,
+        *,
+        extra_filter: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Fetch primitive rows from every primitive source (non-ranked)."""
+        rows: List[Dict[str, Any]] = []
+        for spec in self._primitive_read_specs():
+            row_filter = spec.row_filter
+            if extra_filter:
+                row_filter = f"({extra_filter}) and ({row_filter})"
+            kwargs: Dict[str, Any] = {
+                "context": spec.context,
+                "project": spec.project,
+                "filter": row_filter,
+                "exclude_fields": list_private_fields(
+                    spec.context,
+                    project=spec.project,
+                ),
+            }
+            if limit is not None:
+                kwargs["limit"] = limit
+            try:
+                logs = unify.get_logs(**kwargs)
+            except _UnifyRequestError as e:
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                if status == 404:
+                    continue
+                raise
+            rows.extend(lg.entries for lg in logs)
+        return rows
 
     def _integration_owner_scope(self) -> Dict[str, Any]:
         """Best-effort owner scope for provider-backed integration searches."""
@@ -2092,12 +2153,7 @@ class FunctionManager(BaseFunctionManager):
             "provider_action_id",
         )
         app_icon_url = item.get("app_icon_url") or item.get("icon_url")
-        activation = item.get("activation_state", "connected_ready")
-        provider_error_status = item.get("provider_error_status") or item.get(
-            "provider_error_code",
-        )
         required_scopes = item.get("required_scopes") or []
-        granted_scopes = item.get("granted_scopes") or []
         action_class = item.get("action_class", "read")
         confirmation_required = bool(item.get("confirmation_required", False))
         input_schema = item.get("input_schema") or item.get("input_schema_json") or {}
@@ -2174,22 +2230,23 @@ class FunctionManager(BaseFunctionManager):
             "input_schema": input_schema,
             "output_schema": output_schema,
             "examples": examples,
+            # Catalogue-level metadata only: per-user connection state
+            # (connection ids, activation, granted scopes, provider errors)
+            # is deliberately absent. Rows describe the tool itself; live
+            # state is resolved at read/execution time from the user's
+            # connections, so the same rows are valid for every user of the
+            # app.
             "integration_metadata": {
                 "source_type": "third_party",
                 "namespace": "primitives.integrations",
                 "provider_app_id": provider_app_id,
                 "provider_tool_id": provider_tool_id,
-                "provider_error_status": provider_error_status,
                 "app_display_name": app,
                 "app_icon_url": app_icon_url,
-                "activation_state": activation,
-                "connection_id": item.get("connection_id"),
                 "required_scopes": required_scopes,
-                "granted_scopes": granted_scopes,
                 "action_class": action_class,
                 "confirmation_required": confirmation_required,
                 "schema_available": item.get("schema_available", True),
-                "match_reason": item.get("match_reason"),
             },
         }
         return Function.model_validate(row).model_dump(include=set(row.keys()))
@@ -2465,7 +2522,6 @@ class FunctionManager(BaseFunctionManager):
         # Reset any manager-local counters or caches
         try:
             self._next_id = None
-            self._primitives_synced = False
             self._custom_venvs_synced = False
             self._custom_functions_synced = False
             self._custom_venvs_synced_contexts.clear()
@@ -2554,19 +2610,6 @@ class FunctionManager(BaseFunctionManager):
                 )
         except Exception as e:
             logger.warning("Failed to store %s hash map: %s", field_name, e)
-
-    def _get_stored_primitives_hash_by_manager(self) -> Dict[str, str]:
-        """Retrieve the per-manager primitives hashes from the Meta context."""
-
-        return self._get_stored_hash_map("primitives_hash_by_manager")
-
-    def _store_primitives_hash_by_manager(
-        self,
-        hash_by_manager: Dict[str, str],
-    ) -> None:
-        """Store the per-manager primitives hashes in the Meta context."""
-
-        self._store_hash_map("primitives_hash_by_manager", hash_by_manager)
 
     def _get_stored_integration_tool_hash_by_app(self) -> Dict[str, str]:
         """Retrieve per-app hashes for materialized provider-backed tools."""
@@ -2671,48 +2714,6 @@ class FunctionManager(BaseFunctionManager):
             )
             return None
 
-    def _delete_provider_integration_rows_for_connection(
-        self,
-        *,
-        app_slug: str,
-        connection_id: str,
-    ) -> tuple[int, list[str]]:
-        filter_expr = (
-            'integration_source == "provider_backed" ' f'and app_slug == "{app_slug}"'
-        )
-        try:
-            logs = unify.get_logs(
-                context=self._primitives_ctx,
-                filter=filter_expr,
-                exclude_fields=list_private_fields(self._primitives_ctx),
-            )
-            ids_to_delete: list[int] = []
-            removed_keys: set[str] = set()
-            for log in logs or []:
-                entries = getattr(log, "entries", None) or {}
-                metadata = entries.get("integration_metadata") or {}
-                if metadata.get("connection_id") != connection_id:
-                    continue
-                ids_to_delete.append(log.id)
-                removed_keys.add(
-                    self._integration_hash_key(
-                        backend_id=entries.get("backend_id") or "provider",
-                        app_slug=app_slug,
-                    ),
-                )
-            if not ids_to_delete:
-                return 0, []
-            unify.delete_logs(context=self._primitives_ctx, logs=ids_to_delete)
-            return len(ids_to_delete), sorted(removed_keys)
-        except Exception as exc:
-            logger.warning(
-                "Failed to delete provider integration rows for connection %s/%s: %s",
-                app_slug,
-                connection_id,
-                exc,
-            )
-            return 0, []
-
     def sync_provider_integration_tools(
         self,
         *,
@@ -2724,8 +2725,8 @@ class FunctionManager(BaseFunctionManager):
         """Materialize active provider-backed tools into the Primitives context.
 
         This is an explicit sync path, not a FunctionManager query-time search.
-        It mirrors ``sync_primitives``: build expected rows, compare stable
-        hashes, and only delete/upsert the affected app rows when changed.
+        It builds expected rows, compares stable per-app hashes, and only
+        deletes/upserts the affected app rows when changed.
         """
         from time import perf_counter
 
@@ -2878,19 +2879,23 @@ class FunctionManager(BaseFunctionManager):
         removed_apps: list[str] = []
 
         if normalized_app and operation == "cleanup":
-            if connection_id:
-                removed, removed_keys = (
-                    self._delete_provider_integration_rows_for_connection(
-                        app_slug=normalized_app,
-                        connection_id=connection_id,
-                    )
+            # Rows are connection-agnostic catalogue entries, so a single
+            # disconnect only removes them when no other live connection
+            # still serves the app.
+            remaining_connections = [
+                connection
+                for connection in connections or []
+                if connection.get("status") == "connected"
+                and normalize_app_slug(str(connection.get("canonical_app_slug") or ""))
+                == normalized_app
+                and (
+                    not connection_id
+                    or connection.get("connection_id") != connection_id
                 )
-                hash_keys_to_remove = [
-                    key for key in new_hashes if key.endswith(f":{normalized_app}")
-                ]
-                removed_keys = sorted(set([*removed_keys, *hash_keys_to_remove]))
-                for key in hash_keys_to_remove:
-                    new_hashes.pop(key, None)
+            ]
+            if connection_id and remaining_connections:
+                removed = 0
+                removed_keys: list[str] = []
             else:
                 app_keys_to_remove: list[tuple[str | None, str]] = []
                 removed_keys = []
@@ -3195,49 +3200,6 @@ class FunctionManager(BaseFunctionManager):
         )
         return result
 
-    def _delete_primitives_for_managers(self, manager_aliases: List[str]) -> None:
-        """Delete primitive rows for specific managers."""
-        if not manager_aliases:
-            return
-        try:
-            # Convert manager aliases to class paths for filtering
-            class_paths = []
-            for alias in manager_aliases:
-                for spec in self._registry.manager_specs(self._primitive_scope):
-                    if spec.manager_alias == alias:
-                        class_paths.append(spec.primitive_class_path)
-                        break
-
-            if not class_paths:
-                return
-
-            # Build filter using OR clauses (in [] syntax may not work for strings).
-            # Provider-backed integration rows share the IntegrationPrimitives runtime
-            # bridge, but their lifecycle is owned by sync_provider_integration_tools().
-            # Static primitive sync must not delete those materialized rows.
-            clauses = []
-            for cp in class_paths:
-                clause = f'primitive_class == "{cp}"'
-                if cp == "unity.integrations.primitives.IntegrationPrimitives":
-                    clause = f'({clause}) and integration_source != "provider_backed"'
-                clauses.append(clause)
-            filter_expr = " or ".join(clauses)
-            logs = unify.get_logs(
-                context=self._primitives_ctx,
-                filter=filter_expr,
-                exclude_fields=list_private_fields(self._primitives_ctx),
-            )
-            if logs:
-                unify.delete_logs(
-                    context=self._primitives_ctx,
-                    logs=[lg.id for lg in logs],
-                )
-                logger.debug(
-                    f"Deleted {len(logs)} primitive rows for managers: {manager_aliases}",
-                )
-        except Exception as e:
-            logger.warning(f"Failed to delete primitives for {manager_aliases}: {e}")
-
     def _delete_primitives_by_function_ids(self, function_ids: list[int]) -> None:
         if not function_ids:
             return
@@ -3286,136 +3248,6 @@ class FunctionManager(BaseFunctionManager):
             logger.debug(f"Inserted {len(entries)} primitives")
         except Exception as e:
             logger.error(f"Failed to insert primitives: {e}")
-
-    def sync_primitives(self) -> bool:
-        """
-        Ensure primitives in the database match current Python definitions.
-
-        Uses per-manager hash comparison to avoid unnecessary writes. Only syncs
-        primitives for managers in this FunctionManager's scope.
-
-        The algorithm:
-        1. Read current hashes from Meta (one call)
-        2. Compute expected hashes for each scoped manager
-        3. Batch delete all changed managers' primitives (one call)
-        4. Batch insert all new primitives (one call)
-        5. Update Meta with new hashes (one call)
-
-        Returns:
-            True if sync was performed, False if already up-to-date.
-        """
-        import time as _sp_time
-
-        _sp_t0 = _sp_time.perf_counter()
-
-        def _sp_ms():
-            return f"{(_sp_time.perf_counter() - _sp_t0) * 1000:.0f}ms"
-
-        logger.debug(f"⏱️ [FM.sync_primitives +{_sp_ms()}] entered")
-
-        if self._primitives_synced:
-            logger.debug(
-                f"⏱️ [FM.sync_primitives +{_sp_ms()}] already synced, skipping",
-            )
-            return False
-
-        target_managers = sorted(self._primitive_scope.scoped_managers)
-        log_startup_timing(
-            logger,
-            "⏱️ [StartupTiming] function_manager.sync_primitives target_managers=%d",
-            len(target_managers),
-        )
-
-        # Step 1: Read current hashes (one backend call)
-        logger.debug(f"⏱️ [FM.sync_primitives +{_sp_ms()}] reading stored hashes")
-        _step_t0 = _sp_time.perf_counter()
-        current_hashes = self._get_stored_primitives_hash_by_manager()
-        log_startup_timing(
-            logger,
-            "⏱️ [StartupTiming] function_manager.sync_primitives.read_hashes duration=%.2fs hashes=%d",
-            _sp_time.perf_counter() - _step_t0,
-            len(current_hashes),
-        )
-        logger.debug(f"⏱️ [FM.sync_primitives +{_sp_ms()}] hashes read")
-
-        # Step 2: Compute expected hashes and collect pending updates if they differ
-        _step_t0 = _sp_time.perf_counter()
-        pending_updates: List[Tuple[str, List[Dict[str, Any]], str]] = []
-        for manager_alias in target_managers:
-            expected_hash = self._registry.compute_hash_for_manager(manager_alias)
-
-            if current_hashes.get(manager_alias) == expected_hash:
-                continue
-
-            single_scope = PrimitiveScope(scoped_managers=frozenset({manager_alias}))
-            primitives_dict = self._registry.collect_primitives(single_scope)
-            expected_rows = list(primitives_dict.values())
-            pending_updates.append((manager_alias, expected_rows, expected_hash))
-        pending_rows = sum(len(rows) for _, rows, _ in pending_updates)
-        log_startup_timing(
-            logger,
-            "⏱️ [StartupTiming] function_manager.sync_primitives.compute_pending duration=%.2fs changed_managers=%s pending_rows=%d",
-            _sp_time.perf_counter() - _step_t0,
-            [alias for alias, _, _ in pending_updates],
-            pending_rows,
-        )
-
-        # Step 3: If nothing changed, mark synced and return
-        if not pending_updates:
-            logger.debug(
-                f"⏱️ [FM.sync_primitives +{_sp_ms()}] hashes match, skipping sync",
-            )
-            self._primitives_synced = True
-            return False
-
-        changed_managers = [alias for alias, _, _ in pending_updates]
-        logger.debug(
-            f"⏱️ [FM.sync_primitives +{_sp_ms()}] changed: {changed_managers}, syncing...",
-        )
-
-        # Step 4: Batched delete for all changed managers (one backend call)
-        _step_t0 = _sp_time.perf_counter()
-        self._delete_primitives_for_managers(changed_managers)
-        log_startup_timing(
-            logger,
-            "⏱️ [StartupTiming] function_manager.sync_primitives.delete duration=%.2fs changed_managers=%d",
-            _sp_time.perf_counter() - _step_t0,
-            len(changed_managers),
-        )
-        logger.debug(f"⏱️ [FM.sync_primitives +{_sp_ms()}] delete done")
-
-        # Step 5: Batched insert all new primitives (one backend call)
-        all_rows = []
-        for _, rows, _ in pending_updates:
-            all_rows.extend(rows)
-        _step_t0 = _sp_time.perf_counter()
-        self._insert_primitives(all_rows)
-        log_startup_timing(
-            logger,
-            "⏱️ [StartupTiming] function_manager.sync_primitives.insert duration=%.2fs rows=%d",
-            _sp_time.perf_counter() - _step_t0,
-            len(all_rows),
-        )
-        logger.debug(
-            f"⏱️ [FM.sync_primitives +{_sp_ms()}] insert done ({len(all_rows)} rows)",
-        )
-
-        # Step 6: Update Meta with new hashes (one backend call)
-        _step_t0 = _sp_time.perf_counter()
-        new_hashes = dict(current_hashes)
-        for alias, _, hash_val in pending_updates:
-            new_hashes[alias] = hash_val
-        self._store_primitives_hash_by_manager(new_hashes)
-        log_startup_timing(
-            logger,
-            "⏱️ [StartupTiming] function_manager.sync_primitives.store_hashes duration=%.2fs hashes=%d",
-            _sp_time.perf_counter() - _step_t0,
-            len(new_hashes),
-        )
-        logger.debug(f"⏱️ [FM.sync_primitives +{_sp_ms()}] hashes stored, done")
-
-        self._primitives_synced = True
-        return True
 
     # ------------------------------------------------------------------ #
     #  Custom Functions Sync                                              #
@@ -3966,29 +3798,24 @@ class FunctionManager(BaseFunctionManager):
         """
         Return a mapping of primitive name to primitive metadata.
 
-        Only returns primitives for managers in this FunctionManager's scope.
-        Call sync_primitives() first to ensure the database is up-to-date.
+        Only returns primitives for managers in this FunctionManager's scope,
+        combining the global builtins catalogue with materialized
+        provider-backed integration tool rows.
 
         Returns:
             Dict mapping primitive name to metadata dict (includes function_id).
         """
         entries: Dict[str, Dict[str, Any]] = {}
         try:
-            filter_expr = self._scoped_primitive_filter()
-            logs = unify.get_logs(
-                context=self._primitives_ctx,
-                filter=filter_expr,
-                exclude_fields=list_private_fields(self._primitives_ctx),
-            )
-            for log in logs:
+            for row in self._primitive_logs():
                 data = {
-                    "function_id": log.entries.get("function_id"),
-                    "name": log.entries["name"],
-                    "argspec": log.entries.get("argspec", ""),
-                    "docstring": log.entries.get("docstring", ""),
+                    "function_id": row.get("function_id"),
+                    "name": row["name"],
+                    "argspec": row.get("argspec", ""),
+                    "docstring": row.get("docstring", ""),
                     "is_primitive": True,
-                    "primitive_class": log.entries.get("primitive_class"),
-                    "primitive_method": log.entries.get("primitive_method"),
+                    "primitive_class": row.get("primitive_class"),
+                    "primitive_method": row.get("primitive_method"),
                 }
                 for key in (
                     "integration_source",
@@ -4000,9 +3827,9 @@ class FunctionManager(BaseFunctionManager):
                     "examples",
                     "integration_metadata",
                 ):
-                    if key in log.entries:
-                        data[key] = log.entries.get(key)
-                entries[log.entries["name"]] = data
+                    if key in row:
+                        data[key] = row.get(key)
+                entries.setdefault(row["name"], data)
         except Exception as e:
             logger.warning(f"Failed to list primitives: {e}")
         return entries
@@ -4917,36 +4744,27 @@ class FunctionManager(BaseFunctionManager):
         if _return_callable and _namespace is None:
             raise ValueError("_namespace required when _return_callable=True")
 
-        compositional_logs = []
+        compositional_rows: List[Dict[str, Any]] = []
         for context in self._read_compositional_contexts():
-            compositional_logs.extend(
-                unify.get_logs(
+            compositional_rows.extend(
+                lg.entries
+                for lg in unify.get_logs(
                     context=context,
                     filter=self._scoped_filter(None),
                     exclude_fields=list_private_fields(context),
-                ),
+                )
             )
 
-        primitive_logs: list = []
+        primitive_rows: List[Dict[str, Any]] = []
         if self._include_primitives:
-            self.sync_primitives()
-            primitive_filter = self._scoped_primitive_filter()
-            for context in self._read_function_contexts(FUNCTIONS_PRIMITIVES_TABLE):
-                primitive_logs.extend(
-                    unify.get_logs(
-                        context=context,
-                        filter=primitive_filter,
-                        exclude_fields=list_private_fields(context),
-                    ),
-                )
+            primitive_rows = self._primitive_logs()
 
-        all_logs = list(compositional_logs) + list(primitive_logs)
+        all_rows = compositional_rows + primitive_rows
 
         metadata: Dict[str, Dict[str, Any]] = {}
         func_rows: List[Dict[str, Any]] = []
         seen_names: set[str] = set()
-        for log in all_logs:
-            ent = log.entries
+        for ent in all_rows:
             name = ent.get("name")
             if not isinstance(name, str):
                 continue
@@ -5022,22 +4840,12 @@ class FunctionManager(BaseFunctionManager):
             if logs:
                 break
         if not logs and self._include_primitives:
-            self.sync_primitives()
-            prim_name_filter = f"name == '{function_name}'"
-            prim_filter = (
-                f"({prim_name_filter}) and ({self._scoped_primitive_filter()})"
+            primitive_rows = self._primitive_logs(
+                extra_filter=f"name == '{function_name}'",
+                limit=1,
             )
-            for context in self._read_function_contexts(FUNCTIONS_PRIMITIVES_TABLE):
-                logs.extend(
-                    unify.get_logs(
-                        context=context,
-                        filter=prim_filter,
-                        limit=1,
-                        exclude_fields=list_private_fields(context),
-                    ),
-                )
-                if logs:
-                    break
+            if primitive_rows:
+                return primitive_rows[0].get("precondition")
         if not logs:
             return None
 
@@ -5074,18 +4882,14 @@ class FunctionManager(BaseFunctionManager):
 
         # Reject deletion of primitives (only check when primitives are enabled).
         if self._include_primitives:
-            self.sync_primitives()
             id_clauses = " or ".join(f"function_id == {fid}" for fid in function_ids)
-            prim_logs = unify.get_logs(
-                context=self._primitives_ctx,
-                filter=id_clauses,
+            prim_rows = self._primitive_logs(
+                extra_filter=id_clauses,
                 limit=len(function_ids),
-                exclude_fields=list_private_fields(self._primitives_ctx),
             )
-            if prim_logs:
+            if prim_rows:
                 prim_names = [
-                    lg.entries.get("name", lg.entries.get("function_id"))
-                    for lg in prim_logs
+                    row.get("name", row.get("function_id")) for row in prim_rows
                 ]
                 raise ValueError(
                     f"Cannot delete primitives (system-owned): {prim_names}",
@@ -5190,6 +4994,7 @@ class FunctionManager(BaseFunctionManager):
         filter: Optional[str] = None,
         offset: int = 0,
         limit: Optional[int] = None,
+        project: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Query a context with retries for 404 (lazy context creation)."""
         import time as _time
@@ -5198,7 +5003,8 @@ class FunctionManager(BaseFunctionManager):
         last_exc: Exception | None = None
         kwargs: Dict[str, Any] = {
             "context": context,
-            "exclude_fields": list_private_fields(context),
+            "project": project,
+            "exclude_fields": list_private_fields(context, project=project),
         }
         if filter is not None:
             kwargs["filter"] = filter
@@ -5263,15 +5069,7 @@ class FunctionManager(BaseFunctionManager):
         ]
 
         if self._include_primitives:
-            self.sync_primitives()
-            contexts.extend(
-                FederatedSearchContext(
-                    context=context,
-                    source="primitives",
-                    row_filter=self._scoped_primitive_filter(),
-                )
-                for context in self._read_function_contexts(FUNCTIONS_PRIMITIVES_TABLE)
-            )
+            contexts.extend(self._primitive_read_specs())
 
         def fetcher(spec, row_filter, _sorting, fetch_limit):
             combined = row_filter
@@ -5283,6 +5081,7 @@ class FunctionManager(BaseFunctionManager):
                 spec.context,
                 filter=combined,
                 limit=fetch_limit,
+                project=spec.project,
             )
 
         rows = federated_filter(
@@ -5349,15 +5148,8 @@ class FunctionManager(BaseFunctionManager):
         ]
 
         if self._include_primitives:
-            self.sync_primitives()
             contexts.extend(
-                FederatedSearchContext(
-                    context=context,
-                    source="primitives",
-                    row_filter=self._scoped_primitive_filter(),
-                    allowed_fields=allowed_fields,
-                )
-                for context in self._read_function_contexts(FUNCTIONS_PRIMITIVES_TABLE)
+                self._primitive_read_specs(allowed_fields=allowed_fields),
             )
 
         results = federated_ranked_search(
@@ -6540,25 +6332,17 @@ class FunctionManager(BaseFunctionManager):
         provider_backed_only: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Look up a primitive row by exact name from readable primitive contexts."""
-        self.sync_primitives()
         try:
             name_filter = normalize_filter_expr(f"name == {json.dumps(name)}")
         except Exception:
             name_filter = f"name == {json.dumps(name)}"
-        prim_filter = f"({name_filter}) and ({self._scoped_primitive_filter()})"
         if provider_backed_only:
-            prim_filter = (
-                f'({prim_filter}) and (integration_source == "provider_backed")'
+            name_filter = (
+                f'({name_filter}) and (integration_source == "provider_backed")'
             )
-        for context in self._read_function_contexts(FUNCTIONS_PRIMITIVES_TABLE):
-            rows = unify.get_logs(
-                context=context,
-                filter=prim_filter,
-                limit=1,
-                exclude_fields=list_private_fields(context),
-            )
-            if rows:
-                return dict(rows[0].entries)
+        rows = self._primitive_logs(extra_filter=name_filter, limit=1)
+        if rows:
+            return dict(rows[0])
         return None
 
     async def _execute_primitive(

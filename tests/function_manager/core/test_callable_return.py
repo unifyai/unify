@@ -195,12 +195,12 @@ async def test_similarity_search_return_callable_monkeypatched(monkeypatch):
         "is_primitive": False,
     }
 
-    def _fake_table_search_top_k(*args, **kwargs):
+    def _fake_ranked_search(contexts, references, **kwargs):
         return [dict(fake_record)]
 
     monkeypatch.setattr(
-        "unity.function_manager.function_manager.table_search_top_k",
-        _fake_table_search_top_k,
+        "unity.function_manager.function_manager.federated_ranked_search",
+        _fake_ranked_search,
     )
 
     ns = create_base_globals()
@@ -431,12 +431,12 @@ async def test_similarity_search_return_callable_forward_ref_annotations_just_wo
         "is_primitive": False,
     }
 
-    def _fake_table_search_top_k(*args, **kwargs):
+    def _fake_ranked_search(contexts, references, **kwargs):
         return [dict(fake_record)]
 
     monkeypatch.setattr(
-        "unity.function_manager.function_manager.table_search_top_k",
-        _fake_table_search_top_k,
+        "unity.function_manager.function_manager.federated_ranked_search",
+        _fake_ranked_search,
     )
 
     ns = create_base_globals()

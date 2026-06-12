@@ -1899,24 +1899,9 @@ def _init_managers(
     )
     manager_init_total.record(_total_dur)
 
-    # 12. Eager primitive sync (avoids ~7s cold-start on first execute_function).
-    #     Must run after all managers are initialised so the primitive registry
-    #     contains every manager's methods (actor, files, contacts, …).
-    try:
-        LOGGER.debug(
-            f"{ICONS['managers_worker']} [ManagersWorker] Syncing primitives...",
-        )
-        local_start_time = perf_counter()
-        _init_fm = ManagerRegistry.get_function_manager()
-        _init_fm.sync_primitives()
-        _prim_dur = perf_counter() - local_start_time
-        LOGGER.info(
-            f"{ICONS['managers_worker']} [ManagersWorker] Primitives synced in {_prim_dur:.2f} seconds",
-        )
-    except Exception as e:
-        LOGGER.warning(
-            f"{ICONS['managers_worker']} [ManagersWorker] Primitive sync failed (degraded): {e}",
-        )
+    # 12. Static primitives live in the global builtins catalogue (seeded at
+    #     deploy time), so no per-assistant primitive sync is needed here.
+    _init_fm = ManagerRegistry.get_function_manager()
 
     # 13. Pre-warm embedding columns for all managers (best-effort, avoids
     #     cold-start latency on the first vector search after a fresh hire).

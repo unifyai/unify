@@ -27,6 +27,7 @@ def table_search_top_k(
     allowed_fields: Optional[List[str]] = None,
     row_filter: Optional[str] = None,
     unique_id_field: Optional[str] = None,
+    project: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Return up to k rows from a Unify context using semantic search with backfill.
@@ -62,6 +63,7 @@ def table_search_top_k(
         k=k,
         allowed_fields=allowed_fields,
         row_filter=row_filter,
+        project=project,
     )
     filled = _backfill_rows(
         context,
@@ -70,6 +72,7 @@ def table_search_top_k(
         row_filter=row_filter,
         unique_id_field=unique_id_field,
         allowed_fields=allowed_fields,
+        project=project,
     )
     return filled
 
