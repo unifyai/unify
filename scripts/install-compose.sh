@@ -81,7 +81,7 @@ install_compose_bundle() {
   mkdir -p "$UNITY_HOME"
   mkdir -p "${UNITY_HOME}/workspace"
   local file
-  for file in docker-compose.yml Caddyfile .env.example ensure-pubsub-topics.sh; do
+  for file in docker-compose.yml Caddyfile .env.example ensure-pubsub-topics.sh cm-entrypoint.sh desktop-entrypoint.sh publish-desktop-ready.sh livekit.yaml; do
     if [[ -n "$SELFHOST_SRC" && -f "$SELFHOST_SRC/$file" ]]; then
       cp "$SELFHOST_SRC/$file" "$UNITY_HOME/$file"
     else
@@ -98,16 +98,86 @@ install_compose_bundle() {
   log_ok "Compose bundle installed to $UNITY_HOME"
 }
 
+upsert_env_value() {
+  local env_file="$1"
+  local key="$2"
+  local val="$3"
+  python3 - "$env_file" "$key" "$val" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+key, val = sys.argv[2], sys.argv[3]
+lines = path.read_text().splitlines() if path.exists() else []
+pat = re.compile(rf"^{re.escape(key)}=")
+replaced = False
+for i, line in enumerate(lines):
+    if pat.match(line):
+        lines[i] = f"{key}={val}"
+        replaced = True
+        break
+if not replaced:
+    lines.append(f"{key}={val}")
+path.write_text("\n".join(lines) + "\n")
+PY
+}
+
+normalize_env_file() {
+  local env_file="$1"
+  [[ -f "$env_file" ]] || return 0
+  python3 - "$env_file" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+secret_keys = {
+    "POSTGRES_PASSWORD",
+    "ORCHESTRA_ADMIN_KEY",
+    "NEXTAUTH_SECRET",
+    "JWT_SECRET",
+}
+lines = path.read_text().splitlines()
+seen: dict[str, tuple[int, str]] = {}
+out: list[str] = []
+
+for line in lines:
+    if "=" in line and not line.strip().startswith("#"):
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if key in seen:
+            idx, kept = seen[key]
+            if value and not kept:
+                out[idx] = f"{key}={value}"
+                seen[key] = (idx, value)
+            continue
+        if key in secret_keys and not value:
+            continue
+        seen[key] = (len(out), value)
+        out.append(line)
+    else:
+        out.append(line)
+
+path.write_text("\n".join(out) + ("\n" if out else ""))
+PY
+}
+
 generate_secrets() {
   local env_file="$UNITY_HOME/.env"
+  normalize_env_file "$env_file"
   if ! grep -qE '^ORCHESTRA_ADMIN_KEY=.+$' "$env_file" 2>/dev/null; then
-    echo "ORCHESTRA_ADMIN_KEY=$(openssl rand -base64 32 | tr -d '/+=' | head -c 43)" >> "$env_file"
+    upsert_env_value "$env_file" "ORCHESTRA_ADMIN_KEY" \
+      "$(openssl rand -base64 32 | tr -d '/+=' | head -c 43)"
   fi
   if ! grep -qE '^NEXTAUTH_SECRET=.+$' "$env_file" 2>/dev/null; then
-    echo "NEXTAUTH_SECRET=$(openssl rand -base64 32)" >> "$env_file"
+    upsert_env_value "$env_file" "NEXTAUTH_SECRET" "$(openssl rand -base64 32)"
+  fi
+  if ! grep -qE '^JWT_SECRET=.+$' "$env_file" 2>/dev/null; then
+    upsert_env_value "$env_file" "JWT_SECRET" "$(openssl rand -base64 32)"
   fi
   if ! grep -qE '^POSTGRES_PASSWORD=.+$' "$env_file" 2>/dev/null; then
-    echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)" >> "$env_file"
+    upsert_env_value "$env_file" "POSTGRES_PASSWORD" "$(openssl rand -hex 16)"
   fi
 }
 
@@ -124,6 +194,7 @@ run_byok_wizard() {
   fi
   log_info "BYOK wizard (keys written to $UNITY_HOME/.env)..."
   UNITY_ENV_FILE="$UNITY_HOME/.env" \
+    UNITY_COMPOSE_INSTALL=1 \
     NON_INTERACTIVE="$NON_INTERACTIVE" \
     bash "$wizard" ${NON_INTERACTIVE:+--non-interactive}
 }
@@ -183,11 +254,34 @@ EOF
   log_ok "Installed unity CLI at $shim"
 }
 
+verify_orchestra_seed() {
+  local compose=(docker compose -f "$UNITY_HOME/docker-compose.yml" --env-file "$UNITY_HOME/.env")
+  local seed_status=""
+  log_info "Waiting for orchestra billing seed..."
+  local i
+  for i in $(seq 1 45); do
+    seed_status="$("${compose[@]}" ps -a --format '{{.Service}}\t{{.State}}\t{{.ExitCode}}' 2>/dev/null \
+      | awk '$1=="orchestra-seed"{print $2"\t"$3; exit}')"
+    if [[ "$seed_status" == "exited	0" ]]; then
+      log_ok "Orchestra billing seed completed"
+      return 0
+    fi
+    if [[ "$seed_status" == exited* ]] && [[ "$seed_status" != "exited	0" ]]; then
+      log_err "orchestra-seed failed — billing tables were not seeded"
+      log_info "Retry: docker compose -f $UNITY_HOME/docker-compose.yml --env-file $UNITY_HOME/.env run --rm orchestra-seed"
+      exit 1
+    fi
+    sleep 2
+  done
+  log_warn "orchestra-seed status unclear — run: unity stack doctor"
+}
+
 pull_and_start() {
   log_info "Pulling images (first run may take several minutes)..."
   docker compose -f "$UNITY_HOME/docker-compose.yml" --env-file "$UNITY_HOME/.env" pull
   log_info "Starting stack..."
   docker compose -f "$UNITY_HOME/docker-compose.yml" --env-file "$UNITY_HOME/.env" up -d
+  verify_orchestra_seed
   log_ok "Stack started"
 }
 

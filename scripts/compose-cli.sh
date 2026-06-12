@@ -79,6 +79,11 @@ cmd_logs() {
   compose logs -f "${@:-}"
 }
 
+_has_env() {
+  local key="$1"
+  grep -qE "^${key}=.+$" "$ENV_FILE" 2>/dev/null
+}
+
 cmd_doctor() {
   require_compose
   echo -e "${BOLD}Self-host compose doctor${NC}"
@@ -90,14 +95,40 @@ cmd_doctor() {
   fi
   if [[ -f "$ENV_FILE" ]]; then
     log_ok ".env present"
-    for key in OPENAI_API_KEY ANTHROPIC_API_KEY; do
-      if grep -qE "^${key}=.+$" "$ENV_FILE" 2>/dev/null; then
-        log_ok "LLM key configured ($key)"
-        break
+    for key in ORCHESTRA_ADMIN_KEY NEXTAUTH_SECRET JWT_SECRET POSTGRES_PASSWORD; do
+      if _has_env "$key"; then
+        log_ok "Secret configured ($key)"
+      else
+        log_err "Missing installer secret: $key — re-run install or set manually"
       fi
     done
+    if _has_env OPENAI_API_KEY || _has_env ANTHROPIC_API_KEY || _has_env DEEPSEEK_API_KEY; then
+      log_ok "LLM provider key configured"
+    else
+      log_err "Missing LLM key — set OPENAI_API_KEY, ANTHROPIC_API_KEY, or DEEPSEEK_API_KEY"
+    fi
+    if _has_env OPENAI_API_KEY; then
+      log_ok "OpenAI key present (chat and tool-search embeddings)"
+    elif _has_env ANTHROPIC_API_KEY || _has_env DEEPSEEK_API_KEY; then
+      log_warn "No OPENAI_API_KEY — tool-search embeddings need OpenAI"
+    fi
+    if _has_env DEEPGRAM_API_KEY && _has_env CARTESIA_API_KEY; then
+      log_ok "Voice BYOK keys configured"
+    else
+      log_warn "Voice calls need DEEPGRAM_API_KEY and CARTESIA_API_KEY"
+    fi
   else
     log_err ".env missing at $ENV_FILE"
+  fi
+  local seed_status
+  seed_status="$(compose ps -a --format '{{.Service}}\t{{.State}}\t{{.ExitCode}}' 2>/dev/null \
+    | awk '$1=="orchestra-seed"{print $2"\t"$3; exit}')"
+  if [[ "$seed_status" == "exited	0" ]]; then
+    log_ok "Orchestra billing seed completed"
+  elif [[ -n "$seed_status" ]]; then
+    log_warn "orchestra-seed status: ${seed_status//$'\t'/ }"
+  else
+    log_warn "orchestra-seed not found — run: unity stack up"
   fi
   compose ps --format 'table {{.Name}}\t{{.Status}}\t{{.Ports}}'
 }

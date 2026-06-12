@@ -149,13 +149,15 @@ prompt_secret() {
 }
 
 prompt_llm_key() {
-  if has_env_value OPENAI_API_KEY || has_env_value ANTHROPIC_API_KEY; then
+  if has_env_value OPENAI_API_KEY \
+    || has_env_value ANTHROPIC_API_KEY \
+    || has_env_value DEEPSEEK_API_KEY; then
     log_success "LLM provider key already set"
     return 0
   fi
 
   if [[ "$NON_INTERACTIVE" == "true" ]] || [[ ! -r /dev/tty ]] || [[ ! -w /dev/tty ]]; then
-    log_warn "No LLM key set — add OPENAI_API_KEY or ANTHROPIC_API_KEY to $ENV_FILE"
+    log_warn "No LLM key set — add OPENAI_API_KEY, ANTHROPIC_API_KEY, or DEEPSEEK_API_KEY to $ENV_FILE"
     return 0
   fi
 
@@ -163,9 +165,10 @@ prompt_llm_key() {
   echo -e "${BOLD}LLM provider (required for chat)${NC}" >/dev/tty
   echo "  1) OpenAI    — https://platform.openai.com/api-keys" >/dev/tty
   echo "  2) Anthropic — https://console.anthropic.com/" >/dev/tty
-  echo "  3) Skip" >/dev/tty
+  echo "  3) DeepSeek  — https://platform.deepseek.com" >/dev/tty
+  echo "  4) Skip" >/dev/tty
   local choice=""
-  printf "Choice [1-3, default 1]: " >/dev/tty
+  printf "Choice [1-4, default 1]: " >/dev/tty
   IFS= read -r choice </dev/tty || choice=""
   choice="${choice:-1}"
 
@@ -173,10 +176,34 @@ prompt_llm_key() {
   case "$choice" in
     1) var_name="OPENAI_API_KEY" ;;
     2) var_name="ANTHROPIC_API_KEY" ;;
+    3) var_name="DEEPSEEK_API_KEY" ;;
     *) log_warn "Skipped LLM key"; return 0 ;;
   esac
 
   prompt_secret "LLM" "$var_name" "Required for Coordinator chat."
+}
+
+ensure_embedding_search_key() {
+  if has_env_value OPENAI_API_KEY; then
+    return 0
+  fi
+  if ! has_env_value ANTHROPIC_API_KEY && ! has_env_value DEEPSEEK_API_KEY; then
+    return 0
+  fi
+
+  if [[ "$NON_INTERACTIVE" == "true" ]] || [[ ! -r /dev/tty ]] || [[ ! -w /dev/tty ]]; then
+    log_warn "OPENAI_API_KEY not set — tool-search embeddings need OpenAI even when chat uses another provider"
+    return 0
+  fi
+
+  echo "" >/dev/tty
+  echo -e "${BOLD}OpenAI for tool search (recommended)${NC}" >/dev/tty
+  echo "  Coordinator tool search uses OpenAI embeddings." >/dev/tty
+  echo "  Add an OpenAI key for desktop automation and research tools." >/dev/tty
+  prompt_secret \
+    "OpenAI embeddings" \
+    "OPENAI_API_KEY" \
+    "https://platform.openai.com/api-keys"
 }
 
 ensure_oauth_signing_key() {
@@ -329,8 +356,8 @@ prompt_research_and_computer() {
 
 import_shell_env_keys() {
   local key val
-  for key in OPENAI_API_KEY ANTHROPIC_API_KEY DEEPGRAM_API_KEY CARTESIA_API_KEY \
-    UNITY_WEB_TAVILY_API_KEY ANTICAPTCHA_KEY; do
+  for key in OPENAI_API_KEY ANTHROPIC_API_KEY DEEPSEEK_API_KEY DEEPGRAM_API_KEY \
+    CARTESIA_API_KEY UNIFY_MODEL UNITY_WEB_TAVILY_API_KEY ANTICAPTCHA_KEY; do
     val="${!key:-}"
     [[ -z "$val" ]] && continue
     if ! has_env_value "$key"; then
@@ -347,6 +374,7 @@ mark_byok_configured() {
 run_non_interactive_byok() {
   import_shell_env_keys
   prompt_llm_key
+  ensure_embedding_search_key
   prompt_secret \
     "Speech-to-text (required for browser calls)" \
     "DEEPGRAM_API_KEY" \
@@ -364,10 +392,18 @@ run_non_interactive_byok() {
   log_success "BYOK keys synced (non-interactive)"
 }
 
+compose_install_mode() {
+  [[ "${UNITY_COMPOSE_INSTALL:-0}" == "1" && -f "$ENV_FILE" ]]
+}
+
 main() {
-  if [[ ! -d "$UNITY_REPO" ]]; then
-    log_warn "Unity repo not found at $UNITY_REPO — skipping BYOK prompts"
-    exit 0
+  if ! _looks_like_unity_repo "$UNITY_REPO"; then
+    if compose_install_mode; then
+      log_info "Compose install — configuring $ENV_FILE"
+    else
+      log_warn "Unity repo not found at $UNITY_REPO — skipping BYOK prompts"
+      exit 0
+    fi
   fi
 
   if [[ "$NON_INTERACTIVE" == "true" ]]; then
@@ -386,7 +422,7 @@ main() {
   echo ""
   echo -e "${BOLD}BYOK setup${NC} — provider keys for chat, voice, and workspace"
   echo ""
-  echo "  Required:  LLM key (OpenAI or Anthropic)"
+  echo "  Required:  LLM key (OpenAI, Anthropic, or DeepSeek)"
   echo "  Voice:     Deepgram + Cartesia (browser calls)"
   echo "  Optional:  Google / Microsoft OAuth (workspace connect)"
   echo "  Optional:  Tavily (web search), AntiCaptcha (computer use)"
@@ -394,6 +430,7 @@ main() {
 
   import_shell_env_keys
   prompt_llm_key
+  ensure_embedding_search_key
   prompt_secret \
     "Speech-to-text (required for browser calls)" \
     "DEEPGRAM_API_KEY" \
