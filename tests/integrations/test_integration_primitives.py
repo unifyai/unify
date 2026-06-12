@@ -706,7 +706,6 @@ async def test_search_integrations_reports_connection_and_materialization_status
             {
                 "owner_scope": "assistant",
                 "assistant_id": 42,
-                "user_id": "user-1",
                 "limit": 7,
             },
         ),

@@ -242,6 +242,7 @@ def test_search_functions_uses_compact_provider_projection(monkeypatch) -> None:
     fm._read_compositional_contexts = lambda: []
     fm._read_function_contexts = lambda _table_name: ["Functions/Primitives"]
     fm._scoped_primitive_filter = lambda: None
+    fm._primitives_ctx = "Functions/Primitives"
     fm.sync_primitives = lambda: None
     captured: dict[str, object] = {}
 
