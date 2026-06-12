@@ -29,7 +29,6 @@ from unity.gateway.channels.discord.gateway import (
 )
 from unity.gateway.channels.discord.gateway import (
     _assistant_topic,
-    _default_contacts,
     _ensure_job_running,
 )
 from unity.gateway.common import pubsub as shared_pubsub
@@ -165,30 +164,6 @@ class TestAssistantTopic:
         assert _assistant_topic("42") == "unity-42"
 
 
-class TestDefaultContacts:
-    def test_returns_assistant_then_user_pair(self) -> None:
-        contacts = _default_contacts(
-            {
-                "first_name": "Bot",
-                "surname": "Assistant",
-                "email": "bot@example.com",
-                "user_first_name": "Alice",
-                "user_last_name": "Doe",
-                "user_email": "alice@example.com",
-            },
-        )
-        assert len(contacts) == 2
-        assert contacts[0]["first_name"] == "Bot"
-        assert contacts[0]["should_respond"] is False
-        assert contacts[1]["first_name"] == "Alice"
-        assert contacts[1]["should_respond"] is True
-
-    def test_missing_fields_default_to_empty(self) -> None:
-        contacts = _default_contacts({})
-        assert all(c["first_name"] == "" for c in contacts)
-        assert all(c["email_address"] == "" for c in contacts)
-
-
 class TestEnsureJobRunning:
     """The /infra/job/start contract requires self_contact_id and
     boss_contact_id as form fields; omitting them returns 422."""
@@ -224,7 +199,7 @@ class TestEnsureJobRunning:
         with patch.object(gw.httpx, "AsyncClient", return_value=httpx_client):
             await _ensure_job_running(
                 {
-                    "agent_id": "42",
+                    "assistant_id": "42",
                     "api_key": "key-42",  # pragma: allowlist secret
                     "self_contact_id": 789,
                     "boss_contact_id": 790,
@@ -232,6 +207,7 @@ class TestEnsureJobRunning:
             )
 
         assert captured["url"].endswith("/infra/job/start")
+        assert captured["data"]["assistant_id"] == "42"
         assert captured["data"]["self_contact_id"] == "789"
         assert captured["data"]["boss_contact_id"] == "790"
 

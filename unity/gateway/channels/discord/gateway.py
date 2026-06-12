@@ -39,6 +39,11 @@ from typing import Any
 import aiohttp
 import httpx
 
+from unity.gateway.adapters.common import (
+    default_contacts,
+    get_assistant,
+    required_contact_id,
+)
 from unity.gateway.common.pubsub import already_published, get_pubsub_client
 from unity.settings import SETTINGS
 
@@ -96,74 +101,18 @@ async def _resolve_discord_route(bot_id: str, sender: str) -> dict | None:
     return resp.json()
 
 
-async def _fetch_assistant(assistant_id: str) -> dict | None:
-    """Fetch assistant data from Orchestra."""
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"{SETTINGS.ORCHESTRA_URL}/admin/assistant",
-            params={"agent_id": assistant_id},
-            headers={"Authorization": f"Bearer {_admin_token()}"},
-            timeout=10.0,
-        )
-    if resp.status_code >= 400:
-        logger.error(
-            "failed to fetch assistant %s: %s",
-            assistant_id,
-            resp.status_code,
-        )
-        return None
-    data = resp.json()
-    assistants = data.get("info", [])
-    if not assistants:
-        return None
-    return assistants[0]
-
-
-def _default_contacts(assistant_data: dict) -> list[dict]:
-    """Synthesise the (assistant, user) contact pair from assistant fields.
-
-    Fallback used when the assistant has no Contacts log yet (fresh
-    provisioning) or when we can't reach the logs endpoint.
-    """
-    return [
-        {
-            "contact_id": 0,
-            "first_name": assistant_data.get("first_name") or "",
-            "surname": assistant_data.get("surname") or "",
-            "email_address": assistant_data.get("email") or "",
-            "phone_number": assistant_data.get("phone") or "",
-            "whatsapp_number": assistant_data.get("assistant_whatsapp_number") or "",
-            "discord_id": assistant_data.get("assistant_discord_bot_id") or "",
-            "slack_user_id": assistant_data.get("assistant_slack_bot_user_id") or "",
-            "bio": "",
-            "rolling_summary": "",
-            "should_respond": False,
-            "response_policy": "",
-        },
-        {
-            "contact_id": 1,
-            "first_name": assistant_data.get("user_first_name") or "",
-            "surname": assistant_data.get("user_last_name") or "",
-            "email_address": assistant_data.get("user_email") or "",
-            "phone_number": assistant_data.get("user_phone") or "",
-            "whatsapp_number": assistant_data.get("user_whatsapp_number") or "",
-            "discord_id": assistant_data.get("user_discord_id") or "",
-            "slack_user_id": assistant_data.get("user_slack_user_id") or "",
-            "bio": "",
-            "rolling_summary": "",
-            "should_respond": True,
-            "response_policy": "",
-        },
-    ]
-
-
 async def _fetch_contacts(assistant_data: dict) -> list[dict]:
-    """Fetch the assistant's contact list from Orchestra logs."""
+    """Fetch the assistant's contact list from Orchestra logs.
+
+    Falls back to the (assistant, owner) pair synthesised from
+    assistant metadata when the assistant has no Contacts log yet
+    (fresh provisioning) or when the logs endpoint is unreachable.
+    """
     user_id = assistant_data.get("user_id") or ""
-    assistant_id = assistant_data.get("agent_id") or ""
+    assistant_id = assistant_data.get("assistant_id") or ""
     api_key = assistant_data.get("api_key") or ""
     if not api_key:
-        return _default_contacts(assistant_data)
+        return default_contacts(assistant_data)
 
     context = f"{user_id}/{assistant_id}/Contacts"
     async with httpx.AsyncClient() as client:
@@ -174,10 +123,10 @@ async def _fetch_contacts(assistant_data: dict) -> list[dict]:
             timeout=10.0,
         )
     if resp.status_code != 200:
-        return _default_contacts(assistant_data)
+        return default_contacts(assistant_data)
     logs = resp.json().get("logs", [])
     if len(logs) < 2:
-        return _default_contacts(assistant_data)
+        return default_contacts(assistant_data)
     return [entry["entries"] for entry in logs]
 
 
@@ -185,11 +134,16 @@ async def _ensure_job_running(
     assistant_data: dict,
     medium: str = "discord",
 ) -> None:
-    """Fire-and-forget request to start a Unity container for this assistant."""
-    assistant_id = assistant_data.get("agent_id") or ""
+    """Fire-and-forget request to start a Unity container for this assistant.
+
+    ``assistant_data`` is the normalized payload from
+    ``adapters.common.get_assistant`` whose keys line up with the
+    ``/infra/job/start`` form contract.
+    """
     api_key = assistant_data.get("api_key") or ""
     if not api_key:
         return
+    assistant_id = assistant_data.get("assistant_id") or ""
 
     def _s(key: str, default: str = "") -> str:
         v = assistant_data.get(key)
@@ -206,32 +160,44 @@ async def _ensure_job_running(
                     "assistant_id": assistant_id,
                     "user_id": _s("user_id"),
                     "user_first_name": _s("user_first_name"),
-                    "user_surname": _s("user_last_name"),
+                    "user_surname": _s("user_surname"),
                     "user_email": _s("user_email"),
-                    "assistant_first_name": _s("first_name"),
-                    "assistant_surname": _s("surname"),
-                    "assistant_age": _s("age"),
-                    "assistant_nationality": _s("nationality"),
-                    "assistant_about": _s("about"),
-                    "assistant_job_title": _s("job_title"),
-                    "assistant_timezone": _s("timezone", "UTC"),
-                    "user_number": _s("user_phone"),
-                    "assistant_number": _s("phone"),
-                    "assistant_email": _s("email"),
+                    "assistant_first_name": _s("assistant_first_name"),
+                    "assistant_surname": _s("assistant_surname"),
+                    "assistant_age": _s("assistant_age"),
+                    "assistant_nationality": _s("assistant_nationality"),
+                    "assistant_about": _s("assistant_about"),
+                    "assistant_job_title": _s("assistant_job_title"),
+                    "assistant_timezone": _s("assistant_timezone", "UTC"),
+                    "user_number": _s("user_number"),
+                    "assistant_number": _s("assistant_number"),
+                    "assistant_email": _s("assistant_email"),
+                    "assistant_email_provider": _s(
+                        "assistant_email_provider",
+                        "google_workspace",
+                    ),
                     "user_whatsapp_number": _s("user_whatsapp_number"),
                     "assistant_whatsapp_number": _s("assistant_whatsapp_number"),
                     "assistant_discord_bot_id": _s("assistant_discord_bot_id"),
                     "voice_provider": _s("voice_provider"),
                     "voice_id": _s("voice_id"),
-                    "desktop_mode": _s("desktop_mode", "ubuntu"),
+                    "desktop_mode": _s("desktop_mode", "none"),
                     "user_desktops": json.dumps(
                         assistant_data.get("user_desktops") or [],
                     ),
+                    "is_coordinator": _s("is_coordinator", "false"),
                     "demo_id": _s("demo_id"),
                     "team_ids": json.dumps(assistant_data.get("team_ids") or []),
-                    "self_contact_id": str(assistant_data["self_contact_id"]),
-                    "boss_contact_id": str(assistant_data["boss_contact_id"]),
-                    "org_id": _s("organization_id"),
+                    "team_summaries": json.dumps(
+                        assistant_data.get("team_summaries") or [],
+                    ),
+                    "self_contact_id": str(
+                        required_contact_id(assistant_data, "self_contact_id"),
+                    ),
+                    "boss_contact_id": str(
+                        required_contact_id(assistant_data, "boss_contact_id"),
+                    ),
+                    "org_id": _s("org_id"),
                     "deploy_env": _s("deploy_env"),
                 },
                 timeout=5.0,
@@ -645,9 +611,9 @@ class GatewayConnection:
         assistant_id = str(route["assistant_id"])
         role = route.get("role", "contact")
 
-        assistant_data = await _fetch_assistant(assistant_id)
+        assistant_data = await get_assistant(assistant_id=assistant_id)
         contacts: list[dict] = []
-        if assistant_data:
+        if assistant_data.get("assistant_id"):
             asyncio.create_task(_ensure_job_running(assistant_data))
             contacts = await _fetch_contacts(assistant_data)
 
