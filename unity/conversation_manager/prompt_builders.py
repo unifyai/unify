@@ -699,18 +699,24 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  6. Address the user by their first name (from Boss details / "
             'Authorized humans). Open with a warm "Hi <first name> — " or '
             "similar; don't leave it generic.",
-            "  7. Look at the transcript history *before* you respond.",
+            "  7. Look at the transcript history *before* you respond, and read "
+            "the completed-steps list in the notification body — it is the "
+            "authoritative, server-derived record of which onboarding steps "
+            "are already done (steps finished in earlier sessions appear "
+            "there even though no event fired this session). The step you "
+            "propose is ALWAYS the first step of the onboarding flow that is "
+            "NOT in that list — never suggest a step it marks as done (e.g. "
+            "never say 'connect your workspace' when `workspace` is listed).",
             "     - If there are no prior assistant messages, introduce yourself in one "
             "short paragraph: name your role as the user's coordinator assistant, "
             "also frame yourself as their virtual double who can take actions on their "
             "behalf to help them get things done, say you'll help them get set up, "
-            "and invite them to start by connecting their workspace. Stay friendly "
+            "and invite them to take that next pending step. Stay friendly "
             "and concise; do not list every onboarding step at once.",
             "     - If prior assistant messages exist, skip the intro. Open with one "
-            "short sentence recapping which onboarding steps appear complete (lean on "
-            "the latest assistant messages plus any `completed_step_ids` hint in the "
-            "notification body) and propose the single next step. Do NOT re-introduce "
-            "yourself.",
+            "short sentence recapping which onboarding steps are complete (from the "
+            "completed-steps list) and propose the single next pending step. Do NOT "
+            "re-introduce yourself.",
             "  8. Exactly one message. No tool calls, no `act`. The user's reply is what "
             "advances the flow.",
             "  9. When the notification says the medium is `call`, the voice agent will "
@@ -2508,7 +2514,34 @@ def _build_coordinator_onboarding_flow_reference_block() -> str:
     )
 
 
-def _build_coordinator_voice_opening_block() -> str:
+# Onboarding step order paired with how the voice opener pitches each
+# step out loud. Kept in checklist order so the first pending entry is
+# the next step to suggest. Mirrors the step vocabulary Orchestra's
+# ``derive_onboarding_progress`` emits.
+_VOICE_ONBOARDING_STEP_SUGGESTIONS: tuple[tuple[str, str], ...] = (
+    ("workspace", "connecting their workspace (Google or Microsoft)"),
+    (
+        "apps",
+        "connecting one of their apps (Slack, Gmail, Notion, …) from the "
+        "Integrations panel",
+    ),
+    ("act", "handing me a one-off job right now so they can watch it run live"),
+    ("schedule", "scheduling a recurring or event-triggered task"),
+)
+
+
+def _voice_next_onboarding_suggestion(completed_steps: list[str]) -> str:
+    """Spoken-friendly pitch for the first step not yet completed."""
+    done = set(completed_steps)
+    for step_id, suggestion in _VOICE_ONBOARDING_STEP_SUGGESTIONS:
+        if step_id not in done:
+            return suggestion
+    return "onboarding their first specialist droid"
+
+
+def _build_coordinator_voice_opening_block(
+    completed_onboarding_steps: list[str] | None = None,
+) -> str:
     """Voice-only session-opening guidance for Marty.
 
     The slow-brain ``coordinator_onboarding_event`` reactive block
@@ -2521,36 +2554,60 @@ def _build_coordinator_voice_opening_block() -> str:
     Gated only on ``is_coordinator`` — the rule is benign for both
     onboarding and working-mode Marty calls (fresh history ⇒
     intro is appropriate either way; resumed history ⇒ skipping the
-    intro is appropriate either way). The "onboarding recap" framing
-    on the chat side is replaced here by the more general
-    "continue where things left off" because the voice agent doesn't
-    have synchronous access to ``Coordinator/State`` at prompt-build
-    time and overshooting an onboarding-flavoured recap inside a
-    working-mode call would feel off.
+    intro is appropriate either way).
+
+    ``completed_onboarding_steps`` is the server-derived onboarding
+    progress the call worker fetches from Orchestra's
+    ``Coordinator/State`` endpoint at setup (see ``call.py``). When
+    available, the intro pitches the actual next pending step — a
+    caller whose workspace has been connected since an earlier
+    session must not be told to connect it again. ``None`` means the
+    fetch failed or the Coordinator is no longer onboarding, in which
+    case the copy stays generic about next steps.
     """
-    return "\n".join(
-        [
-            f"{COORDINATOR_NAME} opening turn",
-            "------------------",
-            "Before I open this call I look at the conversation history.",
-            "  - If there are no prior assistant turns, I introduce myself "
-            "briefly — address the caller by their first name (from Boss "
-            f"details), name myself as {COORDINATOR_NAME}, "
-            "also frame myself as their virtual double who can take actions "
-            "on their behalf to help them get things done, say I'll help "
-            "them get set up, and suggest connecting their workspace as "
-            "the first concrete step. Two or three short sentences, "
-            "warm and human.",
-            "  - If prior assistant turns exist, I skip the intro entirely. "
-            "I open with a one-sentence orient — pick up where things "
-            "left off and propose the single next step, using the "
-            "caller's first name when natural. Do NOT re-introduce "
-            "myself or repeat earlier framing.",
-            "Either way: one short spoken line, then stop and wait. No "
-            "menus, no onboarding steps read out loud, no platform-knowledge "
-            "spiel.",
-        ],
+    if completed_onboarding_steps is None:
+        intro_step_suggestion = (
+            "suggest connecting their workspace as the first concrete step "
+            "if it isn't connected yet"
+        )
+        progress_note = None
+    else:
+        intro_step_suggestion = (
+            "suggest "
+            + _voice_next_onboarding_suggestion(completed_onboarding_steps)
+            + " as the next concrete step"
+        )
+        done = ", ".join(completed_onboarding_steps)
+        progress_note = (
+            "Onboarding steps already done (derived from the caller's "
+            f"account state): {done or 'none yet'}. I never suggest a step "
+            "that is already done."
+        )
+    lines = [
+        f"{COORDINATOR_NAME} opening turn",
+        "------------------",
+        "Before I open this call I look at the conversation history.",
+        "  - If there are no prior assistant turns, I introduce myself "
+        "briefly — address the caller by their first name (from Boss "
+        f"details), name myself as {COORDINATOR_NAME}, "
+        "also frame myself as their virtual double who can take actions "
+        "on their behalf to help them get things done, say I'll help "
+        f"them get set up, and {intro_step_suggestion}. Two or three "
+        "short sentences, warm and human.",
+        "  - If prior assistant turns exist, I skip the intro entirely. "
+        "I open with a one-sentence orient — pick up where things "
+        "left off and propose the single next step, using the "
+        "caller's first name when natural. Do NOT re-introduce "
+        "myself or repeat earlier framing.",
+    ]
+    if progress_note:
+        lines.append(progress_note)
+    lines.append(
+        "Either way: one short spoken line, then stop and wait. No "
+        "menus, no onboarding steps read out loud, no platform-knowledge "
+        "spiel.",
     )
+    return "\n".join(lines)
 
 
 def build_voice_agent_prompt(
@@ -2575,6 +2632,7 @@ def build_voice_agent_prompt(
     has_linked_user_desktop: bool = False,
     is_coordinator: bool = False,
     is_org_workspace: bool = True,
+    coordinator_completed_onboarding_steps: list[str] | None = None,
 ) -> PromptParts:
     """Build the system prompt for the Voice Agent (fast brain).
 
@@ -2632,6 +2690,11 @@ def build_voice_agent_prompt(
         used by live voice calls.
     is_org_workspace : bool
         Whether the active workspace is organization-scoped (vs personal).
+    coordinator_completed_onboarding_steps : list[str] | None
+        Server-derived onboarding steps already completed, fetched from
+        Orchestra's ``Coordinator/State`` endpoint at call setup. ``None``
+        when unavailable (fetch failed or not in onboarding mode), which
+        keeps the opening-turn copy generic about next steps.
 
     Returns
     -------
@@ -2742,9 +2805,15 @@ I let the results speak for themselves rather than narrating steps or repeating 
     # so a fresh call gets a proper introduction and a resumed call
     # skips the intro. Gated on ``is_coordinator`` only: the rule is
     # neutral across onboarding vs working mode (history empty →
-    # intro, history non-empty → orient).
+    # intro, history non-empty → orient). The completed-steps
+    # snapshot (when the caller fetched one) keeps the intro from
+    # pitching a step the user already finished.
     if is_coordinator and not demo_mode:
-        parts.add(_build_coordinator_voice_opening_block())
+        parts.add(
+            _build_coordinator_voice_opening_block(
+                coordinator_completed_onboarding_steps,
+            ),
+        )
         # Onboarding UI reference so the Voice Agent can answer
         # "what do I click on next?" style questions verbally with
         # the same map of the screen the slow brain sees.

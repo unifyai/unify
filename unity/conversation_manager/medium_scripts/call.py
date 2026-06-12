@@ -871,6 +871,43 @@ async def entrypoint(ctx: agents.JobContext):
     call_has_linked_user_desktop = (
         SESSION_DETAILS.assistant.user_desktop_for(call_acting_user_id) is not None
     )
+
+    # Server-derived onboarding progress for the Coordinator's opening
+    # line. Orchestra re-derives completed steps from durable state on
+    # every ``Coordinator/State`` read, so a workspace connected in an
+    # earlier session is visible here even though no transition event
+    # fired — without this, the fresh-history intro would pitch
+    # "connect your workspace" to a caller who already did. Best-effort:
+    # on any failure (or outside onboarding mode) the opener falls back
+    # to its generic copy.
+    coordinator_completed_onboarding_steps: list[str] | None = None
+    if (
+        SESSION_DETAILS.is_coordinator
+        and SESSION_DETAILS.assistant.agent_id is not None
+    ):
+        import httpx as _httpx
+
+        try:
+            async with _httpx.AsyncClient(timeout=5.0) as _state_http:
+                _state_resp = await _state_http.get(
+                    f"{SETTINGS.ORCHESTRA_URL}/assistant/"
+                    f"{SESSION_DETAILS.assistant.agent_id}/state",
+                    headers={"Authorization": f"Bearer {SESSION_DETAILS.unify_key}"},
+                )
+                _state_resp.raise_for_status()
+                _state_info = (_state_resp.json() or {}).get("info") or {}
+            if _state_info.get("mode") == "onboarding":
+                _steps = _state_info.get("completed_step_ids")
+                coordinator_completed_onboarding_steps = (
+                    [str(item) for item in _steps if item]
+                    if isinstance(_steps, list)
+                    else []
+                )
+        except Exception as exc:
+            _log.warning(
+                f"Coordinator state fetch failed; voice opener stays generic: {exc}",
+            )
+
     system_prompt = build_voice_agent_prompt(
         bio=assistant_bio,
         assistant_name=assistant_name or None,
@@ -891,6 +928,7 @@ async def entrypoint(ctx: agents.JobContext):
         has_linked_user_desktop=call_has_linked_user_desktop,
         is_coordinator=SESSION_DETAILS.is_coordinator,
         is_org_workspace=SESSION_DETAILS.org_id is not None,
+        coordinator_completed_onboarding_steps=coordinator_completed_onboarding_steps,
     ).flatten()
     _log.config(f"System prompt ({len(system_prompt)} chars)")
 
