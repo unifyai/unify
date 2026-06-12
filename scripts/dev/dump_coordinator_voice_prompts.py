@@ -6,11 +6,12 @@ Prints the exact system prompts that production code builds for:
 - fast brain (Voice Agent / TTS) — ``call.py`` entrypoint → ``build_voice_agent_prompt``
 
 These are the same builder functions and kwargs wiring used at runtime; only
-contact/bio placeholders differ unless you pass real values on the CLI.
+contact placeholders differ unless you pass real values on the CLI.
 
 Two personas are supported via ``--persona``:
-- ``coordinator`` (default) renders the Org Coordinator prompts using the
-  live ``COORDINATOR_BIO`` from ``orchestra-coordinator``.
+- ``coordinator`` (default) renders Marty coordinator prompts. Personality and
+  role intro come from ``prompt_builders``; ``--assistant-bio`` supplies optional
+  user-authored about text only.
 - ``regular`` renders a regular assistant's prompts with ``is_coordinator=False``,
   no authorized-humans roster, and a short generic placeholder bio so the
   surrounding scaffolding is what is visible in the dump.
@@ -27,7 +28,6 @@ Usage
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import sys
 from pathlib import Path
 from textwrap import dedent
@@ -40,46 +40,13 @@ if str(_REPO_ROOT) not in sys.path:
 from unity.conversation_manager.domains.contact_index import ContactIndex
 from unity.conversation_manager.domains.renderer import Renderer
 from unity.conversation_manager.prompt_builders import (
+    COORDINATOR_JOB_TITLE,
+    COORDINATOR_NAME,
     build_system_prompt,
     build_voice_agent_prompt,
 )
 from unity.session_details import SESSION_DETAILS, TeamSummary
 from unity.settings import SETTINGS
-
-# Source of truth: orchestra/services/coordinator_personas.py (assistants.about at provision time).
-_ORCHESTRA_PERSONAS_PATH = (
-    _REPO_ROOT.parent
-    / "orchestra-coordinator"
-    / "orchestra"
-    / "services"
-    / "coordinator_personas.py"
-)
-
-
-def _load_coordinator_bio() -> str:
-    if not _ORCHESTRA_PERSONAS_PATH.is_file():
-        raise SystemExit(
-            "Cannot load Coordinator bio: expected orchestra-coordinator at "
-            f"{_ORCHESTRA_PERSONAS_PATH.parents[2]}\n"
-            "Clone https://github.com/unifyai/orchestra-coordinator alongside unity-coordinator.",
-        )
-
-    spec = importlib.util.spec_from_file_location(
-        "orchestra_coordinator_personas",
-        _ORCHESTRA_PERSONAS_PATH,
-    )
-    if spec is None or spec.loader is None:
-        raise SystemExit(f"Failed to load {_ORCHESTRA_PERSONAS_PATH}")
-
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    bio = getattr(module, "COORDINATOR_BIO", None)
-    if not isinstance(bio, str) or not bio.strip():
-        raise SystemExit(f"{_ORCHESTRA_PERSONAS_PATH} has no COORDINATOR_BIO string")
-    return bio
-
-
-COORDINATOR_BIO = _load_coordinator_bio()
 
 # Sample boss/roster stand-ins — production fills these from contacts and
 # CoordinatorManager.get_org_members().
@@ -107,18 +74,14 @@ DEFAULT_AUTHORIZED_HUMANS = [
     },
 ]
 
-# Mirror orchestra/services/coordinator_service.py::create_coordinator_assistant defaults.
 DEFAULT_ASSISTANT = {
-    "name": "Coordinator",
-    "bio": COORDINATOR_BIO,
-    "job_title": "Coordinator",
+    "name": COORDINATOR_NAME,
+    "bio": "",
+    "job_title": COORDINATOR_JOB_TITLE,
     "phone": "+15557654321",
-    "email": "coordinator@acme.com",
+    "email": "marty@acme.com",
 }
 
-# Placeholder regular-assistant identity — short and generic so the surrounding
-# prompt scaffolding is what is visible in the dump. Production assistants
-# carry their own bio authored by the user.
 REGULAR_ASSISTANT = {
     "name": "Sam",
     "bio": (
@@ -147,16 +110,15 @@ def _build_slow_brain_system_prompt(
     team_summaries: list[TeamSummary],
 ) -> str:
     """Mirror ``unity/conversation_manager/domains/brain.py::build_brain_spec``."""
-    bio_parts: list[str] = []
-    job_title = (assistant_job_title or "").strip()
-    if job_title:
-        bio_parts.append(f"Role / specialization: {job_title}.")
-    if assistant_bio:
-        bio_parts.append(assistant_bio)
-
     is_coordinator = persona == "coordinator"
+    bio_parts: list[str] = []
+    if not is_coordinator:
+        job_title = (assistant_job_title or "").strip()
+        if job_title:
+            bio_parts.append(f"Role / specialization: {job_title}.")
+        if assistant_bio:
+            bio_parts.append(assistant_bio)
 
-    # runtime_setup_note = deployment_runtime_reconcile_prompt_note(cm) — None at cold start.
     return build_system_prompt(
         bio="\n".join(bio_parts),
         contact_id=boss["contact_id"],
@@ -253,7 +215,7 @@ def _write_or_print(label: str, content: str, write_dir: Path | None) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Dump production Coordinator voice-call prompts for slow brain and fast brain."
+            "Dump production Marty/coordinator voice-call prompts for slow brain and fast brain."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=dedent(
@@ -322,9 +284,8 @@ def main() -> int:
         "--assistant-bio",
         default=None,
         help=(
-            "Override assistant about text "
-            "(default: Orchestra COORDINATOR_BIO for --persona coordinator, "
-            "a short placeholder for --persona regular)"
+            "Optional user-authored about text. For coordinator prompts this is "
+            "appended as an About me section; Marty intro comes from prompt_builders."
         ),
     )
     parser.add_argument(
@@ -335,16 +296,16 @@ def main() -> int:
     parser.add_argument(
         "--assistant-job-title",
         default=None,
-        help="Job title prepended to slow-brain bio (default: persona-specific)",
+        help="Job title prepended to slow-brain bio for regular assistants only",
     )
     args = parser.parse_args()
 
     persona = args.persona
     defaults = DEFAULT_ASSISTANT if persona == "coordinator" else REGULAR_ASSISTANT
-    default_bio = (
-        COORDINATOR_BIO if persona == "coordinator" else REGULAR_ASSISTANT["bio"]
+    default_bio = defaults["bio"]
+    assistant_bio = (
+        args.assistant_bio if args.assistant_bio is not None else default_bio
     )
-    assistant_bio = args.assistant_bio or default_bio
     assistant_name = args.assistant_name or defaults["name"]
     assistant_job_title = args.assistant_job_title or defaults["job_title"]
 
