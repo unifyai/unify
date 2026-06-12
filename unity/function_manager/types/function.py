@@ -98,54 +98,13 @@ class Function(AuthoredRow):
         description="Method name on the primitive class.",
     )
 
-    # Integration routing fields. Keep only values that current sync/execution
-    # paths filter on at top level; source-specific details live in
-    # integration_metadata so Function rows do not become a sparse union of
-    # provider-only and native-only columns.
-    integration_source: Optional[str] = Field(
-        None,
-        description=(
-            "Internal routing source for integration primitives, e.g. "
-            "'provider_backed', 'native_function', 'native_mcp', "
-            "'native_computer', or 'native_guidance'."
-        ),
-    )
-    integration_tool_id: Optional[str] = Field(
-        None,
-        description=(
-            "Stable provider/control-plane tool identifier for integration execution. "
-            "For provider-backed rows this is the canonical runtime ID; function_id "
-            "is only the FunctionManager integer row key."
-        ),
-    )
-    backend_id: Optional[str] = Field(
-        None,
-        description="Integration backend identifier retained for provider row cleanup filters.",
-    )
-    app_slug: Optional[str] = Field(None, description="Canonical integration app slug.")
-    input_schema: Optional[Dict[str, Any]] = Field(
-        None,
-        description="Provider input JSON schema for runtime-backed integration primitives.",
-    )
-    output_schema: Optional[Dict[str, Any]] = Field(
-        None,
-        description="Provider output JSON schema for runtime-backed integration primitives.",
-    )
-    examples: List[Dict[str, Any]] = Field(
-        default_factory=list,
-        description="Provider example argument payloads for runtime-backed integration primitives.",
-    )
-    integration_metadata: Dict[str, Any] = Field(
+    metadata: Dict[str, Any] = Field(
         default_factory=dict,
         description=(
-            "Nested source-specific integration metadata, catalogue-level "
-            "only. Provider rows store backend/provider IDs, required "
-            "scopes, action safety, schema availability, and icon URL here; "
-            "per-user connection state (connection ids, activation, granted "
-            "scopes) is resolved live and never stored on rows. Native rows "
-            "can store manifest slug, capabilities, secrets, tier/quality, "
-            "and deployment status without adding more sparse top-level "
-            "fields."
+            "Source-specific metadata for function subtypes. Provider-backed "
+            "integration rows store catalogue-level tool metadata here; "
+            "per-user connection state is resolved live and never stored on "
+            "Function rows."
         ),
     )
 

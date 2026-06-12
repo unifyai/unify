@@ -352,16 +352,32 @@ def test_provider_tool_row_is_materialized_as_integration_namespace_primitive() 
     assert (
         row["primitive_class"] == "unity.integrations.primitives.IntegrationPrimitives"
     )
-    assert row["integration_source"] == "provider_backed"
-    assert row["integration_tool_id"] == "composio:salesforce:query_records"
-    assert row["integration_metadata"]["namespace"] == "primitives.integrations"
+    assert row["metadata"]["source"] == "provider_backed"
+    assert (
+        row["metadata"]["integration"]["tool_id"] == "composio:salesforce:query_records"
+    )
+    assert row["metadata"]["integration"]["namespace"] == "primitives.integrations"
     assert "_integration_distance" not in row
 
 
 def test_provider_tool_row_hash_is_order_stable() -> None:
     rows = [
-        {"name": "b", "docstring": "B", "integration_tool_id": "tool-b"},
-        {"name": "a", "docstring": "A", "integration_tool_id": "tool-a"},
+        {
+            "name": "b",
+            "docstring": "B",
+            "metadata": {
+                "source": "provider_backed",
+                "integration": {"tool_id": "tool-b"},
+            },
+        },
+        {
+            "name": "a",
+            "docstring": "A",
+            "metadata": {
+                "source": "provider_backed",
+                "integration": {"tool_id": "tool-a"},
+            },
+        },
     ]
     assert FunctionManager._hash_integration_rows(
         rows,
