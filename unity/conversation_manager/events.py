@@ -1419,9 +1419,10 @@ class TaskDue(Event):
 
 @dataclass
 class InactivityFollowup(Event):
-    """Orchestra signalled that the assistant has been silent across all
-    contacts for ``settings.inactivity_followup_days`` and should compose
-    a re-engagement message to the boss.
+    """Orchestra signalled that the user has been silent across all of
+    their assistants for ``settings.inactivity_followup_days`` (orchestra
+    side) and this Coordinator should compose a re-engagement message to
+    the boss.
 
     Communication publishes this either as a ``unity_system_event`` to a
     hot pod's Pub/Sub topic or, on a cold start, as an entry in
