@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import inspect
 import functools
 import json
+import keyword
 import os
 import re
 import signal
@@ -1880,7 +1881,9 @@ class FunctionManager(BaseFunctionManager):
         return int.from_bytes(digest[:4], "big") & 0x7FFFFFFF
 
     @staticmethod
-    def _integration_schema_argspec(input_schema: Dict[str, Any]) -> str:
+    def _integration_schema_properties(
+        input_schema: Dict[str, Any],
+    ) -> tuple[dict[str, Any], set[str]]:
         properties = (
             input_schema.get("properties") if isinstance(input_schema, dict) else None
         )
@@ -1890,26 +1893,193 @@ class FunctionManager(BaseFunctionManager):
             else set()
         )
         if not isinstance(properties, dict) or not properties:
+            return {}, set()
+        return properties, required
+
+    @staticmethod
+    def _integration_schema_type(schema: Any) -> str:
+        if not isinstance(schema, dict):
+            return "Any"
+        if "anyOf" in schema and isinstance(schema["anyOf"], list):
+            types = [
+                FunctionManager._integration_schema_type(item)
+                for item in schema["anyOf"]
+                if isinstance(item, dict) and item.get("type") != "null"
+            ]
+            return " | ".join(dict.fromkeys(types)) if types else "Any"
+        if "oneOf" in schema and isinstance(schema["oneOf"], list):
+            types = [
+                FunctionManager._integration_schema_type(item)
+                for item in schema["oneOf"]
+                if isinstance(item, dict) and item.get("type") != "null"
+            ]
+            return " | ".join(dict.fromkeys(types)) if types else "Any"
+        raw_type = schema.get("type")
+        if isinstance(raw_type, list):
+            non_null = [item for item in raw_type if item != "null"]
+            if not non_null:
+                return "Any"
+            return " | ".join(
+                dict.fromkeys(
+                    FunctionManager._integration_schema_type({"type": item})
+                    for item in non_null
+                ),
+            )
+        if raw_type == "array":
+            item_type = FunctionManager._integration_schema_type(schema.get("items"))
+            return f"list[{item_type}]" if item_type != "Any" else "list"
+        if raw_type == "object":
+            return "dict"
+        if isinstance(raw_type, str):
+            return {
+                "string": "str",
+                "integer": "int",
+                "number": "float",
+                "boolean": "bool",
+            }.get(raw_type, "Any")
+        return "Any"
+
+    @staticmethod
+    def _integration_schema_argspec(input_schema: Dict[str, Any]) -> str:
+        properties, required = FunctionManager._integration_schema_properties(
+            input_schema,
+        )
+        if not properties:
             return "(**kwargs) -> dict"
         parts: list[str] = []
         for name, schema in properties.items():
-            if not isinstance(name, str):
+            if (
+                not isinstance(name, str)
+                or not name.isidentifier()
+                or keyword.iskeyword(name)
+            ):
                 continue
-            type_name = "Any"
-            if isinstance(schema, dict):
-                raw_type = schema.get("type")
-                if isinstance(raw_type, str):
-                    type_name = {
-                        "string": "str",
-                        "integer": "int",
-                        "number": "float",
-                        "boolean": "bool",
-                        "array": "list",
-                        "object": "dict",
-                    }.get(raw_type, raw_type)
-            default = "" if name in required else " = None"
+            type_name = FunctionManager._integration_schema_type(schema)
+            if (
+                isinstance(schema, dict)
+                and "default" in schema
+                and name not in required
+            ):
+                default = f" = {schema['default']!r}"
+            else:
+                default = "" if name in required else " = None"
             parts.append(f"{name}: {type_name}{default}")
         return f"({', '.join(parts)}) -> dict" if parts else "(**kwargs) -> dict"
+
+    @staticmethod
+    def _integration_parameter_doc(input_schema: Dict[str, Any]) -> str:
+        properties, required = FunctionManager._integration_schema_properties(
+            input_schema,
+        )
+        if not properties:
+            return "Parameters\n----------\n**kwargs : Any\n    Provider arguments accepted by the integration tool."
+        lines = ["Parameters", "----------"]
+        for name, schema in properties.items():
+            if not isinstance(name, str):
+                continue
+            type_name = FunctionManager._integration_schema_type(schema)
+            required_label = "required" if name in required else "optional"
+            default_text = ""
+            description = ""
+            if isinstance(schema, dict):
+                if "default" in schema:
+                    default_text = f", default {schema['default']!r}"
+                description = str(
+                    schema.get("description") or schema.get("title") or "",
+                )
+            lines.append(f"{name} : {type_name}")
+            detail = f"{required_label}{default_text}."
+            if description:
+                detail = f"{detail} {description}"
+            lines.append(f"    {detail}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _integration_examples_doc(
+        name: str,
+        examples: list[Any],
+        input_schema: Dict[str, Any],
+        description: str,
+    ) -> str:
+        example_payloads: list[dict[str, Any]] = []
+        for example in examples:
+            if isinstance(example, dict):
+                args = (
+                    example.get("arguments")
+                    or example.get("input")
+                    or example.get("params")
+                    or example
+                )
+                if isinstance(args, dict):
+                    example_payloads.append(args)
+            if len(example_payloads) >= 3:
+                break
+        if not example_payloads:
+            properties, _required = FunctionManager._integration_schema_properties(
+                input_schema,
+            )
+            synthetic: dict[str, Any] = {}
+            for param, schema in properties.items():
+                if not isinstance(param, str) or not isinstance(schema, dict):
+                    continue
+                if "default" in schema:
+                    synthetic[param] = schema["default"]
+                elif param in {"query", "q", "search_query"}:
+                    synthetic[param] = "is:unread"
+                elif param in {"max_results", "limit", "page_size"}:
+                    synthetic[param] = 5
+                elif schema.get("type") == "boolean":
+                    synthetic[param] = False
+                if len(synthetic) >= 3:
+                    break
+            if synthetic:
+                example_payloads.append(synthetic)
+        if not example_payloads:
+            return "Examples\n--------\nNo provider examples are available. Inspect the Parameters section before calling."
+        lines = ["Examples", "--------"]
+        for payload in example_payloads:
+            rendered = ", ".join(f"{key}={value!r}" for key, value in payload.items())
+            lines.append(f"await {name}({rendered})")
+        if "hydrate" in description.lower() or "message_id" in description.lower():
+            lines.append(
+                "For full message bodies, list message IDs first and hydrate individual messages when needed.",
+            )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _integration_embedding_text(
+        *,
+        name: str,
+        signature: str,
+        app: str,
+        tool: str,
+        description: str,
+        input_schema: Dict[str, Any],
+        examples: list[Any],
+    ) -> str:
+        properties, _required = FunctionManager._integration_schema_properties(
+            input_schema,
+        )
+        parameter_names = ", ".join(str(key) for key in properties.keys())
+        example_terms: list[str] = []
+        for example in examples:
+            if isinstance(example, dict):
+                text = json.dumps(example, sort_keys=True)
+                example_terms.append(text)
+            if len(example_terms) >= 2:
+                break
+        parts = [
+            f"Function Name: {name}",
+            f"Signature: {signature}",
+            f"App: {app}",
+            f"Tool: {tool}",
+            f"Purpose: {description}",
+        ]
+        if parameter_names:
+            parts.append(f"Parameters: {parameter_names}")
+        if example_terms:
+            parts.append(f"Examples: {'; '.join(example_terms)}")
+        return "\n".join(parts)
 
     def _integration_tool_to_function_row(self, item: Dict[str, Any]) -> Dict[str, Any]:
         tool_id = item["tool_id"]
@@ -1937,70 +2107,59 @@ class FunctionManager(BaseFunctionManager):
         examples = item.get("examples") or item.get("examples_json") or []
         example_prompts = item.get("example_prompts") or []
         guidance_ids = item.get("guidance_ids") or []
-        input_summary = (
-            json.dumps(input_schema, sort_keys=True)
-            if input_schema
-            else "schema available via get_tool_schema"
+        signature = self._integration_schema_argspec(input_schema)
+        parameter_doc = self._integration_parameter_doc(input_schema)
+        examples_doc = self._integration_examples_doc(
+            name,
+            examples,
+            input_schema,
+            str(item.get("description") or ""),
         )
-        output_summary = (
-            json.dumps(output_schema, sort_keys=True)
-            if output_schema
-            else "provider response envelope"
+        usage_prompts = "\n".join(
+            f"- {prompt}" for prompt in example_prompts[:3] if str(prompt).strip()
         )
-        examples_summary = (
-            json.dumps(examples[:2], sort_keys=True) if examples else "none provided"
-        )
-        prompt_summary = (
-            "; ".join(str(prompt) for prompt in example_prompts[:3])
-            if example_prompts
-            else f"User asks to use {app} for {tool}."
+        usage_prompt_section = (
+            f"\n\nExample user requests\n---------------------\n{usage_prompts}"
+            if usage_prompts
+            else ""
         )
         docstring = (
             f"{tool}\n\n"
-            f"Provider-backed integration tool for {app} via {backend}.\n\n"
-            f"Provider app ID: {provider_app_id or 'unknown'}.\n"
-            f"Provider tool/action ID: {provider_tool_id or 'unknown'}.\n"
-            f"App icon URL: {app_icon_url or 'none'}.\n"
-            f"Use when: {item.get('description', 'the user asks for this provider action')}\n\n"
-            f"Activation state: {activation}. `connected_ready` means this tool can "
-            "be executed; `not_connected`, `missing_scope`, `expired`, `error`, "
-            "and `disabled_by_policy` are blocked states that should be explained "
-            "to the user with the required Console action.\n"
-            f"Required scopes: {', '.join(required_scopes) if required_scopes else 'none'}.\n"
-            f"Granted scopes: {', '.join(granted_scopes) if granted_scopes else 'unknown or none'}.\n"
-            f"Action class: {action_class}.\n"
-            f"Confirmation required: {confirmation_required}.\n"
-            f"Provider error status: {provider_error_status or 'none'}.\n"
-            f"Input schema summary: {input_summary}.\n"
-            f"Output schema summary: {output_summary}.\n"
-            f"Example user prompts: {prompt_summary}\n"
-            f"Example call arguments: {examples_summary}\n"
-            f"Guidance IDs: {guidance_ids if guidance_ids else 'none'}.\n\n"
-            "Safety notes: inspect schema before execution when arguments are "
-            "unclear. Do not invent credentials, tokens, scopes, or provider "
-            "connection IDs. For write, destructive, bulk-export, or sensitive "
-            "actions, require the approved confirmation flow before execution."
+            f"Use this {app} integration primitive when you need to {item.get('description', 'run this provider action')}.\n\n"
+            f"Call signature\n--------------\n{name}{signature}\n\n"
+            f"{parameter_doc}\n\n"
+            "Returns\n-------\n"
+            "dict\n"
+            "    Provider execution envelope returned by Orchestra. Treat non-ok "
+            "statuses such as confirmation_required, missing_scope, expired, "
+            "blocked_by_policy, or error as actionable outcomes to explain to "
+            "the user.\n\n"
+            f"{examples_doc}{usage_prompt_section}\n\n"
+            "Safety\n------\n"
+            f"Action class: {action_class}. "
+            f"Confirmation required: {confirmation_required}. "
+            "Use the approved confirmation flow for sensitive, write, destructive, "
+            "or bulk-export actions."
+        )
+        embedding_text = self._integration_embedding_text(
+            name=name,
+            signature=signature,
+            app=str(app),
+            tool=str(tool),
+            description=str(item.get("description") or ""),
+            input_schema=input_schema,
+            examples=examples,
         )
         row = {
             "function_id": self._provider_integration_function_id(tool_id),
             "language": "python",
             "name": name,
-            "argspec": self._integration_schema_argspec(input_schema),
+            "argspec": signature,
             "docstring": docstring,
             "implementation": None,
             "depends_on": [],
             "precondition": None,
-            "embedding_text": " ".join(
-                [
-                    name,
-                    app,
-                    tool,
-                    item.get("description", ""),
-                    activation,
-                    action_class,
-                    " ".join(required_scopes),
-                ],
-            ),
+            "embedding_text": embedding_text,
             "guidance_ids": guidance_ids,
             "verify": confirmation_required
             or action_class in {"write", "destructive", "bulk_export"},
@@ -2012,6 +2171,9 @@ class FunctionManager(BaseFunctionManager):
             "integration_tool_id": tool_id,
             "backend_id": backend,
             "app_slug": item.get("app_slug"),
+            "input_schema": input_schema,
+            "output_schema": output_schema,
+            "examples": examples,
             "integration_metadata": {
                 "source_type": "third_party",
                 "namespace": "primitives.integrations",
@@ -2434,6 +2596,9 @@ class FunctionManager(BaseFunctionManager):
             "integration_tool_id",
             "backend_id",
             "app_slug",
+            "input_schema",
+            "output_schema",
+            "examples",
             "integration_metadata",
             "verify",
         )
@@ -2837,6 +3002,7 @@ class FunctionManager(BaseFunctionManager):
                 offset=offset,
                 activation_state="connected_ready",
                 include_unconnected=False,
+                include_schema=True,
                 canonical_app_slug=normalized_app,
                 **owner_scope,
             )
@@ -3824,6 +3990,18 @@ class FunctionManager(BaseFunctionManager):
                     "primitive_class": log.entries.get("primitive_class"),
                     "primitive_method": log.entries.get("primitive_method"),
                 }
+                for key in (
+                    "integration_source",
+                    "integration_tool_id",
+                    "backend_id",
+                    "app_slug",
+                    "input_schema",
+                    "output_schema",
+                    "examples",
+                    "integration_metadata",
+                ):
+                    if key in log.entries:
+                        data[key] = log.entries.get(key)
                 entries[log.entries["name"]] = data
         except Exception as e:
             logger.warning(f"Failed to list primitives: {e}")
@@ -4798,6 +4976,9 @@ class FunctionManager(BaseFunctionManager):
                 "integration_tool_id",
                 "backend_id",
                 "app_slug",
+                "input_schema",
+                "output_schema",
+                "examples",
                 "integration_metadata",
             ):
                 if key in ent:
@@ -6297,19 +6478,7 @@ class FunctionManager(BaseFunctionManager):
             func_data = self._get_primitive_data_by_name(name=function_name)
 
         if func_data is None and self._include_primitives:
-            # Fallback: check primitives DB context directly.
-            self.sync_primitives()
-            try:
-                prim_logs = unify.get_logs(
-                    context=self._primitives_ctx,
-                    filter=f"name == {json.dumps(function_name)}",
-                    limit=1,
-                    exclude_fields=list_private_fields(self._primitives_ctx),
-                )
-                if prim_logs:
-                    func_data = prim_logs[0].entries
-            except Exception:
-                pass
+            func_data = self._get_stored_primitive_data_by_name(name=function_name)
 
         if func_data is None:
             raise ValueError(f"Function '{function_name}' not found")
@@ -6363,6 +6532,34 @@ class FunctionManager(BaseFunctionManager):
         """Look up primitive metadata by name from the in-memory registry."""
         primitives = self._registry.collect_primitives(self._primitive_scope)
         return primitives.get(name)
+
+    def _get_stored_primitive_data_by_name(
+        self,
+        *,
+        name: str,
+        provider_backed_only: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Look up a primitive row by exact name from readable primitive contexts."""
+        self.sync_primitives()
+        try:
+            name_filter = normalize_filter_expr(f"name == {json.dumps(name)}")
+        except Exception:
+            name_filter = f"name == {json.dumps(name)}"
+        prim_filter = f"({name_filter}) and ({self._scoped_primitive_filter()})"
+        if provider_backed_only:
+            prim_filter = (
+                f'({prim_filter}) and (integration_source == "provider_backed")'
+            )
+        for context in self._read_function_contexts(FUNCTIONS_PRIMITIVES_TABLE):
+            rows = unify.get_logs(
+                context=context,
+                filter=prim_filter,
+                limit=1,
+                exclude_fields=list_private_fields(context),
+            )
+            if rows:
+                return dict(rows[0].entries)
+        return None
 
     async def _execute_primitive(
         self,

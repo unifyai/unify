@@ -3,8 +3,11 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 
+import pytest
+
 from unity.function_manager.function_manager import FunctionManager
 from unity.function_manager.primitives.scope import PrimitiveScope
+from unity.integrations.primitives import IntegrationPrimitives
 from unity.settings import SETTINGS
 
 MOCK_TOOL = {
@@ -24,6 +27,23 @@ MOCK_TOOL = {
     "required_scopes": ["crm.objects.contacts.read"],
     "action_class": "read",
     "confirmation_required": False,
+    "input_schema": {
+        "type": "object",
+        "required": ["query"],
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Search text for matching contacts.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Maximum number of contacts to return.",
+                "default": 10,
+            },
+        },
+    },
+    "output_schema": {"type": "object"},
+    "examples": [{"arguments": {"query": "alice@example.com", "limit": 5}}],
     "schema_available": True,
     "provider_error_status": None,
 }
@@ -123,6 +143,7 @@ def test_materializes_connected_provider_tools_with_active_only_search(
                 "offset": 0,
                 "activation_state": "connected_ready",
                 "include_unconnected": False,
+                "include_schema": True,
                 "canonical_app_slug": "hubspot",
                 "owner_scope": "assistant",
                 "assistant_id": 42,
@@ -131,8 +152,23 @@ def test_materializes_connected_provider_tools_with_active_only_search(
     ]
     row = fm._inserted_rows[0]
     assert row["name"] == "primitives.integrations.hubspot.search_contacts"
+    assert row["argspec"] == "(query: str, limit: int = 10) -> dict"
     assert row["integration_tool_id"] == "composio:hubspot:search_contacts"
     assert row["backend_id"] == "composio"
+    assert row["input_schema"]["properties"]["query"]["type"] == "string"
+    assert row["output_schema"] == {"type": "object"}
+    assert row["examples"] == [
+        {"arguments": {"query": "alice@example.com", "limit": 5}},
+    ]
+    assert "Parameters\n----------" in row["docstring"]
+    assert "query : str" in row["docstring"]
+    assert "await primitives.integrations.hubspot.search_contacts" in row["docstring"]
+    assert (
+        "Function Name: primitives.integrations.hubspot.search_contacts"
+        in row["embedding_text"]
+    )
+    assert "Signature: (query: str, limit: int = 10) -> dict" in row["embedding_text"]
+    assert "crm.objects.contacts.read" not in row["embedding_text"]
     metadata = row["integration_metadata"]
     assert metadata["activation_state"] == "connected_ready"
     assert metadata["required_scopes"] == ["crm.objects.contacts.read"]
@@ -161,6 +197,52 @@ def test_provider_integration_function_id_is_stable_signed_int32() -> None:
     assert first != different_tool
     assert 0 <= first <= 0x7FFFFFFF
     assert 0 <= different_tool <= 0x7FFFFFFF
+
+
+@pytest.mark.anyio
+async def test_execute_function_dispatches_provider_backed_primitive_by_row(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, dict]] = []
+
+    def fake_run_tool(tool_id, arguments, **_payload):
+        calls.append((tool_id, arguments))
+        return {"status": "ok", "tool_id": tool_id, "arguments": arguments}
+
+    monkeypatch.setattr("unity.integrations.ops.run_tool", fake_run_tool)
+    fm = FunctionManager.__new__(FunctionManager)
+    fm._include_primitives = True
+    fm._get_function_data_by_name = lambda name: None
+    fm._get_primitive_data_by_name = lambda name: None
+    fm._get_stored_primitive_data_by_name = lambda name: {
+        "name": "primitives.integrations.gmail.fetch_emails",
+        "is_primitive": True,
+        "primitive_class": "unity.integrations.primitives.IntegrationPrimitives",
+        "primitive_method": "primitives_integrations__gmail__fetch_emails",
+        "integration_source": "provider_backed",
+        "integration_tool_id": "composio:gmail:fetch_emails",
+    }
+    primitives = SimpleNamespace(
+        integrations=IntegrationPrimitives(owner_scope={"assistant_id": 42}),
+    )
+
+    result = await fm.execute_function(
+        function_name="primitives.integrations.gmail.fetch_emails",
+        call_kwargs={"query": "is:unread", "max_results": 5},
+        extra_namespaces={"primitives": primitives},
+    )
+
+    assert result == {
+        "status": "ok",
+        "tool_id": "composio:gmail:fetch_emails",
+        "arguments": {"query": "is:unread", "max_results": 5},
+    }
+    assert calls == [
+        (
+            "composio:gmail:fetch_emails",
+            {"query": "is:unread", "max_results": 5},
+        ),
+    ]
 
 
 def test_materialization_excludes_unconnected_tools(monkeypatch) -> None:
