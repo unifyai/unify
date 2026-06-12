@@ -31,6 +31,11 @@ from unity.conversation_manager.domains.integration_sync import (
     _handle_integration_tools_sync_requested,
     _schedule_startup_integration_sync,
 )
+from unity.conversation_manager.domains.self_host_desktop import (
+    apply_managed_desktop_ready,
+    bootstrap_managed_desktop_on_startup,
+    resolve_desktop_urls,
+)
 from unity.conversation_manager.domains.task_activation import (
     _consume_startup_wake_reasons,
     _handle_task_due_event,
@@ -2601,8 +2606,6 @@ async def _(
     *args,
     **kwargs,
 ):
-    from unity.conversation_manager.domains import comms_utils
-    from unity.function_manager.primitives.runtime import _vm_ready
     from unity.session_details import SESSION_DETAILS
 
     current_binding_id = SESSION_DETAILS.assistant.binding_id or ""
@@ -2624,112 +2627,26 @@ async def _(
         return
 
     resolved_binding_id = event.binding_id or current_binding_id
-    desktop_url = event.desktop_url or SESSION_DETAILS.assistant.desktop_url or ""
+    browser_desktop_url, api_desktop_url = resolve_desktop_urls(event.desktop_url)
 
     cm._session_logger.info(
         "desktop_ready",
-        f"VM ready: {event.vm_type} at {desktop_url}",
+        f"VM ready: {event.vm_type} at {api_desktop_url or browser_desktop_url}",
     )
     log_startup_timing(
         LOGGER,
         "⏱️ [StartupTiming] desktop_ready.received vm_type=%s desktop_url_present=%s",
         event.vm_type,
-        bool(desktop_url),
+        bool(api_desktop_url or browser_desktop_url),
     )
 
-    if desktop_url:
-        SESSION_DETAILS.assistant.desktop_url = desktop_url
-
-    liveview_url = f"{desktop_url.rstrip('/')}/desktop/custom.html"
-    _t0 = time.perf_counter()
-    await asyncio.to_thread(
-        assistant_jobs.update_liveview_url,
-        cm.assistant_id,
-        cm.user_id,
-        liveview_url,
-    )
-    log_startup_timing(
-        LOGGER,
-        "⏱️ [StartupTiming] desktop_ready.update_liveview_url duration=%.2fs",
-        time.perf_counter() - _t0,
-    )
-
-    _vm_ready.set()
-
-    if desktop_url:
-        from urllib.parse import urlparse
-        from unity.function_manager.primitives.runtime import ComputerPrimitives
-        from unity.manager_registry import ManagerRegistry
-
-        cp = ManagerRegistry.get_instance(ComputerPrimitives)
-        if cp is not None and cp._backend is not None:
-            _t0 = time.perf_counter()
-            parsed = urlparse(desktop_url)
-            cp._backend.update_container_url(
-                f"{parsed.scheme}://{parsed.netloc}/api",
-            )
-            log_startup_timing(
-                LOGGER,
-                "⏱️ [StartupTiming] desktop_ready.update_computer_backend_url duration=%.2fs",
-                time.perf_counter() - _t0,
-            )
-
-    cm.vm_ready = True
-    cm.notifications_bar.push_notif(
-        "System",
-        "Desktop VM is ready — computer actions are now available.",
-        event.timestamp,
-    )
-
-    asyncio.ensure_future(_ensure_desktop_session(cm))
-    _t0 = time.perf_counter()
-    file_sync_started = await managers_utils._start_file_sync()
-    log_startup_timing(
-        LOGGER,
-        "⏱️ [StartupTiming] desktop_ready.start_file_sync duration=%.2fs success=%s",
-        time.perf_counter() - _t0,
-        file_sync_started,
-    )
-
-    publish_file_sync_complete = (
-        file_sync_started or os.environ.get("SELF_HOST", "0") != "1"
-    )
-    if publish_file_sync_complete:
-        _t0 = time.perf_counter()
-        await cm.event_broker.publish(
-            FileSyncComplete.topic,
-            FileSyncComplete().to_json(),
-        )
-        log_startup_timing(
-            LOGGER,
-            "⏱️ [StartupTiming] desktop_ready.publish_file_sync_complete duration=%.2fs",
-            time.perf_counter() - _t0,
-        )
-    else:
-        cm._session_logger.info(
-            "file_sync",
-            "Self-host file sync did not start — deferring FileSyncComplete",
-        )
-
-    _t0 = time.perf_counter()
-    await comms_utils.publish_assistant_desktop_ready(
-        resolved_binding_id,
-        desktop_url,
-        liveview_url,
-        event.vm_type,
-    )
-    log_startup_timing(
-        LOGGER,
-        "⏱️ [StartupTiming] desktop_ready.publish_assistant_ready duration=%.2fs",
-        time.perf_counter() - _t0,
-    )
-
-    _t0 = time.perf_counter()
-    await cm.request_llm_run(delay=0)
-    log_startup_timing(
-        LOGGER,
-        "⏱️ [StartupTiming] desktop_ready.request_llm_run duration=%.2fs",
-        time.perf_counter() - _t0,
+    await apply_managed_desktop_ready(
+        cm,
+        binding_id=resolved_binding_id,
+        browser_desktop_url=browser_desktop_url,
+        api_desktop_url=api_desktop_url,
+        vm_type=event.vm_type,
+        timestamp=event.timestamp,
     )
 
 
@@ -2786,6 +2703,8 @@ async def _(
         event.timestamp,
     )
     cm._session_logger.debug("initialization", "Initialization complete")
+
+    await bootstrap_managed_desktop_on_startup(cm)
 
     # Notify the fast brain (voice agent) directly via the call manager's
     # IPC socket — the same channel used for meet_interaction and other
