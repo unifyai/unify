@@ -54,8 +54,12 @@ DISCORD_API_BASE = "https://discord.com/api/v10"
 
 INTENTS_DIRECT_MESSAGES = 1 << 12
 INTENTS_GUILD_MESSAGES = 1 << 9
-INTENTS_MESSAGE_CONTENT = 1 << 15
-BOT_INTENTS = INTENTS_DIRECT_MESSAGES | INTENTS_GUILD_MESSAGES | INTENTS_MESSAGE_CONTENT
+# MESSAGE_CONTENT (1 << 15) is a privileged intent and is deliberately not
+# requested. Discord still delivers full content/attachments for the only
+# messages this gateway acts on -- DMs to the bot and guild/thread messages
+# that @mention the bot -- so the privileged intent is unnecessary. Requesting
+# an intent not enabled in the bot's portal triggers a fatal 4014 close.
+BOT_INTENTS = INTENTS_DIRECT_MESSAGES | INTENTS_GUILD_MESSAGES
 
 FATAL_CLOSE_CODES = {4004, 4010, 4011, 4013, 4014}
 FRESH_IDENTIFY_CODES = {4003, 4007, 4009}
