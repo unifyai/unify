@@ -8,7 +8,11 @@ The compose file publishes:
 - `7881/tcp` — TCP fallback
 - `7882/udp` — WebRTC media (dev mode)
 
-Console and the browser use `ws://127.0.0.1:7880`. CM and gateway use `ws://livekit:7880` on the internal network.
+Console returns `ws://127.0.0.1:7880` to the browser. Server-side room cleanup uses `LIVEKIT_API_URL=http://livekit:7880`.
+
+`unity-cm` uses `network_mode: service:livekit` so the voice agent and LiveKit share `127.0.0.1` for WebRTC ICE. Without this split-container layout, Docker Desktop cannot satisfy both the host browser and the in-container agent with one advertised ICE address. Gateway reaches CM ingress at `http://livekit:8787` (port published from the shared network stack).
+
+`livekit.yaml` sets `rtc.node_ip: 127.0.0.1` so published host ports `7880/7881/7882` match the ICE candidates sent to browsers.
 
 ## Validation checklist
 
