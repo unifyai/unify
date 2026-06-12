@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import inspect
 import json
+import keyword
 from typing import Any, Optional
 
 from unity.integrations import ops as integration_ops
@@ -24,6 +26,60 @@ def _json_list(value: Any) -> list[Any]:
     except json.JSONDecodeError:
         return []
     return parsed if isinstance(parsed, list) else []
+
+
+def _annotation_for_schema(schema: Any) -> Any:
+    if not isinstance(schema, dict):
+        return Any
+    raw_type = schema.get("type")
+    if isinstance(raw_type, list):
+        raw_type = next((item for item in raw_type if item != "null"), None)
+    if raw_type == "string":
+        return str
+    if raw_type == "integer":
+        return int
+    if raw_type == "number":
+        return float
+    if raw_type == "boolean":
+        return bool
+    if raw_type == "array":
+        return list
+    if raw_type == "object":
+        return dict
+    return Any
+
+
+def _signature_for_input_schema(input_schema: Any) -> inspect.Signature | None:
+    if not isinstance(input_schema, dict):
+        return None
+    properties = input_schema.get("properties")
+    if not isinstance(properties, dict) or not properties:
+        return None
+    required = set(input_schema.get("required") or [])
+    parameters: list[inspect.Parameter] = []
+    for name, schema in properties.items():
+        if (
+            not isinstance(name, str)
+            or not name.isidentifier()
+            or keyword.iskeyword(name)
+        ):
+            continue
+        default = inspect._empty
+        if name not in required:
+            default = schema.get("default") if isinstance(schema, dict) else None
+            if default is inspect._empty:
+                default = None
+        parameters.append(
+            inspect.Parameter(
+                name,
+                inspect.Parameter.KEYWORD_ONLY,
+                default=default,
+                annotation=_annotation_for_schema(schema),
+            ),
+        )
+    if not parameters:
+        return None
+    return inspect.Signature(parameters, return_annotation=dict)
 
 
 def integration_owner_scope_from_session() -> dict[str, Any]:
@@ -89,6 +145,13 @@ class _IntegrationAppNamespace:
         self._app_slug = app_slug
 
     def __getattr__(self, tool_name: str):
+        try:
+            callable_tool = self._owner.callable_for_app_tool(self._app_slug, tool_name)
+            if callable_tool is not None:
+                return callable_tool
+        except AttributeError:
+            pass
+
         async def _call(**arguments: Any) -> Any:
             callable_tool = self._owner.callable_for_app_tool(self._app_slug, tool_name)
             if callable_tool is None:
@@ -711,6 +774,18 @@ class IntegrationPrimitives:
             return cached
         name = f"primitives.integrations.{app_slug}.{tool_name}"
         try:
+            from unity.manager_registry import ManagerRegistry
+
+            fm = ManagerRegistry.get_function_manager()
+            resolver = getattr(fm, "_get_stored_primitive_data_by_name", None)
+            if callable(resolver):
+                row = resolver(name=name, provider_backed_only=True)
+                if isinstance(row, dict) and row.get("integration_tool_id"):
+                    self._tool_row_cache[(app_slug, tool_name)] = row
+                    return row
+        except Exception:
+            pass
+        try:
             import unify
 
             active = unify.get_active_context() or {}
@@ -754,6 +829,9 @@ class IntegrationPrimitives:
             primitive_data.get("docstring")
             or "Execute a provider-backed integration tool."
         )
+        signature = _signature_for_input_schema(primitive_data.get("input_schema"))
+        if signature is not None:
+            _call.__signature__ = signature
         return _call
 
     def callable_for_app_tool(self, app_slug: str, tool_name: str):
