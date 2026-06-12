@@ -30,6 +30,20 @@ Register on `/login`, then chat with your Coordinator.
 
 ## Configuration
 
+The installer generates local secrets (`POSTGRES_PASSWORD`, `ORCHESTRA_ADMIN_KEY`,
+`NEXTAUTH_SECRET`, `JWT_SECRET`) and runs the BYOK wizard for provider keys.
+
+| Key | Required for |
+|-----|----------------|
+| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `DEEPSEEK_API_KEY` | Coordinator chat (wizard: pick one) |
+| `OPENAI_API_KEY` | Tool-search embeddings (recommended even with other chat providers) |
+| `DEEPGRAM_API_KEY`, `CARTESIA_API_KEY` | Browser voice calls |
+| `UNIFY_MODEL` | Optional override; Unity picks a default when unset |
+
+On first `docker compose up`, the one-shot `orchestra-seed` service inserts billing
+plan rows Postgres needs before registration. Always start with `unity stack up`
+(full stack) — starting individual services manually can skip that seed step.
+
 Edit `~/.unity/.env` for BYOK keys and secrets. After changes:
 
 ```bash
@@ -59,3 +73,5 @@ Voice uses LiveKit in `--dev` mode with ports `7880` (WS), `7881` (TCP fallback)
 ## Architecture
 
 See `deploy/selfhost/docker-compose.yml` for the full service graph: Postgres, Orchestra, Pub/Sub emulator, LiveKit, gateway, Console, CM supervisor, desktop, and Caddy proxy.
+
+Entrypoint scripts (`cm-entrypoint.sh`, `desktop-entrypoint.sh`, `publish-desktop-ready.sh`, `ensure-pubsub-topics.sh`) ship inside the `unity-selfhost` and `unity-desktop-selfhost` images. After changing them, rebuild and publish those images — editing copies under `~/.unity/` does not affect running containers.
