@@ -8,6 +8,13 @@ import keyword
 from typing import Any, Optional
 
 from unity.integrations import ops as integration_ops
+from unity.integrations.function_metadata import (
+    integration_connection_id,
+    integration_input_schema,
+    integration_metadata,
+    integration_tool_id,
+    is_provider_backed_function,
+)
 
 
 def _normalize_app_slug(value: str) -> str:
@@ -181,7 +188,12 @@ class IntegrationPrimitives:
 
     # Concrete app/tool rows are materialized by FunctionManager sync. This
     # single helper is catalog/status discovery only, not execution discovery.
-    _PRIMITIVE_METHODS: tuple[str, ...] = ("search_integrations",)
+    _PRIMITIVE_METHODS: tuple[str, ...] = (
+        "search_integrations",
+        "review_tool_permissions",
+        "update_tool_permissions",
+        "resolve_tool_execution",
+    )
 
     def __init__(
         self,
@@ -347,12 +359,7 @@ class IntegrationPrimitives:
                     {
                         "name": row.get("name"),
                         "description": row.get("docstring"),
-                        "action_class": (
-                            row.get("action_class")
-                            or (row.get("integration_metadata") or {}).get(
-                                "action_class",
-                            )
-                        ),
+                        "action_class": integration_metadata(row).get("action_class"),
                     }
                     for row in materialized_rows[:25]
                 ]
@@ -469,17 +476,13 @@ class IntegrationPrimitives:
                 rows = unify.get_logs(
                     context=context,
                     filter=(
-                        f'app_slug == "{normalized}" and integration_source == "provider_backed"'
+                        'metadata["source"] == "provider_backed" '
+                        f'and metadata["integration"]["app_slug"] == {json.dumps(normalized)}'
                     ),
                     limit=100,
                 )
                 if rows:
-                    return [
-                        dict(row.entries)
-                        for row in rows
-                        if dict(row.entries).get("integration_source")
-                        == "provider_backed"
-                    ]
+                    return [dict(row.entries) for row in rows]
         except Exception:
             pass
         return []
@@ -674,6 +677,8 @@ class IntegrationPrimitives:
         user_id: Optional[str] = None,
         assistant_id: Optional[int] = None,
         confirmation_token: Optional[str] = None,
+        connection_id: Optional[str] = None,
+        approval_audit_id: Optional[int] = None,
     ) -> Any:
         """Execute a provider tool through Orchestra policy and audit checks.
 
@@ -699,6 +704,11 @@ class IntegrationPrimitives:
         confirmation_token : str, optional
             Confirmation token required by Orchestra for write, destructive,
             bulk export, or sensitive actions.
+        connection_id : str, optional
+            Stable Orchestra connection identifier for account-scoped execution.
+        approval_audit_id : int, optional
+            Audit identifier for an approved execution retry. Use this only when
+            retrying the same tool with the same original arguments.
 
         Returns
         -------
@@ -714,10 +724,56 @@ class IntegrationPrimitives:
         confirm in the approved UI flow.
         """
 
+        effective_scope = self._effective_owner_scope(
+            owner_scope=owner_scope,
+            org_id=org_id,
+            team_id=team_id,
+            user_id=user_id,
+            assistant_id=assistant_id,
+            connection_id=connection_id,
+        )
+        if approval_audit_id is not None:
+            effective_scope["approval_audit_id"] = approval_audit_id
+
         return integration_ops.run_tool(
             tool_id,
             arguments or {},
             confirmation_token=confirmation_token,
+            **effective_scope,
+        )
+
+    async def review_tool_permissions(
+        self,
+        connection_id: str,
+        *,
+        owner_scope: Optional[str] = None,
+        org_id: Optional[int] = None,
+        team_id: Optional[int] = None,
+        user_id: Optional[str] = None,
+        assistant_id: Optional[int] = None,
+    ) -> Any:
+        """Review tool permissions for one connected integration account.
+
+        Use this when the user asks what an integration account is allowed to
+        do, why a tool asks for confirmation, or which tools are blocked. The
+        returned policy is scoped to ``connection_id``. If the same app has
+        multiple connected accounts, review the account the user named or ask
+        which account they mean before changing permissions.
+
+        Examples
+        --------
+        - ``await primitives.integrations.review_tool_permissions(connection_id="ic_work")``
+        - "What Gmail tools are allowed for my Work Gmail account?"
+
+        Returns
+        -------
+        dict
+            Account-scoped policy with app/account labels and per-tool approval
+            levels: ``auto``, ``specific_approval``, or ``forbidden``.
+        """
+
+        return integration_ops.get_tool_policy(
+            connection_id,
             **self._effective_owner_scope(
                 owner_scope=owner_scope,
                 org_id=org_id,
@@ -726,6 +782,133 @@ class IntegrationPrimitives:
                 assistant_id=assistant_id,
             ),
         )
+
+    async def update_tool_permissions(
+        self,
+        connection_id: str,
+        *,
+        tool_policies: Optional[dict[str, str]] = None,
+        bulk_approval_level: Optional[str] = None,
+        action_classes: Optional[list[str]] = None,
+        reset_to_defaults: bool = False,
+        owner_scope: Optional[str] = None,
+        org_id: Optional[int] = None,
+        team_id: Optional[int] = None,
+        user_id: Optional[str] = None,
+        assistant_id: Optional[int] = None,
+    ) -> Any:
+        """Change durable tool permissions for one connected account.
+
+        Use this only after the user clearly asks to change future behavior for
+        a specific connected account. For one-off approval of a pending
+        execution, use ``resolve_tool_execution`` instead.
+
+        Permission levels:
+        - ``auto`` means allow this tool for this account without asking first.
+        - ``specific_approval`` means ask every time for this account.
+        - ``forbidden`` means block this tool for this account.
+
+        Examples
+        --------
+        - Allow one tool for one account:
+          ``await primitives.integrations.update_tool_permissions(connection_id="ic_work", tool_policies={"composio:gmail:list_labels": "auto"})``
+        - Require confirmation for write tools:
+          ``await primitives.integrations.update_tool_permissions(connection_id="ic_work", bulk_approval_level="specific_approval", action_classes=["write"])``
+        - Reset a connected account to backend defaults:
+          ``await primitives.integrations.update_tool_permissions(connection_id="ic_work", reset_to_defaults=True)``
+
+        Returns
+        -------
+        dict
+            Updated account-scoped policy from Orchestra.
+        """
+
+        return integration_ops.patch_tool_policy(
+            connection_id,
+            tool_policies=tool_policies,
+            bulk_approval_level=bulk_approval_level,
+            action_classes=action_classes,
+            reset_to_defaults=reset_to_defaults,
+            **self._effective_owner_scope(
+                owner_scope=owner_scope,
+                org_id=org_id,
+                team_id=team_id,
+                user_id=user_id,
+                assistant_id=assistant_id,
+            ),
+        )
+
+    async def resolve_tool_execution(
+        self,
+        audit_id: int,
+        *,
+        decision: str,
+        scope: str = "once",
+        persist_policy: bool = False,
+        approval_level: str = "auto",
+        actor_id: Optional[str] = None,
+        reason: Optional[str] = None,
+        expires_at: Optional[str] = None,
+        owner_scope: Optional[str] = None,
+        org_id: Optional[int] = None,
+        team_id: Optional[int] = None,
+        user_id: Optional[str] = None,
+        assistant_id: Optional[int] = None,
+    ) -> Any:
+        """Approve or deny a pending integration tool execution.
+
+        Use this when a provider-backed tool returned ``pending_approval`` and
+        the user responds in natural language. ``scope="once"`` approves or
+        denies only the pending audit. Set ``persist_policy=True`` only when
+        the user explicitly asks to change future permissions for the connected
+        account too.
+
+        After approval, retry the original tool with the same original
+        arguments and the returned ``confirmation_token`` or
+        ``approval_audit_id``. Do not start a fresh unrelated tool call.
+
+        Examples
+        --------
+        - ``await primitives.integrations.resolve_tool_execution(audit_id=17, decision="approve")``
+        - ``await primitives.integrations.resolve_tool_execution(audit_id=17, decision="deny", reason="wrong account")``
+        - ``await primitives.integrations.resolve_tool_execution(audit_id=17, decision="approve", scope="tool", persist_policy=True, approval_level="auto")``
+
+        Returns
+        -------
+        dict
+            Approval or denial envelope with audit/tool/connection identity.
+            Approval responses include a ``confirmation_token`` for retry.
+        """
+
+        resolved_scope = self._effective_owner_scope(
+            owner_scope=owner_scope,
+            org_id=org_id,
+            team_id=team_id,
+            user_id=user_id,
+            assistant_id=assistant_id,
+        )
+        if decision == "approve":
+            return integration_ops.approve_tool_execution(
+                audit_id,
+                scope=scope,
+                persist_policy=persist_policy,
+                approval_level=approval_level,
+                actor_id=actor_id,
+                expires_at=expires_at,
+                **resolved_scope,
+            )
+        if decision == "deny":
+            denial_level = "forbidden" if approval_level == "auto" else approval_level
+            return integration_ops.deny_tool_execution(
+                audit_id,
+                scope=scope,
+                persist_policy=persist_policy,
+                approval_level=denial_level,
+                actor_id=actor_id,
+                reason=reason,
+                **resolved_scope,
+            )
+        raise ValueError("decision must be 'approve' or 'deny'")
 
     async def manage_connection(
         self,
@@ -761,7 +944,7 @@ class IntegrationPrimitives:
 
     async def resolve_tool_id(self, app_slug: str, tool_name: str) -> str:
         row = self._materialized_tool_row(app_slug, tool_name)
-        tool_id = row.get("integration_tool_id")
+        tool_id = integration_tool_id(row)
         if isinstance(tool_id, str) and tool_id:
             return tool_id
         raise AttributeError(
@@ -780,7 +963,7 @@ class IntegrationPrimitives:
             resolver = getattr(fm, "_get_stored_primitive_data_by_name", None)
             if callable(resolver):
                 row = resolver(name=name, provider_backed_only=True)
-                if isinstance(row, dict) and row.get("integration_tool_id"):
+                if isinstance(row, dict) and integration_tool_id(row):
                     self._tool_row_cache[(app_slug, tool_name)] = row
                     return row
         except Exception:
@@ -797,15 +980,14 @@ class IntegrationPrimitives:
                 rows = unify.get_logs(
                     context=context,
                     filter=(
-                        f'name == "{name}" and integration_source == "provider_backed"'
+                        f"name == {json.dumps(name)} "
+                        'and metadata["source"] == "provider_backed"'
                     ),
                     limit=1,
                 )
-                if rows:
-                    row = dict(rows[0].entries)
-                    if row.get("integration_source") == "provider_backed" and row.get(
-                        "integration_tool_id",
-                    ):
+                for raw_row in rows or []:
+                    row = dict(raw_row.entries)
+                    if is_provider_backed_function(row) and integration_tool_id(row):
                         self._tool_row_cache[(app_slug, tool_name)] = row
                         return row
         except Exception:
@@ -815,21 +997,33 @@ class IntegrationPrimitives:
         )
 
     def callable_for_tool(self, primitive_data: dict[str, Any]):
-        tool_id = primitive_data.get("integration_tool_id") or primitive_data.get(
-            "tool_id",
-        )
+        tool_id = integration_tool_id(primitive_data)
         if not tool_id:
             return None
+        connection_id = integration_connection_id(primitive_data)
 
         async def _call(**arguments: Any) -> Any:
-            return await self.execute_tool(tool_id=tool_id, arguments=arguments)
+            confirmation_token = arguments.pop("confirmation_token", None)
+            approval_audit_id = arguments.pop("approval_audit_id", None)
+            override_connection_id = (
+                arguments.pop("connection_id", None) or connection_id
+            )
+            return await self.execute_tool(
+                tool_id=tool_id,
+                arguments=arguments,
+                confirmation_token=confirmation_token,
+                connection_id=override_connection_id,
+                approval_audit_id=approval_audit_id,
+            )
 
         _call.__name__ = primitive_data.get("primitive_method") or "integration_tool"
         _call.__doc__ = (
             primitive_data.get("docstring")
             or "Execute a provider-backed integration tool."
         )
-        signature = _signature_for_input_schema(primitive_data.get("input_schema"))
+        signature = _signature_for_input_schema(
+            integration_input_schema(primitive_data),
+        )
         if signature is not None:
             _call.__signature__ = signature
         return _call
