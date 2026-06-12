@@ -765,6 +765,67 @@ def test_disconnect_cleanup_removes_materialized_rows(monkeypatch) -> None:
     assert fm._deleted_apps == [("composio", "hubspot")]
 
 
+def test_disconnect_cleanup_deletes_legacy_top_level_provider_rows(
+    monkeypatch,
+) -> None:
+    deleted: list[int] = []
+    captured: dict[str, str] = {}
+    logs = [
+        SimpleNamespace(
+            id=1,
+            entries={
+                "integration_source": "provider_backed",
+                "backend_id": "composio",
+                "app_slug": "gmail",
+            },
+        ),
+        SimpleNamespace(
+            id=2,
+            entries={
+                "metadata": {
+                    "source": "provider_backed",
+                    "integration": {
+                        "backend_id": "composio",
+                        "app_slug": "gmail",
+                    },
+                },
+            },
+        ),
+        SimpleNamespace(
+            id=3,
+            entries={
+                "integration_source": "provider_backed",
+                "backend_id": "composio",
+                "app_slug": "slack",
+            },
+        ),
+    ]
+
+    def fake_get_logs(**kwargs):
+        captured["filter"] = kwargs["filter"]
+        return logs
+
+    def fake_delete_logs(**kwargs):
+        deleted.extend(kwargs["logs"])
+
+    monkeypatch.setattr("unify.get_logs", fake_get_logs)
+    monkeypatch.setattr("unify.delete_logs", fake_delete_logs)
+    monkeypatch.setattr(fm_module, "list_private_fields", lambda *_args, **_kwargs: [])
+    fm = FunctionManager.__new__(FunctionManager)
+    fm._primitives_ctx = "Functions/Primitives"
+
+    removed = FunctionManager._delete_provider_integration_rows_for_apps(
+        fm,
+        [("composio", "gmail")],
+    )
+
+    assert removed == 2
+    assert deleted == [1, 2]
+    assert 'metadata["source"] == "provider_backed"' in captured["filter"]
+    assert 'integration_source == "provider_backed"' in captured["filter"]
+    assert 'app_slug == "gmail"' in captured["filter"]
+
+
 def test_connection_cleanup_removes_app_rows_when_last_connection_drops(
     monkeypatch,
 ) -> None:
