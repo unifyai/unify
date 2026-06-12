@@ -229,6 +229,8 @@ async def _ensure_job_running(
                     ),
                     "demo_id": _s("demo_id"),
                     "team_ids": json.dumps(assistant_data.get("team_ids") or []),
+                    "self_contact_id": str(assistant_data["self_contact_id"]),
+                    "boss_contact_id": str(assistant_data["boss_contact_id"]),
                     "org_id": _s("organization_id"),
                     "deploy_env": _s("deploy_env"),
                 },
