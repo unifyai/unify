@@ -4,6 +4,7 @@ import copy
 import functools
 import inspect
 import json
+import sys
 import traceback
 import uuid
 from secrets import token_hex as _token_hex
@@ -61,6 +62,8 @@ from unity.events.manager_event_logging import (
     publish_manager_method_event,
 )
 from unity.events.active_work import ACTIVE_WORK, ActiveWorkHandle
+from unity.integrations.approval import build_pending_approval_payload
+from unity.integrations.function_metadata import is_provider_backed_function
 
 if TYPE_CHECKING:
     from unity.actor.environments.base import BaseEnvironment
@@ -3321,8 +3324,7 @@ class CodeActActor(BaseCodeActActor):
                     if (
                         isinstance(function_data, dict)
                         and function_data.get("is_primitive")
-                        and function_data.get("integration_source") == "provider_backed"
-                        and function_data.get("integration_tool_id")
+                        and is_provider_backed_function(function_data)
                     ):
                         _ef_log.debug(
                             f"⏱️ [execute_function +{_ef_ms()}] "
@@ -3344,6 +3346,19 @@ class CodeActActor(BaseCodeActActor):
                                     _parent_chat_context=_parent_chat_context,
                                 )
                             )
+                            if (
+                                isinstance(direct_result, dict)
+                                and direct_result.get("status")
+                                == "confirmation_required"
+                            ):
+                                direct_result = build_pending_approval_payload(
+                                    function_name=function_name,
+                                    function_data=function_data,
+                                    call_kwargs=call_kwargs,
+                                    provider_envelope=direct_result,
+                                )
+                                if notification_q is not None:
+                                    await notification_q.put(direct_result)
                             out = {
                                 "stdout": [],
                                 "stderr": [],
