@@ -46,6 +46,11 @@ class BaseGuidanceManager(BaseStateManager, metaclass=SingletonABCMeta):
         instructions, operating procedures, software walkthroughs, and
         strategies for composing functions together.
 
+        Results blend your own stored guidance with a built-in, read-only
+        library of platform-provided guidance (entries with
+        ``is_builtin=True``). Built-in entries can be searched and read like
+        any other guidance but never modified.
+
         Parameters
         ----------
         references : Dict[str, str] | None, default None
@@ -76,6 +81,11 @@ class BaseGuidanceManager(BaseStateManager, metaclass=SingletonABCMeta):
         Guidance entries contain procedural how-to information: step-by-step
         instructions, operating procedures, software walkthroughs, and
         strategies for composing functions together.
+
+        Results blend your own stored guidance with a built-in, read-only
+        library of platform-provided guidance (entries with
+        ``is_builtin=True``). Filter on ``is_builtin`` to target either
+        population explicitly.
 
         Parameters
         ----------
@@ -147,7 +157,10 @@ class BaseGuidanceManager(BaseStateManager, metaclass=SingletonABCMeta):
         """Update fields of an existing guidance entry by id.
 
         Use this to revise procedural instructions, operating procedures,
-        or compositional strategies that are already stored.
+        or compositional strategies that are already stored. Built-in
+        platform guidance (``is_builtin=True``) is read-only and cannot be
+        updated; create your own entry instead when a tailored variant is
+        needed.
 
         Parameters
         ----------
@@ -180,6 +193,9 @@ class BaseGuidanceManager(BaseStateManager, metaclass=SingletonABCMeta):
         guidance_id: int,
     ) -> "ToolOutcome":
         """Delete a guidance entry by id.
+
+        Built-in platform guidance (``is_builtin=True``) is read-only and
+        cannot be deleted.
 
         Parameters
         ----------

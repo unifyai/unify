@@ -292,6 +292,11 @@ def compose_guidance_content(
     sections: List[str] = []
     if skill.description:
         sections.append(skill.description)
+    compatibility = skill.frontmatter.get("compatibility")
+    if compatibility:
+        # Surface environment requirements to the LLM as part of the
+        # searchable content rather than dropping the frontmatter field.
+        sections.append(f"Compatibility: {str(compatibility).strip()}")
     if skill.body.strip():
         sections.append(skill.body.strip())
     if inline_scripts:

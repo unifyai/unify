@@ -1,11 +1,14 @@
 """Tests for the SKILL.md → GuidanceManager migration utilities.
 
-Two layers:
+Three layers:
 
 * Pure parsing / mapping tests (no backend) covering frontmatter parsing,
   discovery, title namespacing, and content composition for both the
   OpenClaw (single-line JSON ``metadata``) and HermesAgent (nested YAML
   ``metadata``) flavours of the agentskills.io standard.
+* Builtins-import tests (no backend, local git fixtures) covering manifest
+  parsing, pin verification (SHA + directory integrity hash), snapshot
+  building, drift detection, and stable-id determinism.
 * End-to-end tests that build a tiny on-disk skill tree and import it into a
   real ``GuidanceManager`` (under ``@_handle_project``), exercising the
   add / skip / overwrite conflict paths.
@@ -13,8 +16,20 @@ Two layers:
 
 from __future__ import annotations
 
+import json
+import subprocess
 from pathlib import Path
 
+import pytest
+
+from scripts.skill_migration.builtins_import import (
+    PinnedSkill,
+    build_snapshot_entries,
+    check_drift,
+    directory_integrity_hash,
+    load_manifest,
+    write_snapshot,
+)
 from scripts.skill_migration.skill_to_guidance import (
     SkillMigrator,
     compose_guidance_content,
@@ -22,6 +37,11 @@ from scripts.skill_migration.skill_to_guidance import (
     guidance_title,
     parse_skill_file,
     split_frontmatter,
+)
+from unity.guidance_manager.builtins_catalog import (
+    entry_hash,
+    load_snapshot,
+    stable_guidance_id,
 )
 from unity.guidance_manager.guidance_manager import GuidanceManager
 from tests.helpers import _handle_project
@@ -207,6 +227,239 @@ def test_build_entries_is_pure(tmp_path: Path):
     assert [e.title for e in entries] == ["[openclaw] alpha", "[openclaw] beta"]
     assert all(e.source == "openclaw" for e in entries)
     assert "first" in entries[0].content
+
+
+def test_compose_folds_compatibility_into_content(tmp_path: Path):
+    md = _write_skill(
+        tmp_path / "skills",
+        "needs-node",
+        description="Run node tooling.",
+        body="Use npx.",
+        metadata_block="compatibility: Requires node >= 20 and network access\n",
+    )
+    skill = parse_skill_file(md, source="openclaw", repo_root=tmp_path)
+    content = compose_guidance_content(skill)
+    assert "Compatibility: Requires node >= 20 and network access" in content
+
+
+# --------------------------------------------------------------------------- #
+# Builtins import: manifest, pin verification, snapshot, drift                 #
+# --------------------------------------------------------------------------- #
+
+
+def _git(*args: str, cwd: Path) -> str:
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _make_skill_repo(tmp_path: Path) -> tuple[Path, str]:
+    """Create a local git repo with two committed skills; return (repo, sha)."""
+    repo = tmp_path / "upstream"
+    repo.mkdir()
+    _git("init", "-q", cwd=repo)
+    _git("config", "user.email", "test@test.invalid", cwd=repo)
+    _git("config", "user.name", "test", cwd=repo)
+    # Allow fetching pinned (non-HEAD) commits from this fixture repo.
+    _git("config", "uploadpack.allowAnySHA1InWant", "true", cwd=repo)
+    _write_skill(
+        repo / "skills",
+        "ffmpeg-frames",
+        description="Extract frames from a video.",
+        body="Use ffmpeg to grab a frame.",
+        scripts={"frame.sh": '#!/usr/bin/env bash\nffmpeg -i "$1" out.jpg\n'},
+    )
+    _write_skill(
+        repo / "skills",
+        "arxiv-search",
+        description="Search arXiv for papers.",
+        body="Query the arXiv API.",
+    )
+    _git("add", "-A", cwd=repo)
+    _git("commit", "-q", "-m", "add skills", cwd=repo)
+    return repo, _git("rev-parse", "HEAD", cwd=repo)
+
+
+def _pin(repo: Path, sha: str, name: str, *, key: str | None = None) -> PinnedSkill:
+    return PinnedSkill(
+        key=key or f"test/{name}",
+        source="test",
+        repo=str(repo),
+        path=f"skills/{name}",
+        commit=sha,
+        integrity=directory_integrity_hash(repo / "skills" / name),
+    )
+
+
+def test_load_manifest_parses_and_validates(tmp_path: Path):
+    repo, sha = _make_skill_repo(tmp_path)
+    pin = _pin(repo, sha, "arxiv-search")
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"skills": [pin.__dict__]}), encoding="utf-8")
+
+    pins = load_manifest(manifest)
+    assert pins == [pin]
+
+
+@pytest.mark.parametrize(
+    "field,value,match",
+    [
+        ("commit", "abc123", "40-char"),
+        ("integrity", "md5-deadbeef", "sha256-"),
+    ],
+)
+def test_load_manifest_rejects_bad_pins(tmp_path: Path, field, value, match):
+    raw = {
+        "key": "test/x",
+        "source": "test",
+        "repo": "https://example.invalid/repo",
+        "path": "skills/x",
+        "commit": "0" * 40,
+        "integrity": "sha256-" + "0" * 64,
+    }
+    raw[field] = value
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"skills": [raw]}), encoding="utf-8")
+    with pytest.raises(ValueError, match=match):
+        load_manifest(manifest)
+
+
+def test_load_manifest_rejects_duplicate_keys(tmp_path: Path):
+    raw = {
+        "key": "test/x",
+        "source": "test",
+        "repo": "https://example.invalid/repo",
+        "path": "skills/x",
+        "commit": "0" * 40,
+        "integrity": "sha256-" + "0" * 64,
+    }
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"skills": [raw, raw]}), encoding="utf-8")
+    with pytest.raises(ValueError, match="Duplicate skill key"):
+        load_manifest(manifest)
+
+
+def test_directory_integrity_hash_deterministic_and_sensitive(tmp_path: Path):
+    _write_skill(tmp_path / "skills", "alpha", description="first")
+    skill_dir = tmp_path / "skills" / "alpha"
+
+    first = directory_integrity_hash(skill_dir)
+    assert first == directory_integrity_hash(skill_dir)
+    assert first.startswith("sha256-")
+
+    (skill_dir / "SKILL.md").write_text("---\nname: alpha\n---\n\nchanged\n")
+    assert directory_integrity_hash(skill_dir) != first
+
+
+def test_stable_guidance_id_deterministic_int32():
+    first = stable_guidance_id("[test] arxiv-search")
+    assert first == stable_guidance_id("[test] arxiv-search")
+    assert 0 <= first <= 0x7FFFFFFF
+    assert first != stable_guidance_id("[test] ffmpeg-frames")
+
+
+def test_entry_hash_changes_with_title_and_content():
+    base = entry_hash("t", "c")
+    assert base == entry_hash("t", "c")
+    assert base != entry_hash("t", "c2")
+    assert base != entry_hash("t2", "c")
+
+
+def test_build_snapshot_entries_imports_pinned_skills(tmp_path: Path):
+    repo, sha = _make_skill_repo(tmp_path)
+    pins = [_pin(repo, sha, "arxiv-search"), _pin(repo, sha, "ffmpeg-frames")]
+
+    entries = build_snapshot_entries(pins, workdir=tmp_path / "work")
+
+    assert set(entries) == {"test/arxiv-search", "test/ffmpeg-frames"}
+    arxiv = entries["test/arxiv-search"]
+    assert arxiv["title"] == "[test] arxiv-search"
+    assert "Search arXiv for papers." in arxiv["content"]
+    assert "ffmpeg -i" in entries["test/ffmpeg-frames"]["content"]
+
+    snapshot = tmp_path / "snapshot.json"
+    write_snapshot(entries, snapshot)
+    assert load_snapshot(snapshot) == entries
+    # Deterministic output: rewriting produces identical bytes.
+    before = snapshot.read_bytes()
+    write_snapshot(entries, snapshot)
+    assert snapshot.read_bytes() == before
+
+
+def test_build_snapshot_imports_pinned_commit_not_head(tmp_path: Path):
+    repo, sha = _make_skill_repo(tmp_path)
+    pin = _pin(repo, sha, "arxiv-search")
+
+    # Advance upstream past the pin; the import must still see the pinned state.
+    (repo / "skills" / "arxiv-search" / "SKILL.md").write_text(
+        "---\nname: arxiv-search\ndescription: CHANGED UPSTREAM\n---\n\nnew body\n",
+        encoding="utf-8",
+    )
+    _git("add", "-A", cwd=repo)
+    _git("commit", "-q", "-m", "mutate skill", cwd=repo)
+
+    entries = build_snapshot_entries([pin], workdir=tmp_path / "work")
+    assert "Search arXiv for papers." in entries["test/arxiv-search"]["content"]
+    assert "CHANGED UPSTREAM" not in entries["test/arxiv-search"]["content"]
+
+
+def test_build_snapshot_rejects_integrity_mismatch(tmp_path: Path):
+    repo, sha = _make_skill_repo(tmp_path)
+    pin = _pin(repo, sha, "arxiv-search")
+    tampered = PinnedSkill(
+        key=pin.key,
+        source=pin.source,
+        repo=pin.repo,
+        path=pin.path,
+        commit=pin.commit,
+        integrity="sha256-" + "0" * 64,
+    )
+    with pytest.raises(ValueError, match="integrity mismatch"):
+        build_snapshot_entries([tampered], workdir=tmp_path / "work")
+
+
+def test_build_snapshot_rejects_title_collisions(tmp_path: Path):
+    repo, sha = _make_skill_repo(tmp_path)
+    first = _pin(repo, sha, "arxiv-search", key="test/one")
+    second = _pin(repo, sha, "arxiv-search", key="test/two")
+    with pytest.raises(ValueError, match="collides"):
+        build_snapshot_entries([first, second], workdir=tmp_path / "work")
+
+
+def test_check_drift_converged_and_changed(tmp_path: Path):
+    repo, sha = _make_skill_repo(tmp_path)
+    pins = [_pin(repo, sha, "arxiv-search"), _pin(repo, sha, "ffmpeg-frames")]
+
+    assert check_drift(pins, workdir=tmp_path / "work1") == []
+
+    (repo / "skills" / "arxiv-search" / "SKILL.md").write_text(
+        "---\nname: arxiv-search\ndescription: drifted\n---\n\nnew\n",
+        encoding="utf-8",
+    )
+    _git("add", "-A", cwd=repo)
+    _git("commit", "-q", "-m", "drift", cwd=repo)
+
+    drifts = check_drift(pins, workdir=tmp_path / "work2")
+    assert [d["key"] for d in drifts] == ["test/arxiv-search"]
+    assert drifts[0]["status"] == "changed-upstream"
+    assert drifts[0]["pinned_commit"] == sha
+    assert drifts[0]["head_commit"] != sha
+
+
+def test_check_drift_reports_upstream_removal(tmp_path: Path):
+    repo, sha = _make_skill_repo(tmp_path)
+    pin = _pin(repo, sha, "ffmpeg-frames")
+
+    _git("rm", "-q", "-r", "skills/ffmpeg-frames", cwd=repo)
+    _git("commit", "-q", "-m", "remove skill", cwd=repo)
+
+    drifts = check_drift([pin], workdir=tmp_path / "work")
+    assert len(drifts) == 1
+    assert drifts[0]["status"] == "removed-upstream"
 
 
 # --------------------------------------------------------------------------- #

@@ -1,10 +1,10 @@
-"""Global builtin-primitives catalogue: addressing and idempotent seeding.
+"""Global builtin-primitives catalogue: idempotent seeding.
 
-The catalogue lives in a dedicated public-read Unify project (settings
-``UNITY_FUNCTION_BUILTINS_PROJECT``, default ``"Builtins"``) owned by the
-platform admin account. It stores exactly one copy of the static primitive
-rows for every manager; deployments scope at read time via
-``primitive_row_filter`` and never write to it.
+The catalogue lives in the public-read builtins project (see
+``unity.common.builtins``) owned by the platform admin account. It stores
+exactly one copy of the static primitive rows for every manager;
+deployments scope at read time via ``primitive_row_filter`` and never
+write to it.
 
 Seeding runs in bootstrap/admin processes (deploy hooks, self-host install,
 the test harness) whose API key owns the catalogue project. It is
@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Tuple
 
 import unify
 
+from ..common.builtins import builtins_project, read_seed_hashes, write_seed_hashes
 from ..common.embed_utils import ensure_vector_column, list_private_fields
 from .primitives.registry import get_registry
 from .primitives.scope import PrimitiveScope
@@ -28,13 +29,7 @@ logger = logging.getLogger(__name__)
 
 BUILTINS_PRIMITIVES_CONTEXT = "Functions/Primitives"
 BUILTINS_META_CONTEXT = "Functions/Meta"
-
-
-def builtins_project() -> str:
-    """Return the configured name of the public builtins catalogue project."""
-    from unity.settings import SETTINGS
-
-    return SETTINGS.function.BUILTINS_PROJECT
+_HASH_MAP_KEY = "primitives_hash_by_manager"
 
 
 def _ensure_catalog_storage(project: str) -> None:
@@ -55,38 +50,6 @@ def _ensure_catalog_storage(project: str) -> None:
         description="Seeding state for the builtin primitives catalogue.",
         unique_keys={"meta_id": "int"},
         project=project,
-    )
-
-
-def _read_hash_map(project: str) -> Dict[str, str]:
-    logs = unify.get_logs(
-        project=project,
-        context=BUILTINS_META_CONTEXT,
-        filter="meta_id == 1",
-        limit=1,
-    )
-    if logs:
-        return logs[0].entries.get("primitives_hash_by_manager", {}) or {}
-    return {}
-
-
-def _store_hash_map(project: str, hashes: Dict[str, str]) -> None:
-    logs = unify.get_logs(
-        project=project,
-        context=BUILTINS_META_CONTEXT,
-        filter="meta_id == 1",
-        limit=1,
-    )
-    if logs:
-        unify.delete_logs(
-            project=project,
-            context=BUILTINS_META_CONTEXT,
-            logs=[logs[0].id],
-        )
-    unify.create_logs(
-        project=project,
-        context=BUILTINS_META_CONTEXT,
-        entries=[{"meta_id": 1, "primitives_hash_by_manager": hashes}],
     )
 
 
@@ -143,7 +106,11 @@ def seed_builtin_primitives(*, project: str | None = None) -> bool:
 
     _ensure_catalog_storage(project)
 
-    current_hashes = _read_hash_map(project)
+    current_hashes = read_seed_hashes(
+        project,
+        meta_context=BUILTINS_META_CONTEXT,
+        key=_HASH_MAP_KEY,
+    )
     pending: List[Tuple[str, List[Dict[str, Any]], str]] = []
     for manager_alias in sorted(PrimitiveScope.all_managers().scoped_managers):
         expected_hash = registry.compute_hash_for_manager(manager_alias)
@@ -170,7 +137,12 @@ def seed_builtin_primitives(*, project: str | None = None) -> bool:
         new_hashes = dict(current_hashes)
         for manager_alias, _, expected_hash in pending:
             new_hashes[manager_alias] = expected_hash
-        _store_hash_map(project, new_hashes)
+        write_seed_hashes(
+            project,
+            new_hashes,
+            meta_context=BUILTINS_META_CONTEXT,
+            key=_HASH_MAP_KEY,
+        )
         logger.info(
             "Seeded builtins catalogue project=%s managers=%s rows=%d",
             project,
@@ -190,6 +162,5 @@ def seed_builtin_primitives(*, project: str | None = None) -> bool:
 __all__ = [
     "BUILTINS_META_CONTEXT",
     "BUILTINS_PRIMITIVES_CONTEXT",
-    "builtins_project",
     "seed_builtin_primitives",
 ]

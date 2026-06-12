@@ -13,12 +13,9 @@ class FunctionSettings(BaseSettings):
 
     Attributes:
         IMPL: Implementation type - "real" or "simulated".
-        BUILTINS_PROJECT: Name of the public-read Unify project holding the
-            global builtin primitives catalogue (one copy platform-wide).
     """
 
     IMPL: str = "real"
-    BUILTINS_PROJECT: str = "Builtins"
 
     model_config = SettingsConfigDict(
         env_prefix="UNITY_FUNCTION_",

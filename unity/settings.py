@@ -89,6 +89,13 @@ class ProductionSettings(BaseSettings):
     UNITY_COORDINATOR_EMAIL_ADDRESS: str = "marty@unify.ai"
 
     # ─────────────────────────────────────────────────────────────────────────
+    # Builtins Catalogue
+    # ─────────────────────────────────────────────────────────────────────────
+    # Name of the public-read Unify project holding the global builtins
+    # catalogues (function primitives and guidance), one copy platform-wide.
+    UNITY_BUILTINS_PROJECT: str = "Builtins"
+
+    # ─────────────────────────────────────────────────────────────────────────
     # GCP Project
     # ─────────────────────────────────────────────────────────────────────────
     # GCP project ID for Pub/Sub topics and subscriptions. Override via
