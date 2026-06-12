@@ -126,9 +126,11 @@ def test_gateway_importable() -> None:
     assert "discord.com/api" in DISCORD_API_BASE
     assert DISCORD_GATEWAY_URL.startswith("wss://")
     assert BOT_INTENTS > 0
-    # DIRECT_MESSAGES and GUILD_MESSAGES are required; MESSAGE_CONTENT
-    # (privileged, 1 << 15) must not be requested or the gateway gets a
-    # fatal 4014 close when the intent is disabled in the bot's portal.
+    # GUILDS (1 << 0) is required for thread MESSAGE_CREATE delivery;
+    # DIRECT_MESSAGES (1 << 12) and GUILD_MESSAGES (1 << 9) for DMs and guild
+    # channels. MESSAGE_CONTENT (privileged, 1 << 15) must not be requested or
+    # the gateway gets a fatal 4014 close when it is disabled in the portal.
+    assert BOT_INTENTS & (1 << 0)
     assert BOT_INTENTS & (1 << 12)
     assert BOT_INTENTS & (1 << 9)
     assert not BOT_INTENTS & (1 << 15)
