@@ -67,8 +67,20 @@ build_cm_env() {
   export LIVEKIT_API_KEY="${LIVEKIT_API_KEY:-devkey}"
   export LIVEKIT_API_SECRET="${LIVEKIT_API_SECRET:-secret}"
 
-  if [[ -n "${SELF_HOST_DESKTOP_URL:-}" ]]; then
-    export ASSISTANT_DESKTOP_URL="$SELF_HOST_DESKTOP_URL"
+  # Voice jobs need the turn-detector assets baked at image build time (/opt/hf-cache).
+  # Production entrypoint.sh seeds these into /tmp/huggingface; self-host CM bypasses that path.
+  if [[ -z "${HF_HOME:-}" ]]; then
+    if [[ -d /opt/hf-cache ]]; then
+      export HF_HOME=/opt/hf-cache
+    elif [[ -d /tmp/huggingface ]]; then
+      export HF_HOME=/tmp/huggingface
+    fi
+  fi
+
+  if [[ -n "${SELF_HOST_DESKTOP_INTERNAL_URL:-}" ]]; then
+    export ASSISTANT_DESKTOP_URL="${SELF_HOST_DESKTOP_INTERNAL_URL%/}"
+  elif [[ -n "${SELF_HOST_DESKTOP_URL:-}" ]]; then
+    export ASSISTANT_DESKTOP_URL="${SELF_HOST_DESKTOP_URL%/}"
   fi
 
   local voice_provider voice_id
@@ -95,27 +107,35 @@ build_cm_env() {
   [[ -n "$user_id" ]] && export USER_ID="$user_id"
 }
 
-run_cm_once() {
+runtime_signature() {
+  python3 - "$RUNTIME_FILE" <<'PY'
+import hashlib
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    data = json.load(fh)
+api_key = data.get("apiKey") or data.get("api_key") or ""
+agent_id = data.get("coordinatorAgentId") or data.get("coordinator_agent_id") or ""
+print(hashlib.sha256(f"{agent_id}\0{api_key}".encode()).hexdigest())
+PY
+}
+
+start_cm() {
   local unify_key="$1"
   local agent_id="$2"
-  local runtime_mtime="$3"
 
   log "Ensuring Pub/Sub topics for assistant ${agent_id}..."
   bash "${SCRIPT_DIR}/ensure-pubsub-topics.sh" "$agent_id"
 
   build_cm_env "$unify_key" "$agent_id"
   log "Starting ConversationManager for assistant ${agent_id}..."
-  python3 -m unity.conversation_manager.main
+  python3 -m unity.conversation_manager.main &
+  CM_PID=$!
 }
 
-last_mtime=""
 while true; do
   wait_for_runtime
-  current_mtime="$(python3 - <<PY
-import os
-print(int(os.path.getmtime("${RUNTIME_FILE}")))
-PY
-)"
   parsed="$(read_runtime)"
   unify_key="$(echo "$parsed" | sed -n '1p')"
   agent_id="$(echo "$parsed" | sed -n '2p')"
@@ -126,19 +146,29 @@ PY
     continue
   fi
 
-  if [[ "$current_mtime" == "$last_mtime" && -n "${CM_PID:-}" ]] && kill -0 "$CM_PID" 2>/dev/null; then
+  active_signature="$(runtime_signature)"
+  start_cm "$unify_key" "$agent_id"
+
+  while kill -0 "$CM_PID" 2>/dev/null; do
     sleep "$POLL_SECONDS"
+    parsed="$(read_runtime)"
+    next_unify_key="$(echo "$parsed" | sed -n '1p')"
+    next_agent_id="$(echo "$parsed" | sed -n '2p')"
+    if [[ -z "$next_unify_key" || -z "$next_agent_id" ]]; then
+      continue
+    fi
+    next_signature="$(runtime_signature)"
+    if [[ "$next_signature" != "$active_signature" ]]; then
+      log "Coordinator runtime changed; restarting CM..."
+      kill "$CM_PID" 2>/dev/null || true
+      wait "$CM_PID" 2>/dev/null || true
+      break
+    fi
+  done
+
+  if kill -0 "$CM_PID" 2>/dev/null; then
     continue
   fi
-
-  if [[ -n "${CM_PID:-}" ]] && kill -0 "$CM_PID" 2>/dev/null; then
-    log "Runtime file changed; restarting CM..."
-    kill "$CM_PID" 2>/dev/null || true
-    wait "$CM_PID" 2>/dev/null || true
-  fi
-
-  last_mtime="$current_mtime"
-  run_cm_once "$unify_key" "$agent_id" "$current_mtime" &
-  CM_PID=$!
-  wait "$CM_PID" || log "CM exited; watching for runtime updates..."
+  wait "$CM_PID" 2>/dev/null || true
+  log "CM exited; watching for runtime updates..."
 done
