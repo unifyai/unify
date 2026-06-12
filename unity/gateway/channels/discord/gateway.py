@@ -57,14 +57,20 @@ def _log_field(value: object) -> str:
 DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json"
 DISCORD_API_BASE = "https://discord.com/api/v10"
 
-INTENTS_DIRECT_MESSAGES = 1 << 12
+INTENTS_GUILDS = 1 << 0
 INTENTS_GUILD_MESSAGES = 1 << 9
+INTENTS_DIRECT_MESSAGES = 1 << 12
+# GUILDS is required for the gateway to deliver thread MESSAGE_CREATE events:
+# Discord only routes thread messages to bots that track thread state/membership,
+# which GUILDS enables. Without it, DMs and plain-channel @mentions arrive but
+# thread messages are silently dropped.
+#
 # MESSAGE_CONTENT (1 << 15) is a privileged intent and is deliberately not
 # requested. Discord still delivers full content/attachments for the only
 # messages this gateway acts on -- DMs to the bot and guild/thread messages
 # that @mention the bot -- so the privileged intent is unnecessary. Requesting
 # an intent not enabled in the bot's portal triggers a fatal 4014 close.
-BOT_INTENTS = INTENTS_DIRECT_MESSAGES | INTENTS_GUILD_MESSAGES
+BOT_INTENTS = INTENTS_GUILDS | INTENTS_GUILD_MESSAGES | INTENTS_DIRECT_MESSAGES
 
 FATAL_CLOSE_CODES = {4004, 4010, 4011, 4013, 4014}
 FRESH_IDENTIFY_CODES = {4003, 4007, 4009}
