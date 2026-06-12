@@ -354,10 +354,32 @@ prompt_research_and_computer() {
   echo ""
 }
 
+prompt_app_integrations() {
+  echo ""
+  echo -e "${BOLD}App integrations (optional)${NC}"
+  echo "  Composio connects third-party apps (HubSpot, Notion, GitHub, ...)"
+  echo "  as assistant tools, using your own Composio account."
+  echo ""
+
+  prompt_secret \
+    "App integrations — Composio API key" \
+    "COMPOSIO_API_KEY" \
+    "Free tier: https://composio.dev — enables third-party app tools"
+
+  echo ""
+  if has_env_value COMPOSIO_API_KEY; then
+    log_success "Composio app integrations configured"
+  else
+    log_warn "Composio skipped — third-party app integrations stay disabled"
+  fi
+  echo ""
+}
+
 import_shell_env_keys() {
   local key val
   for key in OPENAI_API_KEY ANTHROPIC_API_KEY DEEPSEEK_API_KEY DEEPGRAM_API_KEY \
-    CARTESIA_API_KEY UNIFY_MODEL UNITY_WEB_TAVILY_API_KEY ANTICAPTCHA_KEY; do
+    CARTESIA_API_KEY UNIFY_MODEL UNITY_WEB_TAVILY_API_KEY ANTICAPTCHA_KEY \
+    COMPOSIO_API_KEY; do
     val="${!key:-}"
     [[ -z "$val" ]] && continue
     if ! has_env_value "$key"; then
@@ -426,6 +448,7 @@ main() {
   echo "  Voice:     Deepgram + Cartesia (browser calls)"
   echo "  Optional:  Google / Microsoft OAuth (workspace connect)"
   echo "  Optional:  Tavily (web search), AntiCaptcha (computer use)"
+  echo "  Optional:  Composio (third-party app integrations)"
   echo ""
 
   import_shell_env_keys
@@ -454,6 +477,7 @@ main() {
 
   prompt_workspace_oauth
   prompt_research_and_computer
+  prompt_app_integrations
   mark_byok_configured
 }
 
