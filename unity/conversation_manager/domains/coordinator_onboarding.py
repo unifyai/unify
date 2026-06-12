@@ -40,6 +40,7 @@ _NOTIFICATION_TYPE = "CoordinatorOnboarding"
 _SUBTYPE_DEFAULT_MESSAGES: dict[str, str] = {
     "workspace_connected": "The user just connected their workspace to you.",
     "integration_connected": "The user just connected a new integration to you.",
+    "step_skipped": "The user just skipped an onboarding step.",
     "onboarding_session_started": (
         "The user just opened the onboarding session with you — they are "
         "waiting for you to open with one short turn."
@@ -51,6 +52,7 @@ _SUBTYPE_DEFAULT_MESSAGES: dict[str, str] = {
 # the orchestra-side ``SUBTYPE_*`` constants in
 # ``orchestra/services/coordinator_service.py``.
 _SUBTYPE_ONBOARDING_SESSION_STARTED = "onboarding_session_started"
+_SUBTYPE_STEP_SKIPPED = "step_skipped"
 
 
 def _coordinator_onboarding_event_from_payload(
@@ -128,9 +130,13 @@ def _coordinator_onboarding_notification_text(
         if isinstance(medium_raw, str) and medium_raw:
             medium = medium_raw
         completed_steps = details.get("completed_step_ids")
+        skipped_steps = details.get("skipped_step_ids")
         joined = ""
         if isinstance(completed_steps, list) and completed_steps:
             joined = ", ".join(str(item) for item in completed_steps if item)
+        skipped_joined = ""
+        if isinstance(skipped_steps, list) and skipped_steps:
+            skipped_joined = ", ".join(str(item) for item in skipped_steps if item)
         completed_hint = (
             f" These onboarding steps are already done (derived from the "
             f"user's account state — steps finished in earlier sessions are "
@@ -141,12 +147,19 @@ def _coordinator_onboarding_notification_text(
                 "workspace is the first step."
             )
         )
+        skipped_hint = (
+            f" These onboarding steps were explicitly skipped by the user: "
+            f"{skipped_joined}. Treat them as passed over for now, not done."
+            if skipped_joined
+            else ""
+        )
         guidance = (
             "Open the session with exactly one short message. The next step "
             "to propose is always the FIRST onboarding step that is not "
-            "listed as already done below — never suggest a step the list "
-            "marks as done (e.g. do not say 'connect your workspace' when "
-            "`workspace` is already done). If you have *no* prior assistant "
+            "listed as already done or explicitly skipped below — never suggest "
+            "a step either list marks resolved (e.g. do not say 'connect your "
+            "workspace' when `workspace` is already done or skipped). If you "
+            "have *no* prior assistant "
             "messages in the transcript history, introduce yourself briefly "
             "as the user's coordinator assistant, say you'll help them get "
             "set up, and invite them to take that next pending step. If "
@@ -162,8 +175,28 @@ def _coordinator_onboarding_notification_text(
             )
         elif medium == "chat":
             medium_note = " (Chat: send exactly one short chat message.)"
-        composed = f"{subtype_hint} {body} {guidance}{completed_hint}{medium_note}"
+        composed = f"{subtype_hint} {body} {guidance}{completed_hint}{skipped_hint}{medium_note}"
         return composed.strip()
+
+    if event.subtype == _SUBTYPE_STEP_SKIPPED:
+        details = event.details if isinstance(event.details, dict) else {}
+        step_id = details.get("step_id")
+        step_note = (
+            f" The skipped step id is `{step_id}`." if isinstance(step_id, str) else ""
+        )
+        skipped_steps = details.get("skipped_step_ids")
+        skipped_joined = ""
+        if isinstance(skipped_steps, list) and skipped_steps:
+            skipped_joined = ", ".join(str(item) for item in skipped_steps if item)
+        skipped_note = (
+            f" Steps skipped so far: {skipped_joined}." if skipped_joined else ""
+        )
+        guidance = (
+            "Acknowledge in one short sentence that you'll leave that step for "
+            "now, then preview the single next onboarding step that is neither "
+            "done nor skipped. Do not say the skipped step is complete."
+        )
+        return f"{subtype_hint} {body}{step_note}{skipped_note} {guidance}".strip()
 
     guidance = (
         "Acknowledge this in one short sentence to the user, name the thing they "

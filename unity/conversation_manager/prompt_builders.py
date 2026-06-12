@@ -655,17 +655,19 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "`[onboarding subtype: <name>]`):",
             "  - `workspace_connected`: workspace OAuth (Google / Microsoft) just succeeded.",
             "  - `integration_connected`: a new integration secret was saved.",
+            "  - `step_skipped`: the user intentionally skipped one onboarding step.",
             "  - `onboarding_session_started`: the user just resolved the onboarding "
             f"picker — they're sitting in front of {COORDINATOR_NAME} and you owe them the "
             "first turn.",
-            "Rules for action subtypes (`workspace_connected`, `integration_connected`):",
+            "Rules for action subtypes (`workspace_connected`, `integration_connected`, `step_skipped`):",
             "  1. Acknowledge in one short sentence — name the thing that just happened, "
-            "stay warm, do not re-list every onboarding step.",
+            "stay warm, do not re-list every onboarding step. For `step_skipped`, say "
+            "we'll leave that step for now; do NOT call it done.",
             "  2. Preview the *single* next pending onboarding step so the user has a "
             "clear handoff. The next step ALWAYS comes from the onboarding "
             f"steps documented in the {COORDINATOR_NAME} onboarding flow (UI "
-            "reference) section below — not from generic assistant-setup "
-            "priors. Concretely: ",
+            "reference) section below — and it must be the first step not already "
+            "done or explicitly skipped. Concretely: ",
             '       - After `workspace_connected`: point them at "Connect '
             'your coordinator with your apps" (the next onboarding step) — '
             "suggest opening Integrations and picking at least one app "
@@ -700,13 +702,13 @@ def _build_coordinator_onboarding_narration_block() -> str:
             'Authorized humans). Open with a warm "Hi <first name> — " or '
             "similar; don't leave it generic.",
             "  7. Look at the transcript history *before* you respond, and read "
-            "the completed-steps list in the notification body — it is the "
-            "authoritative, server-derived record of which onboarding steps "
-            "are already done (steps finished in earlier sessions appear "
-            "there even though no event fired this session). The step you "
-            "propose is ALWAYS the first step of the onboarding flow that is "
-            "NOT in that list — never suggest a step it marks as done (e.g. "
-            "never say 'connect your workspace' when `workspace` is listed).",
+            "the completed-steps and skipped-steps lists in the notification body. "
+            "The completed list is the authoritative, server-derived record of "
+            "which onboarding steps are already done (steps finished in earlier "
+            "sessions appear there even though no event fired this session). The "
+            "skipped list records steps the user chose to pass over. The step you "
+            "propose is ALWAYS the first step of the onboarding flow that is in "
+            "neither list — never suggest a step marked done or skipped.",
             "     - If there are no prior assistant messages, introduce yourself in one "
             "short paragraph: name your role as the user's coordinator assistant, "
             "also frame yourself as their virtual double who can take actions on their "
@@ -2428,9 +2430,11 @@ def _build_coordinator_onboarding_flow_reference_block() -> str:
             "Connect, Delegate — followed by onboarding steps grouped "
             "into the same three phases. Each row shows a checkbox, a "
             "title, a short description, and (for actionable rows) a "
-            "primary button. Locked rows are greyed out until their "
-            "prerequisite is complete; the tooltip on a locked row says "
-            "which earlier step to finish first.",
+            "primary button. Pending rows also have a small inline Skip "
+            "button; skipped rows show a dash-style marker instead of a "
+            "tick and count as passed over, not done. Locked rows are greyed "
+            "out until their prerequisite is resolved; the tooltip on a "
+            "locked row says which earlier step to finish first.",
             "  - Left column: the chat surface with the user (or a docked "
             "voice call if they picked the call path on the opening "
             "picker). Side panels for Integrations, Tasks, and Actions "
@@ -2446,7 +2450,7 @@ def _build_coordinator_onboarding_flow_reference_block() -> str:
             "saying anything in the chat (or starting the call) clears "
             "this step.",
             f"  2. **Connect {COORDINATOR_NAME}** (`connect`, grouping row). "
-            "Itself has no button; it ticks when both children are done. "
+            "Itself has no button; it resolves when both children are done or skipped. "
             "Children:",
             f"     - **Give {COORDINATOR_NAME} access to your workspace** "
             '(`workspace`). Primary button "Connect workspace" opens '
@@ -2507,6 +2511,9 @@ def _build_coordinator_onboarding_flow_reference_block() -> str:
             "system event has actually arrived in my notifications "
             "(workspace OAuth → workspace_connected; integration save "
             "→ integration_connected; etc.).",
+            "  - If a step is skipped, I treat it as intentionally passed over "
+            "for now. I can move to the next step, but I do not describe the "
+            "skipped step as completed.",
             '  - I treat "Skip onboarding" as a valid choice. If the '
             "user wants out, I acknowledge calmly and remind them once "
             "where to resume it later.",
@@ -2530,17 +2537,21 @@ _VOICE_ONBOARDING_STEP_SUGGESTIONS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _voice_next_onboarding_suggestion(completed_steps: list[str]) -> str:
-    """Spoken-friendly pitch for the first step not yet completed."""
-    done = set(completed_steps)
+def _voice_next_onboarding_suggestion(
+    completed_steps: list[str],
+    skipped_steps: list[str],
+) -> str:
+    """Spoken-friendly pitch for the first step not yet resolved."""
+    resolved = set(completed_steps) | set(skipped_steps)
     for step_id, suggestion in _VOICE_ONBOARDING_STEP_SUGGESTIONS:
-        if step_id not in done:
+        if step_id not in resolved:
             return suggestion
     return "onboarding their first specialist droid"
 
 
 def _build_coordinator_voice_opening_block(
     completed_onboarding_steps: list[str] | None = None,
+    skipped_onboarding_steps: list[str] | None = None,
 ) -> str:
     """Voice-only session-opening guidance for Marty.
 
@@ -2556,14 +2567,14 @@ def _build_coordinator_voice_opening_block(
     intro is appropriate either way; resumed history ⇒ skipping the
     intro is appropriate either way).
 
-    ``completed_onboarding_steps`` is the server-derived onboarding
-    progress the call worker fetches from Orchestra's
-    ``Coordinator/State`` endpoint at setup (see ``call.py``). When
-    available, the intro pitches the actual next pending step — a
-    caller whose workspace has been connected since an earlier
-    session must not be told to connect it again. ``None`` means the
-    fetch failed or the Coordinator is no longer onboarding, in which
-    case the copy stays generic about next steps.
+    ``completed_onboarding_steps`` and ``skipped_onboarding_steps``
+    come from Orchestra's ``Coordinator/State`` endpoint at setup
+    (see ``call.py``). When available, the intro pitches the actual
+    next pending step — a caller whose workspace has been connected
+    or skipped since an earlier session must not be told to connect it
+    again. ``None`` means the fetch failed or the Coordinator is no
+    longer onboarding, in which case the copy stays generic about next
+    steps.
     """
     if completed_onboarding_steps is None:
         intro_step_suggestion = (
@@ -2574,14 +2585,19 @@ def _build_coordinator_voice_opening_block(
     else:
         intro_step_suggestion = (
             "suggest "
-            + _voice_next_onboarding_suggestion(completed_onboarding_steps)
+            + _voice_next_onboarding_suggestion(
+                completed_onboarding_steps,
+                skipped_onboarding_steps or [],
+            )
             + " as the next concrete step"
         )
         done = ", ".join(completed_onboarding_steps)
+        skipped = ", ".join(skipped_onboarding_steps or [])
         progress_note = (
             "Onboarding steps already done (derived from the caller's "
-            f"account state): {done or 'none yet'}. I never suggest a step "
-            "that is already done."
+            f"account state): {done or 'none yet'}. Steps the caller chose "
+            f"to skip: {skipped or 'none'}. I never suggest a step that is "
+            "already done or skipped, and I never describe skipped steps as done."
         )
     lines = [
         f"{COORDINATOR_NAME} opening turn",
@@ -2633,6 +2649,7 @@ def build_voice_agent_prompt(
     is_coordinator: bool = False,
     is_org_workspace: bool = True,
     coordinator_completed_onboarding_steps: list[str] | None = None,
+    coordinator_skipped_onboarding_steps: list[str] | None = None,
 ) -> PromptParts:
     """Build the system prompt for the Voice Agent (fast brain).
 
@@ -2695,6 +2712,10 @@ def build_voice_agent_prompt(
         Orchestra's ``Coordinator/State`` endpoint at call setup. ``None``
         when unavailable (fetch failed or not in onboarding mode), which
         keeps the opening-turn copy generic about next steps.
+    coordinator_skipped_onboarding_steps : list[str] | None
+        Onboarding steps the user explicitly skipped, fetched with the
+        same state snapshot. Skipped steps are treated as passed over
+        for next-step selection but never described as done.
 
     Returns
     -------
@@ -2812,6 +2833,7 @@ I let the results speak for themselves rather than narrating steps or repeating 
         parts.add(
             _build_coordinator_voice_opening_block(
                 coordinator_completed_onboarding_steps,
+                coordinator_skipped_onboarding_steps,
             ),
         )
         # Onboarding UI reference so the Voice Agent can answer

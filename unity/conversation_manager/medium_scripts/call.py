@@ -881,6 +881,7 @@ async def entrypoint(ctx: agents.JobContext):
     # on any failure (or outside onboarding mode) the opener falls back
     # to its generic copy.
     coordinator_completed_onboarding_steps: list[str] | None = None
+    coordinator_skipped_onboarding_steps: list[str] | None = None
     if (
         SESSION_DETAILS.is_coordinator
         and SESSION_DETAILS.assistant.agent_id is not None
@@ -901,6 +902,12 @@ async def entrypoint(ctx: agents.JobContext):
                 coordinator_completed_onboarding_steps = (
                     [str(item) for item in _steps if item]
                     if isinstance(_steps, list)
+                    else []
+                )
+                _skipped_steps = _state_info.get("skipped_step_ids")
+                coordinator_skipped_onboarding_steps = (
+                    [str(item) for item in _skipped_steps if item]
+                    if isinstance(_skipped_steps, list)
                     else []
                 )
         except Exception as exc:
@@ -929,6 +936,7 @@ async def entrypoint(ctx: agents.JobContext):
         is_coordinator=SESSION_DETAILS.is_coordinator,
         is_org_workspace=SESSION_DETAILS.org_id is not None,
         coordinator_completed_onboarding_steps=coordinator_completed_onboarding_steps,
+        coordinator_skipped_onboarding_steps=coordinator_skipped_onboarding_steps,
     ).flatten()
     _log.config(f"System prompt ({len(system_prompt)} chars)")
 
