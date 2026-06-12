@@ -29,6 +29,7 @@ from unity.function_manager.primitives.registry import (
     _CLASS_PATH_TO_ALIAS,
 )
 from unity.manager_registry import SingletonABCMeta
+from unity.integrations.function_metadata import is_provider_backed_function
 
 if TYPE_CHECKING:
     from unity.comms.primitives import CommsPrimitives
@@ -1451,6 +1452,6 @@ def get_primitive_callable(
     manager = getattr(primitives, manager_alias, None)
     if manager is None:
         return None
-    if manager_alias == "integrations" and primitive_data.get("integration_tool_id"):
+    if manager_alias == "integrations" and is_provider_backed_function(primitive_data):
         return manager.callable_for_tool(primitive_data)
     return getattr(manager, method_name, None)

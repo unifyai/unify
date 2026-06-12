@@ -5,8 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
+import unity.function_manager.function_manager as fm_module
 from unity.function_manager.function_manager import FunctionManager
 from unity.function_manager.primitives.scope import PrimitiveScope
+from unity.function_manager.types.function import Function
 from unity.integrations.primitives import IntegrationPrimitives
 from unity.settings import SETTINGS
 
@@ -26,7 +28,9 @@ MOCK_TOOL = {
     "connection_id": "conn-1",
     "required_scopes": ["crm.objects.contacts.read"],
     "action_class": "read",
+    "behavior_hints": ["read_only", "external"],
     "confirmation_required": False,
+    "approval_level": "auto",
     "input_schema": {
         "type": "object",
         "required": ["query"],
@@ -153,13 +157,12 @@ def test_materializes_connected_provider_tools_with_active_only_search(
     row = fm._inserted_rows[0]
     assert row["name"] == "primitives.integrations.hubspot.search_contacts"
     assert row["argspec"] == "(query: str, limit: int = 10) -> dict"
-    assert row["integration_tool_id"] == "composio:hubspot:search_contacts"
-    assert row["backend_id"] == "composio"
-    assert row["input_schema"]["properties"]["query"]["type"] == "string"
-    assert row["output_schema"] == {"type": "object"}
-    assert row["examples"] == [
-        {"arguments": {"query": "alice@example.com", "limit": 5}},
-    ]
+    assert set(row) >= {"metadata"}
+    assert "integration_tool_id" not in row
+    assert "backend_id" not in row
+    assert "input_schema" not in row
+    assert "output_schema" not in row
+    assert "examples" not in row
     assert "Parameters\n----------" in row["docstring"]
     assert "query : str" in row["docstring"]
     assert "await primitives.integrations.hubspot.search_contacts" in row["docstring"]
@@ -169,21 +172,36 @@ def test_materializes_connected_provider_tools_with_active_only_search(
     )
     assert "Signature: (query: str, limit: int = 10) -> dict" in row["embedding_text"]
     assert "crm.objects.contacts.read" not in row["embedding_text"]
-    metadata = row["integration_metadata"]
-    assert metadata["required_scopes"] == ["crm.objects.contacts.read"]
-    assert metadata["action_class"] == "read"
-    assert metadata["confirmation_required"] is False
-    assert metadata["schema_available"] is True
-    assert metadata["provider_app_id"] == "hubspot"
-    assert metadata["provider_tool_id"] == "hubspot.search_contacts"
-    assert metadata["app_icon_url"] == "https://provider.example/icons/hubspot.png"
-    # Per-user connection state never lands on catalogue rows.
-    assert "connection_id" not in metadata
-    assert "activation_state" not in metadata
-    assert "granted_scopes" not in metadata
-    assert "provider_error_status" not in metadata
-    assert "match_reason" not in metadata
-    assert row["integration_source"] == "provider_backed"
+    metadata = row["metadata"]
+    assert metadata["source"] == "provider_backed"
+    integration = metadata["integration"]
+    assert integration["tool_id"] == "composio:hubspot:search_contacts"
+    assert integration["backend_id"] == "composio"
+    assert integration["app_slug"] == "hubspot"
+    assert integration["input_schema"]["properties"]["query"]["type"] == "string"
+    assert integration["output_schema"] == {"type": "object"}
+    assert integration["examples"] == [
+        {"arguments": {"query": "alice@example.com", "limit": 5}},
+    ]
+    assert integration["required_scopes"] == ["crm.objects.contacts.read"]
+    assert integration["action_class"] == "read"
+    assert integration["behavior_hints"] == ["read_only", "external"]
+    assert integration["confirmation_required"] is False
+    assert integration["schema_available"] is True
+    assert integration["provider_app_id"] == "hubspot"
+    assert integration["provider_tool_id"] == "hubspot.search_contacts"
+    assert integration["labels"] == {
+        "app_display_name": "HubSpot",
+        "app_icon_url": "https://provider.example/icons/hubspot.png",
+        "tool_display_name": "Search contacts",
+    }
+    assert integration["app_icon_url"] == "https://provider.example/icons/hubspot.png"
+    assert "connection_id" not in integration
+    assert "activation_state" not in integration
+    assert "granted_scopes" not in integration
+    assert "provider_error_status" not in integration
+    assert "match_reason" not in integration
+    assert "approval_level" not in integration
     assert row["depends_on"] == []
 
 
@@ -200,6 +218,92 @@ def test_provider_integration_function_id_is_stable_signed_int32() -> None:
     assert first != different_tool
     assert 0 <= first <= 0x7FFFFFFF
     assert 0 <= different_tool <= 0x7FFFFFFF
+
+
+def test_function_model_keeps_provider_details_inside_metadata() -> None:
+    forbidden_fields = {
+        "integration_tool_id",
+        "integration_source",
+        "integration_metadata",
+        "input_schema",
+        "output_schema",
+        "behavior_hints",
+        "backend_id",
+        "app_slug",
+    }
+
+    assert "metadata" in Function.model_fields
+    assert not forbidden_fields.intersection(Function.model_fields)
+
+
+def test_search_functions_uses_compact_provider_projection(monkeypatch) -> None:
+    fm = FunctionManager.__new__(FunctionManager)
+    fm._include_primitives = True
+    fm._read_compositional_contexts = lambda: []
+    fm._read_function_contexts = lambda _table_name: ["Functions/Primitives"]
+    fm._scoped_primitive_filter = lambda: None
+    fm.sync_primitives = lambda: None
+    captured: dict[str, object] = {}
+
+    full_row = {
+        **fm._integration_tool_to_function_row(MOCK_TOOL),
+        "implementation": "print('large implementation')",
+    }
+
+    def fake_ranked_search(contexts, query, *, limit, unique_id_field, backfill):
+        captured["allowed_fields"] = contexts[0].allowed_fields
+        captured["query"] = query
+        captured["limit"] = limit
+        captured["unique_id_field"] = unique_id_field
+        captured["backfill"] = backfill
+        return [full_row]
+
+    monkeypatch.setattr(fm_module, "federated_ranked_search", fake_ranked_search)
+
+    results = fm.search_functions(
+        query="hubspot contact search",
+        n=1,
+        include_implementations=False,
+    )
+
+    assert len(results) == 1
+    assert "input_schema" not in results[0]
+    assert "output_schema" not in results[0]
+    assert "examples" not in results[0]
+    assert "implementation" not in results[0]
+    assert results[0]["metadata"]["source"] == "provider_backed"
+    assert results[0]["metadata"]["integration"] == {
+        "tool_id": "composio:hubspot:search_contacts",
+        "backend_id": "composio",
+        "app_slug": "hubspot",
+        "source_type": "third_party",
+        "namespace": "primitives.integrations",
+        "provider_app_id": "hubspot",
+        "provider_tool_id": "hubspot.search_contacts",
+        "labels": {
+            "app_display_name": "HubSpot",
+            "app_icon_url": "https://provider.example/icons/hubspot.png",
+            "tool_display_name": "Search contacts",
+        },
+        "app_display_name": "HubSpot",
+        "app_icon_url": "https://provider.example/icons/hubspot.png",
+        "tool_display_name": "Search contacts",
+        "required_scopes": ["crm.objects.contacts.read"],
+        "action_class": "read",
+        "behavior_hints": ["read_only", "external"],
+        "confirmation_required": False,
+        "schema_available": True,
+    }
+    assert "input_schema" not in results[0]["metadata"]["integration"]
+    assert "output_schema" not in results[0]["metadata"]["integration"]
+    assert "examples" not in results[0]["metadata"]["integration"]
+    allowed_fields = captured["allowed_fields"]
+    assert isinstance(allowed_fields, list)
+    assert "input_schema" not in allowed_fields
+    assert "output_schema" not in allowed_fields
+    assert "examples" not in allowed_fields
+    assert "metadata" in allowed_fields
+    assert "behavior_hints" not in allowed_fields
 
 
 @pytest.mark.anyio
@@ -222,8 +326,10 @@ async def test_execute_function_dispatches_provider_backed_primitive_by_row(
         "is_primitive": True,
         "primitive_class": "unity.integrations.primitives.IntegrationPrimitives",
         "primitive_method": "primitives_integrations__gmail__fetch_emails",
-        "integration_source": "provider_backed",
-        "integration_tool_id": "composio:gmail:fetch_emails",
+        "metadata": {
+            "source": "provider_backed",
+            "integration": {"tool_id": "composio:gmail:fetch_emails"},
+        },
     }
     primitives = SimpleNamespace(
         integrations=IntegrationPrimitives(owner_scope={"assistant_id": 42}),
@@ -425,8 +531,8 @@ def test_materialized_rows_include_pipedream_metadata_without_user_state(
     assert result["status"] == "synced"
     row = fm._inserted_rows[0]
     assert row["name"] == "primitives.integrations.slack.send_message"
-    assert row["backend_id"] == "pipedream"
-    metadata = row["integration_metadata"]
+    metadata = row["metadata"]["integration"]
+    assert metadata["backend_id"] == "pipedream"
     assert metadata["provider_app_id"] == "slack"
     assert metadata["provider_tool_id"] == "slack-send-message"
     assert metadata["app_icon_url"] == "https://provider.example/icons/slack.png"
@@ -468,15 +574,18 @@ def test_insert_primitives_preserves_validated_integration_metadata(
 
     assert captured[0]["verify"] is True
     assert captured[0]["guidance_ids"] == [101]
-    assert captured[0]["integration_source"] == "provider_backed"
-    assert captured[0]["integration_tool_id"] == "composio:hubspot:search_contacts"
+    assert captured[0]["metadata"]["source"] == "provider_backed"
+    assert (
+        captured[0]["metadata"]["integration"]["tool_id"]
+        == "composio:hubspot:search_contacts"
+    )
     assert "implementation" in captured[0]
     assert captured[0]["implementation"] is None
     assert "precondition" in captured[0]
     assert captured[0]["precondition"] is None
-    assert "integration_metadata" in captured[0]
-    assert "provider_error_status" not in captured[0]["integration_metadata"]
-    assert "match_reason" not in captured[0]["integration_metadata"]
+    assert "integration_metadata" not in captured[0]
+    assert "provider_error_status" not in captured[0]["metadata"]["integration"]
+    assert "match_reason" not in captured[0]["metadata"]["integration"]
 
 
 def test_insert_primitives_preserves_static_primitive_null_shape(monkeypatch) -> None:
@@ -588,8 +697,9 @@ def test_function_manager_queries_do_not_call_integration_ops(monkeypatch) -> No
         ),
     )
     monkeypatch.setattr(
-        "unity.function_manager.function_manager.federated_ranked_search",
-        lambda contexts, references, **kwargs: [dict(primitive_row)],
+        fm_module,
+        "federated_ranked_search",
+        lambda *_args, **_kwargs: [primitive_row],
     )
     fm = _fake_function_manager()
     fm._read_compositional_contexts = lambda: []

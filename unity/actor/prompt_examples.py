@@ -2006,10 +2006,10 @@ async def find_recent_hubspot_contacts() -> dict:
     #
     # Suppose the result includes:
     #   name="primitives.integrations.hubspot.search_contacts"
-    #   integration_tool_id="composio:hubspot:search_contacts"
-    #   activation_state="connected_ready"
-    #   required_scopes=["crm.objects.contacts.read"]
-    #   schema_available=True
+    #   metadata["source"]="provider_backed"
+    #   metadata["integration"]["tool_id"]="composio:hubspot:search_contacts"
+    #   metadata["integration"]["activation_state"]="connected_ready"
+    #   metadata["integration"]["schema_available"]=True
     #
     # Then call the concrete primitive directly.
     return await primitives.integrations.hubspot.search_contacts(

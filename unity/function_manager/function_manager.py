@@ -73,6 +73,14 @@ from unity.common.diagnostic_logging import (
     log_staging_diagnostic,
     staging_diagnostics_enabled,
 )
+from unity.integrations.function_metadata import (
+    function_metadata,
+    integration_app_slug,
+    integration_backend_id,
+    integration_metadata,
+    is_provider_backed_function,
+    provider_function_metadata,
+)
 from .custom_functions import (
     compute_custom_functions_hash,
     compute_custom_venvs_hash,
@@ -1871,7 +1879,7 @@ class FunctionManager(BaseFunctionManager):
             FederatedSearchContext(
                 context=self._primitives_ctx,
                 source="primitives",
-                row_filter=f'({scoped}) and integration_source == "provider_backed"',
+                row_filter=f'({scoped}) and metadata["source"] == "provider_backed"',
                 allowed_fields=allowed_fields,
             ),
         ]
@@ -1927,8 +1935,8 @@ class FunctionManager(BaseFunctionManager):
 
         Provider-backed tools are materialized rows in ``Functions/Primitives``,
         so they need the same integer ``function_id`` shape as static primitive
-        methods. The canonical execution identifier remains
-        ``integration_tool_id``; this hash-derived value only lets the row
+        methods. The canonical execution identifier remains the provider
+        tool id stored in metadata; this hash-derived value only lets the row
         participate in existing FunctionManager storage, search, and filtering
         paths.
         """
@@ -2156,6 +2164,7 @@ class FunctionManager(BaseFunctionManager):
         required_scopes = item.get("required_scopes") or []
         action_class = item.get("action_class", "read")
         confirmation_required = bool(item.get("confirmation_required", False))
+        behavior_hints = item.get("behavior_hints") or []
         input_schema = item.get("input_schema") or item.get("input_schema_json") or {}
         output_schema = (
             item.get("output_schema") or item.get("output_schema_json") or {}
@@ -2206,6 +2215,33 @@ class FunctionManager(BaseFunctionManager):
             input_schema=input_schema,
             examples=examples,
         )
+        metadata = provider_function_metadata(
+            {
+                "tool_id": tool_id,
+                "backend_id": backend,
+                "app_slug": item.get("app_slug"),
+                "input_schema": input_schema,
+                "output_schema": output_schema,
+                "examples": examples,
+                "source_type": "third_party",
+                "namespace": "primitives.integrations",
+                "provider_app_id": provider_app_id,
+                "provider_tool_id": provider_tool_id,
+                "labels": {
+                    "app_display_name": app,
+                    "app_icon_url": app_icon_url,
+                    "tool_display_name": tool,
+                },
+                "app_display_name": app,
+                "app_icon_url": app_icon_url,
+                "tool_display_name": tool,
+                "required_scopes": required_scopes,
+                "action_class": action_class,
+                "behavior_hints": behavior_hints,
+                "confirmation_required": confirmation_required,
+                "schema_available": item.get("schema_available", True),
+            },
+        )
         row = {
             "function_id": self._provider_integration_function_id(tool_id),
             "language": "python",
@@ -2223,31 +2259,7 @@ class FunctionManager(BaseFunctionManager):
             "primitive_class": "unity.integrations.primitives.IntegrationPrimitives",
             "primitive_method": item.get("function_manager_name")
             or name.replace(".", "__"),
-            "integration_source": "provider_backed",
-            "integration_tool_id": tool_id,
-            "backend_id": backend,
-            "app_slug": item.get("app_slug"),
-            "input_schema": input_schema,
-            "output_schema": output_schema,
-            "examples": examples,
-            # Catalogue-level metadata only: per-user connection state
-            # (connection ids, activation, granted scopes, provider errors)
-            # is deliberately absent. Rows describe the tool itself; live
-            # state is resolved at read/execution time from the user's
-            # connections, so the same rows are valid for every user of the
-            # app.
-            "integration_metadata": {
-                "source_type": "third_party",
-                "namespace": "primitives.integrations",
-                "provider_app_id": provider_app_id,
-                "provider_tool_id": provider_tool_id,
-                "app_display_name": app,
-                "app_icon_url": app_icon_url,
-                "required_scopes": required_scopes,
-                "action_class": action_class,
-                "confirmation_required": confirmation_required,
-                "schema_available": item.get("schema_available", True),
-            },
+            "metadata": metadata,
         }
         return Function.model_validate(row).model_dump(include=set(row.keys()))
 
@@ -2622,8 +2634,51 @@ class FunctionManager(BaseFunctionManager):
         self._store_hash_map("integration_tool_hash_by_app", hash_by_app)
 
     @staticmethod
+    def _compact_function_search_rows(
+        rows: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Return actor-facing discovery rows without large structured payloads."""
+
+        compact_rows: list[dict[str, Any]] = []
+        for row in rows:
+            compact = {
+                key: value for key, value in row.items() if key != "implementation"
+            }
+            metadata = function_metadata(compact)
+            integration = integration_metadata(compact)
+            if integration:
+                compact_integration = {
+                    key: value
+                    for key, value in integration.items()
+                    if key not in {"input_schema", "output_schema", "examples"}
+                }
+                compact["metadata"] = {
+                    **metadata,
+                    "integration": compact_integration,
+                }
+            compact_rows.append(compact)
+        return compact_rows
+
+    @staticmethod
     def _integration_hash_key(*, backend_id: str | None, app_slug: str) -> str:
         return f"{backend_id or 'provider'}:{app_slug}"
+
+    @staticmethod
+    def _provider_integration_filter(
+        *,
+        backend_id: str | None = None,
+        app_slug: str | None = None,
+    ) -> str:
+        clauses = ['metadata["source"] == "provider_backed"']
+        if backend_id is not None:
+            clauses.append(
+                f'metadata["integration"]["backend_id"] == {json.dumps(backend_id or "provider")}',
+            )
+        if app_slug is not None:
+            clauses.append(
+                f'metadata["integration"]["app_slug"] == {json.dumps(app_slug)}',
+            )
+        return " and ".join(clauses)
 
     @staticmethod
     def _hash_integration_rows(rows: List[Dict[str, Any]]) -> str:
@@ -2635,14 +2690,7 @@ class FunctionManager(BaseFunctionManager):
             "function_id",
             "primitive_class",
             "primitive_method",
-            "integration_source",
-            "integration_tool_id",
-            "backend_id",
-            "app_slug",
-            "input_schema",
-            "output_schema",
-            "examples",
-            "integration_metadata",
+            "metadata",
             "verify",
         )
         return stable_hash_for_rows(rows, fields=hash_fields)
@@ -2654,28 +2702,37 @@ class FunctionManager(BaseFunctionManager):
         """Delete materialized provider-backed primitive rows for the given apps."""
         if not app_keys:
             return 0
-        clauses = [
-            (
-                'integration_source == "provider_backed" '
-                f'and backend_id == "{backend_id or "provider"}" '
-                f'and app_slug == "{app_slug}"'
-            )
+        app_key_set = {
+            self._integration_hash_key(backend_id=backend_id, app_slug=app_slug)
             for backend_id, app_slug in app_keys
-        ]
-        filter_expr = " or ".join(f"({clause})" for clause in clauses)
+        }
+        filter_expr = " or ".join(
+            f"({self._provider_integration_filter(backend_id=backend_id or 'provider', app_slug=app_slug)})"
+            for backend_id, app_slug in app_keys
+        )
         try:
             logs = unify.get_logs(
                 context=self._primitives_ctx,
                 filter=filter_expr,
                 exclude_fields=list_private_fields(self._primitives_ctx),
             )
-            if not logs:
+            ids_to_delete = [
+                lg.id
+                for lg in logs or []
+                if is_provider_backed_function(getattr(lg, "entries", None))
+                and self._integration_hash_key(
+                    backend_id=integration_backend_id(lg.entries) or "provider",
+                    app_slug=integration_app_slug(lg.entries) or "",
+                )
+                in app_key_set
+            ]
+            if not ids_to_delete:
                 return 0
             unify.delete_logs(
                 context=self._primitives_ctx,
-                logs=[lg.id for lg in logs],
+                logs=ids_to_delete,
             )
-            return len(logs)
+            return len(ids_to_delete)
         except Exception as e:
             logger.warning(f"Failed to delete provider integration rows: {e}")
             return 0
@@ -2687,19 +2744,17 @@ class FunctionManager(BaseFunctionManager):
         app_slug: str,
     ) -> int | None:
         """Count materialized provider-backed rows for one app."""
-        filter_expr = (
-            'integration_source == "provider_backed" '
-            f'and backend_id == "{backend_id or "provider"}" '
-            f'and app_slug == "{app_slug}"'
+        filter_expr = self._provider_integration_filter(
+            backend_id=backend_id or "provider",
+            app_slug=app_slug,
         )
         try:
-            return len(
-                unify.get_logs(
-                    context=self._primitives_ctx,
-                    filter=filter_expr,
-                    exclude_fields=list_private_fields(self._primitives_ctx),
-                ),
+            rows = unify.get_logs(
+                context=self._primitives_ctx,
+                filter=filter_expr,
+                exclude_fields=list_private_fields(self._primitives_ctx),
             )
+            return len(rows or [])
         except Exception as exc:
             log_staging_diagnostic(
                 logger,
@@ -3088,7 +3143,7 @@ class FunctionManager(BaseFunctionManager):
                 continue
             item = {**item, "app_slug": item_app}
             row = self._integration_tool_to_function_row(item)
-            backend_id = row.get("backend_id") or "provider"
+            backend_id = integration_backend_id(row) or "provider"
             key = self._integration_hash_key(backend_id=backend_id, app_slug=item_app)
             rows_by_key.setdefault(key, []).append(row)
             key_to_app[key] = (backend_id, item_app)
@@ -3817,16 +3872,7 @@ class FunctionManager(BaseFunctionManager):
                     "primitive_class": row.get("primitive_class"),
                     "primitive_method": row.get("primitive_method"),
                 }
-                for key in (
-                    "integration_source",
-                    "integration_tool_id",
-                    "backend_id",
-                    "app_slug",
-                    "input_schema",
-                    "output_schema",
-                    "examples",
-                    "integration_metadata",
-                ):
+                for key in ("metadata",):
                     if key in row:
                         data[key] = row.get(key)
                 entries.setdefault(row["name"], data)
@@ -4790,14 +4836,7 @@ class FunctionManager(BaseFunctionManager):
             for key in (
                 "primitive_class",
                 "primitive_method",
-                "integration_source",
-                "integration_tool_id",
-                "backend_id",
-                "app_slug",
-                "input_schema",
-                "output_schema",
-                "examples",
-                "integration_metadata",
+                "metadata",
             ):
                 if key in ent:
                     data[key] = ent.get(key)
@@ -5135,7 +5174,31 @@ class FunctionManager(BaseFunctionManager):
         if _return_callable and _namespace is None:
             raise ValueError("_namespace required when _return_callable=True")
 
-        allowed_fields = list(Function.model_fields.keys())
+        allowed_fields = (
+            list(Function.model_fields.keys())
+            if _return_callable
+            else [
+                "function_id",
+                "language",
+                "name",
+                "argspec",
+                "docstring",
+                "depends_on",
+                "embedding_text",
+                "precondition",
+                "guidance_ids",
+                "verify",
+                "is_primitive",
+                "primitive_class",
+                "primitive_method",
+                "metadata",
+                "venv_id",
+                "windows_os_required",
+                "custom_hash",
+            ]
+        )
+        if not _return_callable and include_implementations:
+            allowed_fields.append("implementation")
 
         contexts = [
             FederatedSearchContext(
@@ -5161,13 +5224,12 @@ class FunctionManager(BaseFunctionManager):
         )
 
         if not _return_callable:
-            # Strip implementations if not requested (reduces payload size)
-            if not include_implementations:
-                results = [
-                    {k: v for k, v in row.items() if k != "implementation"}
-                    for row in results
-                ]
-            return results
+            compact_results = self._compact_function_search_rows(results)
+            if include_implementations:
+                for compact, full in zip(compact_results, results, strict=True):
+                    if "implementation" in full:
+                        compact["implementation"] = full["implementation"]
+            return compact_results
 
         assert _namespace is not None  # validated above
         callables_list = self._inject_callables_for_functions(
@@ -5176,13 +5238,11 @@ class FunctionManager(BaseFunctionManager):
         )
 
         if _also_return_metadata:
-            # Strip implementations from metadata if not requested
-            metadata_rows = results
-            if not include_implementations:
-                metadata_rows = [
-                    {k: v for k, v in row.items() if k != "implementation"}
-                    for row in results
-                ]
+            metadata_rows = self._compact_function_search_rows(results)
+            if include_implementations:
+                for compact, full in zip(metadata_rows, results, strict=True):
+                    if "implementation" in full:
+                        compact["implementation"] = full["implementation"]
             return {"callables": callables_list, "metadata": metadata_rows}  # type: ignore[return-value]
 
         return callables_list  # type: ignore[return-value]
@@ -6338,7 +6398,7 @@ class FunctionManager(BaseFunctionManager):
             name_filter = f"name == {json.dumps(name)}"
         if provider_backed_only:
             name_filter = (
-                f'({name_filter}) and (integration_source == "provider_backed")'
+                f'({name_filter}) and (metadata["source"] == "provider_backed")'
             )
         rows = self._primitive_logs(extra_filter=name_filter, limit=1)
         if rows:
