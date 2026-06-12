@@ -13,6 +13,7 @@ from .semantic_search import (
     backfill_rows,
     ensure_vector_for_source,
     fetch_top_k_by_terms_with_score,
+    resolve_existing_vector_for_source,
 )
 
 SOURCE_FIELD = "_federated_source"
@@ -78,7 +79,7 @@ MetricFetcher = Callable[
 RowFetcher = Callable[[FederatedSearchContext, Optional[str]], list[dict]]
 
 
-def _is_missing_context_error(exc: Exception) -> bool:
+def is_missing_context_error(exc: Exception) -> bool:
     if not isinstance(exc, _UnifyRequestError):
         return False
     status = getattr(getattr(exc, "response", None), "status_code", None)
@@ -106,18 +107,28 @@ def default_ranked_fetcher(
     references: Mapping[str, str],
     limit: int,
 ) -> tuple[list[dict], str]:
-    """Fetch ranked rows from one context and expose the score column."""
-    terms = [
-        (
-            ensure_vector_for_source(
+    """Fetch ranked rows from one context and expose the score column.
+
+    Contexts in the active project create missing embedding columns on the
+    fly. Foreign-project contexts (public-read catalogues) are strictly
+    read-only: only terms whose embedding column was pre-created at seed
+    time participate, and terms without one are treated as having no
+    embeddings in that context (consistent with the per-row
+    missing-embedding semantics of multi-term scoring).
+    """
+    terms: list[tuple[str, str]] = []
+    for source_expr, ref_text in references.items():
+        if spec.project is None:
+            embed_col = ensure_vector_for_source(spec.context, source_expr)
+        else:
+            embed_col = resolve_existing_vector_for_source(
                 spec.context,
                 source_expr,
                 project=spec.project,
-            ),
-            str(ref_text),
-        )
-        for source_expr, ref_text in references.items()
-    ]
+            )
+            if embed_col is None:
+                continue
+        terms.append((embed_col, str(ref_text)))
     return fetch_top_k_by_terms_with_score(
         spec.context,
         terms,
@@ -184,7 +195,7 @@ def default_filter_fetcher(
         try:
             page = [row.entries for row in unify.get_logs(**kwargs)]
         except Exception as exc:
-            if _is_missing_context_error(exc):
+            if is_missing_context_error(exc):
                 break
             raise
         rows.extend(page)
@@ -467,7 +478,7 @@ def default_metric_fetcher(
     try:
         unify.get_context(spec.context, project=spec.project)
     except Exception as exc:
-        if _is_missing_context_error(exc):
+        if is_missing_context_error(exc):
             return _empty()
         raise
 
@@ -483,7 +494,7 @@ def default_metric_fetcher(
             ),
         )
     except Exception as exc:
-        if not _is_missing_context_error(exc):
+        if not is_missing_context_error(exc):
             raise
         return _empty()
 
@@ -693,6 +704,7 @@ __all__ = [
     "federated_filter",
     "federated_ranked_search",
     "federated_reduce",
+    "is_missing_context_error",
     "merge_ranked_batches",
     "merge_sorted_batches",
     "reduce_grouped_rows",

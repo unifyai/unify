@@ -17,8 +17,11 @@ from ..common.federated_search import (
     federated_count,
     federated_filter,
     federated_ranked_search,
+    is_missing_context_error,
 )
+from ..common.builtins import builtins_project
 from .base import BaseGuidanceManager
+from .builtins_catalog import BUILTINS_GUIDANCE_CONTEXT
 from .types.guidance import Guidance
 from ..manager_registry import ManagerRegistry
 from ..image_manager.types import AnnotatedImageRefs, AnnotatedImageRef
@@ -119,6 +122,21 @@ class GuidanceManager(BaseGuidanceManager):
             ),
         )
 
+    def _builtins_read_spec(
+        self,
+        *,
+        row_filter: Optional[str] = None,
+        allowed_fields: Optional[List[str]] = None,
+    ) -> FederatedSearchContext:
+        """Return the federated source for the global builtins guidance catalogue."""
+        return FederatedSearchContext(
+            context=BUILTINS_GUIDANCE_CONTEXT,
+            source="builtins",
+            row_filter=row_filter,
+            allowed_fields=allowed_fields,
+            project=builtins_project(),
+        )
+
     def _function_contexts_for_read(self) -> list[str]:
         """Return compositional function contexts visible to guidance reads."""
         from ..function_manager.function_manager import (
@@ -187,11 +205,42 @@ class GuidanceManager(BaseGuidanceManager):
             return parts[0]
         return " and ".join(f"({p})" for p in parts)
 
+    def _is_builtin_guidance(self, guidance_id: int) -> bool:
+        """Return whether an id refers to a row in the builtins catalogue."""
+        try:
+            rows = unify.get_logs(
+                context=BUILTINS_GUIDANCE_CONTEXT,
+                project=builtins_project(),
+                filter=f"guidance_id == {int(guidance_id)}",
+                limit=1,
+                from_fields=["guidance_id"],
+            )
+        except Exception as exc:
+            if is_missing_context_error(exc):
+                return False
+            raise
+        return bool(rows)
+
+    def _raise_if_builtin(self, guidance_id: int, action: str) -> None:
+        """Refuse mutations of builtins entries with an actionable error."""
+        if self._is_builtin_guidance(guidance_id):
+            raise ValueError(
+                f"guidance_id {guidance_id} is a built-in platform guidance "
+                f"entry and cannot be {action}. Built-in guidance is "
+                "read-only for everyone. To tailor it, create your own "
+                "entry with add_guidance (optionally adapting the built-in "
+                "content) and the personal copy can then be updated or "
+                "deleted freely.",
+            )
+
     def _num_items(self) -> int:
         return federated_count(
             [
-                FederatedSearchContext(context=context, source=context)
-                for context in self._read_guidance_contexts()
+                *(
+                    FederatedSearchContext(context=context, source=context)
+                    for context in self._read_guidance_contexts()
+                ),
+                self._builtins_read_spec(),
             ],
             key="guidance_id",
             filter=self._scoped_filter(None),
@@ -675,6 +724,7 @@ class GuidanceManager(BaseGuidanceManager):
             context = self._guidance_context_for_destination(destination)
         except ToolErrorException as exc:
             return exc.payload  # type: ignore[return-value]
+        self._raise_if_builtin(guidance_id, "updated")
         ids = unify.get_logs(
             context=context,
             filter=f"guidance_id == {int(guidance_id)}",
@@ -796,6 +846,7 @@ class GuidanceManager(BaseGuidanceManager):
             context = self._guidance_context_for_destination(destination)
         except ToolErrorException as exc:
             return exc.payload  # type: ignore[return-value]
+        self._raise_if_builtin(guidance_id, "deleted")
         ids = unify.get_logs(
             context=context,
             filter=f"guidance_id == {int(guidance_id)}",
@@ -823,13 +874,19 @@ class GuidanceManager(BaseGuidanceManager):
         allowed_fields = list(self._BUILTIN_FIELDS)
         rows = federated_ranked_search(
             [
-                FederatedSearchContext(
-                    context=context,
-                    source=context,
+                *(
+                    FederatedSearchContext(
+                        context=context,
+                        source=context,
+                        row_filter=self._scoped_filter(None),
+                        allowed_fields=allowed_fields,
+                    )
+                    for context in self._read_guidance_contexts()
+                ),
+                self._builtins_read_spec(
                     row_filter=self._scoped_filter(None),
                     allowed_fields=allowed_fields,
-                )
-                for context in self._read_guidance_contexts()
+                ),
             ],
             references,
             limit=k,
@@ -849,12 +906,15 @@ class GuidanceManager(BaseGuidanceManager):
         from_fields = list(self._BUILTIN_FIELDS)
         rows = federated_filter(
             [
-                FederatedSearchContext(
-                    context=context,
-                    source=context,
-                    allowed_fields=from_fields,
-                )
-                for context in self._read_guidance_contexts()
+                *(
+                    FederatedSearchContext(
+                        context=context,
+                        source=context,
+                        allowed_fields=from_fields,
+                    )
+                    for context in self._read_guidance_contexts()
+                ),
+                self._builtins_read_spec(allowed_fields=from_fields),
             ],
             filter=self._scoped_filter(normalize_filter_expr(filter)),
             offset=offset,

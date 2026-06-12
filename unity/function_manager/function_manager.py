@@ -46,7 +46,8 @@ from ..common.federated_search import (
     federated_filter,
     federated_ranked_search,
 )
-from .builtins_catalog import BUILTINS_PRIMITIVES_CONTEXT, builtins_project
+from ..common.builtins import builtins_project
+from .builtins_catalog import BUILTINS_PRIMITIVES_CONTEXT
 from ..common.tool_outcome import ToolErrorException
 from .execution_env import ENVIRONMENT_MODULES, create_base_globals
 from .dependency_analysis import (

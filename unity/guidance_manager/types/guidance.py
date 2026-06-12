@@ -41,6 +41,14 @@ class Guidance(AuthoredRow):
         ),
     )
 
+    is_builtin: bool = Field(
+        default=False,
+        description=(
+            "True for read-only platform builtin guidance from the global "
+            "catalogue; False for tenant-authored entries."
+        ),
+    )
+
     # Images are a list-based AnnotatedImageRefs container (persisted as a plain list in the backend).
 
     @field_validator("function_ids", mode="before")
