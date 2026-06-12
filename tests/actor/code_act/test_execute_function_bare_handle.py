@@ -12,6 +12,7 @@ This ensures the core loop adopts the handle via the bare-handle path
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from typing import Any, AsyncIterator
 from unittest.mock import AsyncMock
@@ -217,8 +218,10 @@ async def test_execute_function_dispatches_provider_backed_primitive_directly():
             return {
                 "name": name,
                 "is_primitive": True,
-                "integration_source": "provider_backed",
-                "integration_tool_id": "composio:gmail:fetch_emails",
+                "metadata": {
+                    "source": "provider_backed",
+                    "integration": {"tool_id": "composio:gmail:fetch_emails"},
+                },
             }
 
         async def execute_function(self, **kwargs):
@@ -261,6 +264,110 @@ async def test_execute_function_dispatches_provider_backed_primitive_directly():
         "primitives.integrations.gmail.fetch_emails"
     )
     actor._session_executor.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_execute_function_surfaces_provider_confirmation_as_pending_approval():
+    class _ProviderFunctionManager(_FakeFunctionManager):
+        def _get_stored_primitive_data_by_name(self, *, name: str):
+            if name != "primitives.integrations.gmail.fetch_emails":
+                return None
+            return {
+                "name": name,
+                "is_primitive": True,
+                "metadata": {
+                    "source": "provider_backed",
+                    "integration": {
+                        "tool_id": "composio:gmail:fetch_emails",
+                        "app_slug": "gmail",
+                        "connection_id": "conn-gmail",
+                        "app_display_name": "Gmail",
+                        "external_account_label": "Work Gmail",
+                        "tool_display_name": "Fetch emails",
+                        "action_class": "sensitive_read",
+                        "behavior_hints": ["sensitive_data", "external"],
+                        "approval_level": "specific_approval",
+                    },
+                },
+            }
+
+        async def execute_function(self, **_kwargs):
+            return {
+                "status": "confirmation_required",
+                "confirmation": {
+                    "audit_id": 17,
+                    "connection_id": "conn-gmail",
+                    "tool_id": "composio:gmail:fetch_emails",
+                    "app_slug": "gmail",
+                    "app_display_name": "Gmail",
+                    "account_label": "Work Gmail",
+                    "tool_display_name": "Fetch emails",
+                    "action_class": "sensitive_read",
+                    "behavior_hints": ["sensitive_data", "external"],
+                    "arguments_summary": {"query": "is:unread"},
+                    "approval_level": "specific_approval",
+                    "approval_options": ["approve_once", "deny"],
+                    "confirmation_token": "confirm-1",
+                    "expires_at": "2026-06-12T14:00:00Z",
+                },
+                "error": {"code": "confirmation_required"},
+            }
+
+    fm = _ProviderFunctionManager()
+    actor = CodeActActor(
+        function_manager=fm,  # type: ignore[arg-type]
+        can_store=False,
+    )
+    notification_q: asyncio.Queue[dict] = asyncio.Queue()
+    actor._session_executor.execute = AsyncMock(  # type: ignore[method-assign]
+        side_effect=AssertionError("provider primitive should not use sandbox"),
+    )
+
+    try:
+        execute_function = actor.get_tools("act")["execute_function"]
+        if hasattr(execute_function, "fn"):
+            execute_function = execute_function.fn
+
+        result = await execute_function(
+            function_name="primitives.integrations.gmail.fetch_emails",
+            call_kwargs={"query": "is:unread"},
+            _notification_up_q=notification_q,
+        )
+    finally:
+        await actor.close()
+
+    assert isinstance(result, ExecutionResult)
+    assert result.result["type"] == "integration_tool_pending_approval"
+    assert result.result["status"] == "pending_approval"
+    assert result.result["approval"] == {
+        "audit_id": 17,
+        "connection_id": "conn-gmail",
+        "tool_id": "composio:gmail:fetch_emails",
+        "function_name": "primitives.integrations.gmail.fetch_emails",
+        "app_slug": "gmail",
+        "app_display_name": "Gmail",
+        "account_label": "Work Gmail",
+        "tool_display_name": "Fetch emails",
+        "action_class": "sensitive_read",
+        "behavior_hints": ["sensitive_data", "external"],
+        "arguments_summary": {"query": "is:unread"},
+        "approval_level": "specific_approval",
+        "approval_options": ["approve_once", "deny"],
+        "confirmation_token": "confirm-1",
+        "expires_at": "2026-06-12T14:00:00Z",
+    }
+    assert result.result["resume"] == {
+        "tool_id": "composio:gmail:fetch_emails",
+        "connection_id": "conn-gmail",
+        "audit_id": 17,
+        "arguments": {"query": "is:unread"},
+        "confirmation_token": "confirm-1",
+        "approval_audit_id": 17,
+        "confirmation_token_argument": "confirmation_token",
+        "approval_audit_id_argument": "approval_audit_id",
+    }
+    notification = await asyncio.wait_for(notification_q.get(), timeout=1)
+    assert notification == result.result
 
 
 @pytest.mark.asyncio
