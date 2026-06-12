@@ -206,6 +206,27 @@ ensure_embedding_search_key() {
     "https://platform.openai.com/api-keys"
 }
 
+ensure_default_chat_model() {
+  if has_env_value UNIFY_MODEL; then
+    return 0
+  fi
+  # Compose passes UNIFY_MODEL through to the runtime even when blank, which
+  # would override Unity's built-in default — so pin a model that matches the
+  # chat key the user actually provided.
+  local model=""
+  if has_env_value DEEPSEEK_API_KEY; then
+    model="deepseek-v4-max@deepseek"
+  elif has_env_value ANTHROPIC_API_KEY; then
+    model="claude-4.6-sonnet@anthropic"
+  elif has_env_value OPENAI_API_KEY; then
+    model="gpt-5.4@openai"
+  else
+    return 0
+  fi
+  upsert_env "UNIFY_MODEL" "$model"
+  log_success "Set UNIFY_MODEL=$model (edit in $ENV_FILE to change)"
+}
+
 ensure_oauth_signing_key() {
   if has_env_value OAUTH_STATE_SIGNING_KEY; then
     log_success "OAUTH_STATE_SIGNING_KEY already set"
@@ -397,6 +418,7 @@ run_non_interactive_byok() {
   import_shell_env_keys
   prompt_llm_key
   ensure_embedding_search_key
+  ensure_default_chat_model
   prompt_secret \
     "Speech-to-text (required for browser calls)" \
     "DEEPGRAM_API_KEY" \
@@ -435,6 +457,7 @@ main() {
 
   if [[ "${UNITY_BYOK_FORCE:-0}" != "1" ]] && has_env_value UNITY_BYOK_CONFIGURED; then
     import_shell_env_keys
+    ensure_default_chat_model
     sync_anticaptcha_keys
     log_success "BYOK already configured in $ENV_FILE — skipping wizard"
     log_info "Set UNITY_BYOK_FORCE=1 to run the wizard again"
@@ -454,6 +477,7 @@ main() {
   import_shell_env_keys
   prompt_llm_key
   ensure_embedding_search_key
+  ensure_default_chat_model
   prompt_secret \
     "Speech-to-text (required for browser calls)" \
     "DEEPGRAM_API_KEY" \
