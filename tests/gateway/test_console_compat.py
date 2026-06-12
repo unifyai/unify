@@ -38,7 +38,7 @@ class FakeStorage:
         content_type: str = "application/octet-stream",
     ):
         return SimpleNamespace(
-            key=f"gs://local-bucket/{key}",
+            key=key,
             size_bytes=len(data),
             content_type=content_type,
             metadata={},
@@ -513,7 +513,9 @@ def test_console_attachment_upload_response_has_expected_aliases(
     assert response.status_code == 200
     body = response.json()
     assert body["filename"] == "hello.txt"
-    assert body["gs_url"].startswith("gs://local-bucket/attachments/123/")
+    assert body["gs_url"].startswith(
+        "gs://assistant-message-attachments-production/123/",
+    )
     assert body["signed_url"].startswith("https://signed.local/")
     assert body["content_type"] == "text/plain"
     assert body["size_bytes"] == 5

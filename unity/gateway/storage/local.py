@@ -2,7 +2,13 @@
 
 Used by the single-process self-hosted Unity. Backs gateway attachments
 to a workspace-relative directory (``UNITY_GATEWAY_STORAGE_DIR``, default
-``./.unity-gateway-storage``) and serves them via ``file://`` URIs.
+``./.unity-gateway-storage``).
+
+When a ``public_base_url`` is configured, ``signed_url`` returns
+``{public_base_url}/{key}`` — the HTTP endpoint where another service
+(Orchestra's local-object route, in the self-host compose stack) serves
+the same directory. Without one, ``signed_url`` falls back to a
+``file://`` URI usable only inside the gateway process.
 """
 
 from __future__ import annotations
@@ -27,9 +33,14 @@ class LocalDiskStorage(Storage):
     paths are rejected to prevent escapes out of ``base_dir``.
     """
 
-    def __init__(self, base_dir: Path | str | None = None) -> None:
+    def __init__(
+        self,
+        base_dir: Path | str | None = None,
+        public_base_url: str | None = None,
+    ) -> None:
         self._base_dir = Path(base_dir) if base_dir is not None else _default_base_dir()
         self._base_dir.mkdir(parents=True, exist_ok=True)
+        self._public_base_url = (public_base_url or "").rstrip("/") or None
 
     @property
     def base_dir(self) -> Path:
@@ -100,6 +111,8 @@ class LocalDiskStorage(Storage):
         path = self._resolve(key)
         if not path.exists():
             raise StorageError(f"object not found: {key!r}")
+        if self._public_base_url:
+            return f"{self._public_base_url}/{key}"
         return path.resolve().as_uri()
 
 

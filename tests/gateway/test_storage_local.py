@@ -83,6 +83,21 @@ async def test_signed_url_returns_file_uri_for_existing_object(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+async def test_signed_url_returns_public_base_url_when_configured(
+    tmp_path: Path,
+) -> None:
+    storage = LocalDiskStorage(
+        base_dir=tmp_path,
+        public_base_url="http://orchestra:8000/v0/storage/local/",
+    )
+    await storage.write_bytes("attachments/123/abc_hello.txt", b"x")
+    url = await storage.signed_url("attachments/123/abc_hello.txt")
+    assert url == (
+        "http://orchestra:8000/v0/storage/local/attachments/123/abc_hello.txt"
+    )
+
+
+@pytest.mark.asyncio
 async def test_signed_url_raises_for_missing_object(tmp_path: Path) -> None:
     storage = LocalDiskStorage(base_dir=tmp_path)
     with pytest.raises(StorageError):
