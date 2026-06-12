@@ -21,8 +21,22 @@ log_ok() { echo -e "${GREEN}✓${NC} $1"; }
 log_warn() { echo -e "${YELLOW}⚠${NC} $1"; }
 log_err() { echo -e "${RED}✗${NC} $1" >&2; }
 
+# Compose gives the caller's shell environment precedence over --env-file
+# values during ${VAR} interpolation, so stray exports (direnv, dotfiles, CI)
+# would silently override the stack's secrets. Run compose under a minimal
+# environment so $ENV_FILE is the single source of truth; keep only PATH,
+# HOME (docker CLI config), TERM, and Docker connectivity settings.
 compose() {
-  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"
+  env -i \
+    PATH="$PATH" \
+    HOME="$HOME" \
+    TERM="${TERM:-}" \
+    ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} \
+    ${DOCKER_CONFIG:+DOCKER_CONFIG="$DOCKER_CONFIG"} \
+    ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
+    ${DOCKER_CERT_PATH:+DOCKER_CERT_PATH="$DOCKER_CERT_PATH"} \
+    ${DOCKER_TLS_VERIFY:+DOCKER_TLS_VERIFY="$DOCKER_TLS_VERIFY"} \
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"
 }
 
 require_compose() {
