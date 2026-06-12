@@ -1,13 +1,66 @@
 {
-    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
-    "python.terminal.activateEnvironment": true,
-    "python.testing.pytestArgs": [
-        "."
-    ],
-    "python.testing.unittestEnabled": false,
-    "python.testing.pytestEnabled": true,
-    "python.testing.cwd": "${workspaceFolder}",
-    "workbench.editor.enablePreview": false,
-    "python.envFile": "${workspaceFolder}/.env",
-    "debugpy.justMyCode": false
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "python.terminal.activateEnvironment": true,
+  "python.testing.pytestArgs": [
+    "."
+  ],
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestEnabled": true,
+  "python.testing.cwd": "${workspaceFolder}",
+  "workbench.editor.enablePreview": false,
+  "python.envFile": "${workspaceFolder}/.env",
+  "debugpy.justMyCode": false,
+  "files.watcherExclude": {
+    "**/.git/**": true,
+    "**/.venv/**": true,
+    "**/logs/**": true,
+    "**/.pytest_cache/**": true,
+    "**/.ruff_cache/**": true,
+    "**/.unity_plans/**": true,
+    "**/__pycache__/**": true,
+    "**/.cache.ndjson": true,
+    "**/.cache_write.ndjson": true
+  },
+  "search.exclude": {
+    "**/.venv": true,
+    "**/logs": true,
+    "**/.pytest_cache": true,
+    "**/.ruff_cache": true,
+    "**/.unity_plans": true,
+    "**/__pycache__": true,
+    "**/.cache.ndjson": true,
+    "**/.cache_write.ndjson": true
+  },
+  "python.analysis.exclude": [
+    "**/.git",
+    "**/.venv",
+    "**/.pytest_cache",
+    "**/.ruff_cache",
+    "**/__pycache__",
+    "**/logs",
+    "**/.unity_plans"
+  ],
+  "python.analysis.diagnosticMode": "openFilesOnly",
+  "python.analysis.indexing": false,
+  "cursorpyright.analysis.include": [
+    "unity",
+    "tests",
+    "conftest.py"
+  ],
+  "cursorpyright.analysis.exclude": [
+    "**/.git",
+    "**/.venv",
+    "**/.pytest_cache",
+    "**/.ruff_cache",
+    "**/__pycache__",
+    "**/logs",
+    "**/.unity_plans"
+  ],
+  "cursorpyright.analysis.diagnosticMode": "openFilesOnly",
+  "cursorpyright.analysis.disableWorkspaceSymbol": true,
+  "cursorpyright.analysis.autoImportCompletions": false,
+  "cursorpyright.analysis.autoSearchPaths": false,
+  "cursorpyright.analysis.useLibraryCodeForTypes": false,
+  "cursorpyright.analysis.fileEnumerationTimeout": 2,
+  "cursorpyright.analysis.typeCheckingMode": "off"
 }

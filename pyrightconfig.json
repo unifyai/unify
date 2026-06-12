@@ -1,4 +1,24 @@
 {
-  "extraPaths": ["../unillm", "../unify"],
-  "typeCheckingMode": "off"
+  "extraPaths": [
+    "../unillm",
+    "../unify"
+  ],
+  "exclude": [
+    "**/.git",
+    "**/.venv",
+    "**/.pytest_cache",
+    "**/.ruff_cache",
+    "**/__pycache__",
+    "**/logs",
+    "**/.unity_plans"
+  ],
+  "venv": ".venv",
+  "venvPath": ".",
+  "typeCheckingMode": "off",
+  "include": [
+    "unity",
+    "tests",
+    "conftest.py"
+  ],
+  "useLibraryCodeForTypes": false
 }
