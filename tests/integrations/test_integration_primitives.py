@@ -66,6 +66,34 @@ class FakeIntegrationClient:
         self.calls.append(("run_tool", (tool_id, arguments), payload))
         return {"status": "ok", "tool_id": tool_id, "arguments": arguments}
 
+    def get_tool_policy(self, connection_id, **scope):
+        self.calls.append(("get_tool_policy", (connection_id,), scope))
+        return {
+            "connection_id": connection_id,
+            "app_display_name": "Gmail",
+            "account_label": "Work Gmail",
+            "policies": [],
+        }
+
+    def patch_tool_policy(self, connection_id, **payload):
+        self.calls.append(("patch_tool_policy", (connection_id,), payload))
+        return {
+            "connection_id": connection_id,
+            "policies": payload.get("tool_policies") or {},
+        }
+
+    def approve_tool_execution(self, audit_id, **payload):
+        self.calls.append(("approve_tool_execution", (audit_id,), payload))
+        return {
+            "status": "approved",
+            "audit_id": audit_id,
+            "confirmation_token": "confirm-approved",
+        }
+
+    def deny_tool_execution(self, audit_id, **payload):
+        self.calls.append(("deny_tool_execution", (audit_id,), payload))
+        return {"status": "denied", "audit_id": audit_id}
+
     def test_connection(self, connection_id):
         self.calls.append(("test_connection", (connection_id,), {}))
         return {"status": "ok", "connection_id": connection_id}
@@ -77,6 +105,18 @@ def patch_ops_from_client(monkeypatch, client: FakeIntegrationClient) -> None:
     monkeypatch.setattr(ops_module, "search_tools", client.search_tools)
     monkeypatch.setattr(ops_module, "get_tool_schema", client.get_tool_schema)
     monkeypatch.setattr(ops_module, "run_tool", client.run_tool)
+    monkeypatch.setattr(ops_module, "get_tool_policy", client.get_tool_policy)
+    monkeypatch.setattr(ops_module, "patch_tool_policy", client.patch_tool_policy)
+    monkeypatch.setattr(
+        ops_module,
+        "approve_tool_execution",
+        client.approve_tool_execution,
+    )
+    monkeypatch.setattr(
+        ops_module,
+        "deny_tool_execution",
+        client.deny_tool_execution,
+    )
     monkeypatch.setattr(ops_module, "test_connection", client.test_connection)
 
 
@@ -84,16 +124,17 @@ def stub_materialized_tool(monkeypatch, *, name: str, tool_id: str) -> None:
     monkeypatch.setattr("unify.get_active_context", lambda: {"read": "user-1/42"})
 
     def fake_get_logs(**kwargs):
-        if (
-            kwargs.get("filter")
-            == f'name == "{name}" and integration_source == "provider_backed"'
+        if kwargs.get("filter") == (
+            f"name == {json.dumps(name)} " 'and metadata["source"] == "provider_backed"'
         ):
             return [
                 SimpleNamespace(
                     entries={
                         "name": name,
-                        "integration_source": "provider_backed",
-                        "integration_tool_id": tool_id,
+                        "metadata": {
+                            "source": "provider_backed",
+                            "integration": {"tool_id": tool_id},
+                        },
                         "primitive_method": name.replace(".", "__"),
                         "docstring": f"Execute {name}.",
                     },
@@ -108,18 +149,23 @@ def stub_materialized_app(monkeypatch, *, app_slug: str, names: list[str]) -> No
     monkeypatch.setattr("unify.get_active_context", lambda: {"read": "user-1/42"})
 
     def fake_get_logs(**kwargs):
-        if (
-            kwargs.get("filter")
-            == f'app_slug == "{app_slug}" and integration_source == "provider_backed"'
+        if kwargs.get("filter") == (
+            'metadata["source"] == "provider_backed" '
+            f'and metadata["integration"]["app_slug"] == {json.dumps(app_slug)}'
         ):
             return [
                 SimpleNamespace(
                     entries={
                         "name": name,
                         "docstring": f"Execute {name}.",
-                        "action_class": "read",
-                        "integration_source": "provider_backed",
-                        "app_slug": app_slug,
+                        "primitive_class": "unity.integrations.primitives.IntegrationPrimitives",
+                        "metadata": {
+                            "source": "provider_backed",
+                            "integration": {
+                                "app_slug": app_slug,
+                                "action_class": "read",
+                            },
+                        },
                     },
                 )
                 for name in names
@@ -209,6 +255,26 @@ def test_ops_functions_delegate_to_unify_integration_helpers(monkeypatch) -> Non
         raising=False,
     )
     monkeypatch.setattr(
+        "unity.integrations.ops.unify.get_integration_tool_policy",
+        helper("get_tool_policy"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "unity.integrations.ops.unify.patch_integration_tool_policy",
+        helper("patch_tool_policy"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "unity.integrations.ops.unify.approve_integration_tool_execution",
+        helper("approve_tool_execution"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "unity.integrations.ops.unify.deny_integration_tool_execution",
+        helper("deny_tool_execution"),
+        raising=False,
+    )
+    monkeypatch.setattr(
         "unity.integrations.ops.unify.test_integration_connection",
         helper("test_connection"),
         raising=False,
@@ -242,7 +308,33 @@ def test_ops_functions_delegate_to_unify_integration_helpers(monkeypatch) -> Non
         "tool-1",
         {"query": "alice"},
         confirmation_token="confirm",
+        approval_audit_id=17,
         owner_scope="assistant",
+    )
+    ops_module.get_tool_policy(
+        "conn-1",
+        owner_scope="assistant",
+        assistant_id=42,
+    )
+    ops_module.patch_tool_policy(
+        "conn-1",
+        tool_policies={"tool-1": "auto"},
+        owner_scope="assistant",
+        assistant_id=42,
+    )
+    ops_module.approve_tool_execution(
+        17,
+        scope="tool",
+        persist_policy=True,
+        approval_level="auto",
+        owner_scope="assistant",
+        assistant_id=42,
+    )
+    ops_module.deny_tool_execution(
+        18,
+        reason="wrong account",
+        owner_scope="assistant",
+        assistant_id=42,
     )
     ops_module.test_connection("conn-1")
 
@@ -274,6 +366,7 @@ def test_ops_functions_delegate_to_unify_integration_helpers(monkeypatch) -> Non
                 "canonical_app_slug": "slack",
                 "activation_state": None,
                 "include_unconnected": False,
+                "include_schema": False,
                 "owner_scope": "assistant",
                 "assistant_id": 42,
             },
@@ -286,6 +379,7 @@ def test_ops_functions_delegate_to_unify_integration_helpers(monkeypatch) -> Non
                 "offset": 0,
                 "include_unconnected": False,
                 "canonical_app_slug": None,
+                "include_schema": False,
                 "owner_scope": "assistant",
                 "assistant_id": 42,
             },
@@ -302,7 +396,54 @@ def test_ops_functions_delegate_to_unify_integration_helpers(monkeypatch) -> Non
             ("tool-1", {"query": "alice"}),
             {
                 "confirmation_token": "confirm",
+                "approval_audit_id": 17,
                 "owner_scope": "assistant",
+            },
+        ),
+        (
+            "get_tool_policy",
+            ("conn-1",),
+            {
+                "owner_scope": "assistant",
+                "assistant_id": 42,
+            },
+        ),
+        (
+            "patch_tool_policy",
+            ("conn-1",),
+            {
+                "tool_policies": {"tool-1": "auto"},
+                "bulk_approval_level": None,
+                "action_classes": None,
+                "reset_to_defaults": False,
+                "owner_scope": "assistant",
+                "assistant_id": 42,
+            },
+        ),
+        (
+            "approve_tool_execution",
+            (17,),
+            {
+                "scope": "tool",
+                "persist_policy": True,
+                "approval_level": "auto",
+                "actor_id": None,
+                "expires_at": None,
+                "owner_scope": "assistant",
+                "assistant_id": 42,
+            },
+        ),
+        (
+            "deny_tool_execution",
+            (18,),
+            {
+                "scope": "once",
+                "persist_policy": False,
+                "approval_level": "forbidden",
+                "actor_id": None,
+                "reason": "wrong account",
+                "owner_scope": "assistant",
+                "assistant_id": 42,
             },
         ),
         (
@@ -372,6 +513,37 @@ async def test_helper_methods_delegate_to_client_with_scope_payloads(
         assistant_id=42,
         confirmation_token="confirm",
     ) == {"status": "ok", "tool_id": "tool-1", "arguments": {"query": "alice"}}
+    assert await primitives.review_tool_permissions(
+        "conn-1",
+        assistant_id=42,
+    ) == {
+        "connection_id": "conn-1",
+        "app_display_name": "Gmail",
+        "account_label": "Work Gmail",
+        "policies": [],
+    }
+    assert await primitives.update_tool_permissions(
+        "conn-1",
+        tool_policies={"tool-1": "auto"},
+        assistant_id=42,
+    ) == {"connection_id": "conn-1", "policies": {"tool-1": "auto"}}
+    assert await primitives.resolve_tool_execution(
+        17,
+        decision="approve",
+        scope="tool",
+        persist_policy=True,
+        assistant_id=42,
+    ) == {
+        "status": "approved",
+        "audit_id": 17,
+        "confirmation_token": "confirm-approved",
+    }
+    assert await primitives.resolve_tool_execution(
+        18,
+        decision="deny",
+        reason="wrong account",
+        assistant_id=42,
+    ) == {"status": "denied", "audit_id": 18}
     assert await primitives.manage_connection("conn-1", action="test") == {
         "status": "ok",
         "connection_id": "conn-1",
@@ -383,7 +555,6 @@ async def test_helper_methods_delegate_to_client_with_scope_payloads(
             (),
             {
                 "owner_scope": "assistant",
-                "user_id": "user-1",
                 "assistant_id": 42,
             },
         ),
@@ -392,7 +563,6 @@ async def test_helper_methods_delegate_to_client_with_scope_payloads(
             ("HubSpot leads",),
             {
                 "owner_scope": "assistant",
-                "user_id": "user-1",
                 "assistant_id": 42,
                 "include_unconnected": False,
                 "limit": 7,
@@ -413,6 +583,52 @@ async def test_helper_methods_delegate_to_client_with_scope_payloads(
                 "owner_scope": "assistant",
                 "assistant_id": 42,
                 "confirmation_token": "confirm",
+            },
+        ),
+        (
+            "get_tool_policy",
+            ("conn-1",),
+            {
+                "owner_scope": "assistant",
+                "assistant_id": 42,
+            },
+        ),
+        (
+            "patch_tool_policy",
+            ("conn-1",),
+            {
+                "tool_policies": {"tool-1": "auto"},
+                "bulk_approval_level": None,
+                "action_classes": None,
+                "reset_to_defaults": False,
+                "owner_scope": "assistant",
+                "assistant_id": 42,
+            },
+        ),
+        (
+            "approve_tool_execution",
+            (17,),
+            {
+                "scope": "tool",
+                "persist_policy": True,
+                "approval_level": "auto",
+                "actor_id": None,
+                "expires_at": None,
+                "owner_scope": "assistant",
+                "assistant_id": 42,
+            },
+        ),
+        (
+            "deny_tool_execution",
+            (18,),
+            {
+                "scope": "once",
+                "persist_policy": False,
+                "approval_level": "forbidden",
+                "actor_id": None,
+                "reason": "wrong account",
+                "owner_scope": "assistant",
+                "assistant_id": 42,
             },
         ),
         ("test_connection", ("conn-1",), {}),
@@ -576,8 +792,13 @@ async def test_search_integrations_allows_omitted_query(monkeypatch) -> None:
     ]
 
 
-def test_search_integrations_is_only_fixed_integration_discovery_primitive() -> None:
-    assert IntegrationPrimitives._PRIMITIVE_METHODS == ("search_integrations",)
+def test_integration_primitives_expose_discovery_and_permission_tools() -> None:
+    assert IntegrationPrimitives._PRIMITIVE_METHODS == (
+        "search_integrations",
+        "review_tool_permissions",
+        "update_tool_permissions",
+        "resolve_tool_execution",
+    )
 
 
 @pytest.mark.anyio
@@ -637,7 +858,6 @@ async def test_first_wave_dynamic_namespace_executes_discord_tool(monkeypatch) -
             {
                 "owner_scope": "assistant",
                 "assistant_id": 42,
-                "user_id": "user-1",
                 "confirmation_token": None,
             },
         ),
@@ -652,9 +872,12 @@ async def test_callable_for_tool_dispatches_execution(monkeypatch) -> None:
 
     callable_tool = primitives.callable_for_tool(
         {
-            "integration_tool_id": "composio:hubspot:search_contacts",
             "primitive_method": "primitives_integrations__hubspot__search_contacts",
             "docstring": "Search HubSpot contacts.",
+            "metadata": {
+                "source": "provider_backed",
+                "integration": {"tool_id": "composio:hubspot:search_contacts"},
+            },
         },
     )
 
@@ -667,7 +890,57 @@ async def test_callable_for_tool_dispatches_execution(monkeypatch) -> None:
         "arguments": {"query": "alice"},
     }
     signature = inspect.signature(callable_tool)
-    assert list(signature.parameters) == []
+    assert list(signature.parameters) == ["arguments"]
+
+
+@pytest.mark.anyio
+async def test_callable_for_tool_keeps_execution_identity_out_of_arguments(
+    monkeypatch,
+) -> None:
+    client = FakeIntegrationClient()
+    patch_ops_from_client(monkeypatch, client)
+    primitives = IntegrationPrimitives(owner_scope={"assistant_id": 42})
+
+    callable_tool = primitives.callable_for_tool(
+        {
+            "primitive_method": "primitives_integrations__gmail__fetch_emails",
+            "metadata": {
+                "source": "provider_backed",
+                "integration": {
+                    "tool_id": "composio:gmail:fetch_emails",
+                    "connection_id": "conn-gmail",
+                },
+            },
+        },
+    )
+
+    assert callable_tool is not None
+    result = await callable_tool(
+        user_id="me",
+        max_results=5,
+        confirmation_token="confirm-1",
+        approval_audit_id=17,
+    )
+
+    assert result == {
+        "status": "ok",
+        "tool_id": "composio:gmail:fetch_emails",
+        "arguments": {"user_id": "me", "max_results": 5},
+    }
+    assert client.calls[-1] == (
+        "run_tool",
+        (
+            "composio:gmail:fetch_emails",
+            {"user_id": "me", "max_results": 5},
+        ),
+        {
+            "confirmation_token": "confirm-1",
+            "approval_audit_id": 17,
+            "assistant_id": 42,
+            "connection_id": "conn-gmail",
+            "owner_scope": "assistant",
+        },
+    )
 
 
 @pytest.mark.anyio
@@ -678,16 +951,20 @@ async def test_namespace_execution_uses_function_manager_provider_row(
     patch_ops_from_client(monkeypatch, client)
     row = {
         "name": "primitives.integrations.gmail.fetch_emails",
-        "integration_source": "provider_backed",
-        "integration_tool_id": "composio:gmail:fetch_emails",
         "primitive_method": "primitives_integrations__gmail__fetch_emails",
         "docstring": "Fetch Gmail messages.",
-        "input_schema": {
-            "type": "object",
-            "required": ["query"],
-            "properties": {
-                "query": {"type": "string"},
-                "max_results": {"type": "integer", "default": 5},
+        "metadata": {
+            "source": "provider_backed",
+            "integration": {
+                "tool_id": "composio:gmail:fetch_emails",
+                "input_schema": {
+                    "type": "object",
+                    "required": ["query"],
+                    "properties": {
+                        "query": {"type": "string"},
+                        "max_results": {"type": "integer", "default": 5},
+                    },
+                },
             },
         },
     }
@@ -751,7 +1028,6 @@ async def test_default_owner_scope_is_shared_across_helper_and_namespace_executi
             "limit": 20,
             "owner_scope": "assistant",
             "assistant_id": 42,
-            "user_id": "user-1",
         },
     )
     assert client.calls[1] == (
@@ -761,7 +1037,6 @@ async def test_default_owner_scope_is_shared_across_helper_and_namespace_executi
             "confirmation_token": None,
             "owner_scope": "assistant",
             "assistant_id": 42,
-            "user_id": "user-1",
         },
     )
 

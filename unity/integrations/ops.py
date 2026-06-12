@@ -127,6 +127,7 @@ def run_tool(
     arguments: dict[str, Any],
     *,
     confirmation_token: Optional[str] = None,
+    approval_audit_id: Optional[int] = None,
     **scope: Any,
 ) -> Any:
     try:
@@ -134,12 +135,101 @@ def run_tool(
             tool_id,
             arguments,
             confirmation_token=confirmation_token,
+            approval_audit_id=approval_audit_id,
             **_clean_scope(scope),
         )
     except KeyError:
         raise
     except Exception as exc:
         return _request_failed("run_integration_tool", exc)
+
+
+def get_tool_policy(connection_id: str, **scope: Any) -> Any:
+    try:
+        return unify.get_integration_tool_policy(
+            connection_id,
+            **_clean_scope(scope),
+        )
+    except KeyError:
+        raise
+    except Exception as exc:
+        return _request_failed("get_integration_tool_policy", exc)
+
+
+def patch_tool_policy(
+    connection_id: str,
+    *,
+    tool_policies: Optional[dict[str, str]] = None,
+    bulk_approval_level: Optional[str] = None,
+    action_classes: Optional[list[str]] = None,
+    reset_to_defaults: bool = False,
+    **scope: Any,
+) -> Any:
+    try:
+        return unify.patch_integration_tool_policy(
+            connection_id,
+            tool_policies=tool_policies,
+            bulk_approval_level=bulk_approval_level,
+            action_classes=action_classes,
+            reset_to_defaults=reset_to_defaults,
+            **_clean_scope(scope),
+        )
+    except KeyError:
+        raise
+    except Exception as exc:
+        return _request_failed("patch_integration_tool_policy", exc)
+
+
+def approve_tool_execution(
+    audit_id: int,
+    *,
+    scope: str = "once",
+    persist_policy: bool = False,
+    approval_level: str = "auto",
+    actor_id: Optional[str] = None,
+    expires_at: Optional[str] = None,
+    **owner_scope: Any,
+) -> Any:
+    try:
+        return unify.approve_integration_tool_execution(
+            audit_id,
+            scope=scope,
+            persist_policy=persist_policy,
+            approval_level=approval_level,
+            actor_id=actor_id,
+            expires_at=expires_at,
+            **_clean_scope(owner_scope),
+        )
+    except KeyError:
+        raise
+    except Exception as exc:
+        return _request_failed("approve_integration_tool_execution", exc)
+
+
+def deny_tool_execution(
+    audit_id: int,
+    *,
+    scope: str = "once",
+    persist_policy: bool = False,
+    approval_level: str = "forbidden",
+    actor_id: Optional[str] = None,
+    reason: Optional[str] = None,
+    **owner_scope: Any,
+) -> Any:
+    try:
+        return unify.deny_integration_tool_execution(
+            audit_id,
+            scope=scope,
+            persist_policy=persist_policy,
+            approval_level=approval_level,
+            actor_id=actor_id,
+            reason=reason,
+            **_clean_scope(owner_scope),
+        )
+    except KeyError:
+        raise
+    except Exception as exc:
+        return _request_failed("deny_integration_tool_execution", exc)
 
 
 def test_connection(connection_id: str) -> Any:
