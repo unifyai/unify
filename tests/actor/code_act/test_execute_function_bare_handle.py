@@ -205,6 +205,65 @@ async def test_execute_function_uses_stored_venv_when_caller_omits_it():
 
 
 @pytest.mark.asyncio
+async def test_execute_function_dispatches_provider_backed_primitive_directly():
+    class _ProviderFunctionManager(_FakeFunctionManager):
+        def __init__(self):
+            super().__init__()
+            self.direct_calls: list[dict[str, Any]] = []
+
+        def _get_stored_primitive_data_by_name(self, *, name: str):
+            if name != "primitives.integrations.gmail.fetch_emails":
+                return None
+            return {
+                "name": name,
+                "is_primitive": True,
+                "integration_source": "provider_backed",
+                "integration_tool_id": "composio:gmail:fetch_emails",
+            }
+
+        async def execute_function(self, **kwargs):
+            self.direct_calls.append(kwargs)
+            return {
+                "status": "ok",
+                "tool_id": "composio:gmail:fetch_emails",
+                "arguments": kwargs["call_kwargs"],
+            }
+
+    fm = _ProviderFunctionManager()
+    actor = CodeActActor(
+        function_manager=fm,  # type: ignore[arg-type]
+        can_store=False,
+    )
+    actor._session_executor.execute = AsyncMock(  # type: ignore[method-assign]
+        side_effect=AssertionError("provider primitive should not use sandbox"),
+    )
+
+    try:
+        execute_function = actor.get_tools("act")["execute_function"]
+        if hasattr(execute_function, "fn"):
+            execute_function = execute_function.fn
+
+        result = await execute_function(
+            function_name="primitives.integrations.gmail.fetch_emails",
+            call_kwargs={"query": "is:unread"},
+        )
+    finally:
+        await actor.close()
+
+    assert isinstance(result, ExecutionResult)
+    assert result.result == {
+        "status": "ok",
+        "tool_id": "composio:gmail:fetch_emails",
+        "arguments": {"query": "is:unread"},
+    }
+    assert len(fm.direct_calls) == 1
+    assert fm.direct_calls[0]["function_name"] == (
+        "primitives.integrations.gmail.fetch_emails"
+    )
+    actor._session_executor.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
 @pytest.mark.timeout(120)
 async def test_execute_function_returns_bare_handle_for_primitive(
     execute_function_tool,

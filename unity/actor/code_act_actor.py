@@ -1895,6 +1895,18 @@ def _synthesize_python_call(
             False,
         ):
             func_data = function_manager._get_primitive_data_by_name(name=function_name)
+        if func_data is None and getattr(
+            function_manager,
+            "_include_primitives",
+            False,
+        ):
+            get_stored_primitive = getattr(
+                function_manager,
+                "_get_stored_primitive_data_by_name",
+                None,
+            )
+            if callable(get_stored_primitive):
+                func_data = get_stored_primitive(name=function_name)
 
         if func_data is not None:
             impl = func_data.get("implementation")
@@ -3134,6 +3146,7 @@ class CodeActActor(BaseCodeActActor):
                 """
                 call_kwargs = call_kwargs or {}
                 resolved_venv_id: int | None = None
+                function_data: dict[str, Any] | None = None
                 get_function_data = getattr(
                     self.function_manager,
                     "_get_function_data_by_name",
@@ -3141,14 +3154,22 @@ class CodeActActor(BaseCodeActActor):
                 )
                 if callable(get_function_data):
                     function_data = get_function_data(name=function_name)
-                    stored_venv_id = (
-                        function_data.get("venv_id")
-                        if isinstance(function_data, dict)
-                        and not function_data.get("is_primitive")
-                        else None
+                if function_data is None:
+                    get_stored_primitive = getattr(
+                        self.function_manager,
+                        "_get_stored_primitive_data_by_name",
+                        None,
                     )
-                    if stored_venv_id is not None:
-                        resolved_venv_id = int(stored_venv_id)
+                    if callable(get_stored_primitive):
+                        function_data = get_stored_primitive(name=function_name)
+                stored_venv_id = (
+                    function_data.get("venv_id")
+                    if isinstance(function_data, dict)
+                    and not function_data.get("is_primitive")
+                    else None
+                )
+                if stored_venv_id is not None:
+                    resolved_venv_id = int(stored_venv_id)
 
                 import time as _ef_time
                 import logging as _ef_logging
@@ -3297,44 +3318,109 @@ class CodeActActor(BaseCodeActActor):
                     except Exception:
                         pass
 
-                    _ef_log.debug(
-                        f"⏱️ [execute_function +{_ef_ms()}] sandbox.execute start",
-                    )
-                    _pcc_token = _PARENT_CHAT_CONTEXT.set(_parent_chat_context)
-                    try:
+                    if (
+                        isinstance(function_data, dict)
+                        and function_data.get("is_primitive")
+                        and function_data.get("integration_source") == "provider_backed"
+                        and function_data.get("integration_tool_id")
+                    ):
+                        _ef_log.debug(
+                            f"⏱️ [execute_function +{_ef_ms()}] "
+                            "provider primitive direct execute start",
+                        )
                         try:
-                            out = await self._session_executor.execute(
-                                code=code,
-                                language=str(language),  # type: ignore[arg-type]
-                                state_mode=state_mode,  # type: ignore[arg-type]
-                                session_id=session_id,
-                                venv_id=resolved_venv_id,
-                                primitives=primitives,
-                                computer_primitives=computer_primitives,
-                                notification_q=notification_q,
+                            direct_result = (
+                                await self.function_manager.execute_function(
+                                    function_name=function_name,
+                                    call_kwargs=call_kwargs,
+                                    target_venv_id=None,
+                                    state_mode=state_mode,  # type: ignore[arg-type]
+                                    session_id=session_id or 0,
+                                    extra_namespaces=(
+                                        {"primitives": primitives}
+                                        if primitives is not None
+                                        else None
+                                    ),
+                                    _parent_chat_context=_parent_chat_context,
+                                )
                             )
-                            _ef_log.debug(
-                                f"⏱️ [execute_function +{_ef_ms()}] sandbox.execute done",
-                            )
-                        except Exception as e:
-                            exec_exc = e
-                            tb = traceback.format_exc()
-                            tb_str = tb
                             out = {
-                                "stdout": "",
-                                "stderr": "",
-                                "result": None,
-                                "error": tb,
-                                "language": language,
+                                "stdout": [],
+                                "stderr": [],
+                                "result": direct_result,
+                                "error": None,
+                                "language": "python",
                                 "state_mode": state_mode,
                                 "session_id": session_id,
                                 "session_name": session_name,
                                 "venv_id": resolved_venv_id,
                                 "session_created": False,
-                                "duration_ms": 0,
+                                "duration_ms": int(
+                                    (_ef_time.perf_counter() - _ef_t0) * 1000,
+                                ),
                             }
-                    finally:
-                        _PARENT_CHAT_CONTEXT.reset(_pcc_token)
+                            _ef_log.debug(
+                                f"⏱️ [execute_function +{_ef_ms()}] "
+                                "provider primitive direct execute done",
+                            )
+                        except Exception:
+                            exec_exc = sys.exc_info()[1]
+                            tb = traceback.format_exc()
+                            tb_str = tb
+                            out = {
+                                "stdout": [],
+                                "stderr": [],
+                                "result": None,
+                                "error": tb,
+                                "language": "python",
+                                "state_mode": state_mode,
+                                "session_id": session_id,
+                                "session_name": session_name,
+                                "venv_id": resolved_venv_id,
+                                "session_created": False,
+                                "duration_ms": int(
+                                    (_ef_time.perf_counter() - _ef_t0) * 1000,
+                                ),
+                            }
+                    else:
+                        _ef_log.debug(
+                            f"⏱️ [execute_function +{_ef_ms()}] sandbox.execute start",
+                        )
+                        _pcc_token = _PARENT_CHAT_CONTEXT.set(_parent_chat_context)
+                        try:
+                            try:
+                                out = await self._session_executor.execute(
+                                    code=code,
+                                    language=str(language),  # type: ignore[arg-type]
+                                    state_mode=state_mode,  # type: ignore[arg-type]
+                                    session_id=session_id,
+                                    venv_id=resolved_venv_id,
+                                    primitives=primitives,
+                                    computer_primitives=computer_primitives,
+                                    notification_q=notification_q,
+                                )
+                                _ef_log.debug(
+                                    f"⏱️ [execute_function +{_ef_ms()}] sandbox.execute done",
+                                )
+                            except Exception as e:
+                                exec_exc = e
+                                tb = traceback.format_exc()
+                                tb_str = tb
+                                out = {
+                                    "stdout": "",
+                                    "stderr": "",
+                                    "result": None,
+                                    "error": tb,
+                                    "language": language,
+                                    "state_mode": state_mode,
+                                    "session_id": session_id,
+                                    "session_name": session_name,
+                                    "venv_id": resolved_venv_id,
+                                    "session_created": False,
+                                    "duration_ms": 0,
+                                }
+                        finally:
+                            _PARENT_CHAT_CONTEXT.reset(_pcc_token)
 
                     # Enrich with session name.
                     if out.get("session_id") is not None:

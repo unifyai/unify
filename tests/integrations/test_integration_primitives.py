@@ -666,6 +666,59 @@ async def test_callable_for_tool_dispatches_execution(monkeypatch) -> None:
         "tool_id": "composio:hubspot:search_contacts",
         "arguments": {"query": "alice"},
     }
+    signature = inspect.signature(callable_tool)
+    assert list(signature.parameters) == []
+
+
+@pytest.mark.anyio
+async def test_namespace_execution_uses_function_manager_provider_row(
+    monkeypatch,
+) -> None:
+    client = FakeIntegrationClient()
+    patch_ops_from_client(monkeypatch, client)
+    row = {
+        "name": "primitives.integrations.gmail.fetch_emails",
+        "integration_source": "provider_backed",
+        "integration_tool_id": "composio:gmail:fetch_emails",
+        "primitive_method": "primitives_integrations__gmail__fetch_emails",
+        "docstring": "Fetch Gmail messages.",
+        "input_schema": {
+            "type": "object",
+            "required": ["query"],
+            "properties": {
+                "query": {"type": "string"},
+                "max_results": {"type": "integer", "default": 5},
+            },
+        },
+    }
+
+    class FakeFunctionManager:
+        def _get_stored_primitive_data_by_name(self, **kwargs):
+            assert kwargs == {
+                "name": "primitives.integrations.gmail.fetch_emails",
+                "provider_backed_only": True,
+            }
+            return dict(row)
+
+    monkeypatch.setattr(
+        "unity.manager_registry.ManagerRegistry.get_function_manager",
+        lambda: FakeFunctionManager(),
+    )
+    monkeypatch.setattr("unify.get_active_context", lambda: {})
+    monkeypatch.setattr("unify.get_logs", lambda **_kwargs: [])
+
+    primitives = IntegrationPrimitives(owner_scope={"assistant_id": 42})
+    callable_tool = primitives.gmail.fetch_emails
+
+    assert callable_tool.__doc__ == "Fetch Gmail messages."
+    assert str(inspect.signature(callable_tool)) == (
+        "(*, query: str, max_results: int = 5) -> dict"
+    )
+    assert await callable_tool(query="is:unread", max_results=5) == {
+        "status": "ok",
+        "tool_id": "composio:gmail:fetch_emails",
+        "arguments": {"query": "is:unread", "max_results": 5},
+    }
 
 
 @pytest.mark.anyio
