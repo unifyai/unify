@@ -244,21 +244,21 @@ def build_brain_spec(
             authorized_humans = coordinator_manager.get_org_members()
 
     _active_contact_ms = _mark_step()
-    # Prepend the assistant's job title / specialization (if set) to the bio
-    # so the voice-call system prompt also reflects what the assistant is
-    # specialized for. Keeping this here (rather than threading a new param
-    # through build_system_prompt) keeps the prompt builder API stable.
+    # Marty sessions carry fixed intro scaffolding in the prompt builder.
+    # Regular assistants prepend job title into the bio block when set.
     _bio_parts: list[str] = []
-    _job_title = (cm.assistant_job_title or "").strip()
-    if _job_title:
-        _bio_parts.append(f"Role / specialization: {_job_title}.")
+    if not SESSION_DETAILS.is_coordinator:
+        _job_title = (cm.assistant_job_title or "").strip()
+        if _job_title:
+            _bio_parts.append(f"Role / specialization: {_job_title}.")
     if cm.assistant_about:
         _bio_parts.append(cm.assistant_about)
+    _bio_text = "\n".join(_bio_parts)
     _bio_ms = _mark_step()
     runtime_setup_note = deployment_runtime_reconcile_prompt_note(cm)
     _runtime_status_ms = _mark_step()
     system_prompt = build_system_prompt(
-        bio="\n".join(_bio_parts),
+        bio=_bio_text,
         contact_id=boss_contact_id,
         first_name=boss_contact.get("first_name") or "",
         surname=boss_contact.get("surname") or "",
