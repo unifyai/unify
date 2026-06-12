@@ -20,7 +20,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orchestra}
       POSTGRES_DB: orchestra
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+    - postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U orchestra -d orchestra"]
       interval: 2s
@@ -44,13 +44,27 @@ services:
 
   orchestra-seed:
     <<: *orchestra_image
-    command: python /app/src/deploy/selfhost/compose_seed.py
+    command:
+    - python
+    - -c
+    - |
+      from sqlalchemy import create_engine
+      from sqlalchemy.orm import sessionmaker
+      from orchestra.services.self_host_bootstrap import ensure_platform_billing_defaults
+      from orchestra.settings import settings
+      engine = create_engine(str(settings.db_url))
+      sf = sessionmaker(bind=engine)
+      with sf() as session:
+          ensure_platform_billing_defaults(session)
+          session.commit()
+      print("Self-host billing defaults ensured.")
     environment:
       ORCHESTRA_DB_HOST: postgres
       ORCHESTRA_DB_PORT: 5432
       ORCHESTRA_DB_USER: orchestra
       ORCHESTRA_DB_PASS: ${POSTGRES_PASSWORD:-orchestra}
       ORCHESTRA_DB_BASE: orchestra
+      SELF_HOST: "1"
     depends_on:
       orchestra-migrate:
         condition: service_completed_successfully
@@ -67,20 +81,17 @@ services:
       ORCHESTRA_DB_PASS: ${POSTGRES_PASSWORD:-orchestra}
       ORCHESTRA_DB_BASE: orchestra
       ORCHESTRA_ADMIN_KEY: ${ORCHESTRA_ADMIN_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       SELF_HOST: "1"
       SELF_HOST_LOCAL_BUCKET_DIR: /data/local-bucket
       ORCHESTRA_WORKERS_COUNT: "2"
     volumes:
-      - local-bucket:/data/local-bucket
+    - local-bucket:/data/local-bucket
     depends_on:
       orchestra-seed:
         condition: service_completed_successfully
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v0/health', timeout=5)\"",
-        ]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v0/health', timeout=5)\""]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -89,13 +100,13 @@ services:
   pubsub-emulator:
     image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
     command:
-      - gcloud
-      - beta
-      - emulators
-      - pubsub
-      - start
-      - --host-port=0.0.0.0:8085
-      - --project=${PUBSUB_GCP_PROJECT_ID:-local-test-project}
+    - gcloud
+    - beta
+    - emulators
+    - pubsub
+    - start
+    - --host-port=0.0.0.0:8085
+    - --project=${PUBSUB_GCP_PROJECT_ID:-local-test-project}
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8085 || exit 0"]
       interval: 3s
@@ -105,11 +116,14 @@ services:
 
   livekit:
     image: livekit/livekit-server:latest
-    command: ["--dev", "--bind", "0.0.0.0"]
+    command: ["--dev", "--bind", "0.0.0.0", "--config", "/etc/livekit.yaml"]
+    volumes:
+    - ./livekit.yaml:/etc/livekit.yaml:ro
     ports:
-      - "7880:7880"
-      - "7881:7881"
-      - "7882:7882/udp"
+    - "7880:7880"
+    - "7881:7881"
+    - "7882:7882/udp"
+    - "8787:8787"
     restart: unless-stopped
 
   gateway:
@@ -123,10 +137,14 @@ services:
       UNITY_GATEWAY_SINGLE_URL: "true"
       UNITY_COMMS_URL: http://gateway:8001
       UNITY_ADAPTERS_URL: http://gateway:8001
-      UNITY_GATEWAY_LOCAL_INGRESS_URL: http://unity-cm:8787
+      UNITY_GATEWAY_LOCAL_INGRESS_URL: http://livekit:8787
       LIVEKIT_URL: ws://livekit:7880
-      LIVEKIT_API_KEY: devkey
-      LIVEKIT_API_SECRET: secret
+      LIVEKIT_API_KEY: devkey # pragma: allowlist secret
+      LIVEKIT_API_SECRET: secret # pragma: allowlist secret
+      UNIFY_MODEL: ${UNIFY_MODEL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
     depends_on:
       orchestra:
         condition: service_healthy
@@ -142,27 +160,33 @@ services:
   console:
     <<: *console_image
     ports:
-      - "${CONSOLE_PORT:-3000}:3000"
+    - "${CONSOLE_PORT:-3000}:3000"
     environment:
       SELF_HOST: "1"
       NEXT_PUBLIC_SELF_HOST: "1"
       SELF_HOST_RUNTIME_MODE: compose
       NEXTAUTH_URL: ${NEXTAUTH_URL:-http://127.0.0.1:3000}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
-      ORCHESTRA_URL: http://orchestra:8000/v0
+      JWT_SECRET: ${JWT_SECRET}
+      ORCHESTRA_URL: http://orchestra:8000
       ORCHESTRA_ADMIN_KEY: ${ORCHESTRA_ADMIN_KEY}
       LOCAL_ADAPTERS_URL: http://gateway:8001
       UNITY_ADAPTERS_URL: http://gateway:8001
       UNITY_COMMS_URL: http://gateway:8001
       SELF_HOST_DESKTOP_URL: http://127.0.0.1:8090
+      SELF_HOST_DESKTOP_INTERNAL_URL: http://desktop-proxy:8090
       SELF_HOST_COORDINATOR_RUNTIME_FILE: /runtime/coordinator-runtime.json
       PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
       GCP_PROJECT_ID: ${PUBSUB_GCP_PROJECT_ID:-local-test-project}
+      PUBSUB_TOPIC_SUFFIX: ${PUBSUB_TOPIC_SUFFIX:--staging}
       LIVEKIT_URL: ws://127.0.0.1:7880
-      LIVEKIT_API_KEY: devkey
-      LIVEKIT_API_SECRET: secret
+      LIVEKIT_API_URL: http://livekit:7880
+      LIVEKIT_API_KEY: devkey # pragma: allowlist secret
+      LIVEKIT_API_SECRET: secret # pragma: allowlist secret
+      DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-}
+      CARTESIA_API_KEY: ${CARTESIA_API_KEY:-}
     volumes:
-      - runtime:/runtime
+    - runtime:/runtime
     depends_on:
       orchestra:
         condition: service_healthy
@@ -172,6 +196,7 @@ services:
 
   unity-cm:
     <<: *unity_image
+    network_mode: "service:livekit"
     entrypoint: ["/bin/bash", "/app/deploy/selfhost/cm-entrypoint.sh"]
     environment:
       SELF_HOST: "1"
@@ -180,7 +205,7 @@ services:
       ORCHESTRA_ADMIN_KEY: ${ORCHESTRA_ADMIN_KEY}
       PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
       GCP_PROJECT_ID: ${PUBSUB_GCP_PROJECT_ID:-local-test-project}
-      PUBSUB_TOPIC_SUFFIX: "-staging"
+      PUBSUB_TOPIC_SUFFIX: ${PUBSUB_TOPIC_SUFFIX:--staging}
       UNITY_COMMS_URL: http://gateway:8001
       UNITY_ADAPTERS_URL: http://gateway:8001
       UNITY_CONVERSATION_LOCAL_COMMS_HOST: 0.0.0.0
@@ -188,9 +213,11 @@ services:
       UNITY_DESKTOP_SHARED_MOUNT: "1"
       UNITY_LOCAL_ROOT: /Unity/Local
       SELF_HOST_DESKTOP_URL: http://127.0.0.1:8090
-      LIVEKIT_URL: ws://livekit:7880
-      LIVEKIT_API_KEY: devkey
-      LIVEKIT_API_SECRET: secret
+      SELF_HOST_DESKTOP_INTERNAL_URL: http://desktop-proxy:8090
+      LIVEKIT_URL: ws://127.0.0.1:7880
+      LIVEKIT_API_KEY: devkey # pragma: allowlist secret
+      LIVEKIT_API_SECRET: secret # pragma: allowlist secret
+      HF_HOME: /opt/hf-cache
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
@@ -198,13 +225,15 @@ services:
       CARTESIA_API_KEY: ${CARTESIA_API_KEY:-}
       UNIFY_MODEL: ${UNIFY_MODEL:-}
       UNITY_WEB_TAVILY_API_KEY: ${UNITY_WEB_TAVILY_API_KEY:-}
-      UNITY_WEB_ENABLED: ${UNITY_WEB_ENABLED:-}
+      UNITY_WEB_ENABLED: ${UNITY_WEB_ENABLED:-false}
       ANTICAPTCHA_KEY: ${ANTICAPTCHA_KEY:-}
       UNITY_ACTOR_ANTICAPTCHA_KEY: ${UNITY_ACTOR_ANTICAPTCHA_KEY:-}
     volumes:
-      - runtime:/runtime
-      - ${UNITY_WORKSPACE_HOST:-./workspace}:/Unity/Local
+    - runtime:/runtime
+    - ${UNITY_WORKSPACE_HOST:-./workspace}:/Unity/Local
     depends_on:
+      livekit:
+        condition: service_started
       orchestra:
         condition: service_healthy
       gateway:
@@ -215,23 +244,44 @@ services:
 
   desktop:
     image: ${DESKTOP_IMAGE:-ghcr.io/unifyai/unity-desktop-selfhost:staging}
+    entrypoint: ["/bin/bash", "/app/deploy/selfhost/desktop-entrypoint.sh"]
     environment:
       HOME: /Unity
       UNITY_LOCAL_ROOT: /Unity/Local
-      AGENT_SERVICE_PORT: "13000"
-      UNIFY_KEY: ${PLACEHOLDER_UNIFY_KEY:-local-placeholder}
+      PORT: "3000"
+      SELF_HOST_COORDINATOR_RUNTIME_FILE: /runtime/coordinator-runtime.json
+      UNIFY_MODEL: ${UNIFY_MODEL:-}
     volumes:
-      - ${UNITY_WORKSPACE_HOST:-./workspace}:/Unity/Local
+    - runtime:/runtime
+    - ${UNITY_WORKSPACE_HOST:-./workspace}:/Unity/Local
     restart: unless-stopped
 
   desktop-proxy:
     image: caddy:2-alpine
     ports:
-      - "8090:8090"
+    - "8090:8090"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    - ./Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:
-      - desktop
+    - desktop
+    restart: unless-stopped
+
+  desktop-ready:
+    <<: *unity_image
+    entrypoint: ["/bin/bash", "/app/deploy/selfhost/publish-desktop-ready.sh"]
+    environment:
+      SELF_HOST_COORDINATOR_RUNTIME_FILE: /runtime/coordinator-runtime.json
+      SELF_HOST_DESKTOP_URL: http://127.0.0.1:8090
+      SELF_HOST_DESKTOP_INTERNAL_URL: http://desktop-proxy:8090
+      PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
+      GCP_PROJECT_ID: ${PUBSUB_GCP_PROJECT_ID:-local-test-project}
+    volumes:
+    - runtime:/runtime
+    depends_on:
+      desktop-proxy:
+        condition: service_started
+      pubsub-emulator:
+        condition: service_started
     restart: unless-stopped
 
 volumes:
