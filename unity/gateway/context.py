@@ -60,9 +60,12 @@ def create_default_gateway_context() -> GatewayContext:
         if local_ingress_url
         else MissingEnvelopeSink()
     )
+    # HTTP base where another service serves the gateway storage directory
+    # (Orchestra's /v0/storage/local route over the shared compose volume).
+    storage_public_url = os.environ.get("UNITY_GATEWAY_STORAGE_PUBLIC_URL", "").strip()
     return GatewayContext(
         credentials=EnvCredentialStore(),
-        storage=LocalDiskStorage(),
+        storage=LocalDiskStorage(public_base_url=storage_public_url or None),
         envelope_sink=envelope_sink,
         runtime_activator=LocalRuntimeActivator(),
         public_url_provider=default_public_url_provider(),

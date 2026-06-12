@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from pathlib import PurePath
 from typing import Any
@@ -19,8 +20,29 @@ from unity.gateway.adapters.common import (
     validate_attachments,
 )
 from unity.gateway.context import GatewayContext, get_gateway_context
+from unity.settings import SETTINGS
 
 router = APIRouter()
+
+
+def _attachments_bucket() -> str:
+    """Bucket namespace shared with Orchestra for message attachments.
+
+    Orchestra resolves its message-attachments bucket from
+    ``ORCHESTRA_GCP_ASSISTANT_MESSAGE_ATTACHMENTS_BUCKET_NAME``, defaulting to
+    ``assistant-message-attachments-{staging|production}`` keyed off its
+    deploy environment. Mirror both the override and the environment
+    resolution (Orchestra treats any URL containing "staging" as staging) so
+    the ``gs://`` URIs minted here resolve in Orchestra's bucket allowlist.
+    """
+    configured = os.environ.get(
+        "ORCHESTRA_GCP_ASSISTANT_MESSAGE_ATTACHMENTS_BUCKET_NAME",
+        "",
+    ).strip()
+    if configured:
+        return configured
+    env = "staging" if "staging" in SETTINGS.ORCHESTRA_URL.lower() else "production"
+    return f"assistant-message-attachments-{env}"
 
 
 def _safe_filename(filename: str) -> str:
@@ -65,8 +87,9 @@ async def unify_attachment_upload(
     filename = _safe_filename(file.filename or "attachment")
     content_type = file.content_type or "application/octet-stream"
     attachment_id = str(uuid.uuid4())
-    key_prefix = assistant_id or "unknown"
-    key = f"attachments/{key_prefix}/{attachment_id}_{filename}"
+    bucket = _attachments_bucket()
+    object_path = f"{assistant_id or 'unknown'}/{attachment_id}_{filename}"
+    key = f"{bucket}/{object_path}"
     stored = await context.storage.write_bytes(
         key,
         content,
@@ -79,7 +102,7 @@ async def unify_attachment_upload(
         "url": url,
         "signed_url": url,
         "storage_key": stored.key,
-        "gs_url": stored.key,
+        "gs_url": f"gs://{bucket}/{object_path}",
         "content_type": stored.content_type,
         "size_bytes": stored.size_bytes,
     }
