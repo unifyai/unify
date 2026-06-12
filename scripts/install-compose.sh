@@ -199,7 +199,7 @@ run_byok_wizard() {
   UNITY_ENV_FILE="$UNITY_HOME/.env" \
     UNITY_COMPOSE_INSTALL=1 \
     NON_INTERACTIVE="$NON_INTERACTIVE" \
-    bash "$wizard" ${NON_INTERACTIVE:+--non-interactive}
+    bash "$wizard"
 }
 
 create_compose_cli() {
