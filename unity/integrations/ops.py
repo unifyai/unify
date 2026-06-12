@@ -65,6 +65,7 @@ def get_tools(
     canonical_app_slug: Optional[str] = None,
     activation_state: Optional[str] = None,
     include_unconnected: bool = False,
+    include_schema: bool = False,
     **scope: Any,
 ) -> Any:
     try:
@@ -74,6 +75,7 @@ def get_tools(
             canonical_app_slug=canonical_app_slug,
             activation_state=activation_state,
             include_unconnected=include_unconnected,
+            include_schema=include_schema,
             **_clean_scope(scope),
         )
     except KeyError:
@@ -89,6 +91,7 @@ def search_tools(
     offset: int = 0,
     include_unconnected: bool = False,
     canonical_app_slug: Optional[str] = None,
+    include_schema: bool = False,
     **scope: Any,
 ) -> Any:
     try:
@@ -98,6 +101,7 @@ def search_tools(
             offset=offset,
             include_unconnected=include_unconnected,
             canonical_app_slug=canonical_app_slug,
+            include_schema=include_schema,
             **_clean_scope(scope),
         )
     except KeyError:

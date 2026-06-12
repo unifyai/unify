@@ -123,6 +123,18 @@ class Function(AuthoredRow):
         description="Integration backend identifier retained for provider row cleanup filters.",
     )
     app_slug: Optional[str] = Field(None, description="Canonical integration app slug.")
+    input_schema: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Provider input JSON schema for runtime-backed integration primitives.",
+    )
+    output_schema: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Provider output JSON schema for runtime-backed integration primitives.",
+    )
+    examples: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Provider example argument payloads for runtime-backed integration primitives.",
+    )
     integration_metadata: Dict[str, Any] = Field(
         default_factory=dict,
         description=(
