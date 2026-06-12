@@ -30,7 +30,15 @@ def test_guidance_writes_route_to_destination_and_reads_merge_roots(
         row.entries["title"]
         for row in unify.get_logs(context=f"Teams/{team_id}/Guidance")
     ] == ["Team rule"]
-    assert {row.title for row in manager.filter()} == {"Private rule", "Team rule"}
+    # Reads also federate over the read-only builtins library; tenant rows
+    # are isolated with the provenance flag.
+    assert {row.title for row in manager.filter(filter="is_builtin == False")} == {
+        "Private rule",
+        "Team rule",
+    }
+    all_titles = {row.title for row in manager.filter(limit=100)}
+    assert {"Private rule", "Team rule"} <= all_titles
+    assert any(title.startswith("[anthropic] ") for title in all_titles)
 
     outcome = manager.delete_guidance(guidance_id=1, destination="team:404404")
     assert outcome["error_kind"] == "invalid_destination"

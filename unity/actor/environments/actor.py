@@ -154,6 +154,9 @@ def _resolve_prompt_guidance(
             rows = gm.filter(filter=f"guidance_id == {identifier}", limit=1)
         else:
             rows = gm.filter(filter=f"title == '{identifier}'", limit=1)
+        # Explicitly pinned guidance is injected with its complete content;
+        # list reads only carry previews, so re-fetch each match in full.
+        rows = [gm.get_guidance(guidance_id=g.guidance_id) for g in rows]
         for g in rows:
             parts = [f"## {g.title} [guidance_id: {g.guidance_id}]"]
             parts.append(f"\n{g.content}")

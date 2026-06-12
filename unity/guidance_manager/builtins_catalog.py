@@ -38,6 +38,13 @@ BUILTINS_GUIDANCE_CONTEXT = "Guidance"
 BUILTINS_GUIDANCE_META_CONTEXT = "Guidance/Meta"
 _HASH_MAP_KEY = "guidance_hash_by_skill"
 
+# The backend refuses to embed inputs above ~8000 estimated tokens (0.25 per
+# UTF-8 byte, i.e. ~32KB). Imported skills with inlined scripts routinely
+# exceed that, so the content embedding ranks on a truncated head of the
+# entry — where the description and body intro carry the retrieval signal —
+# while the stored ``content`` column keeps the full text.
+CONTENT_EMBED_HEAD_CHARS = 24000
+
 SNAPSHOT_PATH = Path(__file__).with_name("builtins_guidance.json")
 
 
@@ -202,13 +209,19 @@ def seed_builtin_guidance(
         )
 
     if desired:
-        for source_column in ("content", "title"):
-            ensure_vector_column(
-                BUILTINS_GUIDANCE_CONTEXT,
-                embed_column=f"_{source_column}_emb",
-                source_column=source_column,
-                project=project,
-            )
+        ensure_vector_column(
+            BUILTINS_GUIDANCE_CONTEXT,
+            embed_column="_content_emb",
+            source_column="_content_head",
+            derived_expr=f"str({{content}})[:{CONTENT_EMBED_HEAD_CHARS}]",
+            project=project,
+        )
+        ensure_vector_column(
+            BUILTINS_GUIDANCE_CONTEXT,
+            embed_column="_title_emb",
+            source_column="title",
+            project=project,
+        )
     return bool(changed_keys or removed_keys)
 
 

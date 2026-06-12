@@ -47,6 +47,12 @@ _FUNCTION_AND_GUIDANCE_LIBRARY = textwrap.dedent("""
        - use `execute_code` only when the task genuinely requires multi-step
          composition, branching, iteration, or combining intermediate results
 
+    Guidance search/filter results carry truncated content previews for
+    long entries. When a discovered entry is actually relevant to the task,
+    fetch its complete procedure with `GuidanceManager_get_guidance` before
+    following it — do not act on a truncated preview. Skip the fetch for
+    entries that are merely near-matches you will not use.
+
     #### Writing Guidance
 
     When the user provides procedural instructions, operating procedures,

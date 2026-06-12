@@ -16,6 +16,8 @@ import unify
 from tests.helpers import _handle_project
 from unity.guidance_manager.builtins_catalog import (
     BUILTINS_GUIDANCE_CONTEXT,
+    CONTENT_EMBED_HEAD_CHARS,
+    load_snapshot,
     seed_builtin_guidance,
     stable_guidance_id,
 )
@@ -103,6 +105,96 @@ def test_seed_builtin_guidance_empty_snapshot_is_noop(builtins_test_project):
     assert seed_builtin_guidance(entries={}) is False
     assert seed_builtin_guidance(entries={}) is False
     assert _builtin_rows(builtins_test_project) == {}
+
+
+def test_default_catalogue_is_converged():
+    """The session-start seeding already converged the shared catalogue."""
+    assert seed_builtin_guidance() is False
+
+
+# --------------------------------------------------------------------------- #
+# Default library (the committed snapshot of 14 Anthropic skills)              #
+# --------------------------------------------------------------------------- #
+
+
+@_handle_project
+def test_default_library_seeds_and_surfaces_through_guidance_manager(
+    builtins_test_project,
+):
+    snapshot = load_snapshot()
+    assert len(snapshot) == 14
+
+    # Several skills exceed the backend's per-input embedding limit; seeding
+    # must still succeed because ranking embeds a truncated content head.
+    assert any(
+        len(entry["content"]) > CONTENT_EMBED_HEAD_CHARS for entry in snapshot.values()
+    )
+    assert seed_builtin_guidance() is True
+
+    gm = GuidanceManager()
+    builtin_rows = gm.filter(filter="is_builtin == True", limit=100)
+    assert {row.title for row in builtin_rows} == {
+        entry["title"] for entry in snapshot.values()
+    }
+    assert gm._num_items() == 14
+
+    # List-style reads return bounded previews (large skills would otherwise
+    # flood the caller's context window), each pointing at get_guidance.
+    from unity.guidance_manager.guidance_manager import GUIDANCE_PREVIEW_CHARS
+
+    preview_slack = 200  # truncation marker text
+    for row in builtin_rows:
+        assert len(row.content) <= GUIDANCE_PREVIEW_CHARS + preview_slack
+    truncated = [
+        row for row in builtin_rows if "get_guidance(guidance_id=" in row.content
+    ]
+    assert truncated, "expected at least one truncated preview"
+
+    # get_guidance returns the complete content verbatim, including entries
+    # far beyond both the preview cap and the embedding head window.
+    by_title = {entry["title"]: entry for entry in snapshot.values()}
+    for row in truncated:
+        full = gm.get_guidance(guidance_id=row.guidance_id)
+        assert full.content == by_title[full.title]["content"]
+        assert len(full.content) > GUIDANCE_PREVIEW_CHARS
+
+
+@_handle_project
+def test_default_library_semantic_search(builtins_test_project):
+    seed_builtin_guidance()
+    gm = GuidanceManager()
+
+    results = gm.search(
+        references={"content": "create a powerpoint presentation slide deck"},
+        k=3,
+    )
+    assert results and results[0].title == "[anthropic] pptx"
+
+    multi = gm.search(
+        references={"content": "fill out pdf form fields", "title": "pdf"},
+        k=3,
+    )
+    assert multi and multi[0].title == "[anthropic] pdf"
+    assert all(row.is_builtin for row in multi)
+
+
+@_handle_project
+def test_get_guidance_resolves_tenant_and_builtin_entries(builtins_test_project):
+    seed_builtin_guidance(entries=_ENTRIES)
+    gm = GuidanceManager()
+    outcome = gm.add_guidance(title="mine", content="my own entry")
+    own_id = outcome["details"]["guidance_id"]
+
+    own = gm.get_guidance(guidance_id=own_id)
+    assert (own.title, own.content, own.is_builtin) == ("mine", "my own entry", False)
+
+    builtin_id = stable_guidance_id("[test] arxiv-search")
+    builtin = gm.get_guidance(guidance_id=builtin_id)
+    assert builtin.is_builtin is True
+    assert builtin.content == _ENTRIES["test/arxiv-search"]["content"]
+
+    with pytest.raises(ValueError, match="No guidance found"):
+        gm.get_guidance(guidance_id=999999999)
 
 
 # --------------------------------------------------------------------------- #

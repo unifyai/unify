@@ -34,6 +34,11 @@ Usage::
 
     .venv/bin/python -m scripts.skill_migration.builtins_import           # import
     .venv/bin/python -m scripts.skill_migration.builtins_import --check   # drift report
+
+    # Pin skills from a repo at its current HEAD (writes/updates the manifest):
+    .venv/bin/python -m scripts.skill_migration.builtins_import \
+        --pin-repo https://github.com/anthropics/skills --source anthropic \
+        --skill-paths skills/pdf skills/docx
 """
 
 from __future__ import annotations
@@ -222,6 +227,54 @@ def write_snapshot(entries: Dict[str, Dict[str, str]], path: Path) -> None:
     )
 
 
+def pin_skills_at_head(
+    repo: str,
+    skill_paths: List[str],
+    *,
+    source: str,
+    workdir: Path,
+) -> List[PinnedSkill]:
+    """Build manifest pins for *skill_paths* at the repo's current HEAD.
+
+    This is the explicit update path: pinning (or re-pinning) records the
+    HEAD commit and per-skill directory integrity hashes, after which the
+    import is fully reproducible from the manifest alone.
+    """
+    head = resolve_remote_head(repo)
+    slug = hashlib.sha256(f"{repo}@{head}".encode()).hexdigest()[:12]
+    checkout = clone_at_commit(repo, head, workdir / f"pin_{slug}")
+    pins: List[PinnedSkill] = []
+    for skill_path in skill_paths:
+        skill_path = skill_path.strip("/")
+        skill_dir = checkout / skill_path
+        if not (skill_dir / "SKILL.md").is_file():
+            raise FileNotFoundError(
+                f"No SKILL.md at {skill_path!r} in {repo} at {head}",
+            )
+        pins.append(
+            PinnedSkill(
+                key=f"{source}/{skill_dir.name}",
+                source=source,
+                repo=repo,
+                path=skill_path,
+                commit=head,
+                integrity=directory_integrity_hash(skill_dir),
+            ),
+        )
+    return pins
+
+
+def write_manifest(pins: List[PinnedSkill], path: Path) -> None:
+    """Write the manifest deterministically (sorted by key)."""
+    payload = {
+        "skills": [pin.__dict__ for pin in sorted(pins, key=lambda p: p.key)],
+    }
+    path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
 def check_drift(pins: List[PinnedSkill], *, workdir: Path) -> List[Dict[str, str]]:
     """Compare upstream HEAD folder hashes against the pins.
 
@@ -291,19 +344,52 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Report upstream drift against the pins without applying anything.",
     )
     parser.add_argument(
+        "--pin-repo",
+        help="Pin --skill-paths from this repo at its current HEAD, then import.",
+    )
+    parser.add_argument(
+        "--source",
+        help="Source label for --pin-repo (namespaces titles as '[source] name').",
+    )
+    parser.add_argument(
+        "--skill-paths",
+        nargs="+",
+        default=[],
+        help="Skill directories within --pin-repo to pin.",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Emit the report as JSON.",
     )
     args = parser.parse_args(argv)
 
-    pins = load_manifest(args.manifest)
-    if not pins:
-        print("Manifest is empty; nothing to do.")
-        return 0
-
     with tempfile.TemporaryDirectory(prefix="builtins_skills_") as tmp:
         workdir = Path(tmp)
+        if args.pin_repo:
+            if not args.source or not args.skill_paths:
+                parser.error("--pin-repo requires --source and --skill-paths")
+            existing = {
+                pin.key: pin
+                for pin in (
+                    load_manifest(args.manifest) if args.manifest.exists() else []
+                )
+            }
+            new_pins = pin_skills_at_head(
+                args.pin_repo,
+                args.skill_paths,
+                source=args.source,
+                workdir=workdir,
+            )
+            for pin in new_pins:
+                existing[pin.key] = pin
+            write_manifest(list(existing.values()), args.manifest)
+            print(f"Pinned {len(new_pins)} skills at HEAD into {args.manifest}")
+
+        pins = load_manifest(args.manifest)
+        if not pins:
+            print("Manifest is empty; nothing to do.")
+            return 0
         if args.check:
             drifts = check_drift(pins, workdir=workdir)
             if args.json:

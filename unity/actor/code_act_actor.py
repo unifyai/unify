@@ -735,6 +735,7 @@ def _build_storage_tools(
             fm.get_function_venv,
             gm.search,
             gm.filter,
+            gm.get_guidance,
             gm.add_guidance,
             gm.update_guidance,
             gm.delete_guidance,
@@ -2932,6 +2933,10 @@ class CodeActActor(BaseCodeActActor):
                         display_label="Searching for relevant guidance",
                     ),
                     ToolSpec(fn=gm.filter, display_label="Filtering saved guidance"),
+                    ToolSpec(
+                        fn=gm.get_guidance,
+                        display_label="Reading a full guidance entry",
+                    ),
                     ToolSpec(fn=gm.add_guidance, display_label="Saving new guidance"),
                     ToolSpec(
                         fn=gm.update_guidance,
