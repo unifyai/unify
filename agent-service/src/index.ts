@@ -1157,17 +1157,24 @@ app.post('/start', async (req: Request, res: Response) => {
   }
 
   // Desktop mode is singleton -- one physical display, one session.
-  // Close any existing desktop session before creating a new one.
+  // Fully stop any existing desktop session before creating a new one so
+  // Playwright does not tear down the browser context mid-start.
   if (mode === "desktop") {
+    const stopTasks: Array<Promise<void>> = [];
     for (const [existingId, existing] of activeSessions.entries()) {
       if (existing.mode === "desktop") {
         console.log(`Replacing existing desktop session: ${existingId}`);
-        existing.agent.stop().catch((err: unknown) =>
-          console.error(`Error stopping old desktop session: ${err}`)
+        stopTasks.push(
+          existing.agent.stop().catch((err: unknown) => {
+            console.error(`Error stopping old desktop session: ${err}`);
+          }),
         );
         activeSessions.delete(existingId);
         broadcastSessionEvent(existingId, 'replaced');
       }
+    }
+    if (stopTasks.length > 0) {
+      await Promise.all(stopTasks);
     }
   }
 
@@ -1222,7 +1229,7 @@ app.post('/start', async (req: Request, res: Response) => {
       // if magnitude's route already handled it, this won't fire.
       // If this DOES fire for a mapped URL, it means magnitude's route did NOT catch it.
       try {
-        await agent.context.route('**/*', async (route) => {
+        await agent.context.route('**/*', async (route: any) => {
           const req = route.request();
           const url = req.url();
           const isNav = req.isNavigationRequest();
@@ -2194,7 +2201,7 @@ app.post('/captcha/solve', isAgentReady, async (req: Request, res: Response) => 
     try {
       settledVia = await Promise.race([
         page.waitForResponse(
-          (r) => /recaptcha\/(api2|enterprise)\/userverify/.test(r.url()),
+          (r: { url: () => string }) => /recaptcha\/(api2|enterprise)\/userverify/.test(r.url()),
           { timeout: SETTLE_TIMEOUT_MS },
         ).then(() => 'userverify' as const),
         page.waitForLoadState('networkidle', { timeout: SETTLE_TIMEOUT_MS })
