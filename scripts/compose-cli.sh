@@ -150,10 +150,10 @@ cmd_doctor() {
     elif _has_env ANTHROPIC_API_KEY || _has_env DEEPSEEK_API_KEY; then
       log_warn "No OPENAI_API_KEY — tool-search embeddings need OpenAI"
     fi
-    if _has_env DEEPGRAM_API_KEY && _has_env CARTESIA_API_KEY; then
+    if _has_env DEEPGRAM_API_KEY && { _has_env CARTESIA_API_KEY || _has_env ELEVEN_API_KEY; }; then
       log_ok "Voice BYOK keys configured"
     else
-      log_warn "Voice calls need DEEPGRAM_API_KEY and CARTESIA_API_KEY"
+      log_warn "Voice calls need DEEPGRAM_API_KEY and a TTS key (CARTESIA_API_KEY or ELEVEN_API_KEY)"
     fi
     if _has_env COMPOSIO_API_KEY; then
       log_ok "Composio API key configured"

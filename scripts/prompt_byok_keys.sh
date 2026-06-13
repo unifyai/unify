@@ -338,11 +338,56 @@ prompt_app_integrations() {
   echo ""
 }
 
+ensure_voice_provider_from_keys() {
+  if has_env_value VOICE_PROVIDER; then
+    return 0
+  fi
+  if has_env_value ELEVEN_API_KEY; then
+    upsert_env "VOICE_PROVIDER" "elevenlabs"
+    log_success "Set VOICE_PROVIDER=elevenlabs"
+  elif has_env_value CARTESIA_API_KEY; then
+    upsert_env "VOICE_PROVIDER" "cartesia"
+    log_success "Set VOICE_PROVIDER=cartesia"
+  fi
+}
+
+prompt_tts_provider() {
+  if has_env_value CARTESIA_API_KEY || has_env_value ELEVEN_API_KEY; then
+    ensure_voice_provider_from_keys
+    log_success "Text-to-speech key already set"
+    return 0
+  fi
+
+  if [[ "$NON_INTERACTIVE" == "true" ]] || [[ ! -r /dev/tty ]] || [[ ! -w /dev/tty ]]; then
+    log_warn "No TTS key set — add CARTESIA_API_KEY or ELEVEN_API_KEY to $ENV_FILE for browser calls"
+    return 0
+  fi
+
+  echo "" >/dev/tty
+  echo -e "${BOLD}Text-to-speech (required for browser calls)${NC}" >/dev/tty
+  echo "  Picks the voice Marty speaks back with on calls." >/dev/tty
+  echo "  1) Cartesia   — https://play.cartesia.ai (free credits)" >/dev/tty
+  echo "  2) ElevenLabs — https://elevenlabs.io (free credits)" >/dev/tty
+  echo "  3) Skip" >/dev/tty
+  local choice=""
+  printf "Choice [1-3, default 1]: " >/dev/tty
+  IFS= read -r choice </dev/tty || choice=""
+  choice="${choice:-1}"
+
+  case "$choice" in
+    1) prompt_secret "Cartesia (text-to-speech)" "CARTESIA_API_KEY" "Lets Marty speak back on calls. Free credits: https://play.cartesia.ai" ;;
+    2) prompt_secret "ElevenLabs (text-to-speech)" "ELEVEN_API_KEY" "Lets Marty speak back on calls. Free credits: https://elevenlabs.io" ;;
+    *) log_warn "Skipped text-to-speech"; return 0 ;;
+  esac
+
+  ensure_voice_provider_from_keys
+}
+
 import_shell_env_keys() {
   local key val
   for key in OPENAI_API_KEY ANTHROPIC_API_KEY DEEPSEEK_API_KEY DEEPGRAM_API_KEY \
-    CARTESIA_API_KEY UNIFY_MODEL UNITY_WEB_TAVILY_API_KEY ANTICAPTCHA_KEY \
-    COMPOSIO_API_KEY; do
+    CARTESIA_API_KEY ELEVEN_API_KEY VOICE_PROVIDER UNIFY_MODEL \
+    UNITY_WEB_TAVILY_API_KEY ANTICAPTCHA_KEY COMPOSIO_API_KEY; do
     val="${!key:-}"
     [[ -z "$val" ]] && continue
     if ! has_env_value "$key"; then
@@ -364,14 +409,8 @@ run_non_interactive_byok() {
   prompt_secret \
     "Speech-to-text (required for browser calls)" \
     "DEEPGRAM_API_KEY" \
-    "Free tier: https://console.deepgram.com"
-  prompt_secret \
-    "Text-to-speech (required for browser calls)" \
-    "CARTESIA_API_KEY" \
-    "Free credits: https://play.cartesia.ai"
-  if has_env_value CARTESIA_API_KEY && ! has_env_value VOICE_PROVIDER; then
-    upsert_env "VOICE_PROVIDER" "cartesia"
-  fi
+    "Lets Marty hear you on browser calls. Free tier: https://console.deepgram.com"
+  prompt_tts_provider
   sync_anticaptcha_keys
   mark_byok_configured
   log_success "BYOK keys synced (non-interactive)"
@@ -409,7 +448,7 @@ main() {
   echo -e "${BOLD}BYOK setup${NC} — provider keys for chat, voice, and tools"
   echo ""
   echo "  Required:  LLM key (OpenAI, Anthropic, or DeepSeek)"
-  echo "  Voice:     Deepgram + Cartesia (browser calls)"
+  echo "  Voice:     Deepgram + Cartesia/ElevenLabs (browser calls)"
   echo "  Optional:  Tavily (web search), AntiCaptcha (computer use)"
   echo "  Optional:  Composio (third-party app integrations)"
   echo ""
@@ -421,22 +460,14 @@ main() {
   prompt_secret \
     "Speech-to-text (required for browser calls)" \
     "DEEPGRAM_API_KEY" \
-    "Free tier: https://console.deepgram.com"
-  prompt_secret \
-    "Text-to-speech (required for browser calls)" \
-    "CARTESIA_API_KEY" \
-    "Free credits: https://play.cartesia.ai"
-
-  if has_env_value CARTESIA_API_KEY && ! has_env_value VOICE_PROVIDER; then
-    upsert_env "VOICE_PROVIDER" "cartesia"
-    log_success "Set VOICE_PROVIDER=cartesia (default TTS for local voice)"
-  fi
+    "Lets Marty hear you on browser calls. Free tier: https://console.deepgram.com"
+  prompt_tts_provider
 
   echo ""
-  if has_env_value DEEPGRAM_API_KEY && has_env_value CARTESIA_API_KEY; then
+  if has_env_value DEEPGRAM_API_KEY && { has_env_value CARTESIA_API_KEY || has_env_value ELEVEN_API_KEY; }; then
     log_success "Voice BYOK keys configured"
   else
-    log_warn "Voice calls need DEEPGRAM_API_KEY + CARTESIA_API_KEY in $ENV_FILE"
+    log_warn "Voice calls need DEEPGRAM_API_KEY + a TTS key (CARTESIA_API_KEY or ELEVEN_API_KEY) in $ENV_FILE"
   fi
 
   prompt_research_and_computer
