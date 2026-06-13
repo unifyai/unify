@@ -54,7 +54,7 @@ load_self_host_context() {
     # shellcheck disable=SC1090
     source "$SELF_HOST_ENV_SCRIPT"
     export_self_host_coordinator_runtime_file
-    export_workspace_oauth_env "$UNITY_REPO_PATH/.env"
+    load_self_host_env_file "$UNITY_REPO_PATH/.env"
   fi
 }
 

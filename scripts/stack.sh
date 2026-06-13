@@ -148,7 +148,6 @@ cmd_doctor() {
   echo "----------------------"
   echo "  Required: LLM (OpenAI or Anthropic)"
   echo "  Voice:    Deepgram + Cartesia (browser calls; LiveKit auto-configured on stack up)"
-  echo "  Optional: Google / Microsoft OAuth (workspace connect)"
   echo "  Optional: Tavily (web search), AntiCaptcha (computer use)"
   echo ""
 
@@ -169,19 +168,6 @@ cmd_doctor() {
     log_success "CARTESIA_API_KEY set"
   else
     log_warn "CARTESIA_API_KEY missing — browser calls need TTS"
-  fi
-
-  if _has_env_key OAUTH_STATE_SIGNING_KEY \
-    && { _has_env_key GOOGLE_OAUTH_CLIENT_ID || _has_env_key MICROSOFT_BYOD_CLIENT_ID; }; then
-    if _has_env_key GOOGLE_OAUTH_CLIENT_ID && _has_env_key GOOGLE_OAUTH_CLIENT_SECRET; then
-      log_success "Google workspace OAuth configured"
-    elif _has_env_key MICROSOFT_BYOD_CLIENT_ID && _has_env_key MS365_BYOD_CLIENT_SECRET; then
-      log_success "Microsoft workspace OAuth configured"
-    else
-      log_warn "Workspace OAuth partially configured — finish client id + secret in unity/.env"
-    fi
-  else
-    log_info "Workspace OAuth not configured (optional — onboarding workspace connect disabled)"
   fi
 
   if _has_env_key UNITY_WEB_TAVILY_API_KEY; then
@@ -258,7 +244,7 @@ cmd_up() {
     # shellcheck disable=SC1090
     source "$SELF_HOST_ENV_SCRIPT"
     export_self_host_coordinator_runtime_file
-    export_workspace_oauth_env "$UNITY_REPO_PATH/.env"
+    load_self_host_env_file "$UNITY_REPO_PATH/.env"
     if declare -F self_host_enable_runtime &>/dev/null; then
       self_host_enable_runtime
     fi

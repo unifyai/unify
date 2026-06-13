@@ -227,64 +227,6 @@ ensure_default_chat_model() {
   log_success "Set UNIFY_MODEL=$model (edit in $ENV_FILE to change)"
 }
 
-ensure_oauth_signing_key() {
-  if has_env_value OAUTH_STATE_SIGNING_KEY; then
-    log_success "OAUTH_STATE_SIGNING_KEY already set"
-    return 0
-  fi
-  local signing_key
-  signing_key="$(openssl rand -hex 32)"
-  upsert_env "OAUTH_STATE_SIGNING_KEY" "$signing_key"
-  log_success "Generated OAUTH_STATE_SIGNING_KEY (local OAuth state signing)"
-}
-
-prompt_workspace_oauth() {
-  echo ""
-  echo -e "${BOLD}Workspace connect (optional)${NC}"
-  echo "  Enables Google / Microsoft workspace OAuth in Console onboarding."
-  echo "  Create an OAuth app in your cloud console, then paste credentials here."
-  echo "  Redirect URI to register:"
-  echo "    http://127.0.0.1:8081/google/auth/callback"
-  echo ""
-
-  ensure_oauth_signing_key
-
-  prompt_secret \
-    "Google workspace — OAuth client ID" \
-    "GOOGLE_OAUTH_CLIENT_ID" \
-    "Google Cloud Console → APIs & Services → Credentials"
-  prompt_secret \
-    "Google workspace — OAuth client secret" \
-    "GOOGLE_OAUTH_CLIENT_SECRET" \
-    "Same OAuth client; used by local Adapters for token exchange"
-  prompt_secret \
-    "Microsoft workspace — OAuth client ID" \
-    "MICROSOFT_BYOD_CLIENT_ID" \
-    "Azure App Registration → Application (client) ID"
-
-  if has_env_value MICROSOFT_BYOD_CLIENT_ID && ! has_env_value MS365_BYOD_CLIENT_ID; then
-    local ms_id
-    ms_id="$(read_env_value MICROSOFT_BYOD_CLIENT_ID)"
-    upsert_env "MS365_BYOD_CLIENT_ID" "$ms_id"
-    log_success "Mirrored MS365_BYOD_CLIENT_ID from MICROSOFT_BYOD_CLIENT_ID"
-  fi
-
-  prompt_secret \
-    "Microsoft workspace — OAuth client secret" \
-    "MS365_BYOD_CLIENT_SECRET" \
-    "Azure App Registration → Certificates & secrets"
-
-  echo ""
-  if has_env_value GOOGLE_OAUTH_CLIENT_ID && has_env_value GOOGLE_OAUTH_CLIENT_SECRET; then
-    log_success "Google workspace OAuth configured"
-  elif has_env_value MICROSOFT_BYOD_CLIENT_ID && has_env_value MS365_BYOD_CLIENT_SECRET; then
-    log_success "Microsoft workspace OAuth configured"
-  else
-    log_warn "Workspace connect skipped — add OAuth keys later to $ENV_FILE"
-  fi
-  echo ""
-}
-
 sync_anticaptcha_keys() {
   local key=""
   if has_env_value ANTICAPTCHA_KEY; then
@@ -430,7 +372,6 @@ run_non_interactive_byok() {
   if has_env_value CARTESIA_API_KEY && ! has_env_value VOICE_PROVIDER; then
     upsert_env "VOICE_PROVIDER" "cartesia"
   fi
-  ensure_oauth_signing_key
   sync_anticaptcha_keys
   mark_byok_configured
   log_success "BYOK keys synced (non-interactive)"
@@ -465,11 +406,10 @@ main() {
   fi
 
   echo ""
-  echo -e "${BOLD}BYOK setup${NC} — provider keys for chat, voice, and workspace"
+  echo -e "${BOLD}BYOK setup${NC} — provider keys for chat, voice, and tools"
   echo ""
   echo "  Required:  LLM key (OpenAI, Anthropic, or DeepSeek)"
   echo "  Voice:     Deepgram + Cartesia (browser calls)"
-  echo "  Optional:  Google / Microsoft OAuth (workspace connect)"
   echo "  Optional:  Tavily (web search), AntiCaptcha (computer use)"
   echo "  Optional:  Composio (third-party app integrations)"
   echo ""
@@ -499,7 +439,6 @@ main() {
     log_warn "Voice calls need DEEPGRAM_API_KEY + CARTESIA_API_KEY in $ENV_FILE"
   fi
 
-  prompt_workspace_oauth
   prompt_research_and_computer
   prompt_app_integrations
   mark_byok_configured
