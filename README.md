@@ -40,7 +40,7 @@ Full architectural comparison with diagrams is [further down](#where-unity-sits-
 
 ## Install
 
-**Prerequisites:** Docker, and an LLM provider key (OpenAI or Anthropic). macOS, Linux, or WSL2.
+**Prerequisites:** Docker, and an LLM provider key (OpenAI, Anthropic, or DeepSeek). macOS, Linux, or WSL2.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/unifyai/unity/main/scripts/install.sh | bash
