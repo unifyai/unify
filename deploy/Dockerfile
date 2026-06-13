@@ -91,14 +91,19 @@ RUN install -m 0755 /app/scripts/sandbox-dpkg /usr/local/bin/sandbox-dpkg
 ENV OMP_NUM_THREADS=1
 ENV MKL_NUM_THREADS=1
 RUN HF_HOME=/opt/hf-cache python unity/conversation_manager/medium_scripts/call.py download-files
-RUN playwright install
+
+# Browsers install once into a single user-owned cache. The CM spawns agent-service
+# with PLAYWRIGHT_BROWSERS_PATH set to this path, and the runtime user resolves the
+# same path, so no duplicate copy is needed. Chromium is the only browser used.
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/unity/.cache/ms-playwright
+RUN mkdir -p /home/unity/.cache/ms-playwright && playwright install chromium
 
 # Install Patchright Chromium (same as deploy/desktop/Dockerfile) for non-headless
 # browser sessions (e.g., Google Meet join via local browser with virtual display).
 RUN cd /opt/magnitude/packages/magnitude-core && npx patchright install --with-deps chromium
 
 # Configure Chromium as default browser so XFCE and GUI apps can find it
-RUN CHROME_PATH=$(find /root/.cache/ms-playwright -name "chrome" -type f -executable 2>/dev/null | head -1) && \
+RUN CHROME_PATH=$(find /home/unity/.cache/ms-playwright -name "chrome" -type f -executable 2>/dev/null | head -1) && \
     printf '#!/bin/bash\nexec "%s" --no-sandbox "$@"\n' "$CHROME_PATH" > /usr/local/bin/chromium-browser && \
     chmod +x /usr/local/bin/chromium-browser && \
     printf '[Desktop Entry]\nVersion=1.0\nName=Chromium Web Browser\nExec=/usr/local/bin/chromium-browser %%U\nTerminal=false\nType=Application\nIcon=web-browser\nCategories=Network;WebBrowser;\nMimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;\nStartupNotify=true\n' \
@@ -154,9 +159,8 @@ RUN useradd -m -u 1000 unity && \
     mkdir -p /run/dbus && chmod 777 /run/dbus && \
     mkdir -p /tmp/runtime-unity && chown unity:unity /tmp/runtime-unity && chmod 700 /tmp/runtime-unity && \
     chown -R unity:unity /app /var/log/unity /var/log/unify /var/log/unillm /var/log/magnitude && \
-    cp -r /root/.cache/ms-playwright /home/unity/.cache/ms-playwright && \
     cp -r /root/.config/xfce4 /home/unity/.config/xfce4 2>/dev/null || true && \
-    chown -R unity:unity /home/unity/.cache /home/unity/.config
+    chown -R unity:unity /home/unity
 
 USER unity
 
