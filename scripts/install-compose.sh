@@ -312,7 +312,7 @@ start_composio_catalog_sync() {
     return 0
   fi
   log_info "Starting Composio catalog sync in the background (may take ~30 minutes)..."
-  compose_cmd up -d --profile integrations-sync orchestra-integrations-bootstrap
+  compose_cmd --profile integrations-sync up -d orchestra-integrations-bootstrap
   log_info "Console is ready — integrations will appear gradually in the app catalog"
 }
 
