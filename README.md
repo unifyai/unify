@@ -121,11 +121,11 @@ The local install runs **one assistant — Marty, your Coordinator** — the nat
 
 Everything below runs on your laptop after install:
 
-- **Chat** with Marty in Console.
-- **Browser voice calls** — bring a Deepgram (speech-to-text) and a Cartesia or ElevenLabs (text-to-speech) key.
-- **Web search** for research — bring a free [Tavily](https://tavily.com) key.
-- **Computer use** — Marty drives a real browser and desktop; add an optional [AntiCaptcha](https://anti-captcha.com) key for CAPTCHA solving.
-- **Third-party app tools** via [Composio](https://composio.dev) — bring your own key to expose apps like Notion, GitHub, and HubSpot as assistant tools.
+- **Chat** with Marty in Console — an LLM key (OpenAI, Anthropic, or DeepSeek) is what lets Marty think and reply.
+- **Browser voice calls** — a Deepgram (speech-to-text) key lets Marty hear you, and a Cartesia or ElevenLabs (text-to-speech) key lets Marty speak back.
+- **Web search** — a free [Tavily](https://tavily.com) key lets Marty look things up on the web while researching.
+- **Computer use** — Marty drives a real browser and desktop; an optional [AntiCaptcha](https://anti-captcha.com) key lets Marty get past CAPTCHAs instead of stalling.
+- **Third-party app tools** — a [Composio](https://composio.dev) key lets Marty act in apps like Notion, GitHub, and HubSpot on your behalf.
 
 Inbound messaging channels (SMS / WhatsApp / phone, Slack, Gmail, Outlook, Teams, Discord) and Google / Microsoft workspace connect are part of the hosted product and are not wired into the self-host stack.
 
