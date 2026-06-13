@@ -231,6 +231,7 @@ if [[ -f "\$UNITY_HOME/docker-compose.yml" ]]; then
         status|ps) exec bash "\$COMPOSE_CLI" status "\$@" ;;
         logs) shift; exec bash "\$COMPOSE_CLI" logs "\$@" ;;
         restart) exec bash "\$COMPOSE_CLI" restart "\$@" ;;
+        integrations-sync) exec bash "\$COMPOSE_CLI" integrations-sync "\$@" ;;
         *) exec bash "\$COMPOSE_CLI" "\$sub" "\$@" ;;
       esac
       ;;
@@ -295,12 +296,22 @@ verify_orchestra_seed() {
   log_warn "orchestra-seed status unclear — run: unity stack doctor"
 }
 
+start_composio_catalog_sync() {
+  if ! grep -qE '^COMPOSIO_API_KEY=.+$' "$UNITY_HOME/.env" 2>/dev/null; then
+    return 0
+  fi
+  log_info "Starting Composio catalog sync in the background (may take ~30 minutes)..."
+  compose_cmd up -d --profile integrations-sync orchestra-integrations-bootstrap
+  log_info "Console is ready — integrations will appear gradually in the app catalog"
+}
+
 pull_and_start() {
   log_info "Pulling images (first run may take several minutes)..."
   compose_cmd pull
   log_info "Starting stack..."
   compose_cmd up -d
   verify_orchestra_seed
+  start_composio_catalog_sync
   log_ok "Stack started"
 }
 
@@ -334,6 +345,9 @@ main() {
   echo "  UI off:        unity stack down"
   echo "  Stop all:      unity stack down --full"
   echo "  Edit keys:     \$UNITY_HOME/.env  then  unity restart"
+  if grep -qE '^COMPOSIO_API_KEY=.+$' "$UNITY_HOME/.env" 2>/dev/null; then
+    echo "  Integrations:  catalog sync runs in background (~30 min); unity stack doctor"
+  fi
   echo ""
 }
 
