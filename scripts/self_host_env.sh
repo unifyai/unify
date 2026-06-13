@@ -102,7 +102,9 @@ append_self_host_unity_runtime_env() {
     ANTHROPIC_API_KEY \
     DEEPSEEK_API_KEY \
     DEEPGRAM_API_KEY \
-    CARTESIA_API_KEY; do
+    CARTESIA_API_KEY \
+    ELEVEN_API_KEY \
+    VOICE_PROVIDER; do
     val="${!key:-}"
     if [[ -n "$val" ]]; then
       _target_array+=("$key=$val")

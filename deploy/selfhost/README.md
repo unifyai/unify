@@ -42,7 +42,7 @@ The installer generates local secrets (`POSTGRES_PASSWORD`, `ORCHESTRA_ADMIN_KEY
 |-----|----------------|
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `DEEPSEEK_API_KEY` | Coordinator chat (wizard: pick one) |
 | `OPENAI_API_KEY` | Tool-search embeddings (recommended even with other chat providers) |
-| `DEEPGRAM_API_KEY`, `CARTESIA_API_KEY` | Browser voice calls |
+| `DEEPGRAM_API_KEY` + `CARTESIA_API_KEY` or `ELEVEN_API_KEY` | Browser voice calls (STT + TTS) |
 | `UNIFY_MODEL` | Optional override; Unity picks a default when unset |
 
 On first `docker compose up`, the one-shot `orchestra-seed` service inserts billing

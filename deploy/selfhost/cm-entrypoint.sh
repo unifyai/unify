@@ -86,8 +86,10 @@ build_cm_env() {
   local voice_provider voice_id
   voice_provider="$(fetch_assistant_field "$unify_key" "$agent_id" "voice_provider" || true)"
   voice_id="$(fetch_assistant_field "$unify_key" "$agent_id" "voice_id" || true)"
-  [[ -n "$voice_provider" ]] && export VOICE_PROVIDER="$voice_provider"
-  [[ -n "$voice_id" ]] && export VOICE_ID="$voice_id"
+  # A VOICE_PROVIDER/VOICE_ID provided via the environment (BYOK .env) is
+  # authoritative for self-host; fall back to the assistant's stored values.
+  [[ -z "${VOICE_PROVIDER:-}" && -n "$voice_provider" ]] && export VOICE_PROVIDER="$voice_provider"
+  [[ -z "${VOICE_ID:-}" && -n "$voice_id" ]] && export VOICE_ID="$voice_id"
 
   local first_name surname about age nationality timezone user_id
   first_name="$(fetch_assistant_field "$unify_key" "$agent_id" "first_name" || true)"

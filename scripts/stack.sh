@@ -164,10 +164,10 @@ cmd_doctor() {
     log_warn "DEEPGRAM_API_KEY missing — browser calls need STT"
   fi
 
-  if _has_env_key CARTESIA_API_KEY; then
-    log_success "CARTESIA_API_KEY set"
+  if _has_env_key CARTESIA_API_KEY || _has_env_key ELEVEN_API_KEY; then
+    log_success "Text-to-speech key set (Cartesia or ElevenLabs)"
   else
-    log_warn "CARTESIA_API_KEY missing — browser calls need TTS"
+    log_warn "No TTS key — browser calls need CARTESIA_API_KEY or ELEVEN_API_KEY"
   fi
 
   if _has_env_key UNITY_WEB_TAVILY_API_KEY; then

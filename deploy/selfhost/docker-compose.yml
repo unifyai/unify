@@ -236,6 +236,7 @@ services:
       LIVEKIT_API_SECRET: secret # pragma: allowlist secret
       DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-}
       CARTESIA_API_KEY: ${CARTESIA_API_KEY:-}
+      ELEVEN_API_KEY: ${ELEVEN_API_KEY:-}
     volumes:
     - runtime:/runtime
     depends_on:
@@ -274,6 +275,8 @@ services:
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-}
       CARTESIA_API_KEY: ${CARTESIA_API_KEY:-}
+      ELEVEN_API_KEY: ${ELEVEN_API_KEY:-}
+      VOICE_PROVIDER: ${VOICE_PROVIDER:-}
       UNIFY_MODEL: ${UNIFY_MODEL:-}
       UNITY_WEB_TAVILY_API_KEY: ${UNITY_WEB_TAVILY_API_KEY:-}
       UNITY_WEB_ENABLED: ${UNITY_WEB_ENABLED:-false}
