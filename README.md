@@ -43,10 +43,10 @@ Full architectural comparison with diagrams is [further down](#where-unity-sits-
 **Prerequisites:** Docker, and an LLM provider key (OpenAI or Anthropic). macOS, Linux, or WSL2.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/unifyai/unity/staging/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/unifyai/unity/main/scripts/install.sh | bash
 ```
 
-This pulls prebuilt images via Docker Compose, runs a BYOK wizard, and opens Console at http://127.0.0.1:3000. Register, then chat with your Coordinator. See [`deploy/selfhost/README.md`](deploy/selfhost/README.md) for compose commands and developer source install (`--source-install`).
+This pulls prebuilt images via Docker Compose, runs a BYOK wizard, and opens Console at http://127.0.0.1:3000. Register there, then chat with Marty — your assistant. See [`deploy/selfhost/README.md`](deploy/selfhost/README.md) for compose commands and the developer source install (`--source-install`).
 
 <details>
 <summary>Developer source install (clone repos + uv)</summary>
@@ -54,14 +54,16 @@ This pulls prebuilt images via Docker Compose, runs a BYOK wizard, and opens Con
 Requires Python 3.12+ in addition to Docker:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/unifyai/unity/staging/scripts/install.sh | bash -s -- --source-install
+curl -fsSL https://raw.githubusercontent.com/unifyai/unity/main/scripts/install.sh | bash -s -- --source-install
 ```
 
-The source installer clones `unity`, `unify`, `unillm`, `console`, and `orchestra` under `~/.unity/`, syncs Python deps with `uv`, and runs `unity setup`. **Open a new terminal**, then:
+The source installer clones `unity`, `unify`, `unillm`, `console`, and `orchestra` under `~/.unity/`, syncs Python deps with `uv`, and bootstraps a local Orchestra. **Open a new terminal**, then start the stack:
 
-| Terminal 1 — chat | Terminal 2 — live logs |
-|---|---|
-| `unity` | `unity logs` |
+```bash
+unity
+```
+
+Console opens at http://127.0.0.1:3000 — register and chat with Marty there. Tail logs in another terminal with `unity logs`.
 
 </details>
 
@@ -74,21 +76,21 @@ The source installer clones `unity`, `unify`, `unillm`, `console`, and `orchestr
 <details>
 <summary>What the installer does</summary>
 
-Clones `unity`, `unify`, `unillm`, and `orchestra` as siblings under `~/.unity/`. Installs Python dependencies with `uv`. Boots a local Orchestra in Docker. Generates a local API key for that bundled Orchestra. Writes `ORCHESTRA_URL`, `UNIFY_KEY`, and your LLM provider key into `~/.unity/unity/.env`. Creates a `unity` CLI shim in `~/.local/bin/` and appends a clearly-marked PATH block to your `~/.zshrc` / `~/.bash_profile` / `~/.bashrc`. No Unify account or signup is required.
+Writes `docker-compose.yml`, `.env`, and helper config into `~/.unity/`. Generates the local secrets the stack needs (Postgres password, session and JWT secrets, a local Orchestra admin key). Runs a BYOK wizard that writes your LLM provider key — and optionally voice and integration keys — into `~/.unity/.env`. Pulls the prebuilt images, starts the stack, and creates a `unity` CLI shim in `~/.local/bin/` with a clearly-marked PATH block appended to your shell rc. No Unify account or signup is required — you register the first user in Console.
 
-If you skip the LLM key at install time (or pipe through a non-interactive shell), the installer prints the one line to add to `.env` manually.
+If you skip a key at install time (or pipe through a non-interactive shell), add it to `~/.unity/.env` and run `unity restart`.
 
 </details>
 
 <details>
 <summary>Persistence across reboots</summary>
 
-All long-lived state — transcripts, contacts, knowledge, tasks, functions, guidance — lives in Orchestra Postgres, which Unity stores in a Docker named volume (`orchestra-local-db-data`) with `--restart unless-stopped`. The moment the Docker daemon comes back after a reboot, the Postgres container auto-starts and re-attaches the volume; the next `unity` invocation auto-starts the Orchestra FastAPI server against the existing data. No state is lost, no `unity setup` re-run required.
+All long-lived state — transcripts, contacts, knowledge, tasks, functions, guidance — lives in Orchestra Postgres, stored in a Docker named volume. Every service runs with `restart: unless-stopped`, so the moment the Docker daemon comes back after a reboot the stack restarts against the existing data. No state is lost and there is nothing to re-run.
 
 The only piece outside Unity's install scope is whether Docker itself auto-starts at boot:
 
 - **macOS** — Docker Desktop ships with *Start Docker Desktop when you log in* enabled by default (Settings → General). Nothing to do.
-- **Linux** — enable the systemd unit once: `sudo systemctl enable docker`. `unity doctor` flags this when missing.
+- **Linux** — enable the systemd unit once: `sudo systemctl enable docker`.
 
 </details>
 
@@ -96,89 +98,54 @@ The only piece outside Unity's install scope is whether Docker itself auto-start
 
 ## Voice — talking to your assistant in the browser
 
-The same install can also handle **real voice calls** locally: the production fast-brain (interruption-handling, telephony-aware) running against your local stack, sub-second latency, no LiveKit Cloud account required. Run `unity voice setup` once, then `unity --live-voice` instead of `unity`.
+Real voice calls work locally out of the box: the production fast-brain (interruption-handling, telephony-aware) running against your local stack, sub-second latency, no LiveKit Cloud account. LiveKit runs as a service inside the compose stack, so there is nothing extra to install — you only bring your own speech keys.
 
-<details>
-<summary>Voice setup + run, in detail</summary>
-
-`unity voice setup` installs `livekit-server` (single binary, bound to `127.0.0.1`), boots it in `--dev` mode, and writes `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` to `~/.unity/unity/.env`.
-
-The only voice-related keys you bring yourself are speech-to-text and text-to-speech (both providers have free tiers; pick **one** TTS provider):
+Add a speech-to-text and a text-to-speech key (both have free tiers; pick **one** TTS provider). The install wizard prompts for these; to add them later, edit `~/.unity/.env` and run `unity restart`.
 
 | Variable | Purpose | Where to get it |
 |---|---|---|
 | `DEEPGRAM_API_KEY` | Speech-to-text | [console.deepgram.com](https://console.deepgram.com) — free tier |
 | `CARTESIA_API_KEY` *or* `ELEVEN_API_KEY` | Text-to-speech (pick one) | [play.cartesia.ai](https://play.cartesia.ai) or [elevenlabs.io](https://elevenlabs.io) — free credits |
 
-Then run in two terminals:
-
-| Terminal 1 — chat + voice control | Terminal 2 — live logs |
-|---|---|
-| `unity --live-voice` | `unity logs` |
-
-From the chat prompt: `call` opens the LiveKit Agents Playground in your browser — speak through your mic; `end_call` tears the room down. The first `call` clones [agents-playground](https://github.com/livekit/agents-playground) into `~/.livekit-playground/` and runs `npm install` (one-time; needs Node.js). Stop voice with `unity voice stop`. Full configuration (voice ID, provider selection, SIP/phone numbers) lives in [`sandboxes/conversation_manager/README.md`](sandboxes/conversation_manager/README.md).
-
-</details>
+Then start a call from the Console chat — speak through your mic, share your screen, and end the call from the same place.
 
 ---
 
-## The local assistant
+## Your assistant
 
-The local install runs **one customized assistant called `Unity`** — the natural shape for a single user on their own laptop. The multi-assistant experience (multiple named teammates, organisations, real telephony, channel integrations, billing) maps more cleanly onto professional teams and lives in the hosted product at **[console.unify.ai](https://console.unify.ai)**.
+The local install runs **one assistant — Marty, your Coordinator** — the natural shape for a single user on their own laptop. The multi-assistant experience (multiple named teammates, organisations, real telephony, inbound channel integrations, billing) maps more cleanly onto professional teams and lives in the hosted product at **[console.unify.ai](https://console.unify.ai)**.
 
 ---
 
-## Communication Channels
+## What works locally
 
-Unity's external communication surface lives in `unity.gateway`, so local and hosted deployments use the same channel code.
+Everything below runs on your laptop after install:
 
-- Local chat and browser voice work after install.
-- Local external channels such as Twilio SMS/phone/WhatsApp, Slack, Gmail, Outlook, Teams, and Discord require provider credentials plus a public HTTPS callback URL.
-- Hosted SaaS uses the same gateway routes with hosted backends for Pub/Sub delivery, runtime activation, storage, scheduling, and infrastructure.
+- **Chat** with Marty in Console.
+- **Browser voice calls** — bring a Deepgram (speech-to-text) and a Cartesia or ElevenLabs (text-to-speech) key.
+- **Web search** for research — bring a free [Tavily](https://tavily.com) key.
+- **Computer use** — Marty drives a real browser and desktop; add an optional [AntiCaptcha](https://anti-captcha.com) key for CAPTCHA solving.
+- **Third-party app tools** via [Composio](https://composio.dev) — bring your own key to expose apps like Notion, GitHub, and HubSpot as assistant tools.
 
-Print the local setup guide and exact provider callback URLs with:
-
-```bash
-python -m unity.gateway setup --interactive --env-file .env
-python -m unity.gateway urls --public-url https://your-public-callback.example
-```
-
-Then configure providers to call those generated URLs and validate the local deployment:
-
-```bash
-python -m unity.gateway doctor --check-credentials --channels all --env-file .env --public-url https://your-public-callback.example
-python -m unity.gateway smoke --base-url http://127.0.0.1:8001 --check-credentials --public-url https://your-public-callback.example
-```
-
-The wizard covers channel providers (Twilio, WhatsApp, Slack, Gmail/Google,
-Microsoft/Outlook/Teams/SharePoint, Discord, generic email), local capabilities
-(UniLLM/model keys and voice/audio providers), and internal Console/runtime
-adapter smoke checks. `scripts/local.sh start --full` starts the gateway on
-`:8001` and the local ConversationManager ingress on `:8787`. See
-[`unity/gateway/local-setup.md`](unity/gateway/local-setup.md) and
-[`unity/gateway/channels/README.md`](unity/gateway/channels/README.md) for
-provider recipes. Self-hosted users do not need the private `communication`
-repository; hosted SaaS still uses it for GCP, Kubernetes, DNS, scheduler,
-tunnel, and runtime activation infrastructure.
+Inbound messaging channels (SMS / WhatsApp / phone, Slack, Gmail, Outlook, Teams, Discord) and Google / Microsoft workspace connect are part of the hosted product and are not wired into the self-host stack.
 
 ---
 
 ## Day-to-day commands
 
 ```text
-unity                       Start the runtime (full system on your laptop)
-unity logs                  Tail the runtime log in a second terminal
-unity --live-voice          Start the runtime with live voice calls in the browser
-unity setup                 Bootstrap / re-bootstrap local Orchestra
-unity status                Local Orchestra status
-unity stop                  Stop local Orchestra (preserves data)
-unity restart               Restart local Orchestra (preserves data)
-unity doctor                Diagnose missing deps, keys, and PATH
-unity update                git pull --rebase the four repos + uv sync
-unity voice setup           Install + start local LiveKit
-unity voice stop / status   Stop / report local LiveKit
-unity help                  Subcommand reference
+unity                    Start the stack (alias: unity up, unity stack up)
+unity down               Stop the Console UI; runtime keeps running
+unity down --full        Stop every service
+unity restart            Recreate containers after editing ~/.unity/.env
+unity status             Show container status
+unity logs [service...]  Follow logs (optionally for specific services)
+unity pull               Pull the latest images
+unity doctor             Check Docker, keys, and service health
+unity help               Command reference
 ```
+
+Bring-your-own-keys (LLM, voice, integrations) live in `~/.unity/.env` — edit them and run `unity restart`. For the developer source install and its commands, see [`deploy/selfhost/README.md`](deploy/selfhost/README.md).
 
 ---
 
