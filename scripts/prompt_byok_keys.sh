@@ -180,7 +180,7 @@ prompt_llm_key() {
     *) log_warn "Skipped LLM key"; return 0 ;;
   esac
 
-  prompt_secret "LLM" "$var_name" "Required for Coordinator chat."
+  prompt_secret "LLM" "$var_name" "Lets Marty think and reply — required for chat."
 }
 
 ensure_embedding_search_key() {
@@ -198,8 +198,8 @@ ensure_embedding_search_key() {
 
   echo "" >/dev/tty
   echo -e "${BOLD}OpenAI for tool search (recommended)${NC}" >/dev/tty
-  echo "  Coordinator tool search uses OpenAI embeddings." >/dev/tty
-  echo "  Add an OpenAI key for desktop automation and research tools." >/dev/tty
+  echo "  Marty picks tools using OpenAI embeddings, even when chat runs on another provider." >/dev/tty
+  echo "  Add an OpenAI key so Marty can reach its desktop, browser, and research tools." >/dev/tty
   prompt_secret \
     "OpenAI embeddings" \
     "OPENAI_API_KEY" \
@@ -263,7 +263,7 @@ prompt_anticaptcha_key() {
   local value=""
   echo "" >/dev/tty
   echo -e "${BOLD}AntiCaptcha (optional — computer use)${NC}" >/dev/tty
-  echo "  CAPTCHA solving for browser automation (agent-service + Unity actor)." >/dev/tty
+  echo "  Lets Marty get past CAPTCHAs while driving the browser/desktop instead of stalling." >/dev/tty
   echo "  Not needed for chat or voice-only installs." >/dev/tty
   echo "  Sign up: https://anti-captcha.com" >/dev/tty
   printf "Paste ANTICAPTCHA_KEY (hidden, Enter to skip): " >/dev/tty
@@ -285,14 +285,14 @@ prompt_anticaptcha_key() {
 prompt_research_and_computer() {
   echo ""
   echo -e "${BOLD}Research + computer automation (optional)${NC}"
-  echo "  Tavily:      web search tools for Coordinator research"
-  echo "  AntiCaptcha: CAPTCHA solving when computer use is enabled (Phase 2+)"
+  echo "  Tavily:      lets Marty look things up on the web while researching"
+  echo "  AntiCaptcha: lets Marty get past CAPTCHAs while using the browser/desktop"
   echo ""
 
   prompt_secret \
     "Web search — Tavily API key" \
     "UNITY_WEB_TAVILY_API_KEY" \
-    "Free tier: https://tavily.com — enables Coordinator web search"
+    "Lets Marty search the web while researching. Free tier: https://tavily.com"
 
   if has_env_value UNITY_WEB_TAVILY_API_KEY && ! has_env_value UNITY_WEB_ENABLED; then
     upsert_env "UNITY_WEB_ENABLED" "true"
@@ -320,14 +320,14 @@ prompt_research_and_computer() {
 prompt_app_integrations() {
   echo ""
   echo -e "${BOLD}App integrations (optional)${NC}"
-  echo "  Composio connects third-party apps (HubSpot, Notion, GitHub, ...)"
-  echo "  as assistant tools, using your own Composio account."
+  echo "  Lets Marty act in third-party apps (HubSpot, Notion, GitHub, ...) on your"
+  echo "  behalf, using your own Composio account."
   echo ""
 
   prompt_secret \
     "App integrations — Composio API key" \
     "COMPOSIO_API_KEY" \
-    "Free tier: https://composio.dev — enables third-party app tools"
+    "Lets Marty act in apps like Notion, GitHub, and HubSpot. Free tier: https://composio.dev"
 
   echo ""
   if has_env_value COMPOSIO_API_KEY; then
