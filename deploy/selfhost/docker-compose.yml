@@ -121,6 +121,8 @@ services:
 
   orchestra-integrations-bootstrap:
     <<: *orchestra_image
+    profiles:
+    - integrations-sync
     command:
     - /bin/bash
     - -c
