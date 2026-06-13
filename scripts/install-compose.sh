@@ -219,35 +219,46 @@ export UNITY_HOME
 COMPOSE_CLI="${compose_cli}"
 
 if [[ -f "\$UNITY_HOME/docker-compose.yml" ]]; then
-  case "\${1:-}" in
-    ""|stack)
+  cmd="\${1:-up}"
+  case "\$cmd" in
+    stack)
       shift || true
       sub="\${1:-up}"
       shift || true
-      case "\$sub" in
-        up) exec bash "\$COMPOSE_CLI" up "\$@" ;;
-        down|stop) exec bash "\$COMPOSE_CLI" down "\$@" ;;
-        doctor) exec bash "\$COMPOSE_CLI" doctor "\$@" ;;
-        status|ps) exec bash "\$COMPOSE_CLI" status "\$@" ;;
-        logs) shift; exec bash "\$COMPOSE_CLI" logs "\$@" ;;
-        restart) exec bash "\$COMPOSE_CLI" restart "\$@" ;;
-        integrations-sync) exec bash "\$COMPOSE_CLI" integrations-sync "\$@" ;;
-        *) exec bash "\$COMPOSE_CLI" "\$sub" "\$@" ;;
-      esac
-      ;;
+      exec bash "\$COMPOSE_CLI" "\$sub" "\$@" ;;
+    ""|up)             shift || true; exec bash "\$COMPOSE_CLI" up "\$@" ;;
+    down|stop)         shift || true; exec bash "\$COMPOSE_CLI" down "\$@" ;;
+    restart)           shift || true; exec bash "\$COMPOSE_CLI" restart "\$@" ;;
+    doctor)            shift || true; exec bash "\$COMPOSE_CLI" doctor "\$@" ;;
+    status|ps)         shift || true; exec bash "\$COMPOSE_CLI" status "\$@" ;;
+    logs)              shift || true; exec bash "\$COMPOSE_CLI" logs "\$@" ;;
+    pull)              shift || true; exec bash "\$COMPOSE_CLI" pull "\$@" ;;
+    integrations-sync) shift || true; exec bash "\$COMPOSE_CLI" integrations-sync "\$@" ;;
     setup)
       echo "Compose install is already configured at \$UNITY_HOME" >&2
-      echo "Edit \$UNITY_HOME/.env for keys, then: unity stack restart" >&2
-      exit 0
-      ;;
-    doctor) exec bash "\$COMPOSE_CLI" doctor "\$@" ;;
-    restart) exec bash "\$COMPOSE_CLI" restart "\$@" ;;
-    stop|down) exec bash "\$COMPOSE_CLI" down "\$@" ;;
-    status) exec bash "\$COMPOSE_CLI" status "\$@" ;;
-    logs) exec bash "\$COMPOSE_CLI" logs "\$@" ;;
+      echo "Edit \$UNITY_HOME/.env for keys, then run: unity restart" >&2
+      exit 0 ;;
+    help|-h|--help)
+      cat <<'USAGE'
+unity — Docker Compose self-host control
+
+  unity                    Start the stack (alias: unity up, unity stack up)
+  unity down               Stop the Console UI; runtime keeps running
+  unity down --full        Stop every service
+  unity restart            Recreate containers after editing ~/.unity/.env
+  unity status             Show container status
+  unity logs [service...]  Follow logs (optionally for specific services)
+  unity pull               Pull the latest images
+  unity doctor             Check Docker, keys, and service health
+  unity integrations-sync  Sync the Composio app catalog (needs COMPOSIO_API_KEY)
+
+Edit keys in ~/.unity/.env, then run: unity restart
+USAGE
+      exit 0 ;;
     *)
-      exec bash "\$COMPOSE_CLI" up "\$@"
-      ;;
+      echo "unity: unknown command '\$cmd'" >&2
+      echo "Run 'unity help' to see available commands." >&2
+      exit 1 ;;
   esac
 fi
 
