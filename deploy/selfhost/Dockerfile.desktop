@@ -47,15 +47,16 @@ RUN chmod +x /app/desktop/desktop.sh /app/desktop/device.sh /app/desktop/startup
 # Magnitude packages (agent-service file: deps). Clone in-image so CI does not rely
 # on a local magnitude checkout in the Docker build context.
 RUN git clone --depth 1 --branch unity-modifications https://github.com/unifyai/magnitude.git /app/magnitude
-WORKDIR /app/magnitude/packages/magnitude-core
-RUN npm install --ignore-scripts --omit=dev
-WORKDIR /app/magnitude/packages/magnitude-extract
-RUN npm install --ignore-scripts --omit=dev
+WORKDIR /app/magnitude
+# Root install wires workspace packages; lockfile is macOS-generated so resolve for Linux.
+RUN rm -f package-lock.json && npm install --ignore-scripts
+RUN cd packages/magnitude-extract && npx tsup
+RUN cd packages/magnitude-core && npx baml-cli generate && npx pkgroll
 
 # Agent service install (includes demo-sites/ subdirectory)
 WORKDIR /app/agent-service
 COPY agent-service/ ./
-RUN npm ci
+RUN npm ci && npx tsc --skipLibCheck
 
 # Install browser runtimes using magnitude-core's patchright (Playwright fork)
 RUN cd /app/magnitude/packages/magnitude-core && npx patchright install --with-deps chromium
