@@ -21,12 +21,17 @@ Register on `/login`, then chat with your Coordinator.
 
 | Command | Effect |
 |---------|--------|
-| `unity` / `unity stack up` | Start or resume the stack |
-| `unity stack down` | Stop Console UI; CM + scheduler keep running |
-| `unity stack down --full` | Stop all services |
+| `unity` (or `unity up`) | Start or resume the stack |
+| `unity down` | Stop Console UI; CM + scheduler keep running |
+| `unity down --full` | Stop all services |
 | `unity restart` | Recreate containers after editing `.env` |
-| `unity stack doctor` | Docker + service health |
-| `unity stack logs` | Follow compose logs |
+| `unity status` | Show container status |
+| `unity logs [service...]` | Follow logs (optionally for specific services) |
+| `unity pull` | Pull the latest images |
+| `unity doctor` | Docker + key + service health |
+| `unity integrations-sync` | Sync the Composio app catalog (needs `COMPOSIO_API_KEY`) |
+
+Every command is also available under `unity stack <command>` (e.g. `unity stack logs`).
 
 ## Configuration
 
@@ -62,6 +67,7 @@ curl -fsSL .../install.sh | bash -s -- --source-install
 
 ## System requirements
 
+- macOS, Linux, or Windows via WSL2
 - Docker Desktop or Docker Engine
 - ~12 GB RAM recommended (desktop + CM + ML deps)
 - Multi-GB disk for image pulls
