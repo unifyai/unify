@@ -90,7 +90,20 @@ ensure_playwright_cache_for_unityuser() {
   fi
 }
 
+ensure_chromium_browser_wrapper() {
+  local user_cache="/Unity/.cache/ms-playwright"
+  local chrome_path
+  chrome_path="$(find "$user_cache" -name "chrome" -type f -executable 2>/dev/null | head -1 || true)"
+  if [[ -z "$chrome_path" ]]; then
+    log "Playwright chrome binary not found under ${user_cache}; skipping browser wrapper update"
+    return 0
+  fi
+  printf '#!/bin/bash\nexec "%s" --no-sandbox "$@"\n' "$chrome_path" > /usr/local/bin/chromium-browser
+  chmod +x /usr/local/bin/chromium-browser
+}
+
 ensure_playwright_cache_for_unityuser
+ensure_chromium_browser_wrapper
 
 log "Using coordinator API key for VNC and agent-service auth"
 exec /bin/bash /app/desktop/startup.sh

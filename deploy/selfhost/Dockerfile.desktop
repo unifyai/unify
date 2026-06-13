@@ -61,19 +61,6 @@ RUN npm ci && npx tsc --skipLibCheck
 # Install browser runtimes using magnitude-core's patchright (Playwright fork)
 RUN cd /app/magnitude/packages/magnitude-core && npx patchright install --with-deps chromium
 
-# Configure Chromium as default browser so GUI apps and XFCE can find it
-RUN CHROME_PATH=$(find /root/.cache/ms-playwright -name "chrome" -type f -executable 2>/dev/null | head -1) && \
-    printf '#!/bin/bash\nexec "%s" --no-sandbox "$@"\n' "$CHROME_PATH" > /usr/local/bin/chromium-browser && \
-    chmod +x /usr/local/bin/chromium-browser && \
-    printf '[Desktop Entry]\nVersion=1.0\nName=Chromium Web Browser\nExec=/usr/local/bin/chromium-browser %%U\nTerminal=false\nType=Application\nIcon=web-browser\nCategories=Network;WebBrowser;\nMimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;\nStartupNotify=true\n' \
-        > /usr/share/applications/chromium-browser.desktop && \
-    update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/local/bin/chromium-browser 100 && \
-    update-alternatives --set x-www-browser /usr/local/bin/chromium-browser && \
-    update-desktop-database /usr/share/applications/ 2>/dev/null || true && \
-    xdg-mime default chromium-browser.desktop x-scheme-handler/http 2>/dev/null || true && \
-    xdg-mime default chromium-browser.desktop x-scheme-handler/https 2>/dev/null || true && \
-    xdg-mime default chromium-browser.desktop text/html 2>/dev/null || true
-
 # XFCE helper definition so exo-open recognizes Chromium as a browser option
 RUN mkdir -p /usr/share/xfce4/helpers && \
     printf '[Desktop Entry]\nVersion=1.0\nType=X-XFCE-Helper\nName=Chromium Web Browser\nIcon=web-browser\nX-XFCE-Binaries=chromium-browser;/usr/local/bin/chromium-browser;\nX-XFCE-Category=WebBrowser\nX-XFCE-Commands=%%B;\nX-XFCE-CommandsWithParameter=%%B %%s;\n' \
@@ -95,6 +82,21 @@ WORKDIR /app
 RUN mkdir -p /var/log/supervisor /var/log/magnitude /Unity/.cache && \
     cp -a /root/.cache/ms-playwright /Unity/.cache/ms-playwright && \
     chown -R unityuser:unityuser /Unity/.cache/ms-playwright
+
+# XFCE and GUI apps run as unityuser; the wrapper must target the user-owned cache,
+# not /root/.cache/ms-playwright left over from patchright install during the build.
+RUN CHROME_PATH=$(find /Unity/.cache/ms-playwright -name "chrome" -type f -executable 2>/dev/null | head -1) && \
+    test -n "$CHROME_PATH" && \
+    printf '#!/bin/bash\nexec "%s" --no-sandbox "$@"\n' "$CHROME_PATH" > /usr/local/bin/chromium-browser && \
+    chmod +x /usr/local/bin/chromium-browser && \
+    printf '[Desktop Entry]\nVersion=1.0\nName=Chromium Web Browser\nExec=/usr/local/bin/chromium-browser %%U\nTerminal=false\nType=Application\nIcon=web-browser\nCategories=Network;WebBrowser;\nMimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;\nStartupNotify=true\n' \
+        > /usr/share/applications/chromium-browser.desktop && \
+    update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/local/bin/chromium-browser 100 && \
+    update-alternatives --set x-www-browser /usr/local/bin/chromium-browser && \
+    update-desktop-database /usr/share/applications/ 2>/dev/null || true && \
+    xdg-mime default chromium-browser.desktop x-scheme-handler/http 2>/dev/null || true && \
+    xdg-mime default chromium-browser.desktop x-scheme-handler/https 2>/dev/null || true && \
+    xdg-mime default chromium-browser.desktop text/html 2>/dev/null || true
 
 COPY scripts/sandbox-dpkg .
 RUN install -m 0755 sandbox-dpkg /usr/local/bin/sandbox-dpkg
