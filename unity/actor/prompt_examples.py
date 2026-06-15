@@ -2030,7 +2030,7 @@ async def check_if_slack_is_ready() -> dict:
         limit=3,
     )
     # If results is empty, Slack is not currently supported in Integrations.
-    # If connection_status is not connected, ask the user to connect Slack in Console.
+    # If connection_status is not connected, ask the user to connect Slack from the Integrations tab in Console.
     # If sync_status is not materialized, explain that tools are still syncing.
     # If sync_status is materialized, search FunctionManager for executable rows
     # such as primitives.integrations.slack.send_message.
@@ -2066,7 +2066,7 @@ def get_primitives_integrations_activation_state_example() -> str:
 # Example: Call the concrete synced integration primitive
 async def search_gmail_for_invoices() -> dict:
     # If FunctionManager did not return a Gmail row, Gmail is not connected or
-    # its tools have not synced yet. Ask the user to connect it in Console.
+    # its tools have not synced yet. Ask the user to connect it from the Integrations tab in Console.
     return await primitives.integrations.gmail.search_emails(
         query="from:acme invoice newer_than:30d",
     )

@@ -469,7 +469,7 @@ def test_external_app_integration_present():
     assert "primitives.secrets.ask" in prompt
     assert "install_python_packages" in prompt
     assert "Prefer Python SDKs over CLI tools" in prompt
-    assert "console's Secrets page" in prompt
+    assert "the **Integrations** tab in the console" in prompt
 
 
 @pytest.mark.timeout(30)
