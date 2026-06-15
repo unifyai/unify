@@ -26,14 +26,16 @@ used to configure Orchestra provider backends:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import logging
 import os
 import sys
 import time
 import tomllib
 from pathlib import Path
-from typing import Any
-from urllib import error, request
+from typing import Any, NamedTuple
+from urllib import error, parse, request
 
 _repo_root = Path(__file__).resolve().parent.parent
 if str(_repo_root) not in sys.path:
@@ -55,6 +57,21 @@ SYNC_PASSTHROUGH_FIELDS = {
     "prune_unlisted_apps",
 }
 DEFAULT_COMPOSIO_BATCH_SIZE = 25
+BOOTSTRAP_STATUS_SUCCESS = "success"
+BUILTINS_BOOTSTRAP_SEED_OWNER = "unity-builtins"
+
+
+class ProviderBootstrapPlan(NamedTuple):
+    backend_id: str
+    environment: str
+    desired_hash: str
+    desired_config: dict[str, Any]
+    backend_payload: dict[str, Any]
+    sync_payload: dict[str, Any] | None
+
+
+def _json_dumps(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -137,6 +154,51 @@ def _sync_payload(*, backend_id: str, config: dict[str, Any]) -> dict[str, Any] 
     return payload
 
 
+def _provider_plan(
+    *,
+    manifest: dict[str, Any],
+    backend_id: str,
+    config: dict[str, Any],
+) -> ProviderBootstrapPlan:
+    environment = str(manifest.get("environment") or "selfhost")
+    backend_payload = _backend_payload(
+        backend_id=backend_id,
+        environment=environment,
+        config=config,
+    )
+    sync_payload = _sync_payload(backend_id=backend_id, config=config)
+    desired_sync_config = None
+    if sync_payload:
+        desired_sync_config = {
+            **sync_payload,
+            "mode": sync_payload.get("sync_mode", "partial"),
+        }
+    desired_config = {
+        "schema_version": manifest.get("schema_version", 1),
+        "environment": environment,
+        "seed_owner": BUILTINS_BOOTSTRAP_SEED_OWNER,
+        "backend": backend_payload,
+        "sync": desired_sync_config,
+    }
+    desired_hash = hashlib.sha256(_json_dumps(desired_config).encode()).hexdigest()
+    if sync_payload:
+        sync_payload = {
+            **sync_payload,
+            "cache_version": (
+                f"{BUILTINS_BOOTSTRAP_SEED_OWNER}-{environment}-"
+                f"{backend_id}-{desired_hash[:12]}"
+            ),
+        }
+    return ProviderBootstrapPlan(
+        backend_id=backend_id,
+        environment=environment,
+        desired_hash=desired_hash,
+        desired_config=desired_config,
+        backend_payload=backend_payload,
+        sync_payload=sync_payload,
+    )
+
+
 def _admin_request(
     *,
     base_url: str,
@@ -175,6 +237,117 @@ def _admin_request(
         raise RuntimeError(
             f"{method} {path} failed with HTTP {exc.code}: {detail}",
         ) from exc
+
+
+def _bootstrap_state(
+    *,
+    base_url: str,
+    admin_key: str,
+    environment: str,
+    backend_id: str,
+) -> dict[str, Any] | None:
+    query = parse.urlencode({"environment": environment, "backend_id": backend_id})
+    try:
+        return _admin_request(
+            base_url=base_url,
+            admin_key=admin_key,
+            method="GET",
+            path=f"/admin/integrations/bootstrap-state?{query}",
+        )
+    except RuntimeError as exc:
+        if "HTTP 404" in str(exc):
+            return None
+        raise
+
+
+def _bootstrap_state_matches(
+    *,
+    state: dict[str, Any] | None,
+    plan: ProviderBootstrapPlan,
+) -> bool:
+    diagnostics = (state or {}).get("last_sync_diagnostics") or {}
+    return (
+        bool(state)
+        and state.get("desired_hash") == plan.desired_hash
+        and state.get("last_status") in {BOOTSTRAP_STATUS_SUCCESS, "skipped"}
+        and diagnostics.get("seed_owner") == BUILTINS_BOOTSTRAP_SEED_OWNER
+        and diagnostics.get("builtins_seeded") is True
+    )
+
+
+def _sync_diagnostics(
+    *,
+    plan: ProviderBootstrapPlan,
+    result: dict[str, Any] | None,
+    builtins_changed: bool,
+) -> dict[str, Any]:
+    sync_config = plan.desired_config.get("sync") or {}
+    sync_mode = sync_config.get("mode") or sync_config.get("sync_mode")
+    diagnostics: dict[str, Any] = {
+        "seed_owner": BUILTINS_BOOTSTRAP_SEED_OWNER,
+        "builtins_seeded": True,
+        "builtins_changed": builtins_changed,
+        "sync_mode": sync_mode,
+        "requested_app_slugs": list(sync_config.get("app_slugs") or []),
+        "prune_unlisted_apps": bool(sync_config.get("prune_unlisted_apps", False)),
+    }
+    if result:
+        for field in (
+            "status",
+            "error",
+            "warning",
+            "auth_configs_created",
+            "auth_configs_reused",
+            "cache_version",
+            "prune_unlisted_apps",
+            "apps_pruned",
+            "tools_pruned",
+        ):
+            if field in result:
+                diagnostics[field] = result[field]
+        if sync_mode != "full":
+            for field in ("skipped_apps", "matched_app_slugs"):
+                if field in result:
+                    diagnostics[field] = result[field]
+    return diagnostics
+
+
+def _put_bootstrap_state(
+    *,
+    base_url: str,
+    admin_key: str,
+    plan: ProviderBootstrapPlan,
+    status: str,
+    result: dict[str, Any] | None = None,
+    builtins_changed: bool = False,
+    error_message: str | None = None,
+) -> None:
+    diagnostics = _sync_diagnostics(
+        plan=plan,
+        result=result,
+        builtins_changed=builtins_changed,
+    )
+    if error_message:
+        diagnostics["error"] = error_message[:1000]
+        diagnostics["builtins_seeded"] = False
+    payload = {
+        "environment": plan.environment,
+        "backend_id": plan.backend_id,
+        "desired_hash": plan.desired_hash,
+        "desired_config": plan.desired_config,
+        "last_status": status,
+        "last_error": error_message[:1000] if error_message else None,
+        "apps_upserted": int((result or {}).get("apps_upserted", 0) or 0),
+        "tools_upserted": int((result or {}).get("tools_upserted", 0) or 0),
+        "last_sync_diagnostics": diagnostics,
+    }
+    _admin_request(
+        base_url=base_url,
+        admin_key=admin_key,
+        method="PUT",
+        path="/admin/integrations/bootstrap-state",
+        payload=payload,
+    )
 
 
 def _effective_prune(payload: dict[str, Any]) -> bool:
@@ -216,6 +389,55 @@ def _seed_sync_result(
     return changed
 
 
+def _merge_sync_results(
+    *,
+    base: dict[str, Any] | None,
+    batch: dict[str, Any],
+    app_count: int | None = None,
+) -> dict[str, Any]:
+    merged = dict(base or {})
+    merged["status"] = batch.get("status") or merged.get("status") or "success"
+    if app_count is not None:
+        merged["apps_upserted"] = app_count
+    else:
+        merged["apps_upserted"] = int(merged.get("apps_upserted", 0) or 0) + int(
+            batch.get("apps_upserted", 0) or 0,
+        )
+    for field in ("tools_upserted", "apps_pruned", "tools_pruned"):
+        merged[field] = int(merged.get(field, 0) or 0) + int(batch.get(field, 0) or 0)
+    merged["skipped_apps"] = [
+        *(merged.get("skipped_apps") or []),
+        *(batch.get("skipped_apps") or []),
+    ]
+    merged["apps"] = [
+        *(merged.get("apps") or []),
+        *(batch.get("apps") or []),
+    ]
+    merged["tools"] = [
+        *(merged.get("tools") or []),
+        *(batch.get("tools") or []),
+    ]
+    matched = {
+        str(slug)
+        for slug in [
+            *(merged.get("matched_app_slugs") or []),
+            *(batch.get("matched_app_slugs") or []),
+        ]
+        if slug
+    }
+    merged["matched_app_slugs"] = sorted(matched)
+    for field in ("cache_version", "warning", "error"):
+        if batch.get(field) is not None:
+            merged[field] = batch[field]
+    merged["auth_configs_created"] = int(
+        merged.get("auth_configs_created", 0) or 0,
+    ) + int(batch.get("auth_configs_created", 0) or 0)
+    merged["auth_configs_reused"] = int(
+        merged.get("auth_configs_reused", 0) or 0,
+    ) + int(batch.get("auth_configs_reused", 0) or 0)
+    return merged
+
+
 def _chunks(values: list[str], size: int) -> list[list[str]]:
     return [values[index : index + size] for index in range(0, len(values), size)]
 
@@ -234,7 +456,7 @@ def _sync_and_seed_provider(
     base_url: str,
     admin_key: str,
     sync_payload: dict[str, Any],
-) -> bool:
+) -> tuple[bool, dict[str, Any]]:
     if not _should_batch_composio_full_sync(sync_payload):
         result = _admin_request(
             base_url=base_url,
@@ -243,7 +465,7 @@ def _sync_and_seed_provider(
             path="/admin/integrations/sync",
             payload=sync_payload,
         )
-        return _seed_sync_result(result=result, sync_payload=sync_payload)
+        return _seed_sync_result(result=result, sync_payload=sync_payload), result
 
     app_payload = {
         **sync_payload,
@@ -259,6 +481,10 @@ def _sync_and_seed_provider(
         payload=app_payload,
     )
     changed = _seed_sync_result(result=app_result, sync_payload=app_payload)
+    app_count = int(app_result.get("apps_upserted", 0) or 0)
+    aggregate = _merge_sync_results(base=None, batch=app_result, app_count=app_count)
+    aggregate["sync_mode"] = sync_payload.get("sync_mode") or "full"
+    aggregate["requested_app_slugs"] = list(sync_payload.get("app_slugs") or [])
     matched_slugs = [str(slug) for slug in app_result.get("matched_app_slugs") or []]
     if not matched_slugs:
         raise RuntimeError("Composio full sync returned no app slugs")
@@ -291,7 +517,12 @@ def _sync_and_seed_provider(
             )
             or changed
         )
-    return changed
+        aggregate = _merge_sync_results(
+            base=aggregate,
+            batch=batch_result,
+            app_count=app_count,
+        )
+    return changed, aggregate
 
 
 def _sync_integration_bootstrap_manifest(
@@ -301,35 +532,69 @@ def _sync_integration_bootstrap_manifest(
     admin_key: str,
 ) -> bool:
     manifest = _load_manifest(manifest_path)
-    environment = str(manifest.get("environment") or "selfhost")
     changed = False
     for backend_id, config in sorted(manifest["providers"].items()):
         if not isinstance(config, dict):
             raise ValueError(f"{backend_id}: provider config must be an object")
-        backend_payload = _backend_payload(
+        plan = _provider_plan(
+            manifest=manifest,
             backend_id=str(backend_id),
-            environment=environment,
             config=config,
         )
+        state = _bootstrap_state(
+            base_url=base_url,
+            admin_key=admin_key,
+            environment=plan.environment,
+            backend_id=plan.backend_id,
+        )
+        if _bootstrap_state_matches(state=state, plan=plan):
+            logging.info(
+                "Skipping integration bootstrap backend=%s; manifest hash already seeded",
+                backend_id,
+            )
+            continue
         _admin_request(
             base_url=base_url,
             admin_key=admin_key,
             method="POST",
             path="/admin/integrations/backends",
-            payload=backend_payload,
+            payload=plan.backend_payload,
         )
-        sync_payload = _sync_payload(backend_id=str(backend_id), config=config)
-        if sync_payload is None:
+        if plan.sync_payload is None:
             logging.info("Skipping integration sync for backend=%s", backend_id)
-            continue
-        changed = (
-            _sync_and_seed_provider(
+            _put_bootstrap_state(
                 base_url=base_url,
                 admin_key=admin_key,
-                sync_payload=sync_payload,
+                plan=plan,
+                status=BOOTSTRAP_STATUS_SUCCESS,
+                result={"status": BOOTSTRAP_STATUS_SUCCESS},
+                builtins_changed=False,
             )
-            or changed
-        )
+            continue
+        try:
+            provider_changed, result = _sync_and_seed_provider(
+                base_url=base_url,
+                admin_key=admin_key,
+                sync_payload=plan.sync_payload,
+            )
+            _put_bootstrap_state(
+                base_url=base_url,
+                admin_key=admin_key,
+                plan=plan,
+                status=result.get("status") or BOOTSTRAP_STATUS_SUCCESS,
+                result=result,
+                builtins_changed=provider_changed,
+            )
+            changed = provider_changed or changed
+        except Exception as exc:
+            _put_bootstrap_state(
+                base_url=base_url,
+                admin_key=admin_key,
+                plan=plan,
+                status="failed",
+                error_message=str(exc),
+            )
+            raise
     return changed
 
 
