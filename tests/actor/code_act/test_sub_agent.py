@@ -100,6 +100,7 @@ def test_actor_act_exposes_capability_parameters():
     assert "can_spawn_sub_agents" in param_names
     assert "prompt_functions" in param_names
     assert "discovery_scope" in param_names
+    assert "llm_profile" in param_names
     assert "guidelines" in param_names
 
 
@@ -112,6 +113,7 @@ def test_actor_act_parameter_defaults():
     assert params["can_compose"].default is True
     assert params["can_store"].default is False
     assert params["can_spawn_sub_agents"].default is False
+    assert params["llm_profile"].default is None
     assert params["guidelines"].default is None
 
 
@@ -189,6 +191,9 @@ def test_actor_env_get_prompt_context():
     assert "prompt_functions" in ctx
     assert "timeout" in ctx
     assert "guidelines" in ctx
+    assert "llm_profile" in ctx
+    assert "gpt_5_5_high" in ctx
+    assert "do not automatically inherit" in ctx
     # Docstring content should be present.
     assert "When to use" in ctx
     assert "When NOT to use" in ctx
@@ -282,6 +287,69 @@ async def test_actor_act_forwards_capability_flags():
         await handle.result()
     except Exception:
         pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(30)
+async def test_actor_act_forwards_llm_profile(monkeypatch):
+    """primitives.actor.act should pass llm_profile to the inner CodeActActor."""
+    captured: dict[str, object] = {}
+
+    class _FakeFunctionManager:
+        def list_functions(self):
+            return {}
+
+    class _FakeGuidanceManager:
+        exclude_ids = frozenset()
+
+    class _FakeInnerActor:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def act(self, request, **kwargs):
+            captured["request"] = request
+            captured.update(kwargs)
+
+            class _Handle:
+                async def stop(self, reason=None):
+                    return None
+
+                async def result(self):
+                    return "done"
+
+            return _Handle()
+
+        async def close(self):
+            captured["closed"] = True
+
+    monkeypatch.setattr(
+        "unity.actor.code_act_actor.CodeActActor",
+        _FakeInnerActor,
+    )
+    monkeypatch.setattr(
+        "unity.actor.environments.actor._build_scoped_fm",
+        lambda discovery_scope: _FakeFunctionManager(),
+    )
+    monkeypatch.setattr(
+        "unity.actor.environments.actor._build_scoped_gm",
+        lambda guidance_scope: _FakeGuidanceManager(),
+    )
+
+    runner = _ActorRunner()
+    handle = await runner.act(
+        request="hard subtask",
+        llm_profile="gpt_5_5_high",
+        timeout=10,
+    )
+
+    await handle.stop()
+    try:
+        await handle.result()
+    except Exception:
+        pass
+
+    assert captured["request"] == "hard subtask"
+    assert captured["llm_profile"] == "gpt_5_5_high"
 
 
 # ---------------------------------------------------------------------------
