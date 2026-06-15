@@ -208,24 +208,15 @@ async def send_slack_message(request: Request):
 # ---------------------------------------------------------------------------
 
 
-@auth_router.post("/user-info")
-async def slack_user_info(request: Request):
+async def fetch_slack_user_profile(team_id: str, slack_user_id: str) -> dict:
     """Resolve a Slack user's profile via ``users.info``.
-
-    Body::
-
-        {"team_id": str, "slack_user_id": str}
 
     Returns ``{slack_user_id, email, real_name, display_name, tz}``.
     ``email`` is only populated when the workspace bot has the
-    ``users:read.email`` scope; ``real_name`` / ``display_name`` need
-    only ``users:read``. The inbound pipeline uses these to match an
-    unknown sender to an existing contact (by email, then by name).
+    ``users:read.email`` scope; ``real_name`` / ``display_name`` need only
+    ``users:read``. Raises :class:`HTTPException` on a hard failure (no
+    install, missing bot token, or a Slack API error).
     """
-    data = await request.json()
-    team_id = data["team_id"]
-    slack_user_id = data["slack_user_id"]
-
     bot_token = await _resolve_bot_token(team_id)
     async with httpx.AsyncClient() as client:
         resp = await client.get(
@@ -250,6 +241,21 @@ async def slack_user_info(request: Request):
         "display_name": profile.get("display_name") or None,
         "tz": user.get("tz") or None,
     }
+
+
+@auth_router.post("/user-info")
+async def slack_user_info(request: Request):
+    """Resolve a Slack user's profile via ``users.info``.
+
+    Body::
+
+        {"team_id": str, "slack_user_id": str}
+
+    The inbound pipeline uses the returned profile to match an unknown
+    sender to an existing contact (by email, then by name).
+    """
+    data = await request.json()
+    return await fetch_slack_user_profile(data["team_id"], data["slack_user_id"])
 
 
 # ---------------------------------------------------------------------------
