@@ -115,8 +115,27 @@ async def test_update_contacts_preserves_nameless_service_contact(monkeypatch):
     captured_update_kwargs: list[dict] = []
     captured_create_kwargs: list[dict] = []
 
+    # IMPORTANT: spy wrappers MUST preserve the original signature via
+    # functools.wraps. MemoryManager.get_tools() exposes update_contact /
+    # create_contact through:
+    #     @functools.wraps(self._contact_manager.update_contact, updated=())
+    #     async def _update_contact(**kwargs): ...
+    # which, after monkeypatch.setattr replaces the underlying method with
+    # a spy declared as `def spy(self, **kw)`, ends up wrapping the spy's
+    # signature `(**kw)` — destroying the per-parameter schema info
+    # (contact_id, first_name, …) that method_to_schema reads via
+    # inspect.signature(__wrapped__). The LLM then sees a tool with
+    # `properties: {}, required: []` and calls `update_contact()` with
+    # zero arguments, which crashes with "missing 1 required keyword-only
+    # argument: 'contact_id'". After enough consecutive failures the tool
+    # loop aborts with "Aborted after too many consecutive tool failures"
+    # — even though the LLM eventually figures out the right args from
+    # the error message and would succeed on a later retry.
+    # Wrapping the spies with @functools.wraps(orig_*) preserves the
+    # original signature so the schema generated for the tool is intact.
     orig_cm_update = SimulatedContactManager.update_contact
 
+    @functools.wraps(orig_cm_update)
     def spy_cm_update(self, **kw):
         captured_update_kwargs.append(kw)
         return orig_cm_update(self, **kw)
@@ -130,6 +149,7 @@ async def test_update_contacts_preserves_nameless_service_contact(monkeypatch):
 
     orig_cm_create = SimulatedContactManager._create_contact
 
+    @functools.wraps(orig_cm_create)
     def spy_cm_create(self, **kw):
         captured_create_kwargs.append(kw)
         return orig_cm_create(self, **kw)

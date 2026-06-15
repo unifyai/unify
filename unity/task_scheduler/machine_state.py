@@ -18,6 +18,11 @@ from typing import Any, Mapping
 
 import requests
 
+from unity.common.context_registry import (
+    ContextRegistry,
+    PERSONAL_DESTINATION,
+    TEAM_DESTINATION_PREFIX,
+)
 from unity.session_details import SESSION_DETAILS
 from unity.settings import SETTINGS
 
@@ -32,6 +37,7 @@ _TASK_RUNS_CONTEXT_LEAF = "Runs"
 _TASK_OUTBOUND_OPERATIONS_CONTEXT_LEAF = "OutboundOperations"
 TASK_MACHINE_STATE_PROJECT = "Assistants"
 _TASK_RUN_CREATE_OR_ADOPT_PATH = "/admin/task-run/create-or-adopt"
+_TASK_RUN_LATEST_PATH = "/admin/task-run/latest"
 _TASK_RUN_UPDATE_PATH = "/admin/task-run/update"
 _TASK_OUTBOUND_OPERATION_CREATE_OR_ADOPT_PATH = (
     "/admin/task-outbound-operation/create-or-adopt"
@@ -40,6 +46,7 @@ _TASK_OUTBOUND_OPERATION_UPDATE_PATH = "/admin/task-outbound-operation/update"
 _TASK_RUN_HTTP_TIMEOUT_SECONDS = 15
 _ACTIVATION_QUERY_FIELDS = [
     "assistant_id",
+    "destination",
     "activation_key",
     "task_id",
     "source_task_log_id",
@@ -59,10 +66,27 @@ _ACTIVATION_QUERY_FIELDS = [
     "activation_revision",
 ]
 _DEFAULT_TRIGGER_PAGE_SIZE = 200
-_PENDING_LIVE_TASK_RUNS: dict[int, "TaskRunProvenance"] = {}
+_PENDING_LIVE_TASK_RUNS: dict[tuple[int, str | None], "TaskRunProvenance"] = {}
 _PENDING_TRIGGER_LIVE_TASK_RUNS: dict[str, "TaskRunProvenance"] = {}
 
 logger = logging.getLogger(__name__)
+
+
+def _canonical_destination_or_none(destination: object) -> str | None:
+    """Return canonical destination when valid, otherwise ``None``."""
+    try:
+        return ContextRegistry.canonical_destination(destination)
+    except ValueError:
+        return None
+
+
+def invalidate_task_machine_state_reads() -> None:
+    """Invalidate cached task machine-state readers after membership changes."""
+
+    # Activation/run stores are intentionally lightweight and reconstructed per
+    # read today. The explicit hook keeps membership-update handling aligned with
+    # any future cache while preserving the current no-cache behavior.
+    return None
 
 
 @dataclass(frozen=True)
@@ -78,6 +102,7 @@ class TaskActivationSnapshot:
     assistant_id: str | None
     activation_key: str
     task_id: int
+    destination: str | None = None
     source_task_log_id: int | None = None
     activation_kind: str | None = None
     execution_mode: str | None = None
@@ -105,6 +130,7 @@ class TaskRunProvenance:
     execution_mode: str = "live"
     source_task_log_id: int | None = None
     activation_revision: str | None = None
+    destination: str | None = None
     scheduled_for: str | None = None
     source_medium: str | None = None
     source_ref: str | None = None
@@ -156,12 +182,22 @@ class TaskOutboundOperationRecord:
     created: bool
 
 
-def build_activation_key(*, assistant_id: str | int | None, task_id: int) -> str:
-    """Return the assistant-scoped activation key used by Orchestra."""
+def build_activation_key(
+    *,
+    assistant_id: str | int | None,
+    task_id: int,
+    destination: str | None = None,
+) -> str:
+    """Return the executor-scoped activation key used by Orchestra."""
 
     normalized_assistant_id = _coerce_str(assistant_id)
+    destination_label = _coerce_str(_canonical_destination_or_none(destination))
     if normalized_assistant_id:
+        if destination_label:
+            return f"{normalized_assistant_id}:{destination_label}:{task_id}"
         return f"{normalized_assistant_id}:{task_id}"
+    if destination_label:
+        return f"{destination_label}:{task_id}"
     return str(task_id)
 
 
@@ -234,7 +270,49 @@ def remember_live_task_run_provenance(provenance: TaskRunProvenance) -> None:
     if provenance.source_type == "triggered" and normalized_attempt_token:
         _PENDING_TRIGGER_LIVE_TASK_RUNS[normalized_attempt_token] = provenance
         return
-    _PENDING_LIVE_TASK_RUNS[provenance.task_id] = provenance
+    _PENDING_LIVE_TASK_RUNS[
+        _pending_live_provenance_key(provenance.task_id, provenance.destination)
+    ] = provenance
+
+
+def peek_live_task_run_provenance(
+    *,
+    assistant_id: str | int | None,
+    task_id: int,
+    source_type: str,
+    destination: str | None = None,
+    trigger_attempt_token: str | None = None,
+) -> TaskRunProvenance | None:
+    """Return pending provenance for one task without claiming it."""
+
+    pending: TaskRunProvenance | None
+    if source_type == "triggered":
+        normalized_attempt_token = _normalize_pending_trigger_attempt_token(
+            trigger_attempt_token,
+        )
+        if not normalized_attempt_token:
+            return None
+        pending = _PENDING_TRIGGER_LIVE_TASK_RUNS.get(normalized_attempt_token)
+    else:
+        pending = _PENDING_LIVE_TASK_RUNS.get(
+            _pending_live_provenance_key(task_id, destination),
+        )
+        if pending is None and destination is None:
+            matches = [
+                item
+                for item in _PENDING_LIVE_TASK_RUNS.values()
+                if item.task_id == task_id and item.source_type == source_type
+            ]
+            if len(matches) == 1:
+                pending = matches[0]
+    if pending is None:
+        return None
+    normalized_assistant_id = _coerce_str(assistant_id)
+    if pending.task_id != task_id:
+        return None
+    if normalized_assistant_id and pending.assistant_id != normalized_assistant_id:
+        return None
+    return pending
 
 
 def consume_live_task_run_provenance(
@@ -243,6 +321,7 @@ def consume_live_task_run_provenance(
     task_id: int,
     source_type: str,
     source_task_log_id: int | None = None,
+    destination: str | None = None,
     trigger_attempt_token: str | None = None,
 ) -> TaskRunProvenance | None:
     """Claim the pending live-run provenance for one task, or build a fallback."""
@@ -252,6 +331,7 @@ def consume_live_task_run_provenance(
         assistant_id=normalized_assistant_id,
         task_id=task_id,
         source_type=source_type,
+        destination=destination,
         trigger_attempt_token=trigger_attempt_token,
     )
     if pending is not None:
@@ -263,6 +343,7 @@ def consume_live_task_run_provenance(
         activation = get_task_activation(
             assistant_id=normalized_assistant_id,
             task_id=task_id,
+            destination=destination,
         )
     return TaskRunProvenance(
         assistant_id=normalized_assistant_id,
@@ -274,6 +355,7 @@ def consume_live_task_run_provenance(
         activation_revision=(
             activation.activation_revision if activation is not None else None
         ),
+        destination=(activation.destination if activation is not None else None),
         scheduled_for=(
             activation.next_due_at
             if source_type == "scheduled" and activation
@@ -296,6 +378,7 @@ def _claim_pending_live_task_run_provenance(
     assistant_id: str | None,
     task_id: int,
     source_type: str,
+    destination: str | None,
     trigger_attempt_token: str | None,
 ) -> TaskRunProvenance | None:
     """Claim one pending provenance entry without misattributing another attempt."""
@@ -309,7 +392,10 @@ def _claim_pending_live_task_run_provenance(
             return None
         pending = _PENDING_TRIGGER_LIVE_TASK_RUNS.pop(normalized_attempt_token, None)
     else:
-        pending = _PENDING_LIVE_TASK_RUNS.pop(task_id, None)
+        pending = _PENDING_LIVE_TASK_RUNS.pop(
+            _pending_live_provenance_key(task_id, destination),
+            None,
+        )
     if pending is None:
         return None
     if pending.task_id != task_id:
@@ -332,6 +418,15 @@ def _claim_pending_live_task_run_provenance(
         )
         return None
     return pending
+
+
+def _pending_live_provenance_key(
+    task_id: int,
+    destination: str | None,
+) -> tuple[int, str | None]:
+    """Return the in-memory pending live-run key for a task root."""
+
+    return task_id, _coerce_str(destination)
 
 
 def _normalize_pending_trigger_attempt_token(attempt_token: str | None) -> str | None:
@@ -371,6 +466,7 @@ def create_or_adopt_live_task_run(
                 "source_type": provenance.source_type,
                 "execution_mode": provenance.execution_mode,
                 "activation_revision": provenance.activation_revision,
+                "destination": provenance.destination,
                 "scheduled_for": provenance.scheduled_for,
                 "source_medium": provenance.source_medium,
                 "source_ref": provenance.source_ref,
@@ -411,6 +507,40 @@ def update_task_run_record(
             "run_key": run_reference.run_key,
             "updates": _drop_none_values(dict(updates)),
         },
+    )
+
+
+def latest_task_run_reference_for_source(
+    *,
+    assistant_id: str | int | None,
+    task_id: int,
+    source_task_log_id: int,
+) -> TaskRunReference | None:
+    """Return the latest run row tied to one physical source task row."""
+
+    normalized_assistant_id = _coerce_str(assistant_id)
+    if not normalized_assistant_id:
+        return None
+    response_body = _orchestra_admin_post(
+        _TASK_RUN_LATEST_PATH,
+        {
+            "project_name": TASK_MACHINE_STATE_PROJECT,
+            "assistant_id": normalized_assistant_id,
+            "task_id": int(task_id),
+            "source_task_log_id": int(source_task_log_id),
+        },
+    )
+    if not isinstance(response_body, Mapping):
+        return None
+    run_payload = response_body.get("run")
+    if not isinstance(run_payload, Mapping):
+        return None
+    run_key = _coerce_str(run_payload.get("run_key"))
+    if not run_key:
+        return None
+    return TaskRunReference(
+        assistant_id=normalized_assistant_id,
+        run_key=run_key,
     )
 
 
@@ -492,6 +622,11 @@ def build_task_run_key(provenance: TaskRunProvenance) -> str:
     revision_digest = hashlib.sha256(
         str(provenance.activation_revision or "").encode("utf-8"),
     ).hexdigest()[:12]
+    destination_part = (
+        f"{_normalize_run_key_component(provenance.destination)}:"
+        if provenance.destination
+        else ""
+    )
     tail_parts: list[str] = []
     if provenance.scheduled_for:
         normalized_due = _normalize_run_datetime_fragment(provenance.scheduled_for)
@@ -510,7 +645,8 @@ def build_task_run_key(provenance: TaskRunProvenance) -> str:
     tail = "-".join(tail_parts) or "once"
     return (
         f"{provenance.execution_mode}:{provenance.source_type}:"
-        f"{provenance.assistant_id}:{provenance.task_id}:{revision_digest}:{tail}"
+        f"{provenance.assistant_id}:{destination_part}{provenance.task_id}:"
+        f"{revision_digest}:{tail}"
     )
 
 
@@ -542,12 +678,21 @@ def get_task_activation(
     *,
     assistant_id: str | int | None,
     task_id: int,
+    destination: str | None = None,
 ) -> TaskActivationSnapshot | None:
     """Return the current activation row for one assistant/task pair, if any."""
 
+    normalized_destination = _canonical_destination_or_none(destination)
+    if normalized_destination is None and destination not in (
+        None,
+        "",
+        PERSONAL_DESTINATION,
+    ):
+        return None
     activation_key = build_activation_key(
         assistant_id=assistant_id,
         task_id=task_id,
+        destination=normalized_destination,
     )
     rows = _activation_store().get_rows(
         filter=f"activation_key == '{activation_key}'",
@@ -620,7 +765,15 @@ def list_trigger_activations(
     activations: list[TaskActivationSnapshot] = []
     for row in rows:
         activation = _row_to_activation(row)
-        if activation is not None:
+        destination_team_id = (
+            _destination_team_id(activation.destination)
+            if activation is not None
+            else None
+        )
+        if activation is not None and (
+            destination_team_id is None
+            or destination_team_id in set(SESSION_DETAILS.team_ids)
+        ):
             activations.append(activation)
     return activations
 
@@ -632,12 +785,18 @@ def validate_task_due_activation(
     activation_revision: str,
     source_task_log_id: int,
     scheduled_for: str,
+    destination: str | None = None,
 ) -> tuple[TaskActivationSnapshot | None, str | None]:
     """Validate that a scheduled due event still matches the current activation."""
 
+    try:
+        normalized_destination = ContextRegistry.canonical_destination(destination)
+    except ValueError:
+        return None, "invalid_destination"
     activation = get_task_activation(
         assistant_id=assistant_id,
         task_id=task_id,
+        destination=normalized_destination,
     )
     if activation is None:
         return None, "activation_missing"
@@ -647,6 +806,13 @@ def validate_task_due_activation(
         return None, "execution_mode_changed"
     if activation.activation_revision != activation_revision:
         return None, "activation_revision_mismatch"
+    if activation.destination != normalized_destination:
+        return None, "destination_mismatch"
+    destination_team_id = _destination_team_id(activation.destination)
+    if destination_team_id is not None and destination_team_id not in set(
+        SESSION_DETAILS.team_ids,
+    ):
+        return None, "destination_membership_revoked"
     if activation.source_task_log_id != source_task_log_id:
         return None, "source_task_log_id_mismatch"
     if _normalize_datetime_string(activation.next_due_at) != _normalize_datetime_string(
@@ -665,6 +831,15 @@ def _activation_store() -> TasksStore:
     )
 
 
+def _destination_team_id(destination: str | None) -> int | None:
+    """Return the team id encoded in a task destination label."""
+
+    normalized_destination = _canonical_destination_or_none(destination)
+    if normalized_destination is None:
+        return None
+    return int(normalized_destination[len(TEAM_DESTINATION_PREFIX) :])
+
+
 def _row_to_activation(row: Any) -> TaskActivationSnapshot | None:
     """Convert a Unify log row or raw mapping into a typed activation snapshot."""
 
@@ -675,14 +850,21 @@ def _row_to_activation(row: Any) -> TaskActivationSnapshot | None:
     if task_id is None:
         return None
     assistant_id = _coerce_str(entries.get("assistant_id"))
+    raw_destination = _coerce_str(entries.get("destination"))
+    try:
+        destination = ContextRegistry.canonical_destination(raw_destination)
+    except ValueError:
+        return None
     activation_key = _coerce_str(entries.get("activation_key")) or build_activation_key(
         assistant_id=assistant_id,
         task_id=task_id,
+        destination=destination,
     )
     return TaskActivationSnapshot(
         assistant_id=assistant_id,
         activation_key=activation_key,
         task_id=task_id,
+        destination=destination,
         source_task_log_id=_coerce_int(entries.get("source_task_log_id")),
         activation_kind=_coerce_str(entries.get("activation_kind")),
         execution_mode=_coerce_str(entries.get("execution_mode")),

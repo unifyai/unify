@@ -438,9 +438,7 @@ class TestSlowBrainPassesSpeakThrough:
 
             for event_data in published:
                 payload = event_data.get("payload", event_data)
-                if payload.get("source") == "slow_brain" and payload.get(
-                    "response_text",
-                ):
+                if payload.get("source") == "slow_brain" and payload.get("message"):
                     assert payload.get("should_speak") is True, (
                         "The slow brain should pass should_speak=True through "
                         "unmodified; dedup is now a fast-brain concern.\n"
@@ -548,9 +546,7 @@ class TestSpeechDedupEval:
 
             for event_data in published:
                 payload = event_data.get("payload", event_data)
-                if payload.get("source") == "slow_brain" and payload.get(
-                    "response_text",
-                ):
+                if payload.get("source") == "slow_brain" and payload.get("message"):
                     assert payload.get("should_speak") is True, (
                         "The slow brain should pass should_speak=True through "
                         "unmodified; dedup is now a fast-brain concern.\n"

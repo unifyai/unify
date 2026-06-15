@@ -53,7 +53,7 @@ async def full_roundtrip():
         if channel == "app:call:notification":
             data = json.loads(event_json)
             payload = data.get("payload", data)
-            received_guidance = {"content": payload.get("content", "")}
+            received_guidance = {"message": payload.get("message", "")}
             guidance_ready.set()
 
     # Start receiving
@@ -77,12 +77,12 @@ async def full_roundtrip():
         sys.exit(1)
 
     # Send ack with the content we received (using app:call:* namespace)
-    content = received_guidance.get("content", "")
+    message = received_guidance.get("message", "")
     await client.send_event(
         "app:call:ack",
-        json.dumps({"received_content": content}),
+        json.dumps({"received_message": message}),
     )
-    print(f"SUCCESS: Full roundtrip complete, received content: {content}")
+    print(f"SUCCESS: Full roundtrip complete, received message: {message}")
 
     await client.close()
 

@@ -20,7 +20,7 @@ The fix (``ConversationManager._run_llm_with_failure_notification``) wraps
 turn:
 
 1. Publishes a ``FastBrainNotification`` with ``should_speak=True`` and
-   an explicit ``response_text`` so the fast brain utters the apology via
+   an explicit ``spoken_message`` so the fast brain utters the apology via
    TTS directly (bypassing its own LLM, which may be hitting the same
    outage).
 2. Cancels any pending proactive-speech cycle so it stops emitting "still
@@ -189,8 +189,8 @@ class TestSlowBrainFailureSurfacing:
             "it silent would reproduce the original bug where the user "
             "hears nothing after an LLM outage."
         )
-        assert notif.response_text, (
-            "response_text must be populated so the fast brain can speak "
+        assert notif.spoken_message, (
+            "spoken_message must be populated so the fast brain can speak "
             "the apology without a fresh LLM roundtrip — critical when the "
             "provider is the outage cause."
         )

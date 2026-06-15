@@ -27,18 +27,20 @@ RUN apt-get update && apt-get install -y \
     pipewire pipewire-pulse wireplumber pulseaudio-utils alsa-utils \
     fuse3 libfuse2 squashfs-tools \
     build-essential python3 python3-pip pkg-config libvips-dev \
-    supervisor \
+    supervisor openssh-server \
     && pip3 install --no-cache-dir websockify \
     && rm -rf /var/lib/apt/lists/*
 
 # noVNC static files
 RUN git clone --depth 1 https://github.com/novnc/noVNC.git /opt/novnc && \
     rm -rf /opt/novnc/.git
-COPY desktop/novnc/custom.html /opt/novnc/custom.html
+COPY deploy/desktop/novnc/custom.html /opt/novnc/custom.html
 
 # Desktop scripts + supervisord config
-COPY desktop/ /app/desktop/
-RUN chmod +x /app/desktop/desktop.sh /app/desktop/device.sh /app/desktop/startup.sh
+COPY deploy/desktop/ /app/desktop/
+RUN chmod +x /app/desktop/desktop.sh /app/desktop/device.sh /app/desktop/startup.sh \
+    /app/desktop/install-sftp-overlay.sh /app/desktop/inject-ssh-public-key.sh \
+    && bash /app/desktop/install-sftp-overlay.sh
 
 # Magnitude packages (agent-service depends on magnitude-core + magnitude-extract
 # via file: references that npm resolves as symlinks).
@@ -79,24 +81,32 @@ RUN mkdir -p /usr/share/xfce4/helpers && \
     printf '[Desktop Entry]\nVersion=1.0\nType=X-XFCE-Helper\nName=Chromium Web Browser\nIcon=web-browser\nX-XFCE-Binaries=chromium-browser;/usr/local/bin/chromium-browser;\nX-XFCE-Category=WebBrowser\nX-XFCE-Commands=%%B;\nX-XFCE-CommandsWithParameter=%%B %%s;\n' \
         > /usr/share/xfce4/helpers/chromium-browser.desktop
 
-# XFCE configuration: suppress first-run dialogs, disable screensaver/power mgmt
-RUN mkdir -p /root/.config/xfce4/xfconf/xfce-perchannel-xml && \
+# XFCE configuration: suppress first-run dialogs, disable screensaver/power mgmt.
+# The autostart entries must also be removed: xfce4-screensaver re-arms the X
+# server screensaver timeout (300s) at session startup even with the saver
+# disabled in xfconf, which blanks the VNC framebuffer after idle and leaves a
+# black liveview until real input arrives.
+RUN rm -f /etc/xdg/autostart/xfce4-screensaver.desktop /etc/xdg/autostart/xscreensaver.desktop && \
+    mkdir -p /Unity/.config/xfce4/xfconf/xfce-perchannel-xml && \
     printf '<?xml version="1.0" encoding="UTF-8"?>\n<channel name="xfce4-power-manager" version="1.0">\n  <property name="xfce4-power-manager" type="empty">\n    <property name="dpms-enabled" type="bool" value="false"/>\n    <property name="blank-on-ac" type="int" value="0"/>\n    <property name="dpms-on-ac-sleep" type="uint" value="0"/>\n    <property name="dpms-on-ac-off" type="uint" value="0"/>\n  </property>\n</channel>\n' \
-        > /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-power-manager.xml && \
+        > /Unity/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-power-manager.xml && \
     printf '<?xml version="1.0" encoding="UTF-8"?>\n<channel name="xfce4-screensaver" version="1.0">\n  <property name="saver" type="empty">\n    <property name="enabled" type="bool" value="false"/>\n  </property>\n  <property name="lock" type="empty">\n    <property name="enabled" type="bool" value="false"/>\n  </property>\n</channel>\n' \
-        > /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-screensaver.xml && \
+        > /Unity/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-screensaver.xml && \
     printf 'WebBrowser=chromium-browser\nTerminalEmulator=xfce4-terminal\n' \
-        > /root/.config/xfce4/helpers.rc
+        > /Unity/.config/xfce4/helpers.rc && \
+    chown -R unityuser:unityuser /Unity/.config
 
 WORKDIR /app
 
 # Prepare supervisor and magnitude log directories
-RUN mkdir -p /var/log/supervisor /var/log/magnitude
+RUN mkdir -p /var/log/supervisor /var/log/magnitude && \
+    ln -sfn /root/.cache/ms-playwright /Unity/.cache/ms-playwright && \
+    chown -h unityuser:unityuser /Unity/.cache/ms-playwright
 
 # Install helper tools
 COPY scripts/sandbox-dpkg .
 RUN install -m 0755 sandbox-dpkg /usr/local/bin/sandbox-dpkg
 
 # Startup script to run desktop and agent-service via supervisord
-EXPOSE 3000 6080 5900
+EXPOSE 3000 6080 5900 2222
 CMD ["/bin/bash", "/app/desktop/startup.sh"]

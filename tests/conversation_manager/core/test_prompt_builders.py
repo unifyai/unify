@@ -10,7 +10,11 @@ from __future__ import annotations
 
 import pytest
 
-from unity.conversation_manager.prompt_builders import build_system_prompt
+from unity.conversation_manager.prompt_builders import (
+    build_system_prompt,
+    build_voice_agent_prompt,
+)
+from unity.session_details import TeamSummary
 
 pytestmark = pytest.mark.no_unify_context
 
@@ -30,6 +34,18 @@ def _build(**overrides: object) -> str:
     """Build a system prompt with sensible defaults, returning flat text."""
     kwargs = {**_BASE_KWARGS, **overrides}
     return build_system_prompt(**kwargs).flatten()
+
+
+def _build_voice(**overrides: object) -> str:
+    """Build a voice-agent prompt with stable defaults."""
+    kwargs = {
+        "bio": "I help Acme configure its Unify team.",
+        "assistant_name": "Avery",
+        "boss_first_name": "Dana",
+        "boss_surname": "Owner",
+        **overrides,
+    }
+    return build_voice_agent_prompt(**kwargs).flatten()
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +83,384 @@ class TestCommsToolListing:
         assert "`send_email`: Send an email" not in prompt
         assert "`make_call`: Start an outbound" not in prompt
         assert "`send_unify_message`" in prompt
+
+    def test_coordinator_comms_listing_is_boss_only(self):
+        prompt = _build(
+            is_coordinator=True,
+            assistant_has_phone=True,
+            assistant_has_email=True,
+            assistant_has_whatsapp=True,
+            assistant_has_discord=True,
+            assistant_has_slack=True,
+            assistant_has_teams=True,
+        )
+
+        assert "`send_sms`: Send an SMS message to my boss only" in prompt
+        assert "`send_email`: Send an email to my boss only" in prompt
+        assert (
+            "`send_unify_message`: Send a Unify platform message to my boss only"
+            in prompt
+        )
+        assert "`send_slack_message`: Send a Slack DM to my boss only" in prompt
+        assert (
+            "`send_teams_message`: Send a Teams direct message to my boss only"
+            in prompt
+        )
+        assert (
+            "`create_teams_meet`: Create a Microsoft Teams meeting with my boss only"
+            in prompt
+        )
+        assert "`send_slack_channel_message`" not in prompt
+        assert "`create_teams_channel`" not in prompt
+
+    def test_regular_comms_listing_keeps_contact_targeting(self):
+        prompt = _build(
+            is_coordinator=False,
+            assistant_has_phone=True,
+            assistant_has_email=True,
+            assistant_has_slack=True,
+            assistant_has_teams=True,
+        )
+
+        assert "`send_sms`: Send an SMS message to a contact" in prompt
+        assert "`send_email`: Send an email to a contact" in prompt
+        assert "`send_slack_channel_message`: Post into a Slack channel" in prompt
+        assert "`create_teams_channel`: Create a new channel" in prompt
+
+
+class TestAccessibleSpacesBlock:
+    """The system prompt contains shared-team routing guidance."""
+
+    def test_block_renders_after_bio(self):
+        prompt = _build(
+            bio="Assistant biography.",
+            team_summaries=[
+                TeamSummary(
+                    team_id=3,
+                    name="Repairs",
+                    description="South-East repairs patch daily operations.",
+                ),
+            ],
+        )
+
+        assert "Bio\n---\nAssistant biography." in prompt
+        assert "Accessible shared teams" in prompt
+        assert (
+            '- team:3 "Repairs" - South-East repairs patch daily operations.' in prompt
+        )
+        assert prompt.index("Bio\n---") < prompt.index("Accessible shared teams")
+        assert prompt.index("Accessible shared teams") < prompt.index(
+            "Onboarding reference",
+        )
+
+
+class TestCoordinatorPrompt:
+    """Coordinator sessions use a unified base prompt plus org-context surfaces."""
+
+    def test_org_coordinator_prompt_lists_org_roster_and_admin_tools(self):
+        prompt = _build(
+            is_coordinator=True,
+            authorized_humans=[
+                {
+                    "first_name": "Dana",
+                    "surname": "Owner",
+                    "email": "dana@acme.com",
+                    "is_admin": True,
+                },
+                {
+                    "first_name": "Francis",
+                    "surname": "Lead",
+                    "email": "francis@acme.com",
+                    "is_admin": False,
+                },
+            ],
+        )
+
+        assert "Authorized humans" in prompt
+        assert "Dana Owner; email: dana@acme.com; role: admin" in prompt
+        assert "Francis Lead; email: francis@acme.com; role: member" in prompt
+        assert "**Marty admin tools:**" in prompt
+        assert "`primitives.coordinator.list_org_members`" in prompt
+        assert "always target the active workspace organization" in prompt
+        assert "Marty\n----" in prompt
+        assert "Role / specialization: Coordinator." in prompt
+        assert "Marty identity" in prompt
+
+    def test_personal_coordinator_uses_boss_details_and_routes_org_work_to_switch(
+        self,
+    ):
+        prompt = _build(is_coordinator=True, is_org_workspace=False)
+
+        assert "Boss details" in prompt
+        assert "Authorized humans\n-----------------" not in prompt
+        assert "Organization membership actions are unavailable" in prompt
+        assert "switch to that organization's Marty" in prompt
+        assert "list_accessible_organizations" not in prompt
+
+    def test_regular_assistant_gets_marty_reference_block(self):
+        prompt = _build()
+
+        assert "Marty identity" in prompt
+        assert "Marty is Alice Smith's personal, private assistant" in prompt
+        assert "I propose handing it to Marty explicitly" in prompt
+        assert "inviting, removing, or changing roles for colleagues" in prompt
+        assert "creating or removing teams" in prompt
+        assert (
+            "placing shared credentials, integrations, or other org-level setup"
+            in prompt
+        )
+        assert "I cannot forward it automatically" not in prompt
+
+    def test_marty_handoff_guidance_is_absent_on_marty_sessions(self):
+        coordinator_prompt = _build(is_coordinator=True)
+
+        assert "Marty identity" in coordinator_prompt
+        assert "I propose handing it to Marty explicitly" not in coordinator_prompt
+
+    def test_base_and_coordinator_share_restraint_but_keep_role_specific_sections(self):
+        base_prompt = _build()
+        coordinator_prompt = _build(is_coordinator=True)
+
+        assert "Intent vs verified outcomes" in base_prompt
+        assert "Intent vs verified outcomes" in coordinator_prompt
+        assert "Console knowledge" in base_prompt
+        assert "Console knowledge" not in coordinator_prompt
+        assert "Marty Console literacy" in coordinator_prompt
+        assert "Concurrent action and acknowledgment" in base_prompt
+        assert "Concurrent action and acknowledgment" in coordinator_prompt
+        assert "Onboarding reference" in base_prompt
+        assert "Onboarding reference" not in coordinator_prompt
+
+    def test_coordinator_direct_comms_guidance_is_boss_only(self):
+        prompt = _build(
+            is_coordinator=True,
+            assistant_has_phone=True,
+            assistant_has_email=True,
+            assistant_has_whatsapp=True,
+            assistant_has_discord=True,
+            assistant_has_slack=True,
+            assistant_has_teams=True,
+        )
+
+        assert "Boss-only direct communication" in prompt
+        assert "only for communicating directly with my boss" in prompt
+        assert "They do not accept ``contact_id``" in prompt
+        assert "always target the boss contact (``contact_id==1``" in prompt
+        assert (
+            "Communication with anyone else is never handled by direct tools" in prompt
+        )
+        assert "delegated third-party communication work goes through ``act``" in prompt
+        assert (
+            "send a message, draft a reply, place a call, or invite someone else on their behalf"
+            in prompt
+        )
+        assert "contact_id=5" not in prompt
+        assert "Use the contact_id visible in active_conversations" not in prompt
+        assert "send_slack_channel_message" not in prompt
+
+    def test_regular_direct_comms_guidance_keeps_contact_id_examples(self):
+        prompt = _build(
+            is_coordinator=False,
+            assistant_has_phone=True,
+            assistant_has_email=True,
+            assistant_has_teams=True,
+        )
+
+        assert "Contact-addressed communication tools" in prompt
+        assert "Use the contact_id visible in active_conversations" in prompt
+        assert 'send_sms(contact_id=5, content="Hi"' in prompt
+        assert "Boss-only direct communication" not in prompt
+
+
+class TestPromptSectionOwnershipMatrix:
+    """Role/mode/org combinations keep prompt section ownership boundaries stable."""
+
+    def test_system_prompt_section_ownership_matrix(self):
+        cases = (
+            {
+                "name": "regular_non_demo_no_org",
+                "kwargs": {},
+                "present": (
+                    "Act capabilities\n----------------",
+                    "Concurrent action and acknowledgment\n------------------------------------",
+                ),
+                "absent": (
+                    "**Marty admin tools:**",
+                    "Authorized humans\n-----------------",
+                    "Demo mode\n---------",
+                ),
+            },
+            {
+                "name": "regular_non_demo_with_org",
+                "kwargs": {},
+                "present": (
+                    "Act capabilities\n----------------",
+                    "Concurrent action and acknowledgment\n------------------------------------",
+                    "Marty identity\n--------------",
+                ),
+                "absent": (
+                    "**Marty admin tools:**",
+                    "Authorized humans\n-----------------",
+                    "Demo mode\n---------",
+                ),
+            },
+            {
+                "name": "regular_demo_no_org",
+                "kwargs": {"demo_mode": True},
+                "present": ("Demo mode\n---------",),
+                "absent": (
+                    "**Marty admin tools:**",
+                    "Authorized humans\n-----------------",
+                    "Act capabilities\n----------------",
+                    "Concurrent action and acknowledgment\n------------------------------------",
+                ),
+            },
+            {
+                "name": "regular_demo_with_org",
+                "kwargs": {
+                    "demo_mode": True,
+                },
+                "present": (
+                    "Demo mode\n---------",
+                    "Marty identity\n--------------",
+                ),
+                "absent": (
+                    "**Marty admin tools:**",
+                    "Authorized humans\n-----------------",
+                    "Act capabilities\n----------------",
+                    "Concurrent action and acknowledgment\n------------------------------------",
+                ),
+            },
+            {
+                "name": "coordinator_non_demo_with_org",
+                "kwargs": {
+                    "is_coordinator": True,
+                },
+                "present": (
+                    "**Marty admin tools:**",
+                    "Authorized humans\n-----------------",
+                    "Act capabilities\n----------------",
+                    "Concurrent action and acknowledgment\n------------------------------------",
+                    "Marty\n----",
+                    "Marty identity\n--------------",
+                    "Marty Console literacy\n----------------------",
+                    "Console account & org administration",
+                    "Proactive meeting offers\n------------------------",
+                ),
+                "absent": (
+                    "Demo mode\n---------",
+                    "Onboarding reference\n--------------------",
+                    "Console knowledge\n-----------------",
+                ),
+            },
+            {
+                "name": "coordinator_demo_with_org",
+                "kwargs": {
+                    "is_coordinator": True,
+                    "demo_mode": True,
+                },
+                "present": (
+                    "Marty\n----",
+                    "Marty identity\n--------------",
+                    "Authorized humans\n-----------------",
+                    "Demo mode\n---------",
+                ),
+                "absent": (
+                    "**Marty admin tools:**",
+                    "Act capabilities\n----------------",
+                    "Concurrent action and acknowledgment\n------------------------------------",
+                ),
+            },
+            {
+                "name": "coordinator_non_demo_personal_workspace",
+                "kwargs": {
+                    "is_coordinator": True,
+                    "is_org_workspace": False,
+                },
+                "present": (
+                    "**Marty admin tools:**",
+                    "Boss details\n------------",
+                    "Organization membership actions are unavailable",
+                    "switch to that organization's Marty",
+                    "Marty\n----",
+                    "Marty identity\n--------------",
+                    "Marty Console literacy\n----------------------",
+                    "Console account & org administration",
+                    "Proactive meeting offers\n------------------------",
+                ),
+                "absent": (
+                    "Authorized humans\n-----------------",
+                    "Onboarding reference\n--------------------",
+                    "Console knowledge\n-----------------",
+                ),
+            },
+        )
+
+        for case in cases:
+            prompt = _build(**case["kwargs"])
+            for marker in case["present"]:
+                assert (
+                    marker in prompt
+                ), f"{case['name']} missing expected marker: {marker}"
+            for marker in case["absent"]:
+                assert (
+                    marker not in prompt
+                ), f"{case['name']} unexpectedly contains marker: {marker}"
+
+
+class TestCoordinatorVoicePrompt:
+    """Coordinator voice calls use Marty intro scaffolding plus optional user about."""
+
+    def test_regular_voice_prompt_unchanged_when_flag_is_false(self):
+        omitted = _build_voice()
+        explicit_false = _build_voice(is_coordinator=False)
+
+        assert omitted == explicit_false
+        assert "Coordinator voice role" not in omitted
+
+    def test_coordinator_voice_prompt_uses_marty_intro_and_optional_user_about(self):
+        prompt = _build_voice(is_coordinator=True)
+
+        assert "Marty\n----" in prompt
+        assert "Role / specialization: Coordinator." in prompt
+        assert "About me\n--------\nI help Acme configure its Unify team." in prompt
+        assert "Bio\n---" not in prompt
+        assert "Coordinator voice role" not in prompt
+        assert prompt.index("Marty\n----") < prompt.index("Brevity\n-------")
+
+    def test_coordinator_voice_prompt_omits_user_about_when_empty(self):
+        prompt = _build_voice(is_coordinator=True, bio="")
+
+        assert "Marty\n----" in prompt
+        assert "About me\n--------" not in prompt
+
+    def test_coordinator_voice_prompt_excludes_slow_brain_literacy(self):
+        prompt = _build_voice(is_coordinator=True)
+
+        assert "Marty admin tools" not in prompt
+        assert "Unify system literacy" not in prompt
+        assert "Requirements discovery workflow" not in prompt
+        assert "Tasks/Activations" not in prompt
+        assert "Context taxonomy" not in prompt
+        assert "`create_assistant`" not in prompt
+        assert "`delete_team`" not in prompt
+        assert "`remove_team_member`" not in prompt
+
+    def test_coordinator_voice_prompt_includes_console_literacy(self):
+        prompt = _build_voice(is_coordinator=True)
+
+        assert "Marty identity" in prompt
+        assert "Marty is Dana Owner's personal, private assistant" in prompt
+        assert "Marty Console literacy" in prompt
+        assert "Left sidebar — selection drives everything" in prompt
+        assert "Shared workspaces (Teams in the left sidebar)" in prompt
+        assert "Console account & org administration" in prompt
+        assert "Two ways to accomplish org tasks" in prompt
+        assert "Invite org member (both paths)" in prompt
+        assert "mention **both in the same reply**" in prompt
+        assert "Unify internal operator tools only" in prompt
+        assert "Marty onboarding flow (UI reference)" in prompt
+        assert "Console knowledge\n-----------------" not in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +532,29 @@ class TestCommunicationGuidelinesAdapt:
         assert "I can send SMS, unify messages, calls" in prompt
         assert "I can send SMS, emails" not in prompt
 
+    def test_teams_workspace_actions_are_not_marked_contact_addressed(self):
+        prompt = _build(
+            assistant_has_phone=True,
+            assistant_has_email=True,
+            assistant_has_teams=True,
+        )
+        contact_actions = prompt.split("**Contact actions:**")[1].split(
+            "- If the contact is NOT in active_conversations at all",
+        )[0]
+        contact_addressed_line = next(
+            line
+            for line in contact_actions.splitlines()
+            if "Contact-addressed communication tools" in line
+        )
+
+        assert "send_teams_message" in contact_addressed_line
+        assert "create_teams_channel" not in contact_addressed_line
+        assert "create_teams_meet" not in contact_addressed_line
+        assert (
+            "`create_teams_channel` and `create_teams_meet` are Teams workspace actions"
+            in contact_actions
+        )
+
 
 # ---------------------------------------------------------------------------
 # Tests – external app integration
@@ -150,8 +567,9 @@ class TestExternalAppIntegration:
     def test_onboarding_has_app_integration_qa(self):
         prompt = _build()
         assert "Can you help me manage my apps and online services?" in prompt
-        assert "secure page on the console" in prompt
+        assert "secure Integrations/Secrets pages on the console" in prompt
         assert "API credentials or access tokens" in prompt
+        assert "service's Python SDK" in prompt
 
     def test_act_capabilities_has_external_apps_bullet(self):
         prompt = _build()
@@ -162,9 +580,110 @@ class TestExternalAppIntegration:
         prompt = _build(demo_mode=True)
         assert "Can you help me manage my apps and online services?" in prompt
 
+    def test_org_assistant_onboarding_allows_direct_setup_with_shared_handoff(self):
+        prompt = _build()
+
+        assert "I can walk through app setup and day-to-day usage directly" in prompt
+        assert (
+            "If a credential needs to be shared across the team or org (rather than "
+            "scoped to just me), Marty is the right person to place it"
+        ) in prompt
+        assert "Marty owns that setup" not in prompt
+        assert "I cannot forward it automatically" not in prompt
+
     def test_act_capabilities_absent_in_demo_mode(self):
         prompt = _build(demo_mode=True)
         assert "**External apps & services**" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# Tests – seeing/controlling the user's machine (screen-share → linked desktop)
+# ---------------------------------------------------------------------------
+
+
+class TestUserMachineAccess:
+    """Precedence guidance for seeing/controlling the *user's* machine.
+
+    Default (no linked desktop) is unchanged from the screen-share-only
+    behaviour; a linked desktop unlocks the direct-control path while keeping
+    screen share as the first option.
+    """
+
+    def test_block_absent_without_linked_desktop(self):
+        prompt = _build(has_linked_user_desktop=False)
+        assert "Seeing and controlling the user's machine" not in prompt
+        # Default capability copy: assistant only controls its own computer.
+        assert "I cannot control the user's computer — only my own" in prompt
+
+    def test_linked_desktop_enables_direct_control_block(self):
+        prompt = _build(has_linked_user_desktop=True)
+        assert "Seeing and controlling the user's machine" in prompt
+        # Screen share remains the first-priority option.
+        assert "Active screen share / webcam first" in prompt
+        assert "linked to me" in prompt
+        # Capability bullet reflects the linked machine.
+        assert "my boss's own machine, which they've linked to me" in prompt
+
+    def test_screen_share_still_offered_with_linked_desktop(self):
+        """Linking a desktop must not remove the screen-share-first guidance."""
+        prompt = _build(has_linked_user_desktop=True)
+        assert "Want to share your screen?" in prompt
+        # Proactive meeting/screen-share offers are untouched.
+        assert "Proactive meeting offers" in prompt
+
+    def test_faq_reflects_linked_desktop(self):
+        prompt = _build(has_linked_user_desktop=True)
+        assert "you've linked a desktop to me" in prompt
+
+    def test_acting_user_id_surfaced_for_targeting(self):
+        """When linked + an acting user id is known, the block tells the model
+        which user_id to target so a shared assistant drives the speaker's
+        machine (not the owner's)."""
+        prompt = _build(has_linked_user_desktop=True, acting_user_id="user-42")
+        assert 'user_desktop.session(user_id="user-42")' in prompt
+        assert "user_desktop.list_linked()" in prompt
+
+    def test_acting_user_id_absent_keeps_block_generic(self):
+        prompt = _build(has_linked_user_desktop=True, acting_user_id=None)
+        assert "Seeing and controlling the user's machine" in prompt
+        assert "user_desktop.session(user_id=" not in prompt
+
+
+class TestPerUserDesktopResolution:
+    """``AssistantDetails.user_desktop_for`` keys linked desktops by the acting
+    user, so N users x M assistants resolves the speaker's own machine."""
+
+    @staticmethod
+    def _assistant_with_links() -> object:
+        from unity.session_details import AssistantDetails, UserDesktopLink
+
+        a = AssistantDetails()
+        a.user_desktops = {
+            "user-A": UserDesktopLink(
+                owner_user_id="user-A",
+                url="http://a",
+                os="macos",
+            ),
+            "user-B": UserDesktopLink(
+                owner_user_id="user-B",
+                url="http://b",
+                os="ubuntu",
+            ),
+        }
+        return a
+
+    def test_resolves_speakers_own_link(self):
+        a = self._assistant_with_links()
+        assert a.user_desktop_for("user-B").url == "http://b"
+        assert a.user_desktop_for("user-A").url == "http://a"
+
+    def test_unlinked_speaker_returns_none(self):
+        a = self._assistant_with_links()
+        assert a.user_desktop_for("user-C") is None
+
+    def test_missing_user_id_returns_none(self):
+        a = self._assistant_with_links()
+        assert a.user_desktop_for(None) is None
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +703,10 @@ class TestProactiveMeetingOffers:
         prompt = _build(demo_mode=True)
         assert "Proactive meeting offers" not in prompt
 
+    def test_proactive_meeting_absent_for_coordinator(self):
+        prompt = _build(is_coordinator=True)
+        assert "Proactive meeting offers" in prompt
+
 
 # ---------------------------------------------------------------------------
 # Tests – console knowledge
@@ -201,12 +724,21 @@ class TestConsoleKnowledge:
 
     def test_console_knowledge_has_navigation_paths(self):
         prompt = _build()
-        assert "Hover over my name in the assistant list → ⋮ → Secrets" in prompt
-        assert "Profile menu" in prompt
+        assert "hover over my name in the left sidebar → ⋮ → **Secrets**" in prompt
+        assert "⋮ → **Secrets**" in prompt
+        assert "top-right profile menu" in prompt
 
     def test_console_knowledge_absent_in_demo_mode(self):
         prompt = _build(demo_mode=True)
         assert "Console knowledge" not in prompt
+
+    def test_coordinator_uses_console_literacy_not_base_block(self):
+        prompt = _build(is_coordinator=True)
+        assert "Marty Console literacy" in prompt
+        assert "hover over my name in the left sidebar → ⋮ → **Secrets**" not in prompt
+        assert "Memory → Guidance" in prompt
+        assert "Secrets (on the Integrations tab)" in prompt
+        assert "Shared workspaces (Teams in the left sidebar)" in prompt
 
 
 # ---------------------------------------------------------------------------

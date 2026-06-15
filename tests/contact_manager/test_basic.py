@@ -1,3 +1,5 @@
+import pytest
+
 from unity.contact_manager.contact_manager import ContactManager
 from tests.helpers import _handle_project
 
@@ -73,6 +75,31 @@ def test_update():
     assert contact.should_respond is True
 
     assert contact.response_policy == ContactManager.DEFAULT_RESPONSE_POLICY
+
+
+@_handle_project
+def test_update_accepts_digit_name_parts():
+    cm = ContactManager()
+    out = cm._create_contact(first_name="Dan")
+    cid = out["details"]["contact_id"]
+
+    cm.update_contact(
+        contact_id=cid,
+        first_name="Dan2",
+        surname="Patch 4 Lead",
+    )
+
+    updated = cm.filter_contacts(filter=f"contact_id == {cid}")["contacts"][0]
+    assert updated.first_name == "Dan2"
+    assert updated.surname == "Patch 4 Lead"
+
+
+@_handle_project
+def test_create_rejects_name_with_underscore():
+    cm = ContactManager()
+
+    with pytest.raises(ValueError):
+        cm._create_contact(first_name="Dan_2")
 
 
 @_handle_project
@@ -158,12 +185,27 @@ def test_timezone():
     c = cm.filter_contacts(filter=f"contact_id == {cid}")["contacts"][0]
     assert c.timezone == "America/New_York"
 
-    # Try invalid timezone
-    try:
-        cm.update_contact(contact_id=cid, timezone="Invalid/Timezone")
-        assert False, "Should have raised ValueError for invalid timezone"
-    except ValueError:
-        pass
+    # Invalid timezones are silently no-ops on update (deliberate design
+    # from 45bef21fd, 2026-03-19: console-supplied deprecated IANA aliases
+    # like "Asia/Calcutta" used to ValueError through orchestra → adapters
+    # → ConversationManager, breaking init. The Contact.timezone Pydantic
+    # validator now catches ZoneInfo exceptions and returns None instead
+    # of raising). Because update_contact() treats None-valued fields as
+    # "don't change", the invalid-TZ value is normalized to None by the
+    # validator and then dropped from the update payload — so the
+    # previously-set valid timezone stays in place. The original test
+    # (eece18bde, 2025-11-21) expected a raise; we instead verify the
+    # post-fix behavior: invalid input doesn't crash AND doesn't clobber
+    # the existing value. (e3633cd6e earlier today asserted `is None`
+    # which would only be true if no prior valid TZ existed; the test
+    # sets America/New_York first, so the correct assertion is the
+    # previous-value-preserved behavior.)
+    cm.update_contact(contact_id=cid, timezone="Invalid/Timezone")
+    c = cm.filter_contacts(filter=f"contact_id == {cid}")["contacts"][0]
+    assert c.timezone == "America/New_York", (
+        f"Invalid TZ update should be a no-op (validator-coerced to None, "
+        f"treated as 'no change'), got {c.timezone!r}"
+    )
 
 
 # ────────────────────────────────────────────────────────────────────────────

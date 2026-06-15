@@ -4,6 +4,7 @@ import copy
 import functools
 import inspect
 import json
+import sys
 import traceback
 import uuid
 from secrets import token_hex as _token_hex
@@ -61,6 +62,8 @@ from unity.events.manager_event_logging import (
     publish_manager_method_event,
 )
 from unity.events.active_work import ACTIVE_WORK, ActiveWorkHandle
+from unity.integrations.approval import build_pending_approval_payload
+from unity.integrations.function_metadata import is_provider_backed_function
 
 if TYPE_CHECKING:
     from unity.actor.environments.base import BaseEnvironment
@@ -453,7 +456,7 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "available when the function runs later. Focus on whether a "
     "pattern is *worth* reusing, not whether it is *technically "
     "executable* in isolation.\n\n"
-    "### Wrapping to bake in configuration\n\n"
+    "### Bake configuration into reusable callables\n\n"
     "Stored functions should NOT be verbatim copies of code blocks "
     "from the trajectory. During execution, the agent discovered the "
     "right combination of parameters, tool selections, and strategies "
@@ -463,35 +466,29 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "that genuinely vary between uses (typically the task-specific "
     "input). This produces a function that future callers can use "
     "without rediscovering the right setup.\n\n"
-    "For example, if the trajectory contained:\n\n"
-    "```python\n"
-    "handle = await primitives.actor.act(\n"
-    '    request="Find Alice\'s work email",\n'
-    '    guidelines="Check all contact fields including notes and metadata. ....",\n'
-    '    prompt_functions=["primitives.contacts.ask"],\n'
-    "    discovery_scope=\"'contacts' in docstring\",\n"
-    ")\n"
-    "result = await handle.result()\n"
-    "```\n\n"
-    "Do NOT store this verbatim (every parameter hardcoded). Instead, "
-    "wrap it into a reusable function that bakes in the configuration "
-    "and exposes only the task:\n\n"
-    "```python\n"
-    "async def research_contact_info(request: str):\n"
-    '    """Delegate contact research to a scoped sub-agent with curated tools."""\n'
-    "    handle = await primitives.actor.act(\n"
-    "        request=request,\n"
-    '        guidelines="Check all contact fields including notes and metadata. ....",\n'
-    '        prompt_functions=["primitives.contacts.ask"],\n'
-    "        discovery_scope=\"'contacts' in docstring\",\n"
-    "    )\n"
-    "    return await handle.result()\n"
-    "```\n\n"
-    "Now `research_contact_info` captures the curated agent setup and "
-    "any future caller only needs to provide the request. The same "
-    "principle applies to any code pattern — whenever some parameters "
-    "represent reusable configuration and others represent per-call "
-    "input, wrap to bake in the former and expose the latter.\n\n"
+    "The same applies to trajectories that unrolled as "
+    "`execute_code` -> observe -> agent reasoning -> `execute_code` loops. "
+    "Do not assume the future workflow needs a full CodeActActor. First "
+    "ask whether the agent's intermediate reasoning was open-ended "
+    "planning or bounded semantic judgment inside an otherwise stable "
+    "control flow. If it was bounded, distill the trajectory into one "
+    "function: deterministic Python for control flow, managed primitives "
+    "for side effects, and focused `reason(...)` / UniLLM calls with "
+    "structured outputs, low temperature, and an explicit model for "
+    "classification, summarization, drafting, ranking, or source "
+    "selection. Leave it live-agent or guidance-driven when the reasoning "
+    "involved changing tool discovery, unknown-state debugging, user "
+    "clarification, or broad strategy selection.\n\n"
+    "Semantic downgrades are bugs. When a live trajectory interpreted or "
+    "produced unstructured data — classification, extraction, routing, "
+    "summarization, drafting, rewriting, personalization, or other "
+    "human-facing synthesis — the stored function should preserve that "
+    "fuzzy step as `reason(...)` / UniLLM with a stable contract. Do not "
+    "replace it with keyword ladders, regex classifiers, label-specific "
+    "canned prose, or templates inferred from observed examples unless "
+    "the user explicitly requested fixed deterministic rules/templates. "
+    "Generalize by preserving the LLM call, not by memorizing the sample "
+    "cases.\n\n"
     "### Preserving user-facing communication points\n\n"
     "When wrapping a workflow into a stored function, pay attention to "
     "points where the original code depended on the user being "
@@ -516,14 +513,17 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "to the candidate code path that replaces or preserves it. Keep managed "
     "primitives, helper calls, validation gates, side-effect ordering, "
     "retries, cleanup, result shape, and failure semantics unless the "
-    "candidate declares and validates an equivalent replacement. If a "
-    "runtime-dependent decision required agentic exploration, preserve that "
-    "agentic substep or leave the task description-driven.\n\n"
+    "candidate declares and validates an equivalent replacement. A live "
+    "thinking step may become `reason(...)` only when it has a stable "
+    "input/output contract and validation; if it required agentic "
+    "exploration, preserve that substep or leave the task "
+    "description-driven.\n\n"
     "Executor candidates may simplify incidental logging, formatting, dead "
     "exploratory branches, or duplicated setup, but they must not hardcode "
     "observations from live tool results, remove validation gates, reorder "
-    "dependent side effects, discard recovery branches, or replace managed "
-    "tools with weaker ad hoc mechanisms. Store non-executor helpers and "
+    "dependent side effects, discard recovery branches, replace managed "
+    "tools with weaker ad hoc mechanisms, or replace semantic LLM work "
+    "with brittle symbolic approximations. Store non-executor helpers and "
     "guidance freely; offline executor promotion requires separate "
     "certification.\n\n"
     "### Third-party package dependencies\n\n"
@@ -687,7 +687,15 @@ _STORAGE_BASE_INSTRUCTIONS = (
     "Most trajectories will only warrant function changes, if "
     "anything at all. Add guidance only when a multi-step "
     "composition is genuinely non-obvious.\n"
-    "4. When done (or if there is nothing worth changing), respond "
+    "4. **Delete superseded functions when you add a generalization.** "
+    "When you store a new function that subsumes existing narrower "
+    "variants (e.g. you add `greet(name, style)` while the store already "
+    "has `greet_formal(name)` + `greet_casual(name)`), call "
+    "`FunctionManager_delete_function` on the now-redundant entries by "
+    "their `function_id` — leaving them in the library defeats the "
+    "point of merging. The same applies to outright duplicates and to "
+    "narrow special cases that the new function correctly handles.\n"
+    "5. When done (or if there is nothing worth changing), respond "
     "with a brief summary of what you did (or that nothing was needed)."
 )
 
@@ -727,6 +735,7 @@ def _build_storage_tools(
             fm.get_function_venv,
             gm.search,
             gm.filter,
+            gm.get_guidance,
             gm.add_guidance,
             gm.update_guidance,
             gm.delete_guidance,
@@ -1890,6 +1899,18 @@ def _synthesize_python_call(
             False,
         ):
             func_data = function_manager._get_primitive_data_by_name(name=function_name)
+        if func_data is None and getattr(
+            function_manager,
+            "_include_primitives",
+            False,
+        ):
+            get_stored_primitive = getattr(
+                function_manager,
+                "_get_stored_primitive_data_by_name",
+                None,
+            )
+            if callable(get_stored_primitive):
+                func_data = get_stored_primitive(name=function_name)
 
         if func_data is not None:
             impl = func_data.get("implementation")
@@ -2049,6 +2070,34 @@ class CodeActActor(BaseCodeActActor):
                 self.function_manager.exclude_compositional_ids = frozenset(
                     _excl_compositional,
                 )
+            try:
+                from unity.integration_status import build_function_filter_scope
+
+                function_scope = build_function_filter_scope()
+                if function_scope:
+                    current = getattr(self.function_manager, "filter_scope", None)
+                    self.function_manager.filter_scope = (
+                        f"({current}) and ({function_scope})"
+                        if current
+                        else function_scope
+                    )
+            except Exception:
+                pass
+
+        if self.guidance_manager is not None:
+            try:
+                from unity.integration_status import build_guidance_filter_scope
+
+                guidance_scope = build_guidance_filter_scope()
+                if guidance_scope:
+                    current = getattr(self.guidance_manager, "filter_scope", None)
+                    self.guidance_manager.filter_scope = (
+                        f"({current}) and ({guidance_scope})"
+                        if current
+                        else guidance_scope
+                    )
+            except Exception:
+                pass
 
         # Create persistent pools that survive across act() calls
         from unity.function_manager.function_manager import VenvPool
@@ -2884,6 +2933,10 @@ class CodeActActor(BaseCodeActActor):
                         display_label="Searching for relevant guidance",
                     ),
                     ToolSpec(fn=gm.filter, display_label="Filtering saved guidance"),
+                    ToolSpec(
+                        fn=gm.get_guidance,
+                        display_label="Reading a full guidance entry",
+                    ),
                     ToolSpec(fn=gm.add_guidance, display_label="Saving new guidance"),
                     ToolSpec(
                         fn=gm.update_guidance,
@@ -3101,6 +3154,7 @@ class CodeActActor(BaseCodeActActor):
                 """
                 call_kwargs = call_kwargs or {}
                 resolved_venv_id: int | None = None
+                function_data: dict[str, Any] | None = None
                 get_function_data = getattr(
                     self.function_manager,
                     "_get_function_data_by_name",
@@ -3108,14 +3162,22 @@ class CodeActActor(BaseCodeActActor):
                 )
                 if callable(get_function_data):
                     function_data = get_function_data(name=function_name)
-                    stored_venv_id = (
-                        function_data.get("venv_id")
-                        if isinstance(function_data, dict)
-                        and not function_data.get("is_primitive")
-                        else None
+                if function_data is None:
+                    get_stored_primitive = getattr(
+                        self.function_manager,
+                        "_get_stored_primitive_data_by_name",
+                        None,
                     )
-                    if stored_venv_id is not None:
-                        resolved_venv_id = int(stored_venv_id)
+                    if callable(get_stored_primitive):
+                        function_data = get_stored_primitive(name=function_name)
+                stored_venv_id = (
+                    function_data.get("venv_id")
+                    if isinstance(function_data, dict)
+                    and not function_data.get("is_primitive")
+                    else None
+                )
+                if stored_venv_id is not None:
+                    resolved_venv_id = int(stored_venv_id)
 
                 import time as _ef_time
                 import logging as _ef_logging
@@ -3264,44 +3326,121 @@ class CodeActActor(BaseCodeActActor):
                     except Exception:
                         pass
 
-                    _ef_log.debug(
-                        f"⏱️ [execute_function +{_ef_ms()}] sandbox.execute start",
-                    )
-                    _pcc_token = _PARENT_CHAT_CONTEXT.set(_parent_chat_context)
-                    try:
+                    if (
+                        isinstance(function_data, dict)
+                        and function_data.get("is_primitive")
+                        and is_provider_backed_function(function_data)
+                    ):
+                        _ef_log.debug(
+                            f"⏱️ [execute_function +{_ef_ms()}] "
+                            "provider primitive direct execute start",
+                        )
                         try:
-                            out = await self._session_executor.execute(
-                                code=code,
-                                language=str(language),  # type: ignore[arg-type]
-                                state_mode=state_mode,  # type: ignore[arg-type]
-                                session_id=session_id,
-                                venv_id=resolved_venv_id,
-                                primitives=primitives,
-                                computer_primitives=computer_primitives,
-                                notification_q=notification_q,
+                            direct_result = (
+                                await self.function_manager.execute_function(
+                                    function_name=function_name,
+                                    call_kwargs=call_kwargs,
+                                    target_venv_id=None,
+                                    state_mode=state_mode,  # type: ignore[arg-type]
+                                    session_id=session_id or 0,
+                                    extra_namespaces=(
+                                        {"primitives": primitives}
+                                        if primitives is not None
+                                        else None
+                                    ),
+                                    _parent_chat_context=_parent_chat_context,
+                                )
                             )
-                            _ef_log.debug(
-                                f"⏱️ [execute_function +{_ef_ms()}] sandbox.execute done",
-                            )
-                        except Exception as e:
-                            exec_exc = e
-                            tb = traceback.format_exc()
-                            tb_str = tb
+                            if (
+                                isinstance(direct_result, dict)
+                                and direct_result.get("status")
+                                == "confirmation_required"
+                            ):
+                                direct_result = build_pending_approval_payload(
+                                    function_name=function_name,
+                                    function_data=function_data,
+                                    call_kwargs=call_kwargs,
+                                    provider_envelope=direct_result,
+                                )
+                                if notification_q is not None:
+                                    await notification_q.put(direct_result)
                             out = {
-                                "stdout": "",
-                                "stderr": "",
-                                "result": None,
-                                "error": tb,
-                                "language": language,
+                                "stdout": [],
+                                "stderr": [],
+                                "result": direct_result,
+                                "error": None,
+                                "language": "python",
                                 "state_mode": state_mode,
                                 "session_id": session_id,
                                 "session_name": session_name,
                                 "venv_id": resolved_venv_id,
                                 "session_created": False,
-                                "duration_ms": 0,
+                                "duration_ms": int(
+                                    (_ef_time.perf_counter() - _ef_t0) * 1000,
+                                ),
                             }
-                    finally:
-                        _PARENT_CHAT_CONTEXT.reset(_pcc_token)
+                            _ef_log.debug(
+                                f"⏱️ [execute_function +{_ef_ms()}] "
+                                "provider primitive direct execute done",
+                            )
+                        except Exception:
+                            exec_exc = sys.exc_info()[1]
+                            tb = traceback.format_exc()
+                            tb_str = tb
+                            out = {
+                                "stdout": [],
+                                "stderr": [],
+                                "result": None,
+                                "error": tb,
+                                "language": "python",
+                                "state_mode": state_mode,
+                                "session_id": session_id,
+                                "session_name": session_name,
+                                "venv_id": resolved_venv_id,
+                                "session_created": False,
+                                "duration_ms": int(
+                                    (_ef_time.perf_counter() - _ef_t0) * 1000,
+                                ),
+                            }
+                    else:
+                        _ef_log.debug(
+                            f"⏱️ [execute_function +{_ef_ms()}] sandbox.execute start",
+                        )
+                        _pcc_token = _PARENT_CHAT_CONTEXT.set(_parent_chat_context)
+                        try:
+                            try:
+                                out = await self._session_executor.execute(
+                                    code=code,
+                                    language=str(language),  # type: ignore[arg-type]
+                                    state_mode=state_mode,  # type: ignore[arg-type]
+                                    session_id=session_id,
+                                    venv_id=resolved_venv_id,
+                                    primitives=primitives,
+                                    computer_primitives=computer_primitives,
+                                    notification_q=notification_q,
+                                )
+                                _ef_log.debug(
+                                    f"⏱️ [execute_function +{_ef_ms()}] sandbox.execute done",
+                                )
+                            except Exception as e:
+                                exec_exc = e
+                                tb = traceback.format_exc()
+                                tb_str = tb
+                                out = {
+                                    "stdout": "",
+                                    "stderr": "",
+                                    "result": None,
+                                    "error": tb,
+                                    "language": language,
+                                    "state_mode": state_mode,
+                                    "session_id": session_id,
+                                    "session_name": session_name,
+                                    "venv_id": resolved_venv_id,
+                                    "session_created": False,
+                                    "duration_ms": 0,
+                                }
+                        finally:
+                            _PARENT_CHAT_CONTEXT.reset(_pcc_token)
 
                     # Enrich with session name.
                     if out.get("session_id") is not None:
@@ -4451,8 +4590,18 @@ class CodeActActor(BaseCodeActActor):
                 "    session_created, duration_ms).\n"
             )
 
+        integration_summary = ""
+        try:
+            from unity.integration_status import enabled_summary_for_prompt
+
+            integration_summary = enabled_summary_for_prompt()
+        except Exception:
+            integration_summary = ""
         effective_guidelines = (
-            "\n\n".join(filter(None, [self._base_guidelines, guidelines])) or None
+            "\n\n".join(
+                filter(None, [self._base_guidelines, guidelines, integration_summary]),
+            )
+            or None
         )
 
         logger.debug(f"⏱️ [CodeActActor.act +{_act_ms()}] building system prompt")

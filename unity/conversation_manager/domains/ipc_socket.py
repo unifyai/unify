@@ -109,6 +109,11 @@ class CallEventSocketServer:
         self.on_client_disconnected: Callable[[], Awaitable[None]] | None = None
 
     @property
+    def has_connected_clients(self) -> bool:
+        """Whether a voice-agent subprocess is connected over IPC."""
+        return bool(self._connected_clients)
+
+    @property
     def socket_path(self) -> str | None:
         """Return the socket path, or None if not started."""
         return self._socket_path

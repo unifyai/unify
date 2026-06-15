@@ -25,6 +25,8 @@ from unity.dashboard_manager.types.dashboard import (
     TilePosition,
 )
 
+DASHBOARD_DATA_SCOPE = "dashboard"
+
 
 class BaseDashboardManager(BaseStateManager):
     """
@@ -133,6 +135,8 @@ class BaseDashboardManager(BaseStateManager):
         description: Optional[str] = None,
         data_bindings: Optional[List[DataBinding]] = None,
         on_data: Optional[str] = None,
+        destination: str | None = None,
+        data_scope: str = DASHBOARD_DATA_SCOPE,
     ) -> TileResult:
         """
         Create a new visualization tile from an HTML string.
@@ -206,7 +210,8 @@ class BaseDashboardManager(BaseStateManager):
 
               Fields: ``context`` (required), ``alias``, ``filter``,
               ``columns``, ``exclude_columns``, ``order_by``, ``descending``,
-              ``limit``, ``offset``, ``group_by``.
+              ``limit``, ``offset``, ``group_by``. ``limit`` is optional;
+              when set it must be between 1 and 1000 rows.
 
             **ReduceBinding** (``operation="reduce"``):
               Single-context aggregation.
@@ -224,6 +229,8 @@ class BaseDashboardManager(BaseStateManager):
               ``join_expr`` (required), ``select`` (required),
               ``alias``, ``mode``, ``left_where``, ``right_where``,
               ``result_where``, ``result_limit``, ``result_offset``.
+              ``result_limit`` defaults to 100 and must be between 1 and
+              1000 rows.
 
             **JoinReduceBinding** (``operation="join_reduce"``):
               Cross-context join + aggregation.
@@ -249,6 +256,13 @@ class BaseDashboardManager(BaseStateManager):
               paths (including both tables for join bindings).
             - ``data_bindings_json`` stores the JSON-serialized bindings
               so Console can auto-execute them.
+
+            The live dashboard bridge enforces the same row cap as the
+            backend API: ``FilterBinding.limit`` and
+            ``JoinBinding.result_limit`` cannot exceed 1000. If the tile
+            needs more data, aggregate with ``ReduceBinding`` /
+            ``JoinReduceBinding`` or narrow the query instead of raising the
+            row limit.
 
             When ``None`` (the default), the tile operates in baked-in data
             mode and no bridge script is injected.
@@ -351,6 +365,36 @@ class BaseDashboardManager(BaseStateManager):
             - Binding alias is not a valid JS identifier ->
               ``ValueError``
             - Duplicate aliases across bindings -> ``ValueError``
+
+        destination : str | None, default ``None``
+            Where this tile row lives -- i.e., which dashboard pool this
+            tile belongs to. Pass ``"personal"`` (the default) for tiles
+            on private dashboards. Pass ``"team:<id>"`` for a tile on a
+            shared team dashboard every member of the team sees. The set
+            of available ``team:<id>`` values, each with a name and
+            description, is rendered in the *Accessible shared teams*
+            block of your system prompt; read that block before choosing.
+            ``destination`` controls where the tile row lives. The data
+            the tile renders is governed separately by ``data_scope``. The
+            privacy floor: when in doubt between personal and a team,
+            pick personal. If a clarification channel is available, ask a
+            targeted question when the user appears to want a wider audience
+            but the target team is ambiguous.
+
+        data_scope : str, default ``"dashboard"``
+            Which root this tile's live-data bindings read from when they
+            are resolved. Pass ``"dashboard"`` to inherit the tile row's
+            destination root. Pass ``"team:<id>"`` to bind this tile's
+            data to a specific shared team even when the tile row itself
+            lives somewhere else. The available teams are listed in the
+            *Accessible shared teams* block. This parameter matters only
+            for live tiles with ``data_bindings``.
+
+            Use ``"dashboard"`` when the live data should come from the
+            same place the tile lives, including shared team dashboards.
+            Use ``"team:<id>"`` when the tile's audience and data source
+            intentionally differ, for example a private watch tile that
+            reads Patch-1 operations data.
 
         Returns
         -------
@@ -505,6 +549,9 @@ class BaseDashboardManager(BaseStateManager):
 
         If any binding fails, the tile is **not** stored and
         ``TileResult.error`` explains the problem.
+        Row-returning live bindings also obey the bridge cap:
+        ``FilterBinding.limit`` and ``JoinBinding.result_limit`` must be
+        between 1 and 1000 when provided.
 
         Data mode decision framework
         ----------------------------
@@ -657,6 +704,8 @@ class BaseDashboardManager(BaseStateManager):
         description: Optional[str] = None,
         data_bindings: Optional[List[DataBinding]] = None,
         on_data: Optional[str] = None,
+        destination: str | None = None,
+        data_scope: Optional[str] = None,
     ) -> TileResult:
         """
         Update an existing tile's content, metadata, or data logic.
@@ -714,6 +763,11 @@ class BaseDashboardManager(BaseStateManager):
             valid -- the existing script remains, only the data sources
             change.
 
+            Fresh row-returning bindings obey the same bridge cap as
+            ``create_tile``: ``FilterBinding.limit`` and
+            ``JoinBinding.result_limit`` must be between 1 and 1000 when
+            provided.
+
         on_data : str | None, default ``None``
             New JS code block to replace the tile's ``on_data_script``.
             See ``create_tile()`` for full documentation of the ``on_data``
@@ -725,6 +779,23 @@ class BaseDashboardManager(BaseStateManager):
             To **clear** a tile's ``on_data_script``, pass ``on_data=""``.
             An empty string signals "remove the script"; ``None`` signals
             "don't change it".
+
+        destination : str | None, default ``None``
+            Which tile pool to update. Pass ``"personal"`` for your private
+            tiles or ``"team:<id>"`` for a shared team tile listed in the
+            *Accessible shared teams* block. The privacy floor and
+            clarification rule are the same as ``create_tile``.
+
+        data_scope : str | None, default ``None``
+            Optional replacement for the root used to resolve fresh
+            ``data_bindings``. Pass ``"dashboard"`` to inherit the tile
+            row's destination root, or ``"team:<id>"`` to bind the tile's
+            data reads to a specific shared team. This can only be changed
+            together with fresh ``data_bindings`` because stored tiles keep
+            resolved binding paths rather than an unresolved binding recipe.
+            Use ``"dashboard"`` when the tile and data source belong to the
+            same dashboard root; use ``"team:<id>"`` for intentional
+            cross-root bindings.
 
         Returns
         -------
@@ -821,7 +892,7 @@ class BaseDashboardManager(BaseStateManager):
         """
 
     @abstractmethod
-    def delete_tile(self, token: str) -> bool:
+    def delete_tile(self, token: str, *, destination: str | None = None) -> bool:
         """
         Delete a tile and its token registration.
 
@@ -840,6 +911,13 @@ class BaseDashboardManager(BaseStateManager):
             The 12-character URL-safe token of the tile to delete.
 
             Example: ``"Ab3xK9mP2qLz"``
+
+        destination : str | None, default ``None``
+            Which tile pool to delete from. Pass ``"personal"`` for a
+            private tile or ``"team:<id>"`` for a shared team tile. Read
+            the *Accessible shared teams* block before choosing a shared
+            destination, and choose personal or ask for clarification when
+            the user is ambiguous.
 
         Returns
         -------
@@ -1032,6 +1110,7 @@ class BaseDashboardManager(BaseStateManager):
         *,
         description: Optional[str] = None,
         tiles: Optional[List[TilePosition]] = None,
+        destination: str | None = None,
     ) -> DashboardResult:
         """
         Create a new dashboard layout composed of existing tiles.
@@ -1097,6 +1176,18 @@ class BaseDashboardManager(BaseStateManager):
 
             When ``None``, an empty dashboard is created (no tiles).  Tiles
             can be added later via ``update_dashboard()``.
+
+        destination : str | None, default ``None``
+            Where this dashboard lives. Pass ``"personal"`` (the default)
+            for private dashboards only you see. Pass ``"team:<id>"`` for
+            a team dashboard every member of the team sees -- operational
+            overview boards, team KPI dashboards, and shared monitoring
+            views. The set of available ``team:<id>`` values is rendered
+            in the *Accessible shared teams* block of your system prompt;
+            read that block before choosing. Pick personal when in doubt;
+            if a clarification channel is available, ask a targeted question
+            when the user appears to want a wider audience but the target
+            team is ambiguous.
 
         Returns
         -------
@@ -1290,6 +1381,7 @@ class BaseDashboardManager(BaseStateManager):
         title: Optional[str] = None,
         description: Optional[str] = None,
         tiles: Optional[List[TilePosition]] = None,
+        destination: str | None = None,
     ) -> DashboardResult:
         """
         Update an existing dashboard's metadata or layout.
@@ -1334,6 +1426,13 @@ class BaseDashboardManager(BaseStateManager):
             When ``None``, the existing layout is preserved.
 
             Pass an empty list ``[]`` to clear all tiles from the dashboard.
+
+        destination : str | None, default ``None``
+            Which dashboard pool to update. Pass ``"personal"`` for a
+            private dashboard or ``"team:<id>"`` for a shared team
+            dashboard listed in the *Accessible shared teams* block. The
+            privacy floor and clarification rule are the same as
+            ``create_dashboard``.
 
         Returns
         -------
@@ -1425,7 +1524,7 @@ class BaseDashboardManager(BaseStateManager):
         """
 
     @abstractmethod
-    def delete_dashboard(self, token: str) -> bool:
+    def delete_dashboard(self, token: str, *, destination: str | None = None) -> bool:
         """
         Delete a dashboard and its token registration.
 
@@ -1439,6 +1538,12 @@ class BaseDashboardManager(BaseStateManager):
             The 12-character URL-safe token of the dashboard to delete.
 
             Example: ``"Xy7mN2pQ9rLz"``
+
+        destination : str | None, default ``None``
+            Which dashboard pool to delete from. Pass ``"personal"`` for a
+            private dashboard or ``"team:<id>"`` for a shared dashboard.
+            Read the *Accessible shared teams* block before choosing a
+            shared destination.
 
         Returns
         -------

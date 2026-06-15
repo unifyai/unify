@@ -22,6 +22,8 @@ from typing import Any, Callable, Dict, List, Type, Union
 import unillm
 from pydantic import BaseModel
 
+from unity.common.diagnostic_logging import staging_diagnostics_enabled
+
 from .llm_helpers import method_to_schema
 from .llm_client import pydantic_to_json_schema_response_format
 from .tool_spec import ToolSpec, normalise_tools
@@ -211,6 +213,33 @@ async def single_shot_tool_decision(
     if not messages:
         raise RuntimeError("LLM client returned no messages")
     msg = messages[-1]
+    if staging_diagnostics_enabled():
+        raw_content = msg.get("content") if isinstance(msg, dict) else None
+        raw_tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else None
+        tool_call_names: list[str] = []
+        if isinstance(raw_tool_calls, list):
+            for call in raw_tool_calls:
+                if not isinstance(call, dict):
+                    continue
+                fn_info = call.get("function") or {}
+                if isinstance(fn_info, dict):
+                    name = fn_info.get("name")
+                    if isinstance(name, str):
+                        tool_call_names.append(name)
+        tool_call_count: int | str = (
+            len(raw_tool_calls) if isinstance(raw_tool_calls, list) else "-"
+        )
+        _ss_logger.info(
+            (
+                "Single-shot response shape message_type=%s content_type=%s "
+                "tool_calls_type=%s tool_calls_count=%s wrapper_tool_names=%s"
+            ),
+            type(msg).__name__,
+            type(raw_content).__name__ if raw_content is not None else "None",
+            type(raw_tool_calls).__name__ if raw_tool_calls is not None else "None",
+            tool_call_count,
+            tool_call_names,
+        )
 
     # Extract text response (if any)
     text_response = None

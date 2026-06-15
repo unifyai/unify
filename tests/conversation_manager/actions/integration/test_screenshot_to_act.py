@@ -85,7 +85,14 @@ async def test_screenshot_crop_via_act(initialized_cm_codeact):
         write_screenshot_to_disk,
     )
 
-    screenshot_path = generate_screenshot_path(entry)
+    # `generate_screenshot_path` returns a relative path
+    # (`Screenshots/User/<ts>.jpg`); production code calls it from
+    # inside a worker that runs in `cwd=local_root` (set by
+    # `conversation_manager/main.py:os.chdir(_local_root)`). Test
+    # fixtures don't chdir, so we must absolutise the path here or
+    # `write_screenshot_to_disk`'s `p.parent.mkdir(parents=True)`
+    # raises `FileNotFoundError: 'Screenshots'` (cwd ≠ local_root).
+    screenshot_path = str(local_root / generate_screenshot_path(entry))
     write_screenshot_to_disk(entry, screenshot_path)
 
     # ------------------------------------------------------------------

@@ -2,21 +2,23 @@
 # ============================================================================
 # Unity setup — local backend bootstrap
 # ============================================================================
-# Spins up a local orchestra-core instance (Postgres+pgvector in Docker +
+# Spins up a local orchestra instance (Postgres+pgvector in Docker +
 # FastAPI server) and wires Unity's .env to use it. Idempotent: safe to
-# re-run. orchestra-core is the public single-user kernel of Orchestra; the
-# multi-tenant private orchestra-platform repo is NOT what local installs
-# pull, since it requires repo access this open-source flow doesn't have.
+# re-run. Sibling repos (including orchestra) are cloned by install.sh;
+# setup syncs orchestra and installs runtime dependencies.
 #
 # Usually called automatically by scripts/install.sh; re-run directly via
 # `unity setup` if you need to re-bootstrap (e.g., Docker wasn't running the
 # first time, or you wiped ~/.unity).
 #
+# Options:
+#   --boot-runtime   Install a login boot hook so background scheduling survives reboot
+#
 # Environment (all optional):
 #   UNITY_HOME              Install root (default: ~/.unity)
 #   ORCHESTRA_PORT          Orchestra FastAPI port (default: 8000)
-#   ORCHESTRA_DB_PORT       Postgres port (default: 5432)
-#   UNITY_SKIP_ORCHESTRA    If "1", skip the orchestra-core spin-up (env only)
+#   ORCHESTRA_DB_PORT       Postgres port (default: 55432)
+#   UNITY_SKIP_ORCHESTRA    If "1", skip the orchestra spin-up (env only)
 # ============================================================================
 
 set -e
@@ -24,12 +26,12 @@ set -e
 # --- Config ---------------------------------------------------------------
 UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
 UNITY_REPO="${UNITY_HOME}/unity"
-ORCHESTRA_REPO="${UNITY_HOME}/orchestra-core"
-# Legacy install path from before the orchestra-core split. We detect this
-# below and warn so users on older installs know they can clean it up.
-LEGACY_ORCHESTRA_REPO="${UNITY_HOME}/orchestra"
+ORCHESTRA_REPO="${UNITY_HOME}/orchestra"
+CONSOLE_REPO="${CONSOLE_REPO:-${UNITY_HOME}/console}"
 ORCHESTRA_PORT="${ORCHESTRA_PORT:-8000}"
-ORCHESTRA_DB_PORT="${ORCHESTRA_DB_PORT:-5432}"
+ORCHESTRA_DB_PORT="${ORCHESTRA_DB_PORT:-55432}"
+CONSOLE_PORT="${CONSOLE_PORT:-3000}"
+UNITY_BRANCH="${UNITY_BRANCH:-main}"
 
 # Ensure user-local tool dirs are on PATH. `uv` and tools `uv` installs
 # (e.g. poetry) land here, and in a fresh shell they may not be picked up.
@@ -43,6 +45,52 @@ log_success() { echo -e "${GREEN}✓${NC} $1"; }
 log_warn()    { echo -e "${YELLOW}⚠${NC} $1"; }
 log_error()   { echo -e "${RED}✗${NC} $1"; }
 
+has_env_value() {
+    local key="$1"
+    [[ -f "$UNITY_REPO/.env" ]] && grep -qE "^${key}=.+$" "$UNITY_REPO/.env"
+}
+
+log_stage() {
+    echo ""
+    echo -e "${BOLD}$1${NC}"
+}
+
+_load_install_progress() {
+    if [[ -f "$UNITY_REPO/scripts/install_progress.sh" ]]; then
+        # shellcheck disable=SC1091
+        source "$UNITY_REPO/scripts/install_progress.sh"
+        return 0
+    fi
+    progress_step_begin() { log_info "$2"; }
+    progress_step_update() { :; }
+    progress_step_end_success() { log_success "Done: $2"; }
+    progress_step_end_fail() { log_error "Failed: $2"; return 1; }
+    progress_step_run() { local _s="$1" _l="$2"; shift 2; log_info "$_l"; "$@"; }
+    progress_repo_line() { log_success "[$1] $2"; }
+    progress_repo_fail() { log_error "[$1] $2"; }
+}
+
+SHALLOW_CLONE_DEPTH="${SHALLOW_CLONE_DEPTH:-1}"
+
+_sync_orchestra_repo() {
+    if git -C "$ORCHESTRA_REPO" rev-parse --is-shallow-repository 2>/dev/null | grep -q true; then
+        git -C "$ORCHESTRA_REPO" fetch --depth "$SHALLOW_CLONE_DEPTH" origin "$UNITY_BRANCH" || return 1
+    else
+        git -C "$ORCHESTRA_REPO" fetch origin "$UNITY_BRANCH" || return 1
+    fi
+    git -C "$ORCHESTRA_REPO" checkout "$UNITY_BRANCH" 2>/dev/null || {
+        log_warn "[orchestra] Couldn't checkout $UNITY_BRANCH (uncommitted changes?). Leaving as-is."
+        return 0
+    }
+    if ! git -C "$ORCHESTRA_REPO" reset --hard "origin/$UNITY_BRANCH" 2>/dev/null; then
+        git -C "$ORCHESTRA_REPO" pull --ff-only origin "$UNITY_BRANCH" 2>/dev/null || {
+            log_warn "[orchestra] Fast-forward pull skipped; leaving as-is."
+            return 0
+        }
+    fi
+    return 0
+}
+
 # --- Docker ---------------------------------------------------------------
 detect_os() {
     case "$(uname -s)" in
@@ -54,7 +102,7 @@ detect_os() {
 
 install_docker_interactive() {
     local os; os="$(detect_os)"
-    log_warn "Docker is not installed (required for local orchestra-core)."
+    log_warn "Docker is not installed (required for local orchestra)."
     case "$os" in
         macos)
             echo "  On macOS, install Docker Desktop:"
@@ -114,7 +162,7 @@ ensure_docker() {
     log_success "Docker: $(docker --version 2>/dev/null | head -1)"
 }
 
-# --- Poetry (for orchestra-core) ------------------------------------------
+# --- Poetry (for orchestra) -----------------------------------------------
 ensure_poetry() {
     if command -v poetry >/dev/null 2>&1; then
         log_success "poetry: $(poetry --version 2>/dev/null)"
@@ -136,30 +184,23 @@ ensure_poetry() {
     log_success "poetry installed: $(poetry --version 2>/dev/null)"
 }
 
-# --- orchestra-core clone + install ---------------------------------------
+# --- orchestra repo (cloned by install.sh; sync here) ----------------------
 ensure_orchestra_repo() {
-    if [ -d "$LEGACY_ORCHESTRA_REPO/.git" ] && [ ! -d "$ORCHESTRA_REPO/.git" ]; then
-        log_warn "Found legacy ${LEGACY_ORCHESTRA_REPO} (private orchestra repo, pre-split)."
-        log_info "  Setup now uses orchestra-core (the public kernel) instead."
-        log_info "  After this completes successfully, you can remove the old repo:"
-        log_info "    rm -rf ${LEGACY_ORCHESTRA_REPO}"
-    fi
-
     if [ -d "$ORCHESTRA_REPO/.git" ]; then
-        log_info "Updating orchestra-core at $ORCHESTRA_REPO..."
-        git -C "$ORCHESTRA_REPO" fetch --quiet origin main
-        git -C "$ORCHESTRA_REPO" checkout --quiet main 2>/dev/null || log_warn "Couldn't checkout main (uncommitted changes?)"
-        git -C "$ORCHESTRA_REPO" pull --quiet --ff-only origin main 2>/dev/null || log_warn "Non-ff pull skipped in orchestra-core; leaving as-is."
+        _sync_orchestra_repo || return 1
     else
-        log_info "Cloning unifyai/orchestra-core into $ORCHESTRA_REPO..."
+        log_warn "[orchestra] Missing at $ORCHESTRA_REPO — install.sh should have cloned it."
         mkdir -p "$UNITY_HOME"
-        git clone --quiet --branch main https://github.com/unifyai/orchestra-core.git "$ORCHESTRA_REPO"
+        if ! git clone --quiet --depth "$SHALLOW_CLONE_DEPTH" --single-branch \
+            --branch "$UNITY_BRANCH" "https://github.com/unifyai/orchestra.git" "$ORCHESTRA_REPO" 2>/dev/null; then
+            return 1
+        fi
     fi
-    log_success "orchestra-core: $(git -C "$ORCHESTRA_REPO" rev-parse --short HEAD)"
+    return 0
 }
 
 # --- Python 3.12 selection for poetry --------------------------------------
-# orchestra-core pins itself to ~3.12 because several core deps (asyncpg,
+# orchestra pins itself to ~3.12 because several backend deps (asyncpg,
 # tiktoken, ...) ship no Python 3.13 wheels. Locate a 3.12 interpreter
 # ourselves and tell poetry to use it explicitly, so users on a 3.13-default
 # system don't get surprise build errors.
@@ -172,7 +213,7 @@ find_python312() {
             echo "$uv_py"
             return 0
         fi
-        log_info "Installing Python 3.12 via uv (orchestra-core requires it)..."
+        log_info "Installing Python 3.12 via uv (orchestra requires it)..."
         uv python install 3.12 >/dev/null 2>&1 || true
         uv_py=$(uv python find 3.12 2>/dev/null || true)
         if [ -n "$uv_py" ] && [ -x "$uv_py" ]; then
@@ -189,12 +230,12 @@ find_python312() {
 }
 
 install_orchestra_deps() {
-    log_info "Installing orchestra-core dependencies via poetry (first-time: a few minutes)..."
+    log_info "Installing orchestra dependencies via poetry (first run may take several minutes)..."
 
     local py312
     py312="$(find_python312)" || {
         log_error "Couldn't locate a Python 3.12 interpreter."
-        log_info "orchestra-core requires Python 3.12.x. Install one with:"
+        log_info "orchestra requires Python 3.12.x. Install one with:"
         log_info "  uv python install 3.12        (uv was installed by install.sh)"
         log_info "  brew install python@3.12      (macOS via Homebrew)"
         log_info "  sudo apt-get install python3.12 python3.12-venv   (Debian/Ubuntu)"
@@ -212,7 +253,7 @@ install_orchestra_deps() {
     install_log="$(mktemp)"
     if (cd "$ORCHESTRA_REPO" && poetry install --no-interaction) >"$install_log" 2>&1; then
         rm -f "$install_log"
-        log_success "orchestra-core dependencies installed"
+        log_success "orchestra dependencies installed"
     else
         log_error "poetry install failed in $ORCHESTRA_REPO"
         echo ""
@@ -226,17 +267,29 @@ install_orchestra_deps() {
     fi
 }
 
-# --- orchestra-core spin-up ------------------------------------------------
+# --- orchestra spin-up -----------------------------------------------------
 start_local_orchestra() {
-    log_info "Starting local orchestra-core (Docker Postgres+pgvector + FastAPI)..."
+    log_info "Starting local orchestra (Docker Postgres+pgvector + FastAPI)..."
+
+    if command -v lsof >/dev/null 2>&1 && lsof -i ":${ORCHESTRA_DB_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
+        local db_container
+        db_container=$(docker ps --filter "publish=${ORCHESTRA_DB_PORT}" --format "{{.Names}}" 2>/dev/null | head -1)
+        if [ "$db_container" != "orchestra-local-db" ]; then
+            log_error "Postgres port ${ORCHESTRA_DB_PORT} is already in use."
+            log_info "Stop the process using it, or re-run with a different port:"
+            log_info "  ORCHESTRA_DB_PORT=55433 unity setup"
+            return 1
+        fi
+    fi
 
     # Disable auto-shutdown: local installs should stay up until `unity stop`
     export ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS=0
     export ORCHESTRA_PORT
     export ORCHESTRA_DB_PORT
+    export ORCHESTRA_PREFIX="${ORCHESTRA_PREFIX:-orchestra}"
     export ORCHESTRA_REPO_PATH="$ORCHESTRA_REPO"
 
-    # Run orchestra-core's local.sh; tee to terminal AND a log file so we can
+    # Run orchestra's local.sh; tee to terminal AND a log file so we can
     # parse the final `export UNIFY_BASE_URL=... / UNIFY_KEY=...` lines out of
     # it.
     local tmp_log
@@ -246,7 +299,7 @@ start_local_orchestra() {
 
     if (( start_exit != 0 )); then
         rm -f "$tmp_log"
-        log_error "orchestra-core failed to start (local.sh exit=$start_exit). See output above."
+        log_error "orchestra failed to start (local.sh exit=$start_exit). See output above."
         log_info "Common causes: port $ORCHESTRA_PORT / $ORCHESTRA_DB_PORT in use, Docker daemon not running."
         log_info "Re-run with:  unity setup"
         return 1
@@ -258,7 +311,7 @@ start_local_orchestra() {
     rm -f "$tmp_log"
 
     if [ -z "$env_block" ]; then
-        log_error "orchestra-core started but didn't emit UNIFY_BASE_URL / UNIFY_KEY lines."
+        log_error "orchestra started but didn't emit UNIFY_BASE_URL / UNIFY_KEY lines."
         return 1
     fi
 
@@ -266,17 +319,17 @@ start_local_orchestra() {
     eval "$env_block"
 
     # Sanity: refuse non-local URLs. The expected output is a 127.0.0.1 /
-    # localhost URL since orchestra-core's local.sh has no remote-fallback
+    # localhost URL since orchestra's local.sh has no remote-fallback
     # path; anything else means a downstream change broke the contract.
     case "${UNIFY_BASE_URL:-}" in
         http://127.0.0.1:*|http://localhost:*) ;;
         *)
-            log_error "orchestra-core emitted a non-local URL (${UNIFY_BASE_URL:-empty}). Refusing to wire."
+            log_error "orchestra emitted a non-local URL (${UNIFY_BASE_URL:-empty}). Refusing to wire."
             return 1
             ;;
     esac
 
-    log_success "orchestra-core URL: ${UNIFY_BASE_URL}"
+    log_success "orchestra URL: ${UNIFY_BASE_URL}"
     log_success "Local UNIFY_KEY:    ${UNIFY_KEY}"
 }
 
@@ -319,13 +372,134 @@ PYEOF
     upsert "UNIFY_KEY" "$UNIFY_KEY"
 
     log_success "Wrote ORCHESTRA_URL and UNIFY_KEY to $env_file"
-    log_info "Edit this file to add OPENAI_API_KEY or ANTHROPIC_API_KEY for the LLM provider."
+}
+
+# --- Console .env.local bootstrap -----------------------------------------
+# Mint a strong random secret for auth signing / admin credentials. Prefers
+# openssl, falls back to python3, then /dev/urandom — one of these exists on
+# every supported macOS / Linux / WSL2 box.
+gen_secret() {
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -base64 32 | tr -d '\n'
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 -c 'import base64, secrets; print(base64.b64encode(secrets.token_bytes(32)).decode())'
+    else
+        head -c 32 /dev/urandom | base64 | tr -d '\n'
+    fi
+}
+
+# Generate console/.env.local for self-host. Console has no database of its
+# own — it uses JWT sessions + OrchestraAdapter, so all persistence flows
+# through the local Orchestra. The only required config is therefore auth
+# signing secrets and the local Orchestra wiring. Everything feature-related
+# (billing, voice, workspace OAuth, ...) is derived at runtime from the
+# credentials in unity/.env, which stack.sh propagates into the Console
+# process — so this file deliberately contains no provider keys.
+bootstrap_console_env() {
+    if [ ! -d "$CONSOLE_REPO" ]; then
+        log_warn "console repo not found at $CONSOLE_REPO — skipping Console env bootstrap."
+        log_info "Re-run scripts/install.sh to clone Console (or set CONSOLE_REPO)."
+        return 0
+    fi
+
+    local env_file="$CONSOLE_REPO/.env.local"
+    if [ -f "$env_file" ]; then
+        log_success "Console .env.local already present — leaving it untouched."
+        return 0
+    fi
+
+    log_info "Generating Console .env.local (auth secrets + local Orchestra wiring)..."
+
+    local nextauth_secret jwt_secret admin_key
+    nextauth_secret="$(gen_secret)"
+    jwt_secret="$(gen_secret)"
+    # Console reads ORCHESTRA_ADMIN_KEY from .env.local and forwards it to the
+    # local Orchestra when the stack starts, so both sides share this minted
+    # credential instead of the hardcoded `local-admin-key` dev fallback.
+    admin_key="$(gen_secret)"
+
+    cat > "$env_file" <<EOF
+# Auto-generated by \`unity setup\` on $(date +%Y-%m-%d).
+# Self-host Console config. Secrets are minted per-install; safe to edit.
+#
+# This file contains ONLY auth signing secrets + local Orchestra wiring.
+# Feature availability (billing, voice, transcription, workspace OAuth, ...)
+# is derived from the credentials you add to $UNITY_REPO/.env — the stack
+# scripts propagate those into the Console process automatically.
+
+# NextAuth / session signing. Console uses JWT sessions + OrchestraAdapter and
+# keeps no database of its own; all persistence goes through Orchestra.
+NEXTAUTH_SECRET=${nextauth_secret}
+JWT_SECRET=${jwt_secret}
+NEXTAUTH_URL=http://localhost:${CONSOLE_PORT}
+
+# Local Orchestra backend (started by \`unity setup\`). The stack scripts
+# override these at runtime too, but they keep standalone Console runs working.
+ORCHESTRA_URL=http://127.0.0.1:${ORCHESTRA_PORT}
+ORCHESTRA_ADMIN_KEY=${admin_key}
+EOF
+
+    log_success "Wrote $env_file"
+}
+
+# --- Voice stack (LiveKit + BYOK keys) ------------------------------------
+setup_voice_defaults() {
+    log_info "Setting up local voice (LiveKit + BYOK keys)..."
+
+    if [ -x "$UNITY_REPO/scripts/voice.sh" ]; then
+        if ! bash "$UNITY_REPO/scripts/voice.sh" setup; then
+            log_warn "LiveKit setup failed — browser calls may not work until you run: unity voice setup"
+        fi
+    else
+        log_warn "voice.sh not found — skipping LiveKit setup"
+    fi
+}
+
+ensure_console_npm_deps() {
+    if [ ! -d "$CONSOLE_REPO" ]; then
+        return 0
+    fi
+    local prereqs_script="$UNITY_REPO/scripts/ensure_prereqs.sh"
+    if [ -f "$prereqs_script" ]; then
+        # shellcheck disable=SC1090
+        source "$prereqs_script"
+        ensure_node || return 1
+    elif ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+        log_error "Node.js 20+ and npm are required for Console"
+        return 1
+    fi
+    if [ -d "$CONSOLE_REPO/node_modules" ]; then
+        log_success "Console npm dependencies already installed"
+        return 0
+    fi
+    log_info "Installing Console npm dependencies (first run may take a few minutes)..."
+    (cd "$CONSOLE_REPO" && npm install --no-fund --no-audit)
+    log_success "Console npm dependencies installed"
 }
 
 # --- Main -----------------------------------------------------------------
 main() {
+    local boot_runtime="false"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --boot-runtime) boot_runtime="true"; shift ;;
+            -h|--help)
+                echo "Usage: unity setup [--boot-runtime]"
+                echo ""
+                echo "  Bootstraps local Orchestra, wires unity/.env, and enables background scheduling."
+                echo "  --boot-runtime  Also install a login hook so the runtime survives reboot."
+                exit 0
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                echo "Run: unity setup --help"
+                exit 1
+                ;;
+        esac
+    done
+
     echo ""
-    echo -e "${BOLD}Unity setup${NC} — bootstrapping local orchestra-core"
+    echo -e "${BOLD}Unity setup${NC} — bootstrapping local orchestra + voice"
     echo ""
 
     if [ ! -d "$UNITY_REPO" ]; then
@@ -333,26 +507,91 @@ main() {
         exit 1
     fi
 
+    _load_install_progress
+
     if [ "${UNITY_SKIP_ORCHESTRA:-0}" = "1" ]; then
-        log_warn "UNITY_SKIP_ORCHESTRA=1 — skipping orchestra-core spin-up."
+        log_warn "UNITY_SKIP_ORCHESTRA=1 — skipping orchestra spin-up."
         log_info "Set ORCHESTRA_URL + UNIFY_KEY manually in $UNITY_REPO/.env to point at a remote backend."
         exit 0
     fi
 
     ensure_docker || exit 1
     ensure_poetry || exit 1
-    ensure_orchestra_repo
-    install_orchestra_deps || exit 1
-    start_local_orchestra || exit 1
+    if [[ -f "$UNITY_REPO/scripts/ensure_prereqs.sh" ]]; then
+        # shellcheck disable=SC1090
+        source "$UNITY_REPO/scripts/ensure_prereqs.sh"
+        ensure_self_host_stack_prereqs || exit 1
+    fi
+
+    progress_step_begin 3 "Syncing orchestra repo (branch $UNITY_BRANCH)"
+    progress_step_update 40
+    if ! ensure_orchestra_repo; then
+        progress_step_end_fail
+        exit 1
+    fi
+    progress_step_end_success
+    progress_repo_line "orchestra" "$(git -C "$ORCHESTRA_REPO" rev-parse --short HEAD)"
+
+    if ! progress_step_run 4 "Installing orchestra Python dependencies (poetry)" \
+        install_orchestra_deps; then
+        exit 1
+    fi
+
+    progress_step_begin 5 "Starting local orchestra (Docker + migrations)"
+    if ! start_local_orchestra; then
+        progress_step_end_fail
+        exit 1
+    fi
+    progress_step_end_success
+
     wire_unity_env
+    bootstrap_console_env
+
+    if ! progress_step_run 6 "Installing Console npm dependencies" \
+        ensure_console_npm_deps; then
+        exit 1
+    fi
+
+    if ! progress_step_run 7 "Setting up local voice (LiveKit)" \
+        setup_voice_defaults; then
+        exit 1
+    fi
+
+    if [[ -x "$UNITY_REPO/scripts/prompt_byok_keys.sh" ]]; then
+        if has_env_value UNITY_BYOK_CONFIGURED; then
+            log_success "BYOK already configured — skipping wizard"
+        else
+            echo ""
+            log_info "BYOK wizard (LLM, voice, optional workspace OAuth)..."
+            UNITY_REPO="$UNITY_REPO" bash "$UNITY_REPO/scripts/prompt_byok_keys.sh" || true
+        fi
+    fi
+
+    if [[ -f "$UNITY_REPO/scripts/self_host_env.sh" ]]; then
+        # shellcheck disable=SC1090
+        source "$UNITY_REPO/scripts/self_host_env.sh"
+        self_host_enable_runtime
+        if [[ "$boot_runtime" == "true" && -x "$UNITY_REPO/scripts/service.sh" ]]; then
+            log_info "Installing login boot hook for background runtime..."
+            bash "$UNITY_REPO/scripts/service.sh" install-boot --boot || \
+                log_warn "Boot hook install failed — stack up still enables background scheduling"
+        fi
+    fi
 
     echo ""
     echo -e "${GREEN}${BOLD}Setup complete.${NC}"
     echo ""
-    echo "  orchestra-core is running at $UNIFY_BASE_URL"
+    echo "  orchestra is running at $UNIFY_BASE_URL"
     echo "  Stop it any time with:  unity stop"
     echo ""
-    echo "  Next: add an LLM key to $UNITY_REPO/.env, then run  ${CYAN}unity${NC}"
+    echo "  Next:  ${CYAN}unity stack doctor${NC}  Check self-host prerequisites (optional)"
+    echo "         ${CYAN}unity stack up${NC}     Console + Coordinator (scheduled tasks enabled)"
+    echo "         ${CYAN}unity stack down${NC}   UI off; tasks keep running"
+    echo "  Dev REPL:  ${CYAN}unity sandbox${NC}"
+    if [[ "$boot_runtime" != "true" ]]; then
+        echo ""
+        echo "  Optional: ${CYAN}unity setup --boot-runtime${NC}  Keep scheduled tasks across reboot"
+    fi
     echo ""
 }
 

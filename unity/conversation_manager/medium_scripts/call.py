@@ -34,9 +34,9 @@ if sys.platform == "darwin":
 from livekit.plugins.turn_detector.english import EnglishModel
 from livekit.agents import ChatContext, ChatMessage
 from livekit.agents import ModelSettings, llm
-from livekit.agents.llm import Tool
+from livekit.agents.llm import ChatChunk, ChoiceDelta
 
-from typing import AsyncIterable
+from typing import AsyncIterable, Callable
 
 load_dotenv()
 
@@ -87,6 +87,47 @@ VAD = None
 
 # Module-level logger created early for prewarm (before entrypoint runs).
 _log = FastBrainLogger()
+
+DEPLETED_CREDITS_FAST_BRAIN_RESPONSE = (
+    "Your credits are depleted, so I can't continue helping with setup or tasks "
+    "until you top up. Please add credits in billing, then I'll pick this back up."
+)
+
+VIDEO_AVATAR_CHANNELS = frozenset({"unify_meet", "google_meet", "teams_meet"})
+
+
+def has_video_avatar_channel(channel: str) -> bool:
+    return channel in VIDEO_AVATAR_CHANNELS
+
+
+class FastBrainCreditGateMonitor:
+    """Polls credit state off the voice response path."""
+
+    def __init__(self, refresh_interval_s: float = 5.0) -> None:
+        from unity.spending_limits import CreditGateState
+
+        self._refresh_interval_s = refresh_interval_s
+        self._state = CreditGateState()
+
+    @property
+    def state(self):
+        return self._state
+
+    async def refresh_once(self) -> None:
+        from unity.spending_limits import check_credit_gate_state
+
+        next_state = await check_credit_gate_state()
+        if next_state.allowed != self._state.allowed:
+            if next_state.allowed:
+                _log.info("Credit gate cleared")
+            else:
+                _log.warning(next_state.reason or "Credit gate active")
+        self._state = next_state
+
+    async def run(self) -> None:
+        while True:
+            await self.refresh_once()
+            await asyncio.sleep(self._refresh_interval_s)
 
 
 class MeetAudioBridge:
@@ -232,8 +273,12 @@ class Assistant(Agent):
         self.call_received = not outbound
         self._user_speech_logged = False
         self.user_turn_generating = False
+        self._credit_gate_state_provider: Callable | None = None
 
         super().__init__(instructions=instructions)
+
+    def set_credit_gate_state_provider(self, provider: Callable) -> None:
+        self._credit_gate_state_provider = provider
 
     def set_call_received(self):
         self.call_received = True
@@ -252,7 +297,7 @@ class Assistant(Agent):
     async def llm_node(
         self,
         chat_ctx: llm.ChatContext,
-        tools: list[Tool],
+        tools: list[llm.FunctionTool | llm.RawFunctionTool],
         model_settings: ModelSettings,
     ) -> AsyncIterable[llm.ChatChunk]:
         """Wait for call connection then delegate to parent LLM."""
@@ -262,6 +307,22 @@ class Assistant(Agent):
             while not self.call_received:
                 await asyncio.sleep(0.1)
             _log.call_status("call_received")
+
+            credit_gate_state = (
+                self._credit_gate_state_provider()
+                if self._credit_gate_state_provider is not None
+                else None
+            )
+            if credit_gate_state is not None and not credit_gate_state.allowed:
+                _log.info("Credit gate response served from cached state")
+                yield ChatChunk(
+                    id=f"credit-gate-{monotonic_ms()}",
+                    delta=ChoiceDelta(
+                        role="assistant",
+                        content=DEPLETED_CREDITS_FAST_BRAIN_RESPONSE,
+                    ),
+                )
+                return
 
             await self._capture_screenshots_for_llm(chat_ctx)
 
@@ -398,6 +459,47 @@ def _load_config_from_metadata(ctx: agents.JobContext) -> dict | None:
         return None
 
 
+def _hydrate_session_details_from_metadata(meta: dict) -> None:
+    """Apply assistant identity fields carried by LiveKit job metadata."""
+    assistant_bio = meta.get("assistant_bio", "")
+    SESSION_DETAILS.assistant.about = assistant_bio
+    SESSION_DETAILS.assistant.is_coordinator = meta.get("is_coordinator", False) is True
+    if meta.get("assistant_id"):
+        try:
+            SESSION_DETAILS.assistant.agent_id = int(meta["assistant_id"])
+        except (ValueError, TypeError):
+            pass
+    if meta.get("user_id"):
+        SESSION_DETAILS.user.id = meta["user_id"]
+    if meta.get("assistant_name"):
+        parts = meta["assistant_name"].split(None, 1)
+        SESSION_DETAILS.assistant.first_name = parts[0] if parts else ""
+        SESSION_DETAILS.assistant.surname = parts[1] if len(parts) > 1 else ""
+
+
+_CALL_OPENING_MODES = {"speak", "simulated", "silent"}
+
+
+def _normalize_call_opening_config(raw: object) -> dict:
+    if raw in (None, ""):
+        return {"mode": "speak"}
+    if isinstance(raw, str):
+        raw = json.loads(raw)
+    if not isinstance(raw, dict):
+        raise ValueError("opening_config must be an object")
+
+    mode = str(raw.get("mode", "speak")).strip()
+    if mode not in _CALL_OPENING_MODES:
+        raise ValueError("opening_config.mode must be one of speak, simulated, silent")
+
+    config = {"mode": mode}
+    if raw.get("simulated_utterance") is not None:
+        config["simulated_utterance"] = str(raw["simulated_utterance"])
+    if raw.get("source") is not None:
+        config["source"] = str(raw["source"])
+    return config
+
+
 def _configure_child_logging() -> None:
     """Ensure Unity's LOGGER works in LiveKit's pre-warmed child processes.
 
@@ -447,25 +549,15 @@ async def entrypoint(ctx: agents.JobContext):
         else:
             _log.warning("No ipc_socket_path in job metadata — IPC disabled")
 
-        voice_provider = meta.get("voice_provider", "cartesia")
-        voice_id = meta.get("voice_id", "")
+        voice_provider = meta.get("voice_provider") or "cartesia"
+        voice_id = meta.get("voice_id") or ""
         outbound = meta.get("outbound", False)
         channel = meta.get("channel", "phone")
         assistant_bio = meta.get("assistant_bio", "")
         contact = meta.get("contact", {})
         boss = meta.get("boss", {})
-        SESSION_DETAILS.assistant.about = assistant_bio
-        if meta.get("assistant_id"):
-            try:
-                SESSION_DETAILS.assistant.agent_id = int(meta["assistant_id"])
-            except (ValueError, TypeError):
-                pass
-        if meta.get("user_id"):
-            SESSION_DETAILS.user.id = meta["user_id"]
-        if meta.get("assistant_name"):
-            parts = meta["assistant_name"].split(None, 1)
-            SESSION_DETAILS.assistant.first_name = parts[0] if parts else ""
-            SESSION_DETAILS.assistant.surname = parts[1] if len(parts) > 1 else ""
+        opening_config = _normalize_call_opening_config(meta.get("opening_config"))
+        _hydrate_session_details_from_metadata(meta)
     else:
         _log.warning(
             "No job metadata — falling back to env-based config (IPC disabled)",
@@ -478,6 +570,9 @@ async def entrypoint(ctx: agents.JobContext):
         assistant_bio = SESSION_DETAILS.assistant.about
         contact = json.loads(SESSION_DETAILS.voice_call.contact_json or "{}")
         boss = json.loads(SESSION_DETAILS.voice_call.boss_json or "{}")
+        opening_config = _normalize_call_opening_config(
+            os.environ.get("OPENING_CONFIG"),
+        )
 
     # Browser-meet diarization config (Google Meet / Teams Meet)
     meet_session_id: str = ""
@@ -500,7 +595,7 @@ async def entrypoint(ctx: agents.JobContext):
             meet_agent_service_url = os.environ.get("AGENT_SERVICE_URL", "")
 
     _log.config(
-        f"voice_provider={voice_provider} voice_id={voice_id} outbound={outbound} channel={channel}",
+        f"voice_provider={voice_provider} voice_id={voice_id} outbound={outbound} channel={channel} opening_mode={opening_config['mode']}",
     )
 
     _log.session_start("Connecting to room…")
@@ -766,6 +861,60 @@ async def entrypoint(ctx: agents.JobContext):
     )
 
     assistant_name = SESSION_DETAILS.assistant.name
+    # The acting user on this call is the person we're talking with when they map
+    # to a system user (boss or provisioned org member), else the workspace owner.
+    # Drives per-speaker linked-desktop resolution so the guardrail relaxes only
+    # for someone who has actually linked their machine to this assistant.
+    call_acting_user_id = (
+        contact.get("user_id") if contact.get("is_system") else None
+    ) or SESSION_DETAILS.user.id
+    call_has_linked_user_desktop = (
+        SESSION_DETAILS.assistant.user_desktop_for(call_acting_user_id) is not None
+    )
+
+    # Server-derived onboarding progress for the Coordinator's opening
+    # line. Orchestra re-derives completed steps from durable state on
+    # every ``Coordinator/State`` read, so a workspace connected in an
+    # earlier session is visible here even though no transition event
+    # fired — without this, the fresh-history intro would pitch
+    # "connect your workspace" to a caller who already did. Best-effort:
+    # on any failure (or outside onboarding mode) the opener falls back
+    # to its generic copy.
+    coordinator_completed_onboarding_steps: list[str] | None = None
+    coordinator_skipped_onboarding_steps: list[str] | None = None
+    if (
+        SESSION_DETAILS.is_coordinator
+        and SESSION_DETAILS.assistant.agent_id is not None
+    ):
+        import httpx as _httpx
+
+        try:
+            async with _httpx.AsyncClient(timeout=5.0) as _state_http:
+                _state_resp = await _state_http.get(
+                    f"{SETTINGS.ORCHESTRA_URL}/assistant/"
+                    f"{SESSION_DETAILS.assistant.agent_id}/state",
+                    headers={"Authorization": f"Bearer {SESSION_DETAILS.unify_key}"},
+                )
+                _state_resp.raise_for_status()
+                _state_info = (_state_resp.json() or {}).get("info") or {}
+            if _state_info.get("mode") == "onboarding":
+                _steps = _state_info.get("completed_step_ids")
+                coordinator_completed_onboarding_steps = (
+                    [str(item) for item in _steps if item]
+                    if isinstance(_steps, list)
+                    else []
+                )
+                _skipped_steps = _state_info.get("skipped_step_ids")
+                coordinator_skipped_onboarding_steps = (
+                    [str(item) for item in _skipped_steps if item]
+                    if isinstance(_skipped_steps, list)
+                    else []
+                )
+        except Exception as exc:
+            _log.warning(
+                f"Coordinator state fetch failed; voice opener stays generic: {exc}",
+            )
+
     system_prompt = build_voice_agent_prompt(
         bio=assistant_bio,
         assistant_name=assistant_name or None,
@@ -783,7 +932,11 @@ async def entrypoint(ctx: agents.JobContext):
         contact_rolling_summary=contact.get("rolling_summary", ""),
         demo_mode=SETTINGS.DEMO_MODE,
         channel=channel,
-        user_desktop_control=SETTINGS.conversation.USER_DESKTOP_CONTROL_ENABLED,
+        has_linked_user_desktop=call_has_linked_user_desktop,
+        is_coordinator=SESSION_DETAILS.is_coordinator,
+        is_org_workspace=SESSION_DETAILS.org_id is not None,
+        coordinator_completed_onboarding_steps=coordinator_completed_onboarding_steps,
+        coordinator_skipped_onboarding_steps=coordinator_skipped_onboarding_steps,
     ).flatten()
     _log.config(f"System prompt ({len(system_prompt)} chars)")
 
@@ -792,12 +945,12 @@ async def entrypoint(ctx: agents.JobContext):
         stt=stt_instance,
         tts=(
             elevenlabs.TTS(
-                voice_id=voice_id if voice_id != "" else elevenlabs.DEFAULT_VOICE_ID,
+                voice_id=voice_id or elevenlabs.DEFAULT_VOICE_ID,
                 model="eleven_multilingual_v2",
             )
             if voice_provider == "elevenlabs"
             else cartesia.TTS(
-                voice=voice_id if voice_id != "" else cartesia.tts.TTSDefaultVoiceId,
+                voice=voice_id or cartesia.tts.TTSDefaultVoiceId,
             )
         ),
         vad=VAD,
@@ -815,6 +968,9 @@ async def entrypoint(ctx: agents.JobContext):
     _dedup_in_flight = False
     generation_seq = 0
     user_state_seq = 0
+    mood_turn_index = 0
+    mood_classification_queue: asyncio.Queue[dict] = asyncio.Queue()
+    mood_classification_task: asyncio.Task | None = None
     _was_quiescent = True
     _pending_reply_timer: asyncio.TimerHandle | None = None
     _NOTIFY_COALESCE_S = 0.05
@@ -927,9 +1083,35 @@ async def entrypoint(ctx: agents.JobContext):
         user_utterance_event = InboundUnifyMeetUtterance
         assistant_utterance_event = OutboundUnifyMeetUtterance
 
+    async def _publish_assistant_utterance(text: str) -> None:
+        if channel == "google_meet":
+            event = OutboundGoogleMeetUtterance(
+                contact=contact,
+                content=text,
+                participant_names=_get_meet_participant_names() or None,
+            )
+        elif channel == "teams_meet":
+            event = OutboundTeamsMeetUtterance(
+                contact=contact,
+                content=text,
+                participant_names=_get_meet_participant_names() or None,
+            )
+        else:
+            event = assistant_utterance_event(contact, content=text)
+        await event_broker.publish(
+            f"app:comms:{channel}_utterance",
+            event.to_json(),
+        )
+
+    credit_gate_task: asyncio.Task | None = None
+
     # Register cleanup as a LiveKit shutdown callback so it runs on any
     # exit path: participant disconnect or explicit stop.
     async def _on_job_shutdown():
+        if credit_gate_task is not None:
+            await utils.aio.cancel_and_wait(credit_gate_task)
+        if mood_classification_task is not None:
+            await utils.aio.cancel_and_wait(mood_classification_task)
         if audio_bridge is not None:
             await asyncio.to_thread(audio_bridge.stop)
         await delete_livekit_room(ctx.room.name)
@@ -1128,10 +1310,103 @@ async def entrypoint(ctx: agents.JobContext):
                 ),
             )
 
+    def _fast_brain_text_transcript() -> str:
+        lines: list[str] = []
+        for item in session.history.items:
+            role = getattr(item, "role", None)
+            if role not in ("user", "assistant"):
+                continue
+            text = (getattr(item, "text_content", None) or "").strip()
+            if not text:
+                continue
+            speaker = "User" if role == "user" else "Assistant"
+            lines.append(f"{speaker}: {text}")
+        return "\n".join(lines)
+
+    def _mood_classification_enabled() -> bool:
+        return (
+            SETTINGS.conversation.FAST_BRAIN_MOOD_CLASSIFICATION_ENABLED
+            and has_video_avatar_channel(channel)
+        )
+
+    async def _run_mood_classifications() -> None:
+        from unity.conversation_manager.domains.fast_brain_mood import (
+            FastBrainMoodClassifier,
+        )
+
+        classifier = FastBrainMoodClassifier(
+            SETTINGS.conversation.FAST_BRAIN_MOOD_CLASSIFICATION_MODEL,
+        )
+        while True:
+            item = await mood_classification_queue.get()
+            try:
+                try:
+                    classification = await classifier.evaluate(
+                        transcript=item["transcript"],
+                        trigger_role=item["trigger_role"],
+                        trigger_text=item["trigger_text"],
+                    )
+                    if classification is None:
+                        continue
+
+                    mood = classification.mood.value
+                    avatar_mood = classification.avatar_mood
+                    await ctx.room.local_participant.publish_data(
+                        json.dumps(
+                            {
+                                "type": "mood_classification",
+                                "mood": mood,
+                                "avatarMood": avatar_mood,
+                                "turnIndex": item["turn_index"],
+                                "triggerRole": item["trigger_role"],
+                            },
+                        ).encode(),
+                        topic="agent_status",
+                        reliable=True,
+                    )
+                    event = FastBrainMoodClassified(
+                        contact=contact,
+                        channel=channel,
+                        mood=mood,
+                        avatar_mood=avatar_mood,
+                        trigger_role=item["trigger_role"],
+                        trigger_utterance_id=item["trigger_utterance_id"],
+                        turn_index=item["turn_index"],
+                        model=SETTINGS.conversation.FAST_BRAIN_MOOD_CLASSIFICATION_MODEL,
+                    )
+                    await event_broker.publish(event.topic, event.to_json())
+                except Exception as e:
+                    _log.error(f"Mood classification failed: {e}")
+            finally:
+                mood_classification_queue.task_done()
+
+    def _enqueue_mood_classification(
+        role: str,
+        text: str,
+        utterance_id: str,
+    ) -> None:
+        nonlocal mood_turn_index
+        if not _mood_classification_enabled():
+            return
+        if not text.strip():
+            return
+        mood_turn_index += 1
+        mood_classification_queue.put_nowait(
+            {
+                "transcript": _fast_brain_text_transcript(),
+                "trigger_role": role,
+                "trigger_text": text,
+                "trigger_utterance_id": utterance_id,
+                "turn_index": mood_turn_index,
+            },
+        )
+
     @session.on("conversation_item_added")
     def _on_chat_item_added(ev):
         """Publish both user and assistant utterances from a single location."""
-        role = ev.item.role  # "user" | "assistant"
+        role = getattr(ev.item, "role", None)
+        if role not in ("user", "assistant"):
+            return
         text = ev.item.text_content or ""
         utterance_id = content_trace_id("utt", f"{role}:{text}")
         say_meta: dict | None = None
@@ -1217,26 +1492,8 @@ async def entrypoint(ctx: agents.JobContext):
                 _publish_user_utterance(text),
             )
         else:
-            if channel == "google_meet":
-                event = OutboundGoogleMeetUtterance(
-                    contact=contact,
-                    content=text,
-                    participant_names=_get_meet_participant_names() or None,
-                )
-            elif channel == "teams_meet":
-                event = OutboundTeamsMeetUtterance(
-                    contact=contact,
-                    content=text,
-                    participant_names=_get_meet_participant_names() or None,
-                )
-            else:
-                event = assistant_utterance_event(contact, content=text)
-            asyncio.create_task(
-                event_broker.publish(
-                    f"app:comms:{channel}_utterance",
-                    event.to_json(),
-                ),
-            )
+            asyncio.create_task(_publish_assistant_utterance(text))
+        _enqueue_mood_classification(role, text, utterance_id)
 
     audio_bridge: MeetAudioBridge | None = None
     if channel in ("google_meet", "teams_meet"):
@@ -1251,6 +1508,17 @@ async def entrypoint(ctx: agents.JobContext):
         outbound=outbound,
         audio_bridge=audio_bridge,
     )
+    credit_gate_monitor = FastBrainCreditGateMonitor()
+    assistant.set_credit_gate_state_provider(lambda: credit_gate_monitor.state)
+    credit_gate_task = asyncio.create_task(
+        credit_gate_monitor.run(),
+        name="fast_brain_credit_gate_monitor",
+    )
+    if _mood_classification_enabled():
+        mood_classification_task = asyncio.create_task(
+            _run_mood_classifications(),
+            name="fast_brain_mood_classifier",
+        )
 
     async def _capture_screenshots_for_llm(chat_ctx) -> None:
         """Capture fresh screenshots and inject them into the LLM's chat_ctx.
@@ -1293,7 +1561,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     pending_notifications: list[tuple[str, str, bool, str, str, str]] = (
         []
-    )  # (content, response_text, should_speak, notification_id, notification_source, llm_log_path)
+    )  # (message, spoken_message, should_speak, notification_id, notification_source, llm_log_path)
     session_ready = False
 
     def on_status(data: dict) -> None:
@@ -1399,20 +1667,20 @@ async def entrypoint(ctx: agents.JobContext):
         return messages
 
     def apply_notification(
-        content: str,
-        response_text: str = "",
+        message: str,
         should_speak: bool = False,
         *,
+        spoken_message: str = "",
         notification_id: str = "",
         source: str = "",
         notification_source: str = "",
         llm_log_path: str = "",
     ) -> None:
-        # Inject into chat context unconditionally so the fast brain always
-        # sees the latest slow brain understanding.  Proactive speech is
-        # fire-and-forget filler — it never updates context.
-        if notification_source != "proactive_speech":
-            notification_message = f"[notification] {content}"
+        # Inject into chat context so the fast brain sees slow-brain guidance.
+        # Proactive speech is fire-and-forget filler — it never updates context.
+        speech_text = spoken_message or message
+        if notification_source != "proactive_speech" and message:
+            notification_message = f"[notification] {message}"
             assistant._chat_ctx.add_message(
                 role="system",
                 content=[notification_message],
@@ -1422,7 +1690,7 @@ async def entrypoint(ctx: agents.JobContext):
                 content=[notification_message],
             )
 
-        if should_speak and response_text:
+        if should_speak and speech_text:
             if notification_source == "proactive_speech":
                 # Proactive speech exists purely to fill silence — never queue it.
                 # Play immediately if the pipeline is fully quiescent and nothing
@@ -1430,10 +1698,10 @@ async def entrypoint(ctx: agents.JobContext):
                 if not _is_pipeline_quiescent() or _queued_speech:
                     return
                 _speak_now(
-                    response_text,
+                    speech_text,
                     notification_id,
                     notification_source,
-                    content,
+                    message,
                     llm_log_path,
                 )
             else:
@@ -1441,10 +1709,10 @@ async def entrypoint(ctx: agents.JobContext):
                 _queued_speech.clear()
                 _queued_speech.append(
                     (
-                        response_text,
+                        speech_text,
                         notification_id,
                         notification_source,
-                        content,
+                        message,
                         llm_log_path,
                     ),
                 )
@@ -1561,10 +1829,10 @@ async def entrypoint(ctx: agents.JobContext):
         """Handle notifications from conversation manager."""
         nonlocal assistant_screen_share_active, _agent_service_url
         payload = data.get("payload") or data
-        content = payload.get("content", "")
+        message = payload.get("message", "")
         # Track screen share state from meet interaction notifications.
         if payload.get("source") == "meet_interaction":
-            low = content.lower()
+            low = message.lower()
             if "screen sharing is now on" in low:
                 assistant_screen_share_active = True
                 if payload.get("agent_service_url"):
@@ -1593,28 +1861,28 @@ async def entrypoint(ctx: agents.JobContext):
 
                 if assistant_screen_share_active:
                     asyncio.create_task(_update_cache_after_remote_control())
-        response_text = payload.get("response_text", "")
+        spoken_message = payload.get("spoken_message", "")
         should_speak = payload.get("should_speak", False)
         notification_source = payload.get("source", "")
         llm_log_path = payload.get("llm_log_path", "")
-        notification_id = content_trace_id("guid", content)
+        notification_id = content_trace_id("guid", message or spoken_message)
         triggers_turn = notification_source not in (
             "meet_interaction",
             "proactive_speech",
         )
         _log.notification(
             notification_source,
-            content,
+            message,
             speak=should_speak,
             turn=triggers_turn,
         )
 
-        if content:
+        if message or (should_speak and spoken_message):
             if not session_ready:
                 pending_notifications.append(
                     (
-                        content,
-                        response_text,
+                        message,
+                        spoken_message,
                         should_speak,
                         notification_id,
                         notification_source,
@@ -1624,9 +1892,9 @@ async def entrypoint(ctx: agents.JobContext):
                 _log.notification_buffered(len(pending_notifications))
             else:
                 apply_notification(
-                    content,
-                    response_text,
+                    message,
                     should_speak,
+                    spoken_message=spoken_message,
                     notification_id=notification_id,
                     source="socket_callback",
                     notification_source=notification_source,
@@ -1713,17 +1981,17 @@ async def entrypoint(ctx: agents.JobContext):
             f"Applying {len(pending_notifications)} buffered notification(s)",
         )
         for (
-            content,
-            response_text,
+            message,
+            spoken_message,
             should_speak,
             notification_id,
             notification_source,
             llm_log_path,
         ) in pending_notifications:
             apply_notification(
-                content,
-                response_text,
+                message,
                 should_speak,
+                spoken_message=spoken_message,
                 notification_id=notification_id,
                 source="pending_buffer_flush",
                 notification_source=notification_source,
@@ -1740,33 +2008,64 @@ async def entrypoint(ctx: agents.JobContext):
     if outbound:
         _log.info("Outbound call — waiting for callee to answer…")
         await call_answered_flag.wait()
-        _log.call_status("call_answered — generating greeting")
+        _log.call_status("call_answered — opening turn")
 
-    from unity.common.llm_client import new_llm_client
-
-    greeting_client = new_llm_client(
-        model=SETTINGS.conversation.FAST_BRAIN_MODEL,
-        origin="fast_brain_greeting",
-        reasoning_effort="low",
-    )
-    greeting_messages = build_opening_greeting_messages(
-        system_prompt=system_prompt,
-        history_messages=_extract_chat_messages(session.history),
-    )
-    greeting_text = await greeting_client.generate(messages=greeting_messages)
-
-    if channel != "phone":
+    async def _publish_ready_to_speak() -> None:
+        if channel == "phone":
+            return
         await ctx.room.local_participant.publish_data(
             json.dumps({"type": "ready_to_speak"}).encode(),
             topic="agent_status",
             reliable=True,
         )
 
-    session.say(
-        greeting_text,
-        allow_interruptions=True,
-        add_to_chat_ctx=True,
-    )
+    opening_mode = opening_config["mode"]
+    if opening_mode == "speak":
+        from unity.common.llm_client import new_llm_client
+
+        credit_gate_state = credit_gate_monitor.state
+        if credit_gate_state.allowed:
+            greeting_client = new_llm_client(
+                model=SETTINGS.conversation.FAST_BRAIN_MODEL,
+                origin="fast_brain_greeting",
+                reasoning_effort="low",
+            )
+            greeting_messages = build_opening_greeting_messages(
+                system_prompt=system_prompt,
+                history_messages=_extract_chat_messages(session.history),
+            )
+            greeting_text = await greeting_client.generate(messages=greeting_messages)
+        else:
+            _log.info("Credit gate greeting served from cached state")
+            greeting_text = DEPLETED_CREDITS_FAST_BRAIN_RESPONSE
+
+        await _publish_ready_to_speak()
+        session.say(
+            greeting_text,
+            allow_interruptions=True,
+            add_to_chat_ctx=True,
+        )
+    elif opening_mode == "simulated":
+        simulated_utterance = opening_config.get("simulated_utterance", "").strip()
+        if not simulated_utterance:
+            raise ValueError("simulated opening requires simulated_utterance")
+        await _publish_ready_to_speak()
+        assistant._chat_ctx.add_message(role="assistant", content=[simulated_utterance])
+        session.history.add_message(role="assistant", content=[simulated_utterance])
+        _log.assistant_speech(
+            simulated_utterance,
+            source=opening_config.get("source", "simulated_opening"),
+            llm_log_path="",
+        )
+        await _publish_assistant_utterance(simulated_utterance)
+        _enqueue_mood_classification(
+            "assistant",
+            simulated_utterance,
+            content_trace_id("utt", f"assistant:{simulated_utterance}"),
+        )
+    else:
+        _log.info("Opening turn suppressed by call opening config")
+        await _publish_ready_to_speak()
 
     # Inject the initializing-state system message *after* the greeting has
     # been generated and spoken.  Placing it before the greeting caused the

@@ -7,8 +7,20 @@ and its plumbing through populate / export_to_env / populate_from_env.
 """
 
 import os
+import json
+from dataclasses import fields
 
-from unity.session_details import SessionDetails
+import pytest
+
+from unity.session_details import (
+    SESSION_DETAILS,
+    AssistantDetails,
+    SessionDetails,
+    TeamSummary,
+    UserDetails,
+    is_boss_contact,
+    is_self_contact,
+)
 
 
 class TestEmailProvider:
@@ -26,7 +38,8 @@ class TestEmailProvider:
         sd.populate()
         assert sd.assistant.email_provider == "google_workspace"
 
-    def test_export_and_populate_from_env_round_trips(self):
+    def test_export_and_populate_from_env_round_trips(self, monkeypatch):
+        monkeypatch.delenv("ASSISTANT_EMAIL_PROVIDER", raising=False)
         sd = SessionDetails()
         sd.populate(assistant_email_provider="microsoft_365")
         sd.export_to_env()
@@ -37,9 +50,6 @@ class TestEmailProvider:
         sd2.populate_from_env()
         assert sd2.assistant.email_provider == "microsoft_365"
 
-        # Cleanup
-        os.environ.pop("ASSISTANT_EMAIL_PROVIDER", None)
-
     def test_reset_restores_default(self):
         sd = SessionDetails()
         sd.populate(assistant_email_provider="microsoft_365")
@@ -47,3 +57,216 @@ class TestEmailProvider:
 
         sd.reset()
         assert sd.assistant.email_provider == "google_workspace"
+
+
+class TestSpaceIds:
+    def test_export_and_populate_from_env_round_trips(self, monkeypatch):
+        monkeypatch.delenv("TEAM_IDS", raising=False)
+        sd = SessionDetails()
+        sd.populate(team_ids=[3, 7])
+        sd.export_to_env()
+
+        assert os.environ["TEAM_IDS"] == "3,7"
+
+        sd2 = SessionDetails()
+        sd2.populate_from_env()
+        assert sd2.team_ids == [3, 7]
+        assert sd2.assistant.team_ids == [3, 7]
+
+        sd.populate(team_ids=[])
+        sd.export_to_env()
+        assert os.environ["TEAM_IDS"] == ""
+
+        sd3 = SessionDetails()
+        sd3.populate_from_env()
+        assert sd3.team_ids == []
+
+    def test_reset_restores_empty_memberships(self):
+        sd = SessionDetails()
+        sd.populate(team_ids=[3, 7])
+        assert sd.team_ids == [3, 7]
+
+        sd.reset()
+        assert sd.team_ids == []
+        assert sd.assistant.team_ids == []
+
+
+class TestCoordinatorFlag:
+    def test_defaults_to_non_coordinator(self):
+        sd = SessionDetails()
+
+        assert sd.is_coordinator is False
+        assert sd.assistant.is_coordinator is False
+
+    def test_populate_sets_coordinator_shortcut(self):
+        sd = SessionDetails()
+
+        sd.populate(is_coordinator=True)
+
+        assert sd.is_coordinator is True
+        assert sd.assistant.is_coordinator is True
+
+    def test_export_and_populate_from_env_round_trips(self, monkeypatch):
+        monkeypatch.delenv("ASSISTANT_IS_COORDINATOR", raising=False)
+        sd = SessionDetails()
+        sd.populate(is_coordinator=True)
+        sd.export_to_env()
+
+        assert os.environ["ASSISTANT_IS_COORDINATOR"] == "True"
+
+        sd2 = SessionDetails()
+        sd2.populate_from_env()
+        assert sd2.is_coordinator is True
+
+        sd.populate(is_coordinator=False)
+        sd.export_to_env()
+        assert os.environ["ASSISTANT_IS_COORDINATOR"] == "False"
+
+        sd3 = SessionDetails()
+        sd3.populate_from_env()
+        assert sd3.is_coordinator is False
+
+    def test_reset_restores_non_coordinator(self):
+        sd = SessionDetails()
+        sd.populate(is_coordinator=True)
+
+        sd.reset()
+
+        assert sd.is_coordinator is False
+        assert sd.assistant.is_coordinator is False
+
+
+class TestSpaceSummaries:
+    def test_export_and_populate_from_env_round_trips(self, monkeypatch):
+        monkeypatch.delenv("TEAM_SUMMARIES", raising=False)
+        summaries = [
+            {
+                "team_id": 3,
+                "name": "Repairs",
+                "description": "South-East repairs patch daily operations.",
+            },
+        ]
+        sd = SessionDetails()
+        sd.populate(team_summaries=summaries)
+        sd.export_to_env()
+
+        assert json.loads(os.environ["TEAM_SUMMARIES"]) == summaries
+
+        sd2 = SessionDetails()
+        sd2.populate_from_env()
+        assert sd2.team_summaries == [
+            TeamSummary(
+                team_id=3,
+                name="Repairs",
+                description="South-East repairs patch daily operations.",
+            ),
+        ]
+
+        sd.reset()
+        assert sd.team_summaries == []
+
+    @pytest.mark.parametrize(
+        "summary",
+        [
+            {"team_id": True, "name": "Repairs", "description": "Valid text"},
+            {"team_id": 3, "name": "", "description": "Valid text"},
+        ],
+    )
+    def test_rejects_malformed_team_summaries(self, summary):
+        sd = SessionDetails()
+
+        with pytest.raises(ValueError):
+            sd.populate(team_summaries=[summary])
+
+
+class TestContactIds:
+    def test_defaults_and_shortcuts_use_subcontainer_storage(self):
+        sd = SessionDetails()
+
+        assert sd.self_contact_id == 0
+        assert sd.boss_contact_id == 1
+
+        sd.self_contact_id = 5
+        sd.boss_contact_id = 6
+
+        assert sd.assistant.self_contact_id == 5
+        assert sd.user.boss_contact_id == 6
+
+    def test_populate_sets_resolved_contact_ids(self):
+        sd = SessionDetails()
+
+        sd.populate(assistant_self_contact_id=42, user_boss_contact_id=43)
+
+        assert sd.self_contact_id == 42
+        assert sd.assistant.self_contact_id == 42
+        assert sd.boss_contact_id == 43
+        assert sd.user.boss_contact_id == 43
+
+    def test_subcontainers_do_not_expose_ambiguous_contact_id_fields(self):
+        assistant_fields = {field.name for field in fields(AssistantDetails)}
+        user_fields = {field.name for field in fields(UserDetails)}
+
+        assert "contact_id" not in assistant_fields
+        assert "contact_id" not in user_fields
+
+    def test_export_and_populate_from_env_round_trips(self, monkeypatch):
+        monkeypatch.delenv("SELF_CONTACT_ID", raising=False)
+        monkeypatch.delenv("BOSS_CONTACT_ID", raising=False)
+        sd = SessionDetails()
+        sd.populate(assistant_self_contact_id=42, user_boss_contact_id=43)
+        sd.export_to_env()
+
+        assert os.environ["SELF_CONTACT_ID"] == "42"
+        assert os.environ["BOSS_CONTACT_ID"] == "43"
+
+        sd2 = SessionDetails()
+        sd2.populate_from_env()
+        assert sd2.self_contact_id == 42
+        assert sd2.boss_contact_id == 43
+
+    def test_reset_restores_contact_id_defaults(self):
+        sd = SessionDetails()
+        sd.populate(assistant_self_contact_id=42, user_boss_contact_id=43)
+
+        sd.reset()
+
+        assert sd.self_contact_id == 0
+        assert sd.boss_contact_id == 1
+
+    def test_identity_predicates_use_resolved_session_ids(self):
+        original_self = SESSION_DETAILS.self_contact_id
+        original_boss = SESSION_DETAILS.boss_contact_id
+        try:
+            SESSION_DETAILS.self_contact_id = 42
+            SESSION_DETAILS.boss_contact_id = 43
+
+            assert is_self_contact(42)
+            assert not is_self_contact(43)
+            assert is_boss_contact(43)
+            assert not is_boss_contact(42)
+        finally:
+            SESSION_DETAILS.self_contact_id = original_self
+            SESSION_DETAILS.boss_contact_id = original_boss
+
+
+class TestAssistantManagedDesktop:
+    def test_desktop_mode_without_url_is_not_managed(self):
+        assistant = AssistantDetails(
+            desktop_mode="ubuntu",
+            desktop_url=None,
+        )
+        assert assistant.has_managed_desktop is False
+
+    def test_desktop_mode_with_url_is_managed(self):
+        assistant = AssistantDetails(
+            desktop_mode="ubuntu",
+            desktop_url="https://unity-pool-1.vm.unify.ai",
+        )
+        assert assistant.has_managed_desktop is True
+
+    def test_non_managed_desktop_mode_is_false_even_with_url(self):
+        assistant = AssistantDetails(
+            desktop_mode="none",
+            desktop_url="https://example.com",
+        )
+        assert assistant.has_managed_desktop is False

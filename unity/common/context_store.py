@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional
 import unify
 from unify.utils.http import RequestError as _UnifyRequestError
 
+from unity.common.authorship import fields_with_authoring, is_shared_authored_context
+
 logger = logging.getLogger(__name__)
 
 # Private fields injected by log_utils wrappers
@@ -29,6 +31,16 @@ def _is_transient(exc: _UnifyRequestError) -> bool:
     if status is None:
         return True
     return status == 429 or status >= 500
+
+
+def _is_already_exists_context_error(exc: _UnifyRequestError) -> bool:
+    """Return whether the backend reported an idempotent context-exists conflict."""
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if status != 400:
+        return False
+    text = (getattr(response, "text", "") or "").lower()
+    return "already exists" in text and "context" in text
 
 
 def _create_context_with_retry(
@@ -60,6 +72,8 @@ def _create_context_with_retry(
             )
             return
         except _UnifyRequestError as exc:
+            if _is_already_exists_context_error(exc):
+                return
             if not _is_transient(exc):
                 raise
             last_exc = exc
@@ -112,6 +126,8 @@ class TableStore:
         self._auto_counting = dict(auto_counting or {})
         self._description = description or ""
         self._fields = dict(fields or {})
+        if is_shared_authored_context(context):
+            self._fields = fields_with_authoring(self._fields)
         self._foreign_keys = list(foreign_keys or [])
 
     # ──────────────────────────────────────────────────────────────────────

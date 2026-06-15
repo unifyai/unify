@@ -643,7 +643,7 @@ class TestGuidanceChannelSubscription:
         async with event_broker.pubsub() as pubsub:
             await pubsub.subscribe("app:call:notification")
 
-            event = FastBrainNotification(contact=contact, content="Test guidance")
+            event = FastBrainNotification(contact=contact, message="Test guidance")
             await event_broker.publish("app:call:notification", event.to_json())
 
             msg = await pubsub.get_message(
@@ -757,6 +757,197 @@ class TestUtteranceEventPublishing:
 # =============================================================================
 # Guidance tests: chat context and system messages
 # =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_simulated_opening_publishes_ready_before_utterance(monkeypatch):
+    from livekit.agents import llm
+    from unity.conversation_manager.medium_scripts import call as call_script
+
+    sequence = []
+    contact = {"contact_id": 1, "first_name": "User", "surname": "Example"}
+    boss = {"contact_id": 1, "first_name": "User", "surname": "Example"}
+
+    class _ImmediateAwaitable:
+        def __await__(self):
+            async def _done():
+                return None
+
+            return _done().__await__()
+
+    class _FakeLocalParticipant:
+        async def publish_data(self, payload, *, topic=None, reliable=False):
+            sequence.append(("data", json.loads(payload.decode()), topic, reliable))
+
+    class _FakeRoom:
+        name = "fake-room"
+        local_participant = _FakeLocalParticipant()
+
+        def on(self, *args, **kwargs):
+            return lambda fn: fn
+
+    class _FakeJobContext:
+        def __init__(self):
+            self.room = _FakeRoom()
+            self.job = SimpleNamespace(
+                metadata=json.dumps(
+                    {
+                        "voice_provider": "cartesia",
+                        "voice_id": "",
+                        "outbound": False,
+                        "channel": "unify_meet",
+                        "contact": contact,
+                        "boss": boss,
+                        "assistant_bio": "Assistant bio",
+                        "assistant_id": "123",
+                        "user_id": "user-123",
+                        "assistant_name": "Coordinator Droid",
+                        "opening_config": {
+                            "mode": "simulated",
+                            "simulated_utterance": "Hi, I'm your coordinator droid.",
+                            "source": "coordinator_onboarding_intro",
+                        },
+                    },
+                ),
+            )
+
+        async def connect(self):
+            return None
+
+        def add_shutdown_callback(self, cb):
+            pass
+
+        def shutdown(self, reason=""):
+            pass
+
+    class _FakeEventBroker:
+        def __init__(self):
+            self.callbacks = {}
+
+        def set_logger(self, fb_logger):
+            pass
+
+        def register_callback(self, channel, handler):
+            self.callbacks[channel] = handler
+
+        async def publish(self, channel, message):
+            sequence.append(("broker", channel))
+            return 1
+
+    fake_session_holder = {}
+
+    class _FakeSession:
+        def __init__(self, *args, **kwargs):
+            self._chat_ctx = llm.ChatContext()
+            self.current_agent = None
+            self._events = {}
+            self.agent_state = "listening"
+            self.current_speech = None
+            fake_session_holder["session"] = self
+
+        @property
+        def history(self):
+            return self._chat_ctx
+
+        def on(self, event_name):
+            def _decorator(fn):
+                self._events[event_name] = fn
+                return fn
+
+            return _decorator
+
+        async def start(self, room, agent, room_input_options=None):
+            self.current_agent = agent
+
+        def generate_reply(self, **kwargs):
+            return _ImmediateAwaitable()
+
+        def say(self, text, **kwargs):
+            return _ImmediateAwaitable()
+
+        def interrupt(self):
+            pass
+
+    class _FakeAssistant:
+        def __init__(self, *args, **kwargs):
+            self._chat_ctx = llm.ChatContext()
+            self.call_received = True
+            self.user_turn_generating = False
+
+        def set_call_received(self):
+            self.call_received = True
+
+        def set_credit_gate_state_provider(self, provider):
+            self.credit_gate_state_provider = provider
+
+    async def _noop_async(*args, **kwargs):
+        return None
+
+    async def _noop_end_call():
+        return None
+
+    fake_session_details = SimpleNamespace(
+        user=SimpleNamespace(id=None),
+        assistant=SimpleNamespace(
+            about="Assistant bio",
+            is_coordinator=True,
+            agent_id=None,
+            name="Coordinator Droid",
+            first_name="",
+            surname="",
+            user_desktop_for=lambda user_id: None,
+        ),
+        voice=SimpleNamespace(provider="cartesia", id=""),
+        voice_call=SimpleNamespace(outbound=False, channel="unify_meet"),
+        is_coordinator=True,
+        org_id=None,
+        unify_key="",
+    )
+
+    monkeypatch.setattr(call_script, "event_broker", _FakeEventBroker())
+    monkeypatch.setattr(call_script, "SESSION_DETAILS", fake_session_details)
+    monkeypatch.setattr(call_script, "AgentSession", _FakeSession)
+    monkeypatch.setattr(call_script, "Assistant", _FakeAssistant)
+    monkeypatch.setattr(call_script, "UnifyLLM", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        call_script,
+        "build_voice_agent_prompt",
+        lambda **kwargs: SimpleNamespace(flatten=lambda: "system prompt"),
+    )
+    monkeypatch.setattr(call_script, "start_event_broker_receive", _noop_async)
+    monkeypatch.setattr(call_script, "publish_call_started", _noop_async)
+    monkeypatch.setattr(
+        call_script,
+        "create_end_call",
+        lambda *args, **kwargs: _noop_end_call,
+    )
+    monkeypatch.setattr(
+        call_script,
+        "setup_participant_disconnect_handler",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(call_script, "RoomInputOptions", lambda **kwargs: object())
+    monkeypatch.setattr(call_script, "EnglishModel", lambda: object())
+    monkeypatch.setattr(call_script.cartesia, "TTS", lambda **kwargs: object())
+    monkeypatch.setattr(call_script.elevenlabs, "TTS", lambda **kwargs: object())
+    if hasattr(call_script, "noise_cancellation"):
+        monkeypatch.setattr(call_script.noise_cancellation, "BVC", lambda: object())
+    monkeypatch.setattr(call_script, "STT", object())
+    monkeypatch.setattr(call_script, "VAD", object())
+
+    await call_script.entrypoint(_FakeJobContext())
+
+    ready_index = next(
+        i
+        for i, item in enumerate(sequence)
+        if item[0] == "data" and item[1] == {"type": "ready_to_speak"}
+    )
+    utterance_index = next(
+        i
+        for i, item in enumerate(sequence)
+        if item[0] == "broker" and item[1] == "app:comms:unify_meet_utterance"
+    )
+    assert ready_index < utterance_index
 
 
 @pytest.mark.asyncio
@@ -957,9 +1148,9 @@ class TestFastBrainGuidanceFlow:
         session = fake_session_holder["session"]
         session.say_calls.clear()
 
-        # Send notify-only guidance (should_speak=False, no response_text)
+        # Send notify-only guidance (should_speak=False)
         guidance_cb = fake_broker.callbacks["app:call:notification"]
-        guidance_cb({"payload": {"content": "No, there is no contact named Bob."}})
+        guidance_cb({"payload": {"message": "No, there is no contact named Bob."}})
 
         # Notification should be in both chat contexts
         mirror_texts = [
@@ -1055,7 +1246,7 @@ class TestFastBrainGuidanceFlow:
             def register_callback(self, channel, handler):
                 self.callbacks[channel] = handler
                 if channel == "app:call:notification":
-                    handler({"payload": {"content": buffered_text}})
+                    handler({"payload": {"message": buffered_text}})
 
             async def publish(self, channel, message):
                 return 1
@@ -1604,8 +1795,7 @@ class TestFastBrainGuidanceFlow:
         guidance_cb(
             {
                 "payload": {
-                    "content": "No contact named Bob was found.",
-                    "response_text": "There's no contact named Bob in your list.",
+                    "message": "There's no contact named Bob in your list.",
                     "should_speak": True,
                 },
             },
@@ -1914,8 +2104,7 @@ class TestFastBrainGuidanceFlow:
         guidance_cb(
             {
                 "payload": {
-                    "content": "No, there is no contact named Bob.",
-                    "response_text": "No, there's no contact named Bob.",
+                    "message": "No, there's no contact named Bob.",
                     "should_speak": True,
                 },
             },
@@ -2144,8 +2333,7 @@ class TestFastBrainGuidanceFlow:
         guidance_cb(
             {
                 "payload": {
-                    "content": "The meeting is at 3pm.",
-                    "response_text": "It's at 3pm.",
+                    "message": "It's at 3pm.",
                     "should_speak": True,
                 },
             },
@@ -2384,18 +2572,16 @@ class TestFastBrainSpeechDedup:
             "monkeypatch": monkeypatch,
         }
 
-    def _send_speak_guidance(self, env, content, response_text):
+    def _send_speak_guidance(self, env, message, *, spoken_message: str = ""):
         """Queue a should_speak=True notification."""
-        env["guidance_cb"](
-            {
-                "payload": {
-                    "content": content,
-                    "response_text": response_text,
-                    "should_speak": True,
-                    "source": "slow_brain",
-                },
-            },
-        )
+        payload = {
+            "message": message,
+            "should_speak": True,
+            "source": "slow_brain",
+        }
+        if spoken_message:
+            payload["spoken_message"] = spoken_message
+        env["guidance_cb"]({"payload": payload})
 
     async def _settle_and_drain(self, env):
         """Transition agent to listening and let async dedup task complete."""
@@ -2435,8 +2621,8 @@ class TestFastBrainSpeechDedup:
             env["session"].agent_state = "thinking"
             self._send_speak_guidance(
                 env,
-                content="Italian restaurant search results.",
-                response_text="I found three Italian restaurants nearby.",
+                "Italian restaurant search results.",
+                spoken_message="I found three Italian restaurants nearby.",
             )
             await self._settle_and_drain(env)
             assert (
@@ -2490,8 +2676,7 @@ class TestFastBrainSpeechDedup:
             env["session"].agent_state = "thinking"
             self._send_speak_guidance(
                 env,
-                content="Weather forecast results.",
-                response_text="It's 22 degrees and sunny in London.",
+                "It's 22 degrees and sunny in London.",
             )
             await self._settle_and_drain(env)
             assert len(env["session"].say_calls) == 1, "Novel speech should be spoken."
@@ -2515,8 +2700,7 @@ class TestFastBrainSpeechDedup:
             env["session"].agent_state = "thinking"
             self._send_speak_guidance(
                 env,
-                content="Italian restaurant search results.",
-                response_text="I found three Italian restaurants nearby.",
+                "I found three Italian restaurants nearby.",
             )
             await self._settle_and_drain(env)
             assert (
@@ -2557,8 +2741,7 @@ class TestFastBrainSpeechDedup:
             env["session"].agent_state = "thinking"
             self._send_speak_guidance(
                 env,
-                content="Weather forecast.",
-                response_text="It's sunny in London.",
+                "It's sunny in London.",
             )
             await self._settle_and_drain(env)
             assert (
@@ -2601,13 +2784,11 @@ class TestFastBrainSpeechDedup:
             env["session"].agent_state = "thinking"
             self._send_speak_guidance(
                 env,
-                content="First result.",
-                response_text="Here is the first result.",
+                "Here is the first result.",
             )
             self._send_speak_guidance(
                 env,
-                content="Second result.",
-                response_text="Here is the second result.",
+                "Here is the second result.",
             )
             await self._settle_and_drain(env)
 

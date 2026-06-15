@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -714,6 +714,131 @@ class TestCheckSpendingLimitsCallback:
         assert "exceeded" in response.reason.lower()
 
 
+class TestCreditGateState:
+    """Tests for the lightweight prepaid-credit gate used by voice surfaces."""
+
+    @pytest.mark.asyncio
+    async def test_personal_zero_credits_blocks(self):
+        from unity.spending_limits import check_credit_gate_state
+
+        spend_data = {
+            "cumulative_spend": 0.0,
+            "limit": None,
+            "credit_balance": 0.0,
+            "billing_mode": "CREDITS",
+        }
+
+        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
+            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+                mock_session.user_id = "user_456"
+                mock_session.org_id = None
+                mock_session.assistant.timezone = "UTC"
+
+                with patch(
+                    "unity.spending_limits._get_spend_client",
+                ) as mock_get_client:
+                    mock_instance = MagicMock()
+                    mock_instance.closed = False
+                    mock_instance.get_user_spend = AsyncMock(return_value=spend_data)
+                    mock_get_client.return_value = mock_instance
+
+                    state = await check_credit_gate_state()
+
+        assert state.allowed is False
+        assert state.credit_balance == 0.0
+        assert "Insufficient credits" in state.reason
+        mock_instance.get_user_spend.assert_called_once()
+        mock_instance.get_org_spend.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_metered_zero_credits_allowed(self):
+        from unity.spending_limits import check_credit_gate_state
+
+        spend_data = {
+            "cumulative_spend": 0.0,
+            "limit": None,
+            "credit_balance": 0.0,
+            "billing_mode": "METERED",
+        }
+
+        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
+            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+                mock_session.user_id = "user_456"
+                mock_session.org_id = None
+                mock_session.assistant.timezone = "UTC"
+
+                with patch(
+                    "unity.spending_limits._get_spend_client",
+                ) as mock_get_client:
+                    mock_instance = MagicMock()
+                    mock_instance.closed = False
+                    mock_instance.get_user_spend = AsyncMock(return_value=spend_data)
+                    mock_get_client.return_value = mock_instance
+
+                    state = await check_credit_gate_state()
+
+        assert state.allowed is True
+        assert state.credit_balance == 0.0
+        assert state.billing_mode == "METERED"
+
+    @pytest.mark.asyncio
+    async def test_org_context_checks_org_balance(self):
+        from unity.spending_limits import check_credit_gate_state
+
+        spend_data = {
+            "cumulative_spend": 0.0,
+            "limit": None,
+            "credit_balance": 12.0,
+            "billing_mode": "CREDITS",
+        }
+
+        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
+            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+                mock_session.user_id = "user_456"
+                mock_session.org_id = 789
+                mock_session.assistant.timezone = "UTC"
+
+                with patch(
+                    "unity.spending_limits._get_spend_client",
+                ) as mock_get_client:
+                    mock_instance = MagicMock()
+                    mock_instance.closed = False
+                    mock_instance.get_org_spend = AsyncMock(return_value=spend_data)
+                    mock_get_client.return_value = mock_instance
+
+                    state = await check_credit_gate_state()
+
+        assert state.allowed is True
+        assert state.credit_balance == 12.0
+        mock_instance.get_org_spend.assert_called_once_with(org_id=789, month=ANY)
+        mock_instance.get_user_spend.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_credit_gate_failures_fail_open(self):
+        from unity.spending_limits import check_credit_gate_state
+
+        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
+            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+                mock_session.user_id = "user_456"
+                mock_session.org_id = None
+                mock_session.assistant.timezone = "UTC"
+
+                with patch(
+                    "unity.spending_limits._get_spend_client",
+                ) as mock_get_client:
+                    mock_instance = MagicMock()
+                    mock_instance.closed = False
+                    mock_instance.get_user_spend = AsyncMock(
+                        side_effect=Exception("network"),
+                    )
+                    mock_get_client.return_value = mock_instance
+
+                    state = await check_credit_gate_state()
+
+        assert state.allowed is True
+        assert state.reason is None
+
+
 class TestPersonalContextLimitChecks:
     """Tests for personal context (no org_id)."""
 
@@ -1269,7 +1394,7 @@ class E2ETestConfig:
     test_assistant_first_name: str = "SpendingTest"
     test_assistant_surname: str = "Assistant"
     model: str = "gpt-4o-mini@openai"
-    test_agent_id: _Optional[int] = None
+    test_agent_id: _Optional[str] = None
 
     @classmethod
     def from_env(cls) -> "E2ETestConfig":
@@ -1280,18 +1405,113 @@ class E2ETestConfig:
         return cls(base_url=base_url, api_key=api_key, admin_key=admin_key)
 
 
+_E2E_ASSISTANT_STARTING_CAP = 25.0
+
+
+def _assistant_info_from_response(response: httpx.Response) -> dict:
+    data = response.json()
+    info = data.get("info") if isinstance(data, dict) else None
+    if not isinstance(info, dict):
+        raise RuntimeError(
+            f"Assistant response did not include info object: {data}",
+        )
+    if not info.get("agent_id"):
+        raise RuntimeError(
+            f"Assistant response info did not include agent_id: {data}",
+        )
+    return info
+
+
+async def _get_assistant_spending_cap(
+    client: httpx.AsyncClient,
+    config: E2ETestConfig,
+    headers: dict,
+) -> _Optional[float]:
+    response = await client.get(
+        f"{config.base_url}/assistant/{config.test_agent_id}/spending-limit",
+        headers=headers,
+    )
+    if response.status_code != 200:
+        raise RuntimeError(
+            "Failed to get assistant spending limit: "
+            f"{response.status_code} {response.text}",
+        )
+    return response.json().get("monthly_spending_cap")
+
+
+async def _set_assistant_spending_cap(
+    client: httpx.AsyncClient,
+    config: E2ETestConfig,
+    headers: dict,
+    monthly_spending_cap: _Optional[float],
+) -> None:
+    response = await client.put(
+        f"{config.base_url}/assistant/{config.test_agent_id}/spending-limit",
+        headers=headers,
+        json={"monthly_spending_cap": monthly_spending_cap},
+    )
+    if response.status_code not in (200, 201):
+        raise RuntimeError(
+            "Failed to set assistant spending limit: "
+            f"{response.status_code} {response.text}",
+        )
+
+
 @pytest_asyncio.fixture
-async def e2e_config():
-    """Set up e2e test environment with seeded assistant and user."""
+async def e2e_config(request):
+    """Set up e2e test environment with a per-test ephemeral assistant.
+
+    The previous version of this fixture reused a single shared
+    SpendingTest Assistant across every test in the session via a
+    find-by-name lookup, then attempted to "reset" state in teardown
+    by PATCHing monthly_spending_cap=None. The reset is fundamentally
+    fragile:
+
+      1. Cumulative spend (current_spend) is NOT reset by the PATCH —
+         only the cap. Once any test makes a real LLM call, the
+         assistant carries that spend for the rest of the session.
+
+      2. Several tests in this file (test_limit_exceeded_blocks_llm_call,
+         test_assistant_limit_check, etc.) read the *current* cap
+         before setting it to 0 then restore-to-original. If two
+         restores race or the original was already 0 from a previous
+         leak, cap stays 0 silently.
+
+      3. The reset PATCH itself is best-effort with bare-except; any
+         transient Orchestra hiccup leaves the cap unreset and no
+         signal of the failure.
+
+    Concrete symptom: test_limit_check_callback_allows_under_limit was
+    failing with `cap=0.0, current_spend=10.0` on `entity_id='1'` —
+    the cap-0 and the $10 of spend both leaked in from earlier tests
+    in the file, despite the teardown PATCH "restoring" the cap.
+
+    Fix: each test gets its OWN freshly-created assistant with a
+    UUID-suffixed name, then deletes it in teardown. No shared
+    state, no race-prone reset logic, no cumulative-spend
+    accumulation.
+    """
+    import uuid
+
     config = E2ETestConfig.from_env()
     headers = {"Authorization": f"Bearer {config.api_key}"}
     admin_headers = {"Authorization": f"Bearer {config.admin_key}"}
 
+    # Per-test unique suffix so concurrent or sequential tests can't
+    # collide on assistant identity. Test-name slug + short UUID gives
+    # both human-readability (when listing assistants) and uniqueness.
+    test_node_slug = (
+        getattr(request.node, "name", "unknown")[:32].replace("[", "_").replace("]", "")
+    )
+    unique_suffix = uuid.uuid4().hex[:8]
+
     async with httpx.AsyncClient(timeout=30.0) as client:
-        # Seed test user (required for user spend endpoint tests)
-        # Check if user exists first
+        # Seed test user (required for user spend endpoint tests).
+        # Orchestra exposes `/user/spend` (auth-token-identified), not
+        # `/user/{id}/spend`. Use it for the existence probe so we don't
+        # always go down the "create user" branch unnecessarily.
         response = await client.get(
-            f"{config.base_url}/user/{config.test_user_id}/spend",
+            f"{config.base_url}/user/spend",
             headers=admin_headers,
             params={"month": "2026-01"},
         )
@@ -1312,68 +1532,95 @@ async def e2e_config():
                 if "id" in user_data:
                     config.test_user_id = user_data["id"]
 
-        # Seed test assistant
-        # Check if assistant exists
-        response = await client.get(f"{config.base_url}/assistant", headers=headers)
-        if response.status_code == 200:
-            assistants = response.json().get("info", [])
-            for asst in assistants:
-                if (
-                    asst.get("first_name") == config.test_assistant_first_name
-                    and asst.get("surname") == config.test_assistant_surname
-                ):
-                    config.test_agent_id = asst.get("agent_id")
-                    break
-
-        # Create if not exists
-        if not config.test_agent_id:
-            response = await client.post(
-                f"{config.base_url}/assistant",
-                headers=headers,
-                json={
-                    "first_name": config.test_assistant_first_name,
-                    "surname": config.test_assistant_surname,
-                    "monthly_spending_cap": 25.0,
-                    "create_infra": False,
-                },
+        # Always create a fresh assistant for THIS test. Name includes
+        # the test node + a UUID so we never reuse another test's
+        # state. The cap is set through the spending-limit endpoint
+        # because AssistantCreate does not own spending-limit mutation.
+        response = await client.post(
+            f"{config.base_url}/assistant",
+            headers=headers,
+            json={
+                "first_name": config.test_assistant_first_name,
+                "surname": f"{config.test_assistant_surname}_{test_node_slug}_{unique_suffix}",
+                "create_infra": False,
+                # Skip wake_up_assistant — in CI there's no adapters
+                # service to hit, and the orchestra `wake_up_assistant`
+                # helper currently builds the URL as
+                # `_adapters_url_for("") + "/assistant/wakeup"` which
+                # leaves no protocol → httpx raises
+                # `UnsupportedProtocol` and orchestra returns 500.
+                # `is_local=True` skips wake-up entirely (see
+                # `orchestra/web/api/assistant/views.py` Phase 3).
+                "is_local": True,
+            },
+        )
+        if response.status_code not in (200, 201):
+            raise RuntimeError(
+                f"Failed to create per-test assistant for {test_node_slug}: "
+                f"{response.status_code} {response.text}",
             )
-            if response.status_code in (200, 201):
-                config.test_agent_id = response.json().get("agent_id")
+        assistant_info = _assistant_info_from_response(response)
+        config.test_agent_id = assistant_info["agent_id"]
+        await _set_assistant_spending_cap(
+            client,
+            config,
+            headers,
+            _E2E_ASSISTANT_STARTING_CAP,
+        )
 
     # Populate SESSION_DETAILS
     from unity.session_details import SESSION_DETAILS
 
-    # Derive context names from assistant name
-    def to_context_name(name: str) -> str:
-        return "".join(c for c in name.title() if c.isalnum())
-
     SESSION_DETAILS.populate(
         user_id=config.test_user_id,
-        assistant_id=str(config.test_agent_id),
+        agent_id=config.test_agent_id,
         user_first_name="Test",
         user_surname="User",
     )
-    SESSION_DETAILS.assistant.agent_id = config.test_agent_id
 
     yield config
 
-    # Cleanup: reset assistant spending cap to NULL (no limit) to ensure clean state
+    # Teardown: DELETE the assistant entirely. No cap-reset / spend-
+    # reset gymnastics — the row is gone, so neither cap nor spend
+    # can leak into the next test.
     if config.test_agent_id:
-
-        async def reset_spending_cap():
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                await client.patch(
-                    f"{config.base_url}/assistant/{config.test_agent_id}/config",
-                    headers={"Authorization": f"Bearer {config.api_key}"},
-                    json={"monthly_spending_cap": None},
-                )
-
         try:
-            asyncio.get_event_loop().run_until_complete(reset_spending_cap())
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                await client.delete(
+                    f"{config.base_url}/assistant/{config.test_agent_id}",
+                    headers={"Authorization": f"Bearer {config.api_key}"},
+                )
         except Exception:
-            pass  # Best effort cleanup
+            # Best-effort cleanup: don't fail teardown if Orchestra is
+            # briefly unreachable. The next test's per-test create
+            # gives it a fresh assistant either way; the only cost of
+            # a missed delete is one extra row left in the DB until
+            # local.sh recreates it (CI: never reused; local: cleaned
+            # on next `local.sh restart`).
+            pass
 
-    # Cleanup: reset SESSION_DETAILS
+    # Also reset the SHARED test user's spending limit to None. The
+    # user can't be ephemeralised the way the assistant can — multiple
+    # tests, fixtures, and helpers reference test-user-001 — so we
+    # rely on best-effort post-test reset to keep user-level cap from
+    # leaking. test_user_limit_check sets cap=0 mid-test and restores
+    # to its locally-captured `original_limit`; if any of those
+    # restore PATCHes fail (network hiccup, expired auth, etc.) the
+    # leak persists into the next test's user-level cap reads. Hard
+    # set to None here defensively so the next test always starts
+    # from "no user limit".
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.put(
+                f"{config.base_url}/user/spending-limit",
+                headers={"Authorization": f"Bearer {config.api_key}"},
+                json={"monthly_spending_cap": None},
+            )
+    except Exception:
+        pass
+
+    # Cleanup: reset SESSION_DETAILS so the next test starts with no
+    # leaked agent_id / user_id / etc.
     SESSION_DETAILS.reset()
 
 
@@ -1499,20 +1746,20 @@ class TestE2ESpendingLimits:
         # Save original limit before modifying
         original_limit = None
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(
-                f"{e2e_config.base_url}/assistant/{e2e_config.test_agent_id}",
+            original_limit = await _get_assistant_spending_cap(
+                client,
+                e2e_config,
                 headers=headers,
             )
-            if response.status_code == 200:
-                original_limit = response.json().get("monthly_spending_cap")
 
         try:
             # Set assistant limit to $0
             async with httpx.AsyncClient(timeout=10.0) as client:
-                await client.patch(
-                    f"{e2e_config.base_url}/assistant/{e2e_config.test_agent_id}/config",
-                    headers=headers,
-                    json={"monthly_spending_cap": 0.0},
+                await _set_assistant_spending_cap(
+                    client,
+                    e2e_config,
+                    headers,
+                    0.0,
                 )
 
             llm_client = unillm.AsyncUnify(e2e_config.model)
@@ -1525,10 +1772,11 @@ class TestE2ESpendingLimits:
         finally:
             # Restore original limit (None means no limit)
             async with httpx.AsyncClient(timeout=10.0) as client:
-                await client.patch(
-                    f"{e2e_config.base_url}/assistant/{e2e_config.test_agent_id}/config",
-                    headers=headers,
-                    json={"monthly_spending_cap": original_limit},
+                await _set_assistant_spending_cap(
+                    client,
+                    e2e_config,
+                    headers,
+                    original_limit,
                 )
 
     @pytest.mark.asyncio
@@ -1848,9 +2096,15 @@ class TestE2ESpendingLimits:
         headers = {"Authorization": f"Bearer {e2e_config.admin_key}"}
         current_month = datetime.now().strftime("%Y-%m")
 
+        # Orchestra exposes the endpoint as `/user/spend` (the active user
+        # is identified by the auth token), NOT `/user/{user_id}/spend` —
+        # the path-param form was the original test guess and 404s
+        # against the current production router. See
+        # orchestra/web/api/users/views.py:get_user_spend
+        # (router.get("/user/spend")).
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(
-                f"{e2e_config.base_url}/user/{e2e_config.test_user_id}/spend",
+                f"{e2e_config.base_url}/user/spend",
                 headers=headers,
                 params={"month": current_month},
             )
@@ -1875,22 +2129,19 @@ class TestE2ESpendingLimits:
 
         # Get current limit to restore later
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(
-                f"{e2e_config.base_url}/assistant/{e2e_config.test_agent_id}",
+            original_limit = await _get_assistant_spending_cap(
+                client,
+                e2e_config,
                 headers=headers,
             )
-            original_limit = 25.0
-            if response.status_code == 200:
-                original_limit = (
-                    response.json().get("monthly_spending_cap", 25.0) or 25.0
-                )
 
         # Set assistant limit to $0
         async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.patch(
-                f"{e2e_config.base_url}/assistant/{e2e_config.test_agent_id}/config",
-                headers=headers,
-                json={"monthly_spending_cap": 0.0},
+            await _set_assistant_spending_cap(
+                client,
+                e2e_config,
+                headers,
+                0.0,
             )
 
         try:
@@ -1904,10 +2155,11 @@ class TestE2ESpendingLimits:
         finally:
             # Restore original limit
             async with httpx.AsyncClient(timeout=10.0) as client:
-                await client.patch(
-                    f"{e2e_config.base_url}/assistant/{e2e_config.test_agent_id}/config",
-                    headers=headers,
-                    json={"monthly_spending_cap": original_limit},
+                await _set_assistant_spending_cap(
+                    client,
+                    e2e_config,
+                    headers,
+                    original_limit,
                 )
 
     @pytest.mark.asyncio
@@ -2033,7 +2285,7 @@ class TestE2ESpendingLimits:
 
             SESSION_DETAILS.populate(
                 user_id=e2e_config.test_user_id,
-                assistant_id=str(e2e_config.test_agent_id),
+                agent_id=e2e_config.test_agent_id,
                 user_first_name="Test",
                 user_surname="User",
                 org_id=org_id,
@@ -2062,7 +2314,7 @@ class TestE2ESpendingLimits:
 
             SESSION_DETAILS.populate(
                 user_id=e2e_config.test_user_id,
-                assistant_id=str(e2e_config.test_agent_id),
+                agent_id=e2e_config.test_agent_id,
                 user_first_name="Test",
                 user_surname="User",
             )

@@ -73,7 +73,7 @@ def mock_session_details_windows(monkeypatch):
     from unity.session_details import SESSION_DETAILS
 
     monkeypatch.setattr(SESSION_DETAILS.assistant, "desktop_mode", "windows")
-    monkeypatch.setattr(SESSION_DETAILS.assistant, "id", "test-assistant")
+    monkeypatch.setattr(SESSION_DETAILS.assistant, "agent_id", 999_001)
     monkeypatch.setattr(
         SESSION_DETAILS.assistant,
         "desktop_url",
@@ -81,7 +81,22 @@ def mock_session_details_windows(monkeypatch):
     )
     monkeypatch.setattr(SESSION_DETAILS, "unify_key", "test-api-key")
 
+    # `_execute_python_function_on_remote_windows` waits on the
+    # `_vm_ready` `threading.Event` (set by either ConversationManager
+    # startup or the ComputerPrimitives mock path). In a pure
+    # FunctionManager test those code paths never run, so the wait
+    # times out after 5 min with
+    # `RuntimeError: Managed VM did not become ready within 5 minutes`.
+    # Pre-set the event so the wait returns immediately.
+    from unity.function_manager.primitives.runtime import _vm_ready as _runtime_vm_ready
+
+    _was_set = _runtime_vm_ready.is_set()
+    _runtime_vm_ready.set()
+
     yield SESSION_DETAILS
+
+    if not _was_set:
+        _runtime_vm_ready.clear()
 
 
 @pytest.fixture
@@ -90,7 +105,13 @@ def mock_session_details_ubuntu(monkeypatch):
     from unity.session_details import SESSION_DETAILS
 
     monkeypatch.setattr(SESSION_DETAILS.assistant, "desktop_mode", "ubuntu")
-    monkeypatch.setattr(SESSION_DETAILS.assistant, "id", "test-assistant-ubuntu")
+    monkeypatch.setattr(SESSION_DETAILS.assistant, "agent_id", 999_002)
+
+    # Same _vm_ready pre-set rationale as in
+    # mock_session_details_windows above.
+    from unity.function_manager.primitives.runtime import _vm_ready as _runtime_vm_ready
+
+    _runtime_vm_ready.set()
     monkeypatch.setattr(
         SESSION_DETAILS.assistant,
         "desktop_url",

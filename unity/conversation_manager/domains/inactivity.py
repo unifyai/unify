@@ -71,17 +71,17 @@ def _inactivity_notification_text(event: InactivityFollowup) -> str:
         "assigned, include it in the email body so the boss has a "
         "callback option; if you do not, just send email-only."
     )
-    lifecycle_guidance = (
-        "When the boss replies: if they explicitly decline further "
-        "engagement (any clear opt-out — 'no longer interested', 'take "
-        "me off your list', 'stop contacting me'), call "
-        "comms.terminate_self() so I'll be wound down. If they had "
-        "previously declined and now contradict that ('actually wait, "
-        "let's keep going'), call comms.cancel_self_termination() to "
-        "stay alive. Casual chatter alone does NOT cancel a pending "
-        "termination — only an explicit re-engagement does."
+    optout_guidance = (
+        "If the boss replies and explicitly asks not to be contacted "
+        "again (any clear opt-out — 'no longer interested', 'take me off "
+        "your list', 'stop contacting me'), call "
+        "comms.stop_inactivity_followups() so we won't follow up again. "
+        "If they had previously opted out and now re-engage and want to "
+        "keep hearing from us, call comms.resume_inactivity_followups(). "
+        "Casual chatter alone does NOT change the opt-out state — only an "
+        "explicit request does. Nothing is ever deleted either way."
     )
-    return f"{body} {composition_guidance} {lifecycle_guidance}"
+    return f"{body} {composition_guidance} {optout_guidance}"
 
 
 async def _handle_inactivity_followup_event(

@@ -46,6 +46,15 @@ class BaseGuidanceManager(BaseStateManager, metaclass=SingletonABCMeta):
         instructions, operating procedures, software walkthroughs, and
         strategies for composing functions together.
 
+        Results blend your own stored guidance with a built-in, read-only
+        library of platform-provided guidance (entries with
+        ``is_builtin=True``). Built-in entries can be searched and read like
+        any other guidance but never modified.
+
+        Long entries are returned with a truncated content preview; fetch
+        the complete text of a specific entry with ``get_guidance`` before
+        following its procedure in detail.
+
         Parameters
         ----------
         references : Dict[str, str] | None, default None
@@ -77,6 +86,15 @@ class BaseGuidanceManager(BaseStateManager, metaclass=SingletonABCMeta):
         instructions, operating procedures, software walkthroughs, and
         strategies for composing functions together.
 
+        Results blend your own stored guidance with a built-in, read-only
+        library of platform-provided guidance (entries with
+        ``is_builtin=True``). Filter on ``is_builtin`` to target either
+        population explicitly.
+
+        Long entries are returned with a truncated content preview; fetch
+        the complete text of a specific entry with ``get_guidance`` before
+        following its procedure in detail.
+
         Parameters
         ----------
         filter : str | None, default None
@@ -92,6 +110,31 @@ class BaseGuidanceManager(BaseStateManager, metaclass=SingletonABCMeta):
         -------
         List[Guidance]
             Matching guidance records as Guidance models.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_guidance(
+        self,
+        *,
+        guidance_id: int,
+    ) -> "Guidance":
+        """Fetch one guidance entry by id with its complete, untruncated content.
+
+        ``search`` and ``filter`` return truncated content previews for long
+        entries; call this to read the full procedure before executing it
+        step by step. Works for your own entries and for built-in
+        platform guidance alike.
+
+        Parameters
+        ----------
+        guidance_id : int
+            Identifier of the entry to fetch.
+
+        Returns
+        -------
+        Guidance
+            The complete guidance entry.
         """
         raise NotImplementedError
 
@@ -147,7 +190,10 @@ class BaseGuidanceManager(BaseStateManager, metaclass=SingletonABCMeta):
         """Update fields of an existing guidance entry by id.
 
         Use this to revise procedural instructions, operating procedures,
-        or compositional strategies that are already stored.
+        or compositional strategies that are already stored. Built-in
+        platform guidance (``is_builtin=True``) is read-only and cannot be
+        updated; create your own entry instead when a tailored variant is
+        needed.
 
         Parameters
         ----------
@@ -180,6 +226,9 @@ class BaseGuidanceManager(BaseStateManager, metaclass=SingletonABCMeta):
         guidance_id: int,
     ) -> "ToolOutcome":
         """Delete a guidance entry by id.
+
+        Built-in platform guidance (``is_builtin=True``) is read-only and
+        cannot be deleted.
 
         Parameters
         ----------

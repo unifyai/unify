@@ -6,6 +6,7 @@ import asyncio
 import json
 
 import pytest
+from unittest.mock import MagicMock
 
 import unity.common._async_tool.loop as _loop_mod
 import unity.common._async_tool.context_compression as _cc_mod
@@ -16,6 +17,7 @@ from unity.common._async_tool.context_compression import (
 )
 from unity.common.async_tool_loop import start_async_tool_loop
 from unity.common.llm_client import new_llm_client
+from unity.common.tool_spec import ToolSpec
 from tests.helpers import _handle_project
 from tests.async_helpers import (
     _wait_for_condition,
@@ -457,6 +459,380 @@ async def test_enable_compression_false(llm_config, monkeypatch):
 
 @pytest.mark.asyncio
 @_handle_project
+async def test_tool_quota_survives_compression_restart(llm_config, monkeypatch):
+    """A quota-exhausted tool must stay hidden after compression restarts the loop."""
+    monkeypatch.setattr(_cc_mod, "compress_messages", _mock_compress)
+
+    counter = {"n": 0}
+    phase = {"n": 0}
+
+    async def short_tool():
+        counter["n"] += 1
+        return "ok"
+
+    def _assistant_tool_call(name: str, call_id: str) -> dict:
+        return {
+            "id": call_id,
+            "type": "function",
+            "function": {"name": name, "arguments": "{}"},
+        }
+
+    async def _fake_generate_with_preprocess(_client, preprocess_msgs, **gen_kwargs):
+        tool_names = {
+            tool.get("function", {}).get("name") for tool in gen_kwargs.get("tools", [])
+        }
+
+        if phase["n"] == 0 and "short_tool" in tool_names:
+            phase["n"] = 1
+            _client.messages.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        _assistant_tool_call("short_tool", "call_initial_1"),
+                        _assistant_tool_call("short_tool", "call_initial_2"),
+                    ],
+                },
+            )
+            return {"ok": True}
+
+        if phase["n"] == 1 and "compress_context" in tool_names:
+            phase["n"] = 2
+            _client.messages.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        _assistant_tool_call("compress_context", "call_compress"),
+                    ],
+                },
+            )
+            return {"ok": True}
+
+        if phase["n"] == 2 and "short_tool" in tool_names:
+            phase["n"] = 3
+            _client.messages.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        _assistant_tool_call("short_tool", "call_after_compression"),
+                    ],
+                },
+            )
+            return {"ok": True}
+
+        phase["n"] = 4
+        _client.messages.append(
+            {"role": "assistant", "content": "done", "tool_calls": None},
+        )
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        _loop_mod,
+        "generate_with_preprocess",
+        _fake_generate_with_preprocess,
+        raising=True,
+    )
+
+    client = new_llm_client(**llm_config)
+    handle = start_async_tool_loop(
+        client=client,
+        message="Start by calling short_tool twice, then compress context.",
+        tools={"short_tool": ToolSpec(fn=short_tool, max_total_calls=2)},
+        prune_tool_duplicates=False,
+        timeout=30,
+        max_steps=20,
+    )
+
+    await handle.result()
+
+    assert handle._compression.count == 1
+    assert phase["n"] == 4
+    assert counter["n"] == 2
+
+
+@pytest.mark.asyncio
+@_handle_project
+async def test_tool_policy_history_survives_compression_restart(
+    llm_config,
+    monkeypatch,
+):
+    """3-arg tool policies should see calls made before a compression restart."""
+    monkeypatch.setattr(_cc_mod, "compress_messages", _mock_compress)
+
+    phase = {"n": 0}
+    call_log: list[str] = []
+    policy_log: list[tuple[int, list[str], int]] = []
+
+    async def tool_a():
+        call_log.append("a")
+        return "a"
+
+    async def tool_b():
+        call_log.append("b")
+        return "b"
+
+    def policy(step, tools, called_tools):
+        policy_log.append((step, list(called_tools), phase["n"]))
+        return "auto", tools
+
+    def _assistant_tool_call(name: str, call_id: str) -> dict:
+        return {
+            "id": call_id,
+            "type": "function",
+            "function": {"name": name, "arguments": "{}"},
+        }
+
+    async def _fake_generate_with_preprocess(_client, preprocess_msgs, **gen_kwargs):
+        tool_names = {
+            tool.get("function", {}).get("name") for tool in gen_kwargs.get("tools", [])
+        }
+
+        if phase["n"] == 0 and "tool_a" in tool_names:
+            phase["n"] = 1
+            _client.messages.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [_assistant_tool_call("tool_a", "call_a")],
+                },
+            )
+            return {"ok": True}
+
+        if phase["n"] == 1 and "compress_context" in tool_names:
+            phase["n"] = 2
+            _client.messages.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        _assistant_tool_call("compress_context", "call_compress"),
+                    ],
+                },
+            )
+            return {"ok": True}
+
+        phase["n"] = 3
+        _client.messages.append(
+            {"role": "assistant", "content": "done", "tool_calls": None},
+        )
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        _loop_mod,
+        "generate_with_preprocess",
+        _fake_generate_with_preprocess,
+        raising=True,
+    )
+
+    client = new_llm_client(**llm_config)
+    handle = start_async_tool_loop(
+        client=client,
+        message="Call tool_a, compress, then finish.",
+        tools={"tool_a": tool_a, "tool_b": tool_b},
+        tool_policy=policy,
+        timeout=30,
+        max_steps=20,
+    )
+
+    await handle.result()
+
+    assert handle._compression.count == 1
+    assert call_log == ["a"]
+    after_restart_entries = [entry for entry in policy_log if entry[2] == 2]
+    assert after_restart_entries
+    assert "tool_a" in after_restart_entries[0][1]
+    assert "compress_context" in after_restart_entries[0][1]
+
+
+@pytest.mark.asyncio
+@_handle_project
+async def test_max_steps_survives_compression_restart(llm_config, monkeypatch):
+    """max_steps should apply to the logical loop, not just the compressed transcript."""
+    monkeypatch.setattr(_cc_mod, "compress_messages", _mock_compress)
+
+    phase = {"n": 0}
+    post_restart_calls = {"n": 0}
+
+    async def starter_tool():
+        return "started"
+
+    async def post_restart_tool():
+        post_restart_calls["n"] += 1
+        return "should not run"
+
+    def _assistant_tool_call(name: str, call_id: str) -> dict:
+        return {
+            "id": call_id,
+            "type": "function",
+            "function": {"name": name, "arguments": "{}"},
+        }
+
+    async def _fake_generate_with_preprocess(_client, preprocess_msgs, **gen_kwargs):
+        tool_names = {
+            tool.get("function", {}).get("name") for tool in gen_kwargs.get("tools", [])
+        }
+
+        if phase["n"] == 0 and "starter_tool" in tool_names:
+            phase["n"] = 1
+            _client.messages.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [_assistant_tool_call("starter_tool", "call_start")],
+                },
+            )
+            return {"ok": True}
+
+        if phase["n"] == 1 and "compress_context" in tool_names:
+            phase["n"] = 2
+            _client.messages.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        _assistant_tool_call("compress_context", "call_compress"),
+                    ],
+                },
+            )
+            return {"ok": True}
+
+        if phase["n"] == 2 and "post_restart_tool" in tool_names:
+            phase["n"] = 3
+            _client.messages.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        _assistant_tool_call("post_restart_tool", "call_after_restart"),
+                    ],
+                },
+            )
+            return {"ok": True}
+
+        phase["n"] = 4
+        _client.messages.append(
+            {"role": "assistant", "content": "done", "tool_calls": None},
+        )
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        _loop_mod,
+        "generate_with_preprocess",
+        _fake_generate_with_preprocess,
+        raising=True,
+    )
+
+    client = new_llm_client(**llm_config)
+    result = await start_async_tool_loop(
+        client=client,
+        message="Start, compress, then continue.",
+        tools={
+            "starter_tool": starter_tool,
+            "post_restart_tool": post_restart_tool,
+        },
+        timeout=30,
+        max_steps=7,
+        raise_on_limit=False,
+    ).result()
+
+    assert "max_steps" in result
+    assert post_restart_calls["n"] == 0
+
+
+@pytest.mark.asyncio
+@_handle_project
+async def test_consecutive_failures_survive_compression_restart(
+    llm_config,
+    monkeypatch,
+):
+    """Consecutive tool-failure counts should not reset after compression."""
+    monkeypatch.setattr(_cc_mod, "compress_messages", _mock_compress)
+
+    phase = {"n": 0}
+    failing_calls = {"n": 0}
+
+    async def failing_tool():
+        failing_calls["n"] += 1
+        raise RuntimeError("synthetic tool failure")
+
+    def _assistant_tool_call(name: str, call_id: str) -> dict:
+        return {
+            "id": call_id,
+            "type": "function",
+            "function": {"name": name, "arguments": "{}"},
+        }
+
+    async def _fake_generate_with_preprocess(_client, preprocess_msgs, **gen_kwargs):
+        tool_names = {
+            tool.get("function", {}).get("name") for tool in gen_kwargs.get("tools", [])
+        }
+
+        if phase["n"] == 0 and "failing_tool" in tool_names:
+            phase["n"] = 1
+            _client.messages.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [_assistant_tool_call("failing_tool", "call_fail_1")],
+                },
+            )
+            return {"ok": True}
+
+        if phase["n"] == 1 and "compress_context" in tool_names:
+            phase["n"] = 2
+            _client.messages.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        _assistant_tool_call("compress_context", "call_compress"),
+                    ],
+                },
+            )
+            return {"ok": True}
+
+        if phase["n"] == 2 and "failing_tool" in tool_names:
+            phase["n"] = 3
+            _client.messages.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [_assistant_tool_call("failing_tool", "call_fail_2")],
+                },
+            )
+            return {"ok": True}
+
+        phase["n"] = 4
+        _client.messages.append(
+            {"role": "assistant", "content": "done", "tool_calls": None},
+        )
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        _loop_mod,
+        "generate_with_preprocess",
+        _fake_generate_with_preprocess,
+        raising=True,
+    )
+
+    client = new_llm_client(**llm_config)
+    with pytest.raises(RuntimeError, match="too many consecutive tool failures"):
+        await start_async_tool_loop(
+            client=client,
+            message="Fail once, compress, fail again.",
+            tools={"failing_tool": failing_tool},
+            timeout=30,
+            max_steps=20,
+            max_consecutive_failures=2,
+        ).result()
+
+    assert failing_calls["n"] == 2
+
+
+@pytest.mark.asyncio
+@_handle_project
 async def test_compression_failure_returns_gracefully(llm_config, monkeypatch):
     """When compress_and_rebuild raises, result() returns gracefully."""
     trigger, reset, check = _make_threshold_trigger()
@@ -482,3 +858,74 @@ async def test_compression_failure_returns_gracefully(llm_config, monkeypatch):
     result = await handle.result()
     assert isinstance(result, str)
     assert handle._compression.count == 0
+
+
+@pytest.mark.asyncio
+async def test_compression_restart_omits_parent_chat_context(monkeypatch):
+    """Compression restarts must not re-inject the original parent context blob."""
+
+    from unity.common._async_tool.context_compression import RebuildResult
+    from unity.common.async_tool_loop import AsyncToolLoopHandle
+
+    captured: dict[str, object] = {}
+
+    async def _fake_inner(_client, _message, _tools, **kwargs):
+        captured["parent_chat_context"] = kwargs.get("parent_chat_context")
+        return "done"
+
+    async def _fake_compress(_compression, _messages, _endpoint, _tools):
+        return RebuildResult(
+            system_msgs=[{"role": "system", "content": "compressed"}],
+            tools={},
+        )
+
+    monkeypatch.setattr(_atl_mod, "async_tool_loop_inner", _fake_inner)
+    monkeypatch.setattr(_atl_mod, "compress_and_rebuild", _fake_compress)
+
+    parent_ctx = [{"role": "user", "content": "large parent transcript"}]
+    handle = AsyncToolLoopHandle(
+        task=asyncio.create_task(asyncio.sleep(0)),
+        interject_queue=asyncio.Queue(),
+        cancel_event=asyncio.Event(),
+        stop_event=asyncio.Event(),
+    )
+    handle._client = MagicMock()
+    handle._client.messages = [{"role": "user", "content": "loop"}]
+    handle._client.endpoint = "gpt-4o@openai"
+    handle._loop_config = {
+        "loop_id": "test-loop",
+        "parent_lineage": [],
+        "tools": {},
+        "parent_chat_context": parent_ctx,
+        "max_consecutive_failures": 3,
+        "prune_tool_duplicates": True,
+        "interrupt_llm_with_interjections": True,
+        "propagate_chat_context": True,
+        "caller_description": None,
+        "log_steps": False,
+        "max_steps": None,
+        "timeout": None,
+        "raise_on_limit": False,
+        "include_class_in_dynamic_tool_names": False,
+        "tool_policy": None,
+        "preprocess_msgs": None,
+        "response_format": None,
+        "max_parallel_tool_calls": None,
+        "persist": False,
+        "multi_handle_coordinator": None,
+        "prompt_caching": False,
+        "time_awareness": False,
+        "extra_ask_tools": None,
+        "enable_compression": True,
+        "extra_compression_tools": None,
+        "clarification_queues": None,
+        "on_clarification_request": None,
+        "on_clarification_answer": None,
+        "on_notify": None,
+        "runtime_state": handle._runtime_state,
+    }
+
+    await handle._restart_with_compressed_context()
+    await asyncio.sleep(0)
+
+    assert captured["parent_chat_context"] is None

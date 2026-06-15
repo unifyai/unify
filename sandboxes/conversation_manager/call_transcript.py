@@ -151,9 +151,8 @@ class ProactiveSpeechDecision:
     """A proactive speech LLM decision from the CM side."""
 
     ts_utc: str
-    should_speak: bool
     delay_s: int
-    content: str  # empty when should_speak=False
+    content: str
 
 
 @dataclass
@@ -1131,22 +1130,17 @@ def parse_cm_log(path: Path, *, log_date: str = "") -> CMLogData:
             if gid:
                 data.blocked_ids.append(gid)
 
-        # Proactive speech decisions: 🗣️ [ProactiveSpeech] should_speak=True, delay=3s: text
-        elif "[ProactiveSpeech] should_speak=" in line:
-            should_speak = "should_speak=True" in line
+        # Proactive speech decisions: 🗣️ [ProactiveSpeech] delay=3s: text
+        elif "[ProactiveSpeech] delay=" in line:
             delay_match = re.search(r"delay=(\d+)s", line)
             delay_s = int(delay_match.group(1)) if delay_match else 0
-            content = ""
-            if should_speak and ": " in line.split("delay=")[1]:
-                content = (
-                    line.split("delay=")[1].split(": ", 1)[1].strip()
-                    if ": " in line.split("delay=")[1]
-                    else ""
-                )
+            after_delay = line.split("delay=")[1]
+            content = (
+                after_delay.split(": ", 1)[1].strip() if ": " in after_delay else ""
+            )
             data.proactive_decisions.append(
                 ProactiveSpeechDecision(
                     ts_utc=_ts(line),
-                    should_speak=should_speak,
                     delay_s=delay_s,
                     content=content,
                 ),
@@ -2764,17 +2758,12 @@ def _format_proactive_decision(
     verbose: bool = False,
 ) -> list[str]:
     """Format a proactive speech decision as a timeline line."""
-    if pd.should_speak:
-        preview = pd.content
-        if not verbose and len(preview) > 120:
-            preview = preview[:117] + "..."
-        return [
-            f"  \U0001f5e3\ufe0f {_short_utc(pd.ts_utc)} "
-            f"PROACTIVE SPEECH \u2192 speak (delay={pd.delay_s}s): {preview}",
-        ]
+    preview = pd.content
+    if not verbose and len(preview) > 120:
+        preview = preview[:117] + "..."
     return [
         f"  \U0001f5e3\ufe0f {_short_utc(pd.ts_utc)} "
-        f"PROACTIVE SPEECH \u2192 silent (delay={pd.delay_s}s)",
+        f"PROACTIVE SPEECH \u2192 speak (delay={pd.delay_s}s): {preview}",
     ]
 
 
@@ -3003,11 +2992,11 @@ def format_timeline(timeline: Timeline, *, verbose: bool = False) -> str:
                 f"{exec_count} code executions{mag_suffix}",
             )
         if timeline.proactive_decisions:
-            speak = sum(1 for p in timeline.proactive_decisions if p.should_speak)
-            silent = len(timeline.proactive_decisions) - speak
+            delays = [p.delay_s for p in timeline.proactive_decisions]
+            avg_delay = sum(delays) / len(delays)
             parts.append(
                 f"Proactive decisions: {len(timeline.proactive_decisions)} "
-                f"({speak} speak, {silent} silent)",
+                f"(avg delay {avg_delay:.0f}s, max {max(delays)}s)",
             )
 
     parts.append("")

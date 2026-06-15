@@ -79,6 +79,28 @@ class TestCallEventSocketServer:
         await server.stop()
 
     @pytest.mark.asyncio
+    async def test_has_connected_clients_reflects_live_connection_state(
+        self,
+        mock_event_broker,
+    ):
+        """Connected-client property tracks IPC attach and detach."""
+        server = CallEventSocketServer(mock_event_broker, forward_channels=[])
+        assert server.has_connected_clients is False
+
+        socket_path = await server.start()
+        client = CallEventSocketClient(socket_path)
+        await client.send_event("test:channel", '{"ping": true}')
+        await _wait_for_condition(lambda: server.has_connected_clients)
+
+        assert server.has_connected_clients is True
+
+        await client.close()
+        await _wait_for_condition(lambda: not server.has_connected_clients)
+        assert server.has_connected_clients is False
+
+        await server.stop()
+
+    @pytest.mark.asyncio
     async def test_on_event_callback_called(self, mock_event_broker):
         """Custom on_event callback is called instead of publishing to broker."""
         received_events = []
@@ -842,9 +864,15 @@ class TestBidirectionalCommunication:
         await server.start()
 
         # Publish multiple events before any client connects
+        from unity.conversation_manager.events import FastBrainNotification
+
         await real_event_broker.publish(
             "app:call:notification",
-            '{"content": "First guidance"}',
+            FastBrainNotification(
+                contact={},
+                message="First guidance",
+                source="slow_brain",
+            ).to_json(),
         )
         await real_event_broker.publish(
             "app:call:status",
@@ -983,9 +1011,15 @@ class TestSocketAwareEventBroker:
             await asyncio.sleep(0.1)
 
             # Parent publishes event
+            from unity.conversation_manager.events import FastBrainNotification
+
             await parent_broker.publish(
                 "app:call:notification",
-                '{"content": "Test guidance"}',
+                FastBrainNotification(
+                    contact={},
+                    message="Test guidance",
+                    source="slow_brain",
+                ).to_json(),
             )
 
             # Wait for forwarding
@@ -993,7 +1027,8 @@ class TestSocketAwareEventBroker:
 
             # Should have received the forwarded event via callback
             assert len(received_events) == 1
-            assert received_events[0]["content"] == "Test guidance"
+            payload = received_events[0].get("payload", received_events[0])
+            assert payload["message"] == "Test guidance"
 
             await wrapper.stop()
 

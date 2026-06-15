@@ -25,6 +25,8 @@ from unity.conversation_manager.events import (
     OutboundUnifyMeetUtterance,
     InboundPhoneUtterance,
     OutboundPhoneUtterance,
+    UnifyMessageReceived,
+    UnifyMessageSent,
 )
 from unity.transcript_manager.simulated import SimulatedTranscriptManager
 
@@ -59,7 +61,12 @@ async def test_queue_operation_waits_for_initialization():
     mock_cm.notifications_bar = MagicMock()
     mock_cm.initialized = False
 
-    # Wrap _sync_required_contacts to track calls
+    # The SyncContacts event handler calls
+    # contact_manager._sync_required_contacts(). An earlier rename
+    # attempt to `_provision_system_overlays` was incorrect — that
+    # method never landed in production. Patch the actual method
+    # name so this test's call-tracking assertion lines up with the
+    # production handler.
     with patch.object(
         mock_cm.contact_manager,
         "_sync_required_contacts",
@@ -127,7 +134,65 @@ def _make_cm_for_log_message() -> MagicMock:
         return_value={"contact_id": 1, "first_name": "Test", "surname": "User"},
     )
     cm._local_to_global_message_ids = {}
+    cm._local_to_global_message_ids_by_destination = {}
+    cm._local_message_destinations = {}
     return cm
+
+
+@pytest.mark.asyncio
+async def test_log_message_uses_resolved_self_contact_for_assistant_messages(
+    monkeypatch,
+):
+    """Assistant-authored transcript rows use the resolved self contact id."""
+    monkeypatch.setattr(managers_utils.SESSION_DETAILS, "self_contact_id", 337)
+    cm = _make_cm_for_log_message()
+    cm.contact_index.get_contact = MagicMock(
+        return_value={"contact_id": 441, "first_name": "Boss", "surname": "User"},
+    )
+
+    event = UnifyMessageSent(
+        contact={"contact_id": 441, "first_name": "Boss", "surname": "User"},
+        content="Here is the update.",
+    )
+
+    with patch.object(
+        managers_utils,
+        "event_broker",
+        new=MagicMock(publish=AsyncMock()),
+    ):
+        await managers_utils.log_message(cm, event)
+
+    logged = cm.transcript_manager._sim_messages[-1]
+    assert logged.sender_id == 337
+    assert logged.receiver_ids == [441]
+
+
+@pytest.mark.asyncio
+async def test_log_message_uses_resolved_self_contact_for_inbound_messages(
+    monkeypatch,
+):
+    """Inbound transcript rows target the resolved assistant self contact id."""
+    monkeypatch.setattr(managers_utils.SESSION_DETAILS, "self_contact_id", 337)
+    cm = _make_cm_for_log_message()
+    cm.contact_index.get_contact = MagicMock(
+        return_value={"contact_id": 441, "first_name": "Boss", "surname": "User"},
+    )
+
+    event = UnifyMessageReceived(
+        contact={"contact_id": 441, "first_name": "Boss", "surname": "User"},
+        content="Can you check this?",
+    )
+
+    with patch.object(
+        managers_utils,
+        "event_broker",
+        new=MagicMock(publish=AsyncMock()),
+    ):
+        await managers_utils.log_message(cm, event)
+
+    logged = cm.transcript_manager._sim_messages[-1]
+    assert logged.sender_id == 441
+    assert logged.receiver_ids == [337]
 
 
 @pytest.mark.asyncio

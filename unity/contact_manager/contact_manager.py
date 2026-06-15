@@ -6,9 +6,8 @@ import re
 from .prompt_builders import build_ask_prompt, build_update_prompt
 from ..knowledge_manager.types import ColumnType
 from ..common.embed_utils import ensure_vector_column
-from ..common.tool_outcome import ToolOutcome
+from ..common.tool_outcome import ToolErrorException, ToolOutcome
 from ..common.tool_spec import read_only, manager_tool, ToolSpec
-from ..common.metrics_utils import reduce_logs
 
 import unify
 from .types.contact import Contact
@@ -54,10 +53,15 @@ from .ops import (
     delete_contact as _op_delete,
     merge_contacts as _op_merge,
 )
-from .search import (
-    filter_contacts as _srch_filter,
-    search_contacts as _srch_search,
+from ..common.federated_search import (
+    CONTEXT_FIELD,
+    FederatedSearchContext,
+    federated_count,
+    federated_filter,
+    federated_ranked_search,
+    federated_reduce,
 )
+from ..common.filter_utils import normalize_filter_expr
 
 
 class ContactManager(BaseContactManager):
@@ -182,9 +186,112 @@ class ContactManager(BaseContactManager):
         # Ensure context/schema and prefill known custom fields
         self._provision_storage()
 
-        # ── ensure an assistant contact with id 0 exists and is up-to-date ──
-        # ── ensure a default *user* contact with id 1 exists and is up-to-date ──
+        # Ensure assistant self and boss contacts exist and are up to date.
         self._sync_required_contacts()
+
+    def _contact_context_from_root(self, root_context: str) -> str:
+        """Return the concrete Contacts context under one registry root."""
+
+        return f"{root_context.strip('/')}/Contacts"
+
+    def _contact_context_for_destination(self, destination: str | None) -> str:
+        """Resolve a public write destination into a concrete Contacts context."""
+
+        root_context = ContextRegistry.write_root(
+            self,
+            "Contacts",
+            destination=destination,
+        )
+        return self._contact_context_from_root(root_context)
+
+    def _read_contact_contexts(self) -> list[str]:
+        """Return ordered concrete Contacts contexts visible to this assistant."""
+
+        try:
+            root_contexts = ContextRegistry.read_roots(self, "Contacts")
+            contexts = [self._contact_context_from_root(root) for root in root_contexts]
+        except RuntimeError as exc:
+            if "no base context available" not in str(exc):
+                raise
+            from ..session_details import SESSION_DETAILS
+
+            contexts = [self._ctx]
+            contexts.extend(
+                f"Teams/{team_id}/Contacts"
+                for team_id in sorted(set(SESSION_DETAILS.team_ids))
+            )
+        return list(dict.fromkeys(contexts))
+
+    def _data_store_for_context(self, context: str):
+        """Return the per-root local cache for a concrete Contacts context."""
+
+        if context == self._ctx:
+            return self._data_store
+        return DataStore.for_context(context, key_fields=("contact_id",))
+
+    def _membership_target_for_destination(
+        self,
+        destination: str | None,
+    ) -> tuple[str, int | None]:
+        """Return the ContactMembership target fields for a public destination."""
+
+        if destination is None or destination == "personal":
+            return "personal", None
+        return "team", int(destination.removeprefix("team:"))
+
+    def _delete_contact_memberships(
+        self,
+        contact_id: int,
+        *,
+        destination: str | None,
+    ) -> None:
+        """Delete assistant relationship overlays for one contact id."""
+
+        from ..session_details import SESSION_DETAILS
+
+        if (
+            not SESSION_DETAILS.is_initialized
+            or SESSION_DETAILS.assistant.agent_id is None
+        ):
+            return
+
+        admin_key = SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()
+        if not admin_key:
+            raise RuntimeError(
+                "ORCHESTRA_ADMIN_KEY is required to delete contact memberships.",
+            )
+
+        from unify.utils import http
+
+        target_scope, target_team_id = self._membership_target_for_destination(
+            destination,
+        )
+        assistant_id = int(SESSION_DETAILS.assistant.agent_id)
+        url = (
+            f"{SETTINGS.ORCHESTRA_URL.rstrip('/')}"
+            f"/admin/assistant/{assistant_id}/contact-memberships/{int(contact_id)}"
+        )
+        response = http.delete(
+            url,
+            headers={"Authorization": f"Bearer {admin_key}"},
+            params={
+                "target_scope": target_scope,
+                "target_team_id": target_team_id,
+            },
+            timeout=15,
+        )
+        response.raise_for_status()
+
+    def _pack_contacts(self, contacts: list[Contact]) -> Dict[str, Any]:
+        """Return the standard ContactManager tool payload for contact rows."""
+
+        if not contacts:
+            return {"contacts": []}
+        return {
+            "contact_keys_to_shorthand": Contact.shorthand_map(),
+            "contacts": contacts,
+            "shorthand_to_contact_keys": Contact.shorthand_inverse_map(),
+        }
 
     # ──────────────────────────────────────────────────────────────────────
     #  Public API (English-only entrypoints for the LLM)
@@ -429,7 +536,7 @@ class ContactManager(BaseContactManager):
         except Exception:
             pass
 
-        # Recreate assistant and default user contacts (id 0 and 1)
+        # Recreate required assistant and boss contacts.
         self._sync_required_contacts()
 
     # (Optional) Public programmatic helpers (non-LLM)
@@ -476,42 +583,57 @@ class ContactManager(BaseContactManager):
             ids = [int(contact_id)]
 
         results: Dict[int, Dict[str, Any]] = {}
-        misses: List[int] = []
+        remaining = list(dict.fromkeys(ids))
 
-        # 1) Try local cache
-        if search_local_storage:
-            for cid in ids:
-                try:
-                    row = self._data_store[cid]
-                    results[cid] = {k: v for k, v in row.items() if k in requested}
-                except KeyError:
-                    misses.append(cid)
-        else:
-            misses = list(ids)
+        for context in self._read_contact_contexts():
+            if not remaining:
+                break
+            store = self._data_store_for_context(context)
 
-        # 2) Backend read for misses (allowed-field superset); write-through to cache
-        if misses:
-            if len(misses) == 1:
-                filt = f"contact_id == {misses[0]}"
+            misses: List[int] = []
+            if search_local_storage:
+                for cid in remaining:
+                    try:
+                        row = store[cid]
+                    except KeyError:
+                        misses.append(cid)
+                    else:
+                        results[cid] = {k: v for k, v in row.items() if k in requested}
             else:
-                filt = f"contact_id in [{', '.join(str(x) for x in misses)}]"
-            rows = unify.get_logs(
-                context=self._ctx,
-                filter=filt,
-                limit=len(misses),
-                from_fields=list(allowed),
-            )
-            for lg in rows:
-                try:
-                    backend_row = lg.entries
-                    cid_val = int(backend_row.get("contact_id"))
-                except Exception:
-                    continue
-                try:
-                    self._data_store.put(backend_row)
-                except Exception:
-                    pass
-                results[cid_val] = {k: backend_row.get(k) for k in requested}
+                misses = list(remaining)
+
+            found_ids = set(results).intersection(remaining)
+            remaining = [cid for cid in remaining if cid not in found_ids]
+            if not remaining:
+                break
+
+            if misses:
+                if len(misses) == 1:
+                    filt = f"contact_id == {misses[0]}"
+                else:
+                    filt = f"contact_id in [{', '.join(str(x) for x in misses)}]"
+                rows = unify.get_logs(
+                    context=context,
+                    filter=filt,
+                    limit=len(misses),
+                    from_fields=list(allowed),
+                )
+                for lg in rows:
+                    try:
+                        backend_row = lg.entries
+                        cid_val = int(backend_row.get("contact_id"))
+                    except Exception:
+                        continue
+                    if cid_val not in remaining:
+                        continue
+                    try:
+                        store.put(backend_row)
+                    except Exception:
+                        pass
+                    results[cid_val] = {k: backend_row.get(k) for k in requested}
+
+                found_ids = set(results).intersection(remaining)
+                remaining = [cid for cid in remaining if cid not in found_ids]
 
         return results
 
@@ -601,13 +723,31 @@ class ContactManager(BaseContactManager):
             * Multiple keys, no grouping → ``dict[key -> scalar]``.
             * With grouping             → nested ``dict`` keyed by group values.
         """
-        return reduce_logs(
-            context=self._ctx,
-            metric=metric,
-            keys=keys,
-            filter=filter,
-            group_by=group_by,
-        )
+        keys_list = [keys] if isinstance(keys, str) else list(keys)
+        group_fields = [group_by] if isinstance(group_by, str) else list(group_by or [])
+        result_by_key: dict[str, Any] = {}
+
+        for key in keys_list:
+            key_filter = filter.get(key) if isinstance(filter, dict) else filter
+            contexts = [
+                FederatedSearchContext(
+                    context=context,
+                    source=context,
+                    allowed_fields=[key, *group_fields],
+                )
+                for context in self._read_contact_contexts()
+            ]
+            result_by_key[key] = federated_reduce(
+                contexts,
+                metric=metric,
+                columns=key,
+                filter=normalize_filter_expr(key_filter),
+                group_by=group_fields or None,
+            )
+
+        if isinstance(keys, str):
+            return result_by_key[keys]
+        return result_by_key
 
     @read_only
     def filter_contacts(
@@ -627,7 +767,7 @@ class ContactManager(BaseContactManager):
         filter : str | None, default None
             A Python boolean expression evaluated with column names in scope. Examples:
             - ``"first_name == 'John' and surname == 'Doe'"``
-            - ``"contact_id != 0 and contact_id != 1"``
+            - ``"email_address.endswith('@company.com')"``
             - ``"email_address.endswith('@company.com')"``
             When ``None``, returns all contacts. String comparisons are case‑sensitive unless
             your expression applies a case‑normalisation.
@@ -664,6 +804,7 @@ class ContactManager(BaseContactManager):
                     r"\s*phone_number\s*==\s*(['\"])\S.*?\1\s*",
                     r"\s*whatsapp_number\s*==\s*(['\"])\S.*?\1\s*",
                     r"\s*discord_id\s*==\s*(['\"])\S.*?\1\s*",
+                    r"\s*slack_user_id\s*==\s*(['\"])\S.*?\1\s*",
                 )
                 if any(re.fullmatch(p, filter) for p in unique_eq_patterns):
                     eff_limit = min(eff_limit, 1)
@@ -678,7 +819,44 @@ class ContactManager(BaseContactManager):
                         if count_ids > 0:
                             eff_limit = min(eff_limit, count_ids)
 
-        return _srch_filter(self, filter=filter, offset=offset, limit=limit)
+        from_fields = list(self._BUILTIN_FIELDS)
+        if getattr(self, "_known_custom_fields", None):
+            from_fields.extend(sorted(self._known_custom_fields))
+
+        def fetcher(spec, row_filter, _sorting, fetch_limit):
+            logs = unify.get_logs(
+                context=spec.context,
+                filter=row_filter,
+                offset=0,
+                limit=fetch_limit,
+                from_fields=list(spec.allowed_fields),
+            )
+            rows = [lg.entries for lg in logs]
+            store = self._data_store_for_context(spec.context)
+            try:
+                for row in rows:
+                    store.put(row)
+            except Exception:
+                pass
+            return rows
+
+        contexts = [
+            FederatedSearchContext(
+                context=context,
+                source=context,
+                allowed_fields=from_fields,
+            )
+            for context in self._read_contact_contexts()
+        ]
+        rows = federated_filter(
+            contexts,
+            filter=normalize_filter_expr(filter),
+            offset=offset,
+            limit=eff_limit,
+            fetcher=fetcher,
+            annotate=False,
+        )
+        return self._pack_contacts([Contact(**row) for row in rows])
 
     @read_only
     def _search_contacts(
@@ -710,8 +888,8 @@ class ContactManager(BaseContactManager):
         List[Contact]
             Up to ``k`` Pydantic ``Contact`` models. When semantic references are provided,
             results are sorted by similarity (ascending cosine distance). When references
-            are omitted/empty, returns the most recent contacts. System contacts (ids ``0``
-            and ``1``) are excluded.
+            are omitted/empty, returns the most recent contacts. Assistant self
+            and boss system contacts are excluded.
 
         Notes
         -----
@@ -719,7 +897,47 @@ class ContactManager(BaseContactManager):
         - When multiple terms are provided, results are ranked by the sum of cosines across
           all terms to favour contacts similar across several fields.
         """
-        return _srch_search(self, references=references, k=k)
+        allowed_fields = list(self._BUILTIN_FIELDS)
+        if getattr(self, "_known_custom_fields", None):
+            allowed_fields.extend(sorted(self._known_custom_fields))
+
+        from ..session_details import SESSION_DETAILS
+
+        system_filter = (
+            f"contact_id != {int(SESSION_DETAILS.self_contact_id)} "
+            f"and contact_id != {int(SESSION_DETAILS.boss_contact_id)}"
+        )
+        contexts = [
+            FederatedSearchContext(
+                context=context,
+                source=context,
+                row_filter=system_filter,
+                allowed_fields=allowed_fields,
+            )
+            for context in self._read_contact_contexts()
+        ]
+        rows = federated_ranked_search(
+            contexts,
+            references,
+            limit=k,
+            backfill=True,
+        )
+
+        visible_contacts: list[Contact] = []
+        for row in rows:
+            source_context = row.get(CONTEXT_FIELD)
+            clean = {
+                key: value
+                for key, value in row.items()
+                if not key.startswith("_federated_")
+            }
+            if source_context:
+                try:
+                    self._data_store_for_context(source_context).put(clean)
+                except Exception:
+                    pass
+            visible_contacts.append(Contact(**clean))
+        return self._pack_contacts(visible_contacts)
 
     # Mutation tools
     def _create_contact(
@@ -735,6 +953,7 @@ class ContactManager(BaseContactManager):
         rolling_summary: Optional[str] = None,
         should_respond: bool = True,
         response_policy: Optional[str] = None,
+        destination: Optional[str] = None,
         **kwargs: Any,
     ) -> ToolOutcome:
         """
@@ -743,8 +962,8 @@ class ContactManager(BaseContactManager):
         Parameters
         ----------
         first_name : str | None
-            Given name. Validation guidance: should start with a capital letter; allowed
-            characters are letters, spaces, periods, and hyphens. Optional.
+            Given name. Allowed characters are Unicode letters/digits plus spaces,
+            periods, apostrophes, and hyphens (underscores are not allowed). Optional.
         surname : str | None
             Family name (stored in the ``surname`` column). Same validation guidance as
             ``first_name``. Optional.
@@ -758,9 +977,9 @@ class ContactManager(BaseContactManager):
             Free‑form notes or description about the contact. Optional.
         job_title : str | None
             Free‑text job title / specialization (e.g. "Growth marketing",
-            "QA engineer"). On the assistant contact (``contact_id == 0``)
-            this mirrors the assistant's job title from the backend and is
-            surfaced to the LLM via the broader-context prompt. Optional.
+            "QA engineer"). On the assistant self contact this mirrors the
+            assistant's job title from the backend and is surfaced to the LLM
+            via the broader-context prompt. Optional.
         timezone : str | None
             IANA Timezone identifier (e.g. "America/New_York"). Optional.
         rolling_summary : str | None
@@ -771,6 +990,21 @@ class ContactManager(BaseContactManager):
         response_policy : str | None
             Optional policy text that qualifies how the assistant should respond to this
             contact. When omitted, a safe default policy is automatically applied.
+        destination : str | None, default None
+            Where to file this contact. Pass ``"personal"`` (the default) for
+            contacts that belong only to you — personal acquaintances, family,
+            contacts whose interactions are private to your relationship with
+            your boss. Pass ``"team:<id>"`` for an operational team contact
+            that every member of a shared team should see (operatives,
+            customers, suppliers, peers in a shared workspace). The set of
+            available ``team:<id>`` values, each with a name and a
+            description naming the team / domain it exists for, is rendered in
+            the *Accessible shared teams* block of your system prompt — read
+            that block before choosing. The privacy floor: when in doubt
+            between personal and a team, pick personal. When confidence is
+            low and the contact would land in a shared team, call
+            ``request_clarification`` instead of guessing toward the wider
+            audience.
         Additional keyword arguments
         ----------------------------
         Any additional top‑level keyword arguments are treated as values for existing
@@ -797,15 +1031,18 @@ class ContactManager(BaseContactManager):
 
         Behaviour and Edge Cases
         ------------------------
-        - If this is the very first contact in the table, the record is inserted immediately
-          and Unify will assign ``contact_id == 0`` (reserved for the assistant account).
-          Subsequent creations will receive the next available id.
+        - New regular contacts receive the next available id in the destination root.
+          System contacts are provisioned separately from resolved session ids.
         - ``response_policy`` defaults to a conservative policy that avoids sharing sensitive
           information when not explicitly provided.
         - Unspecified fields remain ``None`` and can be populated later via ``update_contact``.
         - For custom columns, ensure the column exists beforehand via ``_create_custom_column``;
           otherwise the request will fail server‑side.
         """
+        try:
+            context = self._contact_context_for_destination(destination)
+        except ToolErrorException as exc:
+            return exc.payload
         return _op_create(
             self,
             first_name=first_name,
@@ -818,6 +1055,8 @@ class ContactManager(BaseContactManager):
             rolling_summary=rolling_summary,
             should_respond=should_respond,
             response_policy=response_policy,
+            context=context,
+            data_store=self._data_store_for_context(context),
             **kwargs,
         )
 
@@ -836,6 +1075,7 @@ class ContactManager(BaseContactManager):
         rolling_summary: Optional[str] = None,
         should_respond: Optional[bool] = None,
         response_policy: Optional[str] = None,
+        destination: Optional[str] = None,
         _log_id: Optional[int] = None,
         **kwargs: Any,
     ) -> ToolOutcome:
@@ -873,6 +1113,12 @@ class ContactManager(BaseContactManager):
             unchanged.
         response_policy : str | None
             Override the contact‑specific response policy. Omit to leave unchanged.
+        destination : str | None, default None
+            The team whose copy of this contact you are updating. Defaults to
+            ``"personal"`` (your private copy). Passing ``"team:<id>"``
+            updates the shared copy in that team and is visible to every
+            member. See the *Accessible shared teams* block in your system
+            prompt for the available teams and their descriptions.
         Additional keyword arguments
         ----------------------------
         Any additional top‑level keyword arguments are treated as updates for existing
@@ -899,7 +1145,10 @@ class ContactManager(BaseContactManager):
         - This operation overwrites the stored values for the selected fields.
         - ``contact_id`` itself cannot be changed.
         """
-
+        try:
+            context = self._contact_context_for_destination(destination)
+        except ToolErrorException as exc:
+            return exc.payload
         return _op_update(
             self,
             contact_id=contact_id,
@@ -915,6 +1164,8 @@ class ContactManager(BaseContactManager):
             should_respond=should_respond,
             response_policy=response_policy,
             _log_id=_log_id,
+            context=context,
+            data_store=self._data_store_for_context(context),
             **kwargs,
         )
 
@@ -922,6 +1173,7 @@ class ContactManager(BaseContactManager):
         self,
         *,
         contact_id: int,
+        destination: Optional[str] = None,
         _log_id: Optional[int] = None,
     ) -> ToolOutcome:
         """
@@ -931,6 +1183,12 @@ class ContactManager(BaseContactManager):
         ----------
         contact_id : int
             The identifier of the contact to remove. Must refer to a non‑system contact.
+        destination : str | None, default None
+            Which copy of the contact to remove. Defaults to ``"personal"``.
+            Passing ``"team:<id>"`` removes the shared copy from that team
+            for every member; do not delete a shared contact unless the team
+            decision is to remove the relationship entirely. See the
+            *Accessible shared teams* block in your system prompt.
 
         Returns
         -------
@@ -950,7 +1208,19 @@ class ContactManager(BaseContactManager):
         - This operation cannot be undone. Consider ``_merge_contacts`` to consolidate records
           without losing history.
         """
-        return _op_delete(self, contact_id=contact_id, _log_id=_log_id)
+        try:
+            context = self._contact_context_for_destination(destination)
+        except ToolErrorException as exc:
+            return exc.payload
+        outcome = _op_delete(
+            self,
+            contact_id=contact_id,
+            _log_id=_log_id,
+            context=context,
+            data_store=self._data_store_for_context(context),
+        )
+        self._delete_contact_memberships(contact_id, destination=destination)
+        return outcome
 
     def _merge_contacts(
         self,
@@ -958,6 +1228,7 @@ class ContactManager(BaseContactManager):
         contact_id_1: int,
         contact_id_2: int,
         overrides: Optional[Dict[str, int]] = None,
+        destination: Optional[str] = None,
     ) -> ToolOutcome:
         """
         Merge two contacts into a single consolidated record.
@@ -982,6 +1253,11 @@ class ContactManager(BaseContactManager):
 
             If not provided, the first non‑``None`` value in the order ``contact_id_1`` → ``contact_id_2`` is used for each column.
             The special key ``"contact_id"`` can be provided to explicitly choose which id to keep; the other contact will be deleted.
+        destination : str | None, default None
+            Which root the merge operates within. Defaults to ``"personal"``.
+            Passing ``"team:<id>"`` merges the two contacts inside that
+            team's contact pool; merging across roots is not supported.
+            See the *Accessible shared teams* block in your system prompt.
 
         Returns
         -------
@@ -995,7 +1271,7 @@ class ContactManager(BaseContactManager):
             - If either contact cannot be found.
             - If any value in ``overrides`` is not ``1`` or ``2``.
         RuntimeError
-            If the merge would delete a protected system contact (ids ``0`` or ``1``).
+            If the merge would delete a protected assistant self or boss contact.
 
         Notes
         -----
@@ -1004,12 +1280,17 @@ class ContactManager(BaseContactManager):
         - Custom fields are applied via ``update_contact``; built‑in fields are applied
           directly as arguments.
         """
-
+        try:
+            context = self._contact_context_for_destination(destination)
+        except ToolErrorException as exc:
+            return exc.payload
         return _op_merge(
             self,
             contact_id_1=contact_id_1,
             contact_id_2=contact_id_2,
             overrides=overrides,
+            context=context,
+            data_store=self._data_store_for_context(context),
         )
 
     def _move_to_blacklist(
@@ -1017,6 +1298,7 @@ class ContactManager(BaseContactManager):
         *,
         contact_id: int,
         reason: str,
+        destination: Optional[str] = None,
     ) -> ToolOutcome:
         """
         Add all non-empty contact details for the specified contact to the blacklist.
@@ -1031,6 +1313,10 @@ class ContactManager(BaseContactManager):
         Additionally, this tool deletes the contact from the Contacts table once the blacklist entries
         have been created. When no details exist to blacklist, the contact is still deleted as part of
         the move operation.
+        destination : str | None, default None
+            Which Contacts root contains the contact. Defaults to ``"personal"``.
+            Pass ``"team:<id>"`` when blacklisting a contact from a shared
+            team. See the *Accessible shared teams* block in your system prompt.
 
         Returns
         -------
@@ -1042,9 +1328,15 @@ class ContactManager(BaseContactManager):
         ValueError
             If the contact cannot be found.
         """
+        try:
+            context = self._contact_context_for_destination(destination)
+        except ToolErrorException as exc:
+            return exc.payload
+        store = self._data_store_for_context(context)
+
         # Fetch the contact row (public fields only)
         rows = unify.get_logs(
-            context=self._ctx,
+            context=context,
             filter=f"contact_id == {int(contact_id)}",
             limit=1,
             from_fields=self._allowed_fields(),
@@ -1076,7 +1368,17 @@ class ContactManager(BaseContactManager):
         if not detail_media:
             # Even when no details exist, delete the contact as part of the move
             try:
-                _op_delete(self, contact_id=contact_id, _log_id=None)
+                _op_delete(
+                    self,
+                    contact_id=contact_id,
+                    _log_id=None,
+                    context=context,
+                    data_store=store,
+                )
+                self._delete_contact_memberships(
+                    contact_id,
+                    destination=destination,
+                )
             except Exception:
                 # Best-effort delete; surface original outcome regardless
                 pass
@@ -1086,18 +1388,20 @@ class ContactManager(BaseContactManager):
             }
 
         blm = BlackListManager()
+        blacklist_context = blm._blacklist_context_for_destination(destination)
         created_ids: list[int] = []
 
         # Best-effort de-duplication per (medium, contact_detail)
         for detail, med in detail_media:
-            existing = blm.filter_blacklist(
+            existing = unify.get_logs(
+                context=blacklist_context,
                 filter=f"medium == '{med.value}' and contact_detail == '{detail}'",
                 limit=1,
-            )["entries"]
+            )
             if existing:
                 # Skip creating duplicates
                 try:
-                    created_ids.append(int(existing[0].blacklist_id))
+                    created_ids.append(int(existing[0].entries["blacklist_id"]))
                 except Exception:
                     pass
                 continue
@@ -1106,6 +1410,7 @@ class ContactManager(BaseContactManager):
                 medium=med,
                 contact_detail=detail,
                 reason=bl_reason,
+                destination=destination,
             )
             try:
                 created_ids.append(int(res["details"]["blacklist_id"]))
@@ -1113,10 +1418,14 @@ class ContactManager(BaseContactManager):
                 pass
 
         # Finally, delete the original contact
-        try:
-            _op_delete(self, contact_id=contact_id, _log_id=None)
-        except Exception:
-            pass
+        _op_delete(
+            self,
+            contact_id=contact_id,
+            _log_id=None,
+            context=context,
+            data_store=store,
+        )
+        self._delete_contact_memberships(contact_id, destination=destination)
 
         return {
             "outcome": "contact details moved to blacklist",
@@ -1199,14 +1508,13 @@ class ContactManager(BaseContactManager):
         int
             The total number of contacts.
         """
-        ret = unify.get_logs_metric(
-            metric="count",
+        return federated_count(
+            [
+                FederatedSearchContext(context=context, source=context)
+                for context in self._read_contact_contexts()
+            ],
             key="contact_id",
-            context=self._ctx,
         )
-        if ret is None:
-            return 0
-        return int(ret)
 
     def _get_columns(self) -> Dict[str, str]:
         return _storage_get_columns(self)
@@ -1216,9 +1524,13 @@ class ContactManager(BaseContactManager):
         _sys_ensure_columns_exist(self, extra_fields)
 
     def _sync_required_contacts(self) -> None:
+        from ..session_details import SESSION_DETAILS
+
+        self_contact_id = int(SESSION_DETAILS.self_contact_id)
+        boss_contact_id = int(SESSION_DETAILS.boss_contact_id)
         existing_logs = unify.get_logs(
             context=self._ctx,
-            filter="contact_id == 0 or contact_id == 1",
+            filter=f"contact_id == {self_contact_id} or contact_id == {boss_contact_id}",
             limit=2,
         )
         logs_by_contact_id = {
@@ -1226,10 +1538,14 @@ class ContactManager(BaseContactManager):
             for lg in existing_logs
             if lg.entries.get("contact_id") is not None
         }
-        assistant_log = logs_by_contact_id.get(0)
-        user_log = logs_by_contact_id.get(1)
-        _sys_provision_assistant_contact(self, assistant_log)
-        _sys_provision_user_contact(self, user_log)
+        assistant_log = logs_by_contact_id.get(self_contact_id)
+        user_log = logs_by_contact_id.get(boss_contact_id)
+        _sys_provision_assistant_contact(
+            self,
+            assistant_log,
+            contact_id=self_contact_id,
+        )
+        _sys_provision_user_contact(self, user_log, contact_id=boss_contact_id)
 
         # Sync org members (returns early if not org API key)
         _sys_provision_org_member_contacts(self)

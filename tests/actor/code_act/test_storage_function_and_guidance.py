@@ -47,6 +47,10 @@ class _TrackingGuidanceManager:
         """Filter guidance entries using a Python filter expression."""
         return []
 
+    def get_guidance(self, *, guidance_id):
+        """Fetch one guidance entry by id with its complete content."""
+        raise ValueError(f"No guidance found with guidance_id {guidance_id}.")
+
     def add_guidance(self, *, title, content, function_ids=None):
         """Add a guidance entry describing a compositional workflow or playbook."""
         self.add_calls.append(

@@ -11,9 +11,13 @@ from pydantic import (
 )
 from typing import Optional, ClassVar
 
+from unity.common.authorship import AuthoredRow
+
 _log = logging.getLogger(__name__)
 
-UNICODE_NAME_RE = r"^[^\W\d_](?:[^\W\d_]|[ .'-])*$"  # ← one reusable constant
+# Allow Unicode letters/digits plus space, apostrophe, hyphen, and period.
+# Keep underscore excluded to avoid machine-like identifier names in contacts.
+UNICODE_NAME_RE = r"^[^\W_](?:[^\W_]|[ .'-])*$"
 
 UNASSIGNED = -1
 
@@ -73,7 +77,7 @@ class ContactDetailsWhatsApp(ContactDetailsBase):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class Contact(BaseModel):
+class Contact(AuthoredRow):
     # Central, single source of truth for shorthand aliases (full → shorthand)
     SHORTHAND_MAP: ClassVar[dict[str, str]] = {
         "contact_id": "cid",
@@ -83,6 +87,7 @@ class Contact(BaseModel):
         "phone_number": "phone",
         "whatsapp_number": "wa",
         "discord_id": "disc",
+        "slack_user_id": "slack",
         "bio": "bio",
         "job_title": "jt",
         "rolling_summary": "rs",
@@ -104,12 +109,12 @@ class Contact(BaseModel):
     )
     first_name: Optional[str] = Field(
         default=None,
-        description="Contact's first name – letters (any script) plus . ' - and space",
+        description="Contact's first name – letters/digits (any script) plus . ' - and space",
         pattern=UNICODE_NAME_RE,
     )
     surname: Optional[str] = Field(
         default=None,
-        description="Contact's surname – letters (any script) plus . ' - and space",
+        description="Contact's surname – letters/digits (any script) plus . ' - and space",
         pattern=UNICODE_NAME_RE,
     )
     email_address: Optional[str] = Field(
@@ -134,6 +139,12 @@ class Contact(BaseModel):
         default=None,
         description="Discord user snowflake ID (digits only)",
         pattern=r"^[0-9]+$",
+        json_schema_extra={"unique": True},
+    )
+    slack_user_id: Optional[str] = Field(
+        default=None,
+        description="Slack user ID (workteam-scoped, e.g. 'U01ABC234' — letters and digits, optionally underscore-separated)",
+        pattern=r"^[A-Z0-9][A-Z0-9_]*$",
         json_schema_extra={"unique": True},
     )
     bio: Optional[str] = Field(
@@ -203,6 +214,7 @@ class Contact(BaseModel):
         "phone_number",
         "whatsapp_number",
         "discord_id",
+        "slack_user_id",
         "bio",
         "job_title",
         "rolling_summary",

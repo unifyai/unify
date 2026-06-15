@@ -80,13 +80,15 @@ Most tests sit somewhere between these extremes.
 
 ### Caching and Determinism
 
-When `UNILLM_CACHE="true"` (the default), all LLM responses are cached:
+When `UNILLM_CACHE="true"` locally, all LLM responses are cached:
 - **First run**: LLM executes normally; responses stored in `.cache.ndjson`
 - **Subsequent runs**: Cached responses replayed—no actual LLM calls
 
-Both test types become deterministic after caching. To re-evaluate LLM behavior:
+Normal GitHub Actions test runs use `UNILLM_CACHE="read-only"` so cache misses fail instead of calling paid LLM APIs. Use the protected **LLM Cache Refresh** workflow for intentional cache writes or uncached eval sampling.
+
+Both test types become deterministic after caching. To re-evaluate LLM behavior locally:
 ```bash
-parallel_run --env UNILLM_CACHE=false tests
+parallel_run --env UNILLM_CACHE=false tests/contact_manager/test_ask.py
 ```
 
 ### Marking Tests as Eval
@@ -194,8 +196,8 @@ kill_server --global  # Kill ALL tmux servers
 ### Run with different settings
 
 ```bash
-# Disable caching for fresh LLM calls
-parallel_run --env UNILLM_CACHE=false tests
+# Disable caching for fresh local LLM calls
+parallel_run --env UNILLM_CACHE=false tests/contact_manager/test_ask.py
 
 # Use isolated projects per test
 parallel_run --env UNIFY_TESTS_RAND_PROJ=true tests
@@ -222,8 +224,8 @@ For surgical test runs without straining your local machine, use GitHub Actions:
 
 - **No local CPU load** — tests run on GitHub's infrastructure
 - **No rate limiting** — GitHub runners have excellent network connectivity
-- **24 parallel jobs** — one per test folder, all running simultaneously
-- **Full `parallel_run.sh` support** — same flags work in CI as locally
+- **Matrix expansion for targeted paths** — broad matrices are rejected unless explicitly confirmed
+- **Guarded `parallel_run.sh` support** — normal CI rejects cache overrides, repeats, and oversized matrices
 
 ### Quick Cloud Run (`parallel_cloud_run.sh`)
 
@@ -233,11 +235,8 @@ The fastest way to run CI tests on your current code—even uncommitted changes:
 # Test current code state (handles uncommitted/unpushed automatically)
 parallel_cloud_run.sh tests/contact_manager
 
-# Run all tests
-parallel_cloud_run.sh .
-
-# Override a setting from .env
-parallel_cloud_run.sh --env UNILLM_CACHE=false tests/
+# Run another targeted path
+parallel_cloud_run.sh tests/common/test_production_settings.py
 ```
 
 The script automatically:
@@ -256,16 +255,13 @@ Tests are **off by default** to avoid unnecessary CI costs. Trigger them explici
 | Method | How to Trigger | What Runs |
 |--------|----------------|-----------|
 | **`parallel_cloud_run.sh`** | Run script locally | Current code state (auto-pushes staging branch) |
-| **`[run-tests]`** | Include in commit message or PR title | All 24 test folders (parallel workers) |
-| **`[parallel_run.sh ...]`** | Include in commit message or PR title | Specified paths/args (single worker) |
+| **`[run-tests]`** | Include in commit message or PR title | Rejected by the cost gate unless rerun manually with full-matrix confirmation |
+| **`[parallel_run.sh ...]`** | Include in commit message or PR title | Specified paths/args, if they stay within cost-policy limits |
 | **Manual** | GitHub Actions UI or `gh` CLI | Configurable via inputs |
 
 **Examples:**
 
 ```bash
-# Run ALL tests (24 parallel workers)
-git commit -m "Fix contact manager bug [run-tests]"
-
 # Run specific folder (single worker)
 git commit -m "Fix contact manager bug [parallel_run.sh tests/contact_manager]"
 
@@ -293,8 +289,14 @@ The fastest way to trigger CI tests without commits or the web UI:
 brew install gh
 gh auth login
 
-# Run all tests
-gh workflow run tests.yml --repo unifyai/unity --ref main
+# Run a targeted cached path
+gh workflow run tests.yml --repo unifyai/unity --ref main -f test_path=tests/contact_manager
+
+# Protected cache refresh / uncached eval path
+gh workflow run llm-cache-refresh.yml --repo unifyai/unity --ref main \
+  -f test_path=tests/contact_manager/test_ask.py \
+  -f cache_mode=write-misses \
+  -f confirm_llm_spend=LLM_SPEND_OK
 
 # Run specific folder
 gh workflow run tests.yml --repo unifyai/unity --ref main \
@@ -314,7 +316,8 @@ gh workflow run tests.yml --repo unifyai/unity --ref my-feature-branch \
 
 | Flag | Description |
 |------|-------------|
-| `-f test_path="..."` | Path to test folder/file (default: `.` for all) |
+| `-f test_path="..."` | Path to test folder/file; `.` is rejected unless confirmed |
+| `-f confirm_full_matrix="FULL_MATRIX_OK"` | Allows `test_path="."` or large matrices in normal cached CI |
 | `-f parallel_run_args="..."` | Extra args (see [Parallel Runner Reference](#parallel-runner-reference)) |
 | `-f timeout_minutes="N"` | Timeout in minutes (default: 120) |
 | `--ref <branch>` | Branch to run tests on |
@@ -469,7 +472,10 @@ Understanding how env vars flow from `.env` to your test process avoids subtle "
 1. `parallel_cloud_run.sh` base64-encodes your local `.env` and sends it as a workflow input.
 2. The CI runner decodes it back to `.env`, then `parallel_run.sh` sources it (same as local).
 3. CI also sets **job-level env vars** from GitHub secrets/repo variables (API keys, GCP config, etc.). These are always present regardless of `.env` content.
-4. **Commit-triggered tests** (`[run-tests]` in commit message) do **not** send any `.env` — they rely entirely on the job-level env vars.
+4. LLM provider secrets in CI must contain budget-limited project/workspace keys. `OPENAI_CI_API_KEY` must belong to a dedicated CI OpenAI project, and `ANTHROPIC_CI_API_KEY` must belong to a dedicated CI Anthropic workspace.
+5. **Commit-triggered tests** (`[run-tests]` in commit message) do **not** send any `.env` — they rely entirely on the job-level env vars.
+
+Normal CI sets `UNILLM_CACHE=read-only`, rejects explicit cache overrides in `parallel_run_args`, and removes local LLM provider keys/cache settings from pasted `.env` content. Cache writes and uncached evals must use the protected **LLM Cache Refresh** workflow.
 
 ### pydantic-settings (Python side)
 

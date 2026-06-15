@@ -14,6 +14,7 @@ Tests cover:
 
 from __future__ import annotations
 
+import os
 from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -739,6 +740,44 @@ class TestPhoneCallHandlers:
         )
 
     @pytest.mark.asyncio
+    async def test_phone_call_ended_preserves_in_flight_actions(self, mock_cm):
+        """PhoneCallEnded leaves action lifecycle decisions to the slow brain."""
+        mock_cm.mode = Mode.CALL
+        mock_cm.contact_index.push_message(
+            contact_id=2,
+            sender_name="Alice",
+            thread_name=Medium.PHONE_CALL,
+            message_content="test",
+        )
+        mock_cm.contact_index.active_conversations[2].on_call = True
+
+        handle = MagicMock()
+        handle.done.return_value = False
+        handle.stop = AsyncMock()
+        mock_cm.in_flight_actions = {
+            42: {
+                "handle": handle,
+                "instruction": "Research this and let me know when it is done",
+                "handle_actions": [],
+            },
+        }
+
+        event = PhoneCallEnded(
+            contact={"contact_id": 2, "phone_number": "+15555552222"},
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        handle.stop.assert_not_called()
+        assert 42 in mock_cm.in_flight_actions
+        assert 42 not in mock_cm.completed_actions
+        mock_cm.request_llm_run.assert_called_once_with(
+            delay=0,
+            cancel_running=True,
+            triggering_contact_id=2,
+        )
+
+    @pytest.mark.asyncio
     async def test_whatsapp_permission_keeps_legacy_room_name_when_agent_id_missing(
         self,
         mock_cm,
@@ -793,11 +832,23 @@ class TestUnifyMeetHandlers:
         event = UnifyMeetReceived(
             contact={"contact_id": 1},  # Boss contact
             room_name="room_123",
+            opening_config={
+                "mode": "simulated",
+                "simulated_utterance": "Hi, I'm Marty.",
+                "source": "marty_onboarding_intro",
+            },
         )
 
         await EventHandler.handle_event(event, mock_cm)
 
         mock_cm.call_manager.start_unify_meet.assert_called_once()
+        assert mock_cm.call_manager.start_unify_meet.await_args.kwargs[
+            "opening_config"
+        ] == {
+            "mode": "simulated",
+            "simulated_utterance": "Hi, I'm Marty.",
+            "source": "marty_onboarding_intro",
+        }
 
     @pytest.mark.asyncio
     async def test_unify_meet_started_sets_mode(self, mock_cm):
@@ -912,7 +963,7 @@ class TestVoiceUtteranceHandlers:
         """FastBrainNotification adds guidance message to voice thread."""
         event = FastBrainNotification(
             contact={"contact_id": 2},
-            content="Please mention the meeting at 3pm",
+            message="Please mention the meeting at 3pm",
         )
 
         await EventHandler.handle_event(event, mock_cm)
@@ -987,12 +1038,13 @@ class TestActorEventHandlers:
     async def test_actor_result_moves_action_to_completed(self, mock_cm):
         """ActorResult moves action from in_flight_actions to completed_actions."""
         mock_cm.in_flight_actions = {
-            1: {"query": "Test action", "handle_actions": []},
+            1: {"query": "Test action", "action_type": "act", "handle_actions": []},
         }
         event = ActorResult(
             handle_id=1,
             success=True,
             result="Action completed successfully",
+            action_type="act",
         )
 
         await EventHandler.handle_event(event, mock_cm)
@@ -1002,9 +1054,44 @@ class TestActorEventHandlers:
         assert mock_cm.completed_actions[1]["query"] == "Test action"
         # Result is recorded in handle_actions as act_completed event
         handle_actions = mock_cm.completed_actions[1]["handle_actions"]
-        assert any(a["action_name"] == "act_completed" for a in handle_actions)
+        completion = next(
+            a for a in handle_actions if a["action_name"] == "act_completed"
+        )
+        assert completion["success"] is True
+        assert completion["action_type"] == "act"
+        assert completion["result"] == "Action completed successfully"
         # No notification pushed (result is shown in completed_actions section)
         assert len(mock_cm.notifications_bar.notifications) == 0
+
+    @pytest.mark.asyncio
+    async def test_actor_result_failure_records_error_context(self, mock_cm):
+        """ActorResult failure stores error context before completion handoff."""
+        mock_cm.in_flight_actions = {
+            7: {
+                "query": "Fix coordinator memberships",
+                "action_type": "act",
+                "handle_actions": [],
+            },
+        }
+        event = ActorResult(
+            handle_id=7,
+            success=False,
+            result={"error_kind": "permission_denied"},
+            error="Coordinator role required",
+            action_type="act",
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        assert 7 not in mock_cm.in_flight_actions
+        completed = mock_cm.completed_actions[7]
+        completion = next(
+            a for a in completed["handle_actions"] if a["action_name"] == "act_failed"
+        )
+        assert completion["success"] is False
+        assert completion["action_type"] == "act"
+        assert completion["error"] == "Coordinator role required"
+        assert completion["result"] == {"error_kind": "permission_denied"}
 
     @pytest.mark.asyncio
     async def test_actor_handle_response_updates_matching_pending_action(
@@ -2723,6 +2810,7 @@ class TestAssistantUpdateEventHandler:
             user_email="boss@updated.com",
             voice_id="voice_123",
             voice_provider="cartesia",
+            is_coordinator=True,
         )
 
         with patch(
@@ -2760,6 +2848,7 @@ class TestAssistantUpdateEventHandler:
             user_email="boss@updated.com",
             voice_id="voice_123",
             voice_provider="cartesia",
+            is_coordinator=True,
         )
 
         with patch(
@@ -2769,6 +2858,7 @@ class TestAssistantUpdateEventHandler:
             await EventHandler.handle_event(event, mock_cm)
 
         mock_cm.set_details.assert_called_once()
+        assert mock_cm.set_details.call_args.args[0]["is_coordinator"] is True
 
     @pytest.mark.asyncio
     async def test_assistant_update_updates_call_config(self, mock_cm):
@@ -2894,6 +2984,122 @@ class TestAssistantUpdateEventHandler:
 
         # set_details should still be called
         mock_cm.set_details.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_membership_update_rebinds_space_roots_without_restart(
+        self,
+        mock_cm,
+        monkeypatch,
+    ):
+        """Membership updates refresh reachable roots without running config side effects."""
+        from unity.common.context_registry import (
+            PERSONAL_ROOT_IDENTITY,
+            TEAM_CONTEXT_PREFIX,
+            ContextRegistry,
+        )
+        from unity.session_details import SESSION_DETAILS
+
+        SESSION_DETAILS.team_ids = [3, 7]
+        SESSION_DETAILS.self_contact_id = 0
+        SESSION_DETAILS.boss_contact_id = 1
+        monkeypatch.delenv("SELF_CONTACT_ID", raising=False)
+        monkeypatch.delenv("BOSS_CONTACT_ID", raising=False)
+        monkeypatch.delenv("TEAM_SUMMARIES", raising=False)
+        ContextRegistry._registry = {
+            ("TaskScheduler", "Tasks", PERSONAL_ROOT_IDENTITY): "user456/123/Tasks",
+            ("TaskScheduler", "Tasks", f"{TEAM_CONTEXT_PREFIX}3"): "Teams/3/Tasks",
+            ("TaskScheduler", "Tasks", f"{TEAM_CONTEXT_PREFIX}7"): "Teams/7/Tasks",
+        }
+        mock_cm.set_details = MagicMock()
+        mock_cm.get_call_config = MagicMock(return_value={})
+
+        event = AssistantUpdateEvent(
+            api_key="test_key",
+            medium="assistant_update",
+            assistant_id="asst_123",
+            user_id="user_456",
+            assistant_first_name="Updated",
+            assistant_surname="Assistant",
+            assistant_age="25",
+            assistant_nationality="US",
+            assistant_about="Test assistant",
+            assistant_number="+15555550001",
+            assistant_email="assistant@updated.com",
+            user_first_name="Updated",
+            user_surname="Boss",
+            user_number="+15555550002",
+            user_email="boss@updated.com",
+            voice_id="voice_123",
+            voice_provider="cartesia",
+            update_kind="membership",
+            team_ids=[7, 11],
+            team_summaries=[
+                {
+                    "team_id": 7,
+                    "name": "Ops",
+                    "description": "Operations workspace for customer support.",
+                },
+                {
+                    "team_id": 11,
+                    "name": "Repairs",
+                    "description": "South-East repairs patch daily operations.",
+                },
+            ],
+            self_contact_id=42,
+            boss_contact_id=43,
+        )
+
+        with patch(
+            "unity.conversation_manager.domains.event_handlers.managers_utils",
+        ) as mock_utils:
+            mock_utils.queue_operation = AsyncMock()
+            try:
+                await EventHandler.handle_event(event, mock_cm)
+
+                assert SESSION_DETAILS.team_ids == [7, 11]
+                assert SESSION_DETAILS.self_contact_id == 42
+                assert SESSION_DETAILS.boss_contact_id == 43
+                assert os.environ["SELF_CONTACT_ID"] == "42"
+                assert os.environ["BOSS_CONTACT_ID"] == "43"
+                assert (
+                    "South-East repairs patch daily operations."
+                    in os.environ["TEAM_SUMMARIES"]
+                )
+                assert mock_cm.team_ids == [7, 11]
+                assert [summary.team_id for summary in mock_cm.team_summaries] == [
+                    7,
+                    11,
+                ]
+                assert mock_cm.self_contact_id == 42
+                assert mock_cm.boss_contact_id == 43
+                assert (
+                    ContextRegistry._registry[
+                        ("TaskScheduler", "Tasks", PERSONAL_ROOT_IDENTITY)
+                    ]
+                    == "user456/123/Tasks"
+                )
+                assert (
+                    ContextRegistry._registry[
+                        ("TaskScheduler", "Tasks", f"{TEAM_CONTEXT_PREFIX}7")
+                    ]
+                    == "Teams/7/Tasks"
+                )
+                assert (
+                    "TaskScheduler",
+                    "Tasks",
+                    f"{TEAM_CONTEXT_PREFIX}3",
+                ) not in ContextRegistry._registry
+                assert (
+                    "TaskScheduler",
+                    "Tasks",
+                    f"{TEAM_CONTEXT_PREFIX}11",
+                ) not in ContextRegistry._registry
+                mock_cm.set_details.assert_not_called()
+                mock_cm.call_manager.set_config.assert_not_called()
+                mock_utils.queue_operation.assert_not_called()
+            finally:
+                ContextRegistry.clear()
+                SESSION_DETAILS.reset()
 
     @pytest.mark.asyncio
     async def test_update_session_contacts_updates_both_contacts(self, mock_cm):

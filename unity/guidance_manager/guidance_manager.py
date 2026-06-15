@@ -3,22 +3,48 @@ from __future__ import annotations
 from typing import FrozenSet, List, Dict, Optional, Any, Tuple
 import base64
 import functools
+import inspect
 import re
 
 import unify
 
 from ..common.log_utils import log as unity_log
-from ..common.tool_outcome import ToolOutcome
+from ..common.tool_outcome import ToolErrorException, ToolOutcome
 from ..common.model_to_fields import model_to_fields
 from ..common.context_store import TableStore
-from ..common.search_utils import table_search_top_k
+from ..common.federated_search import (
+    FederatedSearchContext,
+    federated_count,
+    federated_filter,
+    federated_ranked_search,
+    is_missing_context_error,
+)
+from ..common.builtins import builtins_project
 from .base import BaseGuidanceManager
+from .builtins_catalog import BUILTINS_GUIDANCE_CONTEXT
 from .types.guidance import Guidance
 from ..manager_registry import ManagerRegistry
 from ..image_manager.types import AnnotatedImageRefs, AnnotatedImageRef
 from ..common.embed_utils import ensure_vector_column, list_private_fields
 from ..common.filter_utils import normalize_filter_expr
 from ..common.context_registry import TableContext, ContextRegistry
+
+GUIDANCE_TABLE = "Guidance"
+FUNCTIONS_COMPOSITIONAL_TABLE = "Functions/Compositional"
+
+# Content cap for search/filter result payloads. Entries (notably imported
+# builtin skills) can run to 100KB+; returning them wholesale from list-style
+# reads floods the caller's context window. Reads above this cap return a
+# preview and the full text is fetched per entry via ``get_guidance``.
+GUIDANCE_PREVIEW_CHARS = 2000
+GUIDANCE_DESTINATION_GUIDANCE = """destination : str | None, default None
+    Where this guidance lives. Pass ``"personal"`` (the default) for private
+    working preferences and individual reminders. Pass ``"team:<id>"`` for
+    team-level guidance every member of the team should follow: shared
+    response style, team-wide do/don't rules, and operational SOPs the team
+    agrees on. See the *Accessible shared teams* block in your system prompt
+    for available teams and descriptions. Pick personal when in doubt; call
+    ``request_clarification`` when the right audience is unclear."""
 
 
 class GuidanceManager(BaseGuidanceManager):
@@ -29,7 +55,7 @@ class GuidanceManager(BaseGuidanceManager):
     class Config:
         required_contexts = [
             TableContext(
-                name="Guidance",
+                name=GUIDANCE_TABLE,
                 description="Table of distilled guidance entries from transcripts and images.",
                 fields=model_to_fields(Guidance),
                 unique_keys={"guidance_id": "int"},
@@ -43,7 +69,7 @@ class GuidanceManager(BaseGuidanceManager):
                     },
                     {
                         "name": "function_ids[*]",
-                        "references": "Functions/Compositional.function_id",
+                        "references": f"{FUNCTIONS_COMPOSITIONAL_TABLE}.function_id",
                         "on_delete": "CASCADE",  # pop on function deletion
                         "on_update": "CASCADE",
                     },
@@ -60,7 +86,7 @@ class GuidanceManager(BaseGuidanceManager):
     ) -> None:
         super().__init__()
         self.include_in_multi_assistant_table = True
-        self._ctx = ContextRegistry.get_context(self, "Guidance")
+        self._ctx = ContextRegistry.get_context(self, GUIDANCE_TABLE)
 
         self._filter_scope = filter_scope
         self._exclude_ids = frozenset(exclude_ids) if exclude_ids else None
@@ -79,6 +105,58 @@ class GuidanceManager(BaseGuidanceManager):
 
         # Ensure context/schema and prefill known custom fields
         self._provision_storage()
+
+    def _guidance_context_for_root(self, root_context: str) -> str:
+        """Return the concrete Guidance context under a registry root."""
+        return f"{root_context.strip('/')}/{GUIDANCE_TABLE}"
+
+    def _guidance_context_for_destination(self, destination: str | None) -> str:
+        """Resolve a public destination into one concrete Guidance context."""
+        root_context = ContextRegistry.write_root(
+            self,
+            GUIDANCE_TABLE,
+            destination=destination,
+        )
+        return self._guidance_context_for_root(root_context)
+
+    def _read_guidance_contexts(self) -> list[str]:
+        """Return personal-first Guidance contexts visible to this assistant."""
+        return list(
+            dict.fromkeys(
+                self._guidance_context_for_root(root)
+                for root in ContextRegistry.read_roots(self, GUIDANCE_TABLE)
+            ),
+        )
+
+    def _builtins_read_spec(
+        self,
+        *,
+        row_filter: Optional[str] = None,
+        allowed_fields: Optional[List[str]] = None,
+    ) -> FederatedSearchContext:
+        """Return the federated source for the global builtins guidance catalogue."""
+        return FederatedSearchContext(
+            context=BUILTINS_GUIDANCE_CONTEXT,
+            source="builtins",
+            row_filter=row_filter,
+            allowed_fields=allowed_fields,
+            project=builtins_project(),
+        )
+
+    def _function_contexts_for_read(self) -> list[str]:
+        """Return compositional function contexts visible to guidance reads."""
+        from ..function_manager.function_manager import (
+            FUNCTIONS_COMPOSITIONAL_TABLE as FUNCTION_MANAGER_COMPOSITIONAL_TABLE,
+            FunctionManager,
+        )
+
+        return [
+            f"{root.strip('/')}/{FUNCTION_MANAGER_COMPOSITIONAL_TABLE}"
+            for root in ContextRegistry.read_roots(
+                FunctionManager,
+                FUNCTION_MANAGER_COMPOSITIONAL_TABLE,
+            )
+        ]
 
     # ------------------------------- Helpers ---------------------------------
 
@@ -133,16 +211,59 @@ class GuidanceManager(BaseGuidanceManager):
             return parts[0]
         return " and ".join(f"({p})" for p in parts)
 
+    def _is_builtin_guidance(self, guidance_id: int) -> bool:
+        """Return whether an id refers to a row in the builtins catalogue."""
+        try:
+            rows = unify.get_logs(
+                context=BUILTINS_GUIDANCE_CONTEXT,
+                project=builtins_project(),
+                filter=f"guidance_id == {int(guidance_id)}",
+                limit=1,
+                from_fields=["guidance_id"],
+            )
+        except Exception as exc:
+            if is_missing_context_error(exc):
+                return False
+            raise
+        return bool(rows)
+
+    def _raise_if_builtin(self, guidance_id: int, action: str) -> None:
+        """Refuse mutations of builtins entries with an actionable error."""
+        if self._is_builtin_guidance(guidance_id):
+            raise ValueError(
+                f"guidance_id {guidance_id} is a built-in platform guidance "
+                f"entry and cannot be {action}. Built-in guidance is "
+                "read-only for everyone. To tailor it, create your own "
+                "entry with add_guidance (optionally adapting the built-in "
+                "content) and the personal copy can then be updated or "
+                "deleted freely.",
+            )
+
+    @staticmethod
+    def _with_content_preview(row: Guidance) -> Guidance:
+        """Return *row* with content truncated to the list-read preview cap."""
+        if len(row.content) <= GUIDANCE_PREVIEW_CHARS:
+            return row
+        preview = (
+            row.content[:GUIDANCE_PREVIEW_CHARS]
+            + f"\n\n… [content preview truncated at {GUIDANCE_PREVIEW_CHARS:,} "
+            f"of {len(row.content):,} chars — fetch the full entry with "
+            f"get_guidance(guidance_id={row.guidance_id})]"
+        )
+        return row.model_copy(update={"content": preview})
+
     def _num_items(self) -> int:
-        ret = unify.get_logs_metric(
-            metric="count",
+        return federated_count(
+            [
+                *(
+                    FederatedSearchContext(context=context, source=context)
+                    for context in self._read_guidance_contexts()
+                ),
+                self._builtins_read_spec(),
+            ],
             key="guidance_id",
             filter=self._scoped_filter(None),
-            context=self._ctx,
         )
-        if ret is None:
-            return 0
-        return int(ret)
 
     @functools.wraps(BaseGuidanceManager.clear, updated=())
     def clear(self) -> None:
@@ -155,7 +276,7 @@ class GuidanceManager(BaseGuidanceManager):
             pass
 
         # Ensure the schema exists again via shared provisioning helper
-        ContextRegistry.refresh(self, "Guidance")
+        self._ctx = ContextRegistry.refresh(self, GUIDANCE_TABLE) or self._ctx
         self._provision_storage()
 
         # Verify the context is visible before attempting reads
@@ -548,6 +669,7 @@ class GuidanceManager(BaseGuidanceManager):
         content: Optional[str] = None,
         images: AnnotatedImageRefs | None = None,
         function_ids: Optional[List[int]] = None,
+        destination: str | None = None,
     ) -> ToolOutcome:
         if not title and not content and not images:
             raise ValueError(
@@ -563,12 +685,17 @@ class GuidanceManager(BaseGuidanceManager):
             ),
             function_ids=function_ids or [],
         )
+        try:
+            context = self._guidance_context_for_destination(destination)
+        except ToolErrorException as exc:
+            return exc.payload  # type: ignore[return-value]
         payload = g.to_post_json()
         log = unity_log(
-            context=self._ctx,
+            context=context,
             **payload,
             new=True,
             mutable=True,
+            stamp_authoring=True,
             add_to_all_context=self.include_in_multi_assistant_table,
         )
         return {
@@ -585,6 +712,7 @@ class GuidanceManager(BaseGuidanceManager):
         content: Optional[str] = None,
         images: AnnotatedImageRefs | None = None,
         function_ids: Optional[List[int]] = None,
+        destination: str | None = None,
     ) -> ToolOutcome:
         updates: Dict[str, Any] = {}
         if title is not None:
@@ -611,8 +739,13 @@ class GuidanceManager(BaseGuidanceManager):
         if not updates:
             raise ValueError("At least one field must be provided for an update.")
 
+        try:
+            context = self._guidance_context_for_destination(destination)
+        except ToolErrorException as exc:
+            return exc.payload  # type: ignore[return-value]
+        self._raise_if_builtin(guidance_id, "updated")
         ids = unify.get_logs(
-            context=self._ctx,
+            context=context,
             filter=f"guidance_id == {int(guidance_id)}",
             limit=2,
             return_ids_only=True,
@@ -627,7 +760,7 @@ class GuidanceManager(BaseGuidanceManager):
             )
         unify.update_logs(
             logs=[ids[0]],
-            context=self._ctx,
+            context=context,
             entries=updates,
             overwrite=True,
         )
@@ -635,9 +768,8 @@ class GuidanceManager(BaseGuidanceManager):
 
     # ─────────────────────────── Functions helpers ───────────────────────────
     def _functions_context(self) -> str:
-        ctxs = unify.get_active_context()
-        read_ctx = ctxs.get("read")
-        return f"{read_ctx}/Functions" if read_ctx else "Functions"
+        """Return the personal compositional functions context."""
+        return self._function_contexts_for_read()[0]
 
     def _get_functions_for_guidance(
         self,
@@ -670,11 +802,15 @@ class GuidanceManager(BaseGuidanceManager):
 
         # Build a safe filter like: (function_id == 1) or (function_id == 2)
         filt = " or ".join(f"function_id == {int(fid)}" for fid in fids)
-        funcs = unify.get_logs(
-            context=self._functions_context(),
-            filter=filt or "False",
-            exclude_fields=list_private_fields(self._functions_context()),
-        )
+        funcs = []
+        for context in self._function_contexts_for_read():
+            funcs.extend(
+                unify.get_logs(
+                    context=context,
+                    filter=filt or "False",
+                    exclude_fields=list_private_fields(context),
+                ),
+            )
 
         out: List[Dict[str, Any]] = []
         for lg in funcs:
@@ -719,9 +855,19 @@ class GuidanceManager(BaseGuidanceManager):
         return {"attached_count": len(funcs), "functions": funcs}
 
     @functools.wraps(BaseGuidanceManager.delete_guidance, updated=())
-    def delete_guidance(self, *, guidance_id: int) -> ToolOutcome:
+    def delete_guidance(
+        self,
+        *,
+        guidance_id: int,
+        destination: str | None = None,
+    ) -> ToolOutcome:
+        try:
+            context = self._guidance_context_for_destination(destination)
+        except ToolErrorException as exc:
+            return exc.payload  # type: ignore[return-value]
+        self._raise_if_builtin(guidance_id, "deleted")
         ids = unify.get_logs(
-            context=self._ctx,
+            context=context,
             filter=f"guidance_id == {int(guidance_id)}",
             limit=2,
             return_ids_only=True,
@@ -734,7 +880,7 @@ class GuidanceManager(BaseGuidanceManager):
             raise RuntimeError(
                 f"Multiple rows found with guidance_id {guidance_id}. Data integrity issue.",
             )
-        unify.delete_logs(context=self._ctx, logs=ids[0])
+        unify.delete_logs(context=context, logs=ids[0])
         return {"outcome": "guidance deleted", "details": {"guidance_id": guidance_id}}
 
     @functools.wraps(BaseGuidanceManager.search, updated=())
@@ -745,15 +891,28 @@ class GuidanceManager(BaseGuidanceManager):
         k: int = 10,
     ) -> List[Guidance]:
         allowed_fields = list(self._BUILTIN_FIELDS)
-        rows = table_search_top_k(
-            context=self._ctx,
-            references=references,
-            k=k,
-            allowed_fields=allowed_fields,
-            unique_id_field="guidance_id",
-            row_filter=self._scoped_filter(None),
+        rows = federated_ranked_search(
+            [
+                *(
+                    FederatedSearchContext(
+                        context=context,
+                        source=context,
+                        row_filter=self._scoped_filter(None),
+                        allowed_fields=allowed_fields,
+                    )
+                    for context in self._read_guidance_contexts()
+                ),
+                self._builtins_read_spec(
+                    row_filter=self._scoped_filter(None),
+                    allowed_fields=allowed_fields,
+                ),
+            ],
+            references,
+            limit=k,
+            backfill=True,
+            annotate=False,
         )
-        return [Guidance(**r) for r in rows]
+        return [self._with_content_preview(Guidance(**r)) for r in rows]
 
     @functools.wraps(BaseGuidanceManager.filter, updated=())
     def filter(
@@ -764,12 +923,69 @@ class GuidanceManager(BaseGuidanceManager):
         limit: int = 100,
     ) -> List[Guidance]:
         from_fields = list(self._BUILTIN_FIELDS)
-        normalized = self._scoped_filter(normalize_filter_expr(filter))
-        logs = unify.get_logs(
-            context=self._ctx,
-            filter=normalized,
+        rows = federated_filter(
+            [
+                *(
+                    FederatedSearchContext(
+                        context=context,
+                        source=context,
+                        allowed_fields=from_fields,
+                    )
+                    for context in self._read_guidance_contexts()
+                ),
+                self._builtins_read_spec(allowed_fields=from_fields),
+            ],
+            filter=self._scoped_filter(normalize_filter_expr(filter)),
             offset=offset,
             limit=limit,
-            from_fields=from_fields,
+            annotate=False,
         )
-        return [Guidance(**lg.entries) for lg in logs]
+        return [self._with_content_preview(Guidance(**row)) for row in rows]
+
+    @functools.wraps(BaseGuidanceManager.get_guidance, updated=())
+    def get_guidance(
+        self,
+        *,
+        guidance_id: int,
+    ) -> Guidance:
+        from_fields = list(self._BUILTIN_FIELDS)
+        rows = federated_filter(
+            [
+                *(
+                    FederatedSearchContext(
+                        context=context,
+                        source=context,
+                        allowed_fields=from_fields,
+                    )
+                    for context in self._read_guidance_contexts()
+                ),
+                self._builtins_read_spec(allowed_fields=from_fields),
+            ],
+            filter=self._scoped_filter(f"guidance_id == {int(guidance_id)}"),
+            limit=1,
+            annotate=False,
+        )
+        if not rows:
+            raise ValueError(f"No guidance found with guidance_id {guidance_id}.")
+        return Guidance(**rows[0])
+
+
+def _append_destination_guidance(method_name: str) -> None:
+    method = getattr(GuidanceManager, method_name)
+    method.__doc__ = f"{method.__doc__ or ''}\n\n{GUIDANCE_DESTINATION_GUIDANCE}"
+    signature = inspect.signature(method)
+    if "destination" not in signature.parameters:
+        parameters = list(signature.parameters.values())
+        parameters.append(
+            inspect.Parameter(
+                "destination",
+                inspect.Parameter.KEYWORD_ONLY,
+                default=None,
+                annotation=str | None,
+            ),
+        )
+        method.__signature__ = signature.replace(parameters=parameters)  # type: ignore[attr-defined]
+
+
+for _destination_method in ("add_guidance", "update_guidance", "delete_guidance"):
+    _append_destination_guidance(_destination_method)

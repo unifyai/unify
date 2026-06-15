@@ -362,7 +362,7 @@ async def _queue_fast_brain_task_context(
         return
     notification = FastBrainNotification(
         contact=contact or getattr(cm.call_manager, "_disconnect_contact", None) or {},
-        content=content,
+        message=content,
         should_speak=False,
         source=source,
     )
@@ -401,6 +401,7 @@ async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> b
         activation_revision=event.activation_revision,
         source_task_log_id=event.source_task_log_id,
         scheduled_for=event.scheduled_for,
+        destination=event.destination,
     )
     if stale_reason is not None:
         cm._session_logger.info(
@@ -421,6 +422,7 @@ async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> b
                 execution_mode="live",
                 source_task_log_id=event.source_task_log_id,
                 activation_revision=event.activation_revision,
+                destination=event.destination,
                 scheduled_for=event.scheduled_for,
                 task_name=(activation.task_name if activation is not None else None),
                 task_description=(
@@ -471,6 +473,10 @@ async def _consume_startup_wake_reasons(cm: "ConversationManager") -> None:
         _handle_inactivity_followup_event,
         _inactivity_followup_event_from_wake_reason,
     )
+    from unity.conversation_manager.domains.coordinator_delegate import (
+        _coordinator_delegate_event_from_wake_reason,
+        _handle_coordinator_delegate_event,
+    )
 
     wake_reasons = list(getattr(cm, "_startup_wake_reasons", []) or [])
     cm._startup_wake_reasons = []
@@ -489,6 +495,13 @@ async def _consume_startup_wake_reasons(cm: "ConversationManager") -> None:
         inactivity_event = _inactivity_followup_event_from_wake_reason(wake_reason)
         if inactivity_event is not None:
             await _handle_inactivity_followup_event(inactivity_event, cm)
+            continue
+
+        coordinator_delegate_event = _coordinator_delegate_event_from_wake_reason(
+            wake_reason,
+        )
+        if coordinator_delegate_event is not None:
+            await _handle_coordinator_delegate_event(coordinator_delegate_event, cm)
             continue
 
         cm._session_logger.info(
@@ -820,6 +833,7 @@ async def _surface_trigger_task_candidates(
                 execution_mode="live",
                 source_task_log_id=candidate.source_task_log_id,
                 activation_revision=candidate.activation_revision,
+                destination=candidate.destination,
                 source_medium=medium.value,
                 source_ref=source_ref,
                 source_contact_id=(str(contact_id) if contact_id is not None else None),

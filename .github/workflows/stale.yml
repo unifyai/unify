@@ -1,0 +1,68 @@
+name: Stale issues and PRs
+
+# Automatic triage of inactive issues and pull requests. Runs daily.
+#
+# Conservative timings — assumes an OSS project with limited maintainer
+# bandwidth, so we leave plenty of room for slow-but-real conversations
+# before nudging:
+#
+#   Issues   warn after 60 days idle  → close 14 days after warning
+#   PRs      warn after 30 days idle  → close 14 days after warning
+#
+# Any of the exempt labels (`pinned`, `security`, `no-stale`, `help wanted`,
+# `work-in-progress`) skips staling entirely. Adding a comment, pushing a
+# commit, or removing the `stale` label clears the timer.
+#
+# Uses the built-in `actions/stale@v9` with the default `GITHUB_TOKEN` —
+# no GitHub App, no secrets beyond what's already issued to the workflow.
+
+on:
+  schedule:
+  - cron: '17 3 * * *'   # daily, 03:17 UTC (off-peak)
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: stale
+  cancel-in-progress: false
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/stale@v9
+      with:
+        days-before-issue-stale: 60
+        days-before-issue-close: 14
+        days-before-pr-stale: 30
+        days-before-pr-close: 14
+        stale-issue-label: stale
+        stale-pr-label: stale
+        exempt-issue-labels: 'pinned,security,no-stale,help wanted'
+        exempt-pr-labels: 'pinned,security,no-stale,work-in-progress'
+        stale-issue-message: |
+          This issue has been automatically marked as stale because it
+          has not had recent activity. It will be closed in 14 days if
+          no further activity occurs. If this is still relevant, add a
+          comment or remove the `stale` label.
+        stale-pr-message: |
+          This pull request has been automatically marked as stale
+          because it has not had recent activity. It will be closed in
+          14 days if no further activity occurs. If you intend to keep
+          working on it, add a comment or remove the `stale` label.
+        close-issue-message: |
+          Closing due to inactivity. If this is still happening on the
+          latest commit, please open a new issue with fresh reproduction
+          steps.
+        close-pr-message: |
+          Closing due to inactivity. If you'd like to revive this PR,
+          comment to ping a maintainer or open a fresh PR against the
+          current `staging`.
+        close-issue-reason: not_planned
+        remove-stale-when-updated: true
+        ascending: true
+        operations-per-run: 100

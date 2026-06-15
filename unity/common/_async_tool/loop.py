@@ -3,6 +3,7 @@ import unillm
 import json
 import inspect
 import copy
+from dataclasses import dataclass, field
 
 from typing import (
     Dict,
@@ -66,6 +67,15 @@ from ...common.hierarchical_logger import ICONS
 if TYPE_CHECKING:
     from .multi_handle import MultiHandleCoordinator
     from unillm.types import PromptCacheParam
+
+
+@dataclass
+class ToolLoopRuntimeState:
+    call_counts: Dict[str, int] = field(default_factory=dict)
+    called_tools: list[str] = field(default_factory=list)
+    step_index: int = 0
+    consecutive_failures: int = 0
+    message_count_offset: int = 0
 
 
 def prune_duplicate_tool_calls(tool_calls: list) -> tuple[list, set[str]]:
@@ -178,26 +188,32 @@ class LoopLogger:
 
 
 class _LoopToolFailureTracker:
-    def __init__(self, max_consecutive_failures: int):
-        self._consecutive_failures = 0
+    def __init__(
+        self,
+        max_consecutive_failures: int,
+        runtime_state: ToolLoopRuntimeState,
+    ):
+        self._runtime_state = runtime_state
         self._max_consecutive_failures = max_consecutive_failures
 
     @property
     def current_failures(self):
-        return self._consecutive_failures
+        return self._runtime_state.consecutive_failures
 
     @property
     def max_failures(self):
         return self._max_consecutive_failures
 
     def has_exceeded_failures(self) -> bool:
-        return self._consecutive_failures >= self._max_consecutive_failures
+        return (
+            self._runtime_state.consecutive_failures >= self._max_consecutive_failures
+        )
 
     def increment_failures(self):
-        self._consecutive_failures += 1
+        self._runtime_state.consecutive_failures += 1
 
     def reset_failures(self):
-        self._consecutive_failures = 0
+        self._runtime_state.consecutive_failures = 0
 
 
 def _check_valid_response_format(response_format: Any):
@@ -258,6 +274,7 @@ async def async_tool_loop_inner(
     on_clarification_request: Optional[Callable[[str], Any]] = None,
     on_clarification_answer: Optional[Callable[[str], Any]] = None,
     on_notify: Optional[Callable[[str], Any]] = None,
+    runtime_state: Optional[ToolLoopRuntimeState] = None,
 ) -> str:
     r"""
     Orchestrate an *interactive* "function-calling" dialogue between an LLM
@@ -484,6 +501,7 @@ async def async_tool_loop_inner(
         "earlier ones if there are any conflicting comments or requests."
     )
     _visibility_guidance_injected = False
+    runtime_state = runtime_state or ToolLoopRuntimeState()
 
     # ── runtime guards ────────────────────────────────────────────────────
     # rolling timeout ----------------------------------------------------
@@ -492,6 +510,7 @@ async def async_tool_loop_inner(
         max_steps=max_steps,
         raise_on_limit=raise_on_limit,
         client=client,
+        message_count_offset=runtime_state.message_count_offset,
     )
     _msg_dispatcher = LoopMessageDispatcher(client, cfg, timer)
     parent_chat_context_safe = make_messages_safe_for_context_dump(parent_chat_context)
@@ -693,6 +712,7 @@ async def async_tool_loop_inner(
         logger=logger,
         time_ctx=time_ctx,
         extra_ask_tools=extra_ask_tools,
+        call_counts=runtime_state.call_counts,
     )
     logger.debug(
         f"[setup +{_setup_elapsed()}] ToolsData ready ({len(tools_data.normalized)} tools)",
@@ -705,10 +725,11 @@ async def async_tool_loop_inner(
     }
     cfg.tool_alias_lookup = _alias_lookup or None
 
-    consecutive_failures = _LoopToolFailureTracker(max_consecutive_failures)
+    consecutive_failures = _LoopToolFailureTracker(
+        max_consecutive_failures,
+        runtime_state,
+    )
     assistant_meta: Dict[int, Dict[str, Any]] = {}
-    step_index: int = 0  # per assistant turn
-    called_tools: list[str] = []  # tool names in invocation order across all turns
 
     _max_input_tokens = unillm.get_max_input_tokens(client.endpoint)
     _over_threshold = False
@@ -1996,25 +2017,25 @@ async def async_tool_loop_inner(
 
             # 0.  Decide policy & tool-subset for this turn  ───────────────
             logger.debug(
-                f"[setup +{_setup_elapsed()}] tool policy eval (step={step_index})",
+                f"[setup +{_setup_elapsed()}] tool policy eval (step={runtime_state.step_index})",
             )
             if tool_policy is not None:
                 _tools_snapshot = {n: s.fn for n, s in tools_data.normalized.items()}
                 try:
                     if _policy_accepts_history:
                         tool_choice_mode, filtered = tool_policy(
-                            step_index,
+                            runtime_state.step_index,
                             _tools_snapshot,
-                            list(called_tools),
+                            list(runtime_state.called_tools),
                         )
                     else:
                         tool_choice_mode, filtered = tool_policy(
-                            step_index,
+                            runtime_state.step_index,
                             _tools_snapshot,
                         )
                 except Exception as _e:  # never abort the loop on mis-behaving policies
                     logger.error(
-                        f"tool_policy raised on turn {step_index}: {_e!r}",
+                        f"tool_policy raised on turn {runtime_state.step_index}: {_e!r}",
                     )
                     tool_choice_mode, filtered = "auto", _tools_snapshot
                 policy_tools_norm = normalise_tools(filtered)
@@ -2317,7 +2338,7 @@ async def async_tool_loop_inner(
 
             # ── D.  Ask the LLM what to do next  ────────────────────────────
             logger.debug(
-                f"[setup +{_setup_elapsed()}] ready for LLM call (step={step_index}, {len(tmp_tools)} tools)",
+                f"[setup +{_setup_elapsed()}] ready for LLM call (step={runtime_state.step_index}, {len(tmp_tools)} tools)",
             )
             if log_steps:
                 logger.begin_thinking()
@@ -2611,7 +2632,7 @@ async def async_tool_loop_inner(
             # LLM has just spoken – reset the flag
             llm_turn_required = False
             # one full assistant turn completed
-            step_index += 1
+            runtime_state.step_index += 1
 
             # ── E.  Launch any new tool calls  ──────────────────────────────
             # NOTE: The model returned `tool_calls`.  For *each* call we:
@@ -2659,7 +2680,7 @@ async def async_tool_loop_inner(
 
                 for idx, call in enumerate(msg["tool_calls"]):  # capture index
                     name = call["function"]["name"]
-                    called_tools.append(name)
+                    runtime_state.called_tools.append(name)
 
                     # Parse arguments - handle both string and dict formats
                     _raw_args = call["function"]["arguments"]

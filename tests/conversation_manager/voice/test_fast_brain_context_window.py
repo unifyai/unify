@@ -359,7 +359,7 @@ class TestRenderHistoryEvent:
 
     def test_call_guidance_skipped(self):
         """FastBrainNotification is handled by the dedicated guidance callback, not history."""
-        ev = FastBrainNotification(contact=ALICE, content="Be polite")
+        ev = FastBrainNotification(contact=ALICE, message="Be polite")
         result = _render_history_event(ev, {2}, False, ASSISTANT_NAME)
         assert result is None
 

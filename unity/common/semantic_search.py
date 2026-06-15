@@ -46,7 +46,12 @@ def wrap_str_placeholders(expr: str) -> str:
     return pattern.sub(_repl, expr)
 
 
-def ensure_vector_for_source(context: str, source_expr: str) -> str:
+def ensure_vector_for_source(
+    context: str,
+    source_expr: str,
+    *,
+    project: Optional[str] = None,
+) -> str:
     """Ensure an embedding column exists for source_expr within context and return its name.
 
     - If source_expr is a plain identifier, use that column directly and create `_{col}_emb`.
@@ -61,9 +66,10 @@ def ensure_vector_for_source(context: str, source_expr: str) -> str:
             embed_column=embed_column_name,
             source_column=source_column_name,
             derived_expr=None,
+            project=project,
         )
     else:
-        expr_hash = hashlib.sha1(source_expr.encode("utf-8")).hexdigest()[:10]
+        expr_hash = hashlib.sha256(source_expr.encode("utf-8")).hexdigest()[:10]
         source_column_name = f"_expr_{expr_hash}"
         embed_column_name = f"{source_column_name}_emb"
         sanitized_expr = wrap_str_placeholders(source_expr)
@@ -72,8 +78,35 @@ def ensure_vector_for_source(context: str, source_expr: str) -> str:
             embed_column=embed_column_name,
             source_column=source_column_name,
             derived_expr=sanitized_expr,
+            project=project,
         )
     return embed_column_name
+
+
+def embed_column_for_source(source_expr: str) -> str:
+    """Return the canonical embedding column name for a source expression."""
+    if is_plain_identifier(source_expr):
+        return f"_{source_expr}_emb"
+    expr_hash = hashlib.sha256(source_expr.encode("utf-8")).hexdigest()[:10]
+    return f"_expr_{expr_hash}_emb"
+
+
+def resolve_existing_vector_for_source(
+    context: str,
+    source_expr: str,
+    *,
+    project: Optional[str] = None,
+) -> Optional[str]:
+    """Return the embedding column for ``source_expr`` only if it already exists.
+
+    Read-only counterpart to :func:`ensure_vector_for_source` for contexts the
+    caller cannot write to (public-read catalogues): the column is looked up
+    but never created. Returns ``None`` when absent, meaning the term simply
+    has no embeddings in this context.
+    """
+    embed_column_name = embed_column_for_source(source_expr)
+    fields = unify.get_fields(context=context, project=project)
+    return embed_column_name if embed_column_name in fields else None
 
 
 def extract_placeholders(expr: str) -> list[str]:
@@ -119,6 +152,8 @@ def ensure_mean_cosine_column(
     context: str,
     terms: List[Tuple[str, str]],
     seed: str,
+    *,
+    project: Optional[str] = None,
 ) -> str:
     """Create a mean-of-cosines derived column over provided (embed_col, ref_text) terms.
 
@@ -146,6 +181,7 @@ def ensure_mean_cosine_column(
         context=context,
         key=sum_key,
         equation=sum_equation,
+        project=project,
     )
 
     return sum_key
@@ -155,6 +191,8 @@ def ensure_mean_cosine_column_piecewise(
     context: str,
     terms: List[Tuple[str, str]],
     seed: str,
+    *,
+    project: Optional[str] = None,
 ) -> str:
     """Create a mean-of-cosines derived column using a single zero-shot equation.
 
@@ -164,7 +202,7 @@ def ensure_mean_cosine_column_piecewise(
 
     Returns the created (or existing) mean column key.
     """
-    return ensure_mean_cosine_column(context, terms, seed)
+    return ensure_mean_cosine_column(context, terms, seed, project=project)
 
 
 def ensure_mean_cosine_column_piecewise_named(
@@ -173,6 +211,7 @@ def ensure_mean_cosine_column_piecewise_named(
     seed: str,
     *,
     public_prefix: str = "score_",
+    project: Optional[str] = None,
 ) -> str:
     """Create a private mean-of-cosines column for the provided terms.
 
@@ -182,7 +221,166 @@ def ensure_mean_cosine_column_piecewise_named(
 
     Returns the created (or existing) private sum column key.
     """
-    return ensure_mean_cosine_column(context, terms, seed)
+    return ensure_mean_cosine_column(context, terms, seed, project=project)
+
+
+SORT_DISTANCE_KEY = "_sort_distance"
+COMBINED_COSINE_KEY = "_combined_cosine"
+
+
+def _fetch_single_term_scored(
+    context: str,
+    embed_col: str,
+    ref_text: str,
+    *,
+    k: int,
+    row_filter: Optional[str] = None,
+    allowed_fields: Optional[List[str]] = None,
+    project: Optional[str] = None,
+) -> list[dict]:
+    """Fetch top-k rows ranked by inline cosine with the distance per row.
+
+    Fully read-only: ranking uses the backend ANN sort with
+    ``return_sort_distance`` instead of a derived score column, so it works
+    against public-read contexts and creates no per-query column bloat.
+    """
+    escaped_ref = escape_single_quotes(ref_text)
+    sorting = {
+        f"cosine({embed_col}, embed('{escaped_ref}', model='{EMBED_MODEL}'))": "ascending",
+    }
+    if allowed_fields is not None:
+        from_fields = list(dict.fromkeys([*allowed_fields, SORT_DISTANCE_KEY]))
+        logs = unify.get_logs(
+            context=context,
+            project=project,
+            filter=row_filter,
+            sorting=sorting,
+            limit=k,
+            from_fields=from_fields,
+            return_sort_distance=True,
+        )
+    else:
+        exclude_fields = [
+            f
+            for f in list_private_fields(context, project=project)
+            if f != SORT_DISTANCE_KEY
+        ]
+        logs = unify.get_logs(
+            context=context,
+            project=project,
+            filter=row_filter,
+            sorting=sorting,
+            limit=k,
+            exclude_fields=exclude_fields,
+            return_sort_distance=True,
+        )
+    return [lg.entries for lg in logs]
+
+
+def _context_unique_id_field(context: str, *, project: Optional[str] = None) -> str:
+    """Return the unique-key column for a context (required for combining)."""
+    ctx_info = unify.get_context(context, project=project)
+    unique_keys = ctx_info.get("unique_keys")
+    if isinstance(unique_keys, dict):
+        unique_keys = list(unique_keys)
+    if isinstance(unique_keys, list):
+        unique_keys = unique_keys[0] if unique_keys else None
+    if not unique_keys:
+        raise ValueError(
+            f"Context {context!r} has no unique key; multi-term client-side "
+            "score combination requires a per-row identity column.",
+        )
+    return str(unique_keys)
+
+
+def fetch_top_k_by_terms_combined_client_side(
+    context: str,
+    terms: List[Tuple[str, str]],
+    *,
+    k: int = 10,
+    row_filter: Optional[str] = None,
+    allowed_fields: Optional[List[str]] = None,
+    project: Optional[str] = None,
+) -> tuple[list[dict], str]:
+    """Multi-term top-k via per-term read-only queries combined client-side.
+
+    Mirrors the mean-with-missing-penalty semantics of
+    ``ensure_mean_cosine_column`` (mean of cosines over terms whose embedding
+    exists for the row; maximal distance 2 when none exist) without creating
+    any derived column, so it works against public-read contexts.
+
+    Candidate generation fetches each term's top-k; a row outside every
+    per-term window cannot be retrieved, so results are exact whenever the
+    true top-k rows each rank within the window of at least one term — the
+    standard top-k union approximation.
+    """
+    id_field = _context_unique_id_field(context, project=project)
+    fetch_fields = (
+        list(dict.fromkeys([*allowed_fields, id_field]))
+        if allowed_fields is not None
+        else None
+    )
+
+    payload_by_id: dict[object, dict] = {}
+    scores_by_id: dict[object, dict[int, float]] = {}
+    for term_index, (embed_col, ref_text) in enumerate(terms):
+        rows = _fetch_single_term_scored(
+            context,
+            embed_col,
+            ref_text,
+            k=k,
+            row_filter=row_filter,
+            allowed_fields=fetch_fields,
+            project=project,
+        )
+        for row in rows:
+            row_id = row.get(id_field)
+            if row_id is None:
+                continue
+            distance = row.pop(SORT_DISTANCE_KEY, None)
+            payload_by_id.setdefault(row_id, row)
+            if distance is not None:
+                scores_by_id.setdefault(row_id, {})[term_index] = float(distance)
+
+    # Fill in exact scores for candidates that fell outside a term's window.
+    for term_index, (embed_col, ref_text) in enumerate(terms):
+        missing = [
+            row_id
+            for row_id in payload_by_id
+            if term_index not in scores_by_id.get(row_id, {})
+        ]
+        if not missing:
+            continue
+        ids_expr = ", ".join(repr(row_id) for row_id in missing)
+        id_filter = f"{id_field} in [{ids_expr}]"
+        combined_filter = (
+            f"({row_filter}) and ({id_filter})" if row_filter else id_filter
+        )
+        rows = _fetch_single_term_scored(
+            context,
+            embed_col,
+            ref_text,
+            k=len(missing),
+            row_filter=combined_filter,
+            allowed_fields=[id_field],
+            project=project,
+        )
+        for row in rows:
+            row_id = row.get(id_field)
+            distance = row.get(SORT_DISTANCE_KEY)
+            if row_id is None or distance is None:
+                continue
+            scores_by_id.setdefault(row_id, {})[term_index] = float(distance)
+
+    ranked: list[dict] = []
+    for row_id, payload in payload_by_id.items():
+        present = scores_by_id.get(row_id, {})
+        mean = sum(present.values()) / len(present) if present else 2.0
+        combined = dict(payload)
+        combined[COMBINED_COSINE_KEY] = mean
+        ranked.append(combined)
+    ranked.sort(key=lambda row: row[COMBINED_COSINE_KEY])
+    return ranked[:k], COMBINED_COSINE_KEY
 
 
 def fetch_top_k_by_terms_with_score(
@@ -192,21 +390,54 @@ def fetch_top_k_by_terms_with_score(
     k: int = 10,
     row_filter: Optional[str] = None,
     allowed_fields: Optional[List[str]] = None,
+    project: Optional[str] = None,
 ) -> tuple[list[dict], str]:
     """Return top-k rows plus the private score column key for provided terms.
 
     The score column remains private (underscored). Internally, this function
     includes that private column in the returned payload to enable downstream
     consumers to combine scores, while still excluding all other private fields.
+
+    Multi-term searches against a foreign ``project`` (a public-read context
+    such as the builtins catalogue, where derived score columns cannot be
+    written) combine per-term read-only queries client-side instead.
     """
     if len(terms) == 0:
         return [], ""
+
+    if len(terms) == 1:
+        embed_col, ref_text = terms[0]
+        rows = _fetch_single_term_scored(
+            context,
+            embed_col,
+            ref_text,
+            k=k,
+            row_filter=row_filter,
+            allowed_fields=allowed_fields,
+            project=project,
+        )
+        return rows, SORT_DISTANCE_KEY
+
+    if project is not None:
+        return fetch_top_k_by_terms_combined_client_side(
+            context,
+            terms,
+            k=k,
+            row_filter=row_filter,
+            allowed_fields=allowed_fields,
+            project=project,
+        )
 
     canonical = "|".join(f"{i}:{col}=>{txt}" for i, (col, txt) in enumerate(terms))
     import hashlib as _hashlib
 
     sum_hash = _hashlib.sha1(canonical.encode("utf-8")).hexdigest()[:12]
-    sum_key = ensure_mean_cosine_column_piecewise_named(context, terms, sum_hash)
+    sum_key = ensure_mean_cosine_column_piecewise_named(
+        context,
+        terms,
+        sum_hash,
+        project=project,
+    )
 
     # Build read projection
     if allowed_fields is not None:
@@ -214,6 +445,7 @@ def fetch_top_k_by_terms_with_score(
         from_fields = list(dict.fromkeys([*allowed_fields, sum_key]))
         logs = unify.get_logs(
             context=context,
+            project=project,
             filter=row_filter,
             sorting={sum_key: "ascending"},
             limit=k,
@@ -221,9 +453,12 @@ def fetch_top_k_by_terms_with_score(
         )
     else:
         # Exclude all private fields except the score key we need to read
-        exclude_fields = [f for f in list_private_fields(context) if f != sum_key]
+        exclude_fields = [
+            f for f in list_private_fields(context, project=project) if f != sum_key
+        ]
         logs = unify.get_logs(
             context=context,
+            project=project,
             filter=row_filter,
             sorting={sum_key: "ascending"},
             limit=k,
@@ -281,6 +516,7 @@ def fetch_top_k_by_terms(
     k: int = 10,
     row_filter: Optional[str] = None,
     allowed_fields: Optional[List[str]] = None,
+    project: Optional[str] = None,
 ) -> List[dict]:
     """Return top-k rows ranked by semantic similarity given pre-embedded terms.
 
@@ -297,6 +533,7 @@ def fetch_top_k_by_terms(
         if allowed_fields is not None:
             logs = unify.get_logs(
                 context=context,
+                project=project,
                 filter=row_filter,
                 sorting={
                     f"cosine({embed_col}, embed('{escaped_ref}', model='{EMBED_MODEL}'))": "ascending",
@@ -307,12 +544,13 @@ def fetch_top_k_by_terms(
         else:
             logs = unify.get_logs(
                 context=context,
+                project=project,
                 filter=row_filter,
                 sorting={
                     f"cosine({embed_col}, embed('{escaped_ref}', model='{EMBED_MODEL}'))": "ascending",
                 },
                 limit=k,
-                exclude_fields=list_private_fields(context),
+                exclude_fields=list_private_fields(context, project=project),
             )
         return [lg.entries for lg in logs]
 
@@ -322,9 +560,10 @@ def fetch_top_k_by_terms(
         if row_filter is not None:
             any_rows = unify.get_logs(
                 context=context,
+                project=project,
                 filter=row_filter,
                 limit=1,
-                exclude_fields=list_private_fields(context),
+                exclude_fields=list_private_fields(context, project=project),
             )
             if not any_rows:
                 return []
@@ -335,12 +574,18 @@ def fetch_top_k_by_terms(
     canonical = "|".join(f"{i}:{col}=>{txt}" for i, (col, txt) in enumerate(terms))
     import hashlib as _hashlib
 
-    sum_hash = _hashlib.sha1(canonical.encode("utf-8")).hexdigest()[:12]
-    sum_key = ensure_mean_cosine_column_piecewise(context, terms, sum_hash)
+    sum_hash = _hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
+    sum_key = ensure_mean_cosine_column_piecewise(
+        context,
+        terms,
+        sum_hash,
+        project=project,
+    )
 
     if allowed_fields is not None:
         logs = unify.get_logs(
             context=context,
+            project=project,
             filter=row_filter,
             sorting={sum_key: "ascending"},
             limit=k,
@@ -349,10 +594,11 @@ def fetch_top_k_by_terms(
     else:
         logs = unify.get_logs(
             context=context,
+            project=project,
             filter=row_filter,
             sorting={sum_key: "ascending"},
             limit=k,
-            exclude_fields=list_private_fields(context),
+            exclude_fields=list_private_fields(context, project=project),
         )
     return [lg.entries for lg in logs]
 
@@ -364,6 +610,7 @@ def fetch_top_k_by_references(
     k: int = 10,
     row_filter: Optional[str] = None,
     allowed_fields: Optional[List[str]] = None,
+    project: Optional[str] = None,
 ) -> List[dict]:
     """Return top-k rows from a context ranked by semantic similarity to reference text(s).
 
@@ -407,7 +654,7 @@ def fetch_top_k_by_references(
     # Collect (embed_col, ref_text) pairs
     terms: List[Tuple[str, str]] = []
     for source_expr, ref_text in references.items():
-        embed_col = ensure_vector_for_source(context, source_expr)
+        embed_col = ensure_vector_for_source(context, source_expr, project=project)
         terms.append((embed_col, ref_text))
 
     return fetch_top_k_by_terms(
@@ -416,6 +663,7 @@ def fetch_top_k_by_references(
         k=k,
         row_filter=row_filter,
         allowed_fields=allowed_fields,
+        project=project,
     )
 
 
@@ -427,6 +675,7 @@ def backfill_rows(
     row_filter: Optional[str] = None,
     unique_id_field: Optional[str] = None,
     allowed_fields: Optional[List[str]] = None,
+    project: Optional[str] = None,
 ) -> List[dict]:
     """Backfill similarity results with additional rows to reach k.
 
@@ -456,7 +705,7 @@ def backfill_rows(
     # Determine unique id column if not supplied
     if unique_id_field is None:
         try:
-            ctx_info = unify.get_context(context)
+            ctx_info = unify.get_context(context, project=project)
             unique_id_field = ctx_info.get("unique_keys")
             if isinstance(unique_id_field, list):
                 unique_id_field = unique_id_field[0] if unique_id_field else None
@@ -496,6 +745,7 @@ def backfill_rows(
             )
             fallback_logs = unify.get_logs(
                 context=context,
+                project=project,
                 filter=row_filter,
                 offset=offset,
                 limit=batch_size,
@@ -506,10 +756,11 @@ def backfill_rows(
             try:
                 fallback_logs = unify.get_logs(
                     context=context,
+                    project=project,
                     filter=row_filter,
                     offset=offset,
                     limit=batch_size,
-                    exclude_fields=list_private_fields(context),
+                    exclude_fields=list_private_fields(context, project=project),
                     sorting=sorting,
                 )
             except Exception as e:

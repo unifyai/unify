@@ -14,11 +14,18 @@ Covers:
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import patch
 
+import pytest
 
 from unity.common.prompt_helpers import PromptParts
-from unity.conversation_manager.domains.brain import BrainSpec
-from unity.conversation_manager.cm_types import ScreenshotEntry
+from unity.common.context_registry import ContextRegistry
+from unity.conversation_manager.cm_types import Mode, ScreenshotEntry
+from unity.conversation_manager.domains import brain as brain_module
+from unity.conversation_manager.domains.brain import BrainSpec, build_brain_spec
+from unity.manager_registry import ManagerRegistry
+from unity.session_details import SESSION_DETAILS
 
 # =============================================================================
 # Helpers
@@ -51,6 +58,48 @@ def _make_brain_spec(
 FAKE_B64 = "iVBORw0KGgoAAAANSUhEUg=="  # tiny valid-looking base64 stub
 
 
+@pytest.fixture(autouse=True)
+def reset_brain_test_state():
+    ContextRegistry.clear()
+    ManagerRegistry.clear()
+    SESSION_DETAILS.reset()
+    yield
+    ContextRegistry.clear()
+    ManagerRegistry.clear()
+    SESSION_DETAILS.reset()
+
+
+def _make_cm():
+    """Create the smallest ConversationManager-like object needed by build_brain_spec."""
+    return SimpleNamespace(
+        contact_index=SimpleNamespace(
+            get_contact=lambda contact_id: {
+                "first_name": "Dana",
+                "surname": "Owner",
+                "phone_number": "+15551234567",
+                "email_address": "dana@acme.com",
+            },
+        ),
+        mode=Mode.TEXT,
+        get_active_contact=lambda: None,
+        initialized=True,
+        assistant_job_title="",
+        assistant_about="Operations assistant.",
+        computer_fast_path_eligible=False,
+        assistant_number="+15557654321",
+        assistant_email="assistant@acme.com",
+        assistant_whatsapp_number="",
+        assistant_discord_bot_id="",
+        assistant_slack_bot_user_id="",
+        assistant_has_teams=False,
+        team_summaries=[],
+    )
+
+
+def _make_snapshot():
+    return SimpleNamespace(full_render="<state>ready</state>")
+
+
 # =============================================================================
 # Tests
 # =============================================================================
@@ -68,6 +117,58 @@ class TestBrainSpecStateMessage:
         assert isinstance(msg["content"], str)
         assert msg["content"] == "<state>hello</state>"
         assert msg["_cm_state_snapshot"] is True
+
+    def test_build_brain_spec_uses_resolved_boss_contact_id(self, monkeypatch):
+        """The main brain prompt reads boss details from the session contact id."""
+
+        captured_prompt_kwargs = {}
+
+        def fake_build_system_prompt(**kwargs):
+            captured_prompt_kwargs.update(kwargs)
+            parts = PromptParts()
+            parts.add("system")
+            return parts
+
+        monkeypatch.setattr(brain_module.SESSION_DETAILS, "boss_contact_id", 43)
+        monkeypatch.setattr(
+            brain_module,
+            "build_system_prompt",
+            fake_build_system_prompt,
+        )
+
+        contacts = {
+            43: {
+                "first_name": "Resolved",
+                "surname": "Boss",
+                "phone_number": "+123",
+                "email_address": "boss@example.com",
+            },
+        }
+        cm = SimpleNamespace(
+            contact_index=SimpleNamespace(
+                get_contact=lambda contact_id: contacts.get(contact_id),
+            ),
+            mode=Mode.TEXT,
+            get_active_contact=lambda: {},
+            initialized=True,
+            assistant_job_title="",
+            assistant_about="",
+            computer_fast_path_eligible=False,
+            assistant_number="",
+            assistant_email="",
+            assistant_whatsapp_number="",
+            assistant_discord_bot_id="",
+            assistant_slack_bot_user_id="",
+            assistant_has_teams=False,
+            team_summaries=[],
+        )
+        snapshot_state = SimpleNamespace(full_render="<state>ready</state>")
+
+        brain_module.build_brain_spec(cm, snapshot_state)
+
+        assert captured_prompt_kwargs["contact_id"] == 43
+        assert captured_prompt_kwargs["first_name"] == "Resolved"
+        assert captured_prompt_kwargs["surname"] == "Boss"
 
     def test_multimodal_with_screenshots(self):
         """With screenshots the message content becomes a list of parts."""
@@ -287,3 +388,87 @@ class TestScreenshotEntryLocalMessageId:
         updated = entry._replace(local_message_id=7)
         assert updated.local_message_id == 7
         assert entry.local_message_id is None  # original unchanged (immutable)
+
+
+class TestBuildBrainSpecCoordinatorPrompt:
+    """BrainSpec prompt construction carries Coordinator awareness."""
+
+    def test_org_assistant_prompt_names_marty(self):
+        SESSION_DETAILS.org_id = 7
+        SESSION_DETAILS.unify_key = "owner-key"
+
+        with patch(
+            "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+        ) as list_assistants:
+            spec = build_brain_spec(_make_cm(), _make_snapshot())
+
+        prompt = spec.system_prompt.flatten()
+        assert "Marty identity" in prompt
+        assert "Marty is Dana Owner's personal, private assistant" in prompt
+        assert "I propose handing it to Marty explicitly" in prompt
+        list_assistants.assert_not_called()
+
+    def test_coordinator_prompt_does_not_render_reciprocal_block(self):
+        SESSION_DETAILS.org_id = 7
+        SESSION_DETAILS.unify_key = "owner-key"
+        SESSION_DETAILS.assistant.is_coordinator = True
+
+        with (
+            patch(
+                "unity.coordinator_manager.coordinator_manager.unify.list_org_members",
+                return_value=[{"first_name": "Dana", "surname": "Owner"}],
+            ) as list_org_members,
+            patch(
+                "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+            ) as list_assistants,
+        ):
+            spec = build_brain_spec(_make_cm(), _make_snapshot())
+
+        prompt = spec.system_prompt.flatten()
+        assert "Authorized humans" in prompt
+        assert "Marty identity" in prompt
+        assert "I propose handing it to Marty explicitly" not in prompt
+        assert "I cannot forward it automatically" not in prompt
+        list_org_members.assert_called_once_with(
+            7,
+            api_key="owner-key",  # pragma: allowlist secret
+        )
+        list_assistants.assert_not_called()
+
+    def test_personal_assistant_names_marty_without_lookup(self):
+        SESSION_DETAILS.org_id = None
+        SESSION_DETAILS.unify_key = "owner-key"
+        SESSION_DETAILS.assistant.is_coordinator = False
+
+        with patch(
+            "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+            return_value=[],
+        ) as list_assistants:
+            spec = build_brain_spec(_make_cm(), _make_snapshot())
+
+        prompt = spec.system_prompt.flatten()
+        assert "Marty identity" in prompt
+        assert "I propose handing it to Marty explicitly" in prompt
+        assert "Escalate to Marty" not in prompt
+        list_assistants.assert_not_called()
+
+    def test_personal_coordinator_skips_org_member_and_workspace_fetch(self):
+        SESSION_DETAILS.org_id = None
+        SESSION_DETAILS.unify_key = "owner-key"
+        SESSION_DETAILS.assistant.is_coordinator = True
+
+        with (
+            patch(
+                "unity.coordinator_manager.coordinator_manager.unify.list_org_members",
+            ) as list_org_members,
+            patch(
+                "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+            ) as list_assistants,
+        ):
+            spec = build_brain_spec(_make_cm(), _make_snapshot())
+
+        prompt = spec.system_prompt.flatten()
+        assert "Authorized humans" not in prompt
+        assert "Boss details" in prompt
+        list_org_members.assert_not_called()
+        list_assistants.assert_not_called()

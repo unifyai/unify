@@ -311,6 +311,41 @@ class TestSendDispatch:
             "body": "Body content",
         }
 
+    def test_shared_coordinator_email_routes_to_gmail_without_lookup(
+        self,
+        client: TestClient,
+        _orchestra_credentials: None,
+    ) -> None:
+        lookup = AsyncMock(side_effect=AssertionError("lookup should be skipped"))
+        outlook_handler = AsyncMock()
+        gmail_handler = AsyncMock(return_value={"success": True, "via": "gmail"})
+        with (
+            patch(
+                "unity.gateway.channels.email.views.lookup_assistant",
+                new=lookup,
+            ),
+            patch(
+                "unity.gateway.channels.email.views.send_outlook_email",
+                new=outlook_handler,
+            ),
+            patch(
+                "unity.gateway.channels.email.views.gmail_send_email",
+                new=gmail_handler,
+            ),
+        ):
+            resp = client.post(
+                "/email/send",
+                json={
+                    "from": "marty@unify.ai",
+                    "to": "owner@example.com",
+                    "body": "hello",
+                },
+            )
+        assert resp.status_code == 200
+        gmail_handler.assert_awaited_once()
+        outlook_handler.assert_not_called()
+        lookup.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # GET /attachment -- dispatch routing
@@ -425,3 +460,43 @@ class TestAttachmentDispatch:
                 },
             )
         gmail_handler.assert_awaited_once()
+
+    def test_shared_coordinator_email_attachment_routes_to_gmail_without_lookup(
+        self,
+        client: TestClient,
+        _orchestra_credentials: None,
+    ) -> None:
+        lookup = AsyncMock(side_effect=AssertionError("lookup should be skipped"))
+        outlook_handler = AsyncMock()
+        gmail_handler = AsyncMock(return_value=b"gmail-bytes")
+        with (
+            patch(
+                "unity.gateway.channels.email.views.lookup_assistant",
+                new=lookup,
+            ),
+            patch(
+                "unity.gateway.channels.email.views.get_outlook_attachment",
+                new=outlook_handler,
+            ),
+            patch(
+                "unity.gateway.channels.email.views.gmail_get_attachment",
+                new=gmail_handler,
+            ),
+        ):
+            client.get(
+                "/email/attachment",
+                params={
+                    "receiver_email": "marty@unify.ai",
+                    "message_id": "msg-1",
+                    "attachment_id": "att-1",
+                    "filename": "doc.pdf",
+                },
+            )
+        gmail_handler.assert_awaited_once_with(
+            receiver_email="marty@unify.ai",
+            gmail_message_id="msg-1",
+            attachment_id="att-1",
+            filename="doc.pdf",
+        )
+        outlook_handler.assert_not_called()
+        lookup.assert_not_called()

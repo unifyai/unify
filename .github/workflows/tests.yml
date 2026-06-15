@@ -20,6 +20,11 @@ on:
         required: false
         type: string
         default: "."
+      confirm_full_matrix:
+        description: "Type FULL_MATRIX_OK to allow test_path='.' or a large matrix"
+        required: false
+        type: string
+        default: ""
       env_file_content:
         description: "env_file: paste .env contents (sensitive values masked)"
         required: false
@@ -45,6 +50,27 @@ on:
   pull_request:
     branches:
     - '**'    # All branches
+
+# Cancel in-progress runs for the same source branch when a newer
+# commit lands. Without this:
+#   1. Every push during active development queues a fresh ~67-job
+#      matrix while previous matrices still occupy runner capacity,
+#      leading to "runner has received a shutdown signal" cancellations
+#      on older runs and starvation on newer ones.
+#   2. A staging push triggers BOTH a `push`-event run AND (when the
+#      perpetual staging→main PR exists, which it usually does)
+#      a `pull_request`-event run for the same commit. Without a
+#      shared concurrency key these double up, also doubling credit
+#      usage.
+#
+# Group key uses `github.head_ref` (PR source branch) when available,
+# falling back to `github.ref_name` (branch name on a direct push).
+# Both event types on the same source branch therefore share a group
+# and supersede each other — exactly one matrix runs per commit per
+# branch. Different branches still parallelise.
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
   # Determine if tests should run based on trigger and commit/PR message
@@ -92,7 +118,8 @@ jobs:
           fi
         }
 
-        # workflow_dispatch always runs tests
+        # workflow_dispatch always runs tests, but the discover job enforces
+        # cost-policy guardrails before any matrix jobs are created.
         if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
           echo "run_tests=true" >> "$GITHUB_OUTPUT"
           echo "parallel_run_cmd=" >> "$GITHUB_OUTPUT"
@@ -126,11 +153,12 @@ jobs:
 
         # For pull_request events, check PR title
         if [[ "$EVENT_NAME" == "pull_request" ]]; then
-          # Auto-run full suite for staging → main PRs (no tags required)
+          # Staging → main PRs run only a tiny smoke path by default. The full
+          # LLM matrix must be triggered manually with confirm_full_matrix.
           if [[ "$PR_BASE_REF" == "main" && "$PR_HEAD_REF" == "staging" ]]; then
             echo "run_tests=true" >> "$GITHUB_OUTPUT"
-            echo "parallel_run_cmd=" >> "$GITHUB_OUTPUT"
-            echo "Tests auto-triggered: staging → main PR"
+            echo "parallel_run_cmd=tests/common/test_production_settings.py" >> "$GITHUB_OUTPUT"
+            echo "Smoke tests auto-triggered: staging → main PR"
             exit 0
           fi
 
@@ -202,6 +230,19 @@ jobs:
         PARALLEL_CMD="${{ needs.should-run-tests.outputs.parallel_run_cmd }}"
         INPUT_PATH="${{ inputs.test_path }}"
         INPUT_ARGS="${{ inputs.parallel_run_args }}"
+        CONFIRM_FULL_MATRIX="${{ inputs.confirm_full_matrix }}"
+        EVENT_NAME="${{ github.event_name }}"
+        MAX_NORMAL_MATRIX=12
+        ENV_FILE_CONTENT_RAW="${{ inputs.env_file_content }}"
+        ENV_FILE_CONTENT=""
+
+        if [[ -n "$ENV_FILE_CONTENT_RAW" ]]; then
+          if DECODED=$(echo "$ENV_FILE_CONTENT_RAW" | base64 -d 2>/dev/null) && [[ "$DECODED" == *$'\n'* || "$DECODED" == *"="* ]]; then
+            ENV_FILE_CONTENT="$DECODED"
+          else
+            ENV_FILE_CONTENT="$ENV_FILE_CONTENT_RAW"
+          fi
+        fi
 
         # Initialize
         declare -a RAW_PATHS=()
@@ -214,11 +255,11 @@ jobs:
           echo "Parsing [parallel_run.sh $PARALLEL_CMD]" >&2
           LAST_FLAG=""
           for token in $PARALLEL_CMD; do
-            if [[ "$token" == --* ]]; then
+            if [[ "$token" == -* ]]; then
               # It's a flag - collect it and its value if needed
               FLAGS+=("$token")
               LAST_FLAG="$token"
-            elif [[ "$LAST_FLAG" == "--env" || "$LAST_FLAG" == "--tags" || "$LAST_FLAG" == "-j" || "$LAST_FLAG" == "--jobs" || "$LAST_FLAG" == "-t" || "$LAST_FLAG" == "--timeout" ]]; then
+            elif [[ "$LAST_FLAG" == "--env" || "$LAST_FLAG" == "-e" || "$LAST_FLAG" == "--tags" || "$LAST_FLAG" == "-j" || "$LAST_FLAG" == "--jobs" || "$LAST_FLAG" == "-t" || "$LAST_FLAG" == "--timeout" || "$LAST_FLAG" == "--repeat" ]]; then
               # Previous token was a flag that takes a value
               FLAGS+=("$token")
               LAST_FLAG=""
@@ -267,6 +308,67 @@ jobs:
           exit 1
         fi
 
+        cost_policy_fail() {
+          echo "" >&2
+          echo "Refusing to create an expensive LLM test matrix." >&2
+          echo "Reason: $1" >&2
+          echo "" >&2
+          echo "Safe options:" >&2
+          echo "  - Target a narrow path, e.g. [parallel_run.sh tests/contact_manager/test_ask.py]" >&2
+          echo "  - For a full matrix, use workflow_dispatch with test_path='.' and confirm_full_matrix='FULL_MATRIX_OK'." >&2
+          echo "  - For uncached/cache-refresh evals, use the protected LLM Cache Refresh workflow." >&2
+          exit 1
+        }
+
+        full_matrix_confirmed=false
+        if [[ "$EVENT_NAME" == "workflow_dispatch" && "$CONFIRM_FULL_MATRIX" == "FULL_MATRIX_OK" ]]; then
+          full_matrix_confirmed=true
+        fi
+
+        if (( ${#RAW_PATHS[@]} == 0 )) && ! $full_matrix_confirmed; then
+          cost_policy_fail "no explicit test path was provided, which would discover the full suite"
+        fi
+
+        if (( ${#PATHS[@]} > MAX_NORMAL_MATRIX )) && ! $full_matrix_confirmed; then
+          cost_policy_fail "requested paths expand to ${#PATHS[@]} matrix jobs (limit: $MAX_NORMAL_MATRIX)"
+        fi
+
+        check_cost_sensitive_flags() {
+          local -n _flags_ref=$1
+          local i flag next_val
+          for i in "${!_flags_ref[@]}"; do
+            flag="${_flags_ref[$i]}"
+            next_val="${_flags_ref[$((i+1))]:-}"
+            case "$flag" in
+              --env|-e)
+                case "$next_val" in
+                  UNILLM_CACHE=read-only)
+                    ;;
+                  UNILLM_CACHE=*)
+                    cost_policy_fail "normal CI may not override UNILLM_CACHE (got '$next_val')"
+                    ;;
+                esac
+                ;;
+              --repeat)
+                if [[ "$next_val" =~ ^[0-9]+$ && "$next_val" -gt 1 ]]; then
+                  cost_policy_fail "normal CI may not use --repeat $next_val"
+                fi
+                ;;
+              --repeat=*)
+                repeat_value="${flag#--repeat=}"
+                if [[ "$repeat_value" =~ ^[0-9]+$ && "$repeat_value" -gt 1 ]]; then
+                  cost_policy_fail "normal CI may not use --repeat $repeat_value"
+                fi
+                ;;
+              --env=UNILLM_CACHE=*|-e=UNILLM_CACHE=*)
+                cost_policy_fail "normal CI may not override UNILLM_CACHE (got '$flag')"
+                ;;
+            esac
+          done
+        }
+
+        check_cost_sensitive_flags FLAGS
+
         json=$(printf '%s\n' "${PATHS[@]}" | python3 -c 'import sys,json; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')
         echo "test_dirs=$json" >> "$GITHUB_OUTPUT"
         echo "Matrix paths: $json" >&2
@@ -309,15 +411,8 @@ jobs:
 
         # Parse env_file_content for project management flags only
         # (actual env vars are written to .env in pytest job, not passed as --env args)
-        ENV_FILE_CONTENT_RAW="${{ inputs.env_file_content }}"
         if [[ -n "$ENV_FILE_CONTENT_RAW" ]]; then
           echo "Parsing env_file_content for project management flags..." >&2
-          # Try to decode as base64; if it fails or produces garbage, assume raw content
-          if DECODED=$(echo "$ENV_FILE_CONTENT_RAW" | base64 -d 2>/dev/null) && [[ "$DECODED" == *$'\n'* || "$DECODED" == *"="* ]]; then
-            ENV_FILE_CONTENT="$DECODED"
-          else
-            ENV_FILE_CONTENT="$ENV_FILE_CONTENT_RAW"
-          fi
           if [[ -n "$ENV_FILE_CONTENT" ]]; then
             while IFS= read -r line || [[ -n "$line" ]]; do
               # Skip empty lines and comments
@@ -527,15 +622,16 @@ jobs:
       UNIFY_TESTS_RAND_PROJ: "false"              # Shared project mode
       UNIFY_TESTS_DELETE_PROJ_ON_START: "false"   # Handled by setup job at workflow level
       UNIFY_TESTS_DELETE_PROJ_ON_EXIT: "false"    # Keep project after tests
-      # LLM response caching (owned by unillm, read from env)
-      UNILLM_CACHE: "true"
+      # Normal CI must fail closed on cache misses. Real LLM cache refreshes
+      # are isolated in the protected LLM Cache Refresh workflow.
+      UNILLM_CACHE: "read-only"
       # Local orchestra path (cloned into workspace, not sibling directory)
       ORCHESTRA_REPO_PATH: ${{ github.workspace }}/orchestra
       # API credentials
       # ORCHESTRA_URL: if repo variable set, use remote; otherwise local orchestra sets it
       ORCHESTRA_URL: ${{ vars.ORCHESTRA_URL }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_CI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_CI_API_KEY }}
       # Communication service URL (set via repository variables)
       UNITY_COMMS_URL: ${{ vars.UNITY_COMMS_URL }}
       # Orchestra GCP configuration (set by google-github-actions/auth step)
@@ -603,12 +699,47 @@ jobs:
 
         # Try to decode as base64; if it fails or produces binary garbage, assume raw content
         if DECODED=$(echo "$CONTENT" | base64 -d 2>/dev/null) && [[ "$DECODED" == *$'\n'* || "$DECODED" == *"="* ]]; then
-          echo "$DECODED" > .env
+          ENV_CONTENT="$DECODED"
           echo "✓ Decoded base64 env_file_content"
         else
-          echo "$CONTENT" > .env
+          ENV_CONTENT="$CONTENT"
           echo "✓ Using raw env_file_content"
         fi
+
+        # Normal CI owns cache mode and provider credentials at job level.
+        # Filter any local developer values before parallel_run.sh sources .env.
+        printf '%s\n' "$ENV_CONTENT" > .env.raw
+        python3 << 'PYEOF'
+        from pathlib import Path
+        import sys
+
+        blocked = {
+            "UNILLM_CACHE",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "OPENROUTER_API_KEY",
+            "GROQ_API_KEY",
+            "MISTRAL_API_KEY",
+            "GOOGLE_API_KEY",
+            "GEMINI_API_KEY",
+        }
+
+        output = []
+        for line in Path(".env.raw").read_text().splitlines(keepends=True):
+            stripped = line.lstrip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                key = stripped.split("=", 1)[0].strip()
+                if key in blocked:
+                    print(
+                        f"Removed {key} from env_file_content; CI uses guarded job-level values.",
+                        file=sys.stderr,
+                    )
+                    continue
+            output.append(line)
+
+        Path(".env").write_text("".join(output))
+        PYEOF
+        rm .env.raw
 
         # Mask values for sensitive variable names (these patterns catch most secrets)
         # Sensitive patterns: *_KEY, *_SECRET, *_PASSWORD, *_TOKEN, *_CREDENTIAL*, *_API_*
@@ -764,6 +895,54 @@ jobs:
         uv run playwright install --with-deps
 
     # =========================================================================
+    # HuggingFace model cache (any tests under tests/file_manager/ —
+    # both `managers/` and `file_parser/` exercise docling's PDF pipeline,
+    # which downloads the docling-project/docling-models weights on first
+    # use). Without a stable cache, every CI run does a fresh multi-GB
+    # download into /tmp/unity_test_home/.cache/huggingface (set by
+    # tests/conftest.py's HOME isolation), and the chunked-download temp
+    # dirs race with each other across parallel pytest workers →
+    # "[Errno 2] No such file or directory: '.../tmp_<uuid>'" mid-
+    # download → pdf_backend parse failure. Originally observed in
+    # file_manager/managers (test_parse_multiple_mixed,
+    # test_filter_by_content_id_dict); same race subsequently surfaced
+    # in file_manager/file_parser (test_document_formats_have_text_
+    # summary_metadata_and_structure[*.pdf-pdf-pdf_backend]). Broaden
+    # the gate so any matrix entry under tests/file_manager/ is covered.
+    #
+    # Caching ~/.cache/huggingface (the original $HOME location) makes
+    # unity/tests/conftest.py:pytest_configure() honor its HF_HOME-preserve
+    # branch (which only fires when ~/.cache/huggingface exists on the
+    # original HOME), pointing the test process at the warm cache instead
+    # of a fresh /tmp dir. After the first successful CI run populates the
+    # cache, subsequent runs are race-free for these tests.
+    # =========================================================================
+    - name: Cache HuggingFace models (file_manager tests)
+      if: contains(matrix.test_path, 'file_manager/')
+      id: hf-cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/huggingface
+        # Key version (v1) — bump if docling/HF model set changes and we
+        # want to force a fresh download across all CI runs.
+        key: huggingface-docling-${{ runner.os }}-v1
+        restore-keys: |
+          huggingface-docling-${{ runner.os }}-
+
+    - name: Pre-download docling models (cache miss)
+      if: contains(matrix.test_path, 'file_manager/') && steps.hf-cache.outputs.cache-hit != 'true'
+      run: |
+        # First-time download into the cached path. Running once here,
+        # serialized before the test matrix forks, eliminates the parallel
+        # download race that breaks tests in the cold-cache case.
+        mkdir -p ~/.cache/huggingface
+        uv run python -c "
+        from docling.document_converter import DocumentConverter
+        DocumentConverter()  # triggers model download into ~/.cache/huggingface
+        print('docling models warmed')
+        "
+
+    # =========================================================================
     # Agent-service setup (only for tests/agent_service/ matrix entries)
     # Installs Node.js, clones magnitude, builds magnitude-core, and installs
     # agent-service npm deps + Patchright browser binaries.
@@ -784,27 +963,59 @@ jobs:
         token: ${{ secrets.CLONE_TOKEN }}
         fetch-depth: 1
 
+    - name: Install bun (agent-service tests, magnitude packageManager dep)
+      if: contains(matrix.test_path, 'agent_service')
+      run: |
+        # magnitude's root package.json declares
+        # "packageManager": "bun@1.2.8^". Turbo (run by the monorepo's
+        # postinstall script) reads packageManager to pick which package
+        # manager to invoke for workspace builds. Without bun on PATH,
+        # turbo dies with:
+        #   "Unable to find package manager binary: cannot find binary path"
+        # Install bun globally via npm so turbo's lookup succeeds.
+        npm install -g bun
+        bun --version
+
     - name: Build magnitude packages and install agent-service (agent-service tests)
       if: contains(matrix.test_path, 'agent_service')
       run: |
-        # Build magnitude-core (agent-service depends on it via file: reference)
-        cd magnitude/packages/magnitude-core
+        # Build magnitude as a TURBOREPO MONOREPO from its root.
+        #
+        # Previously this step did `cd magnitude/packages/magnitude-core;
+        # npm install` which fails with `sh: 1: turbo: not found` —
+        # because magnitude's root package.json declares
+        # `"postinstall": "turbo run build"` and `turbo` is a root-level
+        # devDep (`turbo: ^2.4.4`). Installing in a workspace subdir
+        # triggers the root postinstall hook BEFORE the root has
+        # downloaded its own devDeps, so the postinstall can't find
+        # turbo on PATH.
+        #
+        # Installing from the monorepo root with npm workspaces:
+        #   1. Downloads root devDeps including turbo
+        #   2. Resolves & installs all workspace packages
+        #   3. Runs the root postinstall (`turbo run build`) which now
+        #      finds turbo via node_modules/.bin and builds all
+        #      packages in the right dependency order
+        cd magnitude
         npm install
-        npm run build
-        echo "✓ magnitude-core built"
-
-        # Build magnitude-extract
-        cd ../magnitude-extract
-        npm install
-        npm run build
-        echo "✓ magnitude-extract built"
+        echo "✓ magnitude monorepo installed + built via turbo postinstall"
 
         # Install agent-service dependencies
         cd ${{ github.workspace }}/agent-service
         npm install
         echo "✓ agent-service dependencies installed"
 
-        # Install Patchright browser (Chromium) for Level 2 round-trip tests
+        # Install Patchright browser (Chromium) for Level 2 round-trip tests.
+        #
+        # `patchright` is declared as a magnitude root-level devDep
+        # (magnitude/package.json: "patchright": "^1.52.5") — NOT as an
+        # agent-service dep — so the binary lives at
+        # magnitude/node_modules/.bin/patchright. Running `npx
+        # patchright install chromium` from agent-service/ resolves npx
+        # against agent-service/node_modules and exits 127
+        # ("sh: 1: patchright: not found"). Run it from magnitude/ where
+        # patchright is actually installed.
+        cd ${{ github.workspace }}/magnitude
         npx patchright install chromium
         echo "✓ Patchright Chromium installed"
 
@@ -1151,32 +1362,6 @@ jobs:
     name: Consolidate and store cache
     runs-on: ubuntu-latest
     needs: [should-run-tests, pytest, cleanup]
-    if: always() && needs.should-run-tests.outputs.run_tests == 'true'
+    if: false
     steps:
-    - uses: actions/checkout@v4
-
-    - name: Restore existing consolidated cache
-      id: cache-restore
-      uses: actions/cache/restore@v4
-      with:
-        path: .cache.ndjson
-        key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
-        restore-keys: |
-          cache-ndjson-${{ runner.os }}-
-
-    - name: Download cache artifacts from current run
-      uses: actions/download-artifact@v4
-      with:
-        pattern: cache-diff-*
-        path: cache-artifacts
-
-    - name: Consolidate .cache.ndjson files
-      run: |
-        python3 .github/scripts/consolidate_cache.py \
-          --artifacts-dir cache-artifacts
-
-    - name: Store consolidated cache
-      uses: actions/cache/save@v4
-      with:
-        path: .cache.ndjson
-        key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+    - run: echo "Normal CI runs with UNILLM_CACHE=read-only and never writes the shared cache."

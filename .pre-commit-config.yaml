@@ -24,6 +24,25 @@ repos:
     - --preserve-quotes
     - --indent=2
 
+- repo: https://github.com/Yelp/detect-secrets
+  rev: v1.5.0
+  hooks:
+  - id: detect-secrets
+    args: ['--baseline', '.secrets.baseline']
+    exclude: |
+      (?x)^(
+        \.secrets\.baseline$|
+        uv\.lock$|
+        agent-service/package-lock\.json$|
+        agent-service/node_modules/.*|
+        \.venv/.*|
+        logs/.*|
+        assets/.*|
+        scripts/skill_migration/builtins_skills\.lock\.json$|
+        unity/guidance_manager/builtins_guidance\.json$|
+        .*/__pycache__/.*
+      )$
+
 - repo: local
   hooks:
   - id: autoflake
@@ -44,3 +63,9 @@ repos:
     language: python
     additional_dependencies: [black==26.1.0]
     types: [python]
+
+  - id: check-no-release-versioning
+    name: no first-party release versioning
+    entry: python3 scripts/check_no_release_versioning.py
+    language: system
+    pass_filenames: false

@@ -1,0 +1,218 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+import time
+
+import pytest
+import unify
+
+from tests.assertion_helpers import assertion_failed
+from tests.helpers import _handle_project
+from unity.session_details import SESSION_DETAILS
+from unity.transcript_manager.transcript_manager import TranscriptManager
+from unity.transcript_manager.types.message import Message
+
+pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
+
+
+def _team_ids() -> tuple[int, int]:
+    base = int(time.time_ns() % 1_000_000_000)
+    return base, base + 1
+
+
+def _message(content: str, *, exchange_id: int) -> Message:
+    return Message(
+        medium="email",
+        sender_id=0,
+        receiver_ids=[1],
+        timestamp=datetime.now(UTC),
+        content=content,
+        exchange_id=exchange_id,
+    )
+
+
+def _delete_context_tree(root: str) -> None:
+    try:
+        children = list(unify.get_contexts(prefix=f"{root}/").keys())
+    except Exception:
+        children = []
+    for context in sorted(children, key=len, reverse=True):
+        try:
+            unify.delete_context(context)
+        except Exception:
+            pass
+    try:
+        unify.delete_context(root)
+    except Exception:
+        pass
+
+
+@_handle_project
+@pytest.mark.asyncio
+async def test_ask_reads_the_relevant_accessible_space_transcript() -> None:
+    patch_team_id, research_team_id = _team_ids()
+    target_token = "amber-coupler-5197"
+    personal_decoy = "private-lotus-1189"
+    research_decoy = "market-cedar-2048"
+
+    try:
+        SESSION_DETAILS.team_ids = [patch_team_id, research_team_id]
+        SESSION_DETAILS.team_summaries = [
+            {
+                "team_id": patch_team_id,
+                "name": "Patch Reliability",
+                "description": (
+                    "Shared workspace for field dispatch, compressor incidents, "
+                    "maintenance handoffs, and team-visible repair coordination."
+                ),
+            },
+            {
+                "team_id": research_team_id,
+                "name": "Market Research",
+                "description": (
+                    "Shared workspace for competitive research, pricing studies, "
+                    "customer interviews, and analyst notes."
+                ),
+            },
+        ]
+
+        manager = TranscriptManager()
+        manager.log_messages(
+            _message(
+                f"My private browser notes use personal lookup token {personal_decoy}.",
+                exchange_id=51001,
+            ),
+            synchronous=True,
+        )
+        manager.log_messages(
+            _message(
+                (
+                    "Competitive interview archive: the analyst pack uses "
+                    f"research lookup token {research_decoy}."
+                ),
+                exchange_id=51002,
+            ),
+            synchronous=True,
+            destination=f"team:{research_team_id}",
+        )
+        manager.log_messages(
+            _message(
+                (
+                    "Compressor callback handoff: the repair rota told field "
+                    f"dispatch coordinators to use bundle access token {target_token}."
+                ),
+                exchange_id=51003,
+            ),
+            synchronous=True,
+            destination=f"team:{patch_team_id}",
+        )
+
+        handle = await manager.ask(
+            (
+                "The field reliability coordinators are reviewing the compressor "
+                "callback handoff. Which access token should they use for the "
+                "bundle?"
+            ),
+            _return_reasoning_steps=True,
+        )
+        answer, steps = await handle.result()
+        normalized = answer.lower()
+
+        assert target_token in normalized, assertion_failed(
+            target_token,
+            answer,
+            steps,
+            "TranscriptManager.ask should answer from the relevant shared transcript",
+        )
+        assert personal_decoy not in normalized
+        assert research_decoy not in normalized
+    finally:
+        _delete_context_tree(f"Teams/{patch_team_id}")
+        _delete_context_tree(f"Teams/{research_team_id}")
+        SESSION_DETAILS.reset()
+
+
+@_handle_project
+@pytest.mark.asyncio
+async def test_ask_attributes_colleague_shared_transcript_as_team_knowledge() -> None:
+    shared_team_id, _ = _team_ids()
+    own_token = "self-ledger-1102"
+    colleague_token = "teammate-ledger-9971"
+    colleague_assistant_id = 987654321
+
+    try:
+        SESSION_DETAILS.assistant.agent_id = 684
+        SESSION_DETAILS.assistant.first_name = "Avery"
+        SESSION_DETAILS.assistant.surname = "Ops"
+        SESSION_DETAILS.user.id = "boss-user"
+        SESSION_DETAILS.team_ids = [shared_team_id]
+        SESSION_DETAILS.team_summaries = [
+            {
+                "team_id": shared_team_id,
+                "name": "Operations Coordination",
+                "description": (
+                    "Shared workspace for dispatch handoffs, incident notes, "
+                    "and team-visible operating context."
+                ),
+            },
+        ]
+
+        manager = TranscriptManager()
+        manager.log_messages(
+            _message(
+                f"I personally discussed private token {own_token}.",
+                exchange_id=61001,
+            ),
+            synchronous=True,
+            destination=f"team:{shared_team_id}",
+        )
+
+        SESSION_DETAILS.assistant.agent_id = colleague_assistant_id
+        manager.log_messages(
+            _message(
+                (
+                    "Operations teammate note: use team lookup token "
+                    f"{colleague_token} for overnight handoff review."
+                ),
+                exchange_id=61002,
+            ),
+            synchronous=True,
+            destination=f"team:{shared_team_id}",
+        )
+        SESSION_DETAILS.assistant.agent_id = 684
+
+        handle = await manager.ask(
+            (
+                "From our shared team history, what is the overnight handoff "
+                "lookup token, and was that from your own prior chat or a "
+                "colleague's conversation?"
+            ),
+            _return_reasoning_steps=True,
+        )
+        answer, steps = await handle.result()
+        normalized = answer.lower()
+
+        assert colleague_token in normalized, assertion_failed(
+            colleague_token,
+            answer,
+            steps,
+            "Expected ask() to retrieve the colleague-authored token from shared history.",
+        )
+        assert any(
+            marker in normalized
+            for marker in (
+                "colleague",
+                "former colleague",
+                "another assistant",
+                "team member",
+            )
+        ), assertion_failed(
+            "colleague attribution language",
+            answer,
+            steps,
+            "Expected ask() to attribute teammate-authored history as non-self.",
+        )
+        assert own_token not in normalized
+    finally:
+        _delete_context_tree(f"Teams/{shared_team_id}")
+        SESSION_DETAILS.reset()

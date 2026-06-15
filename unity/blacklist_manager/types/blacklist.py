@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import ClassVar
 from pydantic import (
-    BaseModel,
     Field,
     model_validator,
     model_serializer,
@@ -10,12 +9,13 @@ from pydantic import (
     SerializerFunctionWrapHandler,
 )
 
+from unity.common.authorship import AuthoredRow
 from unity.conversation_manager.cm_types import Medium
 
 UNASSIGNED = -1
 
 
-class BlackList(BaseModel):
+class BlackList(AuthoredRow):
     """
     Minimal schema representing a single blacklist entry.
 
@@ -28,6 +28,7 @@ class BlackList(BaseModel):
         "medium": "med",
         "contact_detail": "cd",
         "reason": "r",
+        "destination": "dst",
     }
 
     blacklist_id: int = Field(
@@ -44,6 +45,10 @@ class BlackList(BaseModel):
     reason: str = Field(
         description="Why this contact detail is blacklisted (short context).",
     )
+    destination: str = Field(
+        default="personal",
+        description="Blacklist root that owns this entry, such as personal or team:<id>.",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -55,7 +60,9 @@ class BlackList(BaseModel):
         """
         Dump payload for POST operations; omit the sentinel id when unassigned.
         """
-        exclude = {"blacklist_id"} if self.blacklist_id == UNASSIGNED else set()
+        exclude = {"destination"}
+        if self.blacklist_id == UNASSIGNED:
+            exclude.add("blacklist_id")
         return self.model_dump(mode="json", exclude=exclude)
 
     @classmethod

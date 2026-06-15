@@ -17,6 +17,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Type, TYPE_CHECKING
 
+from unity.function_manager.hash_utils import stable_hash_for_rows
 from unity.function_manager.primitives.scope import PrimitiveScope
 
 if TYPE_CHECKING:
@@ -258,6 +259,79 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         ),
     ),
     ManagerSpec(
+        manager_alias="integrations",
+        manager_registry_key="",
+        primitive_class_path="unity.integrations.primitives.IntegrationPrimitives",
+        excluded_methods=frozenset(
+            {
+                "list_connected",
+                "search_tools",
+                "get_tool_schema",
+                "execute_tool",
+                "manage_connection",
+                "resolve_tool_id",
+                "callable_for_tool",
+            },
+        ),
+        priority=6,
+        domain="Integration App Discovery & Connected SaaS Apps",
+        description=(
+            "`primitives.integrations.search_integrations` is the app discovery "
+            "surface for both Native Unity-deploy packages and Third-party "
+            "provider-backed apps. It answers support, deployment activation, "
+            "provider connection, and sync/materialization status. Provider "
+            "tools execute through Orchestra policy/audit after materialization; "
+            "native package functions keep their existing custom function, MCP, "
+            "guidance, and computer-use routing."
+        ),
+        use_when=(
+            "The user asks to read or act in connected external apps such as "
+            "HubSpot, Salesforce, Google Drive, Gmail, Slack, Notion, Clay, "
+            "or a native deployment package. Also use it when a user asks "
+            "whether an integration is available, native vs third-party, "
+            "enabled for this assistant, connected, missing secrets/scopes, "
+            "expired, or blocked by policy."
+        ),
+        examples=(
+            "'Find recent HubSpot leads', 'Search Salesforce opportunities', "
+            "'Look up Google Drive files modified this week', 'Search Gmail "
+            "for invoices from Acme', 'Send this approved update to Slack', "
+            "'Which CRM integrations are connected?'"
+        ),
+        special_note=(
+            "Use `search_integrations` to answer whether an app is supported, "
+            "Native or Third-party, enabled/connected, or still syncing. "
+            "FunctionManager search remains the only actor-facing discovery "
+            "surface for executable functions/tools. Native apps become "
+            "executable through deployment-enabled package functions; "
+            "Third-party apps become executable after connection and provider "
+            "tool materialization. Inspect each row's docstring and argspec "
+            "before calling, and require user confirmation for write, "
+            "destructive, bulk-export, or sensitive actions."
+        ),
+    ),
+    ManagerSpec(
+        manager_alias="coordinator",
+        manager_registry_key="",  # No ManagerRegistry getter - singleton via metaclass
+        primitive_class_path="unity.coordinator_manager.coordinator_manager.CoordinatorManager",
+        excluded_methods=frozenset(),
+        priority=6,
+        domain="Coordinator Workspace Administration",
+        description=(
+            "Coordinator-only workspace lifecycle operations for assistants, teams, "
+            "membership, and Coordinator/State onboarding mode"
+        ),
+        use_when=(
+            "The session is running as a Coordinator and needs privileged setup "
+            "or lifecycle mutations on colleagues and shared workspaces"
+        ),
+        examples=(
+            "'Create the Regional Ops Manager colleague', "
+            "'Add the supervisor to Patch 4 workspace', "
+            "'Mark the first setup slice ready once validation passes'"
+        ),
+    ),
+    ManagerSpec(
         manager_alias="computer",
         manager_registry_key="",  # No ManagerRegistry getter - singleton via metaclass
         primitive_class_path="unity.function_manager.primitives.runtime.ComputerPrimitives",
@@ -428,6 +502,13 @@ _EXAMPLE_GENERATORS: Dict[str, List[str]] = {
         "get_primitives_dashboards_rich_live_data_example",
         "get_primitives_dashboards_composition_example",
     ],
+    "integrations": [
+        "get_primitives_integrations_function_manager_search_example",
+        "get_primitives_integrations_catalog_status_example",
+        "get_primitives_integrations_materialized_schema_example",
+        "get_primitives_integrations_activation_state_example",
+        "get_primitives_integrations_confirmation_example",
+    ],
 }
 
 
@@ -564,9 +645,9 @@ class ToolSurfaceRegistry:
     def get_function_id(self, manager_alias: str, method_name: str) -> int:
         """Compute the stable function_id for a primitive method.
 
-        This returns the same ID that ``collect_primitives`` / ``sync_primitives``
-        store in the ``Functions/Primitives`` database context, without requiring
-        a DB round-trip.
+        This returns the same ID that ``collect_primitives`` produces for rows
+        stored in the builtins primitives catalogue, without requiring a DB
+        round-trip.
 
         Args:
             manager_alias: Canonical manager alias (e.g., ``"contacts"``).
@@ -1291,14 +1372,12 @@ class ToolSurfaceRegistry:
         if primitives is None:
             primitives = self.collect_primitives(primitive_scope)
 
-        parts = []
-        for name in sorted(primitives.keys()):
-            p = primitives[name]
-            # Include name, signature, and docstring in hash
-            parts.append(f"{name}|{p['argspec']}|{p['docstring']}")
-
-        combined = "\n".join(parts)
-        return hashlib.sha256(combined.encode()).hexdigest()[:16]
+        return stable_hash_for_rows(
+            primitives.values(),
+            fields=("name", "argspec", "docstring"),
+            digest_chars=16,
+            projection="delimited",
+        )
 
     def compute_hash_for_manager(self, manager_alias: str) -> str:
         """

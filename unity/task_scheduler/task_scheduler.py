@@ -14,7 +14,9 @@ import unillm
 import asyncio
 import functools
 import json
-from datetime import datetime
+import os
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Type, Union, Callable, Tuple
 from typing import Literal, overload
 from pydantic import BaseModel
@@ -119,12 +121,21 @@ from .queue_engine import plan_reorder_queue, derive_status_after_queue_edit
 from ..common.llm_client import new_llm_client
 from ..common.read_only_ask_guard import ReadOnlyAskGuardHandle
 from ..common.sentinels import _UnsetSentinel
-from ..common.context_registry import ContextRegistry, TableContext
+from ..common.context_registry import (
+    ContextRegistry,
+    PERSONAL_DESTINATION,
+    TEAM_CONTEXT_PREFIX,
+    TEAM_DESTINATION_PREFIX,
+    TableContext,
+)
 from .machine_state import (
     TaskRunProvenance,
     build_task_run_key,
     consume_live_task_run_provenance,
+    latest_task_run_reference_for_source,
+    peek_live_task_run_provenance,
     source_type_from_activation_reason,
+    update_task_run_record,
 )
 from ..session_details import SESSION_DETAILS
 
@@ -293,6 +304,10 @@ class TaskScheduler(BaseTaskScheduler):
         # active task
         self.__actor = actor
         self._ctx = ContextRegistry.get_context(self, "Tasks")
+        self._personal_tasks_context = self._ctx
+        self._root_views: Dict[str, LocalTaskView] = {}
+        self._root_stores: Dict[str, TasksStore] = {}
+        self._active_task_root_context: Optional[str] = None
 
         # Install storage adapter and ensure context/fields exist
         self._provision_storage()
@@ -676,6 +691,81 @@ class TaskScheduler(BaseTaskScheduler):
 
         # Centralised local view for queue membership, allocator and light caching.
         self._view = LocalTaskView(self._store)
+        self._root_stores[self._ctx] = self._store
+        self._root_views[self._ctx] = self._view
+
+    def _task_context_from_root(self, root_context: str) -> str:
+        """Return the concrete Tasks context under one registry root."""
+
+        return f"{root_context.strip('/')}/Tasks"
+
+    def _destination_from_task_context(self, context_name: str) -> str | None:
+        """Return the public destination represented by a concrete Tasks context."""
+
+        if context_name.startswith(TEAM_CONTEXT_PREFIX):
+            raw_team_id = context_name[len(TEAM_CONTEXT_PREFIX) :].split("/", 1)[0]
+            return f"{TEAM_DESTINATION_PREFIX}{raw_team_id}"
+        return None
+
+    def _view_for_task_context(self, context_name: str) -> LocalTaskView:
+        """Return a per-root local view for a concrete Tasks context."""
+
+        if context_name in self._root_views:
+            return self._root_views[context_name]
+        store = TasksStore(
+            context_name,
+            add_to_all_context=(
+                self.include_in_multi_assistant_table
+                and not context_name.startswith(TEAM_CONTEXT_PREFIX)
+            ),
+        )
+        view = LocalTaskView(store)
+        self._root_stores[context_name] = store
+        self._root_views[context_name] = view
+        return view
+
+    def _task_context_for_destination(self, destination: str | None) -> str:
+        """Resolve a write destination into a concrete Tasks context."""
+
+        destination = destination or os.environ.get("TASK_DESTINATION") or None
+        if destination in (None, PERSONAL_DESTINATION):
+            return self._personal_tasks_context
+        root_context = ContextRegistry.write_root(
+            self,
+            "Tasks",
+            destination=destination,
+        )
+        return self._task_context_from_root(root_context)
+
+    def _read_task_contexts(self) -> list[str]:
+        """Return ordered concrete Tasks contexts visible to this assistant."""
+
+        if self._active_task_root_context is not None:
+            return [self._active_task_root_context]
+        root_contexts = ContextRegistry.read_roots(self, "Tasks")
+        contexts = [self._task_context_from_root(root) for root in root_contexts]
+        return list(dict.fromkeys(contexts))
+
+    @contextmanager
+    def _use_task_destination(self, destination: str | None):
+        """Temporarily scope scheduler storage to one task destination."""
+
+        context_name = self._task_context_for_destination(destination)
+        previous_context = self._ctx
+        previous_store = self._store
+        previous_view = self._view
+        previous_active_root = self._active_task_root_context
+        self._ctx = context_name
+        self._view = self._view_for_task_context(context_name)
+        self._store = self._root_stores[context_name]
+        self._active_task_root_context = context_name
+        try:
+            yield context_name
+        finally:
+            self._ctx = previous_context
+            self._store = previous_store
+            self._view = previous_view
+            self._active_task_root_context = previous_active_root
 
     @functools.wraps(BaseTaskScheduler.clear, updated=())
     def clear(self) -> None:
@@ -696,6 +786,9 @@ class TaskScheduler(BaseTaskScheduler):
 
         # Re-create the context with proper schema and fields
         self._ctx = ContextRegistry.get_context(self, "Tasks")
+        self._personal_tasks_context = self._ctx
+        self._root_views.clear()
+        self._root_stores.clear()
 
         # Re-provision storage (schema, local view)
         self._provision_storage()
@@ -718,6 +811,187 @@ class TaskScheduler(BaseTaskScheduler):
         for lg in log_objs:
             id_map[lg.entries["task_id"]] = lg.id
         return id_map
+
+    def _get_log_by_task_instance(self, *, task_id: int, instance_id: int) -> unify.Log:
+        """Return the physical task row for one logical task instance."""
+
+        log_objs = self._view.get_rows(
+            filter=f"task_id == {task_id} and instance_id == {instance_id}",
+            limit=2,
+            return_ids_only=False,
+        )
+        if not log_objs:
+            raise ValueError(
+                f"No task row found for task_id={task_id}, instance_id={instance_id}.",
+            )
+        if len(log_objs) != 1:
+            raise ValueError(
+                f"Ambiguous task rows for task_id={task_id}, instance_id={instance_id}.",
+            )
+        return log_objs[0]
+
+    def _get_task_for_source_log_id(
+        self,
+        *,
+        source_task_log_id: int,
+        expected_task_id: int,
+    ) -> Task:
+        """Return the task instance addressed by an activation source log id."""
+
+        log_objs = self._view.get_rows_by_log_ids(log_ids=[source_task_log_id])
+        if not log_objs:
+            raise ValueError(
+                f"Activation source task log {source_task_log_id} was not found.",
+            )
+        if len(log_objs) != 1:
+            raise ValueError(
+                f"Activation source task log {source_task_log_id} is ambiguous.",
+            )
+        entries = dict(log_objs[0].entries or {})
+        row_task_id = entries.get("task_id")
+        if row_task_id != expected_task_id:
+            raise ValueError(
+                "Activation source task log does not match requested task: "
+                f"expected task_id={expected_task_id}, got task_id={row_task_id}.",
+            )
+        instance_id = entries.get("instance_id")
+        if instance_id is None:
+            raise ValueError(
+                f"Activation source task log {source_task_log_id} has no instance_id.",
+            )
+        return Task(**entries)
+
+    @staticmethod
+    def _normalize_activation_datetime(value: Any) -> str | None:
+        if value is None:
+            return None
+        try:
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00")).isoformat()
+        except ValueError:
+            return str(value)
+
+    def _validate_task_matches_provenance(
+        self,
+        *,
+        task: Task,
+        provenance: "TaskRunProvenance | None",
+    ) -> None:
+        """Reject stale scheduled provenance before mutating a task instance."""
+
+        if provenance is None or provenance.source_type != "scheduled":
+            return
+        if provenance.scheduled_for is None:
+            return
+        task_scheduled_for = self._normalize_activation_datetime(task.schedule_start_at)
+        provenance_scheduled_for = self._normalize_activation_datetime(
+            provenance.scheduled_for,
+        )
+        if task_scheduled_for != provenance_scheduled_for:
+            raise ValueError(
+                "Scheduled activation does not match selected task instance: "
+                f"task_id={task.task_id}, instance_id={task.instance_id}, "
+                f"task_start_at={task_scheduled_for}, "
+                f"activation_scheduled_for={provenance_scheduled_for}.",
+            )
+
+    def _resolve_tasks_by_ids_for_queue_edit(self, task_ids: List[int]) -> List[Task]:
+        """Resolve logical task ids for queue edits, including freshly-created rows."""
+
+        unique_ids = list(dict.fromkeys(int(task_id) for task_id in task_ids))
+        tasks = self._filter_tasks(filter=f"task_id in {unique_ids}")
+        if {task.task_id for task in tasks} == set(unique_ids):
+            tasks_by_id = {task.task_id: task for task in tasks}
+            return [tasks_by_id[task_id] for task_id in unique_ids]
+
+        log_ids = self._view.get_log_ids_by_task_ids(task_ids=unique_ids)
+        exact_logs = self._view.get_rows_by_log_ids(
+            log_ids=[int(log_id) for log_id in log_ids],
+        )
+        tasks_by_id = {task.task_id: task for task in tasks}
+        for log in exact_logs:
+            task = Task(**log.entries)
+            tasks_by_id[task.task_id] = task
+        return [
+            tasks_by_id[task_id] for task_id in unique_ids if task_id in tasks_by_id
+        ]
+
+    def _reconcile_offline_active_blockers(
+        self,
+        *,
+        task_id: int,
+        provenance: TaskRunProvenance | None,
+    ) -> bool:
+        """Fail stale same-task active rows before a headless retry starts."""
+
+        if (
+            provenance is None
+            or provenance.execution_mode != "offline"
+            or provenance.source_type not in {"scheduled", "triggered"}
+            or provenance.source_task_log_id is None
+        ):
+            return False
+
+        active_rows = self._view.get_rows(
+            filter="status == 'active'",
+            return_ids_only=False,
+        )
+        if not active_rows:
+            return True
+
+        stale_rows = []
+        for row in active_rows:
+            entries = dict(row.entries or {})
+            row_task_id = entries.get("task_id")
+            if row_task_id is None or int(row_task_id) != int(task_id):
+                return False
+            if int(row.id) == int(provenance.source_task_log_id):
+                return False
+            stale_rows.append(row)
+
+        if not stale_rows:
+            return True
+
+        now = datetime.now(timezone.utc).isoformat()
+        for row in stale_rows:
+            entries = dict(row.entries or {})
+            reconciliation_info = (
+                "Task instance marked failed by offline lifecycle reconciliation. "
+                f"The headless execution for source_task_log_id={row.id} left "
+                "the row active without a live scheduler handle; "
+                f"reconciled_at={now}; "
+                f"next_source_task_log_id={provenance.source_task_log_id}."
+            )
+            self._write_log_entries(
+                logs=row.id,
+                entries={
+                    "status": Status.failed,
+                    "info": reconciliation_info,
+                },
+            )
+            run_reference = latest_task_run_reference_for_source(
+                assistant_id=provenance.assistant_id,
+                task_id=task_id,
+                source_task_log_id=int(row.id),
+            )
+            update_task_run_record(
+                run_reference,
+                {
+                    "state": "failed",
+                    "completed_at": now,
+                    "error": reconciliation_info,
+                    "result_summary": None,
+                    "reconciled_at": now,
+                    "reconciliation_reason": "offline_active_row_reconciliation",
+                },
+            )
+            self._reintegration_plans.pop(
+                (
+                    int(entries["task_id"]),
+                    int(entries["instance_id"]),
+                ),
+                None,
+            )
+        return True
 
     def _write_entries_batched(
         self,
@@ -991,9 +1265,26 @@ class TaskScheduler(BaseTaskScheduler):
         except Exception:
             any_active = False
         if any_active:
-            raise RuntimeError(
-                "A task is marked as active, but no active handle is present – reconcile state before starting another task.",
+            source_type = (
+                "triggered"
+                if trigger_attempt_token
+                else source_type_from_activation_reason(
+                    (_activated_by or ActivatedBy.explicit).value,
+                )
             )
+            provenance = peek_live_task_run_provenance(
+                assistant_id=SESSION_DETAILS.assistant.agent_id,
+                task_id=task_id,
+                source_type=source_type,
+                trigger_attempt_token=trigger_attempt_token,
+            )
+            if not self._reconcile_offline_active_blockers(
+                task_id=task_id,
+                provenance=provenance,
+            ):
+                raise RuntimeError(
+                    "A task is marked as active, but no active handle is present – reconcile state before starting another task.",
+                )
 
         # Execute strictly by id; choose isolation semantics based on flag
         handle = await self._execute_queue_internal(
@@ -1068,7 +1359,8 @@ class TaskScheduler(BaseTaskScheduler):
         if not candidate_tasks:
             raise ValueError(f"No runnable task found with id={task_id}")
 
-        # Pick the *oldest* runnable instance (lowest instance_id)
+        # Pick the oldest runnable instance unless activation provenance points
+        # at a specific physical task row.
         task = sorted(
             candidate_tasks,
             key=lambda t: t.instance_id,
@@ -1105,13 +1397,46 @@ class TaskScheduler(BaseTaskScheduler):
             if trigger_attempt_token
             else source_type_from_activation_reason(reason.value)
         )
-        source_task_log_id = self._task_id_to_log_id_map([task_id]).get(task_id)
         task_run_provenance = consume_live_task_run_provenance(
             assistant_id=SESSION_DETAILS.assistant.agent_id,
             task_id=task_id,
             source_type=task_run_source_type,
-            source_task_log_id=source_task_log_id,
+            destination=task.destination,
             trigger_attempt_token=trigger_attempt_token,
+        )
+        if task_run_provenance and task_run_provenance.source_task_log_id is not None:
+            task = self._get_task_for_source_log_id(
+                source_task_log_id=task_run_provenance.source_task_log_id,
+                expected_task_id=task_id,
+            )
+            if task.status in (
+                Status.completed,
+                Status.cancelled,
+                Status.failed,
+                Status.active,
+            ):
+                raise ValueError(
+                    "Activation source task instance is not runnable: "
+                    f"task_id={task.task_id}, instance_id={task.instance_id}, "
+                    f"status={task.status!r}.",
+                )
+            if activated_by is None:
+                if task.trigger is not None:
+                    reason = ActivatedBy.trigger
+                elif task.schedule_prev is None and task.schedule_start_at is not None:
+                    reason = ActivatedBy.schedule
+                elif task.schedule_prev is not None:
+                    reason = ActivatedBy.queue
+                else:
+                    reason = ActivatedBy.explicit
+                task_run_source_type = (
+                    "triggered"
+                    if trigger_attempt_token
+                    else source_type_from_activation_reason(reason.value)
+                )
+        self._validate_task_matches_provenance(
+            task=task,
+            provenance=task_run_provenance,
         )
 
         # Adjust queue linkages for activation (and record reintegration plan).
@@ -1120,6 +1445,7 @@ class TaskScheduler(BaseTaskScheduler):
         detach_from_queue_for_activation(
             self,
             task_id=task_id,
+            instance_id=task.instance_id,
             detach=detach,
             unlink_from_prev=unlink_from_prev,
         )
@@ -1170,20 +1496,18 @@ class TaskScheduler(BaseTaskScheduler):
             handle=handle,
         )
 
-        # Clone if this is a triggerable or recurring task
         if task.status == Status.triggerable or (
             task.repeat is not None and task.schedule_start_at is not None
         ):
             self._clone_task_instance(task)
 
-        # Promote status to active (and record the activation reason) and clear the primed pointer if needed
-
-        self._update_task_status_instance(
-            task_id=task_id,
-            instance_id=task.instance_id,
-            new_status=Status.active,
-            activated_by=reason,
-        )
+        with self._use_task_destination(task.destination):
+            self._update_task_status_instance(
+                task_id=task_id,
+                instance_id=task.instance_id,
+                new_status=Status.active,
+                activated_by=reason,
+            )
         if self._primed_task and self._primed_task.task_id == task_id:
             self._primed_task = None
 
@@ -1280,7 +1604,13 @@ class TaskScheduler(BaseTaskScheduler):
         )
         return handle
 
-    def create_task(self, *, name: str, description: str) -> ToolOutcome:
+    def create_task(
+        self,
+        *,
+        name: str,
+        description: str,
+        destination: str | None = None,
+    ) -> ToolOutcome:
         """
         Create a brand‑new task with minimal inputs (name and description only).
 
@@ -1299,7 +1629,11 @@ class TaskScheduler(BaseTaskScheduler):
         description : str
             A short description of the task.
         """
-        return self._create_task(name=name, description=description)
+        return self._create_task(
+            name=name,
+            description=description,
+            destination=destination,
+        )
 
     # (Removed LLM-driven outer loop – execution is strictly by id)
 
@@ -1406,7 +1740,8 @@ class TaskScheduler(BaseTaskScheduler):
                 "next_task": None,
                 "start_at": next_start_at.isoformat(),
             }
-        self._view.create_one(entries=clone_payload, new=True)
+        with self._use_task_destination(task.destination):
+            self._view.create_one(entries=clone_payload, new=True)
         # Maintain cached total count (+1 new instance row)
         if self._num_tasks_cached is not None:
             self._num_tasks_cached += 1
@@ -1554,10 +1889,36 @@ class TaskScheduler(BaseTaskScheduler):
         list[int] | list[unify.Log]
             The matching log identifiers or objects.
         """
-        return self._view.get_log_ids_by_task_ids(
-            task_ids=task_ids,
-            return_ids_only=return_ids_only,
-        )
+        task_id_list = task_ids if isinstance(task_ids, list) else [task_ids]
+        matches: list[unify.Log] = []
+        for context_name in self._read_task_contexts():
+            view = self._view_for_task_context(context_name)
+            rows = view.get_log_ids_by_task_ids(
+                task_ids=task_id_list,
+                return_ids_only=False,
+            )
+            destination = self._destination_from_task_context(context_name)
+            for row in rows:
+                row.entries.setdefault("destination", destination)
+                row.entries.setdefault(
+                    "assistant_id",
+                    SESSION_DETAILS.assistant_context,
+                )
+                matches.append(row)
+
+        if isinstance(task_ids, int):
+            root_destinations = {
+                row.entries.get("destination") or PERSONAL_DESTINATION
+                for row in matches
+            }
+            if len(root_destinations) > 1:
+                raise ValueError(
+                    f"Task id {task_ids} exists in multiple task roots; provide destination.",
+                )
+
+        if return_ids_only:
+            return [row.id for row in matches]
+        return matches
 
     # Private Tools #
     # --------------#
@@ -1579,6 +1940,8 @@ class TaskScheduler(BaseTaskScheduler):
         response_policy: Optional[str] = None,
         entrypoint: Optional[int] = None,
         offline: bool = False,
+        destination: str | None = None,
+        _root_applied: bool = False,
     ) -> ToolOutcome:
         """
         Create a **brand-new task** and, depending on its attributes, place it
@@ -1642,6 +2005,28 @@ class TaskScheduler(BaseTaskScheduler):
         To avoid mistakes, prefer omitting ``status`` and let the scheduler infer
         the correct lifecycle value from the ``schedule`` you supply.
         """
+        if not _root_applied:
+            effective_destination = (
+                destination or os.environ.get("TASK_DESTINATION") or None
+            )
+            with self._use_task_destination(effective_destination):
+                return self._create_task(
+                    name=name,
+                    description=description,
+                    queue_id=queue_id,
+                    status=status,
+                    schedule=schedule,
+                    trigger=trigger,
+                    deadline=deadline,
+                    repeat=repeat,
+                    priority=priority,
+                    response_policy=response_policy,
+                    entrypoint=entrypoint,
+                    offline=offline,
+                    destination=effective_destination,
+                    _root_applied=True,
+                )
+
         # ----------------  helper: iso-8601 → datetime  ---------------- #
         from datetime import datetime, timezone
 
@@ -1779,6 +2164,10 @@ class TaskScheduler(BaseTaskScheduler):
                 derived_qid = self._allocate_new_queue_id()
 
         task_details = TaskBase(
+            assistant_id=SESSION_DETAILS.assistant_context,
+            destination=(
+                destination if destination not in (None, PERSONAL_DESTINATION) else None
+            ),
             name=name,
             description=description,
             status=status,
@@ -1855,6 +2244,8 @@ class TaskScheduler(BaseTaskScheduler):
         *,
         tasks: List[Dict[str, Any]],
         queue_ordering: Optional[List[Union[List[int], Dict[str, Any]]]] = None,
+        destination: str | None = None,
+        _root_applied: bool = False,
     ) -> ToolOutcome:
         """
         Batch‑create tasks with ascending ids and (optionally) materialise one
@@ -1887,7 +2278,9 @@ class TaskScheduler(BaseTaskScheduler):
         tasks : list[dict]
             One dict per task mirroring the arguments of ``_create_task``.
             Typical usage is to provide just ``name`` and ``description`` for
-            each task and rely on ``queue_ordering`` for ordering.
+            each task and rely on ``queue_ordering`` for ordering. Destination
+            is batch-scoped; pass ``destination`` to this method rather than
+            per task item.
         queue_ordering : list[dict] | None
             Optional declaration of one or more queues using RELATIVE indices
             into the ``tasks`` list (0‑based; distinct from backend ``queue_id``).
@@ -1921,6 +2314,18 @@ class TaskScheduler(BaseTaskScheduler):
           dedicated queue tools. When both creation and ordering are requested
           together, prefer this batched tool.
         """
+
+        if not _root_applied:
+            effective_destination = (
+                destination or os.environ.get("TASK_DESTINATION") or None
+            )
+            with self._use_task_destination(effective_destination):
+                return self._create_tasks(
+                    tasks=tasks,
+                    queue_ordering=queue_ordering,
+                    destination=effective_destination,
+                    _root_applied=True,
+                )
 
         # Fast path: nothing to do
         if not tasks:
@@ -1967,6 +2372,7 @@ class TaskScheduler(BaseTaskScheduler):
                 "priority",
                 "response_policy",
                 "entrypoint",
+                "offline",
             ):
                 if key in spec:
                     payload[key] = spec[key]
@@ -1976,7 +2382,11 @@ class TaskScheduler(BaseTaskScheduler):
             if queue_ordering is not None and "status" not in payload:
                 payload["status"] = Status.queued
 
-            out = self._create_task(**payload)
+            out = self._create_task(
+                **payload,
+                destination=destination,
+                _root_applied=True,
+            )
             created_ids.append(int(out["details"]["task_id"]))
 
         queues_report: List[Dict[str, Any]] = []
@@ -2106,7 +2516,13 @@ class TaskScheduler(BaseTaskScheduler):
 
     # Delete
 
-    def _delete_task(self, *, task_id: int) -> ToolOutcome:
+    def _delete_task(
+        self,
+        *,
+        task_id: int,
+        destination: str | None = None,
+        _root_applied: bool = False,
+    ) -> ToolOutcome:
         """
         Permanently **remove** a task from storage.
 
@@ -2125,6 +2541,21 @@ class TaskScheduler(BaseTaskScheduler):
         RuntimeError
             If the task is currently *active* (active tasks cannot be deleted).
         """
+        if not _root_applied:
+            resolved_destination = (
+                destination or os.environ.get("TASK_DESTINATION") or None
+            )
+            if resolved_destination is None:
+                resolved_destination = (
+                    self._get_task_or_raise(task_id).destination or PERSONAL_DESTINATION
+                )
+            with self._use_task_destination(resolved_destination):
+                return self._delete_task(
+                    task_id=task_id,
+                    destination=resolved_destination,
+                    _root_applied=True,
+                )
+
         self._ensure_not_active_task(task_id)
         # Fast path: if we know the backing log id for this task, delete directly
         # Resolve the log id via a single lookup then delete (LocalTaskView manages memoization)
@@ -2180,34 +2611,41 @@ class TaskScheduler(BaseTaskScheduler):
         # Guard against touching the active task (fast in‑memory check)
         self._ensure_not_active_task(task_ids)
 
-        # Single targeted read for the referenced tasks only with a minimal field projection
-        # (avoid scanning all completed tasks and avoid fetching unused columns within this call).
-        logs = self._view.get_minimal_rows_by_task_ids(
-            task_ids=task_ids,
-            fields=["status"],
+        requested_task_ids = list(dict.fromkeys(int(task_id) for task_id in task_ids))
+
+        log_ids = self._view.get_log_ids_by_task_ids(task_ids=requested_task_ids)
+        logs = self._view.get_rows_by_log_ids(
+            log_ids=[int(log_id) for log_id in log_ids],
         )
+        logs_by_task_id = {
+            int(log.entries["task_id"]): log
+            for log in logs
+            if log.entries.get("task_id") is not None
+        }
+        missing = [
+            task_id for task_id in requested_task_ids if task_id not in logs_by_task_id
+        ]
+        if missing:
+            raise ValueError(f"No matching task_ids resolved: {missing}")
+
         # Validate none of the referenced tasks are already completed
-        try:
-            completed_ids = {
-                int(lg.entries["task_id"])
-                for lg in logs
-                if str(lg.entries.get("status")) == "completed"
-            }
-        except Exception:
-            completed_ids = set()
-        overlap = set(task_ids).intersection(completed_ids)
-        assert not overlap, (
-            "Cannot cancel completed tasks. Attempted to cancel: " f"{overlap}"
+        completed_ids = {
+            task_id
+            for task_id, log in logs_by_task_id.items()
+            if str(log.entries.get("status")) == Status.completed.value
+        }
+        assert not completed_ids, (
+            "Cannot cancel completed tasks. Attempted to cancel: " f"{completed_ids}"
         )
 
         # Batch update status using the resolved log ids directly (no extra reads)
         self._write_log_entries(
-            logs=[lg.id for lg in logs],
+            logs=[logs_by_task_id[task_id].id for task_id in requested_task_ids],
             entries={"status": Status.cancelled},
         )
         return {
             "outcome": "tasks cancelled",
-            "details": {"task_ids": task_ids},
+            "details": {"task_ids": requested_task_ids},
         }
 
     # Update Task Queue
@@ -2751,7 +3189,7 @@ class TaskScheduler(BaseTaskScheduler):
         self._ensure_not_active_task(block)
 
         # Validate existence, reject terminal/trigger-based; single consolidated read
-        tasks = self._filter_tasks(filter=f"task_id in {block}")
+        tasks = self._resolve_tasks_by_ids_for_queue_edit(block)
         ids_found = {t.task_id for t in tasks}
         missing = [tid for tid in block if tid not in ids_found]
         assert not missing, f"Unknown task ids: {missing}"
@@ -2902,7 +3340,7 @@ class TaskScheduler(BaseTaskScheduler):
                 "details": {"queue_id": queue_id, "order": []},
             }
 
-        tasks: List[Task] = self._filter_tasks(filter=f"task_id in {order}")
+        tasks = self._resolve_tasks_by_ids_for_queue_edit(order)
         ids_found = {t.task_id for t in tasks}
         missing = [tid for tid in order if tid not in ids_found]
         assert not missing, f"Unknown task ids: {missing}"
@@ -3771,6 +4209,8 @@ class TaskScheduler(BaseTaskScheduler):
         trigger: Any = _UNSET,
         entrypoint: Any = _UNSET,
         offline: Any = _UNSET,
+        destination: str | None = None,
+        _root_applied: bool = False,
     ) -> Dict[str, Any]:
         """
         Update one or more fields of an existing task.
@@ -3806,6 +4246,31 @@ class TaskScheduler(BaseTaskScheduler):
         dict
             Confirmation payload from the write operation.
         """
+
+        if not _root_applied:
+            resolved_destination = (
+                destination or os.environ.get("TASK_DESTINATION") or None
+            )
+            if resolved_destination is None:
+                resolved_destination = (
+                    self._get_task_or_raise(task_id).destination or PERSONAL_DESTINATION
+                )
+            with self._use_task_destination(resolved_destination):
+                return self._update_task(
+                    task_id=task_id,
+                    name=name,
+                    description=description,
+                    status=status,
+                    start_at=start_at,
+                    deadline=deadline,
+                    repeat=repeat,
+                    priority=priority,
+                    trigger=trigger,
+                    entrypoint=entrypoint,
+                    offline=offline,
+                    destination=resolved_destination,
+                    _root_applied=True,
+                )
 
         # Forbid edits on the currently active task via scheduler APIs
         self._ensure_not_active_task(task_id)
@@ -4318,9 +4783,14 @@ class TaskScheduler(BaseTaskScheduler):
 
     def _get_task_or_raise(self, task_id: int) -> Task:
         """Fetch exactly one task by id or raise ValueError."""
-        tasks = self._filter_tasks(filter=f"task_id == {task_id}", limit=1)
+        tasks = self._filter_tasks(filter=f"task_id == {task_id}", limit=1000)
         if not tasks:
             raise ValueError(f"No task found with id={task_id}")
+        destinations = {task.destination or PERSONAL_DESTINATION for task in tasks}
+        if len(destinations) > 1:
+            raise ValueError(
+                f"Task id {task_id} exists in multiple task roots; provide destination.",
+            )
         return tasks[0]
 
     # Reinstate a previously isolated-and-activated task back to its prior queue position
@@ -4489,17 +4959,27 @@ class TaskScheduler(BaseTaskScheduler):
 
         include_fields = list(Task.model_fields.keys())
 
-        rows = [
-            lg.entries
-            for lg in self._view.get_rows(
-                filter=normalized_filter,
-                offset=offset,
-                limit=limit,
-                # Avoid an extra backend call here by deriving private fields from the
-                # cached schema instead of calling get_fields() again.
-                include_fields=include_fields,
-            )
-        ]
+        rows: list[dict[str, Any]] = []
+        root_contexts = self._read_task_contexts()
+        for context_name in root_contexts:
+            view = self._view_for_task_context(context_name)
+            destination = self._destination_from_task_context(context_name)
+            root_rows = [
+                lg.entries
+                for lg in view.get_rows(
+                    filter=normalized_filter,
+                    offset=0,
+                    limit=max(limit + offset, 1000 if limit >= 1000 else limit),
+                    # Avoid an extra backend call here by deriving private fields from the
+                    # cached schema instead of calling get_fields() again.
+                    include_fields=include_fields,
+                )
+            ]
+            for row in root_rows:
+                row.setdefault("assistant_id", SESSION_DETAILS.assistant_context)
+                row["destination"] = destination
+            rows.extend(root_rows)
+        rows = rows[offset : offset + limit]
 
         # Rehydrate Enum values inside repetition patterns so callers see
         # the same structure as produced by `RepeatPattern.model_dump()`.
@@ -4669,6 +5149,16 @@ class TaskScheduler(BaseTaskScheduler):
         rows_by_id: Dict[int, Dict[str, Any]] = {
             lg.entries["task_id"]: lg.entries for lg in logs
         }
+        if set(rows_by_id) != set(ids):
+            missing_ids = [int(task_id) for task_id in ids if task_id not in rows_by_id]
+            log_ids = self._view.get_log_ids_by_task_ids(task_ids=missing_ids)
+            exact_logs = self._view.get_rows_by_log_ids(
+                log_ids=[int(log_id) for log_id in log_ids],
+            )
+            for log in exact_logs:
+                task_id = log.entries.get("task_id")
+                if task_id is not None:
+                    rows_by_id[int(task_id)] = log.entries
         return rows_by_id
 
     def _find_name_desc_collisions(

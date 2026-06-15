@@ -255,10 +255,23 @@ class TestVoiceHydration:
     async def test_call_guidance_restored(self):
         """FastBrainNotification events restore as guidance-role messages."""
         cm = _make_mock_cm()
+        # The hydration handler for FastBrainNotification picks a medium
+        # by inspecting (in order): cm.call_manager.has_active_google_meet,
+        # cm.call_manager.has_active_teams_meet, cm.mode == Mode.MEET,
+        # cm.call_manager._call_channel == "whatsapp_call". With a bare
+        # MagicMock these attributes return truthy Mock objects, so the
+        # very first branch matches and messages land under GOOGLE_MEET
+        # instead of the PHONE_CALL medium this test asserts. Pin the
+        # mocks to False/non-meet values so the handler falls through
+        # to the PHONE_CALL default.
+        cm.call_manager.has_active_google_meet = False
+        cm.call_manager.has_active_teams_meet = False
+        cm.call_manager._call_channel = "phone"
+        cm.mode = None  # any non-Mode.MEET value
         events = [
             FastBrainNotification(
                 contact=ALICE,
-                content="Mention the 3pm meeting",
+                message="Mention the 3pm meeting",
                 timestamp=BASE_TIME,
             ),
         ]

@@ -280,7 +280,6 @@ def greet_pet(name: str) -> str:
 async def test_semantic_search_finds_primitive():
     """Semantic search should find primitives by default."""
     fm = FunctionManager()
-    fm.sync_primitives()  # Ensure primitives are loaded
 
     actor = SingleFunctionActor(
         computer_primitives=None,
@@ -345,7 +344,6 @@ def list_my_contacts() -> str:
 async def test_semantic_search_with_no_user_functions():
     """Semantic search should work with only primitives available."""
     fm = FunctionManager()
-    fm.sync_primitives()  # Ensure primitives are loaded
 
     actor = SingleFunctionActor(
         computer_primitives=None,

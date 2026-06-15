@@ -222,6 +222,14 @@ The sandbox supports two comms backends:
 
 #### Local comms backend
 
+Use the gateway wizard to create or update the local env file before running
+real-comms scenarios:
+
+```bash
+python -m unity.gateway setup --interactive --env-file .env
+python -m unity.gateway doctor --check-credentials --channels twilio google microsoft slack --env-file .env
+```
+
 | Variable | Required | Description |
 |---|---|---|
 | `UNITY_CONVERSATION_LOCAL_COMMS_ENABLED` | Recommended | Set to `true` to enable Unity's local ingress |

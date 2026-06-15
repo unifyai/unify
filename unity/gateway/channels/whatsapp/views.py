@@ -598,7 +598,7 @@ async def create_whatsapp_sender(request: Request):
     payload: dict = {
         "sender_id": f"whatsapp:{phone_number}",
         "profile": {
-            "name": "Unify Assistant",
+            "name": data.get("name", "Unify Assistant"),
             "logo_url": "https://console.unify.ai/ivy_logo_only.png",
         },
         "webhook": {

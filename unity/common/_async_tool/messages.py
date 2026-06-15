@@ -589,7 +589,7 @@ def build_helper_ack_content(name: str, args_json: Any) -> str:
             else "Clarification helper acknowledged. Waiting for the original tool to proceed."
         )
     elif name.startswith("interject_"):
-        guidance = payload.get("content")
+        guidance = payload.get("message")
         ack_content = (
             f"Guidance forwarded to the running tool: {guidance!r}."
             if guidance

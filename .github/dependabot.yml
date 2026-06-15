@@ -1,0 +1,58 @@
+# Dependabot configuration for unifyai/unity.
+#
+# Scoped to GitHub Actions and the agent-service npm workspace.
+#
+# We deliberately do NOT enable scheduled pip updates: Unity sits on top of
+# three sibling repos (unify, unillm, orchestra) wired in via editable
+# uv installs, and we move source-dep pins deliberately rather than on a
+# cadence. CVE-driven security PRs against currently-pinned deps are still
+# delivered via the repo-level "Dependabot security updates" setting
+# (Settings → Code security → Dependabot security updates) — those are
+# fire-on-CVE, not schedule-driven, and that's exactly when we want to
+# move a pin.
+#
+# GitHub Actions and the agent-service npm package are the exceptions:
+# - action pins should be kept fresh (most upstream bumps are themselves
+#   security fixes); Dependabot's grouped weekly PR is low-noise.
+# - agent-service is leaf TypeScript with no Python coupling, so npm
+#   patch/minor bumps are safe to apply on a schedule.
+
+version: 2
+updates:
+- package-ecosystem: "github-actions"
+  directory: "/"
+  schedule:
+    interval: "weekly"
+    day: "monday"
+  open-pull-requests-limit: 5
+  labels:
+  - "dependencies"
+  - "github-actions"
+  commit-message:
+    prefix: "chore(actions)"
+    include: "scope"
+  groups:
+      # Batch routine action bumps into one PR per week to reduce noise.
+      # Security updates still open individually and bypass grouping.
+    actions-minor-patch:
+      update-types:
+      - "minor"
+      - "patch"
+
+- package-ecosystem: "npm"
+  directory: "/agent-service"
+  schedule:
+    interval: "weekly"
+    day: "monday"
+  open-pull-requests-limit: 5
+  labels:
+  - "dependencies"
+  - "agent-service"
+  commit-message:
+    prefix: "chore(agent-service)"
+    include: "scope"
+  groups:
+    agent-service-minor-patch:
+      update-types:
+      - "minor"
+      - "patch"

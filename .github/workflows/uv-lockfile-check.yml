@@ -1,0 +1,132 @@
+name: uv.lock check
+
+# Verifies that uv.lock is in sync with pyproject.toml. Blocking check —
+# PRs that modify pyproject.toml without regenerating uv.lock (or vice
+# versa) must not merge, because the bundled `scripts/install.sh` and
+# the Docker build at `deploy/Dockerfile` both rely on a coherent
+# lockfile when they `uv sync`. Catching the drift here avoids
+# breaking fresh installs after merge to `main` / `staging`.
+#
+# ─────────────────────────────────────────────────────────────────────
+# IMPORTANT: this check runs against the MERGED state, not just your
+#            branch
+# ─────────────────────────────────────────────────────────────────────
+#
+# For `pull_request` events, GitHub checks out `refs/pull/<N>/merge` —
+# a synthetic commit that merges your PR branch into the CURRENT state
+# of the target branch. So `pyproject.toml` evaluated here is
+# `target's pyproject.toml + your PR's changes to pyproject.toml`, not
+# just your branch.
+#
+# Failure mode: if the target branch advanced (e.g. someone merged a PR
+# that added a dep + its lock entries), your branch's uv.lock is now
+# missing those entries. `uv lock --check` resolves against the merged
+# pyproject and sees a lockfile that doesn't cover all current deps →
+# fails with "The lockfile at uv.lock needs to be updated."
+#
+# This is confusing because `uv lock --check` passes locally (your
+# branch is internally consistent) but fails in CI (the merged state
+# isn't). The fix is to sync with the target branch and regenerate
+# the lockfile — instructions live in the failure summary below.
+
+on:
+  push:
+    branches: [main, staging]
+    paths:
+    - 'pyproject.toml'
+    - 'uv.lock'
+    - '.github/workflows/uv-lockfile-check.yml'
+  pull_request:
+    branches: [main, staging]
+    paths:
+    - 'pyproject.toml'
+    - 'uv.lock'
+    - '.github/workflows/uv-lockfile-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: uv-lockfile-check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: uv lock --check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    # Check unity into ./unity so that `../unify` and `../unillm` (the
+    # editable paths declared in unity's pyproject.toml [tool.uv.sources])
+    # resolve to the sibling checkouts we make below. Without this, uv
+    # lock --check fails with "Distribution not found at file:///../unify"
+    # because the workspace root has no `unify/` or `unillm/` dirs.
+    - name: Checkout unity
+      uses: actions/checkout@v6
+      with:
+        path: unity
+
+    - name: Checkout unify (sibling editable dep)
+      uses: actions/checkout@v6
+      with:
+        repository: unifyai/unify
+        path: unify
+        # Unity on staging is locked against unify/unillm staging tips; only
+        # resolve against main siblings when unity itself is on main.
+        ref: ${{ (github.ref == 'refs/heads/main' || github.head_ref == 'main') && 'main' || 'staging' }}
+        token: ${{ secrets.CLONE_TOKEN || github.token }}
+
+    - name: Checkout unillm (sibling editable dep)
+      uses: actions/checkout@v6
+      with:
+        repository: unifyai/unillm
+        path: unillm
+        ref: ${{ (github.ref == 'refs/heads/main' || github.head_ref == 'main') && 'main' || 'staging' }}
+        token: ${{ secrets.CLONE_TOKEN || github.token }}
+
+    - name: Install uv
+      # SHA-pinned per repo CodeQL policy (no unpinned 3rd-party actions)
+      uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
+
+      # `uv lock --check` re-resolves the project from pyproject.toml and
+      # compares the result to uv.lock, exiting non-zero if they disagree.
+      # No network writes, no file modifications.
+      #
+      # On PRs this runs against the merge commit (see comment at the top
+      # of this file) — failures often mean "your branch is behind the
+      # target branch, rebase and regenerate uv.lock."
+    - name: Verify uv.lock is up-to-date
+      working-directory: unity
+      run: |
+        if ! uv lock --check; then
+          cat <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+        ## uv.lock is out of sync with pyproject.toml
+
+        **If this is a PR:** this check runs against the merged state
+        (your branch + the current target branch), not your branch
+        alone. If `uv lock --check` passes locally but fails here,
+        your branch is likely behind the target — recent changes to
+        `pyproject.toml` aren't reflected in your `uv.lock` yet.
+
+        To fix, sync with the target branch and regenerate the lockfile:
+
+        ```bash
+        git fetch origin staging          # or main, whichever you target
+        git rebase origin/staging
+        uv lock                           # regenerate against pyproject.toml
+        git commit uv.lock -m "chore: refresh uv.lock"
+        git push --force-with-lease
+        ```
+
+        **If you only changed `pyproject.toml`:** run `uv lock` locally
+        and commit the result alongside your `pyproject.toml` change.
+
+        This check blocks merge because `scripts/install.sh` and
+        `deploy/Dockerfile` both invoke `uv sync` against a lockfile
+        they expect to be coherent — catching drift here avoids
+        breaking fresh installs on the target branch post-merge.
+        EOF
+          echo "::error title=uv.lock out of sync::Run \`uv lock\` locally and commit the result. If on a PR, sync with the target branch first."
+          exit 1
+        fi

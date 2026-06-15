@@ -135,9 +135,15 @@ class TestRealSubprocessIPC:
 
             # Clear and send guidance (using production channel name)
             received_from_child.clear()
+            from unity.conversation_manager.events import FastBrainNotification
+
             await event_broker.publish(
                 "app:call:notification",
-                json.dumps({"content": "Ask about their day"}),
+                FastBrainNotification(
+                    contact={},
+                    message="Ask about their day",
+                    source="slow_brain",
+                ).to_json(),
             )
 
             # Wait for acknowledgment
@@ -148,8 +154,8 @@ class TestRealSubprocessIPC:
                     if channel == "app:call:ack":
                         data = json.loads(event_json)
                         assert (
-                            data["received_content"] == "Ask about their day"
-                        ), f"Subprocess received wrong content: {data}"
+                            data["received_message"] == "Ask about their day"
+                        ), f"Subprocess received wrong message: {data}"
                         ack_received = True
                         break
                 if ack_received:

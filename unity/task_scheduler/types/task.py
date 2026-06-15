@@ -1,8 +1,10 @@
 """Task model: queue membership, scheduling/triggering, priority, and metadata."""
 
 from enum import Enum
-from pydantic import BaseModel, Field, model_validator
+from pydantic import Field, model_validator
 from typing import Optional, List
+
+from unity.common.authorship import AuthoredRow
 
 from .priority import Priority
 from .status import Status
@@ -23,7 +25,15 @@ class ExecutionStyle(str, Enum):
     symbolic = "symbolic"
 
 
-class TaskBase(BaseModel):
+class TaskBase(AuthoredRow):
+    assistant_id: Optional[str] = Field(
+        default=None,
+        description="Assistant that owns execution state for this task.",
+    )
+    destination: Optional[str] = Field(
+        default=None,
+        description="Shared-team destination for routed task writes, if any.",
+    )
     # Top-level queue identifier for tasks that are members of a runnable queue.
     # When a task is queued/scheduled, this must be populated. The schedule
     # object never carries a queue_id field; use this top-level column solely.

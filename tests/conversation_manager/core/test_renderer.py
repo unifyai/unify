@@ -832,6 +832,34 @@ class TestRenderStateWithTracking:
         assert "America/New_York" in result.full_render
         assert "America/Los_Angeles" in result.full_render
 
+    def test_render_state_includes_recent_tool_executions(
+        self,
+        renderer,
+        contact_index,
+        notification_bar,
+    ):
+        last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
+
+        result = renderer.render_state(
+            contact_index,
+            notification_bar,
+            in_flight_actions={},
+            recent_tool_executions=[
+                {
+                    "generation": 2,
+                    "origin_event_name": "SMSSent",
+                    "tool_name": "create_team",
+                    "args_preview": '{"name":"Ops HQ"}',
+                    "result_preview": '{"team_id":11}',
+                },
+            ],
+            last_snapshot=last_snapshot,
+        )
+
+        assert "<recent_tool_executions>" in result.full_render
+        assert "tool=create_team" in result.full_render
+        assert "origin=SMSSent" in result.full_render
+
     def test_tracks_notifications(self, renderer, contact_index, notification_bar):
         """Notifications are tracked with identity."""
         ts1 = datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc)
@@ -1093,6 +1121,29 @@ class TestRenderCompletedActions:
         assert "id='1'" in result
         assert "Search for engineering contacts" in result
         assert "Create a task for follow-up" in result
+
+    def test_failed_completed_action_renders_error_state(self, renderer):
+        """Failed actions render explicit failed status and error text."""
+        completed_actions = {
+            0: {
+                "handle": MagicMock(),
+                "query": "Run coordinator membership repair",
+                "action_type": "act",
+                "handle_actions": [
+                    {
+                        "action_name": "act_failed",
+                        "query": "Coordinator role required",
+                        "success": False,
+                        "error": "Coordinator role required",
+                    },
+                ],
+            },
+        }
+
+        result = renderer.render_completed_actions(completed_actions)
+
+        assert "status='failed'" in result
+        assert "<error>Coordinator role required</error>" in result
 
     def test_render_state_includes_completed_actions(
         self,

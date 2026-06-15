@@ -1,10 +1,14 @@
 import asyncio
-from typing import Any, Optional
 import contextlib
+import json
+import traceback
+from datetime import datetime
+from typing import Any, Optional
 
 from unity.logger import LOGGER
 from unity.common.hierarchical_logger import DEFAULT_ICON
 from unity.common.startup_timing import log_startup_timing
+from unity.common.diagnostic_logging import staging_diagnostics_enabled
 from unity.session_details import SESSION_DETAILS
 from unity.settings import SETTINGS
 from unity.manager_registry import SingletonABCMeta
@@ -29,6 +33,7 @@ from unity.conversation_manager.domains.comms_utils import publish_system_error
 from unity.conversation_manager.domains.event_handlers import EventHandler
 from unity.conversation_manager.domains.renderer import Renderer
 from unity.conversation_manager.events import *
+from unity.integrations.sync_state import IntegrationSyncCoordinator
 from unity.common.prompt_helpers import now as prompt_now
 
 from unity.common.llm_client import new_llm_client
@@ -48,8 +53,88 @@ from unity.conversation_manager.cm_types.screenshot import (
 from unity.actor.base import BaseActor
 from unity.conversation_manager.domains.proactive_speech import ProactiveSpeech
 from unity.conversation_manager.medium_scripts.common import FastBrainLogger
+from unity.spending_limits import check_credit_gate_state
 
 MAX_CONV_MANAGER_MSGS = 50
+RECENT_TOOL_EXECUTIONS_LIMIT = 20
+RECENT_TOOL_PREVIEW_CHARS = 500
+CREDIT_GATE_REPLY_THROTTLE_SECONDS = 300
+DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE = (
+    "Your credits are depleted, so I can't continue helping with setup or tasks "
+    "until you top up. Please add credits in billing, then I'll pick this back up."
+)
+DEPLETED_CREDITS_EMAIL_SUBJECT = "Credits depleted"
+COMMISSIONING_MUTATION_TOOL_NAMES = frozenset(
+    {
+        "act",
+    },
+)
+COMMISSIONING_OUTBOUND_FOLLOWUP_EVENTS = frozenset(
+    {
+        "SMSSent",
+        "WhatsAppMessageSent",
+        "EmailSent",
+        "UnifyMessageSent",
+        "ApiMessageSent",
+        "DiscordMessageSent",
+        "DiscordChannelMessageSent",
+        "TeamsMessageSent",
+        "TeamsChannelMessageSent",
+    },
+)
+ACT_FOLLOWUP_ARGUMENT_DEFAULTS: dict[str, Any] = {
+    "response_format": None,
+    "persist": False,
+    "include_conversation_context": True,
+}
+
+
+def _log_slow_brain_single_shot_failure(
+    *,
+    run_id: str,
+    request_id: str,
+    origin_event_name: str,
+    message_count: int,
+    tool_count: int,
+    state_chars: int,
+) -> None:
+    if not staging_diagnostics_enabled():
+        return
+    LOGGER.exception(
+        (
+            "Slow-brain single-shot failed "
+            "run_id=%s request_id=%s origin_event=%s "
+            "message_count=%d tool_count=%d state_chars=%d"
+        ),
+        run_id,
+        request_id or "-",
+        origin_event_name or "-",
+        message_count,
+        tool_count,
+        state_chars,
+    )
+    LOGGER.error(
+        "Slow-brain single-shot traceback text:\n%s",
+        traceback.format_exc(),
+    )
+
+
+def _append_context_to_state_message(message: dict, context: str) -> dict:
+    if not context:
+        return message
+    updated = dict(message)
+    content = updated.get("content")
+    if isinstance(content, str):
+        updated["content"] = f"{content}\n\n{context}"
+        return updated
+    if isinstance(content, list):
+        updated["content"] = [
+            *content,
+            {"type": "text", "text": f"\n\n{context}"},
+        ]
+        return updated
+    updated["content"] = f"{content or ''}\n\n{context}"
+    return updated
 
 
 def _render_action_context(
@@ -110,6 +195,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
         assistant_whatsapp_number: str = "",
         assistant_discord_bot_id: str = "",
         assistant_email_provider: str = "",
+        assistant_slack_bot_user_id: str = "",
+        assistant_is_coordinator: bool = False,
         assistant_job_title: str = "",
         past_events: list | None = None,
         conv_context_length: int = 50,
@@ -135,6 +222,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.assistant_email = assistant_email
         self.assistant_whatsapp_number = assistant_whatsapp_number
         self.assistant_discord_bot_id = assistant_discord_bot_id
+        self.assistant_slack_bot_user_id = assistant_slack_bot_user_id
+        self.is_coordinator = assistant_is_coordinator
         self.assistant_email_provider = assistant_email_provider
         self.user_first_name = user_first_name
         self.user_surname = user_surname
@@ -184,6 +273,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.chat_history = []
         self.contact_index = ContactIndex()
         self.notifications_bar = NotificationBar()
+        self.integration_sync_coordinator = IntegrationSyncCoordinator()
         self.in_flight_actions: dict[
             int,
             dict,
@@ -218,6 +308,13 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # global message_id (persistent backend TM id), populated by
         # log_message() for post-hoc screenshot image updates.
         self._local_to_global_message_ids: dict[int, int] = {}
+        # Per-destination transcript message ids for fanout writes.
+        self._local_to_global_message_ids_by_destination: dict[
+            int,
+            dict[str | None, int],
+        ] = {}
+        # Primary destination used when one id is needed for compatibility paths.
+        self._local_message_destinations: dict[int, str | None] = {}
 
         # mapping from conference_name/room_name to exchange_id, populated
         # at call/meet end so the async RecordingReady handler can resolve
@@ -237,14 +334,18 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         # LLM run requests recorded during event handling (production path).
         # In step() mode, requests are recorded via a contextvar instead.
-        self._pending_llm_requests: list[tuple[float, bool]] = []
-        self._pending_llm_request_meta: list[dict[str, str]] = []
+        self._pending_llm_requests: list[tuple[float, bool, bool]] = []
+        self._pending_llm_request_meta: list[dict[str, Any]] = []
         self._current_event_trace: dict[str, str] | None = None
         self._event_trace_seq: int = 0
         self._llm_request_seq: int = 0
         self._llm_run_seq: int = 0
         self._llm_gen: int = 0
         self._outbound_suppress_gen: int = -1
+        self._active_llm_trace_meta: dict[str, Any] | None = None
+        self._credit_gate_reply_sent_at: dict[tuple[str, str], float] = {}
+        self._recent_tool_executions: list[dict[str, Any]] = []
+        self._recent_commissioning_successes: dict[str, int] = {}
 
         # WhatsApp messages that were sent via greeting template (outside 24h
         # window). When the contact replies, the brain is notified so it can
@@ -286,6 +387,116 @@ class ConversationManager(metaclass=SingletonABCMeta):
             n for i, n in enumerate(notifs) if n.pinned or i >= snap_n
         ]
 
+    @staticmethod
+    def _tool_result_is_error(result: Any) -> bool:
+        return isinstance(result, dict) and "error_kind" in result
+
+    @staticmethod
+    def _preview_value(
+        value: Any,
+        *,
+        max_chars: int = RECENT_TOOL_PREVIEW_CHARS,
+    ) -> str:
+        try:
+            rendered = json.dumps(value, sort_keys=True, default=str)
+        except Exception:
+            rendered = repr(value)
+        if len(rendered) <= max_chars:
+            return rendered
+        return rendered[: max_chars - 3] + "..."
+
+    @staticmethod
+    def _normalize_followup_tool_args(
+        tool_name: str,
+        tool_args: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        normalized = dict(tool_args or {})
+        if tool_name == "act":
+            for key, default_value in ACT_FOLLOWUP_ARGUMENT_DEFAULTS.items():
+                normalized.setdefault(key, default_value)
+        return normalized
+
+    @classmethod
+    def _commissioning_tool_fingerprint(
+        cls,
+        tool_name: str,
+        tool_args: dict[str, Any] | None,
+    ) -> str:
+        stable_args = json.dumps(
+            cls._normalize_followup_tool_args(tool_name, tool_args),
+            sort_keys=True,
+            default=str,
+        )
+        return f"{tool_name}:{stable_args}"
+
+    def _is_immediate_commissioning_followup(self, origin_event_name: str) -> bool:
+        return origin_event_name in COMMISSIONING_OUTBOUND_FOLLOWUP_EVENTS
+
+    def suppress_duplicate_commissioning_tool(
+        self,
+        *,
+        tool_name: str,
+        tool_args: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        """Suppress immediate duplicate commissioning calls from outbound follow-ups."""
+        if tool_name not in COMMISSIONING_MUTATION_TOOL_NAMES:
+            return None
+        trace_meta = self._active_llm_trace_meta or {}
+        origin_event_name = str(trace_meta.get("origin_event_name") or "")
+        if not self._is_immediate_commissioning_followup(origin_event_name):
+            return None
+        fingerprint = self._commissioning_tool_fingerprint(tool_name, tool_args)
+        last_success_gen = self._recent_commissioning_successes.get(fingerprint)
+        if last_success_gen != self._llm_gen - 1:
+            return None
+        return {
+            "error_kind": "duplicate_suppressed",
+            "message": (
+                "Skipped duplicate commissioning tool call from immediate outbound "
+                "follow-up event."
+            ),
+            "details": {
+                "tool_name": tool_name,
+                "origin_event_name": origin_event_name,
+            },
+        }
+
+    def _record_recent_tool_executions(
+        self,
+        *,
+        tools: list[Any],
+        trace_meta: dict[str, Any],
+    ) -> None:
+        origin_event_name = str(trace_meta.get("origin_event_name") or "")
+        for tool_exec in tools:
+            tool_name = str(getattr(tool_exec, "name", ""))
+            tool_args = getattr(tool_exec, "args", {}) or {}
+            tool_result = getattr(tool_exec, "result", None)
+            self._recent_tool_executions.append(
+                {
+                    "generation": self._llm_gen,
+                    "origin_event_name": origin_event_name,
+                    "tool_name": tool_name,
+                    "args_preview": self._preview_value(tool_args),
+                    "result_preview": self._preview_value(tool_result),
+                },
+            )
+            if (
+                tool_name in COMMISSIONING_MUTATION_TOOL_NAMES
+                and not self._tool_result_is_error(tool_result)
+            ):
+                fingerprint = self._commissioning_tool_fingerprint(tool_name, tool_args)
+                self._recent_commissioning_successes[fingerprint] = self._llm_gen
+        if len(self._recent_tool_executions) > RECENT_TOOL_EXECUTIONS_LIMIT:
+            self._recent_tool_executions = self._recent_tool_executions[
+                -RECENT_TOOL_EXECUTIONS_LIMIT:
+            ]
+        for fingerprint, generation in list(
+            self._recent_commissioning_successes.items(),
+        ):
+            if generation < self._llm_gen - 1:
+                del self._recent_commissioning_successes[fingerprint]
+
     @property
     def assistant_has_teams(self) -> bool:
         """True when Microsoft Teams capabilities are available to this assistant.
@@ -326,7 +537,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
     def get_active_contact(self) -> dict | None:
         """Get the contact for the current active call, or fall back to the boss contact."""
         return self.call_manager.call_contact or self.contact_index.get_contact(
-            contact_id=1,
+            contact_id=SESSION_DETAILS.boss_contact_id,
         )
 
     async def capture_assistant_screenshot(
@@ -458,8 +669,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         # 1. Register with ImageManager to get persistent image_ids.
         image_ids: list[int] = []
+        image_ids_by_destination: dict[str | None, list[int]] = {}
+        implicit_destinations: list[str | None] = [None]
         try:
             from unity.manager_registry import ManagerRegistry
+            from unity.common.context_registry import ContextRegistry
 
             image_manager = ManagerRegistry.get_image_manager()
             items = [
@@ -470,11 +684,17 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 }
                 for entry, path in zip(screenshots, screenshot_paths)
             ]
-            image_ids = await asyncio.to_thread(
-                image_manager.add_images,
-                items,
-                synchronous=True,
-            )
+            implicit_destinations = ContextRegistry.implicit_shared_destinations()
+            for destination in implicit_destinations:
+                destination_image_ids = await asyncio.to_thread(
+                    image_manager.add_images,
+                    items,
+                    synchronous=True,
+                    destination=destination,
+                )
+                image_ids_by_destination[destination] = destination_image_ids
+            primary_destination = implicit_destinations[0]
+            image_ids = image_ids_by_destination.get(primary_destination, [])
         except Exception as e:
             self._session_logger.warning(
                 "screenshot_registration",
@@ -483,7 +703,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             return
 
         # 2. Annotate CM Message objects with image_ids and build TM refs.
-        msg_to_image_refs: dict[int, list[dict]] = {}
+        msg_to_image_refs: dict[tuple[int, str | None], list[dict]] = {}
         for i, (entry, _path) in enumerate(zip(screenshots, screenshot_paths)):
             if entry.local_message_id is None or i >= len(image_ids):
                 continue
@@ -500,23 +720,48 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     break
 
             label = source_labels.get(entry.source, "Screenshot")
-            msg_to_image_refs.setdefault(mid, []).append(
-                {
-                    "raw_image_ref": {"image_id": img_id},
-                    "annotation": f"{label} -- '{entry.utterance}'",
-                },
-            )
+            for destination, destination_image_ids in image_ids_by_destination.items():
+                if i >= len(destination_image_ids):
+                    continue
+                msg_to_image_refs.setdefault((mid, destination), []).append(
+                    {
+                        "raw_image_ref": {"image_id": destination_image_ids[i]},
+                        "annotation": f"{label} -- '{entry.utterance}'",
+                    },
+                )
 
         # 3. Post-hoc update TM messages with AnnotatedImageRefs.
         if msg_to_image_refs and self.transcript_manager is not None:
-            for local_mid, refs in msg_to_image_refs.items():
-                tm_msg_id = self._local_to_global_message_ids.get(local_mid)
+            for (local_mid, destination), refs in msg_to_image_refs.items():
+                destination_map = self._local_to_global_message_ids_by_destination.get(
+                    local_mid,
+                    {},
+                )
+                tm_msg_id = destination_map.get(destination)
+                effective_destination = destination
+                if tm_msg_id is None:
+                    if destination is not None:
+                        self._session_logger.warning(
+                            "screenshot_tm_update",
+                            (
+                                "Skipping screenshot transcript update for "
+                                f"local_mid={local_mid}, destination={destination!r}: "
+                                "destination message mapping missing."
+                            ),
+                        )
+                        continue
+                    tm_msg_id = self._local_to_global_message_ids.get(local_mid)
+                    effective_destination = self._local_message_destinations.get(
+                        local_mid,
+                        destination,
+                    )
                 if tm_msg_id is not None:
                     try:
                         await asyncio.to_thread(
                             self.transcript_manager.update_message_images,
                             tm_msg_id,
                             refs,
+                            destination=effective_destination,
                         )
                     except Exception as e:
                         self._session_logger.warning(
@@ -906,17 +1151,17 @@ class ConversationManager(metaclass=SingletonABCMeta):
         """Surface a slow-brain exhaustion failure to the fast brain.
 
         Publishes a ``FastBrainNotification`` with ``should_speak=True`` and
-        an explicit ``response_text`` so the fast brain utters the error via
+        a dedicated ``spoken_message`` so the fast brain utters the error via
         TTS directly (bypassing its own LLM, which may be hitting the same
         provider outage). Also cancels any pending proactive-speech loop so
         it stops emitting "still looking" filler for a request the slow brain
         has given up on.
         """
-        response_text = (
+        spoken_message = (
             "Sorry, I'm having trouble thinking right now — "
             "could you say that again in a moment?"
         )
-        notification_content = (
+        notification_message = (
             f"Slow-brain turn failed after retries were exhausted "
             f"({type(exc).__name__}). The user's last request was not processed. "
             "Acknowledge the error and ask them to try again; do NOT claim you "
@@ -925,8 +1170,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
         contact = self.get_active_contact()
         event = FastBrainNotification(
             contact=contact or {},
-            content=notification_content,
-            response_text=response_text,
+            message=notification_message,
+            spoken_message=spoken_message,
             should_speak=True,
             source="slow_brain_failure",
         )
@@ -946,6 +1191,38 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         with contextlib.suppress(Exception):
             await self.cancel_proactive_speech()
+
+    async def _publish_slow_brain_fast_brain_guidance(
+        self,
+        *,
+        message: str,
+        should_speak: bool,
+        slow_brain_log_path: str = "",
+    ) -> None:
+        """Publish slow-brain ``guide_voice_agent`` output to the fast brain."""
+        if not message:
+            return
+        contact = self.get_active_contact()
+        event = FastBrainNotification(
+            contact=contact,
+            message=message,
+            should_speak=should_speak,
+            source="slow_brain",
+            llm_log_path=slow_brain_log_path,
+        )
+        self._session_logger.info(
+            "call_notification",
+            f"Guide FastBrain (speak={should_speak}): {message}",
+        )
+        event_json = event.to_json()
+        await self.event_broker.publish(
+            "app:call:notification",
+            event_json,
+        )
+        await self.event_broker.publish(
+            "app:comms:assistant_notification",
+            event_json,
+        )
 
     async def _run_llm_with_failure_notification(
         self,
@@ -971,12 +1248,178 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     await self._notify_fast_brain_of_slow_brain_failure(exc)
             raise
 
+    def _credit_gate_throttle_key(
+        self,
+        reply_context: dict[str, Any],
+    ) -> tuple[str, str]:
+        medium = str(reply_context.get("medium") or "")
+        target = (
+            reply_context.get("api_message_id")
+            or reply_context.get("channel_id")
+            or reply_context.get("chat_id")
+            or reply_context.get("contact_id")
+            or ""
+        )
+        return (medium, str(target))
+
+    def _credit_gate_reply_is_throttled(
+        self,
+        reply_context: dict[str, Any],
+    ) -> bool:
+        if reply_context.get("medium") == Medium.API_MESSAGE.value:
+            return False
+
+        throttle_key = self._credit_gate_throttle_key(reply_context)
+        last_sent_at = self._credit_gate_reply_sent_at.get(throttle_key)
+        now = self.loop.time()
+        if (
+            last_sent_at is not None
+            and now - last_sent_at < CREDIT_GATE_REPLY_THROTTLE_SECONDS
+        ):
+            return True
+
+        self._credit_gate_reply_sent_at[throttle_key] = now
+        return False
+
+    async def _send_credit_gate_reply(
+        self,
+        reply_context: dict[str, Any],
+    ) -> bool:
+        medium = reply_context.get("medium")
+        contact_id = reply_context.get("contact_id")
+        tools = ConversationManagerBrainActionTools(self)
+
+        previous_suppress_gen = self._outbound_suppress_gen
+        self._outbound_suppress_gen = self._llm_gen
+        try:
+            if medium == Medium.UNIFY_MESSAGE.value and contact_id is not None:
+                await tools.send_unify_message(
+                    contact_id=contact_id,
+                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                )
+            elif medium == Medium.SMS_MESSAGE.value and contact_id is not None:
+                await tools.send_sms(
+                    contact_id=contact_id,
+                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                )
+            elif medium == Medium.WHATSAPP_MESSAGE.value and contact_id is not None:
+                await tools.send_whatsapp(
+                    contact_id=contact_id,
+                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                )
+            elif medium == Medium.EMAIL.value:
+                email_id = reply_context.get("email_id")
+                if email_id:
+                    await tools.send_email(
+                        subject=DEPLETED_CREDITS_EMAIL_SUBJECT,
+                        body=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                        reply_all=True,
+                        email_id_to_reply_to=email_id,
+                    )
+                elif contact_id is not None:
+                    await tools.send_email(
+                        to=[contact_id],
+                        subject=DEPLETED_CREDITS_EMAIL_SUBJECT,
+                        body=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                    )
+                else:
+                    return False
+            elif medium == Medium.API_MESSAGE.value:
+                await tools.send_api_response(
+                    contact_id=contact_id or SESSION_DETAILS.boss_contact_id,
+                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                    tags=reply_context.get("tags"),
+                )
+            elif medium == Medium.DISCORD_MESSAGE.value and contact_id is not None:
+                await tools.send_discord_message(
+                    contact_id=contact_id,
+                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                )
+            elif medium == Medium.DISCORD_CHANNEL_MESSAGE.value and reply_context.get(
+                "channel_id",
+            ):
+                await tools.send_discord_channel_message(
+                    channel_id=reply_context["channel_id"],
+                    guild_id=reply_context.get("guild_id") or "",
+                    contact_id=contact_id,
+                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                )
+            elif medium == Medium.SLACK_MESSAGE.value and contact_id is not None:
+                await tools.send_slack_message(
+                    contact_id=contact_id,
+                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                    team_id=reply_context.get("team_id") or "",
+                    thread_ts=reply_context.get("thread_ts"),
+                )
+            elif medium == Medium.SLACK_CHANNEL_MESSAGE.value and reply_context.get(
+                "channel_id",
+            ):
+                await tools.send_slack_channel_message(
+                    channel_id=reply_context["channel_id"],
+                    team_id=reply_context.get("team_id") or "",
+                    thread_ts=reply_context.get("thread_ts"),
+                    contact_id=contact_id,
+                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                )
+            elif medium == Medium.TEAMS_MESSAGE.value and contact_id is not None:
+                await tools.send_teams_message(
+                    contact_id=contact_id,
+                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                    chat_id=reply_context.get("chat_id"),
+                )
+            elif medium == Medium.TEAMS_CHANNEL_MESSAGE.value and reply_context.get(
+                "channel_id",
+            ):
+                await tools.send_teams_message(
+                    contact_id=contact_id or SESSION_DETAILS.boss_contact_id,
+                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                    channel_id=reply_context.get("channel_id"),
+                    team_id=reply_context.get("team_id"),
+                )
+            else:
+                return False
+        finally:
+            self._outbound_suppress_gen = previous_suppress_gen
+
+        return True
+
+    async def _maybe_handle_depleted_credit_gate(
+        self,
+        trace_meta: dict[str, Any],
+    ) -> bool:
+        reply_context = trace_meta.get("credit_gate_reply_context")
+        if not reply_context:
+            return False
+
+        credit_gate_state = await check_credit_gate_state()
+        if credit_gate_state.allowed:
+            return False
+
+        if self._credit_gate_reply_is_throttled(reply_context):
+            self._session_logger.info(
+                "credit_gate",
+                "Skipped repeated depleted-credit reply",
+            )
+            return True
+
+        sent = await self._send_credit_gate_reply(reply_context)
+        self._session_logger.info(
+            "credit_gate",
+            (
+                "Served depleted-credit reply"
+                if sent
+                else "Skipped depleted-credit reply without a deliverable channel"
+            ),
+        )
+        return True
+
     async def request_llm_run(
         self,
         delay=0,
         cancel_running=False,
         triggering_contact_id: int | None = None,
         is_user_origin: bool = False,
+        credit_gate_reply_context: dict[str, Any] | None = None,
     ) -> None:
         """Request an LLM run.
 
@@ -993,6 +1436,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "triggering_contact_id": triggering_contact_id,
             "is_user_origin": is_user_origin,
         }
+        if credit_gate_reply_context is not None:
+            request_meta["credit_gate_reply_context"] = credit_gate_reply_context
         self._pending_llm_requests.append((delay, cancel_running, is_user_origin))
         self._pending_llm_request_meta.append(request_meta)
         log_startup_timing(
@@ -1076,6 +1521,19 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 f"cancel_running={cancel_running} is_user_origin={is_user_origin}"
             ),
         )
+        if await self._maybe_handle_depleted_credit_gate(selected_meta):
+            log_startup_timing(
+                LOGGER,
+                (
+                    "⏱️ [StartupTiming] first_reply.credit_gate_blocked "
+                    "run_id=%s request_id=%s origin_event=%s"
+                ),
+                run_id,
+                selected_meta.get("request_id", "-") or "-",
+                selected_meta.get("origin_event_name", "-") or "-",
+            )
+            return
+
         log_startup_timing(
             LOGGER,
             (
@@ -1118,9 +1576,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         trace_meta = trace_meta or {}
 
+        # Resolve per-turn org member attribution (only meaningful in org
+        # context, where a cost can be attributed to a specific member).
+        attributed_user_id = None
         if SESSION_DETAILS.org_id is not None:
             triggering_contact_id = trace_meta.get("triggering_contact_id")
-            attributed_user_id = None
             if triggering_contact_id is not None:
                 contact = self.contact_index.get_contact(
                     contact_id=triggering_contact_id,
@@ -1132,17 +1592,31 @@ class ConversationManager(metaclass=SingletonABCMeta):
             else:
                 COST_ATTRIBUTION.set([SESSION_DETAILS.user.id])
 
-            try:
-                import unillm
+        # The acting user for this turn: the inbound message sender when it maps
+        # to a system user (boss or provisioned org member), else the workspace
+        # owner. Drives per-user linked-desktop resolution in the prompt so a
+        # shared assistant reflects the *speaker's* machine, not the owner's.
+        acting_user_id = attributed_user_id or SESSION_DETAILS.user.id
 
-                unillm.set_billing_context(
-                    assistant_id=SESSION_DETAILS.assistant.agent_id,
-                    user_id=attributed_user_id or SESSION_DETAILS.user.id,
-                    organization_id=SESSION_DETAILS.org_id,
-                    source="call" if self.mode.is_voice else "chat",
-                )
-            except (ImportError, Exception):
-                pass
+        # Re-bind the billing context for THIS turn so credit deductions are
+        # attributed to the assistant (and the acting member, in org context).
+        # This must run for personal workspaces too: the context set once at
+        # init does not reliably propagate to the generation execution
+        # context, so without this LLM transactions are recorded with a NULL
+        # assistant_id and disappear when filtering usage by assistant.
+        try:
+            import unillm
+
+            is_voice = self.mode.is_voice
+            unillm.set_billing_context(
+                assistant_id=SESSION_DETAILS.assistant.agent_id,
+                user_id=acting_user_id,
+                organization_id=SESSION_DETAILS.org_id,
+                source="call" if is_voice else "chat",
+                label="Voice reply" if is_voice else "Chat reply",
+            )
+        except (ImportError, Exception):
+            pass
         _cost_attribution_ms = _mark_preamble_step()
 
         self._llm_gen += 1
@@ -1234,13 +1708,13 @@ class ConversationManager(metaclass=SingletonABCMeta):
         )
 
         _t0 = _rl_time.perf_counter()
-        _has_desktop = SESSION_DETAILS.assistant.desktop_mode in ("ubuntu", "windows")
         snapshot_state = self.prompt_renderer.render_state(
             self.contact_index,
             self.notifications_bar,
             self.in_flight_actions,
             self.completed_actions,
             self.last_snapshot,
+            recent_tool_executions=self._recent_tool_executions,
             assistant_screen_share_active=self.assistant_screen_share_active,
             user_screen_share_active=self.user_screen_share_active,
             user_webcam_active=self.user_webcam_active,
@@ -1251,7 +1725,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             managers_initialized=self.initialized,
             vm_ready=self.vm_ready,
             file_sync_complete=self.file_sync_complete,
-            has_desktop=_has_desktop,
+            has_desktop=SESSION_DETAILS.assistant.has_managed_desktop,
         )
         _render_ms = (_rl_time.perf_counter() - _t0) * 1000
 
@@ -1261,6 +1735,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             snapshot_state=snapshot_state,
             screenshots=screenshots,
             screenshot_paths=screenshot_paths,
+            acting_user_id=acting_user_id,
         )
         _brain_spec_ms = (_rl_time.perf_counter() - _t0) * 1000
 
@@ -1271,6 +1746,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
             )
         _t0 = _rl_time.perf_counter()
         input_message = brain_spec.state_message()
+        integration_sync_context = self.integration_sync_coordinator.prompt_summary()
+        input_message = _append_context_to_state_message(
+            input_message,
+            integration_sync_context,
+        )
         _state_message_ms = (_rl_time.perf_counter() - _t0) * 1000
         _t0 = _rl_time.perf_counter()
         system_prompt = brain_spec.system_prompt
@@ -1433,21 +1913,34 @@ class ConversationManager(metaclass=SingletonABCMeta):
             len(tools),
             len(messages),
         )
+        self._active_llm_trace_meta = trace_meta
         try:
-            result = await single_shot_tool_decision(
-                client,
-                messages,
-                tools,
-                tool_choice="required" if tools else "auto",
-                response_format=response_model,
-                exclusive_tools={
-                    "make_call",
-                    "make_whatsapp_call",
-                    "join_google_meet",
-                    "join_teams_meet",
-                },
-            )
+            try:
+                result = await single_shot_tool_decision(
+                    client,
+                    messages,
+                    tools,
+                    tool_choice="required" if tools else "auto",
+                    response_format=response_model,
+                    exclusive_tools={
+                        "make_call",
+                        "make_whatsapp_call",
+                        "join_google_meet",
+                        "join_teams_meet",
+                    },
+                )
+            except Exception:
+                _log_slow_brain_single_shot_failure(
+                    run_id=run_id,
+                    request_id=request_id,
+                    origin_event_name=origin_event_name,
+                    message_count=len(messages),
+                    tool_count=len(tools),
+                    state_chars=len(input_message),
+                )
+                raise
         finally:
+            self._active_llm_trace_meta = None
             if hasattr(client, "_pending_thinking_log"):
                 client._pending_thinking_log.emit_fallback()
             _EVENT_SOURCE.reset(_source_token)
@@ -1463,6 +1956,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
             run_id,
             tool_names,
         )
+        self._record_recent_tool_executions(
+            tools=result.tools,
+            trace_meta=trace_meta or {},
+        )
 
         # Extract structured output (thoughts)
         structured = result.structured_output
@@ -1472,47 +1969,27 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         # Handle guide_voice_agent tool calls for voice modes.
         # The slow brain decides BLOCK (omit the tool), NOTIFY (default),
-        # or SPEAK (should_speak=True + response_text) by calling
-        # guide_voice_agent in parallel with its action tool.
-        # Dedup is handled in the fast brain subprocess at speak time.
+        # or SPEAK (should_speak=True + message) by calling guide_voice_agent
+        # in parallel with its action tool. Dedup runs in the fast brain subprocess.
         if self.mode.is_voice:
-            notification_content = ""
+            guidance_message = ""
             should_speak = False
-            response_text = ""
             for tool_exec in result.tools:
                 if tool_exec.name == "guide_voice_agent":
                     args = tool_exec.args or {}
-                    notification_content = args.get("content", "")
+                    guidance_message = args.get("message", "")
                     should_speak = args.get("should_speak", False)
-                    response_text = args.get("response_text", "")
                     break
 
-            if notification_content:
+            if guidance_message:
                 pending = getattr(client, "_pending_thinking_log", None)
                 slow_brain_log_path = (
                     pending.last_path or "" if pending is not None else ""
                 )
-                contact = self.get_active_contact()
-                event = FastBrainNotification(
-                    contact=contact,
-                    content=notification_content,
-                    response_text=response_text,
+                await self._publish_slow_brain_fast_brain_guidance(
+                    message=guidance_message,
                     should_speak=should_speak,
-                    source="slow_brain",
-                    llm_log_path=slow_brain_log_path,
-                )
-                self._session_logger.info(
-                    "call_notification",
-                    f"Guide FastBrain (speak={should_speak}): {notification_content}",
-                )
-                event_json = event.to_json()
-                await self.event_broker.publish(
-                    "app:call:notification",
-                    event_json,
-                )
-                await self.event_broker.publish(
-                    "app:comms:assistant_notification",
-                    event_json,
+                    slow_brain_log_path=slow_brain_log_path,
                 )
 
         self._session_logger.debug(
@@ -1774,8 +2251,15 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "assistant_email_provider",
             "google_workspace",
         )
+        self.self_contact_id = int(payload["self_contact_id"])
+        self.boss_contact_id = int(payload["boss_contact_id"])
         self.assistant_whatsapp_number = payload.get("assistant_whatsapp_number", "")
         self.assistant_discord_bot_id = payload.get("assistant_discord_bot_id", "")
+        self.assistant_slack_bot_user_id = payload.get(
+            "assistant_slack_bot_user_id",
+            "",
+        )
+        self.is_coordinator = bool(payload.get("assistant_is_coordinator", False))
         self.user_first_name = payload["user_first_name"]
         self.user_surname = payload["user_surname"]
         self.user_number = payload["user_number"]
@@ -1785,12 +2269,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.voice_id = payload["voice_id"]
         self.binding_id = payload.get("binding_id", "")
         self.desktop_mode = payload.get("desktop_mode", "ubuntu")
-        self.user_desktop_mode = payload.get("user_desktop_mode")
-        self.user_desktop_filesys_sync = payload.get("user_desktop_filesys_sync", False)
-        self.user_desktop_url = payload.get("user_desktop_url")
+        self.user_desktops = payload.get("user_desktops") or []
         self.org_id: int | None = payload.get("org_id")
         self.org_name: str = payload.get("org_name", "")
         self.team_ids: list[int] = payload.get("team_ids") or []
+        team_summaries = payload.get("team_summaries") or []
+        is_coordinator = payload.get("is_coordinator", False)
         # Set API key on SESSION_DETAILS for runtime access
         if payload.get("api_key"):
             SESSION_DETAILS.unify_key = payload["api_key"]
@@ -1807,25 +2291,30 @@ class ConversationManager(metaclass=SingletonABCMeta):
             assistant_number=self.assistant_number,
             assistant_email=self.assistant_email,
             assistant_email_provider=self.assistant_email_provider,
+            assistant_self_contact_id=self.self_contact_id,
             assistant_whatsapp_number=self.assistant_whatsapp_number,
             assistant_discord_bot_id=self.assistant_discord_bot_id,
+            assistant_slack_bot_user_id=self.assistant_slack_bot_user_id,
+            assistant_is_coordinator=self.is_coordinator,
             user_id=self.user_id,
             user_first_name=self.user_first_name,
             user_surname=self.user_surname,
             user_number=self.user_number,
             user_email=self.user_email,
             user_whatsapp_number=self.user_whatsapp_number,
+            user_boss_contact_id=self.boss_contact_id,
             org_id=self.org_id,
             org_name=self.org_name,
             team_ids=self.team_ids,
+            team_summaries=team_summaries,
             voice_provider=self.voice_provider,
             voice_id=self.voice_id,
             binding_id=self.binding_id,
             desktop_mode=self.desktop_mode,
-            user_desktop_mode=self.user_desktop_mode,
-            user_desktop_filesys_sync=self.user_desktop_filesys_sync,
-            user_desktop_url=self.user_desktop_url,
+            user_desktops=self.user_desktops,
+            is_coordinator=is_coordinator,
         )
+        self.team_summaries = SESSION_DETAILS.team_summaries
         # Export to env vars for subprocess inheritance
         SESSION_DETAILS.export_to_env()
 
@@ -1854,6 +2343,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             voice_id=self.voice_id,
             assistant_name=f"{self.assistant_first_name} {self.assistant_surname}".strip(),
             job_name=self.job_name,
+            is_coordinator=SESSION_DETAILS.is_coordinator,
         )
 
     async def store_chat_history(self):
@@ -2059,16 +2549,18 @@ class ConversationManager(metaclass=SingletonABCMeta):
                         },
                     )
 
-            _has_desktop = SESSION_DETAILS.assistant.desktop_mode in (
-                "ubuntu",
-                "windows",
-            )
+            # Nothing has been said yet — there is no silence to break.  The
+            # cycle re-arms when a real utterance arrives.
+            if not conversation_turns:
+                return
+
             snapshot_state = self.prompt_renderer.render_state(
                 self.contact_index,
                 self.notifications_bar,
                 self.in_flight_actions,
                 self.completed_actions,
                 self.last_snapshot,
+                recent_tool_executions=self._recent_tool_executions,
                 assistant_screen_share_active=self.assistant_screen_share_active,
                 user_screen_share_active=self.user_screen_share_active,
                 user_webcam_active=self.user_webcam_active,
@@ -2077,7 +2569,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 teams_meet_active=self.call_manager.has_active_teams_meet,
                 vm_ready=self.vm_ready,
                 file_sync_complete=self.file_sync_complete,
-                has_desktop=_has_desktop,
+                has_desktop=SESSION_DETAILS.assistant.has_managed_desktop,
             )
             brain_spec = build_brain_spec(self, snapshot_state=snapshot_state)
 
@@ -2097,16 +2589,13 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 return
 
             _log.proactive_decision(
-                decision.should_speak,
                 decision.delay,
                 decision.content,
             )
 
-            if not decision.should_speak:
-                _log.proactive_dormant()
-                return
-
             # Wait the requested delay (cancellable if an utterance arrives).
+            # `delay` is unbounded: a few seconds when someone is waiting on a
+            # reply, many minutes during a focused collaborative silence.
             if decision.delay > 0:
                 _log.proactive_speaking(decision.delay, decision.content)
                 await asyncio.sleep(decision.delay)
@@ -2138,8 +2627,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
             event = FastBrainNotification(
                 contact=contact or {},
-                content=decision.content,
-                response_text=decision.content,
+                message=decision.content,
                 should_speak=True,
                 source="proactive_speech",
                 llm_log_path=llm_log_path,

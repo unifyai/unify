@@ -11,6 +11,8 @@ These tests verify that the scoping mechanism works consistently at ALL levels:
 This ensures the single source of truth (PrimitiveScope) controls what the model sees.
 """
 
+import os
+
 import pytest
 
 from unity.function_manager.primitives import (
@@ -34,8 +36,13 @@ from tests.helpers import _handle_project
 def scoped_function_manager_factory():
     """Factory that creates FunctionManager with specific scope."""
     managers = []
+    previous_impl = os.environ.get("UNITY_FUNCTION_IMPL")
+    previous_base_context = getattr(ContextRegistry, "_base_context", None)
+    os.environ["UNITY_FUNCTION_IMPL"] = "simulated"
+    ContextRegistry.set_base_context("UnityTests/PrimitiveScope")
 
     def _create(scope: PrimitiveScope):
+        ContextRegistry.set_base_context("UnityTests/PrimitiveScope")
         ContextRegistry.forget(FunctionManager, "Functions/VirtualEnvs")
         ContextRegistry.forget(FunctionManager, "Functions/Compositional")
         ContextRegistry.forget(FunctionManager, "Functions/Primitives")
@@ -51,6 +58,13 @@ def scoped_function_manager_factory():
             fm.clear()
         except Exception:
             pass
+    if previous_impl is None:
+        os.environ.pop("UNITY_FUNCTION_IMPL", None)
+    else:
+        os.environ["UNITY_FUNCTION_IMPL"] = previous_impl
+    ContextRegistry.clear()
+    if previous_base_context:
+        ContextRegistry.set_base_context(previous_base_context)
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -184,9 +198,6 @@ def test_search_functions_respects_scope(scoped_function_manager_factory):
     scope = PrimitiveScope.single("files")
     fm = scoped_function_manager_factory(scope)
 
-    # Sync primitives (scoped)
-    fm.sync_primitives()
-
     # Search for something generic
     results = fm.search_functions(query="data operations", n=20)
 
@@ -205,7 +216,6 @@ def test_list_primitives_respects_scope(scoped_function_manager_factory):
     scope = PrimitiveScope(scoped_managers=frozenset({"files", "contacts"}))
     fm = scoped_function_manager_factory(scope)
 
-    fm.sync_primitives()
     primitives = fm.list_primitives()
 
     # All primitives should be from files or contacts
@@ -217,47 +227,26 @@ def test_list_primitives_respects_scope(scoped_function_manager_factory):
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 4. Primitives Syncing Scoping
+# 4. Catalogue Read Scoping
 # ────────────────────────────────────────────────────────────────────────────
 
 
 @_handle_project
-def test_sync_primitives_only_syncs_scoped_managers(scoped_function_manager_factory):
-    """sync_primitives() should only sync primitives for scoped managers."""
+def test_catalog_reads_only_scoped_managers(scoped_function_manager_factory):
+    """Catalogue reads should be filtered to scoped managers."""
     # Create FM with files-only scope
     scope = PrimitiveScope.single("files")
     fm = scoped_function_manager_factory(scope)
 
-    fm.sync_primitives()
     primitives = fm.list_primitives()
 
-    # Should only have FileManager primitives
-    assert len(primitives) > 0, "Should have synced some primitives"
+    # Should only see FileManager primitives despite the catalogue holding all
+    assert len(primitives) > 0, "Should read some primitives from the catalogue"
     for name, data in primitives.items():
         assert "FileManager" in data.get(
             "primitive_class",
             "",
         ), f"Primitive {name} should be from FileManager"
-
-
-@_handle_project
-def test_per_manager_hash_tracking(scoped_function_manager_factory):
-    """FunctionManager should track hashes per-manager for efficient syncing."""
-    scope = PrimitiveScope.all_managers()
-    fm = scoped_function_manager_factory(scope)
-
-    # Sync primitives
-    fm.sync_primitives()
-
-    # Check that per-manager hashes are stored
-    stored_hashes = fm._get_stored_primitives_hash_by_manager()
-
-    # Should have a hash for each scoped manager
-    for alias in scope.scoped_managers:
-        assert alias in stored_hashes, f"Should have hash for {alias}"
-        assert (
-            len(stored_hashes[alias]) == 16
-        ), f"Hash for {alias} should be 16-char hex"
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -272,12 +261,10 @@ def test_primitives_instance_respects_scope():
     scope = PrimitiveScope.single("files")
     primitives = Primitives(primitive_scope=scope)
 
-    # files should be accessible
-    assert hasattr(primitives, "files")
+    assert primitives.primitive_scope.scoped_managers == frozenset({"files"})
 
-    # Other managers should still be accessible (Primitives doesn't block access)
-    # but the scoping is enforced at the environment/FunctionManager level
-    # The runtime Primitives instance gives full access for flexibility
+    with pytest.raises(AttributeError):
+        _ = primitives.contacts
 
 
 def test_state_manager_env_get_prompt_context_respects_scope():

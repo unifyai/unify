@@ -1,8 +1,10 @@
-from pydantic import BaseModel, Field
+from pydantic import Field
 from typing import List, Optional, Dict, Any, Literal
 
+from unity.common.authorship import AuthoredRow
 
-class Function(BaseModel):
+
+class Function(AuthoredRow):
     """
     Represents a function stored in the FunctionManager.
 
@@ -94,6 +96,16 @@ class Function(BaseModel):
     primitive_method: Optional[str] = Field(
         None,
         description="Method name on the primitive class.",
+    )
+
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Source-specific metadata for function subtypes. Provider-backed "
+            "integration rows store catalogue-level tool metadata here; "
+            "per-user connection state is resolved live and never stored on "
+            "Function rows."
+        ),
     )
 
     venv_id: Optional[int] = Field(

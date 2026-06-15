@@ -15,6 +15,7 @@ from unity.conversation_manager.runtime_status import (
 )
 from unity.conversation_manager.cm_types import Mode, ScreenshotEntry
 from unity.logger import LOGGER
+from unity.session_details import SESSION_DETAILS
 
 if TYPE_CHECKING:
     from unity.conversation_manager.conversation_manager import ConversationManager
@@ -187,6 +188,7 @@ def build_brain_spec(
     snapshot_state: "SnapshotState",
     screenshots: list[ScreenshotEntry] | None = None,
     screenshot_paths: list[str] | None = None,
+    acting_user_id: str | None = None,
 ) -> BrainSpec:
     """
     Build the prompt + response model inputs for a single Main CM Brain run.
@@ -206,7 +208,12 @@ def build_brain_spec(
         paired with the user utterance that triggered capture and a timestamp.
     screenshot_paths : list[str] | None
         Relative file paths corresponding to each screenshot (parallel list).
+    acting_user_id : str | None
+        The user acting in this turn (the inbound message sender when it maps to
+        a system user, else the workspace owner). Used to resolve the *speaker's*
+        linked desktop. Falls back to the session owner when not provided.
     """
+    acting_user_id = acting_user_id or SESSION_DETAILS.user.id
     from unity.settings import SETTINGS
 
     _brain_t0 = perf_counter()
@@ -222,29 +229,37 @@ def build_brain_spec(
     prompt = snapshot_state.full_render
     _prompt_ms = _mark_step()
 
-    # Get boss contact (contact_id=1) from ContactManager - the source of truth
-    boss_contact = cm.contact_index.get_contact(1) or {}
+    boss_contact_id = SESSION_DETAILS.boss_contact_id
+    boss_contact = cm.contact_index.get_contact(boss_contact_id) or {}
     _boss_contact_ms = _mark_step()
     is_internal_call = cm.mode.is_voice and bool(
         (cm.get_active_contact() or {}).get("is_system", False),
     )
+    authorized_humans: list[dict] | None = None
+    if cm.initialized:
+        from unity.coordinator_manager.coordinator_manager import CoordinatorManager
+
+        coordinator_manager = CoordinatorManager()
+        if SESSION_DETAILS.is_coordinator and SESSION_DETAILS.org_id is not None:
+            authorized_humans = coordinator_manager.get_org_members()
+
     _active_contact_ms = _mark_step()
-    # Prepend the assistant's job title / specialization (if set) to the bio
-    # so the voice-call system prompt also reflects what the assistant is
-    # specialized for. Keeping this here (rather than threading a new param
-    # through build_system_prompt) keeps the prompt builder API stable.
+    # Marty sessions carry fixed intro scaffolding in the prompt builder.
+    # Regular assistants prepend job title into the bio block when set.
     _bio_parts: list[str] = []
-    _job_title = (cm.assistant_job_title or "").strip()
-    if _job_title:
-        _bio_parts.append(f"Role / specialization: {_job_title}.")
+    if not SESSION_DETAILS.is_coordinator:
+        _job_title = (cm.assistant_job_title or "").strip()
+        if _job_title:
+            _bio_parts.append(f"Role / specialization: {_job_title}.")
     if cm.assistant_about:
         _bio_parts.append(cm.assistant_about)
+    _bio_text = "\n".join(_bio_parts)
     _bio_ms = _mark_step()
     runtime_setup_note = deployment_runtime_reconcile_prompt_note(cm)
     _runtime_status_ms = _mark_step()
     system_prompt = build_system_prompt(
-        bio="\n".join(_bio_parts),
-        contact_id=1,
+        bio=_bio_text,
+        contact_id=boss_contact_id,
         first_name=boss_contact.get("first_name") or "",
         surname=boss_contact.get("surname") or "",
         phone_number=boss_contact.get("phone_number"),
@@ -257,9 +272,18 @@ def build_brain_spec(
         assistant_has_email=bool(cm.assistant_email),
         assistant_has_whatsapp=bool(cm.assistant_whatsapp_number),
         assistant_has_discord=bool(cm.assistant_discord_bot_id),
+        assistant_has_slack=bool(cm.assistant_slack_bot_user_id),
         assistant_has_teams=bool(cm.assistant_has_teams),
-        user_desktop_control=SETTINGS.conversation.USER_DESKTOP_CONTROL_ENABLED,
+        has_linked_user_desktop=SESSION_DETAILS.assistant.user_desktop_for(
+            acting_user_id,
+        )
+        is not None,
+        acting_user_id=acting_user_id,
         runtime_setup_note=runtime_setup_note,
+        team_summaries=getattr(cm, "team_summaries", []),
+        is_coordinator=SESSION_DETAILS.is_coordinator,
+        authorized_humans=authorized_humans,
+        is_org_workspace=SESSION_DETAILS.org_id is not None,
     )
     _system_prompt_ms = _mark_step()
 
