@@ -8,6 +8,7 @@ import keyword
 from typing import Any, Optional
 
 from unity.integrations import ops as integration_ops
+from unity.integrations.builtins_catalog import list_catalog_apps, list_catalog_tools
 from unity.integrations.function_metadata import (
     integration_connection_id,
     integration_input_schema,
@@ -233,9 +234,9 @@ class IntegrationPrimitives:
 
         Use this when the user asks whether an app is supported, active for the
         current assistant, connected if it is provider-backed, or ready to use.
-        It searches Orchestra's global app catalog for both ``Native`` Unity-
-        deploy packages and ``Third-party`` provider apps, then enriches each
-        result with Unity's local deployment/materialization state.
+        It searches the public Builtins app catalogue for both ``Native``
+        Unity-deploy packages and ``Third-party`` provider apps, then enriches
+        each result with current assistant connection/materialization state.
 
         Do not use this to discover executable functions or provider tools.
         Once a result says the app is ready/materialized, search FunctionManager
@@ -266,24 +267,33 @@ class IntegrationPrimitives:
             Assistant identifier for assistant-scoped connections.
         """
 
-        raw_results = integration_ops.search_apps(
-            query,
-            limit=limit,
-            **self._effective_owner_scope(
-                owner_scope=owner_scope,
-                org_id=org_id,
-                team_id=team_id,
-                user_id=user_id,
-                assistant_id=assistant_id,
-            ),
+        effective_scope = self._effective_owner_scope(
+            owner_scope=owner_scope,
+            org_id=org_id,
+            team_id=team_id,
+            user_id=user_id,
+            assistant_id=assistant_id,
         )
-        if isinstance(raw_results, dict) and raw_results.get("error"):
+        raw_results = list_catalog_apps(query=query, limit=limit)
+        connections = integration_ops.list_connections(**effective_scope)
+        if isinstance(connections, dict) and connections.get("error"):
             return {
                 "status": "error",
                 "query": query,
-                "error": raw_results.get("error"),
+                "error": connections.get("error"),
                 "results": [],
             }
+        connection_by_app: dict[str, dict[str, Any]] = {}
+        for connection in connections or []:
+            if not isinstance(connection, dict):
+                continue
+            app_slug = connection.get("canonical_app_slug")
+            if not isinstance(app_slug, str):
+                continue
+            normalized = _normalize_app_slug(app_slug)
+            existing = connection_by_app.get(normalized)
+            if existing is None or connection.get("status") == "connected":
+                connection_by_app[normalized] = connection
         if not raw_results:
             return {
                 "status": "ok",
@@ -320,10 +330,19 @@ class IntegrationPrimitives:
                 if source_type == "native"
                 else "global_catalog"
             )
+            connection_row = (
+                connection_by_app.get(_normalize_app_slug(app_slug))
+                if isinstance(app_slug, str)
+                else None
+            )
             connection_status = (
                 self._native_connection_status(manifest_row)
                 if source_type == "native"
-                else app.get("connection_status")
+                else (
+                    connection_row.get("status")
+                    if isinstance(connection_row, dict)
+                    else "not_connected"
+                )
             )
             sync_status = self._sync_status_for_result(
                 source_type,
@@ -338,8 +357,16 @@ class IntegrationPrimitives:
                 "supported": app.get("supported", True),
                 "deployment_status": deployment_status,
                 "connection_status": connection_status or "not_connected",
-                "connection_id": app.get("connection_id"),
-                "external_account_label": app.get("external_account_label"),
+                "connection_id": (
+                    connection_row.get("connection_id")
+                    if isinstance(connection_row, dict)
+                    else None
+                ),
+                "external_account_label": (
+                    connection_row.get("external_account_label")
+                    if isinstance(connection_row, dict)
+                    else None
+                ),
                 "auth_modes": app.get("auth_modes") or [],
                 "tool_count": app.get("tool_count", 0),
                 "materialized_function_count": materialized_function_count,
@@ -602,18 +629,59 @@ class IntegrationPrimitives:
         instead of inventing credentials or bypasses.
         """
 
-        return integration_ops.search_tools(
-            query,
-            include_unconnected=include_unconnected,
-            limit=limit,
-            **self._effective_owner_scope(
-                owner_scope=owner_scope,
-                org_id=org_id,
-                team_id=team_id,
-                user_id=user_id,
-                assistant_id=assistant_id,
-            ),
+        effective_scope = self._effective_owner_scope(
+            owner_scope=owner_scope,
+            org_id=org_id,
+            team_id=team_id,
+            user_id=user_id,
+            assistant_id=assistant_id,
         )
+        rows = list_catalog_tools(limit=max(limit, 100))
+        if query:
+            needle = query.strip().lower()
+            rows = [
+                row
+                for row in rows
+                if needle in str(row.get("name") or "").lower()
+                or needle in str(row.get("docstring") or "").lower()
+                or needle in str(row.get("embedding_text") or "").lower()
+            ]
+        connections = integration_ops.list_connections(**effective_scope)
+        if isinstance(connections, dict) and connections.get("error"):
+            return connections
+        connected_apps = {
+            _normalize_app_slug(connection.get("canonical_app_slug"))
+            for connection in connections or []
+            if isinstance(connection, dict)
+            and connection.get("status") == "connected"
+            and connection.get("canonical_app_slug")
+        }
+        results = []
+        for row in rows:
+            metadata = integration_metadata(row)
+            app_slug = _normalize_app_slug(metadata.get("app_slug"))
+            activation_state = (
+                "connected_ready" if app_slug in connected_apps else "not_connected"
+            )
+            if not include_unconnected and activation_state != "connected_ready":
+                continue
+            results.append(
+                {
+                    "tool_id": integration_tool_id(row),
+                    "canonical_name": row.get("name"),
+                    "display_name": metadata.get("tool_display_name")
+                    or metadata.get("labels", {}).get("tool_display_name"),
+                    "description": row.get("docstring"),
+                    "activation_state": activation_state,
+                    "required_scopes": metadata.get("required_scopes") or [],
+                    "action_class": metadata.get("action_class"),
+                    "confirmation_required": metadata.get("confirmation_required"),
+                    "schema_available": metadata.get("schema_available", True),
+                },
+            )
+            if len(results) >= limit:
+                break
+        return results
 
     async def get_tool_schema(
         self,
@@ -655,16 +723,29 @@ class IntegrationPrimitives:
             examples, required scopes, activation state, and connection status.
         """
 
-        return integration_ops.get_tool_schema(
-            tool_id,
-            **self._effective_owner_scope(
-                owner_scope=owner_scope,
-                org_id=org_id,
-                team_id=team_id,
-                user_id=user_id,
-                assistant_id=assistant_id,
-            ),
-        )
+        rows = list_catalog_tools(tool_id=tool_id, limit=1)
+        if not rows:
+            return {
+                "status": "error",
+                "error": {
+                    "code": "integration_tool_not_found",
+                    "message": f"No integration tool catalog row found for {tool_id}.",
+                },
+            }
+        row = rows[0]
+        metadata = integration_metadata(row)
+        return {
+            "status": "ok",
+            "tool_id": tool_id,
+            "canonical_name": row.get("name"),
+            "input_schema": integration_input_schema(row),
+            "output_schema": metadata.get("output_schema") or {},
+            "examples": metadata.get("examples") or [],
+            "required_scopes": metadata.get("required_scopes") or [],
+            "action_class": metadata.get("action_class"),
+            "confirmation_required": metadata.get("confirmation_required"),
+            "schema_available": metadata.get("schema_available", True),
+        }
 
     async def execute_tool(
         self,
