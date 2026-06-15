@@ -146,8 +146,14 @@ def mock_cm(mock_session_logger, mock_event_broker, sample_contacts):
     # Mock get_active_contact to return boss contact
     cm.get_active_contact = MagicMock(return_value=sample_contacts[1])
 
-    # Mock get_recent_voice_transcript
-    cm.get_recent_voice_transcript = MagicMock(return_value=([], None))
+    # Mock get_recent_voice_transcript with a minimal non-empty transcript so
+    # the loop's "nothing said yet" guard doesn't short-circuit before decide().
+    cm.get_recent_voice_transcript = MagicMock(
+        return_value=(
+            [{"role": "assistant", "content": "Hi, how can I help?"}],
+            None,
+        ),
+    )
 
     return cm
 
@@ -319,7 +325,7 @@ class TestProactiveSpeechLoop:
             nonlocal decide_called
             decide_called = True
             return (
-                ProactiveDecision(should_speak=True, delay=0, content="Stale filler"),
+                ProactiveDecision(delay=0, content="Stale filler"),
                 "",
             )
 
@@ -353,7 +359,7 @@ class TestProactiveSpeechLoop:
         async def mock_decide(*args, **kwargs):
             nonlocal decide_called
             decide_called = True
-            return ProactiveDecision(should_speak=False), ""
+            return ProactiveDecision(delay=0, content="Are you there?"), ""
 
         mock_cm.proactive_speech.decide = mock_decide
 
@@ -375,13 +381,14 @@ class TestProactiveSpeechLoop:
         assert decide_called, "LLM should be consulted after pipeline becomes quiescent"
 
     async def test_loop_proceeds_when_pipeline_quiescent(self, mock_cm):
-        """When the pipeline is quiescent, the loop proceeds normally."""
+        """When the pipeline is quiescent, the loop proceeds to break the
+        silence (proactive speech always speaks; only the delay varies)."""
         from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm.mode = Mode.CALL
 
         async def mock_decide(*args, **kwargs):
-            return ProactiveDecision(should_speak=False), ""
+            return ProactiveDecision(delay=0, content="Are you there?"), ""
 
         mock_cm.proactive_speech.decide = mock_decide
 
@@ -394,36 +401,36 @@ class TestProactiveSpeechLoop:
         ):
             await ConversationManager._proactive_speech_loop(mock_cm)
 
-        mock_cm.event_broker.publish.assert_not_called()
+        mock_cm.event_broker.publish.assert_called()
 
-    async def test_loop_goes_dormant_when_should_not_speak(self, mock_cm):
-        """When the LLM decides should_speak=False, the loop exits without
-        rescheduling -- it goes dormant until the next utterance event."""
+    async def test_loop_returns_when_nothing_said_yet(self, mock_cm):
+        """With an empty transcript there is no silence to break, so the loop
+        exits without consulting the LLM. It re-arms on the next utterance."""
         from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm.mode = Mode.CALL
+        mock_cm.get_recent_voice_transcript = MagicMock(return_value=([], None))
+        mock_cm.user_screen_share_active = False
+        mock_cm.user_webcam_active = False
+        mock_cm.assistant_screen_share_active = False
+        mock_cm.peek_screenshot_buffer = MagicMock(return_value=[])
+
+        decide_called = False
 
         async def mock_decide(*args, **kwargs):
-            return ProactiveDecision(should_speak=False), ""
+            nonlocal decide_called
+            decide_called = True
+            return ProactiveDecision(delay=0, content="hi"), ""
 
         mock_cm.proactive_speech.decide = mock_decide
-        mock_cm.schedule_proactive_speech = AsyncMock()
 
-        with (
-            patch("asyncio.sleep", new=AsyncMock()),
-            patch(
-                "unity.conversation_manager.conversation_manager.build_brain_spec",
-                return_value=MockBrainSpec(),
-            ),
-        ):
+        with patch("asyncio.sleep", new=AsyncMock()):
             await ConversationManager._proactive_speech_loop(mock_cm)
 
-        # Loop should NOT have published any guidance
+        assert not decide_called
         mock_cm.event_broker.publish.assert_not_called()
-        # Loop should NOT have self-rescheduled
-        mock_cm.schedule_proactive_speech.assert_not_called()
 
-    async def test_loop_publishes_guidance_when_should_speak(self, mock_cm):
+    async def test_loop_publishes_guidance(self, mock_cm):
         """The loop publishes a FastBrainNotification event with should_speak=True and
         message so the fast brain speaks it via session.say()."""
         from unity.conversation_manager.conversation_manager import ConversationManager
@@ -433,7 +440,6 @@ class TestProactiveSpeechLoop:
         async def mock_decide(*args, **kwargs):
             return (
                 ProactiveDecision(
-                    should_speak=True,
                     delay=0,
                     content="Still with you!",
                 ),
@@ -481,7 +487,6 @@ class TestProactiveSpeechLoop:
         async def mock_decide(*args, **kwargs):
             return (
                 ProactiveDecision(
-                    should_speak=True,
                     delay=0,
                     content="Are you still there?",
                 ),
@@ -541,35 +546,24 @@ class TestProactiveSpeechDecideIntegration:
         )
 
         assert isinstance(decision, ProactiveDecision)
-        assert isinstance(decision.should_speak, bool)
         assert isinstance(decision.delay, int)
+        assert isinstance(decision.content, str)
 
-    async def test_decide_handles_empty_history(self):
-        """decide() handles empty chat history gracefully."""
+    async def test_decide_propagates_errors(self):
+        """decide() does not swallow LLM failures — they propagate so the
+        proactive loop's own handler can log and end the cycle. There is no
+        defensive "stay silent" fallback anymore (the system always speaks)."""
         ps = ProactiveSpeech()
 
-        decision, _ = await ps.decide(
-            chat_history=[],
-            system_prompt="You are a helpful assistant.",
-        )
-
-        assert isinstance(decision, ProactiveDecision)
-
-    async def test_decide_returns_safe_default_on_error(self):
-        """decide() returns should_speak=False when the LLM call fails."""
-        ps = ProactiveSpeech()
-
-        # Force an error by patching new_llm_client to raise
         with patch(
             "unity.conversation_manager.domains.proactive_speech.new_llm_client",
             side_effect=RuntimeError("connection failed"),
         ):
-            decision, _ = await ps.decide(
-                chat_history=[{"role": "user", "content": "Hello"}],
-                system_prompt="Test",
-            )
-
-        assert decision.should_speak is False
+            with pytest.raises(RuntimeError):
+                await ps.decide(
+                    chat_history=[{"role": "user", "content": "Hello"}],
+                    system_prompt="Test",
+                )
 
 
 # =============================================================================
@@ -867,7 +861,6 @@ class TestProactiveSpeechBlindSpots:
         async def mock_decide(*args, **kwargs):
             return (
                 ProactiveDecision(
-                    should_speak=True,
                     delay=0,
                     content="Still here for the meeting!",
                 ),
@@ -1010,7 +1003,6 @@ class TestProactiveSpeechBlindSpots:
         async def mock_decide(*args, **kwargs):
             return (
                 ProactiveDecision(
-                    should_speak=True,
                     delay=0,
                     content="Still with you!",
                 ),
@@ -1041,7 +1033,9 @@ class TestProactiveSpeechLLMBehavior:
     # -------------------------------------------------------------------------
 
     async def test_decide_respects_user_asked_to_wait(self):
-        """When user explicitly asked to wait, LLM should NOT speak."""
+        """When the user explicitly asked to wait, the LLM should give them
+        plenty of room — a long delay before any check-in (not silence, but
+        not an immediate interruption either)."""
         ps = ProactiveSpeech()
 
         chat_history = [
@@ -1055,9 +1049,10 @@ class TestProactiveSpeechLLMBehavior:
             system_prompt=system_prompt,
         )
 
-        assert (
-            decision.should_speak is False
-        ), f"User asked to wait - should NOT speak. Decision: {decision}"
+        assert decision.delay >= 30, (
+            f"User asked to wait - should give a long delay before checking in. "
+            f"Decision: {decision}"
+        )
 
     # -------------------------------------------------------------------------
     # Test: Previous proactive messages - LLM should vary responses
@@ -1079,7 +1074,7 @@ class TestProactiveSpeechLLMBehavior:
             system_prompt=system_prompt,
         )
 
-        if decision.should_speak and decision.content:
+        if decision.content:
             assert (
                 decision.content.lower() != "still with you, take your time."
             ), f"LLM should vary content. Got same as before: {decision.content}"
@@ -1088,8 +1083,10 @@ class TestProactiveSpeechLLMBehavior:
     # Test: Conversation is closing - should not speak
     # -------------------------------------------------------------------------
 
-    async def test_decide_does_not_speak_during_goodbye(self):
-        """LLM should not speak proactively when conversation is closing."""
+    async def test_decide_waits_long_during_goodbye(self):
+        """When the conversation is closing, the LLM should wait a long time —
+        the call will almost certainly end on its own first, so there's no
+        rush to refill the silence."""
         ps = ProactiveSpeech()
 
         chat_history = [
@@ -1103,15 +1100,16 @@ class TestProactiveSpeechLLMBehavior:
             system_prompt=system_prompt,
         )
 
-        assert (
-            decision.should_speak is False
-        ), f"Should NOT speak during goodbye. Decision: {decision}"
+        assert decision.delay >= 30, (
+            f"Conversation is wrapping up - should wait a long time. "
+            f"Decision: {decision}"
+        )
 
-    async def test_decide_stays_silent_when_time_expectation_already_set(self):
+    async def test_decide_waits_when_time_expectation_already_set(self):
         """When the assistant already told the caller it'll take a few minutes
-        and an action is still in-flight, proactive speech should NOT fire with
-        filler reassurance. The caller was told to expect a wait — repeating
-        "bear with me" or "shouldn't be too much longer" adds no value.
+        and an action is still in-flight, proactive speech should wait (a long
+        delay) rather than refilling the silence early. The caller was told to
+        expect a wait — repeating "bear with me" adds no value.
         """
         ps = ProactiveSpeech()
 
@@ -1140,10 +1138,10 @@ class TestProactiveSpeechLLMBehavior:
             action_context=action_context,
         )
 
-        assert decision.should_speak is False, (
+        assert decision.delay >= 30, (
             "Assistant already set a multi-minute time expectation and an action "
-            "is still in-flight. Proactive speech should stay silent rather than "
-            f"repeating filler.\nDecision: {decision}"
+            "is still in-flight. Proactive speech should wait a long time rather "
+            f"than refilling the silence early.\nDecision: {decision}"
         )
 
 
@@ -1176,7 +1174,6 @@ class TestProactiveSpeechConcurrentScheduling:
         async def mock_decide(*args, **kwargs):
             return (
                 ProactiveDecision(
-                    should_speak=True,
                     delay=0,
                     content="Still with you!",
                 ),
@@ -1304,7 +1301,7 @@ class TestProactiveSpeechActionAwareness:
             captured_inputs["chat_history"] = chat_history
             captured_inputs["system_prompt"] = system_prompt
             captured_inputs["kwargs"] = kwargs
-            return ProactiveDecision(should_speak=False), ""
+            return ProactiveDecision(delay=600, content="ok"), ""
 
         mock_cm.proactive_speech.decide = spy_decide
         mock_cm.get_recent_voice_transcript = MagicMock(
@@ -1409,7 +1406,7 @@ class TestProactiveSpeechActionAwareness:
             action_context=action_context,
         )
 
-        if decision.should_speak and decision.content:
+        if decision.content:
             lower = decision.content.lower()
             # Only flag PRESENT-TENSE completion claims. Earlier this list
             # also included "should be up" and "should be open" — but those
@@ -1492,7 +1489,7 @@ class TestProactiveSpeechVisualContext:
             captured["chat_history"] = chat_history
             captured["system_prompt"] = system_prompt
             captured["kwargs"] = kwargs
-            return ProactiveDecision(should_speak=False), ""
+            return ProactiveDecision(delay=600, content="ok"), ""
 
         mock_cm.proactive_speech.decide = spy_decide
 
@@ -1538,7 +1535,7 @@ class TestProactiveSpeechVisualContext:
         async def spy_decide(chat_history, system_prompt, **kwargs):
             captured["chat_history"] = chat_history
             captured["kwargs"] = kwargs
-            return ProactiveDecision(should_speak=False), ""
+            return ProactiveDecision(delay=600, content="ok"), ""
 
         mock_cm.proactive_speech.decide = spy_decide
 
@@ -1594,7 +1591,7 @@ class TestProactiveSpeechVisualContext:
         async def spy_decide(chat_history, system_prompt, **kwargs):
             captured["chat_history"] = chat_history
             captured["kwargs"] = kwargs
-            return ProactiveDecision(should_speak=False), ""
+            return ProactiveDecision(delay=600, content="ok"), ""
 
         mock_cm.proactive_speech.decide = spy_decide
 
@@ -1646,7 +1643,7 @@ class TestProactiveSpeechVisualContext:
         async def spy_decide(chat_history, system_prompt, **kwargs):
             captured["chat_history"] = chat_history
             captured["kwargs"] = kwargs
-            return ProactiveDecision(should_speak=False), ""
+            return ProactiveDecision(delay=600, content="ok"), ""
 
         mock_cm.proactive_speech.decide = spy_decide
 
@@ -1711,7 +1708,7 @@ class TestProactiveSpeechVisualContext:
         async def spy_decide(chat_history, system_prompt, **kwargs):
             captured["chat_history"] = chat_history
             captured["kwargs"] = kwargs
-            return ProactiveDecision(should_speak=False), ""
+            return ProactiveDecision(delay=600, content="ok"), ""
 
         mock_cm.proactive_speech.decide = spy_decide
 

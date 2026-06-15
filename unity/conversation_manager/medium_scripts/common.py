@@ -197,24 +197,17 @@ class FastBrainLogger:
 
     def proactive_decision(
         self,
-        should_speak: bool,
         delay: float,
         content: str = "",
     ) -> None:
         suffix = f": {content}" if content else ""
         self._emit(
             "proactive_decision",
-            f"should_speak={should_speak}, delay={delay}s{suffix}",
+            f"delay={delay}s{suffix}",
         )
 
     def proactive_deferred(self, reason: str) -> None:
         self._emit_debug("proactive_deferred", f"Proactive deferred: {reason}")
-
-    def proactive_dormant(self) -> None:
-        self._emit(
-            "proactive_dormant",
-            "Proactive dormant until next utterance",
-        )
 
     def proactive_speaking(self, delay: float, content: str) -> None:
         self._emit_debug(
