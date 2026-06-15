@@ -475,3 +475,79 @@ def test_seed_builtins_script_full_composio_batches_seed_apps_once(monkeypatch) 
     assert seeded_payloads[0]["_seed_phase"] == "app-only-sync"
     assert seeded_payloads[0].get("_seed_apps", True) is True
     assert [payload["_seed_apps"] for payload in seeded_payloads[1:]] == [False, False]
+
+
+def test_seed_builtin_integrations_dedupes_and_deletes_tools_by_function_id(
+    monkeypatch,
+) -> None:
+    stored_hashes: dict[str, str] = {}
+    filters: list[str] = []
+    deleted: list[tuple[str, list[int]]] = []
+    inserted: list[tuple[str, list[dict]]] = []
+    seen_filters: set[str] = set()
+
+    monkeypatch.setattr(builtins_catalog, "ensure_builtins_project", lambda *_: None)
+    monkeypatch.setattr(builtins_catalog.unify, "create_context", lambda *_, **__: None)
+    monkeypatch.setattr(builtins_catalog, "ensure_vector_column", lambda *_, **__: None)
+    monkeypatch.setattr(
+        builtins_catalog,
+        "list_private_fields",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        builtins_catalog,
+        "read_seed_hashes",
+        lambda *_args, **_kwargs: dict(stored_hashes),
+    )
+    monkeypatch.setattr(
+        builtins_catalog,
+        "write_seed_hashes",
+        lambda _project, hashes, **_kwargs: stored_hashes.update(hashes),
+    )
+
+    def fake_get_logs(**kwargs):
+        if kwargs.get("context") == builtins_catalog.BUILTINS_INTEGRATION_META_CONTEXT:
+            return []
+        assert kwargs["return_ids_only"] is True
+        filter_expr = kwargs["filter"]
+        filters.append(filter_expr)
+        if filter_expr in seen_filters:
+            return []
+        seen_filters.add(filter_expr)
+        return [17]
+
+    monkeypatch.setattr(builtins_catalog.unify, "get_logs", fake_get_logs)
+    monkeypatch.setattr(
+        builtins_catalog.unify,
+        "delete_logs",
+        lambda **kwargs: deleted.append((kwargs["context"], list(kwargs["logs"]))),
+    )
+    monkeypatch.setattr(
+        builtins_catalog.unify,
+        "create_logs",
+        lambda **kwargs: inserted.append((kwargs["context"], list(kwargs["entries"]))),
+    )
+
+    tool = _tool("gmail", "list_threads")
+
+    assert builtins_catalog.seed_builtin_integrations(
+        apps=[],
+        tools=[tool, dict(tool)],
+        backend_id="composio",
+        app_slugs=["gmail"],
+        project="Builtins",
+    )
+
+    tool_inserts = [
+        rows
+        for context, rows in inserted
+        if context == builtins_catalog.BUILTINS_INTEGRATION_TOOLS_CONTEXT
+    ]
+    assert len(tool_inserts) == 1
+    assert len(tool_inserts[0]) == 1
+    function_id = tool_inserts[0][0]["function_id"]
+    assert any(f"function_id in [{function_id}]" in item for item in filters)
+    assert (
+        builtins_catalog.BUILTINS_INTEGRATION_TOOLS_CONTEXT,
+        [17],
+    ) in deleted
