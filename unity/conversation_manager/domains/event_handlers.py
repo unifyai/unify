@@ -2336,6 +2336,20 @@ async def _(
         await cm.request_llm_run(delay=0)
 
 
+@EventHandler.register(AssistantPresenceObserved)
+async def _(
+    event: AssistantPresenceObserved,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    if hasattr(cm, "_session_logger"):
+        cm._session_logger.debug(
+            "assistant_presence_observed",
+            f"Assistant presence observed from {event.source or 'console'}.",
+        )
+
+
 @EventHandler.register(CoordinatorDelegate)
 async def _(
     event: CoordinatorDelegate,

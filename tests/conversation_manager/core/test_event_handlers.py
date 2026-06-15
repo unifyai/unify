@@ -59,6 +59,7 @@ from unity.conversation_manager.events import (
     LogMessageResponse,
     DirectMessageEvent,
     AssistantUpdateEvent,
+    AssistantPresenceObserved,
     AssistantScreenShareStarted,
     AssistantScreenShareStopped,
     UserScreenShareStarted,
@@ -229,6 +230,7 @@ class TestEventHandlerRegistry:
             NotificationInjectedEvent,
             NotificationUnpinnedEvent,
             AssistantUpdateEvent,
+            AssistantPresenceObserved,
         ]
         for event_cls in expected_events:
             assert (
@@ -1379,6 +1381,24 @@ class TestMeetInteractionEventHandlers:
         await EventHandler.handle_event(event, mock_cm)
 
         mock_cm.request_llm_run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_assistant_presence_observed_is_noop(self, mock_cm):
+        """AssistantPresenceObserved keeps the runtime warm without waking the brain."""
+        event = AssistantPresenceObserved(
+            reason="selection",
+            source="assistant_profile",
+            page_visibility="visible",
+            occurred_at="2026-06-15T21:00:00.000Z",
+        )
+        await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm._session_logger.debug.assert_any_call(
+            "assistant_presence_observed",
+            "Assistant presence observed from assistant_profile.",
+        )
+        mock_cm.request_llm_run.assert_not_called()
+        mock_cm.schedule_proactive_speech.assert_not_called()
 
     # --------------------------------------------------------------------- #
     # Screenshot capture on utterance
