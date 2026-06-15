@@ -8,14 +8,14 @@ from tests.destination_routing_helpers import (
     routing_decision_prompt,
     tool_name,
 )
-from unity.common.reasoning import reason
+from unity.common.reasoning import query_llm
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
 
 @pytest.mark.asyncio
 async def test_team_kpi_data_routes_to_patch_space():
-    decision = await reason(
+    decision = await query_llm(
         routing_decision_prompt(
             "Insert today's Patch-1 open-work-order count into our KPI table: "
             "47 open jobs, 12 overdue, and 6 waiting on parts. The whole repairs "

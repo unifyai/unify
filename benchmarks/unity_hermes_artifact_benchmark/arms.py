@@ -69,7 +69,7 @@ Target artifact:
 - Output: `{drafts: list[dict], skipped: list[dict], metrics: dict}`.
 - Deterministic steps stay deterministic.
 - Semantic classification and draft wording use a cheap model inside the function
-  via `reason(...)` or `unillm`, not in the outer orchestration loop.
+  via `query_llm(...)` or `unillm`, not in the outer orchestration loop.
 - The function must be callable with `execute_function(function_name=..., call_kwargs=...)`.
 
 Also store GuidanceManager notes only if they explain non-obvious composition

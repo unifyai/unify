@@ -9,8 +9,8 @@ from pydantic import BaseModel
 
 from unity.common.llm_client import new_llm_client
 
-DEFAULT_REASONING_SYSTEM = (
-    "You are a focused semantic reasoning subroutine inside a larger Python "
+DEFAULT_LLM_QUERY_SYSTEM = (
+    "You are a focused semantic LLM subroutine inside a larger Python "
     "workflow. Make the requested judgment from the supplied evidence only. "
     "Prefer stable, concise answers that downstream symbolic code can use."
 )
@@ -37,79 +37,65 @@ def _parse_response(result: Any, response_format: Any) -> Any:
     return result
 
 
-def get_reasoning_prompt_context() -> str:
-    """Return actor-facing documentation for the sandbox reasoning helper."""
+def get_llm_query_prompt_context() -> str:
+    """Return actor-facing documentation for the sandbox LLM helpers."""
 
-    doc = inspect.getdoc(reason) or ""
-    prefix = "async def " if inspect.iscoroutinefunction(reason) else "def "
-    signature = f"{prefix}{reason.__name__}{inspect.signature(reason)}"
+    query_doc = inspect.getdoc(query_llm) or ""
+    query_prefix = "async def " if inspect.iscoroutinefunction(query_llm) else "def "
+    query_signature = (
+        f"{query_prefix}{query_llm.__name__}{inspect.signature(query_llm)}"
+    )
+    list_doc = inspect.getdoc(list_llms) or ""
+    list_signature = f"def {list_llms.__name__}{inspect.signature(list_llms)}"
     return (
-        "### Semantic Reasoning Helper: `reason(...)`\n\n"
-        "`reason(...)` is available inside `execute_code` Python sessions and "
-        "stored Python functions. It is a normal sandbox helper, not a JSON "
-        "tool call.\n\n"
-        f"```python\n{signature}\n```\n\n"
-        f"{doc}\n\n"
-        f"{get_reasoning_model_selection_context()}"
+        "### LLM Query Helpers: `query_llm(...)` And `list_llms(...)`\n\n"
+        "`query_llm(...)` and `list_llms(...)` are available inside "
+        "`execute_code` Python sessions and stored Python functions. They are "
+        "normal sandbox helpers, not JSON tool calls.\n\n"
+        f"```python\n{query_signature}\n{list_signature}\n```\n\n"
+        f"{query_doc}\n\n"
+        f"{list_doc}\n\n"
+        f"{get_llm_model_selection_context()}"
     )
 
 
-def _collect_supported_reasoning_endpoints() -> dict[str, list[str]]:
-    """Return supported UniLLM endpoints grouped by provider.
+def list_llms(provider: str | None = None) -> list[str]:
+    """Return supported UniLLM endpoint strings available in this runtime.
 
-    Prefer the public ``unillm.endpoints.list_endpoints`` helper. The fallback
-    keeps prompt rendering compatible with older editable checkouts while the
-    public helper rolls out across sibling repos.
+    Endpoint strings use ``model@provider`` form, such as
+    ``"gpt-4.1-nano@openai"``. Pass ``provider`` to filter to one provider,
+    e.g. ``list_llms("openai")``.
+
+    Use this helper when choosing a concrete ``model=`` value for
+    ``query_llm(...)``. Do not hardcode assumptions about which endpoints are
+    registered in the current deployment.
     """
-
     try:
         import unillm.endpoints  # noqa: F401  # populate provider registries
 
         try:
             from unillm.endpoints import list_endpoints
 
-            endpoints = list_endpoints()
+            return list_endpoints(provider)
         except (ImportError, AttributeError):
             from unillm.endpoints.utils import _MODEL_ALIAS_MAP
 
             endpoints = sorted(_MODEL_ALIAS_MAP)
     except Exception:
-        return {}
+        return []
 
-    grouped: dict[str, list[str]] = {}
-    for endpoint in endpoints:
-        if "@" not in endpoint:
-            continue
-        _model, provider = endpoint.rsplit("@", 1)
-        grouped.setdefault(provider, []).append(endpoint)
-    return {provider: sorted(values) for provider, values in sorted(grouped.items())}
+    if provider is None:
+        return endpoints
+    suffix = f"@{provider}"
+    return [endpoint for endpoint in endpoints if endpoint.endswith(suffix)]
 
 
-def _format_endpoint_catalog(grouped: dict[str, list[str]]) -> str:
-    if not grouped:
-        return (
-            "Supported endpoint catalog could not be loaded in this runtime. "
-            'Use known UniLLM endpoint strings in `model="model@provider"` form, '
-            "or inspect `unillm.endpoints` before choosing a model."
-        )
+def get_llm_model_selection_context() -> str:
+    """Return model-selection guidance for sandbox LLM calls."""
 
-    lines = [
-        "Supported UniLLM endpoints currently registered in this runtime:",
-    ]
-    for provider, endpoints in grouped.items():
-        lines.append(f"- {provider}: {', '.join(endpoints)}")
-    return "\n".join(lines)
-
-
-def get_reasoning_model_selection_context() -> str:
-    """Return model-selection guidance plus a dynamic UniLLM endpoint catalog."""
-
-    endpoint_catalog = _format_endpoint_catalog(
-        _collect_supported_reasoning_endpoints(),
-    )
     guidance = textwrap.dedent(
         """
-        ### Choosing A Model For `reason(...)`
+        ### Choosing A Model For `query_llm(...)`
 
         Pass model overrides as UniLLM endpoint strings, e.g.
         `model="gpt-4.1-nano@openai"`.
@@ -131,6 +117,10 @@ def get_reasoning_model_selection_context() -> str:
         selected endpoint into the function. Do not put benchmark browsing or
         model shopping inside the hot path of a recurring task.
 
+        Use `list_llms()` to inspect the supported endpoint strings registered
+        in the current runtime. Use `list_llms("openai")` or another provider
+        name when you only need endpoints for one provider.
+
         Practical defaults:
         - Use cheap/fast models for bounded classification, routing, extraction,
           confidence scoring, and yes/no decisions after deterministic
@@ -147,27 +137,27 @@ def get_reasoning_model_selection_context() -> str:
         """,
     ).strip()
 
-    return f"{guidance}\n\n{endpoint_catalog}"
+    return guidance
 
 
-async def reason(
+async def query_llm(
     prompt: str,
     *,
     system: str | None = None,
     response_format: type[BaseModel] | dict[str, Any] | None = None,
     model: str | None = None,
-    origin: str = "CodeActActor.reason",
+    origin: str = "CodeActActor.query_llm",
     temperature: float = 0.0,
     client_kwargs: dict[str, Any] | None = None,
     **generate_kwargs: Any,
 ) -> str | BaseModel | dict[str, Any]:
-    """Run a one-shot semantic reasoning step from generated Python code.
+    """Run a one-shot LLM query from generated Python code.
 
-    Use ``reason(...)`` when the code you are writing needs to process
+    Use ``query_llm(...)`` when the code you are writing needs to process
     unstructured meaning, not merely manipulate exact values. Treat UniLLM as a
     first-class fuzzy processor inside a broader deterministic workflow:
     Python handles retrieval, iteration, batching, grouping, date arithmetic,
-    API calls, validation, persistence, and side effects; ``reason(...)``
+    API calls, validation, persistence, and side effects; ``query_llm(...)``
     handles bounded unstructured-data work that would be brittle if implemented
     as keyword matching or canned templates.
 
@@ -194,13 +184,13 @@ async def reason(
     comparisons, dedupe, schema reshaping, and simple transformations should
     stay in normal Python or use the relevant primitive directly. A generated
     function can freely mix deterministic substeps and semantic substeps; use
-    ``reason(...)`` only where meaning-based judgment is doing real work.
+    ``query_llm(...)`` only where meaning-based judgment is doing real work.
 
     Examples
     --------
     Minimal judgment returning text::
 
-        verdict = await reason(
+        verdict = await query_llm(
             "Does this email require a reply? Answer yes, no, or unsure.\\n"
             f"Subject: {email['subject']}\\nBody: {email['body']}"
         )
@@ -217,7 +207,7 @@ async def reason(
 
         EmailClassification.model_rebuild()
 
-        classification = await reason(
+        classification = await query_llm(
             f"Classify this email for inbox triage.\\nSubject: {subject}\\nBody: {body}",
             response_format=EmailClassification,
         )
@@ -239,7 +229,7 @@ async def reason(
 
         EmailDraftDecision.model_rebuild()
 
-        decision = await reason(
+        decision = await query_llm(
             "Decide whether this email needs a reply. If it does, draft a concise reply "
             "in the user's voice. Return null for draft_reply when no reply is needed.\\n"
             f"Subject: {subject}\\nFrom: {sender}\\nBody: {body}",
@@ -253,7 +243,7 @@ async def reason(
             "Classify messages using the user's existing labels. "
             "Prefer 'needs_user_review' when the evidence is ambiguous."
         )
-        decision = await reason(
+        decision = await query_llm(
             prompt=email_text,
             system=system,
             response_format=EmailClassification,
@@ -262,7 +252,7 @@ async def reason(
     Model and generation options
     ----------------------------
     By default this uses ``new_llm_client(model, async_client=True,
-    stateful=False, origin='CodeActActor.reason')`` and calls
+    stateful=False, origin='CodeActActor.query_llm')`` and calls
     ``generate(..., temperature=0.0)`` for stable judgments. Override
     ``model`` only when the task has a real capability or cost reason. Raise
     ``temperature`` only when creative synthesis is more useful than stable
@@ -271,14 +261,14 @@ async def reason(
 
     Anti-patterns
     -------------
-    - Replacing exact deterministic substeps with ``reason(...)``.
+    - Replacing exact deterministic substeps with ``query_llm(...)``.
     - Using substring checks as the whole classifier for semantic tasks, e.g.
       ``if "urgent" in subject.lower()`` for inbox triage. Exact lexical
       signals can help pre-filter, but they are not semantic judgment.
     - Replacing human-facing drafting, rewriting, or personalization with
       label-specific canned prose or templates unless the user explicitly asked
       for fixed deterministic templates.
-    - Calling ``reason(...)`` for every item in a large set before cheap
+    - Calling ``query_llm(...)`` for every item in a large set before cheap
       deterministic pre-filtering, sampling, or batching.
 
     Cost and observability
@@ -300,7 +290,7 @@ async def reason(
     client = new_llm_client(model, **client_config)
     result = client.generate(
         user_message=prompt,
-        system_message=system or DEFAULT_REASONING_SYSTEM,
+        system_message=system or DEFAULT_LLM_QUERY_SYSTEM,
         response_format=response_format,
         temperature=temperature,
         **generate_kwargs,

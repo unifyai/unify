@@ -260,7 +260,7 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
         Do not create an entrypoint function merely because a new recurring task
         was described. Entrypoint persistence should follow an explicit user
         request or a successful execution reviewed as stable enough to store.
-        Stored functions may still use focused ``reason(...)`` calls for bounded
+        Stored functions may still use focused ``query_llm(...)`` calls for bounded
         semantic judgment, but future offline promotion requires separate
         certification that the stored executor preserves the observed workflow.
 

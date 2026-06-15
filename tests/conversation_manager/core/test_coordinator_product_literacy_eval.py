@@ -11,7 +11,7 @@ from unittest.mock import patch
 import pytest
 from pydantic import BaseModel, Field
 
-from unity.common.reasoning import reason
+from unity.common.reasoning import query_llm
 from unity.common.single_shot import single_shot_tool_decision
 from unity.common.llm_client import new_llm_client
 from unity.conversation_manager.cm_types.mode import Mode
@@ -1624,7 +1624,7 @@ async def _verify_scenario(
         ),
         "candidate_tool_calls": _tool_payloads(result),
     }
-    return await reason(
+    return await query_llm(
         (
             "Evaluate the candidate Coordinator response below against the rubric. "
             "The candidate response is present in `candidate_user_visible_text` and "

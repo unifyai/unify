@@ -15,7 +15,7 @@ from unity.common import reasoning
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
 
-def _coerce_reason_result(response_format: Any, result: dict[str, Any]) -> Any:
+def _coerce_query_llm_result(response_format: Any, result: dict[str, Any]) -> Any:
     if isinstance(response_format, type) and issubclass(response_format, BaseModel):
         fields = response_format.model_fields
         return response_format(**{k: v for k, v in result.items() if k in fields})
@@ -30,20 +30,24 @@ def _coerce_reason_result(response_format: Any, result: dict[str, Any]) -> Any:
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(240)
-async def test_code_act_sprinkles_reason_into_semantic_python_loop(
+async def test_code_act_sprinkles_query_llm_into_semantic_python_loop(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    reason_calls: list[str] = []
+    query_llm_calls: list[str] = []
 
-    async def fake_reason(
+    async def fake_query_llm(
         prompt: str,
         *,
         response_format: Any = None,
         **_kwargs: Any,
     ) -> Any:
-        reason_calls.append(prompt)
+        query_llm_calls.append(prompt)
         text = prompt.lower()
-        needs_reply = "m1" in text or "m3" in text
+        needs_reply = (
+            "thursday fits" in text
+            or "renewal paperwork" in text
+            or "signature" in text
+        )
         category = "scheduling" if "move" in text else "follow_up"
         if "newsletter" in text:
             category = "newsletter"
@@ -53,9 +57,9 @@ async def test_code_act_sprinkles_reason_into_semantic_python_loop(
             "confidence": 0.96,
             "rationale": "Semantic intent requires or does not require a reply.",
         }
-        return _coerce_reason_result(response_format, result)
+        return _coerce_query_llm_result(response_format, result)
 
-    monkeypatch.setattr(reasoning, "reason", fake_reason)
+    monkeypatch.setattr(reasoning, "query_llm", fake_query_llm)
 
     messages = [
         {
@@ -95,8 +99,8 @@ async def test_code_act_sprinkles_reason_into_semantic_python_loop(
     assert "execute_code" in set(get_code_act_tool_calls(handle))
 
     snippets = extract_code_act_execute_code_snippets(handle)
-    assert any("reason(" in snippet for snippet in snippets), snippets
-    assert reason_calls, "Expected generated Python to call reason(...)."
+    assert any("query_llm(" in snippet for snippet in snippets), snippets
+    assert query_llm_calls, "Expected generated Python to call query_llm(...)."
 
     result_text = str(result)
     assert "m1" in result_text

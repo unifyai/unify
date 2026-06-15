@@ -10,14 +10,14 @@ from tests.destination_routing_helpers import (
     routing_decision_prompt,
     tool_name,
 )
-from unity.common.reasoning import reason
+from unity.common.reasoning import query_llm
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
 
 @pytest.mark.asyncio
 async def test_household_blacklist_routes_to_family_space():
-    decision = await reason(
+    decision = await query_llm(
         routing_decision_prompt(
             "Block 0800 999 0001 on every adult's phone. It has been calling "
             "the kids after school and the household agreed nobody should answer.",
@@ -33,7 +33,7 @@ async def test_household_blacklist_routes_to_family_space():
 
 @pytest.mark.asyncio
 async def test_personal_blacklist_stays_personal():
-    decision = await reason(
+    decision = await query_llm(
         routing_decision_prompt(
             "Block 07700 900111 for me. It is an ex I do not want to hear from, "
             "but this is only about my own calls and messages.",
@@ -49,7 +49,7 @@ async def test_personal_blacklist_stays_personal():
 
 @pytest.mark.asyncio
 async def test_ambiguous_blacklist_does_not_guess_wider():
-    decision = await reason(
+    decision = await query_llm(
         routing_decision_prompt("Block this number: 07700 900222."),
         response_format=DestinationRoutingDecision,
     )

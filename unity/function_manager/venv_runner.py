@@ -266,21 +266,21 @@ def _response_format_for_rpc(response_format: Any) -> tuple[Any, Any]:
     return response_format, None
 
 
-async def reason(
+async def query_llm(
     prompt: str,
     *,
     system: str = None,
     response_format: Any = None,
     model: str = None,
-    origin: str = "CodeActActor.reason",
+    origin: str = "CodeActActor.query_llm",
     temperature: float = 0.0,
     **generate_kwargs: Any,
 ) -> Any:
-    """Proxy a semantic reasoning call to the parent Unity process."""
+    """Proxy an LLM query to the parent Unity process."""
 
     rpc_response_format, response_model = _response_format_for_rpc(response_format)
     result = await rpc_call_async(
-        "runtime.reason",
+        "runtime.query_llm",
         {
             "prompt": prompt,
             "system": system,
@@ -294,6 +294,11 @@ async def reason(
     if response_model is not None:
         return response_model.model_validate(result)
     return result
+
+
+def list_llms(provider: str = None) -> list[str]:
+    """Return supported UniLLM endpoint strings from the parent Unity process."""
+    return rpc_call_sync("runtime.list_llms", {"provider": provider})
 
 
 def get_oauth_access_token(provider: str, *, min_ttl_seconds: int = 300) -> str:
@@ -433,7 +438,8 @@ def create_safe_globals(is_async: bool = True):
         "Literal": typing.Literal,
         # Primitives proxy (computer and actor accessible via primitives.computer.* etc.)
         "primitives": PrimitivesProxy(is_async=is_async),
-        "reason": reason,
+        "query_llm": query_llm,
+        "list_llms": list_llms,
         "get_oauth_access_token": get_oauth_access_token,
     }
 

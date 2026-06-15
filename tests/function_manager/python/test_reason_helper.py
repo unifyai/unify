@@ -6,7 +6,7 @@ import pytest
 import unillm
 from pydantic import BaseModel
 
-from unity.common.reasoning import reason
+from unity.common.reasoning import list_llms, query_llm
 from unity.function_manager import venv_runner
 from unity.function_manager.execution_env import (
     ENVIRONMENT_MODULES,
@@ -14,17 +14,19 @@ from unity.function_manager.execution_env import (
 )
 
 
-def test_execution_globals_expose_reason_and_unillm():
+def test_execution_globals_expose_llm_helpers_and_unillm():
     globals_dict = create_execution_globals()
 
-    assert globals_dict["reason"] is reason
+    assert globals_dict["query_llm"] is query_llm
+    assert globals_dict["list_llms"] is list_llms
+    assert "reason" not in globals_dict
     assert globals_dict["unillm"] is unillm
     assert "new_llm_client" not in globals_dict
     assert "unillm" in ENVIRONMENT_MODULES
 
 
 @pytest.mark.asyncio
-async def test_venv_runner_reason_routes_through_runtime_rpc(
+async def test_venv_runner_query_llm_routes_through_runtime_rpc(
     monkeypatch: pytest.MonkeyPatch,
 ):
     class Decision(BaseModel):
@@ -39,7 +41,7 @@ async def test_venv_runner_reason_routes_through_runtime_rpc(
 
     monkeypatch.setattr(venv_runner, "rpc_call_async", fake_rpc_call)
 
-    result = await venv_runner.reason(
+    result = await venv_runner.query_llm(
         "Classify this email.",
         system="Use the inbox rubric.",
         response_format=Decision,
@@ -49,10 +51,25 @@ async def test_venv_runner_reason_routes_through_runtime_rpc(
     assert result.category == "scheduling"
     assert result.needs_reply is True
 
-    assert calls[0][0] == "runtime.reason"
+    assert calls[0][0] == "runtime.query_llm"
     sent_kwargs = calls[0][1]
     assert sent_kwargs["prompt"] == "Classify this email."
     assert sent_kwargs["system"] == "Use the inbox rubric."
     assert sent_kwargs["temperature"] == 0.0
     assert sent_kwargs["response_format"]["type"] == "json_schema"
     assert sent_kwargs["response_format"]["json_schema"]["name"] == "Decision"
+
+
+def test_venv_runner_list_llms_routes_through_runtime_rpc(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def fake_rpc_call(path: str, kwargs: dict[str, Any]) -> list[str]:
+        calls.append((path, kwargs))
+        return ["gpt-5.5@openai"]
+
+    monkeypatch.setattr(venv_runner, "rpc_call_sync", fake_rpc_call)
+
+    assert venv_runner.list_llms("openai") == ["gpt-5.5@openai"]
+    assert calls == [("runtime.list_llms", {"provider": "openai"})]
