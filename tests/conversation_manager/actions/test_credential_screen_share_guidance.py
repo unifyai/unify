@@ -12,8 +12,8 @@ for step-by-step guidance on creating the necessary credentials.
 The screenshot shows the Google Cloud homepage (cloud.google.com) — the very
 beginning of the credential creation journey.  From here the user still needs
 to: sign in, create/select a project, enable the Drive API, navigate to IAM,
-create a service account, generate a JSON key, and finally share it via the
-console's Secrets page.  That's many steps ahead, which makes dispatching
+create a service account, generate a JSON key, and finally connect it via the
+console's Integrations tab.  That's many steps ahead, which makes dispatching
 ``act`` for full documentation clearly justified.
 
 This is an eval test — it exercises real LLM behavior with a realistic
