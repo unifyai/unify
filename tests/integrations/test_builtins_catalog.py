@@ -301,12 +301,17 @@ prune_unlisted_apps = true
 
     def fake_admin_request(*, method, path, payload=None, **_kwargs):
         requests.append((method, path, payload))
+        if method == "GET":
+            raise RuntimeError("GET bootstrap-state failed with HTTP 404")
         if path == "/admin/integrations/sync":
             return {
                 "status": "success",
+                "apps_upserted": 1,
+                "tools_upserted": 1,
                 "apps": [_app("gmail")],
                 "tools": [_tool("gmail", "list_threads")],
                 "matched_app_slugs": ["gmail"],
+                "cache_version": payload["cache_version"],
             }
         return {}
 
@@ -323,7 +328,71 @@ prune_unlisted_apps = true
         admin_key="admin",
     )
 
-    assert requests[0][1] == "/admin/integrations/backends"
-    assert requests[1][1] == "/admin/integrations/sync"
-    assert requests[1][2]["prune_unlisted_apps"] is True
+    assert requests[0][0] == "GET"
+    assert requests[1][1] == "/admin/integrations/backends"
+    assert requests[2][1] == "/admin/integrations/sync"
+    assert requests[2][2]["prune_unlisted_apps"] is True
+    assert requests[3][1] == "/admin/integrations/bootstrap-state"
+    assert requests[3][2]["last_sync_diagnostics"]["seed_owner"] == "unity-builtins"
+    assert requests[3][2]["last_sync_diagnostics"]["builtins_seeded"] is True
     assert seeded[0][1]["app_slugs"] == ["gmail"]
+
+
+def test_seed_builtins_script_skips_previously_seeded_manifest(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    module = _seed_script_module()
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text(
+        """
+schema_version = 1
+environment = "staging"
+
+[providers.composio]
+status = "enabled"
+
+[providers.composio.sync]
+mode = "partial"
+app_slugs = ["gmail"]
+""",
+        encoding="utf-8",
+    )
+    loaded = module._load_manifest(str(manifest))
+    plan = module._provider_plan(
+        manifest=loaded,
+        backend_id="composio",
+        config=loaded["providers"]["composio"],
+    )
+    requests: list[tuple[str, str, dict | None]] = []
+
+    def fake_admin_request(*, method, path, payload=None, **_kwargs):
+        requests.append((method, path, payload))
+        assert method == "GET"
+        return {
+            "desired_hash": plan.desired_hash,
+            "last_status": "success",
+            "last_sync_diagnostics": {
+                "seed_owner": "unity-builtins",
+                "builtins_seeded": True,
+            },
+        }
+
+    monkeypatch.setattr(module, "_admin_request", fake_admin_request)
+
+    assert (
+        module._sync_integration_bootstrap_manifest(
+            manifest_path=str(manifest),
+            base_url="http://orchestra/v0",
+            admin_key="admin",
+        )
+        is False
+    )
+
+    assert requests == [
+        (
+            "GET",
+            "/admin/integrations/bootstrap-state?environment=staging&backend_id=composio",
+            None,
+        ),
+    ]
