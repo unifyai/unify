@@ -160,6 +160,83 @@ class TestPersistentWorkerStartup:
             mock_run.assert_called_once()
             assert call_manager._worker_proc is new_proc
 
+    @pytest.mark.asyncio
+    async def test_refresh_restarts_worker_when_unify_key_changes(self, call_manager):
+        with patch(
+            "unity.conversation_manager.domains.call_manager.run_script",
+        ) as mock_run:
+            mock_proc = MagicMock()
+            mock_proc.poll.return_value = None
+            mock_run.return_value = mock_proc
+            call_manager.start_persistent_worker()
+
+            async def _terminate_worker():
+                call_manager._worker_proc = None
+
+            with patch.object(
+                call_manager,
+                "cleanup_persistent_worker",
+                side_effect=_terminate_worker,
+            ) as mock_cleanup:
+                await call_manager.refresh_persistent_worker_after_key_change(
+                    "old-build-key",
+                    "new-org-key",
+                )
+
+            mock_cleanup.assert_awaited_once()
+            assert mock_run.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_refresh_skips_restart_when_key_unchanged(self, call_manager):
+        with (
+            patch(
+                "unity.conversation_manager.domains.call_manager.run_script",
+            ) as mock_run,
+            patch.object(
+                call_manager,
+                "cleanup_persistent_worker",
+                new_callable=AsyncMock,
+            ) as mock_cleanup,
+        ):
+            mock_proc = MagicMock()
+            mock_proc.poll.return_value = None
+            mock_run.return_value = mock_proc
+            call_manager.start_persistent_worker()
+
+            await call_manager.refresh_persistent_worker_after_key_change(
+                "same-key",
+                "same-key",
+            )
+
+            mock_cleanup.assert_not_awaited()
+            mock_run.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_refresh_skips_restart_during_active_call(self, call_manager):
+        call_manager._active_job = True
+        with (
+            patch(
+                "unity.conversation_manager.domains.call_manager.run_script",
+            ) as mock_run,
+            patch.object(
+                call_manager,
+                "cleanup_persistent_worker",
+                new_callable=AsyncMock,
+            ) as mock_cleanup,
+        ):
+            mock_proc = MagicMock()
+            mock_proc.poll.return_value = None
+            mock_run.return_value = mock_proc
+            call_manager.start_persistent_worker()
+
+            await call_manager.refresh_persistent_worker_after_key_change(
+                "old-key",
+                "new-key",
+            )
+
+            mock_cleanup.assert_not_awaited()
+            mock_run.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # Job dispatch
