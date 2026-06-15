@@ -9,7 +9,12 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import unify
 
-from unity.common.builtins import builtins_project, read_seed_hashes, write_seed_hashes
+from unity.common.builtins import (
+    builtins_project,
+    ensure_builtins_project,
+    read_seed_hashes,
+    write_seed_hashes,
+)
 from unity.common.embed_utils import ensure_vector_column, list_private_fields
 from unity.common.semantic_search import fetch_top_k_by_terms_combined_client_side
 from unity.function_manager.hash_utils import stable_hash_for_rows
@@ -43,7 +48,7 @@ def _normalize_app_slug(value: Any) -> str:
 
 def _ensure_catalog_storage(project: str) -> None:
     logger.info("Ensuring integration catalogue storage project=%s", project)
-    unify.create_project(project, exist_ok=True, is_public_read=True)
+    ensure_builtins_project(project)
     unify.create_context(
         BUILTINS_INTEGRATION_APPS_CONTEXT,
         description="Public integration app catalogue.",
