@@ -81,7 +81,7 @@ install_compose_bundle() {
   mkdir -p "$UNITY_HOME"
   mkdir -p "${UNITY_HOME}/workspace"
   local file
-  for file in docker-compose.yml Caddyfile .env.example ensure-pubsub-topics.sh cm-entrypoint.sh desktop-entrypoint.sh publish-desktop-ready.sh livekit.yaml; do
+  for file in docker-compose.yml Caddyfile .env.example ensure-pubsub-topics.sh cm-entrypoint.sh desktop-entrypoint.sh publish-desktop-ready.sh livekit.yaml integration-bootstrap.selfhost.toml; do
     if [[ -n "$SELFHOST_SRC" && -f "$SELFHOST_SRC/$file" ]]; then
       cp "$SELFHOST_SRC/$file" "$UNITY_HOME/$file"
     else

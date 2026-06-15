@@ -119,24 +119,28 @@ services:
       retries: 30
     restart: unless-stopped
 
-  orchestra-integrations-bootstrap:
-    <<: *orchestra_image
-    profiles:
-    - integrations-sync
+  unity-builtins-seed:
+    <<: *unity_image
     command:
     - /bin/bash
     - -c
     - |
       if [ -z "$${COMPOSIO_API_KEY:-}" ]; then
-        echo "COMPOSIO_API_KEY not set; skipping provider integration catalog sync."
-        exit 0
+        echo "COMPOSIO_API_KEY not set; seeding static Builtins catalogues only."
+        python3 scripts/seed_builtins_catalog.py
+      else
+        python3 scripts/seed_builtins_catalog.py \
+          --integration-bootstrap-manifest /selfhost/integration-bootstrap.selfhost.toml
       fi
-      python3 scripts/cloud_bootstrap_provider_integrations.py \
-        --manifest deploy/integrations/bootstrap.selfhost.toml
     environment:
       ORCHESTRA_URL: http://orchestra:8000/v0
       ORCHESTRA_ADMIN_KEY: ${ORCHESTRA_ADMIN_KEY}
+      UNIFY_KEY: ${ORCHESTRA_ADMIN_KEY}
+      UNITY_BUILTINS_PROJECT: ${UNITY_BUILTINS_PROJECT:-Builtins}
       COMPOSIO_API_KEY: ${COMPOSIO_API_KEY:-}
+    volumes:
+    - runtime:/runtime
+    - ./integration-bootstrap.selfhost.toml:/selfhost/integration-bootstrap.selfhost.toml:ro
     depends_on:
       orchestra:
         condition: service_healthy
@@ -244,6 +248,8 @@ services:
         condition: service_healthy
       gateway:
         condition: service_healthy
+      unity-builtins-seed:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   unity-cm:
@@ -294,6 +300,8 @@ services:
         condition: service_healthy
       pubsub-emulator:
         condition: service_started
+      unity-builtins-seed:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   desktop:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed the global builtins catalogues (primitives and guidance).
+"""Seed the global builtins catalogues (primitives, guidance, integrations).
 
 Creates (or converges) the public-read ``Builtins`` Unify project holding
 one platform-wide copy of every manager's static primitive rows and the
@@ -14,13 +14,26 @@ platform admin account on hosted deployments; the shared key on self-host):
 
 The run is idempotent and hash-guarded (per manager for primitives, per
 skill for guidance), so it is safe (and cheap) to invoke on every deploy.
+
+Provider-backed integration catalogs can be bootstrapped from the same manifest
+used to configure Orchestra provider backends:
+
+    UNIFY_KEY=<admin-key> ORCHESTRA_ADMIN_KEY=<admin-key> ORCHESTRA_URL=<api-url> \
+        .venv/bin/python scripts/seed_builtins_catalog.py \
+        --integration-bootstrap-manifest deploy/selfhost/integration-bootstrap.selfhost.toml
 """
 
 from __future__ import annotations
 
+import argparse
 import logging
+import os
 import sys
+import time
+import tomllib
 from pathlib import Path
+from typing import Any
+from urllib import error, request
 
 _repo_root = Path(__file__).resolve().parent.parent
 if str(_repo_root) not in sys.path:
@@ -32,21 +45,335 @@ load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
+SYNC_PASSTHROUGH_FIELDS = {
+    "tool_limit_per_app",
+    "component_limit_per_app",
+    "include_all_managed_apps",
+    "include_all_apps",
+    "create_auth_configs",
+    "sync_tools",
+    "prune_unlisted_apps",
+}
+DEFAULT_COMPOSIO_BATCH_SIZE = 25
 
-def main() -> int:
+
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--integration-bootstrap-manifest",
+        default=os.environ.get("UNITY_INTEGRATION_BOOTSTRAP_MANIFEST", ""),
+        help=(
+            "Optional provider bootstrap manifest. When provided, this script "
+            "syncs Orchestra provider catalog rows and immediately seeds the "
+            "returned app-scoped rows into Builtins."
+        ),
+    )
+    parser.add_argument(
+        "--admin-key",
+        default=os.environ.get("ORCHESTRA_ADMIN_KEY", ""),
+        help="Orchestra admin key. Defaults to ORCHESTRA_ADMIN_KEY.",
+    )
+    return parser.parse_args(argv)
+
+
+def _load_manifest(path: str) -> dict[str, Any]:
+    with open(path, "rb") as file:
+        if path.endswith(".json"):
+            import json
+
+            manifest = json.loads(file.read().decode("utf-8"))
+        else:
+            manifest = tomllib.load(file)
+    if not isinstance(manifest, dict):
+        raise ValueError("Integration bootstrap manifest must be an object")
+    if not isinstance(manifest.get("providers"), dict):
+        raise ValueError("Integration bootstrap manifest providers must be an object")
+    return manifest
+
+
+def _backend_payload(
+    *,
+    backend_id: str,
+    environment: str,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    status = config.get("status", "disabled")
+    if status not in {"enabled", "disabled"}:
+        raise ValueError(f"{backend_id}: status must be enabled or disabled")
+    return {
+        "backend_id": backend_id,
+        "kind": config.get("kind") or backend_id,
+        "environment": environment,
+        "display_name": config.get("display_name") or backend_id.title(),
+        "status": status,
+        "allowed_orgs_or_tenants": config.get("allowed_orgs_or_tenants") or [],
+        "default_priority": int(config.get("default_priority", 100)),
+        "config_json": config.get("config_json") or {},
+    }
+
+
+def _sync_payload(*, backend_id: str, config: dict[str, Any]) -> dict[str, Any] | None:
+    if config.get("status") != "enabled":
+        return None
+    sync = config.get("sync")
+    if not sync:
+        return None
+    mode = sync.get("mode", "partial")
+    if mode not in {"partial", "full"}:
+        raise ValueError(f"{backend_id}: sync.mode must be partial or full")
+    payload: dict[str, Any] = {
+        "backend_id": backend_id,
+        "app_slugs": [] if mode == "full" else list(sync.get("app_slugs") or []),
+        "sync_mode": mode,
+    }
+    for field in SYNC_PASSTHROUGH_FIELDS:
+        if field in sync:
+            payload[field] = sync[field]
+    if mode == "full":
+        if "include_all_managed_apps" in payload:
+            payload["include_all_managed_apps"] = True
+        if "include_all_apps" in payload:
+            payload["include_all_apps"] = True
+    return payload
+
+
+def _admin_request(
+    *,
+    base_url: str,
+    admin_key: str,
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    import json
+
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    started_at = time.perf_counter()
+    req = request.Request(
+        f"{base_url.rstrip('/')}/{path.lstrip('/')}",
+        data=data,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {admin_key}",
+            "Content-Type": "application/json",
+            "accept": "application/json",
+        },
+    )
+    try:
+        with request.urlopen(req, timeout=120) as response:
+            body = response.read().decode("utf-8")
+            logging.info(
+                "Orchestra admin request complete method=%s path=%s status=%s elapsed=%.1fs",
+                method,
+                path,
+                response.status,
+                time.perf_counter() - started_at,
+            )
+            return json.loads(body) if body else {}
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"{method} {path} failed with HTTP {exc.code}: {detail}",
+        ) from exc
+
+
+def _effective_prune(payload: dict[str, Any]) -> bool:
+    return (
+        bool(payload.get("prune_unlisted_apps")) or payload.get("sync_mode") == "full"
+    )
+
+
+def _seed_sync_result(
+    *,
+    result: dict[str, Any],
+    sync_payload: dict[str, Any],
+) -> bool:
+    from unity.integrations.builtins_catalog import seed_builtin_integrations
+
+    if result.get("status") == "failed":
+        raise RuntimeError(
+            result.get("error")
+            or f"{sync_payload['backend_id']}: integration catalog sync failed",
+        )
+    apps = result.get("apps") or []
+    tools = result.get("tools") or []
+    app_slugs = result.get("matched_app_slugs") or sync_payload.get("app_slugs") or []
+    changed = seed_builtin_integrations(
+        apps=apps,
+        tools=tools,
+        backend_id=str(sync_payload["backend_id"]),
+        app_slugs=[str(slug) for slug in app_slugs],
+        prune_unlisted_apps=_effective_prune(sync_payload),
+    )
+    logging.info(
+        "Seeded integration Builtins backend=%s apps=%s tools=%s changed=%s prune=%s",
+        sync_payload["backend_id"],
+        len(apps),
+        len(tools),
+        changed,
+        _effective_prune(sync_payload),
+    )
+    return changed
+
+
+def _chunks(values: list[str], size: int) -> list[list[str]]:
+    return [values[index : index + size] for index in range(0, len(values), size)]
+
+
+def _should_batch_composio_full_sync(sync_payload: dict[str, Any]) -> bool:
+    return (
+        sync_payload.get("backend_id") == "composio"
+        and sync_payload.get("sync_mode") == "full"
+        and bool(sync_payload.get("include_all_managed_apps"))
+        and bool(sync_payload.get("sync_tools", True))
+    )
+
+
+def _sync_and_seed_provider(
+    *,
+    base_url: str,
+    admin_key: str,
+    sync_payload: dict[str, Any],
+) -> bool:
+    if not _should_batch_composio_full_sync(sync_payload):
+        result = _admin_request(
+            base_url=base_url,
+            admin_key=admin_key,
+            method="POST",
+            path="/admin/integrations/sync",
+            payload=sync_payload,
+        )
+        return _seed_sync_result(result=result, sync_payload=sync_payload)
+
+    app_payload = {
+        **sync_payload,
+        "sync_tools": False,
+        "app_slugs": [],
+        "include_all_managed_apps": True,
+    }
+    app_result = _admin_request(
+        base_url=base_url,
+        admin_key=admin_key,
+        method="POST",
+        path="/admin/integrations/sync",
+        payload=app_payload,
+    )
+    changed = _seed_sync_result(result=app_result, sync_payload=app_payload)
+    matched_slugs = [str(slug) for slug in app_result.get("matched_app_slugs") or []]
+    if not matched_slugs:
+        raise RuntimeError("Composio full sync returned no app slugs")
+    batch_size = int(
+        os.environ.get(
+            "UNITY_INTEGRATION_BOOTSTRAP_BATCH_SIZE",
+            DEFAULT_COMPOSIO_BATCH_SIZE,
+        ),
+    )
+    for batch_slugs in _chunks(matched_slugs, max(1, batch_size)):
+        batch_payload = {
+            **sync_payload,
+            "sync_mode": "partial",
+            "app_slugs": [slug.upper() for slug in batch_slugs],
+            "include_all_managed_apps": False,
+            "sync_tools": True,
+            "prune_unlisted_apps": False,
+        }
+        batch_result = _admin_request(
+            base_url=base_url,
+            admin_key=admin_key,
+            method="POST",
+            path="/admin/integrations/sync",
+            payload=batch_payload,
+        )
+        changed = (
+            _seed_sync_result(
+                result=batch_result,
+                sync_payload=batch_payload,
+            )
+            or changed
+        )
+    return changed
+
+
+def _sync_integration_bootstrap_manifest(
+    *,
+    manifest_path: str,
+    base_url: str,
+    admin_key: str,
+) -> bool:
+    manifest = _load_manifest(manifest_path)
+    environment = str(manifest.get("environment") or "selfhost")
+    changed = False
+    for backend_id, config in sorted(manifest["providers"].items()):
+        if not isinstance(config, dict):
+            raise ValueError(f"{backend_id}: provider config must be an object")
+        backend_payload = _backend_payload(
+            backend_id=str(backend_id),
+            environment=environment,
+            config=config,
+        )
+        _admin_request(
+            base_url=base_url,
+            admin_key=admin_key,
+            method="POST",
+            path="/admin/integrations/backends",
+            payload=backend_payload,
+        )
+        sync_payload = _sync_payload(backend_id=str(backend_id), config=config)
+        if sync_payload is None:
+            logging.info("Skipping integration sync for backend=%s", backend_id)
+            continue
+        changed = (
+            _sync_and_seed_provider(
+                base_url=base_url,
+                admin_key=admin_key,
+                sync_payload=sync_payload,
+            )
+            or changed
+        )
+    return changed
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv or sys.argv[1:])
     from unity.common.builtins import builtins_project
     from unity.function_manager.builtins_catalog import seed_builtin_primitives
     from unity.guidance_manager.builtins_catalog import seed_builtin_guidance
+    from unity.integrations.builtins_catalog import seed_builtin_integrations
 
     primitives_changed = seed_builtin_primitives()
     guidance_changed = seed_builtin_guidance()
+    if args.integration_bootstrap_manifest:
+        integrations_changed = seed_builtin_integrations()
+        base_url = os.environ.get("ORCHESTRA_URL", "").rstrip("/")
+        if not base_url:
+            raise ValueError("ORCHESTRA_URL is required for integration bootstrap")
+        if not args.admin_key:
+            raise ValueError(
+                "ORCHESTRA_ADMIN_KEY or --admin-key is required for integration bootstrap",
+            )
+        integrations_changed = (
+            _sync_integration_bootstrap_manifest(
+                manifest_path=args.integration_bootstrap_manifest,
+                base_url=base_url,
+                admin_key=args.admin_key,
+            )
+            or integrations_changed
+        )
+    else:
+        integrations_changed = seed_builtin_integrations()
     project = builtins_project()
     for name, changed in (
         ("primitives", primitives_changed),
         ("guidance", guidance_changed),
+        ("integrations", integrations_changed),
     ):
         state = "updated" if changed else "already up to date"
         print(f"Builtins {name} catalogue ({project}): {state}")
+    if args.integration_bootstrap_manifest:
+        print(
+            "Integration manifest bootstrap "
+            f"path={args.integration_bootstrap_manifest}",
+        )
     return 0
 
 
