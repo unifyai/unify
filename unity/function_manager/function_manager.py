@@ -82,6 +82,7 @@ from unity.integrations.function_metadata import (
     is_provider_backed_function,
     provider_function_metadata,
 )
+from unity.integrations.builtins_catalog import list_catalog_tools
 from .custom_functions import (
     compute_custom_functions_hash,
     compute_custom_venvs_hash,
@@ -3089,79 +3090,10 @@ class FunctionManager(BaseFunctionManager):
             )
             return result
 
-        tools_response: list[dict[str, Any]] = []
-        offset = 0
-        total_tools: int | None = None
-        max_pages = 10_000
-        page_count = 0
-        while total_tools is None or offset < total_tools:
-            page = integration_ops.get_tools(
-                limit=limit,
-                offset=offset,
-                activation_state="connected_ready",
-                include_unconnected=False,
-                include_schema=True,
-                canonical_app_slug=normalized_app,
-                **owner_scope,
-            )
-            if isinstance(page, dict) and page.get("error"):
-                log_staging_diagnostic(
-                    logger,
-                    (
-                        "Provider integration sync failed app_slug=%s "
-                        "reason=get_tools_error offset=%d error=%s duration=%.2fs"
-                    ),
-                    normalized_app or "-",
-                    offset,
-                    page.get("error"),
-                    _sync_duration(),
-                )
-                return {"status": "error", "error": page.get("error"), "apps": []}
-            page_has_total = isinstance(page, dict)
-            if page_has_total:
-                page_items = list(page.get("items") or [])
-                total_tools = int(page.get("total") or 0)
-            else:
-                # Backward-compatible fallback for older Orchestra deployments.
-                page_items = list(page or [])
-            tools_response.extend(page_items)
-            page_count += 1
-            log_staging_diagnostic(
-                logger,
-                (
-                    "Provider integration sync get_tools page app_slug=%s "
-                    "page=%d offset=%d page_size=%d total=%s"
-                ),
-                normalized_app or "-",
-                page_count,
-                offset,
-                len(page_items),
-                total_tools if total_tools is not None else "-",
-            )
-            if page_count > max_pages:
-                log_staging_diagnostic(
-                    logger,
-                    (
-                        "Provider integration sync failed app_slug=%s "
-                        "reason=pagination_exceeded pages=%d duration=%.2fs"
-                    ),
-                    normalized_app or "-",
-                    page_count,
-                    _sync_duration(),
-                )
-                return {
-                    "status": "error",
-                    "error": {
-                        "code": "provider_tool_pagination_exceeded",
-                        "message": "Provider tool list pagination exceeded the safety page limit.",
-                    },
-                    "apps": [],
-                }
-            if not page_items:
-                break
-            if not page_has_total and len(page_items) < limit:
-                break
-            offset += limit
+        tools_response = list_catalog_tools(
+            canonical_app_slug=normalized_app,
+            limit=limit,
+        )
 
         active_app_slugs = {
             normalize_app_slug(connection["canonical_app_slug"])
@@ -3171,16 +3103,27 @@ class FunctionManager(BaseFunctionManager):
         rows_by_key: dict[str, list[Dict[str, Any]]] = {}
         key_to_app: dict[str, tuple[str | None, str]] = {}
         for item in tools_response or []:
-            raw_item_app = item.get("app_slug")
-            item_app = (
-                normalize_app_slug(raw_item_app)
-                if isinstance(raw_item_app, str)
-                else raw_item_app
-            )
+            if is_provider_backed_function(item):
+                row = dict(item)
+                raw_item_app = integration_app_slug(row)
+                item_app = (
+                    normalize_app_slug(raw_item_app)
+                    if isinstance(raw_item_app, str)
+                    else raw_item_app
+                )
+            else:
+                if item.get("activation_state") not in (None, "connected_ready"):
+                    continue
+                raw_item_app = item.get("app_slug")
+                item_app = (
+                    normalize_app_slug(raw_item_app)
+                    if isinstance(raw_item_app, str)
+                    else raw_item_app
+                )
+                item = {**item, "app_slug": item_app}
+                row = self._integration_tool_to_function_row(item)
             if not item_app or item_app not in active_app_slugs:
                 continue
-            item = {**item, "app_slug": item_app}
-            row = self._integration_tool_to_function_row(item)
             backend_id = integration_backend_id(row) or "provider"
             key = self._integration_hash_key(backend_id=backend_id, app_slug=item_app)
             rows_by_key.setdefault(key, []).append(row)
