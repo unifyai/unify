@@ -33,6 +33,8 @@ from unity.conversation_manager.events import (
     EmailSent,
     Error,
     PhoneCallSent,
+    SlackChannelMessageSent,
+    SlackMessageSent,
     SMSSent,
     TeamsChannelCreated,
     TeamsChannelMessageSent,
@@ -63,6 +65,7 @@ _DETAIL_LABELS = {
     "phone_number": "phone number",
     "whatsapp_number": "WhatsApp number",
     "discord_id": "Discord ID",
+    "slack_user_id": "Slack user ID",
 }
 
 
@@ -105,11 +108,13 @@ class CommsPrimitives:
         "send_api_response",
         "send_discord_message",
         "send_discord_channel_message",
+        "send_slack_message",
+        "send_slack_channel_message",
         "send_teams_message",
         "create_teams_channel",
         "create_teams_meet",
-        "terminate_self",
-        "cancel_self_termination",
+        "stop_inactivity_followups",
+        "resume_inactivity_followups",
     )
 
     def __init__(
@@ -140,6 +145,11 @@ class CommsPrimitives:
         if self._cm is not None:
             return getattr(self._cm, "assistant_discord_bot_id", "") or ""
         return SESSION_DETAILS.assistant.discord_bot_id or ""
+
+    def _assistant_slack_bot_user_id(self) -> str:
+        if self._cm is not None:
+            return getattr(self._cm, "assistant_slack_bot_user_id", "") or ""
+        return SESSION_DETAILS.assistant.slack_bot_user_id or ""
 
     def _assistant_has_teams(self) -> bool:
         if self._cm is not None:
@@ -179,6 +189,7 @@ class CommsPrimitives:
             contact.get("phone_number"),
             contact.get("whatsapp_number"),
             contact.get("discord_id"),
+            contact.get("slack_user_id"),
             contact.get("first_name"),
             contact.get("surname"),
         )
@@ -246,6 +257,7 @@ class CommsPrimitives:
         email: str | None = None,
         whatsapp_number: str | None = None,
         discord_id: str | None = None,
+        slack_user_id: str | None = None,
     ) -> dict | None:
         """Resolve a contact by ID or a communication detail."""
         if self._cm is not None:
@@ -256,6 +268,7 @@ class CommsPrimitives:
                     email=email,
                     whatsapp_number=whatsapp_number,
                     discord_id=discord_id,
+                    slack_user_id=slack_user_id,
                 )
                 contact_dict = self._as_contact_dict(contact)
                 if contact_dict is not None:
@@ -294,6 +307,12 @@ class CommsPrimitives:
                 value=discord_id,
                 limit=1,
             )
+        elif slack_user_id is not None:
+            matches = self._filter_contacts(
+                field_name="slack_user_id",
+                value=slack_user_id,
+                limit=1,
+            )
         else:
             return None
         return matches[0] if matches else None
@@ -317,7 +336,7 @@ class CommsPrimitives:
 
     def _assistant_anchor_contact(self) -> dict:
         """Return the assistant contact as a synthetic anchor for channel-only sends."""
-        assistant_contact_id = SESSION_DETAILS.assistant.contact_id or 0
+        assistant_contact_id = SESSION_DETAILS.self_contact_id
         return self._get_contact(contact_id=assistant_contact_id) or {
             "contact_id": assistant_contact_id,
             "first_name": SESSION_DETAILS.assistant.first_name,
@@ -1308,6 +1327,366 @@ class CommsPrimitives:
             },
         )
 
+    async def send_slack_message(
+        self,
+        *,
+        contact_id: int | str,
+        content: str,
+        team_id: str,
+        slack_user_id: str | None = None,
+        thread_ts: str | None = None,
+    ) -> dict[str, Any]:
+        """Send an assistant-owned Slack direct message to an existing contact.
+
+        Use this for one-to-one Slack DMs. For channel posts or threaded
+        replies in a channel, use ``send_slack_channel_message`` instead.
+
+        - If the contact already has a Slack user ID on file, omit
+          ``slack_user_id``.
+        - If the contact is missing a Slack user ID but you know it, pass it
+          via ``slack_user_id`` and the contact record will be updated before
+          the DM is sent.
+        - Do not supply a different Slack user ID from the one already on
+          file. Update the contact first, then retry.
+
+        Parameters
+        ----------
+        contact_id : int | str
+            Recipient contact from ``active_conversations`` or from contact
+            search/create tools.
+        content : str
+            Direct-message body to send.
+        team_id : str
+            Slack workspace ID the bot token belongs to. Required to resolve
+            the workteam-scoped bot token server-side.
+        slack_user_id : str | None, optional
+            Recipient Slack user ID when the contact does not already have
+            one on file.
+        thread_ts : str | None, optional
+            Slack thread timestamp to reply inside an existing DM thread.
+
+        Returns
+        -------
+        dict[str, Any]
+            ``{"status": "ok"}`` on success, or an error payload describing
+            why the DM could not be sent.
+        """
+        contact_id = _coerce_contact_id(contact_id)
+        offline_reservation = None
+        contact = self._get_contact(contact_id=contact_id)
+        topic = "app:comms:slack_message_sent"
+
+        outbound_error = self._check_outbound_allowed(contact)
+        if outbound_error:
+            return await self._surface_comms_error(
+                outbound_error,
+                topic,
+                contact_id=contact_id,
+                medium=Medium.SLACK_MESSAGE,
+                offline_reservation=offline_reservation,
+                attempted_content=content,
+                receiver_ids=[contact_id],
+                target_metadata={
+                    "contact_id": contact_id,
+                    "team_id": team_id,
+                    "slack_user_id": (contact or {}).get("slack_user_id")
+                    or slack_user_id
+                    or "",
+                },
+                history_metadata={
+                    "contact_display_name": _get_contact_display_name(contact),
+                },
+            )
+
+        bot_user_id = self._assistant_slack_bot_user_id()
+        if not bot_user_id:
+            return await self._surface_comms_error(
+                "Slack is not enabled for this assistant.",
+                topic,
+                contact_id=contact_id,
+                medium=Medium.SLACK_MESSAGE,
+                attempted_content=content,
+                receiver_ids=[contact_id],
+                target_metadata={
+                    "contact_id": contact_id,
+                    "team_id": team_id,
+                    "slack_user_id": (contact or {}).get("slack_user_id")
+                    or slack_user_id
+                    or "",
+                },
+                history_metadata={
+                    "contact_display_name": _get_contact_display_name(contact),
+                },
+            )
+
+        detail_error, contact = self._resolve_or_attach_detail(
+            contact=contact,
+            contact_id=contact_id,
+            field_name="slack_user_id",
+            inline_value=slack_user_id,
+            medium_label="Slack",
+        )
+        if detail_error:
+            return await self._surface_comms_error(
+                detail_error,
+                topic,
+                contact_id=contact_id,
+                medium=Medium.SLACK_MESSAGE,
+                offline_reservation=offline_reservation,
+                attempted_content=content,
+                receiver_ids=[contact_id],
+                target_metadata={
+                    "contact_id": contact_id,
+                    "team_id": team_id,
+                    "slack_user_id": (contact or {}).get("slack_user_id")
+                    or slack_user_id
+                    or "",
+                },
+                history_metadata={
+                    "contact_display_name": _get_contact_display_name(contact),
+                },
+            )
+
+        offline_reservation, offline_response = self._reserve_offline_operation(
+            method_name="send_slack_message",
+            medium=Medium.SLACK_MESSAGE,
+            target_kind="contact",
+            target_metadata={
+                "contact_id": (contact or {}).get("contact_id") or contact_id,
+                "team_id": team_id,
+                "slack_user_id": (contact or {}).get("slack_user_id")
+                or slack_user_id
+                or "",
+                "thread_ts": thread_ts or "",
+            },
+            contact_id=(contact or {}).get("contact_id") or contact_id,
+        )
+        if offline_response is not None:
+            return offline_response
+
+        to_slack_user_id = (contact or {}).get("slack_user_id")
+        response = await comms_utils.send_slack_message(
+            team_id=team_id,
+            user_id=to_slack_user_id,
+            body=content,
+            thread_ts=thread_ts,
+        )
+        if response.get("success"):
+            fresh_contact = (
+                self._get_contact(slack_user_id=to_slack_user_id) or contact or {}
+            )
+            event = SlackMessageSent(
+                contact=fresh_contact,
+                content=content,
+                team_id=team_id,
+                channel_id=response.get("channel_id", ""),
+                thread_ts=thread_ts or "",
+            )
+            await self._event_broker.publish(topic, event.to_json())
+            self._record_offline_success(
+                offline_reservation,
+                attempted_content=content,
+                receiver_ids=[fresh_contact.get("contact_id") or contact_id],
+                target_metadata={
+                    "contact_id": fresh_contact.get("contact_id") or contact_id,
+                    "team_id": team_id,
+                    "slack_user_id": to_slack_user_id or "",
+                    "thread_ts": thread_ts or "",
+                },
+                history_metadata={
+                    "contact_display_name": _get_contact_display_name(fresh_contact),
+                },
+                provider_response=response,
+            )
+            return {"status": "ok"}
+
+        return await self._surface_comms_error(
+            "Failed to send Slack message",
+            topic,
+            contact_id=contact_id,
+            medium=Medium.SLACK_MESSAGE,
+            offline_reservation=offline_reservation,
+            attempted_content=content,
+            receiver_ids=[contact_id],
+            target_metadata={
+                "contact_id": contact_id,
+                "team_id": team_id,
+                "slack_user_id": to_slack_user_id or slack_user_id or "",
+                "thread_ts": thread_ts or "",
+            },
+            history_metadata={
+                "contact_display_name": _get_contact_display_name(contact),
+            },
+        )
+
+    async def send_slack_channel_message(
+        self,
+        *,
+        channel_id: str,
+        content: str,
+        team_id: str,
+        thread_ts: str | None = None,
+        contact_id: int | str | None = None,
+    ) -> dict[str, Any]:
+        """Post an assistant-owned message into a Slack channel.
+
+        Use this when the assistant should speak in a shared Slack channel
+        rather than DM one person. When replying to an inbound channel
+        message, pass the ``thread_ts`` surfaced on the inbound line so the
+        reply lands in a thread under that message; for a top-level
+        @mention the surfaced value is the original message's own id, which
+        starts the thread. Omit ``thread_ts`` only to deliberately post a
+        fresh message at the channel root. The optional
+        ``contact_id`` does not change where the message is sent; it only
+        provides a contact anchor for transcript ownership and response-
+        policy checks when the channel post is associated with a particular
+        person or thread.
+
+        If you want a one-to-one Slack reply, use ``send_slack_message``
+        instead.
+
+        Parameters
+        ----------
+        channel_id : str
+            Target Slack channel ID to post into.
+        content : str
+            Message body to publish.
+        team_id : str
+            Slack workspace ID (used to resolve the bot token server-side).
+        thread_ts : str | None, optional
+            Slack thread timestamp to reply inside a thread. Pass the value
+            surfaced on the inbound message line to keep channel replies
+            threaded under the original message.
+        contact_id : int | str | None, optional
+            Optional contact anchor for transcript ownership and response-
+            policy checks.
+
+        Returns
+        -------
+        dict[str, Any]
+            Status payload with success or error details.
+        """
+        normalized_contact_id = (
+            _coerce_contact_id(contact_id) if contact_id is not None else None
+        )
+        offline_reservation = None
+        resolved_contact = self._normalize_optional_contact(normalized_contact_id)
+        if resolved_contact is not None:
+            outbound_error = self._check_outbound_allowed(resolved_contact)
+            if outbound_error:
+                return await self._surface_comms_error(
+                    outbound_error,
+                    "app:comms:slack_channel_message_sent",
+                    contact_id=resolved_contact.get("contact_id"),
+                    medium=Medium.SLACK_CHANNEL_MESSAGE,
+                    offline_reservation=offline_reservation,
+                    attempted_content=content,
+                    receiver_ids=[resolved_contact.get("contact_id")],
+                    target_metadata={
+                        "channel_id": channel_id,
+                        "team_id": team_id,
+                        "thread_ts": thread_ts or "",
+                        "contact_id": resolved_contact.get("contact_id"),
+                    },
+                    history_metadata={
+                        "contact_display_name": _get_contact_display_name(
+                            resolved_contact,
+                        ),
+                    },
+                )
+        anchor_contact = resolved_contact or self._assistant_anchor_contact()
+        anchor_contact_id = anchor_contact.get("contact_id")
+        bot_user_id = self._assistant_slack_bot_user_id()
+        if not bot_user_id:
+            return await self._surface_comms_error(
+                "Slack is not enabled for this assistant.",
+                "app:comms:slack_channel_message_sent",
+                contact_id=anchor_contact_id,
+                medium=Medium.SLACK_CHANNEL_MESSAGE,
+                attempted_content=content,
+                receiver_ids=(
+                    [anchor_contact_id] if anchor_contact_id is not None else None
+                ),
+                target_metadata={
+                    "channel_id": channel_id,
+                    "team_id": team_id,
+                    "thread_ts": thread_ts or "",
+                    "contact_id": anchor_contact_id,
+                },
+                history_metadata={
+                    "contact_display_name": _get_contact_display_name(anchor_contact),
+                },
+            )
+        offline_reservation, offline_response = self._reserve_offline_operation(
+            method_name="send_slack_channel_message",
+            medium=Medium.SLACK_CHANNEL_MESSAGE,
+            target_kind="slack_channel",
+            target_metadata={
+                "channel_id": channel_id,
+                "team_id": team_id,
+                "thread_ts": thread_ts or "",
+                "contact_id": normalized_contact_id,
+            },
+            contact_id=normalized_contact_id,
+        )
+        if offline_response is not None:
+            return offline_response
+        response = await comms_utils.send_slack_message(
+            team_id=team_id,
+            channel_id=channel_id,
+            body=content,
+            thread_ts=thread_ts,
+        )
+        if response.get("success"):
+            event = SlackChannelMessageSent(
+                contact=anchor_contact,
+                content=content,
+                team_id=team_id,
+                channel_id=channel_id,
+                thread_ts=thread_ts or "",
+            )
+            await self._event_broker.publish(
+                "app:comms:slack_channel_message_sent",
+                event.to_json(),
+            )
+            self._record_offline_success(
+                offline_reservation,
+                attempted_content=content,
+                receiver_ids=(
+                    [anchor_contact_id] if anchor_contact_id is not None else None
+                ),
+                target_metadata={
+                    "channel_id": channel_id,
+                    "team_id": team_id,
+                    "thread_ts": thread_ts or "",
+                    "contact_id": anchor_contact_id,
+                },
+                history_metadata={
+                    "contact_display_name": _get_contact_display_name(anchor_contact),
+                },
+                provider_response=response,
+            )
+            return {"status": "ok"}
+
+        return await self._surface_comms_error(
+            "Failed to send Slack channel message",
+            "app:comms:slack_channel_message_sent",
+            contact_id=anchor_contact_id,
+            medium=Medium.SLACK_CHANNEL_MESSAGE,
+            offline_reservation=offline_reservation,
+            attempted_content=content,
+            receiver_ids=[anchor_contact_id] if anchor_contact_id is not None else None,
+            target_metadata={
+                "channel_id": channel_id,
+                "team_id": team_id,
+                "thread_ts": thread_ts or "",
+                "contact_id": anchor_contact_id,
+            },
+            history_metadata={
+                "contact_display_name": _get_contact_display_name(anchor_contact),
+            },
+        )
+
     async def send_teams_message(
         self,
         *,
@@ -1687,9 +2066,9 @@ class CommsPrimitives:
                     participants=[],
                 )
             else:
-                participants_list: list[int] = [0]
+                participants_list: list[int] = [SESSION_DETAILS.self_contact_id]
                 for rid in resolved_recipient_ids:
-                    if rid is not None and rid != 0:
+                    if rid is not None and rid != SESSION_DETAILS.self_contact_id:
                         participants_list.append(rid)
                 event = TeamsMessageSent(
                     contact=fresh_contact,
@@ -2205,12 +2584,18 @@ class CommsPrimitives:
         file attachment, which will be uploaded first and then referenced from
         the outbound message and transcript history.
 
+        ``contact_id`` must be the integer id of an existing contact record.
+        Shared-team routing tokens such as ``team:80`` are for memory and
+        task destinations only; they are not valid here. To notify people who
+        collaborate in a shared team, message each member's contact id
+        individually. There is no comms primitive that posts to a team channel.
+
         Parameters
         ----------
         content : str
             Message body to send through the Unify platform.
         contact_id : int | str
-            Existing contact that should receive the Unify message.
+            Integer contact id for the recipient. Not a ``team:<id>`` token.
         attachment_filepath : str | None, optional
             Workspace-local file path for one attachment to upload and include.
 
@@ -3336,7 +3721,10 @@ class CommsPrimitives:
 
         to_number = (contact or {}).get("phone_number")
         LOGGER.debug(
-            f"{DEFAULT_ICON} [make_call] context: {context}, to_number: {to_number}",
+            "%s [make_call] context=%r to_number_present=%s",
+            DEFAULT_ICON,
+            context,
+            bool(to_number),
         )
         if self._cm is not None and context:
             self._cm.call_manager.initial_notification = context
@@ -3644,58 +4032,55 @@ class CommsPrimitives:
         }
 
     # ------------------------------------------------------------------
-    # Inactivity-followup lifecycle primitives
+    # Inactivity-followup opt-out primitives
     # ------------------------------------------------------------------
 
-    async def terminate_self(self) -> dict:
-        """Mark this assistant for auto-cleanup after orchestra's grace period.
+    async def stop_inactivity_followups(self) -> dict:
+        """Stop sending inactivity re-engagement follow-ups to the boss.
 
-        Call this when the boss explicitly declines further engagement
+        Call this when the boss explicitly declines further follow-ups
         (e.g. "no longer interested", "take me off your list", "stop
-        contacting me"). Orchestra stamps ``termination_initiated_at``
-        and the daily inactivity-followup cron deprovisions contacts
-        and hard-deletes the assistant once the grace period elapses
-        (see ``settings.inactivity_auto_cleanup_days`` in orchestra).
+        contacting me"). Orchestra sets ``inactivity_followup_opted_out``
+        so the daily inactivity-followup routine skips this Coordinator.
 
-        Sticky: subsequent casual chatter does NOT cancel termination.
-        Use :meth:`cancel_self_termination` if the boss later
-        contradicts the rejection.
+        Nothing is deleted — this only silences future follow-ups. Use
+        :meth:`resume_inactivity_followups` if the boss later re-engages
+        and wants to hear from us again.
 
         Returns:
             ``{"success": bool, "assistant_id": int | None}``
         """
         from unity.transcript_manager.activity_sync import (
-            terminate_assistant_via_orchestra,
+            opt_out_of_inactivity_followups_via_orchestra,
         )
 
         agent_id = getattr(SESSION_DETAILS.assistant, "agent_id", None)
-        success = terminate_assistant_via_orchestra(agent_id)
+        success = opt_out_of_inactivity_followups_via_orchestra(agent_id)
         return {
             "success": bool(success),
             "assistant_id": int(agent_id) if agent_id is not None else None,
         }
 
-    async def cancel_self_termination(self) -> dict:
-        """Cancel an in-flight termination because the boss re-engaged.
+    async def resume_inactivity_followups(self) -> dict:
+        """Re-enable inactivity re-engagement follow-ups for the boss.
 
-        Call this only when termination was previously initiated (via
-        :meth:`terminate_self`) and the boss has now contradicted that
-        rejection in conversation (e.g. "actually wait, let's keep
-        going"). Orchestra clears ``termination_initiated_at`` and the
-        assistant is no longer on the auto-cleanup path.
+        Call this only when follow-ups were previously stopped (via
+        :meth:`stop_inactivity_followups`) and the boss has now
+        re-engaged and wants to keep hearing from us. Orchestra clears
+        ``inactivity_followup_opted_out``.
 
-        Safe to call when no termination is in flight — orchestra
-        treats the clear as a no-op.
+        Safe to call when no opt-out is in effect — orchestra treats the
+        clear as a no-op.
 
         Returns:
             ``{"success": bool, "assistant_id": int | None}``
         """
         from unity.transcript_manager.activity_sync import (
-            cancel_assistant_termination_via_orchestra,
+            opt_in_to_inactivity_followups_via_orchestra,
         )
 
         agent_id = getattr(SESSION_DETAILS.assistant, "agent_id", None)
-        success = cancel_assistant_termination_via_orchestra(agent_id)
+        success = opt_in_to_inactivity_followups_via_orchestra(agent_id)
         return {
             "success": bool(success),
             "assistant_id": int(agent_id) if agent_id is not None else None,

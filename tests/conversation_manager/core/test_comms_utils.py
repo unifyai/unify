@@ -547,7 +547,18 @@ class TestLocalCommsBackends:
             )
 
     @pytest.mark.asyncio
-    async def test_send_unify_message_uses_local_outbox(self):
+    async def test_send_unify_message_mirrors_to_local_outbox_and_pubsub(self):
+        """Local-comms mode mirrors the message into the local outbox but
+        still publishes to Pub/Sub so the Console SSE bridge can deliver
+        it.  Pub/Sub is the single source of truth for the Unify chat
+        surface, even when ``LOCAL_COMMS_MODE=local``.
+        """
+        mock_publisher = MagicMock()
+        mock_publisher.topic_path.return_value = "projects/p/topics/unity-1"
+        mock_future = MagicMock()
+        mock_future.result.return_value = "msg-id-1"
+        mock_publisher.publish.return_value = mock_future
+
         with (
             patch(
                 "unity.conversation_manager.domains.comms_utils._use_local_comms",
@@ -556,7 +567,11 @@ class TestLocalCommsBackends:
             patch(
                 "unity.conversation_manager.domains.comms_utils._publish_local_outbox_async",
                 new=AsyncMock(return_value=True),
-            ) as mock_publish,
+            ) as mock_outbox,
+            patch(
+                "unity.conversation_manager.domains.comms_utils._get_publisher",
+                return_value=mock_publisher,
+            ),
         ):
             result = await comms_utils.send_unify_message(
                 content="Hello world",
@@ -564,11 +579,14 @@ class TestLocalCommsBackends:
             )
 
             assert result["success"] is True
-            mock_publish.assert_awaited_once()
-            payload = mock_publish.await_args.args[0]
-            assert payload["thread"] == "unify_message_outbound"
-            assert payload["event"]["content"] == "Hello world"
-            assert payload["event"]["contact_id"] == 7
+            mock_outbox.assert_awaited_once()
+            outbox_payload = mock_outbox.await_args.args[0]
+            assert outbox_payload["thread"] == "unify_message_outbound"
+            assert outbox_payload["event"]["content"] == "Hello world"
+            assert outbox_payload["event"]["contact_id"] == 7
+            mock_publisher.publish.assert_called_once()
+            _, publish_kwargs = mock_publisher.publish.call_args
+            assert publish_kwargs.get("thread") == "unify_message_outbound"
 
     @pytest.mark.asyncio
     async def test_upload_unify_attachment_uses_local_attachment_store(self):

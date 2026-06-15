@@ -67,6 +67,17 @@ class SimulatedGuidanceManager(BaseGuidanceManager):
             rows = matched
         return rows[offset : offset + limit]
 
+    @functools.wraps(BaseGuidanceManager.get_guidance, updated=())
+    def get_guidance(
+        self,
+        *,
+        guidance_id: int,
+    ) -> Guidance:
+        entry = self._entries.get(guidance_id)
+        if entry is None:
+            raise ValueError(f"No guidance found with guidance_id {guidance_id}.")
+        return entry
+
     @functools.wraps(BaseGuidanceManager.add_guidance, updated=())
     def add_guidance(
         self,

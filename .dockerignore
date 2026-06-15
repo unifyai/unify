@@ -66,6 +66,10 @@ tests/
 
 # Cloned/built inside the image (not from local checkout)
 magnitude/
+!magnitude/packages/magnitude-core/
+!magnitude/packages/magnitude-extract/
+!magnitude/packages/magnitude-core/**
+!magnitude/packages/magnitude-extract/**
 
 # Node modules (agent-service installs its own)
 node_modules/

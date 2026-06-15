@@ -34,6 +34,94 @@ EXCLUDE_DIRS = {
 }
 
 
+# Directories whose tests take longer than a single CI job's 130-min
+# timeout (i.e. parallel_run.sh can't drain them within the wall-clock
+# budget). Each entry maps the directory path → a list of "bundled"
+# test-file groups, where each group becomes its own matrix entry. Files
+# within a group are run together as a single space-separated
+# parallel_run.sh argument (same format as a Mixed-dir bundle).
+#
+# Why explicit chunking instead of a generic "split if > N files"
+# heuristic: the runtime of a test cluster correlates with LLM-eval
+# count, not file count. test_execute.py has 23 functions but most are
+# parametrized into many tens of cases, each making real LLM calls — a
+# generic "split into N file chunks" would not isolate it. The manual
+# breakdown below keeps the heavy file alone and groups smaller files
+# together.
+#
+# Add an entry here when a cluster starts hitting the job timeout and
+# the natural fix is "split it across more matrix slots". Removing or
+# editing entries reshapes the matrix; bumps to the GitHub Actions
+# concurrency directive may also be needed if the matrix grows
+# substantially.
+SPLIT_DIRS: dict[str, list[list[str]]] = {
+    "tests/task_scheduler": [
+        # Group A — the heaviest single file (23 funcs heavily
+        # parametrized into many tens of LLM-eval cases). Lives
+        # alone; verified PASSING after the first split landed.
+        ["test_execute.py"],
+        # Group B1 — test_active_queue.py (20 funcs, also
+        # parametrized). Split out from test_active_task because the
+        # combined Group B was hitting ~90min walls; isolating
+        # test_active_queue gives each half its own 130min budget.
+        ["test_active_queue.py"],
+        # Group B2 — test_active_task.py (9 funcs).
+        ["test_active_task.py"],
+        # Group C — the remaining smaller files (~50 LLM calls
+        # combined, comfortable for one job).
+        [
+            "test_all_ctx.py",
+            "test_ask.py",
+            "test_cancel.py",
+            "test_contexts.py",
+            "test_creation_deletion.py",
+            "test_embedding.py",
+            "test_event_logging.py",
+            "test_failure_recovery.py",
+            "test_foreign_keys.py",
+            "test_info.py",
+            "test_integration_contacts.py",
+        ],
+    ],
+    "tests/function_manager/python": [
+        # 193 collected tests across 15 files; many do real venv
+        # subprocess work and venv create+sync per test. The single
+        # cluster was running 90+ minutes and approaching the 130min
+        # job timeout. Split by execution-mode + state-mode families
+        # so related tests stay grouped (they share fixtures and
+        # naturally share venv lifecycle).
+        #
+        # Group A — execution-environment + venv lifecycle (heaviest
+        # subprocess-per-test category, currently the slowest):
+        [
+            "test_execution_env.py",
+            "test_venv_execution.py",
+            "test_venv_persistent_connections.py",
+            "test_venv_process_cleanup.py",
+            "test_venv_rpc.py",
+            "test_venv_rpc_e2e.py",
+        ],
+        # Group B — in-process proxy / state-mode families:
+        [
+            "test_in_process_state_modes.py",
+            "test_in_process_proxy_state_modes.py",
+            "test_inspect_execution_states.py",
+            "test_state_modes.py",
+            "test_venv_proxy_state_modes.py",
+        ],
+        # Group C — execute_function + multi-session + helpers:
+        [
+            "test_execute_function_primitives.py",
+            "test_execute_function_venv_override.py",
+            "test_multi_session.py",
+            "test_reason_helper.py",
+            "test_remote_windows.py",
+            "test_steerable_compositional.py",
+        ],
+    ],
+}
+
+
 def has_test_files(directory):
     """Check if directory has test_*.py files directly in it."""
     return any(
@@ -68,6 +156,25 @@ def get_direct_test_files(directory):
 def collect_paths(directory, paths):
     """Recursively collect test paths using Option A algorithm."""
     if not directory.is_dir():
+        return
+
+    # Apply explicit split-config first: if this directory is registered
+    # in SPLIT_DIRS, emit one matrix entry per pre-defined file group
+    # rather than the single leaf-bundle the default algorithm would
+    # produce.
+    dir_key = str(directory)
+    if dir_key in SPLIT_DIRS:
+        for group in SPLIT_DIRS[dir_key]:
+            files = [directory / fname for fname in group]
+            missing = [f for f in files if not f.exists()]
+            if missing:
+                raise RuntimeError(
+                    f"SPLIT_DIRS entry for {dir_key} references files "
+                    f"that do not exist: {[str(m) for m in missing]}. "
+                    f"Update SPLIT_DIRS in discover_test_paths.py or "
+                    f"restore the files.",
+                )
+            paths.append(" ".join(str(f) for f in files))
         return
 
     has_files = has_test_files(directory)
@@ -110,6 +217,24 @@ def expand_path(path_str):
 
     # Directory: apply leaf discovery
     if path.is_dir():
+        # SPLIT_DIRS override (see top-of-module rationale): emit one
+        # matrix entry per pre-defined file group so a too-large cluster
+        # fits in the per-job timeout budget.
+        dir_key = str(path)
+        if dir_key in SPLIT_DIRS:
+            for group in SPLIT_DIRS[dir_key]:
+                files = [path / fname for fname in group]
+                missing = [f for f in files if not f.exists()]
+                if missing:
+                    raise RuntimeError(
+                        f"SPLIT_DIRS entry for {dir_key} references files "
+                        f"that do not exist: {[str(m) for m in missing]}. "
+                        f"Update SPLIT_DIRS in discover_test_paths.py or "
+                        f"restore the files.",
+                    )
+                paths.append(" ".join(str(f) for f in files))
+            return paths
+
         # Check if this directory itself is a leaf or needs expansion
         has_files = has_test_files(path)
         has_subdirs = has_test_subdirs(path)
@@ -149,7 +274,13 @@ def discover_all():
             and item.name.endswith(".py")
         ):
             paths.append(str(item))
-        elif item.is_dir() and item.name.startswith("test"):
+        elif item.is_dir() and item.name not in EXCLUDE_DIRS:
+            # Recurse into every non-excluded directory; collect_paths is itself
+            # gated by has_test_files / has_test_subdirs, so non-test dirs are
+            # no-ops. The previous `startswith("test")` filter accidentally
+            # excluded every per-manager test directory (contact_manager/,
+            # knowledge_manager/, actor/, etc.) since they don't carry the
+            # `test_` prefix, collapsing the CI matrix to ~2 entries.
             collect_paths(item, paths)
 
     return paths

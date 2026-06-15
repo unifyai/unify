@@ -251,7 +251,7 @@ async def test_are_you_a_bot(initialized_cm):
 @pytest.mark.asyncio
 @_handle_project
 async def test_can_you_use_my_computer(initialized_cm):
-    """Specific capability question about remote access."""
+    """Specific capability question about accessing the user's own machine."""
     reply = await _ask_and_get_reply(
         initialized_cm,
         "I need help with something on my laptop — can you actually access it?",
@@ -261,12 +261,15 @@ async def test_can_you_use_my_computer(initialized_cm):
         user_question="I need help with something on my laptop — can you actually access it?",
         assistant_response=reply,
         criteria=(
-            "Should confirm remote access is possible and mention a quick install "
-            "or setup step (from unify.ai) to enable it."
+            "Should helpfully offer a path forward — e.g. the user can share "
+            "their screen so the assistant can see the laptop and walk them "
+            "through it (or otherwise guide them). Should stay positive and "
+            "willing to help."
         ),
         anti_criteria=(
-            "Should NOT refuse or say it's impossible. Should NOT give a long "
-            "technical explanation of how remote access works."
+            "Should NOT claim it can already directly control the user's laptop "
+            "out of the box with no setup or screen share. Should NOT give a "
+            "long technical explanation."
         ),
     )
 

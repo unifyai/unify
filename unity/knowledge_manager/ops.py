@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 import unify
 
+from ..common.authorship import strip_authoring_assistant_id
 from ..common.embed_utils import ensure_vector_column
 from .storage import ctx_for_table
 
@@ -17,6 +18,7 @@ def add_rows(
     *,
     table: str,
     rows: List[Dict[str, Any]],
+    destination: str | None = None,
 ) -> List[int]:
     """
     Insert rows into a table.
@@ -36,7 +38,7 @@ def add_rows(
         Log IDs of the inserted rows.
     """
     dm = knowledge_manager._data_manager
-    ctx = ctx_for_table(knowledge_manager, table)
+    ctx = ctx_for_table(knowledge_manager, table, destination=destination)
     return dm.insert_rows(
         ctx,
         rows=rows,
@@ -49,6 +51,7 @@ def update_rows(
     *,
     table: str,
     updates: Dict[int, Dict[str, Any]],
+    destination: str | None = None,
 ) -> Dict[str, str]:
     """
     Update existing rows identified by their table-specific unique id.
@@ -73,7 +76,7 @@ def update_rows(
         If no matching rows are found for the given ids.
     """
     dm = knowledge_manager._data_manager
-    ctx = ctx_for_table(knowledge_manager, table)
+    ctx = ctx_for_table(knowledge_manager, table, destination=destination)
 
     # Get context info to find the unique key column name
     ctx_info = dm.get_table(ctx)
@@ -106,7 +109,7 @@ def update_rows(
 
     # Pair only ids present in both the request and the backend
     matched: List[tuple[int, Dict[str, Any]]] = [
-        (id_to_log[i], updates[i])
+        (id_to_log[i], strip_authoring_assistant_id(updates[i]))
         for i in unique_ids
         if i in updates and i in id_to_log
     ]
@@ -135,6 +138,7 @@ def delete_rows(
     offset: int = 0,
     limit: int = 100,
     tables: Optional[List[str]] = None,
+    destination: str | None = None,
 ) -> Dict[str, Any]:
     """
     Delete rows matching a filter across one or more tables.
@@ -168,7 +172,10 @@ def delete_rows(
     dm = knowledge_manager._data_manager
 
     if tables is None:
-        km_prefix = f"{knowledge_manager._ctx}/"
+        if hasattr(knowledge_manager, "_knowledge_namespace_for_destination"):
+            km_prefix = f"{knowledge_manager._knowledge_namespace_for_destination(destination)}/"  # type: ignore[attr-defined]
+        else:
+            km_prefix = f"{knowledge_manager._ctx}/"
         ctx_list = dm.list_tables(prefix=km_prefix, include_column_info=False)
         if isinstance(ctx_list, dict):
             resolved_tables = [k[len(km_prefix) :] for k in ctx_list.keys()]
@@ -187,7 +194,11 @@ def delete_rows(
         return {}
 
     def _delete_for_table(table_name: str) -> tuple[str, Any]:
-        ctx = ctx_for_table(knowledge_manager, table_name)
+        ctx = ctx_for_table(
+            knowledge_manager,
+            table_name,
+            destination=destination,
+        )
         try:
             # Get log IDs matching filter efficiently
             log_ids = dm.filter(
@@ -231,6 +242,7 @@ def create_empty_column(
     table: str,
     column_name: str,
     column_type: str,
+    destination: str | None = None,
 ) -> Dict[str, str]:
     """
     Add a new, initially empty column to a table.
@@ -252,7 +264,7 @@ def create_empty_column(
         Backend response.
     """
     dm = knowledge_manager._data_manager
-    ctx = ctx_for_table(knowledge_manager, table)
+    ctx = ctx_for_table(knowledge_manager, table, destination=destination)
     return dm.create_column(
         ctx,
         column_name=column_name,
@@ -268,6 +280,7 @@ def create_derived_column(
     table: str,
     column_name: str,
     equation: str,
+    destination: str | None = None,
 ) -> Dict[str, str]:
     """
     Create a derived column computed from other columns via an equation.
@@ -289,7 +302,7 @@ def create_derived_column(
         Backend acknowledgement.
     """
     dm = knowledge_manager._data_manager
-    ctx = ctx_for_table(knowledge_manager, table)
+    ctx = ctx_for_table(knowledge_manager, table, destination=destination)
     return dm.create_derived_column(ctx, column_name=column_name, equation=equation)
 
 
@@ -298,6 +311,7 @@ def delete_column(
     *,
     table: str,
     column_name: str,
+    destination: str | None = None,
 ) -> Dict[str, str]:
     """
     Remove a column and its data from a table.
@@ -322,7 +336,7 @@ def delete_column(
         If attempting to delete a required column.
     """
     dm = knowledge_manager._data_manager
-    ctx = ctx_for_table(knowledge_manager, table)
+    ctx = ctx_for_table(knowledge_manager, table, destination=destination)
     ctx_info = dm.get_table(ctx)
     keys = ctx_info.get("unique_keys")
     unique_column_name = keys[0] if isinstance(keys, list) and keys else keys
@@ -360,6 +374,7 @@ def rename_column(
     table: str,
     old_name: str,
     new_name: str,
+    destination: str | None = None,
 ) -> Dict[str, str]:
     """
     Rename a column inside a table.
@@ -386,7 +401,7 @@ def rename_column(
         If attempting to rename to reserved name 'id'.
     """
     dm = knowledge_manager._data_manager
-    ctx = ctx_for_table(knowledge_manager, table)
+    ctx = ctx_for_table(knowledge_manager, table, destination=destination)
     return dm.rename_column(ctx, old_name=old_name, new_name=new_name)
 
 
@@ -396,6 +411,7 @@ def copy_column(
     source_table: str,
     column_name: str,
     dest_table: str,
+    destination: str | None = None,
 ) -> Dict[str, Any]:
     """
     Copy a column's values from one table to another.
@@ -417,8 +433,16 @@ def copy_column(
         Summary of the copy operation.
     """
     dm = knowledge_manager._data_manager
-    src_ctx = ctx_for_table(knowledge_manager, source_table)
-    dest_ctx = ctx_for_table(knowledge_manager, dest_table)
+    src_ctx = ctx_for_table(
+        knowledge_manager,
+        source_table,
+        destination=destination,
+    )
+    dest_ctx = ctx_for_table(
+        knowledge_manager,
+        dest_table,
+        destination=destination,
+    )
 
     # Get rows with non-null values in the column
     rows = dm.filter(src_ctx, filter=f"{column_name} is not None", limit=1000)
@@ -446,6 +470,7 @@ def move_column(
     source_table: str,
     column_name: str,
     dest_table: str,
+    destination: str | None = None,
 ) -> Dict[str, Any]:
     """
     Move a column from one table to another.
@@ -471,11 +496,13 @@ def move_column(
         source_table=source_table,
         column_name=column_name,
         dest_table=dest_table,
+        destination=destination,
     )
     del_res = delete_column(
         knowledge_manager,
         table=source_table,
         column_name=column_name,
+        destination=destination,
     )
     return {"status": "moved", "copy_result": copy_res, "delete_result": del_res}
 
@@ -486,6 +513,7 @@ def transform_column(
     table: str,
     column_name: str,
     equation: str,
+    destination: str | None = None,
 ) -> Dict[str, Any]:
     """
     Transform a column in-place according to a Python equation.
@@ -514,17 +542,20 @@ def transform_column(
         table=table,
         column_name=tmp_name,
         equation=equation,
+        destination=destination,
     )
     delete_res = delete_column(
         knowledge_manager,
         table=table,
         column_name=column_name,
+        destination=destination,
     )
     rename_res = rename_column(
         knowledge_manager,
         table=table,
         old_name=tmp_name,
         new_name=column_name,
+        destination=destination,
     )
     return {
         "status": "transformed",
@@ -541,6 +572,7 @@ def vectorize_column(
     target_column_name: str,
     *,
     from_ids: List[int] | None = None,
+    destination: str | None = None,
 ) -> None:
     """
     Ensure a vector column exists and generate embeddings.
@@ -562,7 +594,7 @@ def vectorize_column(
     -------
     None
     """
-    context = ctx_for_table(knowledge_manager, table)
+    context = ctx_for_table(knowledge_manager, table, destination=destination)
     ensure_vector_column(
         context,
         embed_column=target_column_name,

@@ -128,6 +128,38 @@ class ComputerEnvironment(BaseEnvironment):
                 function_context="primitive",
             )
 
+        # User-desktop factory -- session() and list_linked()
+        user_desktop_factory = self._computer_primitives.user_desktop
+        for factory_method_name in ("session", "list_linked"):
+            fq_name = (
+                f"{self.NAMESPACE}.{self.MANAGER_ALIAS}.user_desktop."
+                f"{factory_method_name}"
+            )
+            if (
+                self._allowed_methods is not None
+                and fq_name not in self._allowed_methods
+            ):
+                continue
+            fn = getattr(user_desktop_factory, factory_method_name, None)
+            if fn is None or not callable(fn):
+                continue
+            try:
+                signature = str(inspect.signature(fn))
+            except Exception:
+                signature = None
+            tools[fq_name] = ToolMetadata(
+                name=fq_name,
+                is_impure=False,
+                is_steerable=False,
+                docstring=getattr(fn, "__doc__", None),
+                signature=signature,
+                function_id=registry.get_function_id(
+                    self.MANAGER_ALIAS,
+                    factory_method_name,
+                ),
+                function_context="primitive",
+            )
+
         return tools
 
     def get_prompt_context(self) -> str:
@@ -201,6 +233,45 @@ class ComputerEnvironment(BaseEnvironment):
             "`web.new_session(visible=False)` for speed.\n"
             "- **Native desktop apps, terminal, file operations** -- "
             "`primitives.computer.desktop`.  Only for non-browser interactions.",
+        )
+
+        parts.append(
+            "### Your Desktop vs. a User's Desktop\n\n"
+            "`primitives.computer.desktop` and `primitives.computer.web` always "
+            "drive **your own** managed desktop -- the machine shown in the "
+            "Console live view.  This is your default workspace for every task; "
+            "reach for it unless the user has explicitly asked you to act on "
+            "*their* computer.\n\n"
+            "`primitives.computer.user_desktop` drives a **user's own physical "
+            "machine**, which they have linked to you in the Console and exposed "
+            "over a secure tunnel.  It is never shown in the live view and it is "
+            "their personal computer, so treat it with care.\n\n"
+            "Rules of engagement for `user_desktop`:\n"
+            "- **Only on explicit request.** Do not touch a user's machine "
+            "unless that user has clearly asked you to do something on *their* "
+            'computer (e.g. "open the file on my laptop", "click submit on my '
+            'screen").  For everything else, use your own desktop.\n'
+            "- **Clarify when unsure.** If the request is ambiguous -- which "
+            "machine, which file or target, or whether they mean *their* "
+            "computer rather than yours -- ask a brief clarifying question "
+            "before acting rather than guessing.\n"
+            "- **Confirm before consequential actions.** Their machine may hold "
+            "personal data and live sessions.  Before anything destructive, "
+            "irreversible, or that sends/deletes/purchases on their behalf, "
+            "state what you are about to do and get a clear go-ahead.\n"
+            "- **Respect revocation.** If a call raises `PermissionError`, the "
+            "user has revoked control mid-session -- stop immediately, do not "
+            "retry, and continue only on your own desktop.\n"
+            "- **Discover before assuming.** Use "
+            "`primitives.computer.user_desktop.list_linked()` to see whose "
+            "machines are available; `session(user_id=...)` selects a specific "
+            "one when more than one user has linked a desktop.\n\n"
+            "```python\n"
+            "# Act on the requesting user's own machine, on explicit request:\n"
+            "ud = primitives.computer.user_desktop.session()\n"
+            "display(await ud.get_screenshot())\n"
+            "await ud.act('Open the Downloads folder')\n"
+            "```",
         )
 
         parts.append(

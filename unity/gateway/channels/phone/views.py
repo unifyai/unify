@@ -40,6 +40,7 @@ The endpoint set matches the original 1:1::
 
 from __future__ import annotations
 
+import json
 import logging
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -68,6 +69,16 @@ logger = logging.getLogger("unity.gateway.channels.phone")
 
 auth_router = APIRouter()
 unauth_router = APIRouter()
+
+
+async def _json_object_or_empty(request: Request) -> dict:
+    body = await request.body()
+    if not body:
+        return {}
+    payload = json.loads(body)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Request body must be an object")
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +165,7 @@ def _create_conference_response(sip_uri: str) -> VoiceResponse:
 async def dispatch_livekit_agent(request: Request):
     """Create a LiveKit room and dispatch the LiveKit agent into it."""
     credentials = EnvCredentialStore()
-    data = await request.json()
+    data = await _json_object_or_empty(request)
     room_name = data.get("room_name") or data.get("livekit_agent_name", "")
     await create_room_and_dispatch_agent(
         room_name,
@@ -176,7 +187,7 @@ async def send_call(request: Request):
        from /phone/twiml which builds the user-facing call leg.
     """
     credentials = EnvCredentialStore()
-    data = await request.json()
+    data = await _json_object_or_empty(request)
     phone_number = data.get("To")
     twilio_number = data.get("From")
     room_name = data.get("room_name")
@@ -227,7 +238,7 @@ async def create_phone_number(request: Request):
     4. Create a matching LiveKit inbound SIP trunk.
     """
     credentials = EnvCredentialStore()
-    data = await request.json()
+    data = await _json_object_or_empty(request)
 
     voice_url = data.get(
         "voice_url",
@@ -315,8 +326,8 @@ async def delete_phone_number(request: Request):
     converge on a consistent state.
     """
     credentials = EnvCredentialStore()
-    data = await request.json()
-    phone_number = data.get("PhoneNumber")
+    data = await _json_object_or_empty(request)
+    phone_number = data.get("PhoneNumber") or data.get("phone_number")
     if not phone_number:
         raise HTTPException(status_code=400, detail="Missing PhoneNumber")
 

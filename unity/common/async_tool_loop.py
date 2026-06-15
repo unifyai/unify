@@ -21,7 +21,7 @@ from ._async_tool.loop_config import TOOL_LOOP_LINEAGE, _PENDING_LOOP_SUFFIX
 from ._async_tool.messages import forward_handle_call
 from ._async_tool.event_bus_util import to_event_bus
 from ..events.types.tool_loop import ToolLoopKind
-from ._async_tool.loop import async_tool_loop_inner
+from ._async_tool.loop import ToolLoopRuntimeState, async_tool_loop_inner
 from ._async_tool.propagation_mode import ChatContextPropagation
 from ._async_tool.context_compression import (
     _COMPRESSION_SIGNAL,
@@ -269,6 +269,7 @@ class AsyncToolLoopHandle(SteerableToolHandle):
         loop_id: str = "",
         initial_user_message: Optional[Any] = None,
         response_format: Optional[Any] = None,
+        runtime_state: Optional[ToolLoopRuntimeState] = None,
     ):
         self._task = task
         self._queue = interject_queue
@@ -306,6 +307,7 @@ class AsyncToolLoopHandle(SteerableToolHandle):
         # Context compression state (all fields live in CompressionState)
         self._compression = CompressionState()
         self._loop_config: Optional[dict] = None
+        self._runtime_state = runtime_state or ToolLoopRuntimeState()
 
     # small local helpers to keep user-visible history consistent
     def _append_user_visible_user(
@@ -855,6 +857,9 @@ class AsyncToolLoopHandle(SteerableToolHandle):
 
         self._client._messages = result.system_msgs
         self._client._system_message = None
+        self._runtime_state.message_count_offset += n_archived - len(
+            result.system_msgs,
+        )
 
         outer_handle_container: list = [None]
         _parent = cfg["parent_lineage"] or TOOL_LOOP_LINEAGE.get([])
@@ -863,6 +868,11 @@ class AsyncToolLoopHandle(SteerableToolHandle):
         inner_kwargs = {
             k: v for k, v in cfg.items() if k not in ("parent_lineage", "tools")
         }
+        # Parent context was already captured in the first loop pass (often
+        # embedded in compressed system messages). Re-injecting the full blob
+        # on every compression restart can immediately re-trigger compression.
+        inner_kwargs["parent_chat_context"] = None
+        cfg["parent_chat_context"] = None
 
         async def _loop_wrapper():
             return await async_tool_loop_inner(
@@ -1040,6 +1050,7 @@ def start_async_tool_loop(
     stop_event = asyncio.Event()
     pause_event = asyncio.Event()
     pause_event.set()  # start un-paused
+    runtime_state = ToolLoopRuntimeState()
 
     # A single-element list is a mutable container that the inner loop can use
     # to access the outer handle once it exists.
@@ -1114,6 +1125,7 @@ def start_async_tool_loop(
                 on_clarification_request=on_clarification_request,
                 on_clarification_answer=on_clarification_answer,
                 on_notify=on_notify,
+                runtime_state=runtime_state,
             )
         except asyncio.CancelledError:
             raise
@@ -1161,6 +1173,7 @@ def start_async_tool_loop(
         initial_user_message=init_content,
         response_format=response_format,
     )
+    handle._runtime_state = runtime_state
 
     # Store loop config so _restart_with_compressed_context can re-create
     # the loop with identical settings after compression.
@@ -1194,6 +1207,7 @@ def start_async_tool_loop(
         "on_clarification_request": on_clarification_request,
         "on_clarification_answer": on_clarification_answer,
         "on_notify": on_notify,
+        "runtime_state": runtime_state,
     }
 
     # Attach lineage to handle for optional external inspection

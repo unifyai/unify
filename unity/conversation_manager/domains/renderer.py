@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from time import perf_counter
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from unity.common._async_tool.utils import get_handle_paused_state
 from unity.common.prompt_helpers import get_assistant_timezone
@@ -24,6 +24,9 @@ from unity.conversation_manager.domains.contact_index import (
     EmailMessage,
     UnifyMessage,
     WhatsAppMessage,
+    SlackMessage,
+    SlackChannelMessage,
+    DiscordChannelMessage,
     TeamsMessage,
     TeamsChannelMessage,
     GuidanceMessage,
@@ -40,7 +43,7 @@ from unity.conversation_manager.task_actions import (
     safe_call_id_suffix,
 )
 from unity.logger import LOGGER
-from unity.session_details import SESSION_DETAILS
+from unity.session_details import SESSION_DETAILS, is_boss_contact
 
 if TYPE_CHECKING:
     pass
@@ -583,6 +586,7 @@ class Renderer:
         in_flight_actions: dict = None,
         completed_actions: dict = None,
         last_snapshot: datetime = None,
+        recent_tool_executions: list[dict[str, Any]] | None = None,
         max_pinned_notifications: int = 50,
         max_contact_medium_messages: int = 25,
         max_action_history_events: int = 20,
@@ -663,6 +667,9 @@ class Renderer:
             max_history=max_completed_action_history_events,
         )
         _completed_ms = _mark_step()
+        recent_tools_render = self.render_recent_tool_executions(
+            recent_tool_executions,
+        )
         convs_render = self.render_active_conversations(
             contact_index,
             last_snapshot=last_snapshot,
@@ -680,6 +687,7 @@ class Renderer:
                 notif_render,
                 actions_render,
                 completed_render,
+                recent_tools_render,
                 convs_render,
             ]
             if s
@@ -1066,6 +1074,30 @@ class Renderer:
         out += "</in_flight_actions>"
         return out
 
+    def render_recent_tool_executions(
+        self,
+        recent_tool_executions: list[dict[str, Any]] | None,
+        max_items: int = 12,
+    ) -> str:
+        """Render a bounded summary of recently executed tools."""
+        out = "<recent_tool_executions>\n"
+        if not recent_tool_executions:
+            out += "No recent tool executions.\n"
+            out += "</recent_tool_executions>"
+            return out
+
+        for entry in recent_tool_executions[-max_items:]:
+            tool_name = str(entry.get("tool_name") or "unknown")
+            generation = str(entry.get("generation") or "?")
+            origin_event = str(entry.get("origin_event_name") or "-")
+            args_preview = str(entry.get("args_preview") or "{}")
+            result_preview = str(entry.get("result_preview") or "null")
+            out += f"- generation={generation} origin={origin_event} tool={tool_name}\n"
+            out += f"  args={args_preview}\n"
+            out += f"  result={result_preview}\n"
+        out += "</recent_tool_executions>"
+        return out
+
     def render_active_conversations(
         self,
         contact_index: ContactIndex,
@@ -1160,7 +1192,7 @@ class Renderer:
         rolling_summary = contact_info.get("rolling_summary") or ""
         response_policy = contact_info.get("response_policy") or ""
         should_respond = contact_info.get("should_respond", True)
-        is_boss = contact_id == 1
+        is_boss = is_boss_contact(contact_id)
 
         # Compute contact name for timezone display
         contact_name = f"{first_name} {surname}".strip() or f"Contact #{contact_id}"
@@ -1311,6 +1343,9 @@ class Renderer:
             | EmailMessage
             | UnifyMessage
             | WhatsAppMessage
+            | SlackMessage
+            | SlackChannelMessage
+            | DiscordChannelMessage
             | TeamsMessage
             | TeamsChannelMessage
             | ApiMessage
@@ -1565,6 +1600,155 @@ class Renderer:
                 f"{message.content}{ids_line}{attachments_line}{tz_block_line}"
             )
 
+        if isinstance(message, (SlackMessage, SlackChannelMessage)):
+            attachments_line = ""
+            if message.attachments:
+
+                def _slack_att_detail(att, is_self: bool) -> str:
+                    if isinstance(att, dict):
+                        fname = att.get(
+                            "filename",
+                            f"attachment_{att.get('id', 'unknown')}",
+                        )
+                        att_id = att.get("id")
+                        id_part = f"id: {att_id}, " if att_id else ""
+                        if is_self:
+                            fpath = att.get("filepath")
+                            if fpath:
+                                return f"{fname} ({id_part}attached from {fpath})"
+                            return (
+                                f"{fname} ({id_part}attached)"
+                                if id_part
+                                else f"{fname} (attached)"
+                            )
+                        return f"{fname} ({id_part}auto-downloaded to Attachments/{att_id}_{fname})"
+                    return (
+                        f"{att} (attached)" if is_self else f"{att} (auto-downloaded)"
+                    )
+
+                attachment_details = [
+                    _slack_att_detail(att, message.name == "You")
+                    for att in message.attachments
+                ]
+                attachments_line = f" [Attachments: {', '.join(attachment_details)}]"
+
+            tz_block_line = ""
+            if contact_name:
+                tz_block = _get_message_timezone_block(
+                    contact_name,
+                    contact_timezone,
+                    assistant_timezone,
+                )
+                if tz_block:
+                    tz_block_line = f"\n{tz_block}"
+
+            # Surface team_id, channel_id, thread_ts so the LLM can reply into
+            # the same DM/channel thread via send_slack_message(...) /
+            # send_slack_channel_message(...).
+            id_bits: list[str] = []
+            if message.team_id:
+                id_bits.append(f'team_id="{message.team_id}"')
+            if message.channel_id:
+                id_bits.append(f'channel_id="{message.channel_id}"')
+            # For channel messages, fall back to the message's own ts so a
+            # top-level @mention starts a thread when replied to; DMs only
+            # carry thread_ts when the conversation is already threaded.
+            effective_thread_ts = message.thread_ts
+            if isinstance(message, SlackChannelMessage) and not effective_thread_ts:
+                effective_thread_ts = getattr(message, "event_ts", "")
+            if effective_thread_ts:
+                id_bits.append(f'thread_ts="{effective_thread_ts}"')
+            ids_line = f" [{' '.join(id_bits)}]" if id_bits else ""
+
+            # Surface Orchestra-side routing context so the assistant
+            # understands why it received the message (token addressing,
+            # coordinator fallback, ambiguous token, etc.).
+            routing_line = ""
+            if message.routing_metadata:
+                hints: list[str] = []
+                via_token = message.routing_metadata.get("via_token")
+                if via_token:
+                    hints.append(f"addressed via token '{via_token}'")
+                if message.routing_metadata.get("coordinator_fallback"):
+                    hints.append(
+                        "coordinator fallback (no token matched; reply as coordinator)",
+                    )
+                ambiguous = message.routing_metadata.get("ambiguous_token")
+                if ambiguous:
+                    hints.append(f"ambiguous token '{ambiguous}'")
+                known = message.routing_metadata.get("known_assistants") or []
+                if known:
+                    formatted = ", ".join(
+                        f"{a.get('first_name','?')} (id={a.get('agent_id','?')})"
+                        for a in known
+                    )
+                    hints.append(f"known org assistants: {formatted}")
+                if message.routing_metadata.get("thread_inherited"):
+                    hints.append("inherited routing from existing thread")
+                if hints:
+                    routing_line = f"\n[Routing: {'; '.join(hints)}]"
+
+            return (
+                f"{new_marker}[{message.name} @ {timestamp_str}]: "
+                f"{message.content}{ids_line}{attachments_line}{tz_block_line}{routing_line}"
+            )
+
+        if isinstance(message, DiscordChannelMessage):
+            attachments_line = ""
+            if message.attachments:
+
+                def _discord_att_detail(att, is_self: bool) -> str:
+                    if isinstance(att, dict):
+                        fname = att.get(
+                            "filename",
+                            f"attachment_{att.get('id', 'unknown')}",
+                        )
+                        att_id = att.get("id")
+                        id_part = f"id: {att_id}, " if att_id else ""
+                        if is_self:
+                            fpath = att.get("filepath")
+                            if fpath:
+                                return f"{fname} ({id_part}attached from {fpath})"
+                            return (
+                                f"{fname} ({id_part}attached)"
+                                if id_part
+                                else f"{fname} (attached)"
+                            )
+                        return f"{fname} ({id_part}auto-downloaded to Attachments/{att_id}_{fname})"
+                    return (
+                        f"{att} (attached)" if is_self else f"{att} (auto-downloaded)"
+                    )
+
+                attachment_details = [
+                    _discord_att_detail(att, message.name == "You")
+                    for att in message.attachments
+                ]
+                attachments_line = f" [Attachments: {', '.join(attachment_details)}]"
+
+            tz_block_line = ""
+            if contact_name:
+                tz_block = _get_message_timezone_block(
+                    contact_name,
+                    contact_timezone,
+                    assistant_timezone,
+                )
+                if tz_block:
+                    tz_block_line = f"\n{tz_block}"
+
+            # Surface channel_id / guild_id so the LLM can reply into the same
+            # channel via send_discord_channel_message(channel_id="...").
+            id_bits: list[str] = []
+            if message.channel_id:
+                id_bits.append(f'channel_id="{message.channel_id}"')
+            if message.guild_id:
+                id_bits.append(f'guild_id="{message.guild_id}"')
+            ids_line = f" [{' '.join(id_bits)}]" if id_bits else ""
+
+            return (
+                f"{new_marker}[{message.name} @ {timestamp_str}]: "
+                f"{message.content}{ids_line}{attachments_line}{tz_block_line}"
+            )
+
         if isinstance(message, ApiMessage):
             attachments_line = ""
             if message.attachments:
@@ -1657,19 +1841,37 @@ class Renderer:
                 short_name = derive_short_name(query)
                 handle_actions = handle_data.get("handle_actions", [])
 
-                # Extract result from the act_completed event
-                result = None
+                # Extract terminal status from the most recent completion marker.
+                terminal_event = None
                 for a in reversed(handle_actions):
-                    if a.get("action_name") == "act_completed":
-                        result = a.get("query", "")
+                    if a.get("action_name") in {"act_completed", "act_failed"}:
+                        terminal_event = a
                         break
 
                 action_type = handle_data.get("action_type", "act")
-                out += f"<action id='{handle_id}' short_name='{short_name}' status='completed' type='{action_type}'>\n"
+                action_status = (
+                    "failed"
+                    if terminal_event is not None
+                    and terminal_event.get("success") is False
+                    else "completed"
+                )
+                out += f"<action id='{handle_id}' short_name='{short_name}' status='{action_status}' type='{action_type}'>\n"
                 out += f"<original_request>{query}</original_request>\n"
 
-                if result is not None:
-                    out += f"<result>{result}</result>\n"
+                if terminal_event is not None:
+                    if terminal_event.get("success") is False:
+                        error_text = terminal_event.get("error") or terminal_event.get(
+                            "query",
+                            "",
+                        )
+                        if error_text:
+                            out += f"<error>{error_text}</error>\n"
+                    else:
+                        result = terminal_event.get(
+                            "result",
+                            terminal_event.get("query", ""),
+                        )
+                        out += f"<result>{result}</result>\n"
 
                 out += self._render_action_history(
                     handle_actions,

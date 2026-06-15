@@ -187,6 +187,10 @@ def test_create_many_mirrors_to_all_ctxs():
 
         task_id_1 = result1["details"]["task_id"]
         task_id_2 = result2["details"]["task_id"]
+        log_ids = [
+            ts._get_log_by_task_instance(task_id=task_id_1, instance_id=0).id,
+            ts._get_log_by_task_instance(task_id=task_id_2, instance_id=0).id,
+        ]
 
         # Derive both aggregation contexts
         all_ctxs = _derive_all_contexts(ts._ctx)
@@ -196,7 +200,7 @@ def test_create_many_mirrors_to_all_ctxs():
         for all_ctx in all_ctxs:
             all_logs = unify.get_logs(
                 context=all_ctx,
-                filter=f"task_id in [{task_id_1}, {task_id_2}]",
+                from_ids=log_ids,
             )
             assert len(all_logs) >= 2, f"Both tasks should be mirrored to {all_ctx}"
 

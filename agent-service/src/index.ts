@@ -17,6 +17,7 @@ import { randomUUID } from 'crypto';
 import { ChildProcess, spawn, execSync } from 'child_process';
 import multer from 'multer';
 import { jsonSchemaToZod } from './jsonSchemaToZod';
+import { getLlmConfig } from './llmConfig';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -546,7 +547,14 @@ async function ensureDemoSites(urlMappings: Record<string, string>): Promise<Rec
     }
 
     const localhostUrl = `http://localhost:${port}`;
-    resolved[originalUrl] = localhostUrl;
+    let mappingKey: string;
+    try {
+      mappingKey = new URL(originalUrl).href;
+    } catch {
+      console.warn(`[demo-sites] Skipping invalid URL mapping for ${dirName}`);
+      continue;
+    }
+    resolved[mappingKey] = localhostUrl;
 
     // /etc/hosts + Caddy setup so the real domain resolves to the demo site
     try {
@@ -631,75 +639,35 @@ const isAgentReady = (req: Request, res: Response, next: Function) => {
   next();
 };
 
-const getLaunchOptions = (headless: boolean, downloadsPath: string | null = null, tracesDir: string | null = null) => {
-  return { launchOptions: {
-    headless: headless,
-    args: [
-      "--disable-blink-features=AutomationControlled",
-      "--disable-features=IsolateOrigins,site-per-process",
-      // "--enable-features=WebRtcV4L2VideoCapture",
-      // "--auto-select-window-capture-source-by-title=Google",
-      '--auto-select-desktop-capture-source="Entire screen"',
-    ],
-    downloadsPath: downloadsPath || undefined,
-    tracesDir: tracesDir || undefined,
-  }}
-};
-
-// LLM config resolution with graceful fallbacks. Default route is the
-// Unity Comms unillm proxy (when UNITY_COMMS_URL is set). When that
-// proxy isn't available (e.g. running agent-service standalone outside
-// a full Unity stack), fall back to Anthropic or OpenAI direct using
-// the corresponding API key from env.
-const getLlmConfig = (): any => {
-  if (process.env.UNITY_COMMS_URL) {
-    return {
-      provider: 'openai-generic' as const,
-      options: {
-        model: 'claude-4.6-sonnet@anthropic',
-        baseUrl: `${process.env.UNITY_COMMS_URL}/unillm`,
-        headers: {
-          'Authorization': `Bearer ${process.env.UNIFY_KEY}`,
-        },
-        temperature: 0.2,
-      }
-    };
+const getLaunchOptions = (
+  headless: boolean,
+  downloadsPath: string | null = null,
+  tracesDir: string | null = null,
+  storageStateName: string | null = null,
+) => {
+  // ``storageStateName`` is forwarded to magnitude-core's BrowserProvider,
+  // which loads ~/.magnitude/browser_states/<safeName>.json (cookies +
+  // localStorage + sessionStorage) before any page renders.  Used by
+  // brain.influencers.youtube to keep one operator-supervised Google
+  // login persistent across subsequent headless extraction runs.
+  const opts: any = {
+    launchOptions: {
+      headless: headless,
+      args: [
+        "--disable-blink-features=AutomationControlled",
+        "--disable-features=IsolateOrigins,site-per-process",
+        // "--enable-features=WebRtcV4L2VideoCapture",
+        // "--auto-select-window-capture-source-by-title=Google",
+        '--auto-select-desktop-capture-source="Entire screen"',
+      ],
+      downloadsPath: downloadsPath || undefined,
+      tracesDir: tracesDir || undefined,
+    },
+  };
+  if (storageStateName) {
+    opts.storageStateName = storageStateName;
   }
-  // Prefer Anthropic for computer-use: Claude is significantly more
-  // accurate at vision-grounded action planning than GPT-4o.
-  if (process.env.ANTHROPIC_API_KEY) {
-    // Anthropic ships an OpenAI-compatible endpoint that speaks the
-    // same Chat Completions wire format, so we keep provider as
-    // 'openai-generic' and point at the compat path.
-    return {
-      provider: 'openai-generic' as const,
-      options: {
-        model: 'claude-sonnet-4-5',
-        baseUrl: 'https://api.anthropic.com/v1',
-        headers: {
-          'Authorization': `Bearer ${process.env.ANTHROPIC_API_KEY}`,
-        },
-        temperature: 0.2,
-      }
-    };
-  }
-  if (process.env.OPENAI_API_KEY) {
-    return {
-      provider: 'openai-generic' as const,
-      options: {
-        model: 'gpt-4o',
-        baseUrl: 'https://api.openai.com/v1',
-        headers: {
-          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-        },
-        temperature: 0.2,
-      }
-    };
-  }
-  throw new Error(
-    'No LLM provider configured: set UNITY_COMMS_URL (preferred), or ' +
-    'ANTHROPIC_API_KEY or OPENAI_API_KEY for direct provider fallback.'
-  );
+  return opts;
 };
 
 const startDesktop = async (): Promise<BrowserAgent> => {
@@ -712,8 +680,6 @@ const startDesktop = async (): Promise<BrowserAgent> => {
       browser: getLaunchOptions(true),
       prompt: "You're controlling a noVNC virtual desktop page. Do not navigate to other page and use mouse and keyboard to control the browser and apps within the virtual desktop. There may be a terminal (xterm) app launched in the desktop for use.",
       narrate: true,
-      // Route LLM calls through Orchestra/UniLLM proxy for billing/caching,
-      // with fallback to direct OpenAI/Anthropic when UNITY_COMMS_URL is unset.
       llm: getLlmConfig()
     });
     agent.context.setDefaultNavigationTimeout(90000);
@@ -730,15 +696,22 @@ const startDesktop = async (): Promise<BrowserAgent> => {
   }
 }
 
-const startBrowser = async (headless: boolean, urlMappings?: Record<string, string>): Promise<BrowserAgent> => {
+const startBrowser = async (
+  headless: boolean,
+  urlMappings?: Record<string, string>,
+  storageStateName?: string,
+): Promise<BrowserAgent> => {
   try {
     const agent = await startBrowserAgent({
       url: "https://www.google.com/",
-      browser: getLaunchOptions(headless, defaultBrowserPaths.downloadsPath, defaultBrowserPaths.tracesDir),
+      browser: getLaunchOptions(
+        headless,
+        defaultBrowserPaths.downloadsPath,
+        defaultBrowserPaths.tracesDir,
+        storageStateName ?? null,
+      ),
       narrate: true,
       urlMappings,
-      // Route LLM calls through Orchestra/UniLLM proxy for billing/caching,
-      // with fallback to direct OpenAI/Anthropic when UNITY_COMMS_URL is unset.
       llm: getLlmConfig()
     });
     agent.context.setDefaultNavigationTimeout(90000);
@@ -1169,7 +1142,12 @@ async function googleMeetPollState(sessionId: string): Promise<void> {
 
 // --- API Endpoints ---
 app.post('/start', async (req: Request, res: Response) => {
-  const { headless, mode, label, urlMappings } = req.body;
+  // ``storageStateName`` is optional. When set, the magnitude
+  // BrowserProvider loads ~/.magnitude/browser_states/<safeName>.json
+  // (cookies + localStorage + sessionStorage) before any page renders so
+  // the new session boots already-authenticated. Currently only honoured
+  // for ``mode === 'web'``.
+  const { headless, mode, label, urlMappings, storageStateName } = req.body;
   if (!mode || !['desktop', 'web', 'web-vm'].includes(mode)) {
     return res.status(400).json({
       error: 'bad_request',
@@ -1179,17 +1157,24 @@ app.post('/start', async (req: Request, res: Response) => {
   }
 
   // Desktop mode is singleton -- one physical display, one session.
-  // Close any existing desktop session before creating a new one.
+  // Fully stop any existing desktop session before creating a new one so
+  // Playwright does not tear down the browser context mid-start.
   if (mode === "desktop") {
+    const stopTasks: Array<Promise<void>> = [];
     for (const [existingId, existing] of activeSessions.entries()) {
       if (existing.mode === "desktop") {
         console.log(`Replacing existing desktop session: ${existingId}`);
-        existing.agent.stop().catch((err: unknown) =>
-          console.error(`Error stopping old desktop session: ${err}`)
+        stopTasks.push(
+          existing.agent.stop().catch((err: unknown) => {
+            console.error(`Error stopping old desktop session: ${err}`);
+          }),
         );
         activeSessions.delete(existingId);
         broadcastSessionEvent(existingId, 'replaced');
       }
+    }
+    if (stopTasks.length > 0) {
+      await Promise.all(stopTasks);
     }
   }
 
@@ -1207,7 +1192,11 @@ app.post('/start', async (req: Request, res: Response) => {
     } else if (mode === "web-vm") {
       agent = await startBrowserOnVm(mappings);
     } else {
-      agent = await startBrowser(headless ?? false, mappings);
+      agent = await startBrowser(
+        headless ?? false,
+        mappings,
+        typeof storageStateName === 'string' && storageStateName ? storageStateName : undefined,
+      );
     }
     console.log(`[start] agent_created=${Date.now() - t0}ms mode=${mode}`);
 
@@ -1240,7 +1229,7 @@ app.post('/start', async (req: Request, res: Response) => {
       // if magnitude's route already handled it, this won't fire.
       // If this DOES fire for a mapped URL, it means magnitude's route did NOT catch it.
       try {
-        await agent.context.route('**/*', async (route) => {
+        await agent.context.route('**/*', async (route: any) => {
           const req = route.request();
           const url = req.url();
           const isNav = req.isNavigationRequest();
@@ -1950,6 +1939,304 @@ app.post('/content', isAgentReady, async (req: Request, res: Response) => {
     res.json({ url, title, content, format: outputFormat });
   } catch (err) {
     handleAgentError(err, res, 'content_failed');
+  }
+});
+
+// --- /captcha/solve endpoint: Delegate reCAPTCHA v2 to AntiCaptcha ---
+//
+// Extracts the sitekey from the live page, submits a RecaptchaV2TaskProxyless
+// task to api.anti-captcha.com, polls for the worker-solved token, and
+// injects it back into the page so the page's own submit flow accepts the
+// verification. Returns once injection succeeds.
+//
+// The handler is deterministic and decoupled from magnitude-core's LLM
+// action vocabulary: it is meant to be reached for by orchestration code
+// after a separate ``observe()`` call has visually confirmed that a
+// reCAPTCHA challenge is on screen.
+//
+// The token returned by AntiCaptcha is a Google-signed credential. It is
+// NEVER logged, NEVER persisted, and NEVER echoed in the response body.
+//
+// The ``ANTICAPTCHA_KEY`` must be set in agent-service's own ``.env``; it
+// is never accepted from the request body.
+app.post('/captcha/solve', isAgentReady, async (req: Request, res: Response) => {
+  const { sessionId, variant: variantRaw } = req.body;
+  const variant: 'v2_checkbox' | 'v2_invisible' =
+    variantRaw === 'v2_invisible' ? 'v2_invisible' : 'v2_checkbox';
+
+  const clientKey = process.env.ANTICAPTCHA_KEY;
+  if (!clientKey) {
+    return res.status(503).json({
+      error: 'anticaptcha_key_missing',
+      message: 'ANTICAPTCHA_KEY is not set in the agent-service environment.',
+    });
+  }
+
+  const t0 = Date.now();
+  let sitekey: string | null = null;
+  let taskId: number | null = null;
+
+  try {
+    const session = activeSessions.get(sessionId)!;
+    const page = session.agent.page;
+    const pageUrl: string = page.url();
+
+    sitekey = await page.evaluate(() => {
+      const decode = (raw: string | null): string | null => {
+        if (!raw) return null;
+        try { return decodeURIComponent(raw); } catch { return raw; }
+      };
+      const direct = document.querySelector('[data-sitekey]') as HTMLElement | null;
+      const directKey = direct?.getAttribute('data-sitekey');
+      if (directKey) return directKey;
+      const iframes = Array.from(document.querySelectorAll('iframe')) as HTMLIFrameElement[];
+      const probe = (substr: string): string | null => {
+        for (const f of iframes) {
+          const src = f.getAttribute('src') || '';
+          if (src.includes(substr)) {
+            try {
+              const u = new URL(src, window.location.href);
+              const k = u.searchParams.get('k');
+              if (k) return decode(k);
+            } catch { /* fall through */ }
+          }
+        }
+        return null;
+      };
+      return probe('recaptcha/api2/anchor') || probe('recaptcha/api2/bframe');
+    });
+
+    if (!sitekey) {
+      return res.status(400).json({
+        error: 'no_sitekey',
+        message: 'No reCAPTCHA sitekey was found on the current page.',
+      });
+    }
+
+    const createResp = await fetch('https://api.anti-captcha.com/createTask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        clientKey,
+        task: {
+          type: 'RecaptchaV2TaskProxyless',
+          websiteURL: pageUrl,
+          websiteKey: sitekey,
+          isInvisible: variant === 'v2_invisible',
+        },
+      }),
+    });
+    const createBody: any = await createResp.json().catch(() => ({}));
+    if (!createResp.ok || typeof createBody?.errorId !== 'number' || createBody.errorId !== 0) {
+      console.error(
+        `[captcha/solve] createTask failed sitekey=${sitekey} variant=${variant} ` +
+        `httpStatus=${createResp.status} errorId=${createBody?.errorId} ` +
+        `errorCode=${createBody?.errorCode}`,
+      );
+      return res.status(502).json({
+        error: 'anticaptcha_api_error',
+        message: `createTask failed: ${createBody?.errorCode || 'unknown'} - ${createBody?.errorDescription || ''}`,
+        details: { errorId: createBody?.errorId, errorCode: createBody?.errorCode },
+      });
+    }
+    taskId = createBody.taskId;
+    console.log(`[captcha/solve] task_created task_id=${taskId} sitekey=${sitekey} variant=${variant}`);
+
+    // Poll every 3s for up to 60 attempts (~3 min) for the worker pool to
+    // return a token.  Anti-Captcha's docs recommend an initial 5s wait
+    // before the first poll, but a 3s cadence from t=3s is fine and gives
+    // us slightly faster turnaround on already-queued tasks.
+    let token: string | null = null;
+    for (let attempt = 0; attempt < 60; attempt++) {
+      await sleep(3000);
+      const pollResp = await fetch('https://api.anti-captcha.com/getTaskResult', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientKey, taskId }),
+      });
+      const pollBody: any = await pollResp.json().catch(() => ({}));
+      if (!pollResp.ok || typeof pollBody?.errorId !== 'number' || pollBody.errorId !== 0) {
+        console.error(
+          `[captcha/solve] getTaskResult failed task_id=${taskId} ` +
+          `httpStatus=${pollResp.status} errorId=${pollBody?.errorId} ` +
+          `errorCode=${pollBody?.errorCode}`,
+        );
+        return res.status(502).json({
+          error: 'anticaptcha_api_error',
+          message: `getTaskResult failed: ${pollBody?.errorCode || 'unknown'} - ${pollBody?.errorDescription || ''}`,
+          details: { errorId: pollBody?.errorId, errorCode: pollBody?.errorCode, taskId },
+        });
+      }
+      if (pollBody.status === 'ready') {
+        token = pollBody.solution?.gRecaptchaResponse || null;
+        break;
+      }
+    }
+
+    if (!token) {
+      console.error(`[captcha/solve] solve_timeout task_id=${taskId} sitekey=${sitekey}`);
+      return res.status(504).json({
+        error: 'solve_timeout',
+        message: 'AntiCaptcha worker pool did not return a token within ~3 minutes.',
+      });
+    }
+
+    // Inject the token + invoke any registered callbacks, then poll the
+    // reCAPTCHA widget's own JS API until it acknowledges the token. All
+    // done inside a single ``page.evaluate`` so the token is passed in as
+    // a function argument (and lives only on the page side) rather than
+    // being serialised into the evaluation source string.
+    //
+    // The async polling loop turns the brittle "inject and pray" pattern
+    // into a deterministic widget-level handshake: we know the widget
+    // accepts the token when ``grecaptcha.getResponse()`` returns a
+    // non-empty string. This catches injection failures (token written
+    // but widget rejects it) AND eliminates the need for caller-side
+    // sleeps.
+    //
+    // Returns ``{ injected, widgetAcked }`` where ``injected`` means at
+    // least one textarea or callback received the token, and
+    // ``widgetAcked`` means the widget's own JS API confirms it has
+    // internalised the verification.
+    const injectionResult: { injected: boolean; widgetAcked: boolean } = await page.evaluate(
+      async (tkn: string) => {
+        let textareaSet = false;
+        let callbackCalled = false;
+
+        const textareas = Array.from(
+          document.querySelectorAll('textarea[id^="g-recaptcha-response"], textarea[name="g-recaptcha-response"]'),
+        ) as HTMLTextAreaElement[];
+        for (const ta of textareas) {
+          ta.value = tkn;
+          try { ta.dispatchEvent(new Event('input', { bubbles: true })); } catch { /* best-effort */ }
+          try { ta.dispatchEvent(new Event('change', { bubbles: true })); } catch { /* best-effort */ }
+          textareaSet = true;
+        }
+
+        // Strategy A: data-callback attribute names a window-scoped function.
+        const cbHosts = Array.from(document.querySelectorAll('[data-callback]')) as HTMLElement[];
+        for (const host of cbHosts) {
+          const name = host.getAttribute('data-callback');
+          if (!name) continue;
+          const fn = (window as any)[name];
+          if (typeof fn === 'function') {
+            try { fn(tkn); callbackCalled = true; } catch { /* best-effort */ }
+          }
+        }
+
+        // Strategy B: walk window.___grecaptcha_cfg.clients[*] for nested
+        // ``callback`` functions (this is how SPA-mounted widgets register).
+        try {
+          const cfg: any = (window as any).___grecaptcha_cfg;
+          const clients = cfg?.clients;
+          if (clients && typeof clients === 'object') {
+            const walk = (node: any, depth: number): void => {
+              if (!node || depth > 6) return;
+              if (typeof node === 'object') {
+                for (const k of Object.keys(node)) {
+                  const v = node[k];
+                  if (k === 'callback' && typeof v === 'function') {
+                    try { v(tkn); callbackCalled = true; } catch { /* best-effort */ }
+                  } else if (typeof v === 'object' && v !== null) {
+                    walk(v, depth + 1);
+                  }
+                }
+              }
+            };
+            for (const clientKey of Object.keys(clients)) {
+              walk(clients[clientKey], 0);
+            }
+          }
+        } catch { /* best-effort */ }
+
+        // Poll the widget's own ``grecaptcha.getResponse()`` until it
+        // returns the injected token (or any non-empty string — some
+        // Enterprise variants normalise the token). 5s ceiling.
+        const widgetDeadline = Date.now() + 5_000;
+        let widgetAcked = false;
+        while (Date.now() < widgetDeadline) {
+          try {
+            const widget = (window as any).grecaptcha;
+            const getResponse = widget && typeof widget.getResponse === 'function' ? widget.getResponse : null;
+            if (getResponse) {
+              const resp = getResponse();
+              if (typeof resp === 'string' && resp.length > 0) {
+                widgetAcked = true;
+                break;
+              }
+            }
+          } catch { /* best-effort */ }
+          await new Promise(r => setTimeout(r, 100));
+        }
+
+        return { injected: textareaSet || callbackCalled, widgetAcked };
+      },
+      token,
+    );
+
+    if (!injectionResult.injected) {
+      console.error(`[captcha/solve] injection_failed task_id=${taskId} sitekey=${sitekey}`);
+      return res.status(500).json({
+        error: 'injection_failed',
+        message: 'Token retrieved but no textarea or callback was found on the page to receive it.',
+      });
+    }
+
+    // Wait for the host page to actually progress past the captcha.
+    // Two race-able signals, both Playwright-native, both bounded so no
+    // misbehaved page can wedge the handler.  ``settled_via`` tells the
+    // caller which signal latched first (or that we timed out).
+    //
+    // - 'userverify' — reCAPTCHA's server-side verification round-trip
+    //   POSTs to ``recaptcha/api2/userverify`` (or the Enterprise
+    //   variant).  Observing that response means Google has accepted
+    //   the token; the host page can now act on it.
+    // - 'networkidle' — Playwright reports the network as idle (no
+    //   requests in flight for 500ms).  Catches the case where the
+    //   verification call already completed before we started
+    //   waiting, plus follow-up XHRs the host page fires after
+    //   verification (e.g. "now fetch the revealed email").
+    const SETTLE_TIMEOUT_MS = 15_000;
+    let settledVia: 'userverify' | 'networkidle' | 'timeout' = 'timeout';
+    try {
+      settledVia = await Promise.race([
+        page.waitForResponse(
+          (r: { url: () => string }) => /recaptcha\/(api2|enterprise)\/userverify/.test(r.url()),
+          { timeout: SETTLE_TIMEOUT_MS },
+        ).then(() => 'userverify' as const),
+        page.waitForLoadState('networkidle', { timeout: SETTLE_TIMEOUT_MS })
+          .then(() => 'networkidle' as const),
+      ]);
+    } catch {
+      // Both branches timed out — either the host page never went idle
+      // (long-poll SPA) and never triggered userverify (challenge was
+      // already pre-verified, or the page is wedged).  Return
+      // settled=false so the caller can decide; we don't fail the
+      // request because the token + injection are still valid.
+      settledVia = 'timeout';
+    }
+
+    const solveTimeMs = Date.now() - t0;
+    console.log(
+      `[captcha/solve] solved task_id=${taskId} sitekey=${sitekey} variant=${variant} ` +
+      `solve_time_ms=${solveTimeMs} widget_acked=${injectionResult.widgetAcked} ` +
+      `settled_via=${settledVia}`,
+    );
+    res.json({
+      status: 'solved',
+      solve_time_ms: solveTimeMs,
+      sitekey,
+      variant,
+      task_id: taskId,
+      widget_acked: injectionResult.widgetAcked,
+      settled: settledVia !== 'timeout',
+      settled_via: settledVia,
+    });
+  } catch (err) {
+    console.error(
+      `[captcha/solve] unexpected error task_id=${taskId} sitekey=${sitekey}: ${err instanceof Error ? err.message : err}`,
+    );
+    handleAgentError(err, res, 'captcha_solve_failed');
   }
 });
 

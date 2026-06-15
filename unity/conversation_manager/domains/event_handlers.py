@@ -10,19 +10,39 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Union
 
 from unity.contact_manager.types.contact import UNASSIGNED
+from unity.common.context_registry import ContextRegistry
 from unity.common.hierarchical_logger import DEFAULT_ICON
 from unity.conversation_manager import assistant_jobs
 from unity.conversation_manager.events import *
 from unity.conversation_manager.domains import managers_utils
 from unity.conversation_manager.domains.comms_utils import publish_system_error
+from unity.conversation_manager.domains.coordinator_onboarding import (
+    _handle_coordinator_onboarding_event,
+)
+from unity.conversation_manager.domains.coordinator_delegate import (
+    _handle_coordinator_delegate_event,
+)
 from unity.conversation_manager.domains.inactivity import (
     _handle_inactivity_followup_event,
+)
+from unity.conversation_manager.domains.integration_sync import (
+    _handle_integration_tools_sync_completed,
+    _handle_integration_tools_sync_failed,
+    _handle_integration_tools_sync_requested,
+    _schedule_startup_integration_sync,
+)
+from unity.conversation_manager.domains.self_host_desktop import (
+    apply_managed_desktop_ready,
+    bootstrap_managed_desktop_on_startup,
+    resolve_desktop_urls,
 )
 from unity.conversation_manager.domains.task_activation import (
     _consume_startup_wake_reasons,
     _handle_task_due_event,
     _surface_trigger_task_candidates,
 )
+from unity.memory_manager import broader_context
+from unity.task_scheduler.machine_state import invalidate_task_machine_state_reads
 from unity.conversation_manager.cm_types import Medium, Mode
 from unity.common.startup_timing import log_startup_timing
 from unity.logger import LOGGER
@@ -203,6 +223,23 @@ def _get_sender_name(contact: dict | None, fallback: str = "Unknown") -> str:
     return name or fallback
 
 
+def _adopt_slack_bot_user_id(cm: "ConversationManager", event) -> None:
+    """Enable Slack send capability from an inbound Slack event.
+
+    Slack's ``bot_user_id`` is workteam-scoped (it lives on the
+    ``slack_installs`` row), not on the assistant record, so the
+    per-assistant ``assistant_slack_bot_user_id`` is never populated at
+    session bootstrap. The brain gates the ``send_slack_message`` /
+    ``send_slack_channel_message`` tools (and the Slack reply guidelines)
+    on that flag, so without it the assistant can never reply on Slack.
+    Adopt the workspace bot id from the inbound event so this session's
+    subsequent brain run exposes the Slack tools.
+    """
+    inbound_bot_user_id = getattr(event, "bot_user_id", "") or ""
+    if inbound_bot_user_id and not getattr(cm, "assistant_slack_bot_user_id", ""):
+        cm.assistant_slack_bot_user_id = inbound_bot_user_id
+
+
 def _active_voice_thread_medium(cm: "ConversationManager") -> Medium:
     """Return the active voice thread that should receive call-context messages."""
 
@@ -331,7 +368,7 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
     if cm.mode.is_voice:
         return
 
-    boss_contact_id = SESSION_DETAILS.user.contact_id
+    boss_contact_id = SESSION_DETAILS.boss_contact_id
     boss = (
         cm.contact_index.get_contact(contact_id=int(boss_contact_id))
         if boss_contact_id is not None
@@ -367,15 +404,20 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
     match event:
         case PhoneCallReceived() as e:
             cm.call_manager.conference_name = e.conference_name
-            await cm.call_manager.start_call(contact, boss)
+            cm.call_manager.call_session_id = e.call_session_id or ""
+            cm.call_manager.provider_call_sid = e.provider_call_sid or ""
+            await cm.call_manager.start_call(contact, boss, room_name=e.room_name)
             message_content = "<Recvieving Call...>"
             notif_content = f"Call received from {sender_name}"
         case WhatsAppCallReceived() as e:
             cm.call_manager.conference_name = e.conference_name
+            cm.call_manager.call_session_id = e.call_session_id or ""
+            cm.call_manager.provider_call_sid = e.provider_call_sid or ""
             await cm.call_manager.start_call(
                 contact,
                 boss,
                 channel="whatsapp_call",
+                room_name=e.room_name,
             )
             message_content = "<Receiving WhatsApp Call...>"
             notif_content = f"WhatsApp call received from {sender_name}"
@@ -397,6 +439,7 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
                 contact,
                 boss,
                 e.room_name,
+                opening_config=e.opening_config,
             )
             message_content = "<Recieving Call...>"
             notif_content = f"Call received from {sender_name}"
@@ -450,7 +493,7 @@ async def _(
     ):
         return
 
-    boss_contact_id = SESSION_DETAILS.user.contact_id
+    boss_contact_id = SESSION_DETAILS.boss_contact_id
     boss = (
         cm.contact_index.get_contact(contact_id=int(boss_contact_id)) or {}
         if boss_contact_id is not None
@@ -530,7 +573,7 @@ async def _(
     ):
         return
 
-    boss_contact_id = SESSION_DETAILS.user.contact_id
+    boss_contact_id = SESSION_DETAILS.boss_contact_id
     boss = (
         cm.contact_index.get_contact(contact_id=int(boss_contact_id)) or {}
         if boss_contact_id is not None
@@ -636,7 +679,7 @@ async def _(
         contact = event.contact
 
     contact_id = (
-        contact.get("contact_id") if contact else SESSION_DETAILS.user.contact_id
+        contact.get("contact_id") if contact else SESSION_DETAILS.boss_contact_id
     )
     sender_name = _get_sender_name(contact)
 
@@ -692,7 +735,7 @@ async def _(
         guidance_text = _MEET_FAST_BRAIN_GUIDANCE[AssistantScreenShareStarted]
         notification_event = FastBrainNotification(
             contact=contact,
-            content=guidance_text,
+            message=guidance_text,
             source="meet_interaction",
             agent_service_url=_resolve_agent_service_url(),
         )
@@ -778,7 +821,7 @@ async def _(
         contact = event.contact
 
     contact_id = (
-        contact.get("contact_id") if contact else SESSION_DETAILS.user.contact_id
+        contact.get("contact_id") if contact else SESSION_DETAILS.boss_contact_id
     )
     sender_name = _get_sender_name(contact)
     reason = event.reason or "no-answer"
@@ -847,7 +890,7 @@ async def _(
         contact = event.contact
 
     contact_id = (
-        contact.get("contact_id") if contact else SESSION_DETAILS.user.contact_id
+        contact.get("contact_id") if contact else SESSION_DETAILS.boss_contact_id
     )
     sender_name = _get_sender_name(contact)
     reason = event.reason or "no-answer"
@@ -901,7 +944,7 @@ async def _(
     """Handle call permission grant/rejection from a WhatsApp contact."""
     contact = event.contact
     contact_id = (
-        contact.get("contact_id") if contact else SESSION_DETAILS.user.contact_id
+        contact.get("contact_id") if contact else SESSION_DETAILS.boss_contact_id
     )
     sender_name = _get_sender_name(contact)
 
@@ -980,7 +1023,7 @@ async def _(
     """Log the invite template send in the conversation thread."""
     contact = event.contact
     contact_id = (
-        contact.get("contact_id") if contact else SESSION_DETAILS.user.contact_id
+        contact.get("contact_id") if contact else SESSION_DETAILS.boss_contact_id
     )
     sender_name = _get_sender_name(contact)
 
@@ -1117,7 +1160,7 @@ async def _(
         contact_id=contact_id,
         sender_name=sender_name,
         thread_name=_active_voice_thread_medium(cm),
-        message_content=event.content,
+        message_content=event.message,
         role="guidance",
     )
 
@@ -1150,12 +1193,29 @@ async def _(
     # exchange_id so the async RecordingReady handler can find it.
     if isinstance(event, (PhoneCallEnded, WhatsAppCallEnded)):
         exchange_id = cm.call_manager.call_exchange_id
-        if exchange_id != UNASSIGNED and cm.call_manager.conference_name:
+        if exchange_id != UNASSIGNED:
+            metadata = {
+                key: value
+                for key, value in {
+                    "conference_name": cm.call_manager.conference_name,
+                    "room_name": cm.call_manager.room_name,
+                    "call_session_id": cm.call_manager.call_session_id,
+                    "provider_call_sid": cm.call_manager.provider_call_sid,
+                }.items()
+                if value
+            }
             cm.transcript_manager.update_exchange_metadata(
                 exchange_id,
-                {"conference_name": cm.call_manager.conference_name},
+                metadata,
             )
-            cm._recording_exchange_ids[cm.call_manager.conference_name] = exchange_id
+            for key in (
+                cm.call_manager.call_session_id,
+                cm.call_manager.provider_call_sid,
+                cm.call_manager.room_name,
+                cm.call_manager.conference_name,
+            ):
+                if key:
+                    cm._recording_exchange_ids[key] = exchange_id
     elif isinstance(event, GoogleMeetEnded):
         exchange_id = cm.call_manager.google_meet_exchange_id
         if exchange_id != UNASSIGNED and cm.call_manager.room_name:
@@ -1213,11 +1273,12 @@ async def _(
     else:
         await cm.call_manager.cleanup_call_proc()
     await cm.cancel_proactive_speech()
-    await _cleanup_computer_sessions(cm)
 
     # Clear all session state after cleanup.
     cm.call_manager.conference_name = None
     cm.call_manager.room_name = None
+    cm.call_manager.call_session_id = ""
+    cm.call_manager.provider_call_sid = ""
     cm.call_manager.call_start_timestamp = None
     cm.call_manager.unify_meet_start_timestamp = None
     cm.call_manager.google_meet_start_timestamp = None
@@ -1251,38 +1312,6 @@ async def _(
     )
 
 
-async def _cleanup_computer_sessions(cm: "ConversationManager") -> None:
-    """Stop in-flight actor sessions and close web browser sessions.
-
-    Called on call end so resource cleanup is deterministic rather than
-    relying on the slow brain to remember to call stop/close tools.
-    """
-    # Stop in-flight actor sessions
-    for handle_id, action_data in list(cm.in_flight_actions.items()):
-        handle = action_data.get("handle")
-        if handle and not handle.done():
-            try:
-                await handle.stop("Call ended")
-            except Exception:
-                pass
-        stopped = cm.in_flight_actions.pop(handle_id, None)
-        if stopped:
-            cm.completed_actions[handle_id] = stopped
-
-    # Close active web browser sessions
-    cp = cm.computer_primitives
-    if cp is not None:
-        try:
-            active_sessions = cp.web.list_sessions(active_only=True)
-            for session in active_sessions:
-                try:
-                    await session.stop()
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-
 @EventHandler.register(RecordingReady)
 async def _(
     event: RecordingReady,
@@ -1290,12 +1319,32 @@ async def _(
     *args,
     **kwargs,
 ):
-    name = event.conference_name
-    exchange_id = cm._recording_exchange_ids.pop(name, None)
+    keys = [
+        event.call_session_id,
+        event.provider_call_sid,
+        event.room_name,
+        event.conference_name,
+    ]
+    name = next((key for key in keys if key), event.conference_name)
+    exchange_id = None
+    for key in keys:
+        if key:
+            exchange_id = cm._recording_exchange_ids.pop(key, None)
+            if exchange_id is not None:
+                break
     if exchange_id is not None:
         cm.transcript_manager.update_exchange_metadata(
             exchange_id,
-            {"recording_url": event.recording_url},
+            {
+                key: value
+                for key, value in {
+                    "recording_url": event.recording_url,
+                    "recording_call_session_id": event.call_session_id,
+                    "recording_provider_call_sid": event.provider_call_sid,
+                    "recording_room_name": event.room_name,
+                }.items()
+                if value
+            },
         )
         cm._session_logger.debug(
             "recording",
@@ -1447,6 +1496,47 @@ def _push_email_to_all_contacts(
             _push_to_contact(contact["contact_id"], "bcc")
 
 
+def _credit_gate_reply_context(
+    *,
+    medium: Medium,
+    contact_id: int | None,
+    email_id: str | None = None,
+    api_message_id: str | None = None,
+    tags: list[str] | None = None,
+    chat_id: str | None = None,
+    channel_id: str | None = None,
+    team_id: str | None = None,
+    thread_id: str | None = None,
+    thread_ts: str | None = None,
+    guild_id: str | None = None,
+    bot_id: str | None = None,
+    message_id: str | None = None,
+    routing_metadata: dict | None = None,
+) -> dict:
+    context = {
+        "medium": medium.value,
+        "contact_id": contact_id,
+    }
+    optional_fields = {
+        "email_id": email_id,
+        "api_message_id": api_message_id,
+        "tags": tags,
+        "chat_id": chat_id,
+        "channel_id": channel_id,
+        "team_id": team_id,
+        "thread_id": thread_id,
+        "thread_ts": thread_ts,
+        "guild_id": guild_id,
+        "bot_id": bot_id,
+        "message_id": message_id,
+        "routing_metadata": routing_metadata,
+    }
+    for key, value in optional_fields.items():
+        if value:
+            context[key] = value
+    return context
+
+
 @EventHandler.register(
     (
         SMSSent,
@@ -1463,6 +1553,10 @@ def _push_email_to_all_contacts(
         DiscordMessageSent,
         DiscordChannelMessageReceived,
         DiscordChannelMessageSent,
+        SlackMessageReceived,
+        SlackMessageSent,
+        SlackChannelMessageReceived,
+        SlackChannelMessageSent,
         TeamsMessageReceived,
         TeamsMessageSent,
         TeamsChannelMessageReceived,
@@ -1480,7 +1574,12 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
     channel_id = None
     team_id = None
     thread_id = None
+    thread_ts = None
+    event_ts = None
     message_id = None
+    routing_metadata = None
+    guild_id = None
+    bot_id = None
 
     # Get contact info from ContactManager, fallback to event.contact
     # Note: event.contact may be empty dict for emails to external addresses
@@ -1629,6 +1728,11 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             )
             await cm.request_llm_run(
                 triggering_contact_id=contact_id,
+                credit_gate_reply_context=_credit_gate_reply_context(
+                    medium=Medium.EMAIL,
+                    contact_id=contact_id,
+                    email_id=event.email_id,
+                ),
             )
             return  # Early return - email handling is complete
 
@@ -1711,6 +1815,8 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
         case DiscordChannelMessageSent():
             medium = Medium.DISCORD_CHANNEL_MESSAGE
             message_content = event.content
+            channel_id = getattr(event, "channel_id", "") or None
+            guild_id = getattr(event, "guild_id", "") or None
             notif_content = "Discord channel message sent"
             role = "assistant"
             event_trace = getattr(cm, "_current_event_trace", None) or {}
@@ -1722,12 +1828,78 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             medium = Medium.DISCORD_CHANNEL_MESSAGE
             message_content = event.content
             attachments = event.attachments
+            channel_id = getattr(event, "channel_id", "") or None
+            guild_id = getattr(event, "guild_id", "") or None
+            bot_id = getattr(event, "bot_id", "") or None
+            message_id = getattr(event, "message_id", "") or None
             notif_content = f"Discord channel message from {sender_name}"
             role = "user"
             event_trace = getattr(cm, "_current_event_trace", None) or {}
             cm._session_logger.info(
                 "discord_channel_message_received",
                 f"Discord channel from {sender_name}: {event.content}",
+            )
+        case SlackMessageSent():
+            medium = Medium.SLACK_MESSAGE
+            message_content = event.content
+            team_id = getattr(event, "team_id", "") or None
+            channel_id = getattr(event, "channel_id", "") or None
+            thread_ts = getattr(event, "thread_ts", "") or None
+            notif_content = f"Slack DM sent to {sender_name}"
+            role = "assistant"
+            event_trace = getattr(cm, "_current_event_trace", None) or {}
+            cm._session_logger.info(
+                "slack_message_sent",
+                f"Slack DM to {sender_name}: {event.content}",
+            )
+        case SlackMessageReceived():
+            medium = Medium.SLACK_MESSAGE
+            message_content = event.content
+            attachments = event.attachments
+            team_id = getattr(event, "team_id", "") or None
+            channel_id = getattr(event, "channel_id", "") or None
+            thread_ts = getattr(event, "thread_ts", "") or None
+            event_ts = getattr(event, "event_ts", "") or None
+            message_id = getattr(event, "message_id", "") or None
+            routing_metadata = getattr(event, "routing_metadata", None) or None
+            notif_content = f"Slack DM from {sender_name}"
+            role = "user"
+            _adopt_slack_bot_user_id(cm, event)
+            event_trace = getattr(cm, "_current_event_trace", None) or {}
+            cm._session_logger.info(
+                "slack_message_received",
+                f"Slack DM from {sender_name}: {event.content}",
+            )
+        case SlackChannelMessageSent():
+            medium = Medium.SLACK_CHANNEL_MESSAGE
+            message_content = event.content
+            team_id = getattr(event, "team_id", "") or None
+            channel_id = getattr(event, "channel_id", "") or None
+            thread_ts = getattr(event, "thread_ts", "") or None
+            notif_content = "Slack channel message sent"
+            role = "assistant"
+            event_trace = getattr(cm, "_current_event_trace", None) or {}
+            cm._session_logger.info(
+                "slack_channel_message_sent",
+                f"Slack channel message: {event.content}",
+            )
+        case SlackChannelMessageReceived():
+            medium = Medium.SLACK_CHANNEL_MESSAGE
+            message_content = event.content
+            attachments = event.attachments
+            team_id = getattr(event, "team_id", "") or None
+            channel_id = getattr(event, "channel_id", "") or None
+            thread_ts = getattr(event, "thread_ts", "") or None
+            event_ts = getattr(event, "event_ts", "") or None
+            message_id = getattr(event, "message_id", "") or None
+            routing_metadata = getattr(event, "routing_metadata", None) or None
+            notif_content = f"Slack channel message from {sender_name}"
+            role = "user"
+            _adopt_slack_bot_user_id(cm, event)
+            event_trace = getattr(cm, "_current_event_trace", None) or {}
+            cm._session_logger.info(
+                "slack_channel_message_received",
+                f"Slack channel from {sender_name}: {event.content}",
             )
         case TeamsMessageSent():
             medium = Medium.TEAMS_MESSAGE
@@ -1798,7 +1970,12 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             channel_id=channel_id,
             team_id=team_id,
             thread_id=thread_id,
+            thread_ts=thread_ts,
+            event_ts=event_ts,
             message_id=message_id,
+            routing_metadata=routing_metadata,
+            guild_id=guild_id,
+            bot_id=bot_id,
         )
     cm.notifications_bar.push_notif("comms", notif_content, event.timestamp)
     if role == "user":
@@ -1833,6 +2010,25 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
         _t0 = time.perf_counter()
         await cm.request_llm_run(
             triggering_contact_id=contact_id,
+            credit_gate_reply_context=(
+                _credit_gate_reply_context(
+                    medium=medium,
+                    contact_id=contact_id,
+                    api_message_id=getattr(event, "api_message_id", None),
+                    tags=tags,
+                    chat_id=chat_id,
+                    channel_id=channel_id,
+                    team_id=team_id,
+                    thread_id=thread_id,
+                    thread_ts=thread_ts,
+                    guild_id=guild_id,
+                    bot_id=bot_id,
+                    message_id=message_id,
+                    routing_metadata=routing_metadata,
+                )
+                if role == "user"
+                else None
+            ),
         )
         log_startup_timing(
             LOGGER,
@@ -2000,6 +2196,7 @@ async def _(event: StartupEvent, cm: "ConversationManager", *args, **kwargs):
         # Manager initialization runs in parallel
         asyncio.create_task(managers_utils.init_conv_manager(cm))
         asyncio.create_task(managers_utils.listen_to_operations(cm))
+        _schedule_startup_integration_sync(cm)
     except Exception as e:
         cm._session_logger.error("startup", f"Error in startup sequence: {e}")
         traceback.print_exc()
@@ -2012,6 +2209,24 @@ async def _(event: StartupEvent, cm: "ConversationManager", *args, **kwargs):
 @EventHandler.register(AssistantUpdateEvent)
 async def _(event: AssistantUpdateEvent, cm: "ConversationManager", *args, **kwargs):
     cm._session_logger.info("assistant_update", "Received assistant update event")
+    if event.update_kind == "membership":
+        team_ids = sorted(set(event.team_ids or []))
+        SESSION_DETAILS.team_ids = team_ids
+        SESSION_DETAILS.team_summaries = event.team_summaries or []
+        SESSION_DETAILS.self_contact_id = event.self_contact_id
+        SESSION_DETAILS.boss_contact_id = event.boss_contact_id
+        SESSION_DETAILS.export_team_ids_to_env()
+        SESSION_DETAILS.export_team_summaries_to_env()
+        SESSION_DETAILS.export_contact_ids_to_env()
+        cm.team_ids = team_ids
+        cm.team_summaries = SESSION_DETAILS.team_summaries
+        cm.self_contact_id = event.self_contact_id
+        cm.boss_contact_id = event.boss_contact_id
+        ContextRegistry.forget_departed_team_roots(team_ids)
+        broader_context.reset()
+        invalidate_task_machine_state_reads()
+        return
+
     payload = event.to_dict()["payload"]
     old_key = SESSION_DETAILS.unify_key
     cm.set_details(payload)
@@ -2107,6 +2322,66 @@ async def _(
         await cm.request_llm_run(delay=0)
 
 
+@EventHandler.register(CoordinatorDelegate)
+async def _(
+    event: CoordinatorDelegate,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    if await _handle_coordinator_delegate_event(event, cm):
+        await cm.request_llm_run(delay=0)
+
+
+@EventHandler.register(CoordinatorOnboardingEvent)
+async def _(
+    event: CoordinatorOnboardingEvent,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    # Same shape as the inactivity handler: drop the event into the
+    # notifications bar via the domain helper and trigger an
+    # immediate LLM run so the brain composes the acknowledgement
+    # while the user's action is still in the foreground (a delayed
+    # narration during onboarding reads as stale).
+    if await _handle_coordinator_onboarding_event(event, cm):
+        await cm.request_llm_run(delay=0)
+
+
+@EventHandler.register(IntegrationToolsSyncRequested)
+async def _(
+    event: IntegrationToolsSyncRequested,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    if await _handle_integration_tools_sync_requested(event, cm):
+        await cm.request_llm_run(delay=0)
+
+
+@EventHandler.register(IntegrationToolsSyncCompleted)
+async def _(
+    event: IntegrationToolsSyncCompleted,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    if await _handle_integration_tools_sync_completed(event, cm):
+        await cm.request_llm_run(delay=0)
+
+
+@EventHandler.register(IntegrationToolsSyncFailed)
+async def _(
+    event: IntegrationToolsSyncFailed,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    if await _handle_integration_tools_sync_failed(event, cm):
+        await cm.request_llm_run(delay=0)
+
+
 @EventHandler.register(NotificationUnpinnedEvent)
 async def _(
     event: NotificationUnpinnedEvent,
@@ -2124,19 +2399,25 @@ async def _(
 
 @EventHandler.register(ActorResult)
 async def _(event: ActorResult, cm: "ConversationManager", *args, **kwargs):
-    action_data = cm.in_flight_actions.get(event.handle_id, {})
-
-    # Log completion in handle_actions before moving to completed_actions.
     from unity.common.prompt_helpers import now as prompt_now
 
+    action_data = cm.in_flight_actions.get(event.handle_id, {})
+    action_type = event.action_type or action_data.get("action_type") or "act"
+    completion_entry = {
+        "action_name": "act_completed" if event.success else "act_failed",
+        "query": event.result if event.success else (event.error or event.result),
+        "timestamp": prompt_now(),
+        "success": bool(event.success),
+        "action_type": action_type,
+    }
+    if event.result is not None:
+        completion_entry["result"] = event.result
+    if event.error:
+        completion_entry["error"] = event.error
+
+    # Log completion in handle_actions before moving to completed_actions.
     if action_data and "handle_actions" in action_data:
-        action_data["handle_actions"].append(
-            {
-                "action_name": "act_completed",
-                "query": event.result,
-                "timestamp": prompt_now(),
-            },
-        )
+        action_data["handle_actions"].append(completion_entry)
 
     # Move to completed_actions (preserves handle for post-completion ask queries)
     completed = cm.in_flight_actions.pop(event.handle_id, None)
@@ -2224,7 +2505,7 @@ async def _(
 
     async def _sync_contacts():
         try:
-            await asyncio.to_thread(cm.contact_manager._provision_system_overlays)
+            await asyncio.to_thread(cm.contact_manager._sync_required_contacts)
             cm._session_logger.info("state_update", "Contacts synced successfully")
         except Exception as e:
             cm._session_logger.error("state_update", f"Error syncing contacts: {e}")
@@ -2325,8 +2606,6 @@ async def _(
     *args,
     **kwargs,
 ):
-    from unity.conversation_manager.domains import comms_utils
-    from unity.function_manager.primitives.runtime import _vm_ready
     from unity.session_details import SESSION_DETAILS
 
     current_binding_id = SESSION_DETAILS.assistant.binding_id or ""
@@ -2348,102 +2627,26 @@ async def _(
         return
 
     resolved_binding_id = event.binding_id or current_binding_id
-    desktop_url = event.desktop_url or SESSION_DETAILS.assistant.desktop_url or ""
+    browser_desktop_url, api_desktop_url = resolve_desktop_urls(event.desktop_url)
 
     cm._session_logger.info(
         "desktop_ready",
-        f"VM ready: {event.vm_type} at {desktop_url}",
+        f"VM ready: {event.vm_type} at {api_desktop_url or browser_desktop_url}",
     )
     log_startup_timing(
         LOGGER,
         "⏱️ [StartupTiming] desktop_ready.received vm_type=%s desktop_url_present=%s",
         event.vm_type,
-        bool(desktop_url),
+        bool(api_desktop_url or browser_desktop_url),
     )
 
-    if desktop_url:
-        SESSION_DETAILS.assistant.desktop_url = desktop_url
-
-    liveview_url = f"{desktop_url.rstrip('/')}/desktop/custom.html"
-    _t0 = time.perf_counter()
-    await asyncio.to_thread(
-        assistant_jobs.update_liveview_url,
-        cm.assistant_id,
-        cm.user_id,
-        liveview_url,
-    )
-    log_startup_timing(
-        LOGGER,
-        "⏱️ [StartupTiming] desktop_ready.update_liveview_url duration=%.2fs",
-        time.perf_counter() - _t0,
-    )
-
-    _vm_ready.set()
-
-    if desktop_url:
-        from urllib.parse import urlparse
-        from unity.function_manager.primitives.runtime import ComputerPrimitives
-        from unity.manager_registry import ManagerRegistry
-
-        cp = ManagerRegistry.get_instance(ComputerPrimitives)
-        if cp is not None and cp._backend is not None:
-            _t0 = time.perf_counter()
-            parsed = urlparse(desktop_url)
-            cp._backend.update_container_url(
-                f"{parsed.scheme}://{parsed.netloc}/api",
-            )
-            log_startup_timing(
-                LOGGER,
-                "⏱️ [StartupTiming] desktop_ready.update_computer_backend_url duration=%.2fs",
-                time.perf_counter() - _t0,
-            )
-
-    cm.vm_ready = True
-    cm.notifications_bar.push_notif(
-        "System",
-        "Desktop VM is ready — computer actions are now available.",
-        event.timestamp,
-    )
-
-    asyncio.ensure_future(_ensure_desktop_session(cm))
-    _t0 = time.perf_counter()
-    await managers_utils._start_file_sync()
-    log_startup_timing(
-        LOGGER,
-        "⏱️ [StartupTiming] desktop_ready.start_file_sync duration=%.2fs",
-        time.perf_counter() - _t0,
-    )
-
-    _t0 = time.perf_counter()
-    await cm.event_broker.publish(
-        FileSyncComplete.topic,
-        FileSyncComplete().to_json(),
-    )
-    log_startup_timing(
-        LOGGER,
-        "⏱️ [StartupTiming] desktop_ready.publish_file_sync_complete duration=%.2fs",
-        time.perf_counter() - _t0,
-    )
-
-    _t0 = time.perf_counter()
-    await comms_utils.publish_assistant_desktop_ready(
-        resolved_binding_id,
-        desktop_url,
-        liveview_url,
-        event.vm_type,
-    )
-    log_startup_timing(
-        LOGGER,
-        "⏱️ [StartupTiming] desktop_ready.publish_assistant_ready duration=%.2fs",
-        time.perf_counter() - _t0,
-    )
-
-    _t0 = time.perf_counter()
-    await cm.request_llm_run(delay=0)
-    log_startup_timing(
-        LOGGER,
-        "⏱️ [StartupTiming] desktop_ready.request_llm_run duration=%.2fs",
-        time.perf_counter() - _t0,
+    await apply_managed_desktop_ready(
+        cm,
+        binding_id=resolved_binding_id,
+        browser_desktop_url=browser_desktop_url,
+        api_desktop_url=api_desktop_url,
+        vm_type=event.vm_type,
+        timestamp=event.timestamp,
     )
 
 
@@ -2501,6 +2704,8 @@ async def _(
     )
     cm._session_logger.debug("initialization", "Initialization complete")
 
+    await bootstrap_managed_desktop_on_startup(cm)
+
     # Notify the fast brain (voice agent) directly via the call manager's
     # IPC socket — the same channel used for meet_interaction and other
     # direct fast brain notifications.  This bypasses the CM's own event
@@ -2508,7 +2713,7 @@ async def _(
     if cm.call_manager and cm.call_manager._socket_server:
         fast_brain_notification = FastBrainNotification(
             contact={},
-            content=(
+            message=(
                 "Initialization complete — all actions are now available. "
                 "Full conversation history has been loaded."
             ),
@@ -2667,7 +2872,7 @@ async def _(
 
             notification_event = FastBrainNotification(
                 contact=contact,
-                content=fast_brain_text,
+                message=fast_brain_text,
                 source="meet_interaction",
                 agent_service_url=_resolve_agent_service_url(),
             )
@@ -2750,7 +2955,7 @@ async def _(event: DirectMessageEvent, cm: "ConversationManager", *args, **kwarg
 
     contact = cm.get_active_contact()
     contact_id = (
-        contact.get("contact_id") if contact else SESSION_DETAILS.user.contact_id
+        contact.get("contact_id") if contact else SESSION_DETAILS.boss_contact_id
     )
     sender_name = _get_sender_name(contact)
 

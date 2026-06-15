@@ -4,7 +4,7 @@ import json
 from unittest.mock import patch
 
 import pytest
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from unity.dashboard_manager.ops.tile_ops import (
     _match_context,
@@ -14,6 +14,7 @@ from unity.dashboard_manager.ops.tile_ops import (
     validate_on_data,
 )
 from unity.dashboard_manager.types.tile import (
+    DASHBOARD_BRIDGE_MAX_ROW_LIMIT,
     DataBinding,
     FilterBinding,
     JoinBinding,
@@ -39,6 +40,7 @@ class TestTileTypes:
         )
         assert row.token == "abc123abc123"
         assert row.has_data_bindings is False
+        assert row.data_scope == "dashboard"
         assert row.data_binding_contexts is None
 
     def test_tile_record_with_bindings(self):
@@ -107,6 +109,23 @@ class TestFilterBinding:
         assert b.limit == 500
         assert b.group_by == ["region"]
 
+    def test_limit_accepts_bridge_boundary(self):
+        b = FilterBinding(
+            context="Data/Sales/Monthly",
+            limit=DASHBOARD_BRIDGE_MAX_ROW_LIMIT,
+        )
+        assert b.limit == DASHBOARD_BRIDGE_MAX_ROW_LIMIT
+
+    def test_limit_rejects_outside_bridge_boundary(self):
+        with pytest.raises(ValidationError):
+            FilterBinding(context="Data/Sales/Monthly", limit=0)
+
+        with pytest.raises(ValidationError):
+            FilterBinding(
+                context="Data/Sales/Monthly",
+                limit=DASHBOARD_BRIDGE_MAX_ROW_LIMIT + 1,
+            )
+
     def test_default_operation_field(self):
         b = FilterBinding(context="Data/X")
         assert b.operation == "filter"
@@ -161,6 +180,28 @@ class TestJoinBinding:
         assert b.left_where == "active == True"
         assert b.result_limit == 50
 
+    def test_result_limit_accepts_bridge_boundary(self):
+        b = JoinBinding(
+            tables=["Data/A", "Data/B"],
+            join_expr="Data/A.id == Data/B.fk",
+            select={"Data/A.val": "val"},
+            result_limit=DASHBOARD_BRIDGE_MAX_ROW_LIMIT,
+        )
+        assert b.result_limit == DASHBOARD_BRIDGE_MAX_ROW_LIMIT
+
+    def test_result_limit_rejects_outside_bridge_boundary(self):
+        base = {
+            "tables": ["Data/A", "Data/B"],
+            "join_expr": "Data/A.id == Data/B.fk",
+            "select": {"Data/A.val": "val"},
+        }
+
+        with pytest.raises(ValidationError):
+            JoinBinding(**base, result_limit=0)
+
+        with pytest.raises(ValidationError):
+            JoinBinding(**base, result_limit=DASHBOARD_BRIDGE_MAX_ROW_LIMIT + 1)
+
 
 class TestJoinReduceBinding:
     def test_minimal(self):
@@ -198,6 +239,16 @@ class TestDataBindingDiscriminator:
         )
         assert isinstance(b, FilterBinding)
 
+    def test_filter_limit_rejects_outside_bridge_boundary_from_dict(self):
+        with pytest.raises(ValidationError):
+            self.adapter.validate_python(
+                {
+                    "operation": "filter",
+                    "context": "Data/X",
+                    "limit": DASHBOARD_BRIDGE_MAX_ROW_LIMIT + 1,
+                },
+            )
+
     def test_filter_default_operation(self):
         b = self.adapter.validate_python(
             {"operation": "filter", "context": "Data/X"},
@@ -225,6 +276,18 @@ class TestDataBindingDiscriminator:
             },
         )
         assert isinstance(b, JoinBinding)
+
+    def test_join_result_limit_rejects_outside_bridge_boundary_from_dict(self):
+        with pytest.raises(ValidationError):
+            self.adapter.validate_python(
+                {
+                    "operation": "join",
+                    "tables": ["Data/A", "Data/B"],
+                    "join_expr": "Data/A.id == Data/B.fk",
+                    "select": {"Data/A.x": "x"},
+                    "result_limit": DASHBOARD_BRIDGE_MAX_ROW_LIMIT + 1,
+                },
+            )
 
     def test_join_reduce_from_dict(self):
         b = self.adapter.validate_python(
@@ -574,6 +637,29 @@ class TestResolveBindingContexts:
             assert len(result) == 1
             assert result[0].context == f"{BASE}/Data/Sales/Monthly"
             assert result[0].alias == "sales"
+
+    def test_filter_binding_resolved_against_explicit_root(self):
+        space_base = "Teams/7"
+        known_contexts = {
+            f"{space_base}/Data/Sales/Monthly",
+            f"{BASE}/Data/Sales/Monthly",
+        }
+        with (
+            patch(
+                "unity.dashboard_manager.ops.tile_ops.ContextRegistry",
+            ) as mock_reg,
+            patch(
+                "unity.dashboard_manager.ops.tile_ops.unify",
+            ) as mock_unify,
+        ):
+            mock_reg._base_context = BASE
+            mock_unify.get_contexts.return_value = {k: "" for k in known_contexts}
+
+            bindings = [FilterBinding(context="Data/Sales/Monthly", alias="sales")]
+            result = resolve_binding_contexts(bindings, base_context=space_base)
+
+            assert result[0].context == f"{space_base}/Data/Sales/Monthly"
+            mock_unify.get_contexts.assert_called_once_with(prefix=space_base)
 
     def test_reduce_binding_resolved(self):
         with (

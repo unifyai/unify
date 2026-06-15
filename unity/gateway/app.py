@@ -1,10 +1,10 @@
 """FastAPI aggregator for ``unity.gateway`` channels.
 
 Mirrors the channel-mounting topology from
-``communication/main.py`` for the 10 channels migrated in Phase B:
+``communication/main.py`` for the channels migrated in Phase B:
 
   social, phone, gmail, outlook, email, whatsapp, teams,
-  sharepoint, unillm, discord
+  sharepoint, unillm, discord, slack
 
 Mount points and auth shapes are byte-for-byte identical to the
 source so existing callers (Unity admin clients, the Twilio /
@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Callable, Sequence
@@ -50,6 +51,7 @@ from unity.gateway.channels.phone import (
     unauth_router as phone_unauth_router,
 )
 from unity.gateway.channels.sharepoint import router as sharepoint_router
+from unity.gateway.channels.slack import auth_router as slack_auth_router
 from unity.gateway.channels.social import router as social_router
 from unity.gateway.channels.teams import router as teams_router
 from unity.gateway.channels.unillm import router as unillm_router
@@ -60,6 +62,14 @@ from unity.gateway.channels.whatsapp import (
     unauth_router as whatsapp_unauth_router,
 )
 from unity.gateway.common.auth import admin_auth_dependency
+from unity.gateway.context import GatewayContext, create_default_gateway_context
+from unity.gateway.adapters import (
+    google_router,
+    internal_router,
+    microsoft_router,
+    slack_adapter_router,
+    twilio_router,
+)
 
 logger = logging.getLogger("unity.gateway.app")
 
@@ -179,6 +189,7 @@ def _compose_lifespan(
 
 def create_app(
     *,
+    gateway_context: GatewayContext | None = None,
     extra_routers: Sequence[ExtraRouter] | None = None,
     extra_setup_hooks: Sequence[SetupHook] | None = None,
     extra_lifespan_hooks: Sequence[LifespanHook] | None = None,
@@ -198,12 +209,14 @@ def create_app(
     extra_routers = list(extra_routers or ())
     extra_setup_hooks = list(extra_setup_hooks or ())
     extra_lifespan_hooks = list(extra_lifespan_hooks or ())
+    gateway_context = gateway_context or create_default_gateway_context()
 
     app = FastAPI(
         title="unity.gateway",
         description="Open-source communication channels for Unity.",
         lifespan=_compose_lifespan(extra_setup_hooks, extra_lifespan_hooks),
     )
+    app.state.gateway_context = gateway_context
 
     # Built-in admin-authed channels.
     app.include_router(
@@ -251,10 +264,24 @@ def create_app(
         prefix="/discord",
         dependencies=admin_auth_dependency,
     )
+    app.include_router(
+        slack_auth_router,
+        prefix="/slack",
+        dependencies=admin_auth_dependency,
+    )
+    app.include_router(
+        internal_router,
+        dependencies=admin_auth_dependency,
+        tags=["internal-adapters"],
+    )
 
-    # Built-in unauth channels (webhooks from Twilio that can't carry our bearer).
+    # Built-in unauth channels (webhooks from third-parties that can't carry our bearer).
     app.include_router(phone_unauth_router, prefix="/phone")
     app.include_router(whatsapp_unauth_router, prefix="/whatsapp")
+    app.include_router(google_router, tags=["google-adapters"])
+    app.include_router(microsoft_router, tags=["microsoft-adapters"])
+    app.include_router(slack_adapter_router, tags=["slack-adapters"])
+    app.include_router(twilio_router, tags=["twilio-adapters"])
 
     # Built-in user-API-key authed channel (auth is enforced inside the route).
     app.include_router(unillm_router, prefix="/unillm")
@@ -278,6 +305,38 @@ def create_app(
     @app.get("/health", include_in_schema=False)
     async def health() -> dict:
         return {"status": "ok"}
+
+    @app.get("/features", include_in_schema=False)
+    async def features() -> dict:
+        """Per-channel availability for this deployment.
+
+        Reports whether each contact channel has the provider credentials it
+        needs to be provisioned/used, so upstream services (Orchestra → Console)
+        can gate the corresponding UI instead of letting a user provision a
+        channel that would fail at runtime. Deployment-level signal only: it
+        reflects configured credentials, not per-assistant connection state, and
+        carries no secrets (booleans only, no auth required like ``/health``).
+        """
+
+        def configured(*names: str) -> bool:
+            return all(bool(os.environ.get(name, "").strip()) for name in names)
+
+        twilio = configured("TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN")
+        twilio_wa = configured("TWILIO_WA_ACCOUNT_SID", "TWILIO_WA_AUTH_TOKEN")
+        return {
+            # Assistant phone (Twilio number provisioning + SMS/voice webhooks).
+            "phone": twilio,
+            # Assistant WhatsApp (Twilio WhatsApp sender).
+            "whatsapp": twilio_wa,
+            # Assistant Discord (interaction verification key; bot pool lives in
+            # Orchestra, but without this key the deployment can't run Discord).
+            "discord": configured("DISCORD_PUBLIC_KEY"),
+            # Slack Events ingress.
+            "slack": configured("SLACK_SIGNING_SECRET"),
+            # User-side phone / WhatsApp verification codes (Twilio social verify).
+            "social_verify_phone": twilio,
+            "social_verify_whatsapp": twilio_wa,
+        }
 
     return app
 

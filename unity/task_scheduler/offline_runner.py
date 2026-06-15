@@ -42,6 +42,7 @@ from unity.actor.environments import (
     ComputerEnvironment,
     StateManagerEnvironment,
 )
+from unity.common.context_registry import ContextRegistry
 from unity.common.task_execution_context import current_task_execution_delegate
 from unity.function_manager.primitives import ComputerPrimitives
 from unity.logger import LOGGER
@@ -78,6 +79,7 @@ class OfflineTaskConfig:
     source_type: str
     source_task_log_id: int
     activation_revision: str
+    destination: str | None = None
     task_name: str = ""
     task_description: str = ""
     scheduled_for: str = ""
@@ -107,6 +109,11 @@ def _optional_int_env(name: str) -> int | None:
 def _load_config_from_env() -> OfflineTaskConfig:
     """Construct one validated offline task config from process environment."""
 
+    raw_destination = os.environ.get("TASK_DESTINATION")
+    try:
+        destination = ContextRegistry.canonical_destination(raw_destination)
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid TASK_DESTINATION: {raw_destination}") from exc
     return OfflineTaskConfig(
         assistant_id=_require_env("ASSISTANT_ID"),
         run_key=_require_env("UNITY_OFFLINE_TASK_RUN_KEY"),
@@ -116,6 +123,7 @@ def _load_config_from_env() -> OfflineTaskConfig:
         source_type=os.environ.get("UNITY_OFFLINE_TASK_SOURCE_TYPE", "scheduled"),
         source_task_log_id=int(_require_env("UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID")),
         activation_revision=_require_env("UNITY_OFFLINE_TASK_ACTIVATION_REVISION"),
+        destination=destination,
         task_name=os.environ.get("UNITY_OFFLINE_TASK_NAME", ""),
         task_description=os.environ.get("UNITY_OFFLINE_TASK_DESCRIPTION", ""),
         scheduled_for=os.environ.get("UNITY_OFFLINE_TASK_SCHEDULED_FOR", ""),
@@ -160,6 +168,42 @@ def _update_task_run(assistant_id: str, run_key: str, updates: dict[str, Any]) -
     response.raise_for_status()
 
 
+def _mark_source_task_failed(config: OfflineTaskConfig, error_text: str) -> None:
+    """Mark the source task row failed when scheduler finalization did not run."""
+
+    try:
+        SESSION_DETAILS.populate_from_env()
+        unity.ensure_initialised(project_name=TASK_MACHINE_STATE_PROJECT)
+        scheduler = TaskScheduler()
+        rows = scheduler._view.get_rows_by_log_ids(  # type: ignore[attr-defined]
+            log_ids=[config.source_task_log_id],
+        )
+        if not rows:
+            return
+        row = rows[0]
+        entries = dict(row.entries or {})
+        if str(entries.get("status") or "") != "active":
+            return
+        scheduler._write_log_entries(  # type: ignore[attr-defined]
+            logs=config.source_task_log_id,
+            entries={
+                "status": "failed",
+                "info": _truncate_text(
+                    "Offline task runner failed before task lifecycle finalization "
+                    f"completed: {error_text}",
+                ),
+            },
+        )
+    except Exception:
+        LOGGER.exception(
+            "Failed to terminalize source task row after offline runner failure "
+            "(task_id=%s, source_task_log_id=%s, run_key=%s)",
+            config.task_id,
+            config.source_task_log_id,
+            config.run_key,
+        )
+
+
 def _now_iso() -> str:
     """Return the current UTC timestamp in ISO-8601 format."""
 
@@ -202,6 +246,7 @@ def _build_result_summary(config: OfflineTaskConfig, execution_result: Any) -> s
         "function_id": config.function_id,
         "task_name": config.task_name,
         "source_type": config.source_type,
+        "destination": config.destination or None,
         "scheduled_for": config.scheduled_for or None,
         "source_medium": config.source_medium or None,
         "source_contact_id": config.source_contact_id or None,
@@ -443,6 +488,7 @@ def main() -> int:
             config.task_id,
             config.run_key,
         )
+        _mark_source_task_failed(config, error_text)
         _update_task_run(
             config.assistant_id,
             config.run_key,

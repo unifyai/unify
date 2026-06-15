@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
@@ -60,12 +61,16 @@ class CallConfig:
     voice_id: str
     assistant_name: str = ""
     job_name: str = ""
+    is_coordinator: bool = False
 
 
 _BASE_FORWARD_CHANNELS = [
     "app:call:*",
     "app:comms:*",
 ]
+
+WORKER_POOL_REGISTERED_TIMEOUT_S = 120.0
+DISPATCH_ACTIVATION_TIMEOUT_S = 90.0
 
 
 class LivekitCallManager:
@@ -86,6 +91,8 @@ class LivekitCallManager:
         self._active_job: bool = False
         self.conference_name = ""
         self.room_name = ""
+        self.call_session_id = ""
+        self.provider_call_sid = ""
         self._event_broker = event_broker
         self._socket_server: CallEventSocketServer | None = None
         self.is_outbound: bool = False
@@ -97,6 +104,7 @@ class LivekitCallManager:
         self._disconnect_contact: dict | None = None
         self._boss_notification_task: asyncio.Task | None = None
         self._worker_watchdog_task: asyncio.Task | None = None
+        self._dispatch_watchdog_task: asyncio.Task | None = None
         # WhatsApp call joining state
         self._whatsapp_call_joining: bool = False
         # Browser-meet shared state (Google Meet / Teams Meet).  Only one
@@ -119,6 +127,7 @@ class LivekitCallManager:
         self.voice_provider = config.voice_provider
         self.voice_id = config.voice_id
         self.assistant_name = config.assistant_name
+        self.is_coordinator = config.is_coordinator
         if config.job_name:
             self.job_name = config.job_name
 
@@ -150,6 +159,16 @@ class LivekitCallManager:
         if self._worker_proc is not None and self._worker_proc.poll() is None:
             return
 
+        from unity.helpers import cleanup_dangling_call_processes
+
+        cleanup_dangling_call_processes()
+
+        from unity.conversation_manager.medium_scripts.worker import (
+            clear_worker_signal_files,
+        )
+
+        clear_worker_signal_files()
+
         target = Path(__file__).parent.parent.resolve() / "medium_scripts" / "worker.py"
         self._worker_proc = run_script(str(target), "dev", self.worker_agent_name)
         LOGGER.info(
@@ -174,6 +193,11 @@ class LivekitCallManager:
                 )
                 self._worker_proc = None
                 ready_logged = False
+                from unity.conversation_manager.medium_scripts.worker import (
+                    clear_worker_signal_files,
+                )
+
+                clear_worker_signal_files()
                 self.start_persistent_worker()
             elif not ready_logged:
                 from unity.conversation_manager.medium_scripts.worker import (
@@ -186,6 +210,70 @@ class LivekitCallManager:
                     )
                     ready_logged = True
 
+    def _clear_stale_dispatch_state(self) -> bool:
+        """Drop a dispatch flag left behind when LiveKit never ran the job."""
+        if not self._active_job or self._call_proc is not None:
+            return False
+        if self._socket_server and self._socket_server.has_connected_clients:
+            return False
+        self._active_job = False
+        return True
+
+    def _cancel_dispatch_watchdog(self) -> None:
+        task = self._dispatch_watchdog_task
+        if task is not None and not task.done():
+            task.cancel()
+        self._dispatch_watchdog_task = None
+
+    def _schedule_dispatch_watchdog(self) -> None:
+        self._cancel_dispatch_watchdog()
+        self._dispatch_watchdog_task = asyncio.create_task(
+            self._watch_dispatch_activation(),
+        )
+
+    async def _watch_dispatch_activation(self) -> None:
+        """Clear orphaned dispatch state when no voice agent joins the room."""
+        try:
+            await asyncio.sleep(DISPATCH_ACTIVATION_TIMEOUT_S)
+        except asyncio.CancelledError:
+            return
+
+        if not self._active_job or self._call_proc is not None:
+            return
+        if self._socket_server and self._socket_server.has_connected_clients:
+            return
+
+        LOGGER.warning(
+            f"{ICONS['ipc']} [LivekitCallManager] Dispatch never activated; "
+            "clearing stale active-job state",
+        )
+        self._active_job = False
+
+    async def _wait_for_worker_registered(
+        self,
+        timeout: float = WORKER_POOL_REGISTERED_TIMEOUT_S,
+    ) -> None:
+        """Wait until the persistent worker registers with LiveKit."""
+        if self._worker_proc is None:
+            return
+
+        from unity.conversation_manager.medium_scripts.worker import (
+            WORKER_REGISTERED_PATH,
+        )
+
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while time.monotonic() < deadline:
+            if self._worker_proc.poll() is not None:
+                return
+            if os.path.exists(WORKER_REGISTERED_PATH):
+                return
+            await asyncio.sleep(0.5)
+
+        LOGGER.warning(
+            f"{ICONS['ipc']} [LivekitCallManager] Worker registration timeout "
+            f"after {timeout:.0f}s; dispatching anyway",
+        )
+
     async def _dispatch_job(
         self,
         room_name: str,
@@ -197,11 +285,12 @@ class LivekitCallManager:
         extra_metadata: dict | None = None,
     ) -> None:
         """Dispatch a LiveKit job to the persistent worker."""
+        await self._wait_for_worker_registered()
         socket_path = await self._ensure_socket_server()
 
         meta_dict = {
-            "voice_provider": self.voice_provider,
-            "voice_id": self.voice_id,
+            "voice_provider": self.voice_provider or "cartesia",
+            "voice_id": self.voice_id or "",
             "outbound": outbound,
             "channel": channel,
             "contact": contact,
@@ -210,6 +299,7 @@ class LivekitCallManager:
             "assistant_id": self.assistant_id,
             "user_id": self.user_id,
             "assistant_name": self.assistant_name,
+            "is_coordinator": self.is_coordinator,
             "ipc_socket_path": socket_path or "",
         }
         if extra_metadata:
@@ -230,6 +320,7 @@ class LivekitCallManager:
                 ),
             )
             self._active_job = True
+            self._schedule_dispatch_watchdog()
             LOGGER.info(
                 f"{ICONS['ipc']} [LivekitCallManager] Dispatched job "
                 f"(dispatch_id={dispatch.id}, room={room_name})",
@@ -286,13 +377,20 @@ class LivekitCallManager:
         boss: dict,
         outbound: bool = False,
         channel: str = "phone_call",
+        room_name: str | None = None,
     ):
         if self.has_active_call:
-            LOGGER.warning(
-                f"{ICONS['ipc']} [LivekitCallManager] start_call ignored: "
-                "call already active",
-            )
-            return
+            if self._clear_stale_dispatch_state():
+                LOGGER.warning(
+                    f"{ICONS['ipc']} [LivekitCallManager] Cleared stale dispatch "
+                    "state before start_call",
+                )
+            else:
+                LOGGER.warning(
+                    f"{ICONS['ipc']} [LivekitCallManager] start_call ignored: "
+                    "call already active",
+                )
+                return
 
         self._whatsapp_call_joining = False
         self.is_outbound = outbound
@@ -307,7 +405,8 @@ class LivekitCallManager:
             self._start_boss_notification_rendering()
 
         medium = "whatsapp_call" if channel == "whatsapp_call" else "phone"
-        room_name = make_room_name(self.assistant_id, medium)
+        room_name = room_name or make_room_name(self.assistant_id, medium)
+        self.room_name = room_name
 
         if self._worker_proc is not None and self._worker_proc.poll() is None:
             await self._dispatch_job(room_name, channel, contact, boss, outbound)
@@ -323,7 +422,7 @@ class LivekitCallManager:
         if self.initial_notification:
             notification_event = FastBrainNotification(
                 contact=contact,
-                content=self.initial_notification,
+                message=self.initial_notification,
                 source="initial_call",
             )
             await self._socket_server.queue_for_clients(
@@ -344,13 +443,21 @@ class LivekitCallManager:
         contact: dict | None,
         boss: dict | None,
         room_name: str | None,
+        *,
+        opening_config: dict | None = None,
     ):
         if self.has_active_call:
-            LOGGER.warning(
-                f"{ICONS['ipc']} [LivekitCallManager] start_unify_meet ignored: "
-                "call already active",
-            )
-            return
+            if self._clear_stale_dispatch_state():
+                LOGGER.warning(
+                    f"{ICONS['ipc']} [LivekitCallManager] Cleared stale dispatch "
+                    "state before start_unify_meet",
+                )
+            else:
+                LOGGER.warning(
+                    f"{ICONS['ipc']} [LivekitCallManager] start_unify_meet ignored: "
+                    "call already active",
+                )
+                return
 
         self.is_outbound = False
         self._call_channel = "unify_meet"
@@ -365,9 +472,20 @@ class LivekitCallManager:
 
         room_name = room_name or make_room_name(self.assistant_id, "meet")
         self.room_name = room_name
+        extra_metadata = {"opening_config": opening_config} if opening_config else None
+        extra_env = (
+            {"opening_config": json.dumps(opening_config)} if opening_config else None
+        )
 
         if self._worker_proc is not None and self._worker_proc.poll() is None:
-            await self._dispatch_job(room_name, "unify_meet", contact, boss, False)
+            await self._dispatch_job(
+                room_name,
+                "unify_meet",
+                contact,
+                boss,
+                False,
+                extra_metadata=extra_metadata,
+            )
         else:
             await self._start_call_subprocess(
                 room_name,
@@ -375,6 +493,7 @@ class LivekitCallManager:
                 contact,
                 boss,
                 False,
+                extra_env=extra_env,
             )
 
     # ------------------------------------------------------------------
@@ -843,6 +962,7 @@ class LivekitCallManager:
         proc = self._call_proc
         self._call_proc = None
         self._active_job = False
+        self._cancel_dispatch_watchdog()
         self._whatsapp_call_joining = False
 
         self.is_outbound = False
@@ -925,7 +1045,7 @@ class LivekitCallManager:
                     if not text:
                         continue
                     notification = FastBrainNotification(
-                        content=text,
+                        message=text,
                         source="system",
                         contact={},
                     )

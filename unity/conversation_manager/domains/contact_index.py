@@ -113,6 +113,75 @@ class TeamsMessage(CommsMessage):
 
 
 @dataclass
+class SlackMessage(CommsMessage):
+    """A Slack direct message.
+
+    ``team_id`` / ``channel_id`` identify the Slack workspace and DM
+    channel. ``thread_ts`` is set when the message is in a thread (Slack
+    represents both the parent and replies with the parent's ``ts``).
+    ``routing_metadata`` is a free-form dict surfaced to the assistant via
+    the renderer; carries Orchestra-side hints such as ``via_token``,
+    ``coordinator_fallback``, ``ambiguous_token``, ``known_assistants``
+    so the assistant can address misroutes correctly.
+    """
+
+    name: str
+    content: str
+    timestamp: datetime
+    role: str  # "user" or "assistant"
+    team_id: str = ""
+    channel_id: str = ""
+    thread_ts: str = ""
+    event_ts: str = ""
+    message_id: str = ""
+    attachments: list[dict] = field(default_factory=list)
+    routing_metadata: dict = field(default_factory=dict)
+
+
+@dataclass
+class SlackChannelMessage(CommsMessage):
+    """A Slack channel message (or threaded reply).
+
+    Channel identity is carried by ``team_id`` + ``channel_id``;
+    ``thread_ts`` is set when the message lives in a thread.
+    ``routing_metadata`` (see :class:`SlackMessage`) carries Orchestra-side
+    routing context surfaced to the assistant.
+    """
+
+    name: str
+    content: str
+    timestamp: datetime
+    role: str  # "user" or "assistant"
+    team_id: str = ""
+    channel_id: str = ""
+    thread_ts: str = ""
+    event_ts: str = ""
+    message_id: str = ""
+    attachments: list[dict] = field(default_factory=list)
+    routing_metadata: dict = field(default_factory=dict)
+
+
+@dataclass
+class DiscordChannelMessage(CommsMessage):
+    """A Discord guild channel message (bot @mention or in-channel reply).
+
+    ``channel_id`` is the Discord channel the message belongs to and the
+    target for replies via ``send_discord_channel_message``; ``guild_id``
+    identifies the server. ``bot_id`` is the pool bot that received/sent it.
+    """
+
+    name: str
+    content: str
+    timestamp: datetime
+    role: str  # "user" or "assistant"
+    channel_id: str = ""
+    guild_id: str = ""
+    bot_id: str = ""
+    message_id: str = ""
+    attachments: list[dict] = field(default_factory=list)
+
+
+@dataclass
 class TeamsChannelMessage(CommsMessage):
     """A Microsoft Teams channel message.
 
@@ -290,6 +359,7 @@ class ContactIndex:
         email: str | None = None,
         whatsapp_number: str | None = None,
         discord_id: str | None = None,
+        slack_user_id: str | None = None,
     ) -> dict | None:
         """
         Get contact information from fallback cache or ContactManager.
@@ -303,6 +373,7 @@ class ContactIndex:
             email: Email address to search by.
             whatsapp_number: WhatsApp number to search by.
             discord_id: Discord user snowflake ID to search by.
+            slack_user_id: Slack user ID to search by.
 
         Returns:
             Contact dict or None if not found.
@@ -327,6 +398,10 @@ class ContactIndex:
             elif discord_id is not None:
                 for c in self._fallback_contacts.values():
                     if c.get("discord_id") == discord_id:
+                        return c
+            elif slack_user_id is not None:
+                for c in self._fallback_contacts.values():
+                    if c.get("slack_user_id") == slack_user_id:
                         return c
         else:
             try:
@@ -363,6 +438,15 @@ class ContactIndex:
                 elif discord_id is not None:
                     result = self._contact_manager.filter_contacts(
                         filter=f"discord_id == '{discord_id}'",
+                        limit=1,
+                    )
+                    contacts = result.get("contacts", [])
+                    if contacts:
+                        c = contacts[0]
+                        return c.model_dump() if hasattr(c, "model_dump") else c
+                elif slack_user_id is not None:
+                    result = self._contact_manager.filter_contacts(
+                        filter=f"slack_user_id == '{slack_user_id}'",
                         limit=1,
                     )
                     contacts = result.get("contacts", [])
@@ -449,7 +533,12 @@ class ContactIndex:
         channel_id: str | None = None,
         team_id: str | None = None,
         thread_id: str | None = None,
+        thread_ts: str | None = None,
+        event_ts: str | None = None,
         message_id: str | None = None,
+        routing_metadata: dict | None = None,
+        guild_id: str | None = None,
+        bot_id: str | None = None,
     ) -> "GlobalThreadEntry":
         """
         Build a GlobalThreadEntry without appending it to the global thread.
@@ -526,6 +615,46 @@ class ContactIndex:
                 message_id=message_id or "",
                 attachments=attachments or [],
             )
+        elif thread_name == Medium.SLACK_MESSAGE:
+            message = SlackMessage(
+                name=name,
+                content=message_content or "",
+                timestamp=timestamp,
+                role=role,
+                team_id=team_id or "",
+                channel_id=channel_id or "",
+                thread_ts=thread_ts or "",
+                event_ts=event_ts or "",
+                message_id=message_id or "",
+                attachments=attachments or [],
+                routing_metadata=routing_metadata or {},
+            )
+        elif thread_name == Medium.SLACK_CHANNEL_MESSAGE:
+            message = SlackChannelMessage(
+                name=name,
+                content=message_content or "",
+                timestamp=timestamp,
+                role=role,
+                team_id=team_id or "",
+                channel_id=channel_id or "",
+                thread_ts=thread_ts or "",
+                event_ts=event_ts or "",
+                message_id=message_id or "",
+                attachments=attachments or [],
+                routing_metadata=routing_metadata or {},
+            )
+        elif thread_name == Medium.DISCORD_CHANNEL_MESSAGE:
+            message = DiscordChannelMessage(
+                name=name,
+                content=message_content or "",
+                timestamp=timestamp,
+                role=role,
+                channel_id=channel_id or "",
+                guild_id=guild_id or "",
+                bot_id=bot_id or "",
+                message_id=message_id or "",
+                attachments=attachments or [],
+            )
         elif thread_name == Medium.API_MESSAGE:
             message = ApiMessage(
                 name=name,
@@ -572,7 +701,12 @@ class ContactIndex:
         channel_id: str | None = None,
         team_id: str | None = None,
         thread_id: str | None = None,
+        thread_ts: str | None = None,
+        event_ts: str | None = None,
         message_id: str | None = None,
+        routing_metadata: dict | None = None,
+        guild_id: str | None = None,
+        bot_id: str | None = None,
     ) -> int:
         """
         Build a message and append it to the shared global thread.
@@ -599,7 +733,12 @@ class ContactIndex:
             channel_id=channel_id,
             team_id=team_id,
             thread_id=thread_id,
+            thread_ts=thread_ts,
+            event_ts=event_ts,
             message_id=message_id,
+            routing_metadata=routing_metadata,
+            guild_id=guild_id,
+            bot_id=bot_id,
         )
         self.global_thread.append(entry)
         msg = entry.message

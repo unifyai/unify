@@ -237,19 +237,34 @@ def test_code_act_prompt_includes_reasoning_helper_decision_guidance():
         tools=dict(actor.get_tools("act")),
     )
 
-    assert "### Deterministic Code With Semantic Reasoning" in prompt
+    assert "### Deterministic Code With LLM-Native Semantic Processing" in prompt
     assert "Semantic Reasoning Helper: `reason(...)`" in prompt
     assert "billable UniLLM" in prompt
     assert "competes with primitives or stored" in prompt
     assert "fetch data through several" in prompt
     assert "Deterministic substeps stay deterministic" in prompt
-    assert "Semantic substeps use `reason(...)`" in prompt
-    assert "If exact manipulation is enough" in prompt
-    assert "do not replace" in prompt
-    assert "semantic judgment with brittle substring checks" in prompt
+    assert "LLMs are the fuzzy operator for unstructured data" in prompt
+    assert "unstructured -> structured" in prompt
+    assert "unstructured -> unstructured" in prompt
+    assert "draft, respond, rewrite, synthesize" in prompt
+    assert "If exact" in prompt
+    assert "keep it deterministic" in prompt
+    assert "Do not replace" in prompt
+    assert "Semantic downgrades are bugs" in prompt
+    assert "templates pretending" in prompt
     assert "A comment that says" in prompt
     assert "actually call `reason(...)`" in prompt
-    assert "brittle substring checks" in prompt
+    assert "keyword ladders" in prompt
+    assert "reusable function with a semantic drafting step" in prompt
+    assert "keep the reason(...) call inside the" in prompt
+    assert "draft_replies_for_messages" in prompt
+    assert "Choosing A Model For `reason(...)`" in prompt
+    assert "Artificial Analysis: https://artificialanalysis.ai/" in prompt
+    assert "ARC Prize leaderboard: https://arcprize.org/leaderboard" in prompt
+    assert "Supported UniLLM endpoints currently registered" in prompt
+    assert "gpt-4.1-nano@openai" in prompt
+    assert "gpt-5.5@openai" in prompt
+    assert "Do not put benchmark browsing or" in prompt
 
 
 @pytest.mark.timeout(30)

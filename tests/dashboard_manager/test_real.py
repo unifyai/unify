@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Integration tests for the real DashboardManager against the Unify backend.
 
@@ -13,14 +15,23 @@ registration.
 Each test gets a fresh, isolated Unify context that is cleaned up after the test.
 """
 
-from __future__ import annotations
-
+from unity.dashboard_manager.dashboard_manager import DashboardManager
 import json
 
-from unity.dashboard_manager.dashboard_manager import DashboardManager
+import pytest
+
 from unity.dashboard_manager.types.dashboard import TilePosition
-from unity.dashboard_manager.types.tile import FilterBinding
+from unity.dashboard_manager.types.tile import (
+    DASHBOARD_BRIDGE_MAX_ROW_LIMIT,
+    FilterBinding,
+)
+from unity.function_manager.primitives import Primitives
 from unity.manager_registry import ManagerRegistry
+from tests.dashboard_manager.helpers import (
+    active_read_root,
+    create_context_if_missing,
+    fresh_dashboard_manager,
+)
 from tests.helpers import _handle_project
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -30,8 +41,37 @@ from tests.helpers import _handle_project
 
 def _fresh_dm() -> DashboardManager:
     """Create a fresh DashboardManager instance (clears registry singleton)."""
-    ManagerRegistry.clear()
-    return DashboardManager()
+    return fresh_dashboard_manager()
+
+
+def _expected_dashboard_context(suffix: str) -> str:
+    return f"{active_read_root()}/Dashboards/{suffix}"
+
+
+def _assert_tile_stored_in_expected_context(
+    dm: DashboardManager,
+    token: str,
+) -> None:
+    expected_tiles = _expected_dashboard_context("Tiles")
+    rows = dm._get_dm().filter(
+        expected_tiles,
+        filter=f"token == '{token}'",
+        limit=1,
+    )
+    assert rows and rows[0]["token"] == token
+
+
+def _assert_dashboard_stored_in_expected_context(
+    dm: DashboardManager,
+    token: str,
+) -> None:
+    expected_layouts = _expected_dashboard_context("Layouts")
+    rows = dm._get_dm().filter(
+        expected_layouts,
+        filter=f"token == '{token}'",
+        limit=1,
+    )
+    assert rows and rows[0]["token"] == token
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -55,12 +95,16 @@ def test_create_tile_basic():
     assert len(result.token) == 12
     assert result.title == "Test Tile"
     assert "/tile/view/" in result.url
+    _assert_tile_stored_in_expected_context(dm, result.token)
 
 
 @_handle_project
 def test_create_tile_with_data_bindings():
     """create_tile should accept data_bindings for live-data tiles."""
     dm = _fresh_dm()
+    personal_root = active_read_root()
+    create_context_if_missing(f"{personal_root}/Data/monthly_stats")
+    create_context_if_missing(f"{personal_root}/Data/revenue")
 
     result = dm.create_tile(
         "<div id='chart'>Loading...</div>",
@@ -203,6 +247,8 @@ def test_list_tiles_with_limit():
 def test_create_tile_with_on_data():
     """create_tile with on_data should store on_data_script and data_bindings_json."""
     dm = _fresh_dm()
+    personal_root = active_read_root()
+    create_context_if_missing(f"{personal_root}/Data/monthly_stats")
 
     result = dm.create_tile(
         "<div id='tbl'>Loading...</div>",
@@ -211,6 +257,7 @@ def test_create_tile_with_on_data():
             FilterBinding(
                 context="Data/monthly_stats",
                 alias="stats",
+                limit=DASHBOARD_BRIDGE_MAX_ROW_LIMIT,
             ),
         ],
         on_data="document.getElementById('tbl').textContent = data.stats.length;",
@@ -227,12 +274,15 @@ def test_create_tile_with_on_data():
     parsed = json.loads(tile.data_bindings_json)
     assert len(parsed) == 1
     assert parsed[0]["alias"] == "stats"
+    assert parsed[0]["limit"] == DASHBOARD_BRIDGE_MAX_ROW_LIMIT
 
 
 @_handle_project
 def test_update_tile_with_on_data():
     """update_tile should update on_data_script field."""
     dm = _fresh_dm()
+    personal_root = active_read_root()
+    create_context_if_missing(f"{personal_root}/Data/monthly_stats")
 
     created = dm.create_tile(
         "<div id='v'>Loading...</div>",
@@ -469,3 +519,27 @@ def test_full_dashboard_lifecycle():
 
     dm.delete_dashboard(dashboard.token)
     assert dm.get_dashboard(dashboard.token) is None
+
+
+@pytest.mark.asyncio
+@_handle_project
+async def test_primitives_dashboard_creation_uses_dashboard_contexts():
+    """Primitive dashboard calls should store artifacts outside Data/*."""
+    ManagerRegistry.clear()
+    primitives = Primitives()
+
+    tile = await primitives.dashboards.create_tile(
+        "<h1>Primitive Tile</h1>",
+        title="Primitive Tile",
+    )
+    assert tile.succeeded, f"create_tile failed: {tile.error}"
+
+    dashboard = await primitives.dashboards.create_dashboard(
+        "Primitive Dashboard",
+        tiles=[TilePosition(tile_token=tile.token, x=0, y=0, w=12, h=4)],
+    )
+    assert dashboard.succeeded, f"create_dashboard failed: {dashboard.error}"
+
+    dm = primitives.dashboards._wrapped_manager
+    _assert_tile_stored_in_expected_context(dm, tile.token)
+    _assert_dashboard_stored_in_expected_context(dm, dashboard.token)

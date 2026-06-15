@@ -73,7 +73,6 @@ def test_list_primitives_excludes_tagged_ids(fm_factory):
 
     # Baseline: unexcluded FM sees contacts.ask
     fm_all = fm_factory(primitive_scope=_CONTACTS_SCOPE)
-    fm_all.sync_primitives()
     prims_all = fm_all.list_primitives()
     assert (
         "primitives.contacts.ask" in prims_all
@@ -84,7 +83,6 @@ def test_list_primitives_excludes_tagged_ids(fm_factory):
         primitive_scope=_CONTACTS_SCOPE,
         exclude_primitive_ids=frozenset({contacts_ask_id}),
     )
-    fm_excl.sync_primitives()
     prims_excl = fm_excl.list_primitives()
     assert (
         "primitives.contacts.ask" not in prims_excl
@@ -107,7 +105,6 @@ def test_list_functions_excludes_tagged_primitive_ids(fm_factory):
 
     # Baseline
     fm_all = fm_factory(primitive_scope=_CONTACTS_SCOPE)
-    fm_all.sync_primitives()
     listing_all = fm_all.list_functions()
     assert "primitives.contacts.ask" in listing_all
 
@@ -116,7 +113,6 @@ def test_list_functions_excludes_tagged_primitive_ids(fm_factory):
         primitive_scope=_CONTACTS_SCOPE,
         exclude_primitive_ids=frozenset({contacts_ask_id}),
     )
-    fm_excl.sync_primitives()
     listing_excl = fm_excl.list_functions()
     assert "primitives.contacts.ask" not in listing_excl
     assert "primitives.contacts.update" in listing_excl
@@ -134,7 +130,6 @@ def test_search_functions_excludes_tagged_primitive_ids(fm_factory):
 
     # Baseline: search should find contacts.ask
     fm_all = fm_factory(primitive_scope=_CONTACTS_SCOPE)
-    fm_all.sync_primitives()
     hits_all = fm_all.search_functions(query="ask about contacts", n=20)
     names_all = {h["name"] for h in hits_all}
     assert (
@@ -146,7 +141,6 @@ def test_search_functions_excludes_tagged_primitive_ids(fm_factory):
         primitive_scope=_CONTACTS_SCOPE,
         exclude_primitive_ids=frozenset({contacts_ask_id}),
     )
-    fm_excl.sync_primitives()
     hits_excl = fm_excl.search_functions(query="ask about contacts", n=20)
     names_excl = {h["name"] for h in hits_excl}
     assert (
@@ -166,7 +160,6 @@ def test_filter_functions_excludes_tagged_primitive_ids(fm_factory):
 
     # Baseline
     fm_all = fm_factory(primitive_scope=_CONTACTS_SCOPE)
-    fm_all.sync_primitives()
     hits_all = fm_all.filter_functions(filter="is_primitive == True")
     names_all = {h["name"] for h in hits_all}
     assert "primitives.contacts.ask" in names_all
@@ -176,7 +169,6 @@ def test_filter_functions_excludes_tagged_primitive_ids(fm_factory):
         primitive_scope=_CONTACTS_SCOPE,
         exclude_primitive_ids=frozenset({contacts_ask_id}),
     )
-    fm_excl.sync_primitives()
     hits_excl = fm_excl.filter_functions(filter="is_primitive == True")
     names_excl = {h["name"] for h in hits_excl}
     assert "primitives.contacts.ask" not in names_excl
@@ -192,7 +184,6 @@ def test_filter_functions_handles_production_sized_primitive_exclusions(fm_facto
         primitive_scope=PrimitiveScope.all_managers(),
         exclude_primitive_ids=production_like_ids,
     )
-    fm.sync_primitives()
 
     hits = fm.filter_functions(
         filter="is_primitive == True",
@@ -218,7 +209,6 @@ def test_multiple_primitives_excluded(fm_factory):
         primitive_scope=_CONTACTS_SCOPE,
         exclude_primitive_ids=frozenset({contacts_ask_id, contacts_update_id}),
     )
-    fm_excl.sync_primitives()
     listing = fm_excl.list_functions()
 
     assert "primitives.contacts.ask" not in listing
@@ -248,7 +238,7 @@ def test_environment_function_ids_match_exclusion_targets():
         if meta.function_id is not None
     }
 
-    # Get IDs from collect_primitives (same source as sync_primitives)
+    # Get IDs from collect_primitives (same source as the builtins catalogue seeding)
     collected = registry.collect_primitives(scope)
     collected_ids = {row["function_id"] for row in collected.values()}
 

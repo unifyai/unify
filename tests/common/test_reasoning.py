@@ -112,12 +112,29 @@ def test_reason_docstring_contains_actor_usage_guidance():
     assert "Good uses" in doc
     assert "Prefer direct symbolic code instead" in doc
     assert "Structured output for downstream control flow" in doc
+    assert "Unstructured -> structured work" in doc
+    assert "Unstructured -> unstructured work" in doc
+    assert "draft, respond, rewrite" in doc
+    assert "EmailDraftDecision" in doc
     assert "Anti-patterns" in doc
     assert "billable UniLLM call" in doc
     assert "substring checks" in doc
+    assert "label-specific canned prose or templates" in doc
 
 
 def test_reasoning_prompt_context_uses_introspected_signature():
     context = reasoning.get_reasoning_prompt_context()
 
     assert f"async def reason{inspect.signature(reasoning.reason)}" in context
+
+
+def test_reasoning_prompt_context_includes_model_selection_guidance():
+    context = reasoning.get_reasoning_prompt_context()
+
+    assert "Choosing A Model For `reason(...)`" in context
+    assert "Artificial Analysis: https://artificialanalysis.ai/" in context
+    assert "ARC Prize leaderboard: https://arcprize.org/leaderboard" in context
+    assert "Supported UniLLM endpoints currently registered" in context
+    assert "gpt-4.1-nano@openai" in context
+    assert "gpt-5.5@openai" in context
+    assert "Do not put benchmark browsing or" in context

@@ -23,6 +23,10 @@ class ConversationSettings(BaseSettings):
             (utterances, notifications, etc.) the fast brain keeps in its
             rolling context window. Also used as the limit when hydrating
             historical events at call start.
+        FAST_BRAIN_MOOD_CLASSIFICATION_ENABLED: Enable structured mood
+            classification after voice user and assistant turns.
+        FAST_BRAIN_MOOD_CLASSIFICATION_MODEL: LLM model used for voice avatar
+            mood classification.
         BLACKLIST_CHECKS_ENABLED: Enable blacklist filtering and unknown contact
             creation for inbound messages. Default False for fast inbound path.
             When False, no BlackListManager or ContactManager initialization
@@ -36,11 +40,6 @@ class ConversationSettings(BaseSettings):
             speech, a lightweight LLM check compares the proposed speech against
             recent fast brain utterances and suppresses it when the information
             has already been communicated. Default True.
-        USER_DESKTOP_CONTROL_ENABLED: Enable prompts that claim the assistant
-            can remotely control the user's computer. When False (default),
-            prompts clarify that the assistant can only control its own VM and
-            the user can optionally view/control the assistant's desktop — not
-            the other way around.
         INGRESS_TRANSPORT: Selector for the inbound transport
             (``unity.gateway.IngressTransport`` implementation) that
             CommsManager consumes. ``""`` (default) and ``"legacy"`` both
@@ -59,6 +58,8 @@ class ConversationSettings(BaseSettings):
 
     FAST_BRAIN_MODEL: str = "gpt-5.4-mini@openai"
     FAST_BRAIN_CONTEXT_WINDOW: int = 50
+    FAST_BRAIN_MOOD_CLASSIFICATION_ENABLED: bool = False
+    FAST_BRAIN_MOOD_CLASSIFICATION_MODEL: str = "gpt-5.5-mini@openai"
     IMPL: str = "real"
     COMMS_URL: str = Field(default="", validation_alias="UNITY_COMMS_URL")
     ADAPTERS_URL: str = Field(default="", validation_alias="UNITY_ADAPTERS_URL")
@@ -67,7 +68,6 @@ class ConversationSettings(BaseSettings):
     BLACKLIST_CHECKS_ENABLED: bool = False
     SPEECH_URGENCY_PREEMPT_ENABLED: bool = True
     SPEECH_DEDUP_ENABLED: bool = True
-    USER_DESKTOP_CONTROL_ENABLED: bool = False
     ASSISTANT_SESSION_GROUP: str = "infra.unify.ai"
     ASSISTANT_SESSION_VERSION: str = "v1alpha1"
     ASSISTANT_SESSION_PLURAL: str = "assistantsessions"

@@ -1,6 +1,7 @@
 """Tests for DashboardManager registration in ManagerRegistry and primitives."""
 
 from unity.dashboard_manager.base import BaseDashboardManager
+from unity.dashboard_manager.types.tile import DASHBOARD_BRIDGE_MAX_ROW_LIMIT
 from unity.function_manager.primitives.registry import (
     _EXAMPLE_GENERATORS,
     _MANAGER_SPECS,
@@ -74,6 +75,7 @@ class TestPrimitivesDiscovery:
             "update_tile",
         }
         assert set(methods) == expected
+        assert "set_tile_data_scope" not in methods
 
     def test_dashboard_manager_spec_metadata(self):
         spec = get_registry().get_manager_spec("dashboards")
@@ -99,6 +101,32 @@ class TestPrimitivesDiscovery:
             doc = primitives[key]["docstring"]
             assert doc, f"Empty docstring for {key}"
             assert len(doc) > 100, f"Docstring for {key} too short ({len(doc)} chars)"
+
+    def test_dashboard_write_docstrings_explain_destination_and_data_scope(self):
+        scope = PrimitiveScope.single("dashboards")
+        primitives = get_registry().collect_primitives(scope)
+
+        write_methods = (
+            "create_tile",
+            "update_tile",
+            "delete_tile",
+            "create_dashboard",
+            "update_dashboard",
+            "delete_dashboard",
+        )
+        for method in write_methods:
+            doc = primitives[f"primitives.dashboards.{method}"]["docstring"]
+            assert "destination" in doc
+            assert "Accessible shared teams" in doc
+
+        for method in ("create_tile", "update_tile"):
+            doc = primitives[f"primitives.dashboards.{method}"]["docstring"]
+            assert "data_scope" in doc
+            assert "dashboard" in doc
+            assert "team:<id>" in doc
+            assert "FilterBinding.limit" in doc
+            assert "JoinBinding.result_limit" in doc
+            assert str(DASHBOARD_BRIDGE_MAX_ROW_LIMIT) in doc
 
     def test_dashboard_prompt_context_generated(self):
         scope = PrimitiveScope.single("dashboards")

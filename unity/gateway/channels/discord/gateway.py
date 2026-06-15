@@ -34,30 +34,46 @@ import platform
 import random
 import re
 import time
+from typing import Any
 
 import aiohttp
 import httpx
-from google.cloud import pubsub_v1
 
+from unity.gateway.adapters.common import (
+    default_contacts,
+    get_assistant,
+    required_contact_id,
+)
+from unity.gateway.common.pubsub import already_published, get_pubsub_client
 from unity.settings import SETTINGS
 
 logger = logging.getLogger("unity.gateway.channels.discord.gateway")
 
+
+def _log_field(value: object) -> str:
+    return str(value).replace("\r", "").replace("\n", "")
+
+
 DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json"
 DISCORD_API_BASE = "https://discord.com/api/v10"
 
-INTENTS_DIRECT_MESSAGES = 1 << 12
+INTENTS_GUILDS = 1 << 0
 INTENTS_GUILD_MESSAGES = 1 << 9
-INTENTS_MESSAGE_CONTENT = 1 << 15
-BOT_INTENTS = INTENTS_DIRECT_MESSAGES | INTENTS_GUILD_MESSAGES | INTENTS_MESSAGE_CONTENT
+INTENTS_DIRECT_MESSAGES = 1 << 12
+# GUILDS is required for the gateway to deliver thread MESSAGE_CREATE events:
+# Discord only routes thread messages to bots that track thread state/membership,
+# which GUILDS enables. Without it, DMs and plain-channel @mentions arrive but
+# thread messages are silently dropped.
+#
+# MESSAGE_CONTENT (1 << 15) is a privileged intent and is deliberately not
+# requested. Discord still delivers full content/attachments for the only
+# messages this gateway acts on -- DMs to the bot and guild/thread messages
+# that @mention the bot -- so the privileged intent is unnecessary. Requesting
+# an intent not enabled in the bot's portal triggers a fatal 4014 close.
+BOT_INTENTS = INTENTS_GUILDS | INTENTS_GUILD_MESSAGES | INTENTS_DIRECT_MESSAGES
 
 FATAL_CLOSE_CODES = {4004, 4010, 4011, 4013, 4014}
 FRESH_IDENTIFY_CODES = {4003, 4007, 4009}
-
-_pubsub_client: pubsub_v1.PublisherClient | None = None
-
-_seen_message_ids: dict[str, float] = {}
-_DEDUP_TTL = 300.0
 
 
 def _admin_token() -> str:
@@ -72,30 +88,6 @@ def _assistant_topic(assistant_id: str) -> str:
     names line up across services.
     """
     return f"unity-{assistant_id}{SETTINGS.ENV_SUFFIX}"
-
-
-def _already_published(message_id: str) -> bool:
-    """Return True if this message_id was already published recently.
-
-    Tiny in-process dedup window guards against Discord redelivering
-    the same MESSAGE_CREATE after a transient reconnect.
-    """
-    now = time.time()
-    cutoff = now - _DEDUP_TTL
-    expired = [k for k, t in _seen_message_ids.items() if t < cutoff]
-    for k in expired:
-        del _seen_message_ids[k]
-    if message_id in _seen_message_ids:
-        return True
-    _seen_message_ids[message_id] = now
-    return False
-
-
-def _get_pubsub_client() -> pubsub_v1.PublisherClient:
-    global _pubsub_client
-    if _pubsub_client is None:
-        _pubsub_client = pubsub_v1.PublisherClient()
-    return _pubsub_client
 
 
 async def _resolve_discord_route(bot_id: str, sender: str) -> dict | None:
@@ -115,72 +107,18 @@ async def _resolve_discord_route(bot_id: str, sender: str) -> dict | None:
     return resp.json()
 
 
-async def _fetch_assistant(assistant_id: str) -> dict | None:
-    """Fetch assistant data from Orchestra."""
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"{SETTINGS.ORCHESTRA_URL}/admin/assistant",
-            params={"agent_id": assistant_id},
-            headers={"Authorization": f"Bearer {_admin_token()}"},
-            timeout=10.0,
-        )
-    if resp.status_code >= 400:
-        logger.error(
-            "failed to fetch assistant %s: %s",
-            assistant_id,
-            resp.status_code,
-        )
-        return None
-    data = resp.json()
-    assistants = data.get("info", [])
-    if not assistants:
-        return None
-    return assistants[0]
-
-
-def _default_contacts(assistant_data: dict) -> list[dict]:
-    """Synthesise the (assistant, user) contact pair from assistant fields.
-
-    Fallback used when the assistant has no Contacts log yet (fresh
-    provisioning) or when we can't reach the logs endpoint.
-    """
-    return [
-        {
-            "contact_id": 0,
-            "first_name": assistant_data.get("first_name") or "",
-            "surname": assistant_data.get("surname") or "",
-            "email_address": assistant_data.get("email") or "",
-            "phone_number": assistant_data.get("phone") or "",
-            "whatsapp_number": assistant_data.get("assistant_whatsapp_number") or "",
-            "discord_id": assistant_data.get("assistant_discord_bot_id") or "",
-            "bio": "",
-            "rolling_summary": "",
-            "should_respond": False,
-            "response_policy": "",
-        },
-        {
-            "contact_id": 1,
-            "first_name": assistant_data.get("user_first_name") or "",
-            "surname": assistant_data.get("user_last_name") or "",
-            "email_address": assistant_data.get("user_email") or "",
-            "phone_number": assistant_data.get("user_phone") or "",
-            "whatsapp_number": assistant_data.get("user_whatsapp_number") or "",
-            "discord_id": assistant_data.get("user_discord_id") or "",
-            "bio": "",
-            "rolling_summary": "",
-            "should_respond": True,
-            "response_policy": "",
-        },
-    ]
-
-
 async def _fetch_contacts(assistant_data: dict) -> list[dict]:
-    """Fetch the assistant's contact list from Orchestra logs."""
+    """Fetch the assistant's contact list from Orchestra logs.
+
+    Falls back to the (assistant, owner) pair synthesised from
+    assistant metadata when the assistant has no Contacts log yet
+    (fresh provisioning) or when the logs endpoint is unreachable.
+    """
     user_id = assistant_data.get("user_id") or ""
-    assistant_id = assistant_data.get("agent_id") or ""
+    assistant_id = assistant_data.get("assistant_id") or ""
     api_key = assistant_data.get("api_key") or ""
     if not api_key:
-        return _default_contacts(assistant_data)
+        return default_contacts(assistant_data)
 
     context = f"{user_id}/{assistant_id}/Contacts"
     async with httpx.AsyncClient() as client:
@@ -191,10 +129,10 @@ async def _fetch_contacts(assistant_data: dict) -> list[dict]:
             timeout=10.0,
         )
     if resp.status_code != 200:
-        return _default_contacts(assistant_data)
+        return default_contacts(assistant_data)
     logs = resp.json().get("logs", [])
     if len(logs) < 2:
-        return _default_contacts(assistant_data)
+        return default_contacts(assistant_data)
     return [entry["entries"] for entry in logs]
 
 
@@ -202,11 +140,16 @@ async def _ensure_job_running(
     assistant_data: dict,
     medium: str = "discord",
 ) -> None:
-    """Fire-and-forget request to start a Unity container for this assistant."""
-    assistant_id = assistant_data.get("agent_id") or ""
+    """Fire-and-forget request to start a Unity container for this assistant.
+
+    ``assistant_data`` is the normalized payload from
+    ``adapters.common.get_assistant`` whose keys line up with the
+    ``/infra/job/start`` form contract.
+    """
     api_key = assistant_data.get("api_key") or ""
     if not api_key:
         return
+    assistant_id = assistant_data.get("assistant_id") or ""
 
     def _s(key: str, default: str = "") -> str:
         v = assistant_data.get(key)
@@ -223,34 +166,44 @@ async def _ensure_job_running(
                     "assistant_id": assistant_id,
                     "user_id": _s("user_id"),
                     "user_first_name": _s("user_first_name"),
-                    "user_surname": _s("user_last_name"),
+                    "user_surname": _s("user_surname"),
                     "user_email": _s("user_email"),
-                    "assistant_first_name": _s("first_name"),
-                    "assistant_surname": _s("surname"),
-                    "assistant_age": _s("age"),
-                    "assistant_nationality": _s("nationality"),
-                    "assistant_about": _s("about"),
-                    "assistant_job_title": _s("job_title"),
-                    "assistant_timezone": _s("timezone", "UTC"),
-                    "user_number": _s("user_phone"),
-                    "assistant_number": _s("phone"),
-                    "assistant_email": _s("email"),
+                    "assistant_first_name": _s("assistant_first_name"),
+                    "assistant_surname": _s("assistant_surname"),
+                    "assistant_age": _s("assistant_age"),
+                    "assistant_nationality": _s("assistant_nationality"),
+                    "assistant_about": _s("assistant_about"),
+                    "assistant_job_title": _s("assistant_job_title"),
+                    "assistant_timezone": _s("assistant_timezone", "UTC"),
+                    "user_number": _s("user_number"),
+                    "assistant_number": _s("assistant_number"),
+                    "assistant_email": _s("assistant_email"),
+                    "assistant_email_provider": _s(
+                        "assistant_email_provider",
+                        "google_workspace",
+                    ),
                     "user_whatsapp_number": _s("user_whatsapp_number"),
                     "assistant_whatsapp_number": _s("assistant_whatsapp_number"),
                     "assistant_discord_bot_id": _s("assistant_discord_bot_id"),
                     "voice_provider": _s("voice_provider"),
                     "voice_id": _s("voice_id"),
-                    "desktop_mode": _s("desktop_mode", "ubuntu"),
-                    "user_desktop_mode": _s("user_desktop_mode"),
-                    "user_desktop_filesys_sync": (
-                        "true"
-                        if assistant_data.get("user_desktop_filesys_sync")
-                        else "false"
+                    "desktop_mode": _s("desktop_mode", "none"),
+                    "user_desktops": json.dumps(
+                        assistant_data.get("user_desktops") or [],
                     ),
-                    "user_desktop_url": _s("user_desktop_url"),
+                    "is_coordinator": _s("is_coordinator", "false"),
                     "demo_id": _s("demo_id"),
                     "team_ids": json.dumps(assistant_data.get("team_ids") or []),
-                    "org_id": _s("organization_id"),
+                    "team_summaries": json.dumps(
+                        assistant_data.get("team_summaries") or [],
+                    ),
+                    "self_contact_id": str(
+                        required_contact_id(assistant_data, "self_contact_id"),
+                    ),
+                    "boss_contact_id": str(
+                        required_contact_id(assistant_data, "boss_contact_id"),
+                    ),
+                    "org_id": _s("org_id"),
                     "deploy_env": _s("deploy_env"),
                 },
                 timeout=5.0,
@@ -303,11 +256,23 @@ def _publish_to_pubsub(
     contacts: list[dict] | None = None,
 ) -> None:
     """Publish an inbound Discord message to the assistant's Pub/Sub topic."""
-    client = _get_pubsub_client()
-    topic_path = client.topic_path(
-        SETTINGS.GCP_PROJECT_ID,
-        _assistant_topic(assistant_id),
-    )
+    client = get_pubsub_client()
+    project_id = SETTINGS.GCP_PROJECT_ID
+    topic_name = _assistant_topic(assistant_id)
+    kind = "channel message" if is_channel else "DM"
+
+    if not project_id:
+        logger.error(
+            "cannot publish Discord %s from %s to assistant %s: GCP_PROJECT_ID "
+            "is not set (topic=%s); message dropped",
+            kind,
+            sender_discord_id,
+            assistant_id,
+            topic_name,
+        )
+        return
+
+    topic_path = client.topic_path(project_id, topic_name)
     payload = {
         "thread": "discord",
         "publish_timestamp": time.time(),
@@ -324,18 +289,55 @@ def _publish_to_pubsub(
             "attachments": attachments or [],
         },
     }
-    client.publish(
+
+    logger.info(
+        "publishing Discord %s from %s to assistant %s (topic=%s, contacts=%d, "
+        "msg=%s)",
+        kind,
+        sender_discord_id,
+        assistant_id,
+        topic_path,
+        len(contacts or []),
+        message_id,
+    )
+
+    future = client.publish(
         topic_path,
         json.dumps(payload).encode("utf-8"),
         thread="inbound",
     )
-    kind = "channel message" if is_channel else "DM"
-    logger.info(
-        "published Discord %s from %s to assistant %s",
-        kind,
-        sender_discord_id,
-        assistant_id,
-    )
+
+    def _log_publish_result(completed: Any) -> None:
+        """Surface the publish outcome so failures are not swallowed.
+
+        The Pub/Sub future resolves on a background thread; a swallowed
+        exception here previously made a failed publish indistinguishable
+        from a successful one in the logs.
+        """
+        try:
+            pubsub_message_id = completed.result()
+        except Exception:
+            logger.exception(
+                "failed to publish Discord %s from %s to assistant %s (topic=%s, "
+                "msg=%s)",
+                kind,
+                sender_discord_id,
+                assistant_id,
+                topic_path,
+                message_id,
+            )
+            return
+        logger.info(
+            "published Discord %s from %s to assistant %s (topic=%s, "
+            "pubsub_message_id=%s)",
+            kind,
+            sender_discord_id,
+            assistant_id,
+            topic_path,
+            pubsub_message_id,
+        )
+
+    future.add_done_callback(_log_publish_result)
 
 
 class GatewayConnection:
@@ -396,7 +398,11 @@ class GatewayConnection:
 
         hello = await asyncio.wait_for(self._ws.receive_json(), timeout=30.0)
         if hello.get("op") != 10:
-            logger.error("bot %s: expected HELLO (op 10), got %s", self.bot_id, hello)
+            logger.error(
+                "bot %s: expected HELLO (op 10), got op=%s",
+                _log_field(self.bot_id),
+                _log_field(hello.get("op")),
+            )
             await self._ws.close(code=1000)
             raise ConnectionError(
                 f"Bot {self.bot_id}: did not receive HELLO, "
@@ -452,7 +458,7 @@ class GatewayConnection:
             if not self._heartbeat_acked:
                 logger.warning(
                     "bot %s: heartbeat not ACKed, reconnecting",
-                    self.bot_id,
+                    _log_field(self.bot_id),
                 )
                 await self._reconnect()
                 return
@@ -474,14 +480,14 @@ class GatewayConnection:
                 close_code = self._ws.close_code
                 logger.warning(
                     "bot %s: WebSocket closed (code=%s)",
-                    self.bot_id,
-                    close_code,
+                    _log_field(self.bot_id),
+                    _log_field(close_code),
                 )
                 if close_code in FATAL_CLOSE_CODES:
                     logger.error(
                         "bot %s: fatal close code %s, not reconnecting",
-                        self.bot_id,
-                        close_code,
+                        _log_field(self.bot_id),
+                        _log_field(close_code),
                     )
                     self._running = False
                     self._fatal_close_code = close_code
@@ -515,7 +521,7 @@ class GatewayConnection:
             return
 
         if op == 7:
-            logger.info("bot %s: received RECONNECT", self.bot_id)
+            logger.info("bot %s: received RECONNECT", _log_field(self.bot_id))
             await self._reconnect()
             return
 
@@ -523,8 +529,8 @@ class GatewayConnection:
             resumable = bool(d)
             logger.info(
                 "bot %s: INVALID_SESSION (resumable=%s)",
-                self.bot_id,
-                resumable,
+                _log_field(self.bot_id),
+                _log_field(resumable),
             )
             await asyncio.sleep(2)
             if not resumable:
@@ -540,11 +546,11 @@ class GatewayConnection:
                 self._bot_user_id = d["user"]["id"]
                 logger.info(
                     "bot %s: READY (session=%s)",
-                    self.bot_id,
-                    self._session_id,
+                    _log_field(self.bot_id),
+                    _log_field(self._session_id),
                 )
             elif t == "RESUMED":
-                logger.info("bot %s: RESUMED", self.bot_id)
+                logger.info("bot %s: RESUMED", _log_field(self.bot_id))
             elif t == "MESSAGE_CREATE":
                 asyncio.create_task(self._handle_message(d))
 
@@ -611,17 +617,17 @@ class GatewayConnection:
         assistant_id = str(route["assistant_id"])
         role = route.get("role", "contact")
 
-        assistant_data = await _fetch_assistant(assistant_id)
+        assistant_data = await get_assistant(assistant_id=assistant_id)
         contacts: list[dict] = []
-        if assistant_data:
+        if assistant_data.get("assistant_id"):
             asyncio.create_task(_ensure_job_running(assistant_data))
             contacts = await _fetch_contacts(assistant_data)
 
-        if _already_published(message_id):
+        if already_published("discord", message_id):
             logger.debug(
                 "bot %s: skipping duplicate MESSAGE_CREATE %s",
-                self.bot_id,
-                message_id,
+                _log_field(self.bot_id),
+                _log_field(message_id),
             )
             return
 
@@ -659,15 +665,15 @@ class GatewayConnection:
                     await self._connect(resume=resume)
                     logger.info(
                         "bot %s: reconnected (resume=%s)",
-                        self.bot_id,
-                        resume,
+                        _log_field(self.bot_id),
+                        _log_field(resume),
                     )
                     return
                 except Exception:
                     logger.exception(
                         "bot %s: reconnect failed, retrying in %ss",
-                        self.bot_id,
-                        backoff,
+                        _log_field(self.bot_id),
+                        _log_field(backoff),
                     )
                     await asyncio.sleep(backoff)
                     backoff = min(backoff * 2, 60.0)

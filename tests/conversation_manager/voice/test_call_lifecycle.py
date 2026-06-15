@@ -206,7 +206,7 @@ class TestCallEventSerialization:
         """FastBrainNotification event serializes and deserializes correctly."""
         event = FastBrainNotification(
             contact=sample_contact,
-            content="Please ask about their schedule",
+            message="Please ask about their schedule",
         )
 
         json_str = event.to_json()
@@ -865,7 +865,7 @@ class TestFastBrainNotificationFlow:
         # Send guidance
         guidance_event = FastBrainNotification(
             contact=alice_contact,
-            content="Please ask about their availability for next week",
+            message="Please ask about their availability for next week",
         )
         result = await initialized_cm.step(guidance_event)
 
@@ -885,7 +885,7 @@ class TestFastBrainNotificationFlow:
         # Send guidance
         guidance_event = FastBrainNotification(
             contact=alice_contact,
-            content="Reminder: User prefers morning meetings",
+            message="Reminder: User prefers morning meetings",
         )
         await initialized_cm.step(guidance_event)
 
@@ -1075,7 +1075,7 @@ class TestFullCallLifecycle:
         # Main CM Brain sends guidance to Voice Agent
         guidance_event = FastBrainNotification(
             contact=alice_contact,
-            content="You have a 10am meeting with the marketing team and a 2pm call with the client",
+            message="You have a 10am meeting with the marketing team and a 2pm call with the client",
         )
         await initialized_cm.step(guidance_event)
 
@@ -1266,7 +1266,7 @@ class TestCallEventBrokerChannels:
             # Publish guidance
             guidance = FastBrainNotification(
                 contact={"contact_id": 1, "first_name": "Test"},
-                content="Ask about their schedule",
+                message="Ask about their schedule",
             )
             await event_broker.publish(
                 "app:call:notification",

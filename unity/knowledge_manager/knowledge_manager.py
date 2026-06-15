@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 import json
 from unity.logger import LOGGER
 from unity.common.hierarchical_logger import DEFAULT_ICON
-from unity.common.tool_outcome import ToolOutcome
+from unity.common.tool_outcome import ToolErrorException, ToolOutcome
 from unity.common.token_utils import count_tokens_per_utf_byte
 from unity.common import token_utils as _tok
 from unity.common.grouping_helpers import build_grouped_dump_payload
@@ -39,8 +39,21 @@ from ..settings import SETTINGS
 from ..common.read_only_ask_guard import ReadOnlyAskGuardHandle
 from ..common.context_registry import ContextRegistry, TableContext
 from ..common.llm_client import new_llm_client
-from ..common.metrics_utils import reduce_logs
+from ..common.federated_search import FederatedSearchContext, federated_reduce
+from ..common.filter_utils import normalize_filter_expr
 from ..events.event_bus import EVENT_BUS, Event
+
+KNOWLEDGE_TABLE = "Knowledge"
+KNOWLEDGE_DESTINATION_GUIDANCE = """destination : str | None, default None
+    Where this knowledge row lives. Pass ``"personal"`` (the default)
+    for working notes, private hypotheses, draft research, and any fact tied
+    to your individual workflow. Pass ``"team:<id>"`` for a team-shared
+    fact every member of the team should see: operational reference data,
+    shared playbooks, team-level KPIs, or institutional knowledge the team
+    has to keep in sync. The set of available ``team:<id>`` values is
+    rendered in the *Accessible shared teams* block of your system prompt.
+    Pick personal when in doubt; call ``request_clarification`` when the right
+    audience is unclear."""
 
 # Module delegations (split helpers for parity with ContactManager)
 from .storage import (
@@ -78,7 +91,7 @@ class KnowledgeManager(BaseKnowledgeManager):
     class Config:
         required_contexts = [
             TableContext(
-                name="Knowledge",
+                name=KNOWLEDGE_TABLE,
                 description="Knowledge base for the assistant.",
             ),
         ]
@@ -210,7 +223,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         # Optional Contacts-table linkage
         # ------------------------------------------------------------------
         self._include_contacts: bool = include_contacts
-        self._ctx = ContextRegistry.get_context(self, "Knowledge")
+        self._ctx = ContextRegistry.get_context(self, KNOWLEDGE_TABLE)
 
         # Only compute the Contacts context if the caller requested integration.
         self._contacts_ctx: Optional[str]
@@ -223,6 +236,67 @@ class KnowledgeManager(BaseKnowledgeManager):
 
         # Lazily-initialized DataManager for delegation
         self.__data_manager: Optional["DataManager"] = None
+
+    def _knowledge_namespace_for_root(self, root_context: str) -> str:
+        """Return the concrete Knowledge namespace under a registry root."""
+        return f"{root_context.strip('/')}/{KNOWLEDGE_TABLE}"
+
+    def _knowledge_namespace_for_destination(self, destination: str | None) -> str:
+        """Resolve a public destination into one concrete Knowledge namespace."""
+        root_context = ContextRegistry.write_root(
+            self,
+            KNOWLEDGE_TABLE,
+            destination=destination,
+        )
+        return self._knowledge_namespace_for_root(root_context)
+
+    def _knowledge_context_for_table(
+        self,
+        table: str,
+        *,
+        destination: str | None = None,
+    ) -> str:
+        """Resolve a table name and destination into one concrete Knowledge table."""
+        return f"{self._knowledge_namespace_for_destination(destination)}/{table}"
+
+    def _read_knowledge_namespaces(self) -> list[str]:
+        """Return personal-first Knowledge namespaces visible to this assistant."""
+        return list(
+            dict.fromkeys(
+                self._knowledge_namespace_for_root(root)
+                for root in ContextRegistry.read_roots(self, KNOWLEDGE_TABLE)
+            ),
+        )
+
+    def _read_contexts_for_table(self, table: str) -> list[str]:
+        """Return readable concrete Knowledge contexts where a table exists."""
+        contexts: list[str] = []
+        for namespace in self._read_knowledge_namespaces():
+            context = f"{namespace}/{table}"
+            prefix = f"{namespace}/"
+            ctx_info = self._data_manager.list_tables(
+                prefix=prefix,
+                include_column_info=False,
+            )
+            available = ctx_info.keys() if isinstance(ctx_info, dict) else ctx_info
+            if context in available:
+                contexts.append(context)
+        return contexts
+
+    def _table_contexts_for_read(self) -> dict[str, str]:
+        """Return the first readable concrete context for each visible table."""
+        table_contexts: dict[str, str] = {}
+        for namespace in self._read_knowledge_namespaces():
+            prefix = f"{namespace}/"
+            ctx_info = self._data_manager.list_tables(
+                prefix=prefix,
+                include_column_info=False,
+            )
+            contexts = ctx_info.keys() if isinstance(ctx_info, dict) else ctx_info
+            for context in contexts:
+                if context.startswith(prefix):
+                    table_contexts.setdefault(context[len(prefix) :], context)
+        return table_contexts
 
     @property
     def _data_manager(self) -> "DataManager":
@@ -275,7 +349,11 @@ class KnowledgeManager(BaseKnowledgeManager):
             if not all_tables:
                 return None
 
-            table_to_ctx = {t: self._ctx_for_table(t) for t in all_tables}
+            readable_contexts = self._table_contexts_for_read()
+            table_to_ctx = {
+                table: readable_contexts.get(table) or self._ctx_for_table(table)
+                for table in all_tables
+            }
             # Be robust to tables without a "columns" key in their overview entry
             table_to_columns: Dict[str, List[str]] = {
                 t: list((lt.get("columns") or {}).keys()) for t, lt in overview.items()
@@ -926,6 +1004,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         columns: Dict[str, ColumnType] | None = None,
         unique_key_name: str = "row_id",
         auto_counting: Optional[Dict[str, Optional[str]]] = None,
+        destination: str | None = None,
     ) -> Dict[str, str]:
         """
         **Create** a brand-new table in the knowledge store.
@@ -963,14 +1042,18 @@ class KnowledgeManager(BaseKnowledgeManager):
         dict[str, str]
                 Backend response describing success or failure (driver specific).
         """
-        return _storage_create_table(
-            self,
-            name=name,
-            description=description,
-            columns=columns,
-            unique_key_name=unique_key_name,
-            auto_counting=auto_counting,
-        )
+        try:
+            return _storage_create_table(
+                self,
+                name=name,
+                description=description,
+                columns=columns,
+                unique_key_name=unique_key_name,
+                auto_counting=auto_counting,
+                destination=destination,
+            )
+        except ToolErrorException as exc:
+            return exc.payload  # type: ignore[return-value]
 
     @read_only
     def _tables_overview(
@@ -1000,6 +1083,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         *,
         old_name: str,
         new_name: str,
+        destination: str | None = None,
     ) -> Dict[str, str]:
         """
         **Rename** an existing table.
@@ -1016,13 +1100,22 @@ class KnowledgeManager(BaseKnowledgeManager):
         dict[str, str]
                 Backend acknowledgement / error message.
         """
-        return _storage_rename_table(self, old_name=old_name, new_name=new_name)
+        try:
+            return _storage_rename_table(
+                self,
+                old_name=old_name,
+                new_name=new_name,
+                destination=destination,
+            )
+        except ToolErrorException as exc:
+            return exc.payload  # type: ignore[return-value]
 
     def _delete_tables(
         self,
         *,
         tables: Union[str, List[str]],
         startswith: Optional[str] = None,
+        destination: str | None = None,
     ) -> List[Dict[str, str]]:
         """
         **Drop** an entire table *and* all its rows.
@@ -1039,7 +1132,15 @@ class KnowledgeManager(BaseKnowledgeManager):
         list[dict[str, str]]
             Confirmations / errors from the backend.
         """
-        return _storage_delete_tables(self, tables=tables, startswith=startswith)
+        try:
+            return _storage_delete_tables(
+                self,
+                tables=tables,
+                startswith=startswith,
+                destination=destination,
+            )
+        except ToolErrorException as exc:
+            return exc.payload  # type: ignore[return-value]
 
     # Columns
 
@@ -1049,6 +1150,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         table: str,
         column_name: str,
         column_type: ColumnType | str,
+        destination: str | None = None,
     ) -> Dict[str, str]:
         """
         Add a **new, initially empty column** to *table*.
@@ -1068,12 +1170,16 @@ class KnowledgeManager(BaseKnowledgeManager):
         dict[str, str]
                 Backend response.
         """
-        return _op_create_empty_column(
-            self,
-            table=table,
-            column_name=column_name,
-            column_type=column_type,
-        )
+        try:
+            return _op_create_empty_column(
+                self,
+                table=table,
+                column_name=column_name,
+                column_type=column_type,
+                destination=destination,
+            )
+        except ToolErrorException as exc:
+            return exc.payload  # type: ignore[return-value]
 
     def _create_derived_column(
         self,
@@ -1081,6 +1187,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         table: str,
         column_name: str,
         equation: str,
+        destination: str | None = None,
     ) -> Dict[str, str]:
         """
         Create a **derived column** whose value is computed from other columns
@@ -1102,18 +1209,23 @@ class KnowledgeManager(BaseKnowledgeManager):
         dict[str, str]
                 Backend acknowledgement.
         """
-        return _op_create_derived_column(
-            self,
-            table=table,
-            column_name=column_name,
-            equation=equation,
-        )
+        try:
+            return _op_create_derived_column(
+                self,
+                table=table,
+                column_name=column_name,
+                equation=equation,
+                destination=destination,
+            )
+        except ToolErrorException as exc:
+            return exc.payload  # type: ignore[return-value]
 
     def _delete_column(
         self,
         *,
         table: str,
         column_name: str,
+        destination: str | None = None,
     ) -> Dict[str, str]:
         """
         **Remove** a column (and its data) from *table*.
@@ -1130,7 +1242,15 @@ class KnowledgeManager(BaseKnowledgeManager):
         dict[str, str]
                 Backend confirmation or error.
         """
-        return _op_delete_column(self, table=table, column_name=column_name)
+        try:
+            return _op_delete_column(
+                self,
+                table=table,
+                column_name=column_name,
+                destination=destination,
+            )
+        except ToolErrorException as exc:
+            return exc.payload  # type: ignore[return-value]
 
     def _rename_column(
         self,
@@ -1138,6 +1258,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         table: str,
         old_name: str,
         new_name: str,
+        destination: str | None = None,
     ) -> Dict[str, str]:
         """
         **Rename** a column inside *table*.
@@ -1158,12 +1279,16 @@ class KnowledgeManager(BaseKnowledgeManager):
                 Backend response.
         """
         # Short-circuit obvious no-op and invalid rename targets to avoid any backend call
-        return _op_rename_column(
-            self,
-            table=table,
-            old_name=old_name,
-            new_name=new_name,
-        )
+        try:
+            return _op_rename_column(
+                self,
+                table=table,
+                old_name=old_name,
+                new_name=new_name,
+                destination=destination,
+            )
+        except ToolErrorException as exc:
+            return exc.payload  # type: ignore[return-value]
 
     def _copy_column(
         self,
@@ -1171,6 +1296,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         source_table: str,
         column_name: str,
         dest_table: str,
+        destination: str | None = None,
     ) -> Dict[str, Any]:
         """
         Copy a column's values from one table to another.
@@ -1194,12 +1320,16 @@ class KnowledgeManager(BaseKnowledgeManager):
         Implemented by attaching the matching logs to the destination context
         via ``unify.add_logs_to_context``.
         """
-        return _op_copy_column(
-            self,
-            source_table=source_table,
-            column_name=column_name,
-            dest_table=dest_table,
-        )
+        try:
+            return _op_copy_column(
+                self,
+                source_table=source_table,
+                column_name=column_name,
+                dest_table=dest_table,
+                destination=destination,
+            )
+        except ToolErrorException as exc:
+            return exc.payload  # type: ignore[return-value]
 
     def _move_column(
         self,
@@ -1207,6 +1337,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         source_table: str,
         column_name: str,
         dest_table: str,
+        destination: str | None = None,
     ) -> Dict[str, Any]:
         """
         Move a column from one table to another.
@@ -1230,12 +1361,16 @@ class KnowledgeManager(BaseKnowledgeManager):
         Implemented as ``_copy_column`` followed by ``_delete_column`` on the
         source table.
         """
-        return _op_move_column(
-            self,
-            source_table=source_table,
-            column_name=column_name,
-            dest_table=dest_table,
-        )
+        try:
+            return _op_move_column(
+                self,
+                source_table=source_table,
+                column_name=column_name,
+                dest_table=dest_table,
+                destination=destination,
+            )
+        except ToolErrorException as exc:
+            return exc.payload  # type: ignore[return-value]
 
     def _transform_column(
         self,
@@ -1243,6 +1378,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         table: str,
         column_name: str,
         equation: str,
+        destination: str | None = None,
     ) -> Dict[str, Any]:
         """
         Transform a column in‑place according to a Python ``equation``.
@@ -1268,12 +1404,16 @@ class KnowledgeManager(BaseKnowledgeManager):
         2. Delete the original column.
         3. Rename the temporary column back to ``column_name``.
         """
-        return _op_transform_column(
-            self,
-            table=table,
-            column_name=column_name,
-            equation=equation,
-        )
+        try:
+            return _op_transform_column(
+                self,
+                table=table,
+                column_name=column_name,
+                equation=equation,
+                destination=destination,
+            )
+        except ToolErrorException as exc:
+            return exc.payload  # type: ignore[return-value]
 
     #  Row-level deletion
 
@@ -1284,6 +1424,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         offset: int = 0,
         limit: int = 100,
         tables: Optional[List[str]] = None,
+        destination: str | None = None,
     ) -> Dict[str, Any]:
         """
         Delete every log matching ``filter`` across one or more tables.
@@ -1306,13 +1447,17 @@ class KnowledgeManager(BaseKnowledgeManager):
         dict[str, str]
             Mapping ``table_name → backend message / "no-op"``.
         """
-        return _op_delete_rows(
-            self,
-            filter=filter,
-            offset=offset,
-            limit=limit,
-            tables=tables,
-        )
+        try:
+            return _op_delete_rows(
+                self,
+                filter=filter,
+                offset=offset,
+                limit=limit,
+                tables=tables,
+                destination=destination,
+            )
+        except ToolErrorException as exc:
+            return exc.payload  # type: ignore[return-value]
 
     # Row creation / update
 
@@ -1321,6 +1466,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         *,
         table: str,
         rows: List[Dict[str, Any]],
+        destination: str | None = None,
     ) -> ToolOutcome:
         """
         **Insert** one or many rows into *table*.
@@ -1341,7 +1487,14 @@ class KnowledgeManager(BaseKnowledgeManager):
                 Backend confirmation.
         """
         try:
-            res = _op_add_rows(self, table=table, rows=rows)
+            res = _op_add_rows(
+                self,
+                table=table,
+                rows=rows,
+                destination=destination,
+            )
+        except ToolErrorException as exc:
+            return exc.payload  # type: ignore[return-value]
         except Exception as e:
             return {"outcome": "error", "details": {"error": str(e)}}
         return {"outcome": "rows added successfully", "details": {"length": len(res)}}
@@ -1351,6 +1504,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         *,
         table: str,
         updates: Dict[int, Dict[str, Any]],
+        destination: str | None = None,
     ) -> ToolOutcome:
         """
         Update existing rows identified by their table‑specific unique id.
@@ -1369,7 +1523,14 @@ class KnowledgeManager(BaseKnowledgeManager):
             Backend response from ``unify.update_logs``.
         """
         try:
-            res = _op_update_rows(self, table=table, updates=updates)
+            res = _op_update_rows(
+                self,
+                table=table,
+                updates=updates,
+                destination=destination,
+            )
+        except ToolErrorException as exc:
+            return exc.payload  # type: ignore[return-value]
         except Exception as e:
             return {"outcome": "error", "details": {"error": str(e)}}
         return {"outcome": "rows updated successfully", "details": res}
@@ -1630,6 +1791,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         target_column_name: str,
         *,
         from_ids: List[int] | None = None,
+        destination: str | None = None,
     ) -> None:
         """
         Ensure a vector column exists, creating it if necessary.
@@ -1647,13 +1809,17 @@ class KnowledgeManager(BaseKnowledgeManager):
         -------
         None
         """
-        return _op_vectorize_column(
-            self,
-            table=table,
-            source_column=source_column,
-            target_column_name=target_column_name,
-            from_ids=from_ids,
-        )
+        try:
+            return _op_vectorize_column(
+                self,
+                table=table,
+                source_column=source_column,
+                target_column_name=target_column_name,
+                from_ids=from_ids,
+                destination=destination,
+            )
+        except ToolErrorException as exc:
+            return exc.payload  # type: ignore[return-value]
 
     @read_only
     def _search(
@@ -1921,14 +2087,19 @@ class KnowledgeManager(BaseKnowledgeManager):
             * Multiple keys, no grouping → ``dict[key -> scalar]``.
             * With grouping             → nested ``dict`` keyed by group values.
         """
-        ctx = self._ctx_for_table(table)
-        return reduce_logs(
-            context=ctx,
-            metric=metric,
-            keys=keys,
-            filter=filter,
-            group_by=group_by,
-        )
+        contexts = self._read_contexts_for_table(table)
+        key_names = [keys] if isinstance(keys, str) else list(keys)
+        result_by_key: dict[str, Any] = {}
+        for key in key_names:
+            key_filter = filter.get(key) if isinstance(filter, dict) else filter
+            result_by_key[key] = federated_reduce(
+                [FederatedSearchContext(context=ctx, source=ctx) for ctx in contexts],
+                metric=metric,
+                columns=key,
+                filter=normalize_filter_expr(key_filter),
+                group_by=group_by,
+            )
+        return result_by_key[keys] if isinstance(keys, str) else result_by_key
 
     @read_only
     def _filter_join(
@@ -2064,3 +2235,27 @@ class KnowledgeManager(BaseKnowledgeManager):
             result_limit=result_limit,
             result_offset=result_offset,
         )
+
+
+def _append_destination_guidance(method_name: str) -> None:
+    method = getattr(KnowledgeManager, method_name)
+    method.__doc__ = f"{method.__doc__ or ''}\n\n{KNOWLEDGE_DESTINATION_GUIDANCE}"
+
+
+for _destination_method in (
+    "_create_table",
+    "_rename_table",
+    "_delete_tables",
+    "_create_empty_column",
+    "_create_derived_column",
+    "_delete_column",
+    "_rename_column",
+    "_copy_column",
+    "_move_column",
+    "_transform_column",
+    "_vectorize_column",
+    "_delete_rows",
+    "_add_rows",
+    "_update_rows",
+):
+    _append_destination_guidance(_destination_method)

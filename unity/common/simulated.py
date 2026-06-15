@@ -213,15 +213,12 @@ def maybe_tool_log_scheduled(segment: str, method: str, args: dict):
         if SimulatedLineage.has_outer():
             return None
         from unity.logger import LOGGER  # noqa: WPS433
-        import json as _json  # noqa: WPS433
         import time as _time  # noqa: WPS433
 
         label = SimulatedLineage.make_label(segment)
         cid = SimulatedLineage.extract_suffix(label) or ""
         try:
-            LOGGER.info(
-                f"{ICONS['info']} [{label}] ToolCall Scheduled | args={_json.dumps(args)}",
-            )
+            LOGGER.info("%s ToolCall Scheduled", ICONS["info"])
         except Exception:
             pass
         return label, cid, _time.perf_counter()

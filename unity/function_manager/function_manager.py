@@ -1,10 +1,13 @@
 import ast
 import asyncio
+import hashlib
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import inspect
 import functools
 import json
+import keyword
 import os
 import re
 import signal
@@ -12,7 +15,9 @@ import socket
 import sys
 import tempfile
 import logging
+import threading
 from pathlib import Path
+from weakref import WeakSet
 
 from unity.logger import LOGGER
 from unity.common.hierarchical_logger import ICONS
@@ -33,9 +38,17 @@ from typing import (
 import unify
 from .shell_pool import ShellPool
 from unify.utils.http import RequestError as _UnifyRequestError
+from ..common.authorship import strip_authoring_assistant_id
 from ..common.log_utils import create_logs as unity_create_logs
 from ..common.embed_utils import ensure_vector_column, list_private_fields
-from ..common.search_utils import table_search_top_k
+from ..common.federated_search import (
+    FederatedSearchContext,
+    federated_filter,
+    federated_ranked_search,
+)
+from ..common.builtins import builtins_project
+from .builtins_catalog import BUILTINS_PRIMITIVES_CONTEXT
+from ..common.tool_outcome import ToolErrorException
 from .execution_env import ENVIRONMENT_MODULES, create_base_globals
 from .dependency_analysis import (
     collect_dependencies_from_function_node,
@@ -45,21 +58,54 @@ from .types.function import Function
 from .types.meta import FunctionsMeta
 from .types.venv import VirtualEnv
 from .base import BaseFunctionManager
+from .hash_utils import stable_hash_for_rows
 from ..common.model_to_fields import model_to_fields
 from ..file_manager.managers.local import LocalFileManager
 from ..image_manager.image_manager import ImageHandle
 from ..manager_registry import ManagerRegistry
 from ..common.filter_utils import normalize_filter_expr
 from ..common.context_registry import ContextRegistry, TableContext
-from unity.function_manager.primitives.scope import PrimitiveScope
+from unity.function_manager.primitives.scope import (
+    PrimitiveScope,
+    default_runtime_scope,
+)
 from unity.function_manager.primitives.registry import get_registry
-from unity.common.startup_timing import log_startup_timing
+from unity.common.diagnostic_logging import (
+    log_staging_diagnostic,
+    staging_diagnostics_enabled,
+)
+from unity.integrations.function_metadata import (
+    function_metadata,
+    integration_app_slug,
+    integration_backend_id,
+    integration_metadata,
+    is_provider_backed_function,
+    provider_function_metadata,
+)
 from .custom_functions import (
     compute_custom_functions_hash,
     compute_custom_venvs_hash,
 )
 
 logger = logging.getLogger(__name__)
+
+FUNCTIONS_VENVS_TABLE = "Functions/VirtualEnvs"
+FUNCTIONS_COMPOSITIONAL_TABLE = "Functions/Compositional"
+FUNCTIONS_PRIMITIVES_TABLE = "Functions/Primitives"
+FUNCTIONS_META_TABLE = "Functions/Meta"
+FUNCTIONS_COMPOSITIONAL_DESTINATION_GUIDANCE = """destination : str | None, default None
+    Where this composed function (or set of functions) lives. Pass
+    ``"personal"`` (the default) for one-off helper scripts and private
+    automations. Pass ``"team:<id>"`` for team automation every member of the
+    team members should be able to invoke. See the *Accessible shared teams* block in
+    your system prompt for available teams and descriptions. Pick personal
+    when in doubt; call ``request_clarification`` when the right audience is
+    unclear."""
+FUNCTIONS_VENV_DESTINATION_GUIDANCE = """destination : str | None, default None
+    Where the virtual env definition lives. Pass ``"personal"`` (the default)
+    for envs only your private functions need. Pass ``"team:<id>"`` to share
+    the env with team-level functions in that team. See the Accessible shared teams
+    block in your system prompt; pick personal when in doubt."""
 
 if TYPE_CHECKING:  # pragma: no cover
     pass
@@ -640,6 +686,8 @@ class VenvPool:
     stateful sessions per venv. Each session has its own subprocess and globals.
     """
 
+    _instances = WeakSet()
+
     def __init__(self, *, max_total_sessions: int = 20) -> None:
         # Key: (venv_id, session_id) -> _VenvConnection
         self._connections: Dict[Tuple[int, int], _VenvConnection] = {}
@@ -647,6 +695,44 @@ class VenvPool:
         self._lock = asyncio.Lock()
         self._closed = False
         self._max_total_sessions = int(max_total_sessions)
+        self._invalidation_generation = 0
+        self.__class__._instances.add(self)
+
+    @classmethod
+    def invalidate_all_pools(cls) -> int:
+        """Drop every live pool connection so future executions reload credentials."""
+        invalidated = 0
+        for pool in list(cls._instances):
+            invalidated += pool.invalidate_sessions()
+        return invalidated
+
+    def invalidate_sessions(self) -> int:
+        """Retire pooled sessions while keeping the pool reusable."""
+        self._invalidation_generation += 1
+        connections = list(self._connections.values())
+        self._connections.clear()
+        self._metadata.clear()
+        if not connections:
+            return 0
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(self._shutdown_retired_connections(connections))
+        else:
+            loop.create_task(self._shutdown_retired_connections(connections))
+        return len(connections)
+
+    async def _shutdown_retired_connections(
+        self,
+        connections: List["_VenvConnection"],
+    ) -> None:
+        """Close retired connections through the normal subprocess lifecycle."""
+        for conn in connections:
+            try:
+                await conn.shutdown()
+            except Exception:
+                pass
 
     async def get_or_create_connection(
         self,
@@ -668,46 +754,54 @@ class VenvPool:
             A _VenvConnection instance.
         """
         key = (venv_id, session_id)
-        async with self._lock:
-            if self._closed:
-                raise RuntimeError("VenvPool has been closed")
+        while True:
+            async with self._lock:
+                if self._closed:
+                    raise RuntimeError("VenvPool has been closed")
 
-            if key in self._connections:
-                conn = self._connections[key]
-                if conn.is_alive():
-                    md = self._metadata.get(key)
-                    if md is not None:
-                        md.last_used = datetime.now(timezone.utc)
-                    return conn
-                # Connection died, remove it and create a new one
-                logger.warning(
-                    f"VenvPool: connection for venv {venv_id} session {session_id} died, creating new one",
+                if key in self._connections:
+                    conn = self._connections[key]
+                    if conn.is_alive():
+                        md = self._metadata.get(key)
+                        if md is not None:
+                            md.last_used = datetime.now(timezone.utc)
+                        return conn
+                    # Connection died, remove it and create a new one
+                    logger.warning(
+                        f"VenvPool: connection for venv {venv_id} session {session_id} died, creating new one",
+                    )
+                    del self._connections[key]
+                    self._metadata.pop(key, None)
+
+                # Enforce global session cap (across all venv_id/session_id combinations).
+                active = sum(1 for c in self._connections.values() if c.is_alive())
+                if active >= self._max_total_sessions:
+                    raise SessionLimitError(
+                        message=f"Maximum sessions reached for python ({active}/{self._max_total_sessions})",
+                    )
+
+                generation = self._invalidation_generation
+                # Create new connection
+                conn = await _VenvConnection.create(
+                    venv_id=venv_id,
+                    function_manager=function_manager,
+                    timeout=timeout,
                 )
-                del self._connections[key]
-                self._metadata.pop(key, None)
-
-            # Enforce global session cap (across all venv_id/session_id combinations).
-            active = sum(1 for c in self._connections.values() if c.is_alive())
-            if active >= self._max_total_sessions:
-                raise SessionLimitError(
-                    message=f"Maximum sessions reached for python ({active}/{self._max_total_sessions})",
+                if generation != self._invalidation_generation:
+                    try:
+                        await conn.shutdown()
+                    except Exception:
+                        pass
+                    continue
+                self._connections[key] = conn
+                now = datetime.now(timezone.utc)
+                self._metadata[key] = SessionMetadata(
+                    venv_id=int(venv_id),
+                    session_id=int(session_id),
+                    created_at=now,
+                    last_used=now,
                 )
-
-            # Create new connection
-            conn = await _VenvConnection.create(
-                venv_id=venv_id,
-                function_manager=function_manager,
-                timeout=timeout,
-            )
-            self._connections[key] = conn
-            now = datetime.now(timezone.utc)
-            self._metadata[key] = SessionMetadata(
-                venv_id=int(venv_id),
-                session_id=int(session_id),
-                created_at=now,
-                last_used=now,
-            )
-            return conn
+                return conn
 
     async def execute_in_venv(
         self,
@@ -1553,14 +1647,14 @@ class FunctionManager(BaseFunctionManager):
     class Config:
         required_contexts = [
             TableContext(
-                name="Functions/VirtualEnvs",
+                name=FUNCTIONS_VENVS_TABLE,
                 description="Virtual environment configurations (pyproject.toml content).",
                 fields=model_to_fields(VirtualEnv),
                 unique_keys={"venv_id": "int"},
                 auto_counting={"venv_id": None},
             ),
             TableContext(
-                name="Functions/Compositional",
+                name=FUNCTIONS_COMPOSITIONAL_TABLE,
                 description="User-defined functions with auto-incrementing IDs.",
                 fields=model_to_fields(Function),
                 unique_keys={"function_id": "int"},
@@ -1574,21 +1668,21 @@ class FunctionManager(BaseFunctionManager):
                     },
                     {
                         "name": "venv_id",
-                        "references": "Functions/VirtualEnvs.venv_id",
+                        "references": f"{FUNCTIONS_VENVS_TABLE}.venv_id",
                         "on_delete": "SET NULL",
                         "on_update": "CASCADE",
                     },
                 ],
             ),
             TableContext(
-                name="Functions/Primitives",
+                name=FUNCTIONS_PRIMITIVES_TABLE,
                 description="System action primitives with stable explicit IDs.",
                 fields=model_to_fields(Function),
                 unique_keys={"function_id": "int"},
                 # No auto_counting - primitives get explicit IDs from collect_primitives()
             ),
             TableContext(
-                name="Functions/Meta",
+                name=FUNCTIONS_META_TABLE,
                 description="Metadata for primitives sync state.",
                 fields=model_to_fields(FunctionsMeta),
                 unique_keys={"meta_id": "int"},
@@ -1611,8 +1705,8 @@ class FunctionManager(BaseFunctionManager):
         file_manager: Optional[LocalFileManager] = None,
     ) -> None:
         # Store the scope - this FunctionManager instance is permanently scoped
-        # Default to all managers if not specified
-        self._primitive_scope = primitive_scope or PrimitiveScope.all_managers()
+        # Default to the canonical role-scoped manager set when not specified.
+        self._primitive_scope = primitive_scope or default_runtime_scope()
         self._filter_scope = filter_scope
         self._exclude_primitive_ids = (
             frozenset(exclude_primitive_ids) if exclude_primitive_ids else None
@@ -1632,18 +1726,24 @@ class FunctionManager(BaseFunctionManager):
         # time we create a function.  Initialised lazily on first use.
         self._next_id: Optional[int] = None
 
-        self._venvs_ctx = ContextRegistry.get_context(self, "Functions/VirtualEnvs")
+        self._venvs_ctx = ContextRegistry.get_context(self, FUNCTIONS_VENVS_TABLE)
         self._compositional_ctx = ContextRegistry.get_context(
             self,
-            "Functions/Compositional",
+            FUNCTIONS_COMPOSITIONAL_TABLE,
         )
-        self._primitives_ctx = ContextRegistry.get_context(self, "Functions/Primitives")
-        self._meta_ctx = ContextRegistry.get_context(self, "Functions/Meta")
+        self._primitives_ctx = ContextRegistry.get_context(
+            self,
+            FUNCTIONS_PRIMITIVES_TABLE,
+        )
+        self._meta_ctx = ContextRegistry.get_context(self, FUNCTIONS_META_TABLE)
 
-        # Track whether primitives, custom venvs, and custom functions have been synced
-        self._primitives_synced = False
+        # Track whether custom venvs and custom functions have been synced
         self._custom_venvs_synced = False
         self._custom_functions_synced = False
+        self._custom_venvs_synced_contexts: set[str] = set()
+        self._custom_functions_synced_contexts: set[str] = set()
+        self._destination_context_lock = threading.RLock()
+        self._destination_write_scoped = False
 
         # ------------------------------------------------------------------ #
         #  LocalFileManager reference (for VM sync manager access)           #
@@ -1755,6 +1855,484 @@ class FunctionManager(BaseFunctionManager):
         if not excl:
             return base
         return f"({base}) and ({excl})"
+
+    def _primitive_read_specs(
+        self,
+        *,
+        allowed_fields: Optional[List[str]] = None,
+    ) -> List[FederatedSearchContext]:
+        """Return the federated sources holding this deployment's primitives.
+
+        Static primitives live once platform-wide in the public-read builtins
+        catalogue project; the per-assistant ``Functions/Primitives`` context
+        holds only materialized provider-backed integration tool rows. Both
+        are scope-filtered at read time.
+        """
+        scoped = self._scoped_primitive_filter()
+        return [
+            FederatedSearchContext(
+                context=BUILTINS_PRIMITIVES_CONTEXT,
+                source="primitives",
+                row_filter=scoped,
+                allowed_fields=allowed_fields,
+                project=builtins_project(),
+            ),
+            FederatedSearchContext(
+                context=self._primitives_ctx,
+                source="primitives",
+                row_filter=f'({scoped}) and metadata["source"] == "provider_backed"',
+                allowed_fields=allowed_fields,
+            ),
+        ]
+
+    def _primitive_logs(
+        self,
+        *,
+        extra_filter: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Fetch primitive rows from every primitive source (non-ranked)."""
+        rows: List[Dict[str, Any]] = []
+        for spec in self._primitive_read_specs():
+            row_filter = spec.row_filter
+            if extra_filter:
+                row_filter = f"({extra_filter}) and ({row_filter})"
+            kwargs: Dict[str, Any] = {
+                "context": spec.context,
+                "project": spec.project,
+                "filter": row_filter,
+                "exclude_fields": list_private_fields(
+                    spec.context,
+                    project=spec.project,
+                ),
+            }
+            if limit is not None:
+                kwargs["limit"] = limit
+            try:
+                logs = unify.get_logs(**kwargs)
+            except _UnifyRequestError as e:
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                if status == 404:
+                    continue
+                raise
+            rows.extend(lg.entries for lg in logs)
+        return rows
+
+    def _integration_owner_scope(self) -> Dict[str, Any]:
+        """Best-effort owner scope for provider-backed integration searches."""
+        try:
+            from unity.integrations.primitives import (
+                integration_owner_scope_from_session,
+            )
+
+            scope = integration_owner_scope_from_session()
+        except Exception:
+            scope = {"owner_scope": "assistant"}
+        return scope
+
+    @staticmethod
+    def _provider_integration_function_id(tool_id: str) -> int:
+        """Return the stable FunctionManager row ID for a provider-backed tool.
+
+        Provider-backed tools are materialized rows in ``Functions/Primitives``,
+        so they need the same integer ``function_id`` shape as static primitive
+        methods. The canonical execution identifier remains the provider
+        tool id stored in metadata; this hash-derived value only lets the row
+        participate in existing FunctionManager storage, search, and filtering
+        paths.
+        """
+
+        digest = hashlib.sha256(
+            f"IntegrationPrimitives.provider_backed:{tool_id}".encode(),
+        ).digest()
+        # Match the static primitive ID shape: first 32 hash bits masked into
+        # PostgreSQL's signed int32 positive range. This is deterministic but,
+        # like static primitive IDs, not mathematically collision-proof.
+        return int.from_bytes(digest[:4], "big") & 0x7FFFFFFF
+
+    @staticmethod
+    def _integration_schema_properties(
+        input_schema: Dict[str, Any],
+    ) -> tuple[dict[str, Any], set[str]]:
+        properties = (
+            input_schema.get("properties") if isinstance(input_schema, dict) else None
+        )
+        required = (
+            set(input_schema.get("required") or [])
+            if isinstance(input_schema, dict)
+            else set()
+        )
+        if not isinstance(properties, dict) or not properties:
+            return {}, set()
+        return properties, required
+
+    @staticmethod
+    def _integration_schema_type(schema: Any) -> str:
+        if not isinstance(schema, dict):
+            return "Any"
+        if "anyOf" in schema and isinstance(schema["anyOf"], list):
+            types = [
+                FunctionManager._integration_schema_type(item)
+                for item in schema["anyOf"]
+                if isinstance(item, dict) and item.get("type") != "null"
+            ]
+            return " | ".join(dict.fromkeys(types)) if types else "Any"
+        if "oneOf" in schema and isinstance(schema["oneOf"], list):
+            types = [
+                FunctionManager._integration_schema_type(item)
+                for item in schema["oneOf"]
+                if isinstance(item, dict) and item.get("type") != "null"
+            ]
+            return " | ".join(dict.fromkeys(types)) if types else "Any"
+        raw_type = schema.get("type")
+        if isinstance(raw_type, list):
+            non_null = [item for item in raw_type if item != "null"]
+            if not non_null:
+                return "Any"
+            return " | ".join(
+                dict.fromkeys(
+                    FunctionManager._integration_schema_type({"type": item})
+                    for item in non_null
+                ),
+            )
+        if raw_type == "array":
+            item_type = FunctionManager._integration_schema_type(schema.get("items"))
+            return f"list[{item_type}]" if item_type != "Any" else "list"
+        if raw_type == "object":
+            return "dict"
+        if isinstance(raw_type, str):
+            return {
+                "string": "str",
+                "integer": "int",
+                "number": "float",
+                "boolean": "bool",
+            }.get(raw_type, "Any")
+        return "Any"
+
+    @staticmethod
+    def _integration_schema_argspec(input_schema: Dict[str, Any]) -> str:
+        properties, required = FunctionManager._integration_schema_properties(
+            input_schema,
+        )
+        if not properties:
+            return "(**kwargs) -> dict"
+        parts: list[str] = []
+        for name, schema in properties.items():
+            if (
+                not isinstance(name, str)
+                or not name.isidentifier()
+                or keyword.iskeyword(name)
+            ):
+                continue
+            type_name = FunctionManager._integration_schema_type(schema)
+            if (
+                isinstance(schema, dict)
+                and "default" in schema
+                and name not in required
+            ):
+                default = f" = {schema['default']!r}"
+            else:
+                default = "" if name in required else " = None"
+            parts.append(f"{name}: {type_name}{default}")
+        return f"({', '.join(parts)}) -> dict" if parts else "(**kwargs) -> dict"
+
+    @staticmethod
+    def _integration_parameter_doc(input_schema: Dict[str, Any]) -> str:
+        properties, required = FunctionManager._integration_schema_properties(
+            input_schema,
+        )
+        if not properties:
+            return "Parameters\n----------\n**kwargs : Any\n    Provider arguments accepted by the integration tool."
+        lines = ["Parameters", "----------"]
+        for name, schema in properties.items():
+            if not isinstance(name, str):
+                continue
+            type_name = FunctionManager._integration_schema_type(schema)
+            required_label = "required" if name in required else "optional"
+            default_text = ""
+            description = ""
+            if isinstance(schema, dict):
+                if "default" in schema:
+                    default_text = f", default {schema['default']!r}"
+                description = str(
+                    schema.get("description") or schema.get("title") or "",
+                )
+            lines.append(f"{name} : {type_name}")
+            detail = f"{required_label}{default_text}."
+            if description:
+                detail = f"{detail} {description}"
+            lines.append(f"    {detail}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _integration_examples_doc(
+        name: str,
+        examples: list[Any],
+        input_schema: Dict[str, Any],
+        description: str,
+    ) -> str:
+        example_payloads: list[dict[str, Any]] = []
+        for example in examples:
+            if isinstance(example, dict):
+                args = (
+                    example.get("arguments")
+                    or example.get("input")
+                    or example.get("params")
+                    or example
+                )
+                if isinstance(args, dict):
+                    example_payloads.append(args)
+            if len(example_payloads) >= 3:
+                break
+        if not example_payloads:
+            properties, _required = FunctionManager._integration_schema_properties(
+                input_schema,
+            )
+            synthetic: dict[str, Any] = {}
+            for param, schema in properties.items():
+                if not isinstance(param, str) or not isinstance(schema, dict):
+                    continue
+                if "default" in schema:
+                    synthetic[param] = schema["default"]
+                elif param in {"query", "q", "search_query"}:
+                    synthetic[param] = "is:unread"
+                elif param in {"max_results", "limit", "page_size"}:
+                    synthetic[param] = 5
+                elif schema.get("type") == "boolean":
+                    synthetic[param] = False
+                if len(synthetic) >= 3:
+                    break
+            if synthetic:
+                example_payloads.append(synthetic)
+        if not example_payloads:
+            return "Examples\n--------\nNo provider examples are available. Inspect the Parameters section before calling."
+        lines = ["Examples", "--------"]
+        for payload in example_payloads:
+            rendered = ", ".join(f"{key}={value!r}" for key, value in payload.items())
+            lines.append(f"await {name}({rendered})")
+        if "hydrate" in description.lower() or "message_id" in description.lower():
+            lines.append(
+                "For full message bodies, list message IDs first and hydrate individual messages when needed.",
+            )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _integration_embedding_text(
+        *,
+        name: str,
+        signature: str,
+        app: str,
+        tool: str,
+        description: str,
+        input_schema: Dict[str, Any],
+        examples: list[Any],
+    ) -> str:
+        properties, _required = FunctionManager._integration_schema_properties(
+            input_schema,
+        )
+        parameter_names = ", ".join(str(key) for key in properties.keys())
+        example_terms: list[str] = []
+        for example in examples:
+            if isinstance(example, dict):
+                text = json.dumps(example, sort_keys=True)
+                example_terms.append(text)
+            if len(example_terms) >= 2:
+                break
+        parts = [
+            f"Function Name: {name}",
+            f"Signature: {signature}",
+            f"App: {app}",
+            f"Tool: {tool}",
+            f"Purpose: {description}",
+        ]
+        if parameter_names:
+            parts.append(f"Parameters: {parameter_names}")
+        if example_terms:
+            parts.append(f"Examples: {'; '.join(example_terms)}")
+        return "\n".join(parts)
+
+    def _integration_tool_to_function_row(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        tool_id = item["tool_id"]
+        name = item["canonical_name"]
+        app = item.get("app_display_name") or item.get("app_slug") or "integration"
+        tool = item.get("tool_display_name") or name.rsplit(".", 1)[-1]
+        backend = item.get("backend_id") or item.get("provider_backend") or "provider"
+        provider_app_id = item.get("provider_app_id") or item.get("app_slug")
+        provider_tool_id = item.get("provider_tool_id") or item.get(
+            "provider_action_id",
+        )
+        app_icon_url = item.get("app_icon_url") or item.get("icon_url")
+        required_scopes = item.get("required_scopes") or []
+        action_class = item.get("action_class", "read")
+        confirmation_required = bool(item.get("confirmation_required", False))
+        behavior_hints = item.get("behavior_hints") or []
+        input_schema = item.get("input_schema") or item.get("input_schema_json") or {}
+        output_schema = (
+            item.get("output_schema") or item.get("output_schema_json") or {}
+        )
+        examples = item.get("examples") or item.get("examples_json") or []
+        example_prompts = item.get("example_prompts") or []
+        guidance_ids = item.get("guidance_ids") or []
+        signature = self._integration_schema_argspec(input_schema)
+        parameter_doc = self._integration_parameter_doc(input_schema)
+        examples_doc = self._integration_examples_doc(
+            name,
+            examples,
+            input_schema,
+            str(item.get("description") or ""),
+        )
+        usage_prompts = "\n".join(
+            f"- {prompt}" for prompt in example_prompts[:3] if str(prompt).strip()
+        )
+        usage_prompt_section = (
+            f"\n\nExample user requests\n---------------------\n{usage_prompts}"
+            if usage_prompts
+            else ""
+        )
+        docstring = (
+            f"{tool}\n\n"
+            f"Use this {app} integration primitive when you need to {item.get('description', 'run this provider action')}.\n\n"
+            f"Call signature\n--------------\n{name}{signature}\n\n"
+            f"{parameter_doc}\n\n"
+            "Returns\n-------\n"
+            "dict\n"
+            "    Provider execution envelope returned by Orchestra. Treat non-ok "
+            "statuses such as confirmation_required, missing_scope, expired, "
+            "blocked_by_policy, or error as actionable outcomes to explain to "
+            "the user.\n\n"
+            f"{examples_doc}{usage_prompt_section}\n\n"
+            "Safety\n------\n"
+            f"Action class: {action_class}. "
+            f"Confirmation required: {confirmation_required}. "
+            "Use the approved confirmation flow for sensitive, write, destructive, "
+            "or bulk-export actions."
+        )
+        embedding_text = self._integration_embedding_text(
+            name=name,
+            signature=signature,
+            app=str(app),
+            tool=str(tool),
+            description=str(item.get("description") or ""),
+            input_schema=input_schema,
+            examples=examples,
+        )
+        metadata = provider_function_metadata(
+            {
+                "tool_id": tool_id,
+                "backend_id": backend,
+                "app_slug": item.get("app_slug"),
+                "input_schema": input_schema,
+                "output_schema": output_schema,
+                "examples": examples,
+                "source_type": "third_party",
+                "namespace": "primitives.integrations",
+                "provider_app_id": provider_app_id,
+                "provider_tool_id": provider_tool_id,
+                "labels": {
+                    "app_display_name": app,
+                    "app_icon_url": app_icon_url,
+                    "tool_display_name": tool,
+                },
+                "app_display_name": app,
+                "app_icon_url": app_icon_url,
+                "tool_display_name": tool,
+                "required_scopes": required_scopes,
+                "action_class": action_class,
+                "behavior_hints": behavior_hints,
+                "confirmation_required": confirmation_required,
+                "schema_available": item.get("schema_available", True),
+            },
+        )
+        row = {
+            "function_id": self._provider_integration_function_id(tool_id),
+            "language": "python",
+            "name": name,
+            "argspec": signature,
+            "docstring": docstring,
+            "implementation": None,
+            "depends_on": [],
+            "precondition": None,
+            "embedding_text": embedding_text,
+            "guidance_ids": guidance_ids,
+            "verify": confirmation_required
+            or action_class in {"write", "destructive", "bulk_export"},
+            "is_primitive": True,
+            "primitive_class": "unity.integrations.primitives.IntegrationPrimitives",
+            "primitive_method": item.get("function_manager_name")
+            or name.replace(".", "__"),
+            "metadata": metadata,
+        }
+        return Function.model_validate(row).model_dump(include=set(row.keys()))
+
+    def _function_context_for_root(self, root_context: str, table_name: str) -> str:
+        """Return a concrete Functions context under a registry root."""
+        return f"{root_context.strip('/')}/{table_name}"
+
+    def _function_context_for_destination(
+        self,
+        table_name: str,
+        *,
+        destination: str | None,
+    ) -> str:
+        """Resolve a public destination into one concrete Functions context."""
+        root_context = ContextRegistry.write_root(
+            self,
+            table_name,
+            destination=destination,
+        )
+        return self._function_context_for_root(root_context, table_name)
+
+    def _read_function_contexts(self, table_name: str) -> list[str]:
+        """Return personal-first concrete contexts for a Functions table."""
+        return list(
+            dict.fromkeys(
+                self._function_context_for_root(root, table_name)
+                for root in ContextRegistry.read_roots(self, table_name)
+            ),
+        )
+
+    def _read_compositional_contexts(self) -> list[str]:
+        """Return function contexts, narrowed during destination-scoped writes."""
+        if self._destination_write_scoped:
+            return [self._compositional_ctx]
+        return self._read_function_contexts(FUNCTIONS_COMPOSITIONAL_TABLE)
+
+    def _read_venv_contexts(self) -> list[str]:
+        """Return venv contexts, narrowed during destination-scoped writes."""
+        if self._destination_write_scoped:
+            return [self._venvs_ctx]
+        return self._read_function_contexts(FUNCTIONS_VENVS_TABLE)
+
+    @contextmanager
+    def _temporary_function_context(self, attr_name: str, context: str):
+        """Temporarily bind an existing storage method to a resolved context."""
+        with self._destination_context_lock:
+            original = getattr(self, attr_name)
+            was_write_scoped = self._destination_write_scoped
+            setattr(self, attr_name, context)
+            self._destination_write_scoped = True
+            try:
+                yield
+            finally:
+                setattr(self, attr_name, original)
+                self._destination_write_scoped = was_write_scoped
+
+    def _sync_destination_contexts(
+        self,
+        table_name: str,
+        destination: str | None,
+    ) -> tuple[str, str, bool]:
+        """Return the destination-scoped data context, meta context, and personal flag."""
+
+        data_context = self._function_context_for_destination(
+            table_name,
+            destination=destination,
+        )
+        meta_context = self._function_context_for_destination(
+            FUNCTIONS_META_TABLE,
+            destination=destination,
+        )
+        return data_context, meta_context, destination in (None, "personal")
 
     @property
     def _dangerous_builtins(self) -> Set[str]:
@@ -1957,9 +2535,10 @@ class FunctionManager(BaseFunctionManager):
         # Reset any manager-local counters or caches
         try:
             self._next_id = None
-            self._primitives_synced = False
             self._custom_venvs_synced = False
             self._custom_functions_synced = False
+            self._custom_venvs_synced_contexts.clear()
+            self._custom_functions_synced_contexts.clear()
             # Clear in-process session state
             self._in_process_sessions.clear()
         except Exception:
@@ -2002,8 +2581,9 @@ class FunctionManager(BaseFunctionManager):
     #  Primitives sync                                                   #
     # ------------------------------------------------------------------ #
 
-    def _get_stored_primitives_hash_by_manager(self) -> Dict[str, str]:
-        """Retrieve the per-manager primitives hashes from the Meta context."""
+    def _get_stored_hash_map(self, field_name: str) -> Dict[str, str]:
+        """Read a hash map field from the singleton Functions/Meta row."""
+
         try:
             logs = unify.get_logs(
                 context=self._meta_ctx,
@@ -2011,16 +2591,14 @@ class FunctionManager(BaseFunctionManager):
                 limit=1,
             )
             if logs:
-                return logs[0].entries.get("primitives_hash_by_manager", {}) or {}
+                return logs[0].entries.get(field_name, {}) or {}
         except Exception:
             pass
         return {}
 
-    def _store_primitives_hash_by_manager(
-        self,
-        hash_by_manager: Dict[str, str],
-    ) -> None:
-        """Store the per-manager primitives hashes in the Meta context."""
+    def _store_hash_map(self, field_name: str, hashes: Dict[str, str]) -> None:
+        """Store a hash map field on the singleton Functions/Meta row."""
+
         try:
             logs = unify.get_logs(
                 context=self._meta_ctx,
@@ -2031,221 +2609,738 @@ class FunctionManager(BaseFunctionManager):
                 unify.update_logs(
                     logs=[logs[0].id],
                     context=self._meta_ctx,
-                    entries={"primitives_hash_by_manager": hash_by_manager},
+                    entries={field_name: hashes},
                     overwrite=True,
                 )
             else:
                 unity_create_logs(
                     context=self._meta_ctx,
                     entries=[
-                        {"meta_id": 1, "primitives_hash_by_manager": hash_by_manager},
+                        {"meta_id": 1, field_name: hashes},
                     ],
+                    stamp_authoring=True,
                     add_to_all_context=self.include_in_multi_assistant_table,
                 )
         except Exception as e:
-            logger.warning(f"Failed to store primitives hash: {e}")
+            logger.warning("Failed to store %s hash map: %s", field_name, e)
 
-    def _delete_primitives_for_managers(self, manager_aliases: List[str]) -> None:
-        """Delete primitive rows for specific managers."""
-        if not manager_aliases:
-            return
+    def _get_stored_integration_tool_hash_by_app(self) -> Dict[str, str]:
+        """Retrieve per-app hashes for materialized provider-backed tools."""
+
+        return self._get_stored_hash_map("integration_tool_hash_by_app")
+
+    def _store_integration_tool_hash_by_app(self, hash_by_app: Dict[str, str]) -> None:
+        """Store per-app hashes for materialized provider-backed tools."""
+
+        self._store_hash_map("integration_tool_hash_by_app", hash_by_app)
+
+    @staticmethod
+    def _compact_function_search_rows(
+        rows: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Return actor-facing discovery rows without large structured payloads."""
+
+        compact_rows: list[dict[str, Any]] = []
+        for row in rows:
+            compact = {
+                key: value for key, value in row.items() if key != "implementation"
+            }
+            metadata = function_metadata(compact)
+            integration = integration_metadata(compact)
+            if integration:
+                compact_integration = {
+                    key: value
+                    for key, value in integration.items()
+                    if key not in {"input_schema", "output_schema", "examples"}
+                }
+                compact["metadata"] = {
+                    **metadata,
+                    "integration": compact_integration,
+                }
+            compact_rows.append(compact)
+        return compact_rows
+
+    @staticmethod
+    def _integration_hash_key(*, backend_id: str | None, app_slug: str) -> str:
+        return f"{backend_id or 'provider'}:{app_slug}"
+
+    @staticmethod
+    def _provider_integration_filter(
+        *,
+        backend_id: str | None = None,
+        app_slug: str | None = None,
+    ) -> str:
+        clauses = ['metadata["source"] == "provider_backed"']
+        if backend_id is not None:
+            clauses.append(
+                f'metadata["integration"]["backend_id"] == {json.dumps(backend_id or "provider")}',
+            )
+        if app_slug is not None:
+            clauses.append(
+                f'metadata["integration"]["app_slug"] == {json.dumps(app_slug)}',
+            )
+        return " and ".join(clauses)
+
+    @staticmethod
+    def _legacy_provider_integration_filter(
+        *,
+        backend_id: str | None = None,
+        app_slug: str | None = None,
+    ) -> str:
+        clauses = ['integration_source == "provider_backed"']
+        if backend_id is not None:
+            clauses.append(f'backend_id == {json.dumps(backend_id or "provider")}')
+        if app_slug is not None:
+            clauses.append(f"app_slug == {json.dumps(app_slug)}")
+        return " and ".join(clauses)
+
+    def _provider_row_matches_app_keys(
+        self,
+        row: Dict[str, Any] | None,
+        app_keys: List[tuple[str | None, str]],
+    ) -> bool:
+        if not row:
+            return False
+        if is_provider_backed_function(row):
+            backend_id = integration_backend_id(row) or "provider"
+            app_slug = integration_app_slug(row) or ""
+        elif row.get("integration_source") == "provider_backed":
+            backend_id = str(row.get("backend_id") or "provider")
+            app_slug = str(row.get("app_slug") or "")
+        else:
+            return False
+        return any(
+            app_slug == expected_app
+            and (
+                expected_backend is None
+                or backend_id == (expected_backend or "provider")
+            )
+            for expected_backend, expected_app in app_keys
+        )
+
+    @staticmethod
+    def _hash_integration_rows(rows: List[Dict[str, Any]]) -> str:
+        hash_fields = (
+            "name",
+            "argspec",
+            "docstring",
+            "embedding_text",
+            "function_id",
+            "primitive_class",
+            "primitive_method",
+            "metadata",
+            "verify",
+        )
+        return stable_hash_for_rows(rows, fields=hash_fields)
+
+    def _delete_provider_integration_rows_for_apps(
+        self,
+        app_keys: List[tuple[str | None, str]],
+    ) -> int:
+        """Delete materialized provider-backed primitive rows for the given apps."""
+        if not app_keys:
+            return 0
+        filter_expr = " or ".join(
+            clause
+            for backend_id, app_slug in app_keys
+            for clause in (
+                f"({self._provider_integration_filter(backend_id=backend_id, app_slug=app_slug)})",
+                # TODO: Remove this legacy top-level row cleanup after deployed
+                # projects no longer contain pre-metadata provider primitive rows.
+                f"({self._legacy_provider_integration_filter(backend_id=backend_id, app_slug=app_slug)})",
+            )
+        )
         try:
-            # Convert manager aliases to class paths for filtering
-            class_paths = []
-            for alias in manager_aliases:
-                for spec in self._registry.manager_specs(self._primitive_scope):
-                    if spec.manager_alias == alias:
-                        class_paths.append(spec.primitive_class_path)
-                        break
-
-            if not class_paths:
-                return
-
-            # Build filter using OR clauses (in [] syntax may not work for strings)
-            clauses = [f'primitive_class == "{cp}"' for cp in class_paths]
-            filter_expr = " or ".join(clauses)
             logs = unify.get_logs(
                 context=self._primitives_ctx,
                 filter=filter_expr,
                 exclude_fields=list_private_fields(self._primitives_ctx),
             )
-            if logs:
-                unify.delete_logs(
-                    context=self._primitives_ctx,
-                    logs=[lg.id for lg in logs],
+            ids_to_delete = [
+                lg.id
+                for lg in logs or []
+                if self._provider_row_matches_app_keys(
+                    getattr(lg, "entries", None),
+                    app_keys,
                 )
-                logger.debug(
-                    f"Deleted {len(logs)} primitive rows for managers: {manager_aliases}",
-                )
+            ]
+            if not ids_to_delete:
+                return 0
+            unify.delete_logs(
+                context=self._primitives_ctx,
+                logs=ids_to_delete,
+            )
+            return len(ids_to_delete)
         except Exception as e:
-            logger.warning(f"Failed to delete primitives for {manager_aliases}: {e}")
+            logger.warning(f"Failed to delete provider integration rows: {e}")
+            return 0
+
+    def _count_provider_integration_rows_for_app(
+        self,
+        *,
+        backend_id: str | None,
+        app_slug: str,
+    ) -> int | None:
+        """Count materialized provider-backed rows for one app."""
+        filter_expr = self._provider_integration_filter(
+            backend_id=backend_id or "provider",
+            app_slug=app_slug,
+        )
+        try:
+            rows = unify.get_logs(
+                context=self._primitives_ctx,
+                filter=filter_expr,
+                exclude_fields=list_private_fields(self._primitives_ctx),
+            )
+            return len(rows or [])
+        except Exception as exc:
+            log_staging_diagnostic(
+                logger,
+                (
+                    "Provider integration write verification failed "
+                    "backend_id=%s app_slug=%s error=%s"
+                ),
+                backend_id or "provider",
+                app_slug,
+                exc,
+                level=logging.WARNING,
+            )
+            return None
+
+    def sync_provider_integration_tools(
+        self,
+        *,
+        app_slug: str | None = None,
+        connection_id: str | None = None,
+        operation: str = "materialize",
+        limit: int = 500,
+    ) -> Dict[str, Any]:
+        """Materialize active provider-backed tools into the Primitives context.
+
+        This is an explicit sync path, not a FunctionManager query-time search.
+        It builds expected rows, compares stable per-app hashes, and only
+        deletes/upserts the affected app rows when changed.
+        """
+        from time import perf_counter
+
+        sync_start = perf_counter()
+
+        def _sync_duration() -> float:
+            return perf_counter() - sync_start
+
+        operation = (
+            "cleanup" if str(operation).strip().lower() == "cleanup" else "materialize"
+        )
+
+        if not self._include_primitives or not self._primitive_scope.includes(
+            "integrations",
+        ):
+            log_staging_diagnostic(
+                logger,
+                (
+                    "Provider integration sync skipped app_slug=%s "
+                    "reason=integrations_not_in_scope duration=%.2fs"
+                ),
+                app_slug or "-",
+                _sync_duration(),
+            )
+            return {
+                "status": "skipped",
+                "reason": "integrations_not_in_scope",
+                "apps": [],
+            }
+        if limit <= 0:
+            log_staging_diagnostic(
+                logger,
+                (
+                    "Provider integration sync failed app_slug=%s "
+                    "reason=invalid_page_limit limit=%d duration=%.2fs"
+                ),
+                app_slug or "-",
+                limit,
+                _sync_duration(),
+            )
+            return {
+                "status": "error",
+                "error": {
+                    "code": "invalid_page_limit",
+                    "message": "Provider integration tool sync requires a positive page limit.",
+                },
+                "apps": [],
+            }
+
+        try:
+            from unity.integrations import ops as integration_ops
+        except Exception as exc:
+            log_staging_diagnostic(
+                logger,
+                (
+                    "Provider integration sync failed app_slug=%s "
+                    "reason=integration_ops_import_error error=%s duration=%.2fs"
+                ),
+                app_slug or "-",
+                exc,
+                _sync_duration(),
+            )
+            return {"status": "error", "error": str(exc), "apps": []}
+
+        owner_scope = self._integration_owner_scope()
+        try:
+            from unity.integrations.sync_state import normalize_app_slug
+        except Exception:
+            normalize_app_slug = lambda value: value.strip().lower()  # type: ignore[assignment]
+        connections = integration_ops.list_connections(**owner_scope)
+        if isinstance(connections, dict) and connections.get("error"):
+            log_staging_diagnostic(
+                logger,
+                (
+                    "Provider integration sync failed app_slug=%s "
+                    "reason=list_connections_error owner_scope=%s error=%s "
+                    "duration=%.2fs"
+                ),
+                app_slug or "-",
+                {
+                    key: owner_scope.get(key)
+                    for key in (
+                        "owner_scope",
+                        "assistant_id",
+                        "user_id",
+                        "org_id",
+                        "team_ids",
+                    )
+                    if key in owner_scope
+                },
+                connections.get("error"),
+                _sync_duration(),
+            )
+            return {"status": "error", "error": connections.get("error"), "apps": []}
+
+        normalized_app = (
+            normalize_app_slug(app_slug)
+            if isinstance(app_slug, str) and app_slug
+            else None
+        )
+        active_connections = []
+        for connection in connections or []:
+            if connection.get("status") != "connected":
+                continue
+            raw_conn_app = connection.get("canonical_app_slug")
+            conn_app = (
+                normalize_app_slug(raw_conn_app)
+                if isinstance(raw_conn_app, str)
+                else raw_conn_app
+            )
+            if normalized_app and conn_app != normalized_app:
+                continue
+            if connection_id and connection.get("connection_id") != connection_id:
+                continue
+            active_connections.append(connection)
+        active_app_slugs_for_log = [
+            connection.get("canonical_app_slug")
+            for connection in active_connections
+            if connection.get("canonical_app_slug")
+        ]
+        log_staging_diagnostic(
+            logger,
+            (
+                "Provider integration sync started app_slug=%s connection_id=%s operation=%s "
+                "owner_scope=%s connections=%d active_connections=%d active_apps=%s"
+            ),
+            normalized_app or "-",
+            connection_id or "-",
+            operation,
+            {
+                key: owner_scope.get(key)
+                for key in (
+                    "owner_scope",
+                    "assistant_id",
+                    "user_id",
+                    "org_id",
+                    "team_ids",
+                )
+                if key in owner_scope
+            },
+            len(connections or []),
+            len(active_connections),
+            active_app_slugs_for_log,
+        )
+
+        current_hashes = self._get_stored_integration_tool_hash_by_app()
+        new_hashes = dict(current_hashes)
+        changed_apps: list[dict[str, Any]] = []
+        unchanged_apps: list[dict[str, Any]] = []
+        removed_apps: list[str] = []
+
+        if normalized_app and operation == "cleanup":
+            # Rows are connection-agnostic catalogue entries, so a single
+            # disconnect only removes them when no other live connection
+            # still serves the app.
+            remaining_connections = [
+                connection
+                for connection in connections or []
+                if connection.get("status") == "connected"
+                and normalize_app_slug(str(connection.get("canonical_app_slug") or ""))
+                == normalized_app
+                and (
+                    not connection_id
+                    or connection.get("connection_id") != connection_id
+                )
+            ]
+            if connection_id and remaining_connections:
+                removed = 0
+                removed_keys: list[str] = []
+            else:
+                app_keys_to_remove: list[tuple[str | None, str]] = []
+                removed_keys = []
+                for key in list(new_hashes):
+                    if key.endswith(f":{normalized_app}"):
+                        backend_id, _sep, _app = key.partition(":")
+                        app_keys_to_remove.append((backend_id or None, normalized_app))
+                        removed_keys.append(key)
+                        new_hashes.pop(key, None)
+                if not app_keys_to_remove:
+                    app_keys_to_remove = [(None, normalized_app)]
+                removed = self._delete_provider_integration_rows_for_apps(
+                    app_keys_to_remove,
+                )
+            if removed or removed_keys:
+                self._store_integration_tool_hash_by_app(new_hashes)
+            result = {
+                "status": "removed",
+                "apps": [],
+                "removed_apps": removed_keys,
+                "rows_deleted": removed,
+            }
+            log_staging_diagnostic(
+                logger,
+                (
+                    "Provider integration sync completed app_slug=%s "
+                    "operation=cleanup connection_id=%s status=%s "
+                    "removed_apps=%s rows_deleted=%d duration=%.2fs"
+                ),
+                normalized_app,
+                connection_id or "-",
+                result["status"],
+                removed_keys,
+                removed,
+                _sync_duration(),
+            )
+            return result
+
+        if normalized_app and not active_connections:
+            if connection_id:
+                result = {
+                    "status": "error",
+                    "error": {
+                        "code": "provider_connection_not_active",
+                        "message": (
+                            "No connected provider account matched the requested "
+                            f"{normalized_app} connection."
+                        ),
+                    },
+                    "apps": [],
+                    "removed_apps": [],
+                    "rows_deleted": 0,
+                }
+                log_staging_diagnostic(
+                    logger,
+                    (
+                        "Provider integration sync failed app_slug=%s "
+                        "connection_id=%s reason=provider_connection_not_active "
+                        "connections=%d duration=%.2fs"
+                    ),
+                    normalized_app,
+                    connection_id,
+                    len(connections or []),
+                    _sync_duration(),
+                )
+                return result
+            app_keys_to_remove: list[tuple[str | None, str]] = []
+            for key in list(new_hashes):
+                if key.endswith(f":{normalized_app}"):
+                    backend_id, _sep, _app = key.partition(":")
+                    app_keys_to_remove.append((backend_id or None, normalized_app))
+                    new_hashes.pop(key, None)
+                    removed_apps.append(key)
+            if not app_keys_to_remove:
+                app_keys_to_remove = [(None, normalized_app)]
+            removed = self._delete_provider_integration_rows_for_apps(
+                app_keys_to_remove,
+            )
+            if removed_apps:
+                self._store_integration_tool_hash_by_app(new_hashes)
+            result = {
+                "status": "removed" if removed or removed_apps else "unchanged",
+                "apps": [],
+                "removed_apps": removed_apps,
+                "rows_deleted": removed,
+            }
+            log_staging_diagnostic(
+                logger,
+                (
+                    "Provider integration sync completed app_slug=%s status=%s "
+                    "removed_apps=%s rows_deleted=%d duration=%.2fs"
+                ),
+                normalized_app,
+                result["status"],
+                removed_apps,
+                removed,
+                _sync_duration(),
+            )
+            return result
+
+        tools_response: list[dict[str, Any]] = []
+        offset = 0
+        total_tools: int | None = None
+        max_pages = 10_000
+        page_count = 0
+        while total_tools is None or offset < total_tools:
+            page = integration_ops.get_tools(
+                limit=limit,
+                offset=offset,
+                activation_state="connected_ready",
+                include_unconnected=False,
+                include_schema=True,
+                canonical_app_slug=normalized_app,
+                **owner_scope,
+            )
+            if isinstance(page, dict) and page.get("error"):
+                log_staging_diagnostic(
+                    logger,
+                    (
+                        "Provider integration sync failed app_slug=%s "
+                        "reason=get_tools_error offset=%d error=%s duration=%.2fs"
+                    ),
+                    normalized_app or "-",
+                    offset,
+                    page.get("error"),
+                    _sync_duration(),
+                )
+                return {"status": "error", "error": page.get("error"), "apps": []}
+            page_has_total = isinstance(page, dict)
+            if page_has_total:
+                page_items = list(page.get("items") or [])
+                total_tools = int(page.get("total") or 0)
+            else:
+                # Backward-compatible fallback for older Orchestra deployments.
+                page_items = list(page or [])
+            tools_response.extend(page_items)
+            page_count += 1
+            log_staging_diagnostic(
+                logger,
+                (
+                    "Provider integration sync get_tools page app_slug=%s "
+                    "page=%d offset=%d page_size=%d total=%s"
+                ),
+                normalized_app or "-",
+                page_count,
+                offset,
+                len(page_items),
+                total_tools if total_tools is not None else "-",
+            )
+            if page_count > max_pages:
+                log_staging_diagnostic(
+                    logger,
+                    (
+                        "Provider integration sync failed app_slug=%s "
+                        "reason=pagination_exceeded pages=%d duration=%.2fs"
+                    ),
+                    normalized_app or "-",
+                    page_count,
+                    _sync_duration(),
+                )
+                return {
+                    "status": "error",
+                    "error": {
+                        "code": "provider_tool_pagination_exceeded",
+                        "message": "Provider tool list pagination exceeded the safety page limit.",
+                    },
+                    "apps": [],
+                }
+            if not page_items:
+                break
+            if not page_has_total and len(page_items) < limit:
+                break
+            offset += limit
+
+        active_app_slugs = {
+            normalize_app_slug(connection["canonical_app_slug"])
+            for connection in active_connections
+            if isinstance(connection.get("canonical_app_slug"), str)
+        }
+        rows_by_key: dict[str, list[Dict[str, Any]]] = {}
+        key_to_app: dict[str, tuple[str | None, str]] = {}
+        for item in tools_response or []:
+            raw_item_app = item.get("app_slug")
+            item_app = (
+                normalize_app_slug(raw_item_app)
+                if isinstance(raw_item_app, str)
+                else raw_item_app
+            )
+            if not item_app or item_app not in active_app_slugs:
+                continue
+            item = {**item, "app_slug": item_app}
+            row = self._integration_tool_to_function_row(item)
+            backend_id = integration_backend_id(row) or "provider"
+            key = self._integration_hash_key(backend_id=backend_id, app_slug=item_app)
+            rows_by_key.setdefault(key, []).append(row)
+            key_to_app[key] = (backend_id, item_app)
+        log_staging_diagnostic(
+            logger,
+            (
+                "Provider integration sync filtered tools app_slug=%s "
+                "raw_tools=%d active_apps=%s rows_by_key=%s"
+            ),
+            normalized_app or "-",
+            len(tools_response),
+            sorted(active_app_slugs),
+            {key: len(rows) for key, rows in rows_by_key.items()},
+        )
+
+        for key, rows in rows_by_key.items():
+            expected_hash = self._hash_integration_rows(rows)
+            if current_hashes.get(key) == expected_hash:
+                unchanged_apps.append({"key": key, "rows": len(rows)})
+                log_staging_diagnostic(
+                    logger,
+                    (
+                        "Provider integration sync hash decision key=%s "
+                        "decision=unchanged rows=%d"
+                    ),
+                    key,
+                    len(rows),
+                )
+                continue
+            backend_id, item_app = key_to_app[key]
+            deleted = self._delete_provider_integration_rows_for_apps(
+                [(backend_id, item_app)],
+            )
+            log_staging_diagnostic(
+                logger,
+                (
+                    "Provider integration sync hash decision key=%s "
+                    "decision=changed rows=%d rows_deleted=%d"
+                ),
+                key,
+                len(rows),
+                deleted,
+            )
+            log_staging_diagnostic(
+                logger,
+                "Provider integration sync insert attempt key=%s rows=%d",
+                key,
+                len(rows),
+            )
+            self._insert_primitives(rows)
+            if staging_diagnostics_enabled():
+                observed_rows = self._count_provider_integration_rows_for_app(
+                    backend_id=backend_id,
+                    app_slug=item_app,
+                )
+                if observed_rows is not None and observed_rows != len(rows):
+                    logger.warning(
+                        (
+                            "Provider integration write verification mismatch "
+                            "key=%s expected_rows=%d observed_rows=%d"
+                        ),
+                        key,
+                        len(rows),
+                        observed_rows,
+                    )
+            new_hashes[key] = expected_hash
+            changed_apps.append(
+                {"key": key, "rows": len(rows), "rows_deleted": deleted},
+            )
+
+        if not normalized_app:
+            active_keys = set(rows_by_key)
+            for key in list(new_hashes):
+                if key not in active_keys and key in current_hashes:
+                    _backend, _sep, old_app = key.partition(":")
+                    deleted = self._delete_provider_integration_rows_for_apps(
+                        [(_backend, old_app)],
+                    )
+                    new_hashes.pop(key, None)
+                    removed_apps.append(key)
+                    if deleted:
+                        logger.debug(
+                            "Removed %s stale provider integration rows for %s",
+                            deleted,
+                            key,
+                        )
+
+        if changed_apps or removed_apps:
+            self._store_integration_tool_hash_by_app(new_hashes)
+
+        result = {
+            "status": "synced" if changed_apps or removed_apps else "unchanged",
+            "apps": changed_apps,
+            "unchanged_apps": unchanged_apps,
+            "removed_apps": removed_apps,
+        }
+        log_staging_diagnostic(
+            logger,
+            (
+                "Provider integration sync completed app_slug=%s status=%s "
+                "changed_apps=%s unchanged_apps=%s removed_apps=%s duration=%.2fs"
+            ),
+            normalized_app or "-",
+            result["status"],
+            changed_apps,
+            unchanged_apps,
+            removed_apps,
+            _sync_duration(),
+        )
+        return result
+
+    def _delete_primitives_by_function_ids(self, function_ids: list[int]) -> None:
+        if not function_ids:
+            return
+        ids = sorted(set(function_ids))
+        filter_expr = (
+            f"function_id == {ids[0]}"
+            if len(ids) == 1
+            else f"function_id in [{', '.join(str(function_id) for function_id in ids)}]"
+        )
+        logs = unify.get_logs(
+            context=self._primitives_ctx,
+            filter=filter_expr,
+            exclude_fields=list_private_fields(self._primitives_ctx),
+        )
+        if logs:
+            unify.delete_logs(
+                context=self._primitives_ctx,
+                logs=[log.id for log in logs],
+            )
 
     def _insert_primitives(self, primitives: List[Dict[str, Any]]) -> None:
         """Insert primitive rows into the Primitives context with explicit IDs."""
         if not primitives:
             return
 
-        entries = []
-        for data in primitives:
-            entry = {
-                "name": data["name"],
-                "function_id": data[
-                    "function_id"
-                ],  # Explicit stable ID from collect_primitives()
-                "argspec": data["argspec"],
-                "docstring": data["docstring"],
-                "embedding_text": data["embedding_text"],
-                "implementation": None,
-                "depends_on": [],
-                "precondition": None,
-                "verify": False,
-                "is_primitive": True,
-                "guidance_ids": [],
-                "primitive_class": data.get("primitive_class"),
-                "primitive_method": data.get("primitive_method"),
-            }
-            entries.append(entry)
+        entries = [
+            Function.model_validate(data).model_dump(include=set(data.keys()))
+            for data in primitives
+        ]
 
         try:
+            self._delete_primitives_by_function_ids(
+                [
+                    entry["function_id"]
+                    for entry in entries
+                    if isinstance(entry.get("function_id"), int)
+                ],
+            )
             unity_create_logs(
                 context=self._primitives_ctx,
                 entries=entries,
+                stamp_authoring=True,
                 batched=True,
                 recompute_derived=True,
             )
             logger.debug(f"Inserted {len(entries)} primitives")
         except Exception as e:
             logger.error(f"Failed to insert primitives: {e}")
-
-    def sync_primitives(self) -> bool:
-        """
-        Ensure primitives in the database match current Python definitions.
-
-        Uses per-manager hash comparison to avoid unnecessary writes. Only syncs
-        primitives for managers in this FunctionManager's scope.
-
-        The algorithm:
-        1. Read current hashes from Meta (one call)
-        2. Compute expected hashes for each scoped manager
-        3. Batch delete all changed managers' primitives (one call)
-        4. Batch insert all new primitives (one call)
-        5. Update Meta with new hashes (one call)
-
-        Returns:
-            True if sync was performed, False if already up-to-date.
-        """
-        import time as _sp_time
-
-        _sp_t0 = _sp_time.perf_counter()
-
-        def _sp_ms():
-            return f"{(_sp_time.perf_counter() - _sp_t0) * 1000:.0f}ms"
-
-        logger.debug(f"⏱️ [FM.sync_primitives +{_sp_ms()}] entered")
-
-        if self._primitives_synced:
-            logger.debug(
-                f"⏱️ [FM.sync_primitives +{_sp_ms()}] already synced, skipping",
-            )
-            return False
-
-        target_managers = sorted(self._primitive_scope.scoped_managers)
-        log_startup_timing(
-            logger,
-            "⏱️ [StartupTiming] function_manager.sync_primitives target_managers=%d",
-            len(target_managers),
-        )
-
-        # Step 1: Read current hashes (one backend call)
-        logger.debug(f"⏱️ [FM.sync_primitives +{_sp_ms()}] reading stored hashes")
-        _step_t0 = _sp_time.perf_counter()
-        current_hashes = self._get_stored_primitives_hash_by_manager()
-        log_startup_timing(
-            logger,
-            "⏱️ [StartupTiming] function_manager.sync_primitives.read_hashes duration=%.2fs hashes=%d",
-            _sp_time.perf_counter() - _step_t0,
-            len(current_hashes),
-        )
-        logger.debug(f"⏱️ [FM.sync_primitives +{_sp_ms()}] hashes read")
-
-        # Step 2: Compute expected hashes and collect pending updates if they differ
-        _step_t0 = _sp_time.perf_counter()
-        pending_updates: List[Tuple[str, List[Dict[str, Any]], str]] = []
-        for manager_alias in target_managers:
-            expected_hash = self._registry.compute_hash_for_manager(manager_alias)
-
-            if current_hashes.get(manager_alias) == expected_hash:
-                continue
-
-            single_scope = PrimitiveScope(scoped_managers=frozenset({manager_alias}))
-            primitives_dict = self._registry.collect_primitives(single_scope)
-            expected_rows = list(primitives_dict.values())
-            pending_updates.append((manager_alias, expected_rows, expected_hash))
-        pending_rows = sum(len(rows) for _, rows, _ in pending_updates)
-        log_startup_timing(
-            logger,
-            "⏱️ [StartupTiming] function_manager.sync_primitives.compute_pending duration=%.2fs changed_managers=%s pending_rows=%d",
-            _sp_time.perf_counter() - _step_t0,
-            [alias for alias, _, _ in pending_updates],
-            pending_rows,
-        )
-
-        # Step 3: If nothing changed, mark synced and return
-        if not pending_updates:
-            logger.debug(
-                f"⏱️ [FM.sync_primitives +{_sp_ms()}] hashes match, skipping sync",
-            )
-            self._primitives_synced = True
-            return False
-
-        changed_managers = [alias for alias, _, _ in pending_updates]
-        logger.debug(
-            f"⏱️ [FM.sync_primitives +{_sp_ms()}] changed: {changed_managers}, syncing...",
-        )
-
-        # Step 4: Batched delete for all changed managers (one backend call)
-        _step_t0 = _sp_time.perf_counter()
-        self._delete_primitives_for_managers(changed_managers)
-        log_startup_timing(
-            logger,
-            "⏱️ [StartupTiming] function_manager.sync_primitives.delete duration=%.2fs changed_managers=%d",
-            _sp_time.perf_counter() - _step_t0,
-            len(changed_managers),
-        )
-        logger.debug(f"⏱️ [FM.sync_primitives +{_sp_ms()}] delete done")
-
-        # Step 5: Batched insert all new primitives (one backend call)
-        all_rows = []
-        for _, rows, _ in pending_updates:
-            all_rows.extend(rows)
-        _step_t0 = _sp_time.perf_counter()
-        self._insert_primitives(all_rows)
-        log_startup_timing(
-            logger,
-            "⏱️ [StartupTiming] function_manager.sync_primitives.insert duration=%.2fs rows=%d",
-            _sp_time.perf_counter() - _step_t0,
-            len(all_rows),
-        )
-        logger.debug(
-            f"⏱️ [FM.sync_primitives +{_sp_ms()}] insert done ({len(all_rows)} rows)",
-        )
-
-        # Step 6: Update Meta with new hashes (one backend call)
-        _step_t0 = _sp_time.perf_counter()
-        new_hashes = dict(current_hashes)
-        for alias, _, hash_val in pending_updates:
-            new_hashes[alias] = hash_val
-        self._store_primitives_hash_by_manager(new_hashes)
-        log_startup_timing(
-            logger,
-            "⏱️ [StartupTiming] function_manager.sync_primitives.store_hashes duration=%.2fs hashes=%d",
-            _sp_time.perf_counter() - _step_t0,
-            len(new_hashes),
-        )
-        logger.debug(f"⏱️ [FM.sync_primitives +{_sp_ms()}] hashes stored, done")
-
-        self._primitives_synced = True
-        return True
 
     # ------------------------------------------------------------------ #
     #  Custom Functions Sync                                              #
@@ -2285,6 +3380,7 @@ class FunctionManager(BaseFunctionManager):
                 unity_create_logs(
                     context=self._meta_ctx,
                     entries=[{"meta_id": 1, "custom_functions_hash": hash_value}],
+                    stamp_authoring=True,
                     add_to_all_context=self.include_in_multi_assistant_table,
                 )
         except Exception as e:
@@ -2327,7 +3423,9 @@ class FunctionManager(BaseFunctionManager):
             raise_if_missing=True,
         )
         # Update all fields except function_id (preserve it)
-        update_data = {k: v for k, v in data.items() if k != "function_id"}
+        update_data = strip_authoring_assistant_id(
+            {k: v for k, v in data.items() if k != "function_id"},
+        )
         unify.update_logs(
             context=self._compositional_ctx,
             logs=[log.id],
@@ -2342,6 +3440,7 @@ class FunctionManager(BaseFunctionManager):
         result = unity_create_logs(
             context=self._compositional_ctx,
             entries=[insert_data],
+            stamp_authoring=True,
             add_to_all_context=self.include_in_multi_assistant_table,
             recompute_derived=True,
         )
@@ -2399,6 +3498,7 @@ class FunctionManager(BaseFunctionManager):
                 unity_create_logs(
                     context=self._meta_ctx,
                     entries=[{"meta_id": 1, "custom_venvs_hash": hash_value}],
+                    stamp_authoring=True,
                     add_to_all_context=self.include_in_multi_assistant_table,
                 )
         except Exception as e:
@@ -2439,7 +3539,9 @@ class FunctionManager(BaseFunctionManager):
         )
         if not logs:
             raise ValueError(f"VirtualEnv with ID {venv_id} not found")
-        update_data = {k: v for k, v in data.items() if k != "venv_id"}
+        update_data = strip_authoring_assistant_id(
+            {k: v for k, v in data.items() if k != "venv_id"},
+        )
         unify.update_logs(
             context=self._venvs_ctx,
             logs=[logs[0].id],
@@ -2453,6 +3555,7 @@ class FunctionManager(BaseFunctionManager):
         result = unity_create_logs(
             context=self._venvs_ctx,
             entries=[insert_data],
+            stamp_authoring=True,
             add_to_all_context=self.include_in_multi_assistant_table,
         )
         # unity_create_logs can return either a dict or a list of Log objects
@@ -2476,6 +3579,7 @@ class FunctionManager(BaseFunctionManager):
         self,
         *,
         source_venvs: Optional[Dict[str, Dict[str, Any]]] = None,
+        destination: str | None = None,
     ) -> Dict[str, int]:
         """
         Ensure custom venvs in the database match source definitions.
@@ -2485,83 +3589,115 @@ class FunctionManager(BaseFunctionManager):
                 :func:`collect_custom_venvs` or
                 :func:`collect_venvs_from_directories`).  If *None*,
                 an empty set is assumed (no custom venvs).
+            destination: Where the custom venv definitions live. Use
+                ``"personal"`` for private custom environments and
+                ``"team:<id>"`` for team-level environments shared by a
+                team. See the Accessible shared teams block in your system
+                prompt for available teams.
 
         Returns:
             Dict mapping venv name to venv_id.
         """
-        if self._custom_venvs_synced:
-            db_venvs = self._get_custom_venvs_from_db()
-            return {name: v["venv_id"] for name, v in db_venvs.items()}
+        try:
+            venv_context, meta_context, is_personal = self._sync_destination_contexts(
+                FUNCTIONS_VENVS_TABLE,
+                destination,
+            )
+        except ToolErrorException as exc:
+            return exc.payload  # type: ignore[return-value]
 
-        if source_venvs is None:
-            source_venvs = {}
-        expected_hash = compute_custom_venvs_hash(source_venvs=source_venvs)
-        current_hash = self._get_stored_custom_venvs_hash()
+        with (
+            self._temporary_function_context(
+                "_venvs_ctx",
+                venv_context,
+            ),
+            self._temporary_function_context("_meta_ctx", meta_context),
+        ):
+            if source_venvs is None:
+                source_venvs = {}
+            expected_hash = compute_custom_venvs_hash(source_venvs=source_venvs)
+            current_hash = self._get_stored_custom_venvs_hash()
+            already_synced = (
+                self._custom_venvs_synced
+                if is_personal
+                else venv_context in self._custom_venvs_synced_contexts
+            )
 
-        # Quick check: if aggregate hash matches, skip detailed sync
-        if current_hash == expected_hash:
-            logger.debug("Custom venvs hash matches, skipping sync")
-            self._custom_venvs_synced = True
-            db_venvs = self._get_custom_venvs_from_db()
-            return {name: v["venv_id"] for name, v in db_venvs.items()}
+            if already_synced and current_hash == expected_hash:
+                db_venvs = self._get_custom_venvs_from_db()
+                return {name: v["venv_id"] for name, v in db_venvs.items()}
 
-        logger.info(
-            f"Custom venvs hash mismatch "
-            f"(current={current_hash}, expected={expected_hash}), syncing...",
-        )
-
-        db_venvs = self._get_custom_venvs_from_db()
-        processed_names: Set[str] = set()
-        name_to_id: Dict[str, int] = {}
-
-        for name, source_data in source_venvs.items():
-            processed_names.add(name)
-
-            if name in db_venvs:
-                db_entry = db_venvs[name]
-                if db_entry.get("custom_hash") != source_data["custom_hash"]:
-                    logger.info(f"Updating custom venv: {name}")
-                    self._update_custom_venv(
-                        venv_id=db_entry["venv_id"],
-                        data=source_data,
-                    )
+            # Quick check: if aggregate hash matches, skip detailed sync
+            if current_hash == expected_hash:
+                logger.debug("Custom venvs hash matches, skipping sync")
+                if is_personal:
+                    self._custom_venvs_synced = True
                 else:
-                    logger.debug(f"Custom venv unchanged: {name}")
-                name_to_id[name] = db_entry["venv_id"]
-            else:
-                # Check for user-added venv with same name
-                existing = unify.get_logs(
-                    context=self._venvs_ctx,
-                    filter=f"name == '{name}'",
-                    limit=1,
-                )
-                if existing:
-                    logger.info(f"Overwriting user-added venv with custom: {name}")
-                    unify.delete_logs(
+                    self._custom_venvs_synced_contexts.add(venv_context)
+                db_venvs = self._get_custom_venvs_from_db()
+                return {name: v["venv_id"] for name, v in db_venvs.items()}
+
+            logger.info(
+                f"Custom venvs hash mismatch "
+                f"(current={current_hash}, expected={expected_hash}), syncing...",
+            )
+
+            db_venvs = self._get_custom_venvs_from_db()
+            processed_names: Set[str] = set()
+            name_to_id: Dict[str, int] = {}
+
+            for name, source_data in source_venvs.items():
+                processed_names.add(name)
+
+                if name in db_venvs:
+                    db_entry = db_venvs[name]
+                    if db_entry.get("custom_hash") != source_data["custom_hash"]:
+                        logger.info(f"Updating custom venv: {name}")
+                        self._update_custom_venv(
+                            venv_id=db_entry["venv_id"],
+                            data=source_data,
+                        )
+                    else:
+                        logger.debug(f"Custom venv unchanged: {name}")
+                    name_to_id[name] = db_entry["venv_id"]
+                else:
+                    # Check for user-added venv with same name
+                    existing = unify.get_logs(
                         context=self._venvs_ctx,
-                        logs=[existing[0].id],
+                        filter=f"name == '{name}'",
+                        limit=1,
                     )
+                    if existing:
+                        logger.info(f"Overwriting user-added venv with custom: {name}")
+                        unify.delete_logs(
+                            context=self._venvs_ctx,
+                            logs=[existing[0].id],
+                        )
 
-                logger.info(f"Inserting custom venv: {name}")
-                new_id = self._insert_custom_venv(source_data)
-                name_to_id[name] = new_id
+                    logger.info(f"Inserting custom venv: {name}")
+                    new_id = self._insert_custom_venv(source_data)
+                    name_to_id[name] = new_id
 
-        # Delete venvs that are in DB but not in source
-        for name in db_venvs:
-            if name not in processed_names:
-                logger.info(f"Deleting removed custom venv: {name}")
-                self._delete_custom_venv_by_name(name)
+            # Delete venvs that are in DB but not in source
+            for name in db_venvs:
+                if name not in processed_names:
+                    logger.info(f"Deleting removed custom venv: {name}")
+                    self._delete_custom_venv_by_name(name)
 
-        self._store_custom_venvs_hash(expected_hash)
-        self._custom_venvs_synced = True
+            self._store_custom_venvs_hash(expected_hash)
+            if is_personal:
+                self._custom_venvs_synced = True
+            else:
+                self._custom_venvs_synced_contexts.add(venv_context)
 
-        return name_to_id
+            return name_to_id
 
     def sync_custom_functions(
         self,
         venv_name_to_id: Optional[Dict[str, int]] = None,
         *,
         source_functions: Optional[Dict[str, Dict[str, Any]]] = None,
+        destination: str | None = None,
     ) -> bool:
         """
         Ensure custom functions in the database match source definitions.
@@ -2573,103 +3709,138 @@ class FunctionManager(BaseFunctionManager):
                 :func:`collect_custom_functions` or
                 :func:`collect_functions_from_directories`).  If *None*,
                 an empty set is assumed (no custom functions).
+            destination: Where the custom functions live. Use ``"personal"``
+                for private helper functions and ``"team:<id>"`` for
+                team-level functions every team member should be able to
+                invoke. See the Accessible shared teams block in your system
+                prompt for available teams.
 
         Returns:
             True if sync was performed, False if already up-to-date.
         """
-        if self._custom_functions_synced:
-            return False
-
-        if source_functions is None:
-            source_functions = {}
-        expected_hash = compute_custom_functions_hash(
-            source_functions=source_functions,
-        )
-        current_hash = self._get_stored_custom_functions_hash()
-
-        # Quick check: if aggregate hash matches, skip detailed sync
-        if current_hash == expected_hash:
-            logger.debug("Custom functions hash matches, skipping sync")
-            self._custom_functions_synced = True
-            return False
-
-        logger.info(
-            f"Custom functions hash mismatch "
-            f"(current={current_hash}, expected={expected_hash}), syncing...",
-        )
-
-        venv_name_to_id = venv_name_to_id or {}
-
-        # Get existing custom functions from DB
-        db_functions = self._get_custom_functions_from_db()
-
-        # Track what we've processed
-        processed_names: Set[str] = set()
-
-        # Sync each source function
-        for name, source_data in source_functions.items():
-            processed_names.add(name)
-
-            # Resolve venv_name to venv_id
-            venv_name = source_data.get("venv_name")
-            if venv_name and venv_name in venv_name_to_id:
-                source_data["venv_id"] = venv_name_to_id[venv_name]
-                logger.debug(
-                    f"Resolved venv_name={venv_name} to "
-                    f"venv_id={source_data['venv_id']} for {name}",
+        try:
+            function_context, meta_context, is_personal = (
+                self._sync_destination_contexts(
+                    FUNCTIONS_COMPOSITIONAL_TABLE,
+                    destination,
                 )
-            # Remove venv_name from source_data (not stored in DB)
-            source_data.pop("venv_name", None)
+            )
+        except ToolErrorException as exc:
+            return exc.payload  # type: ignore[return-value]
 
-            if name in db_functions:
-                db_entry = db_functions[name]
-                # Check if hash changed
-                if db_entry.get("custom_hash") != source_data["custom_hash"]:
-                    logger.info(f"Updating custom function: {name}")
-                    self._update_custom_function(
-                        function_id=db_entry["function_id"],
-                        data=source_data,
-                    )
+        with (
+            self._temporary_function_context(
+                "_compositional_ctx",
+                function_context,
+            ),
+            self._temporary_function_context("_meta_ctx", meta_context),
+        ):
+            if source_functions is None:
+                source_functions = {}
+            expected_hash = compute_custom_functions_hash(
+                source_functions=source_functions,
+            )
+            current_hash = self._get_stored_custom_functions_hash()
+            already_synced = (
+                self._custom_functions_synced
+                if is_personal
+                else function_context in self._custom_functions_synced_contexts
+            )
+
+            if already_synced and current_hash == expected_hash:
+                return False
+
+            # Quick check: if aggregate hash matches, skip detailed sync
+            if current_hash == expected_hash:
+                logger.debug("Custom functions hash matches, skipping sync")
+                if is_personal:
+                    self._custom_functions_synced = True
                 else:
-                    logger.debug(f"Custom function unchanged: {name}")
-            else:
-                # Check if there's a user-added function with same name
-                # (no custom_hash) - if so, we need to delete it first
-                existing = unify.get_logs(
-                    context=self._compositional_ctx,
-                    filter=f"name == '{name}'",
-                    limit=1,
-                )
-                if existing:
-                    logger.info(
-                        f"Overwriting user-added function with custom: {name}",
+                    self._custom_functions_synced_contexts.add(function_context)
+                return False
+
+            logger.info(
+                f"Custom functions hash mismatch "
+                f"(current={current_hash}, expected={expected_hash}), syncing...",
+            )
+
+            venv_name_to_id = venv_name_to_id or {}
+
+            # Get existing custom functions from DB
+            db_functions = self._get_custom_functions_from_db()
+
+            # Track what we've processed
+            processed_names: Set[str] = set()
+
+            # Sync each source function
+            for name, source_data in source_functions.items():
+                processed_names.add(name)
+                function_data = dict(source_data)
+
+                # Resolve venv_name to venv_id
+                venv_name = function_data.get("venv_name")
+                if venv_name and venv_name in venv_name_to_id:
+                    function_data["venv_id"] = venv_name_to_id[venv_name]
+                    logger.debug(
+                        f"Resolved venv_name={venv_name} to "
+                        f"venv_id={function_data['venv_id']} for {name}",
                     )
-                    unify.delete_logs(
+                # Remove venv_name from persisted data.
+                function_data.pop("venv_name", None)
+
+                if name in db_functions:
+                    db_entry = db_functions[name]
+                    # Check if hash changed
+                    if db_entry.get("custom_hash") != function_data["custom_hash"]:
+                        logger.info(f"Updating custom function: {name}")
+                        self._update_custom_function(
+                            function_id=db_entry["function_id"],
+                            data=function_data,
+                        )
+                    else:
+                        logger.debug(f"Custom function unchanged: {name}")
+                else:
+                    # Check if there's a user-added function with same name
+                    # (no custom_hash) - if so, we need to delete it first
+                    existing = unify.get_logs(
                         context=self._compositional_ctx,
-                        logs=[existing[0].id],
+                        filter=f"name == '{name}'",
+                        limit=1,
                     )
+                    if existing:
+                        logger.info(
+                            f"Overwriting user-added function with custom: {name}",
+                        )
+                        unify.delete_logs(
+                            context=self._compositional_ctx,
+                            logs=[existing[0].id],
+                        )
 
-                # Insert new custom function
-                logger.info(f"Inserting custom function: {name}")
-                self._insert_custom_function(source_data)
+                    # Insert new custom function
+                    logger.info(f"Inserting custom function: {name}")
+                    self._insert_custom_function(function_data)
 
-        # Delete functions that are in DB but not in source
-        for name in db_functions:
-            if name not in processed_names:
-                logger.info(f"Deleting removed custom function: {name}")
-                self._delete_custom_function_by_name(name)
+            # Delete functions that are in DB but not in source
+            for name in db_functions:
+                if name not in processed_names:
+                    logger.info(f"Deleting removed custom function: {name}")
+                    self._delete_custom_function_by_name(name)
 
-        # Store the new hash
-        self._store_custom_functions_hash(expected_hash)
+            # Store the new hash
+            self._store_custom_functions_hash(expected_hash)
 
-        self._custom_functions_synced = True
-        return True
+            if is_personal:
+                self._custom_functions_synced = True
+            else:
+                self._custom_functions_synced_contexts.add(function_context)
+            return True
 
     def sync_custom(
         self,
         *,
         source_functions: Optional[Dict[str, Dict[str, Any]]] = None,
         source_venvs: Optional[Dict[str, Dict[str, Any]]] = None,
+        destination: str | None = None,
     ) -> bool:
         """
         Sync custom venvs and functions from pre-collected sources.
@@ -2680,21 +3851,38 @@ class FunctionManager(BaseFunctionManager):
         Args:
             source_functions: Pre-collected functions dict.
             source_venvs: Pre-collected venvs dict.
+            destination: Where the custom functions and venvs live.
 
         Returns:
             True if any sync was performed, False if everything up-to-date.
         """
-        venv_name_to_id = self.sync_custom_venvs(source_venvs=source_venvs)
+        try:
+            venv_context, meta_context, _ = self._sync_destination_contexts(
+                FUNCTIONS_VENVS_TABLE,
+                destination,
+            )
+        except ToolErrorException as exc:
+            return exc.payload  # type: ignore[return-value]
+
+        with (
+            self._temporary_function_context(
+                "_venvs_ctx",
+                venv_context,
+            ),
+            self._temporary_function_context("_meta_ctx", meta_context),
+        ):
+            venvs_hash_changed = self._get_stored_custom_venvs_hash() != (
+                compute_custom_venvs_hash(source_venvs=source_venvs or {})
+            )
+
+        venv_name_to_id = self.sync_custom_venvs(
+            source_venvs=source_venvs,
+            destination=destination,
+        )
         functions_changed = self.sync_custom_functions(
             venv_name_to_id,
             source_functions=source_functions,
-        )
-
-        venvs_hash_changed = (
-            self._get_stored_custom_venvs_hash()
-            != compute_custom_venvs_hash(source_venvs=source_venvs)
-            if not self._custom_venvs_synced
-            else False
+            destination=destination,
         )
 
         return venvs_hash_changed or functions_changed
@@ -2703,31 +3891,29 @@ class FunctionManager(BaseFunctionManager):
         """
         Return a mapping of primitive name to primitive metadata.
 
-        Only returns primitives for managers in this FunctionManager's scope.
-        Call sync_primitives() first to ensure the database is up-to-date.
+        Only returns primitives for managers in this FunctionManager's scope,
+        combining the global builtins catalogue with materialized
+        provider-backed integration tool rows.
 
         Returns:
             Dict mapping primitive name to metadata dict (includes function_id).
         """
         entries: Dict[str, Dict[str, Any]] = {}
         try:
-            filter_expr = self._scoped_primitive_filter()
-            logs = unify.get_logs(
-                context=self._primitives_ctx,
-                filter=filter_expr,
-                exclude_fields=list_private_fields(self._primitives_ctx),
-            )
-            for log in logs:
+            for row in self._primitive_logs():
                 data = {
-                    "function_id": log.entries.get("function_id"),
-                    "name": log.entries["name"],
-                    "argspec": log.entries.get("argspec", ""),
-                    "docstring": log.entries.get("docstring", ""),
+                    "function_id": row.get("function_id"),
+                    "name": row["name"],
+                    "argspec": row.get("argspec", ""),
+                    "docstring": row.get("docstring", ""),
                     "is_primitive": True,
-                    "primitive_class": log.entries.get("primitive_class"),
-                    "primitive_method": log.entries.get("primitive_method"),
+                    "primitive_class": row.get("primitive_class"),
+                    "primitive_method": row.get("primitive_method"),
                 }
-                entries[log.entries["name"]] = data
+                for key in ("metadata",):
+                    if key in row:
+                        data[key] = row.get(key)
+                entries.setdefault(row["name"], data)
         except Exception as e:
             logger.warning(f"Failed to list primitives: {e}")
         return entries
@@ -2935,6 +4121,7 @@ class FunctionManager(BaseFunctionManager):
                 unity_create_logs(
                     context=self._compositional_ctx,
                     entries=entries_to_create,
+                    stamp_authoring=True,
                     batched=True,
                     add_to_all_context=self.include_in_multi_assistant_table,
                     recompute_derived=True,
@@ -2955,7 +4142,10 @@ class FunctionManager(BaseFunctionManager):
                 unify.update_logs(
                     logs=log_ids_to_update,
                     context=self._compositional_ctx,
-                    entries=entries_to_update,
+                    entries=[
+                        strip_authoring_assistant_id(entry)
+                        for entry in entries_to_update
+                    ],
                     overwrite=True,
                 )
             except Exception as e:
@@ -3103,6 +4293,7 @@ class FunctionManager(BaseFunctionManager):
                 unity_create_logs(
                     context=self._compositional_ctx,
                     entries=entries_to_create,
+                    stamp_authoring=True,
                     batched=True,
                     add_to_all_context=self.include_in_multi_assistant_table,
                     recompute_derived=True,
@@ -3123,7 +4314,10 @@ class FunctionManager(BaseFunctionManager):
                 unify.update_logs(
                     logs=log_ids_to_update,
                     context=self._compositional_ctx,
-                    entries=entries_to_update,
+                    entries=[
+                        strip_authoring_assistant_id(entry)
+                        for entry in entries_to_update
+                    ],
                     overwrite=True,
                 )
             except Exception as e:
@@ -3172,12 +4366,18 @@ class FunctionManager(BaseFunctionManager):
                 _time.sleep(delay)
             try:
                 _q_t0 = _time.perf_counter()
-                logs = unify.get_logs(
-                    context=self._compositional_ctx,
-                    filter=normalized,
-                    limit=1,
-                    exclude_fields=list_private_fields(self._compositional_ctx),
-                )
+                logs = []
+                for context in self._read_compositional_contexts():
+                    logs.extend(
+                        unify.get_logs(
+                            context=context,
+                            filter=normalized,
+                            limit=1,
+                            exclude_fields=list_private_fields(context),
+                        ),
+                    )
+                    if logs:
+                        break
                 _q_ms = (_time.perf_counter() - _q_t0) * 1000
                 if logs:
                     logger.debug(
@@ -3628,32 +4828,33 @@ class FunctionManager(BaseFunctionManager):
         if _return_callable and _namespace is None:
             raise ValueError("_namespace required when _return_callable=True")
 
-        # Query compositional context, and optionally primitives.
-        compositional_logs = unify.get_logs(
-            context=self._compositional_ctx,
-            filter=self._scoped_filter(None),
-            exclude_fields=list_private_fields(self._compositional_ctx),
-        )
-
-        primitive_logs: list = []
-        if self._include_primitives:
-            self.sync_primitives()
-            primitive_filter = self._scoped_primitive_filter()
-            primitive_logs = unify.get_logs(
-                context=self._primitives_ctx,
-                filter=primitive_filter,
-                exclude_fields=list_private_fields(self._primitives_ctx),
+        compositional_rows: List[Dict[str, Any]] = []
+        for context in self._read_compositional_contexts():
+            compositional_rows.extend(
+                lg.entries
+                for lg in unify.get_logs(
+                    context=context,
+                    filter=self._scoped_filter(None),
+                    exclude_fields=list_private_fields(context),
+                )
             )
 
-        all_logs = list(compositional_logs) + list(primitive_logs)
+        primitive_rows: List[Dict[str, Any]] = []
+        if self._include_primitives:
+            primitive_rows = self._primitive_logs()
+
+        all_rows = compositional_rows + primitive_rows
 
         metadata: Dict[str, Dict[str, Any]] = {}
         func_rows: List[Dict[str, Any]] = []
-        for log in all_logs:
-            ent = log.entries
+        seen_names: set[str] = set()
+        for ent in all_rows:
             name = ent.get("name")
             if not isinstance(name, str):
                 continue
+            if name in seen_names:
+                continue
+            seen_names.add(name)
             func_rows.append(ent)
 
             data: Dict[str, Any] = {
@@ -3670,6 +4871,13 @@ class FunctionManager(BaseFunctionManager):
                 "third_party_imports": ent.get("third_party_imports", []),
                 "is_primitive": ent.get("is_primitive", False),
             }
+            for key in (
+                "primitive_class",
+                "primitive_method",
+                "metadata",
+            ):
+                if key in ent:
+                    data[key] = ent.get(key)
             if include_implementations:
                 data["implementation"] = ent.get("implementation")
             metadata[name] = data
@@ -3696,24 +4904,25 @@ class FunctionManager(BaseFunctionManager):
     @functools.wraps(BaseFunctionManager.get_precondition, updated=())
     def get_precondition(self, *, function_name: str) -> Optional[Dict[str, Any]]:
         # Check compositional first, then optionally primitives.
-        logs = unify.get_logs(
-            context=self._compositional_ctx,
-            filter=self._scoped_filter(f"name == '{function_name}'"),
-            limit=1,
-            exclude_fields=list_private_fields(self._compositional_ctx),
-        )
+        logs = []
+        for context in self._read_compositional_contexts():
+            logs.extend(
+                unify.get_logs(
+                    context=context,
+                    filter=self._scoped_filter(f"name == '{function_name}'"),
+                    limit=1,
+                    exclude_fields=list_private_fields(context),
+                ),
+            )
+            if logs:
+                break
         if not logs and self._include_primitives:
-            self.sync_primitives()
-            prim_name_filter = f"name == '{function_name}'"
-            prim_filter = (
-                f"({prim_name_filter}) and ({self._scoped_primitive_filter()})"
-            )
-            logs = unify.get_logs(
-                context=self._primitives_ctx,
-                filter=prim_filter,
+            primitive_rows = self._primitive_logs(
+                extra_filter=f"name == '{function_name}'",
                 limit=1,
-                exclude_fields=list_private_fields(self._primitives_ctx),
             )
+            if primitive_rows:
+                return primitive_rows[0].get("precondition")
         if not logs:
             return None
 
@@ -3750,18 +4959,14 @@ class FunctionManager(BaseFunctionManager):
 
         # Reject deletion of primitives (only check when primitives are enabled).
         if self._include_primitives:
-            self.sync_primitives()
             id_clauses = " or ".join(f"function_id == {fid}" for fid in function_ids)
-            prim_logs = unify.get_logs(
-                context=self._primitives_ctx,
-                filter=id_clauses,
+            prim_rows = self._primitive_logs(
+                extra_filter=id_clauses,
                 limit=len(function_ids),
-                exclude_fields=list_private_fields(self._primitives_ctx),
             )
-            if prim_logs:
+            if prim_rows:
                 prim_names = [
-                    lg.entries.get("name", lg.entries.get("function_id"))
-                    for lg in prim_logs
+                    row.get("name", row.get("function_id")) for row in prim_rows
                 ]
                 raise ValueError(
                     f"Cannot delete primitives (system-owned): {prim_names}",
@@ -3866,6 +5071,7 @@ class FunctionManager(BaseFunctionManager):
         filter: Optional[str] = None,
         offset: int = 0,
         limit: Optional[int] = None,
+        project: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Query a context with retries for 404 (lazy context creation)."""
         import time as _time
@@ -3874,7 +5080,8 @@ class FunctionManager(BaseFunctionManager):
         last_exc: Exception | None = None
         kwargs: Dict[str, Any] = {
             "context": context,
-            "exclude_fields": list_private_fields(context),
+            "project": project,
+            "exclude_fields": list_private_fields(context, project=project),
         }
         if filter is not None:
             kwargs["filter"] = filter
@@ -3928,34 +5135,39 @@ class FunctionManager(BaseFunctionManager):
         if _return_callable and _namespace is None:
             raise ValueError("_namespace required when _return_callable=True")
 
-        normalized = self._scoped_filter(normalize_filter_expr(filter))
+        caller_filter = normalize_filter_expr(filter)
+        contexts = [
+            FederatedSearchContext(
+                context=context,
+                source="compositional",
+                row_filter=self._scoped_filter(None),
+            )
+            for context in self._read_compositional_contexts()
+        ]
 
-        # Query both contexts with the same limit (yielding up to 2x results).
-        per_ctx_limit = limit + offset
-        compositional_rows = self._get_logs_with_retry(
-            self._compositional_ctx,
-            filter=normalized,
-            limit=per_ctx_limit,
-        )
-
-        primitive_rows: List[Dict[str, Any]] = []
         if self._include_primitives:
-            self.sync_primitives()
-            # Combine caller filter with the scoped primitive filter (scope + exclusions).
-            primitive_base = self._scoped_primitive_filter()
-            prim_filter = normalize_filter_expr(filter)
-            if prim_filter:
-                prim_filter = f"({prim_filter}) and ({primitive_base})"
-            else:
-                prim_filter = primitive_base
-            primitive_rows = self._get_logs_with_retry(
-                self._primitives_ctx,
-                filter=prim_filter,
-                limit=per_ctx_limit,
+            contexts.extend(self._primitive_read_specs())
+
+        def fetcher(spec, row_filter, _sorting, fetch_limit):
+            combined = row_filter
+            if combined and spec.row_filter:
+                combined = f"({combined}) and ({spec.row_filter})"
+            elif spec.row_filter:
+                combined = spec.row_filter
+            return self._get_logs_with_retry(
+                spec.context,
+                filter=combined,
+                limit=fetch_limit,
+                project=spec.project,
             )
 
-        # Stack compositional first, primitives last, then apply offset+limit.
-        rows = (compositional_rows + primitive_rows)[offset : offset + limit]
+        rows = federated_filter(
+            contexts,
+            filter=caller_filter,
+            offset=offset,
+            limit=limit,
+            fetcher=fetcher,
+        )
 
         if not _return_callable:
             # Strip implementations if not requested (reduces payload size)
@@ -4000,54 +5212,62 @@ class FunctionManager(BaseFunctionManager):
         if _return_callable and _namespace is None:
             raise ValueError("_namespace required when _return_callable=True")
 
-        allowed_fields = list(Function.model_fields.keys())
-
-        # Search compositional context.
-        compositional_rows = table_search_top_k(
-            context=self._compositional_ctx,
-            references={"embedding_text": query},
-            k=n,
-            allowed_fields=allowed_fields,
-            unique_id_field="function_id",
-            row_filter=self._scoped_filter(None),
+        allowed_fields = (
+            list(Function.model_fields.keys())
+            if _return_callable
+            else [
+                "function_id",
+                "language",
+                "name",
+                "argspec",
+                "docstring",
+                "depends_on",
+                "embedding_text",
+                "precondition",
+                "guidance_ids",
+                "verify",
+                "is_primitive",
+                "primitive_class",
+                "primitive_method",
+                "metadata",
+                "venv_id",
+                "windows_os_required",
+                "custom_hash",
+            ]
         )
+        if not _return_callable and include_implementations:
+            allowed_fields.append("implementation")
 
-        # Optionally search primitives context.
-        primitive_rows: list = []
-        if self._include_primitives:
-            self.sync_primitives()
-            primitive_filter = self._scoped_primitive_filter()
-            primitive_rows = table_search_top_k(
-                context=self._primitives_ctx,
-                references={"embedding_text": query},
-                k=n,
+        contexts = [
+            FederatedSearchContext(
+                context=context,
+                source="compositional",
+                row_filter=self._scoped_filter(None),
                 allowed_fields=allowed_fields,
-                unique_id_field="function_id",
-                row_filter=primitive_filter,
+            )
+            for context in self._read_compositional_contexts()
+        ]
+
+        if self._include_primitives:
+            contexts.extend(
+                self._primitive_read_specs(allowed_fields=allowed_fields),
             )
 
-        # Merge and sort by the private score column (lower distance = better match)
-        all_rows = compositional_rows + primitive_rows
-        sort_key: str | None = None
-        for row in all_rows:
-            for key in row.keys():
-                if key.startswith("_"):
-                    sort_key = key
-                    break
-            if sort_key:
-                break
-        if sort_key:
-            all_rows.sort(key=lambda r: r.get(sort_key, float("inf")))
-        results = all_rows[:n]
+        results = federated_ranked_search(
+            contexts,
+            {"embedding_text": query},
+            limit=n,
+            unique_id_field="function_id",
+            backfill=True,
+        )
 
         if not _return_callable:
-            # Strip implementations if not requested (reduces payload size)
-            if not include_implementations:
-                results = [
-                    {k: v for k, v in row.items() if k != "implementation"}
-                    for row in results
-                ]
-            return results
+            compact_results = self._compact_function_search_rows(results)
+            if include_implementations:
+                for compact, full in zip(compact_results, results, strict=True):
+                    if "implementation" in full:
+                        compact["implementation"] = full["implementation"]
+            return compact_results
 
         assert _namespace is not None  # validated above
         callables_list = self._inject_callables_for_functions(
@@ -4056,13 +5276,11 @@ class FunctionManager(BaseFunctionManager):
         )
 
         if _also_return_metadata:
-            # Strip implementations from metadata if not requested
-            metadata_rows = results
-            if not include_implementations:
-                metadata_rows = [
-                    {k: v for k, v in row.items() if k != "implementation"}
-                    for row in results
-                ]
+            metadata_rows = self._compact_function_search_rows(results)
+            if include_implementations:
+                for compact, full in zip(metadata_rows, results, strict=True):
+                    if "implementation" in full:
+                        compact["implementation"] = full["implementation"]
             return {"callables": callables_list, "metadata": metadata_rows}  # type: ignore[return-value]
 
         return callables_list  # type: ignore[return-value]
@@ -4293,6 +5511,7 @@ class FunctionManager(BaseFunctionManager):
         result = unity_create_logs(
             context=self._venvs_ctx,
             entries=[{"venv": venv}],
+            stamp_authoring=True,
             add_to_all_context=self.include_in_multi_assistant_table,
         )
         # unity_create_logs can return either a dict or a list of Log objects
@@ -4326,14 +5545,24 @@ class FunctionManager(BaseFunctionManager):
         Returns:
             Dict with venv_id and venv content, or None if not found.
         """
-        logs = self._safe_get_venv_logs(
-            filter=f"venv_id == {venv_id}",
-            limit=1,
-            exclude_fields=list_private_fields(self._venvs_ctx),
-        )
-        if not logs:
-            return None
-        return logs[0].entries
+        for context in self._read_venv_contexts():
+            logs = (
+                self._safe_get_venv_logs(
+                    filter=f"venv_id == {venv_id}",
+                    limit=1,
+                    exclude_fields=list_private_fields(context),
+                )
+                if context == self._venvs_ctx
+                else unify.get_logs(
+                    context=context,
+                    filter=f"venv_id == {venv_id}",
+                    limit=1,
+                    exclude_fields=list_private_fields(context),
+                )
+            )
+            if logs:
+                return logs[0].entries
+        return None
 
     def list_venvs(self) -> List[Dict[str, Any]]:
         """
@@ -4342,9 +5571,21 @@ class FunctionManager(BaseFunctionManager):
         Returns:
             List of dicts, each with venv_id and venv content.
         """
-        logs = self._safe_get_venv_logs(
-            exclude_fields=list_private_fields(self._venvs_ctx),
-        )
+        logs = []
+        for context in self._read_venv_contexts():
+            logs.extend(
+                (
+                    self._safe_get_venv_logs(
+                        exclude_fields=list_private_fields(context),
+                        from_fields=None,
+                    )
+                    if context == self._venvs_ctx
+                    else unify.get_logs(
+                        context=context,
+                        exclude_fields=list_private_fields(context),
+                    )
+                ),
+            )
         return [lg.entries for lg in logs]
 
     def delete_venv(self, *, venv_id: int) -> bool:
@@ -4560,8 +5801,6 @@ class FunctionManager(BaseFunctionManager):
             venv_dir.mkdir(parents=True, exist_ok=True)
             pyproject_path.write_text(venv_content)
 
-            # Run uv sync
-            logger.info(f"Venv {venv_id}: running 'uv sync'...")
             import asyncio
             import shutil as _shutil
             import sys as _sys
@@ -4584,19 +5823,94 @@ class FunctionManager(BaseFunctionManager):
                     "Install uv (recommended) or ensure it is available on PATH.",
                 )
 
-            process = await asyncio.create_subprocess_exec(
-                uv_bin,
-                "sync",
-                cwd=str(venv_dir),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await process.communicate()
+            # Two-step venv setup:
+            #
+            #   1. `uv venv <venv_dir>/.venv` — creates the .venv at the
+            #      EXACT path Python will later import from. Passing the
+            #      explicit target path (rather than relying on
+            #      `--directory` + uv's "current project" discovery) is
+            #      defensive: an earlier `--directory <venv_dir>` form
+            #      returned exit code 0 on Linux CI but produced no
+            #      `.venv/bin/python`, causing a downstream
+            #      FileNotFoundError in subprocess.create_subprocess_exec.
+            #      Naming the target path leaves no ambiguity.
+            #
+            #   2. `uv sync --directory <venv_dir>` installs project +
+            #      deps into the freshly-created `.venv`. uv discovers
+            #      the .venv automatically when run from the project
+            #      directory.
+            #
+            # The original `cwd=str(venv_dir)` race ("Current directory
+            # does not exist" when a sibling tmux session rmtree'd a
+            # shared parent's cwd inode) is avoided here too: cwd is set
+            # to the just-mkdir'd venv_dir, AND uv's --directory flag is
+            # passed to make uv chdir before any cwd-dependent work.
+            venv_target = venv_dir / ".venv"
+            uv_steps: list[tuple[str, list[str]]] = [
+                (
+                    "venv",
+                    [
+                        uv_bin,
+                        "venv",
+                        str(venv_target),
+                        "--directory",
+                        str(venv_dir),
+                    ],
+                ),
+                (
+                    "sync",
+                    [
+                        uv_bin,
+                        "sync",
+                        "--directory",
+                        str(venv_dir),
+                        # The synthetic pyproject.toml we generate is
+                        # NOT a real installable package — it only
+                        # declares `dependencies = [...]`. Without
+                        # this flag uv tries to install the project
+                        # itself in editable mode, fails to find a
+                        # build backend / sdist, and raises
+                        # "Distribution not found at: file:///.../<venv_dir>".
+                        # We only want the *dependencies* installed
+                        # into the venv; the project itself is just
+                        # a manifest.
+                        "--no-install-project",
+                    ],
+                ),
+            ]
+            for label, cmd in uv_steps:
+                logger.info(f"Venv {venv_id}: running 'uv {label}'...")
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    cwd=str(venv_dir),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await process.communicate()
+                logger.info(
+                    f"Venv {venv_id}: 'uv {label}' rc={process.returncode}; "
+                    f"stdout={stdout.decode().strip()!r}; "
+                    f"stderr={stderr.decode().strip()!r}",
+                )
 
-            if process.returncode != 0:
-                error_msg = stderr.decode() if stderr else stdout.decode()
+                if process.returncode != 0:
+                    error_msg = stderr.decode() if stderr else stdout.decode()
+                    raise RuntimeError(
+                        f"Failed to 'uv {label}' venv {venv_id}: {error_msg}",
+                    )
+
+            # Verify the venv layout we expect actually exists.
+            # uv has been observed to return 0 from `uv venv` without
+            # materializing the .venv (CI race / disk pressure / etc.) —
+            # fail loud HERE with a focused error rather than later when
+            # subprocess.create_subprocess_exec tries to invoke
+            # `.venv/bin/python` and bubbles a generic FileNotFoundError.
+            if not python_path.exists():
                 raise RuntimeError(
-                    f"Failed to sync venv {venv_id}: {error_msg}",
+                    f"Failed to materialize venv {venv_id}: "
+                    f"expected python at {python_path} but it does not "
+                    f"exist after `uv venv` + `uv sync` both returned 0. "
+                    f"venv_dir={venv_dir} venv_target={venv_target}",
                 )
 
             logger.info(f"Venv {venv_id}: sync complete")
@@ -4744,6 +6058,77 @@ class FunctionManager(BaseFunctionManager):
         # with a single os.killpg() call.
         # Note: start_new_session is not supported on Windows
         use_process_group = sys.platform != "win32"
+
+        # Diagnostic: prepare_venv just returned this python_path and
+        # verified .exists() before returning. If the file is GONE by
+        # the time we get here (CI race / external rmtree), bail with
+        # a structured error rather than letting subprocess raise
+        # FileNotFoundError with no surrounding state.
+        if not python_path.exists():
+            # Walk up the path tree and note which components exist.
+            # If a high-level ancestor (e.g. `~/.unity/venvs/`) is
+            # missing, the culprit is something rmtree-ing the
+            # `unity/Local/.unity/` tree as a whole. If only the venv-
+            # id leaf is missing, suspect per-test cleanup.
+            ancestor_status: list[str] = []
+            cursor: Path | None = python_path
+            while cursor is not None and str(cursor) not in ("/", ""):
+                ancestor_status.append(
+                    f"{cursor.exists()}={cursor}",
+                )
+                next_cursor = cursor.parent
+                if next_cursor == cursor:
+                    break
+                cursor = next_cursor
+
+            venv_dir = python_path.parent.parent.parent
+            parent_listing = "<not present>"
+            if venv_dir.exists():
+                try:
+                    parent_listing = ", ".join(
+                        sorted(p.name for p in venv_dir.iterdir()),
+                    )
+                except OSError as e:
+                    parent_listing = f"<iterdir failed: {e}>"
+
+            # The grandparent (the safe_ctx-keyed dir containing venv
+            # ids) is the most informative — if THAT is gone too, the
+            # whole venvs/<ctx>/ subtree was wiped. If it exists with
+            # OTHER venv-id subdirs, only THIS venv-id was wiped.
+            gp_listing = "<not present>"
+            gp = venv_dir.parent
+            if gp.exists():
+                try:
+                    gp_listing = ", ".join(sorted(p.name for p in gp.iterdir()))
+                except OSError as e:
+                    gp_listing = f"<iterdir failed: {e}>"
+
+            try:
+                import os as _os_diag
+
+                cwd_str = _os_diag.getcwd()
+            except Exception as e:
+                cwd_str = f"<getcwd failed: {e}>"
+
+            import os as _os_diag2
+
+            home_str = _os_diag2.environ.get("HOME", "<unset>")
+            pid_str = _os_diag2.getpid()
+
+            raise RuntimeError(
+                f"execute_in_venv: venv python disappeared between "
+                f"prepare_venv() (which verified existence) and "
+                f"create_subprocess_exec(). "
+                f"venv_id={venv_id} pid={pid_str} cwd={cwd_str} "
+                f"HOME={home_str}\n"
+                f"  python_path={python_path}\n"
+                f"  venv_dir={venv_dir} exists={venv_dir.exists()}\n"
+                f"  venv_dir contents=[{parent_listing}]\n"
+                f"  grandparent={gp} exists={gp.exists()}\n"
+                f"  grandparent contents=[{gp_listing}]\n"
+                f"  ancestor existence (deepest first): {ancestor_status}",
+            )
+
         process = await asyncio.create_subprocess_exec(
             str(python_path),
             str(runner_path),
@@ -4983,19 +6368,7 @@ class FunctionManager(BaseFunctionManager):
             func_data = self._get_primitive_data_by_name(name=function_name)
 
         if func_data is None and self._include_primitives:
-            # Fallback: check primitives DB context directly.
-            self.sync_primitives()
-            try:
-                prim_logs = unify.get_logs(
-                    context=self._primitives_ctx,
-                    filter=f"name == {json.dumps(function_name)}",
-                    limit=1,
-                    exclude_fields=list_private_fields(self._primitives_ctx),
-                )
-                if prim_logs:
-                    func_data = prim_logs[0].entries
-            except Exception:
-                pass
+            func_data = self._get_stored_primitive_data_by_name(name=function_name)
 
         if func_data is None:
             raise ValueError(f"Function '{function_name}' not found")
@@ -5049,6 +6422,26 @@ class FunctionManager(BaseFunctionManager):
         """Look up primitive metadata by name from the in-memory registry."""
         primitives = self._registry.collect_primitives(self._primitive_scope)
         return primitives.get(name)
+
+    def _get_stored_primitive_data_by_name(
+        self,
+        *,
+        name: str,
+        provider_backed_only: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Look up a primitive row by exact name from readable primitive contexts."""
+        try:
+            name_filter = normalize_filter_expr(f"name == {json.dumps(name)}")
+        except Exception:
+            name_filter = f"name == {json.dumps(name)}"
+        if provider_backed_only:
+            name_filter = (
+                f'({name_filter}) and (metadata["source"] == "provider_backed")'
+            )
+        rows = self._primitive_logs(extra_filter=name_filter, limit=1)
+        if rows:
+            return dict(rows[0])
+        return None
 
     async def _execute_primitive(
         self,
@@ -6160,3 +7553,92 @@ if __name__ == "__main__":
                 # Ensure process is terminated
                 if process.returncode is None:
                     await self._terminate_process_group(process, use_process_group)
+
+
+def _wrap_compositional_write(method_name: str) -> None:
+    original = getattr(FunctionManager, method_name)
+
+    @functools.wraps(original)
+    def wrapped(
+        self: FunctionManager,
+        *args: Any,
+        destination: str | None = None,
+        **kwargs: Any,
+    ):
+        try:
+            context = self._function_context_for_destination(
+                FUNCTIONS_COMPOSITIONAL_TABLE,
+                destination=destination,
+            )
+        except ToolErrorException as exc:
+            return exc.payload
+        with self._temporary_function_context("_compositional_ctx", context):
+            return original(self, *args, **kwargs)
+
+    wrapped.__doc__ = (
+        f"{original.__doc__ or ''}\n\n{FUNCTIONS_COMPOSITIONAL_DESTINATION_GUIDANCE}"
+    )
+    wrapped.__signature__ = _signature_with_destination(original)  # type: ignore[attr-defined]
+    setattr(FunctionManager, method_name, wrapped)
+
+
+def _wrap_venv_write(method_name: str) -> None:
+    original = getattr(FunctionManager, method_name)
+
+    @functools.wraps(original)
+    def wrapped(
+        self: FunctionManager,
+        *args: Any,
+        destination: str | None = None,
+        **kwargs: Any,
+    ):
+        try:
+            context = self._function_context_for_destination(
+                FUNCTIONS_VENVS_TABLE,
+                destination=destination,
+            )
+        except ToolErrorException as exc:
+            return exc.payload
+        with self._temporary_function_context("_venvs_ctx", context):
+            return original(self, *args, **kwargs)
+
+    wrapped.__doc__ = (
+        f"{original.__doc__ or ''}\n\n{FUNCTIONS_VENV_DESTINATION_GUIDANCE}"
+    )
+    wrapped.__signature__ = _signature_with_destination(original)  # type: ignore[attr-defined]
+    setattr(FunctionManager, method_name, wrapped)
+
+
+def _signature_with_destination(method: Callable[..., Any]) -> inspect.Signature:
+    signature = inspect.signature(method)
+    if "destination" in signature.parameters:
+        return signature
+    parameters = list(signature.parameters.values())
+    destination_param = inspect.Parameter(
+        "destination",
+        inspect.Parameter.KEYWORD_ONLY,
+        default=None,
+        annotation=str | None,
+    )
+    insert_at = len(parameters)
+    for index, parameter in enumerate(parameters):
+        if parameter.kind == inspect.Parameter.VAR_KEYWORD:
+            insert_at = index
+            break
+    parameters.insert(insert_at, destination_param)
+    return signature.replace(parameters=parameters)
+
+
+for _method_name in (
+    "add_functions",
+    "delete_function",
+    "set_function_venv",
+):
+    _wrap_compositional_write(_method_name)
+
+for _method_name in (
+    "add_venv",
+    "delete_venv",
+    "update_venv",
+):
+    _wrap_venv_write(_method_name)

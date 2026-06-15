@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from typing import List
-from pydantic import BaseModel, Field
+
+from pydantic import Field
+
+from unity.common.authorship import AuthoredRow
 
 UNASSIGNED_SECRET_ID = -1
 
 
-class Secret(BaseModel):
+class Secret(AuthoredRow):
     """Fixed schema for storing secrets.
 
     The schema is intentionally immutable: columns cannot be added or removed.
@@ -26,6 +29,10 @@ class Secret(BaseModel):
     description: str = Field(
         default="",
         description="Human-readable description of the secret's purpose.",
+    )
+    destination: str = Field(
+        default="personal",
+        description="Vault that owns the credential metadata, such as personal or team:<id>.",
     )
     description_emb: List[float] = Field(
         default_factory=list,

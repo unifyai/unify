@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+from types import SimpleNamespace
+
 import pytest
 from pydantic import BaseModel, Field
 
@@ -12,6 +15,8 @@ from unity.common.single_shot import (
     ToolExecution,
 )
 from unity.common.llm_client import new_llm_client
+from unity.logger import LOGGER
+from unity.settings import SETTINGS
 
 # --------------------------------------------------------------------------- #
 #  Test fixtures: response format models                                       #
@@ -218,6 +223,44 @@ def test_single_shot_result_with_structured_output():
     assert result.tool_name == "greet"
     assert result.structured_output is not None
     assert result.structured_output.thoughts == "This is my reasoning"
+
+
+@pytest.mark.asyncio
+async def test_staging_logs_single_shot_response_shape(monkeypatch, caplog):
+    monkeypatch.setattr(SETTINGS, "DEPLOY_ENV", "staging")
+
+    async def fake_generate(**_kwargs):
+        client.messages = [
+            {
+                "role": "assistant",
+                "content": "No action needed.",
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "json_tool_call",
+                            "arguments": "{}",
+                        },
+                    },
+                ],
+            },
+        ]
+
+    client = SimpleNamespace(messages=[], generate=fake_generate)
+    LOGGER.addHandler(caplog.handler)
+    caplog.set_level(logging.INFO, logger="unity")
+
+    try:
+        result = await single_shot_tool_decision(client, "hello", {})
+    finally:
+        LOGGER.removeHandler(caplog.handler)
+
+    assert result.tools == []
+    assert "Single-shot response shape" in caplog.text
+    assert "message_type=dict" in caplog.text
+    assert "content_type=str" in caplog.text
+    assert "tool_calls_type=list" in caplog.text
+    assert "wrapper_tool_names=['json_tool_call']" in caplog.text
 
 
 # --------------------------------------------------------------------------- #

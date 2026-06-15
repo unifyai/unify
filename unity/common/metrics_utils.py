@@ -46,6 +46,7 @@ def reduce_logs(
     keys: Union[str, List[str]],
     filter: Optional[Union[str, Dict[str, str]]] = None,
     group_by: Optional[Union[str, List[str]]] = None,
+    project: Optional[str] = None,
 ) -> Any:
     """
     Compute one or more reduction metrics over a Unify context.
@@ -110,5 +111,6 @@ def reduce_logs(
         key=keys,
         filter=normalized_filter,
         context=context,
+        project=project,
         group_by=group_by,
     )

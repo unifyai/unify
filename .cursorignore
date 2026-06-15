@@ -1,11 +1,11 @@
-# Override .gitignore patterns to include these directories in Cursor indexing
-# These are excluded from git but useful for AI context when debugging tests
-#
-# NOTE: The ! negation syntax is documented to override .gitignore but is known
-# to be buggy (see: forum.cursor.com/t/bug-prefix-in-gitignore-and-cursorignore-is-not-honored)
-# We include these patterns anyway in anticipation of future bug fixes.
-
-# All logs (pytest, llm, orchestra)
-!logs/
-!logs/**
-!logs/*
+# Keep generated runtime artifacts out of Cursor indexing.
+logs/
+logs/**
+.venv/
+.venv/**
+.cache.ndjson
+.cache_write.ndjson
+.pytest_cache/
+.ruff_cache/
+.unity_plans/
+__pycache__/

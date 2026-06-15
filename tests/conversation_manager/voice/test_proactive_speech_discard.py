@@ -28,8 +28,7 @@ import pytest
 def _proactive_payload(text: str = "Still getting it open, one sec.") -> dict:
     return {
         "payload": {
-            "content": text,
-            "response_text": text,
+            "message": text,
             "should_speak": True,
             "source": "proactive_speech",
         },
@@ -37,13 +36,14 @@ def _proactive_payload(text: str = "Still getting it open, one sec.") -> dict:
 
 
 def _actor_payload(
-    content: str = "The meeting is at 3pm.",
-    response_text: str = "It's at 3pm.",
+    message: str = "The meeting is at 3pm.",
+    *,
+    spoken_message: str = "It's at 3pm.",
 ) -> dict:
     return {
         "payload": {
-            "content": content,
-            "response_text": response_text,
+            "message": message,
+            "spoken_message": spoken_message,
             "should_speak": True,
             "source": "actor",
         },
@@ -184,6 +184,8 @@ async def _boot_entrypoint(monkeypatch):
         ),
         assistant=SimpleNamespace(about="Assistant bio", name="Ava"),
         unify_key="",
+        is_coordinator=False,
+        org_id=None,
     )
 
     monkeypatch.setattr(call_script, "event_broker", fake_broker)
@@ -408,7 +410,12 @@ class TestProactiveSpeechDiscard:
         session, notify, set_agent, set_user = await _boot_entrypoint(monkeypatch)
 
         set_user("speaking")
-        notify(_actor_payload("Bob's number is 555-1234.", "It's 555-1234."))
+        notify(
+            _actor_payload(
+                "Bob's number is 555-1234.",
+                spoken_message="It's 555-1234.",
+            ),
+        )
         assert len(session.say_calls) == 0
 
         set_user("listening")
@@ -416,3 +423,43 @@ class TestProactiveSpeechDiscard:
         await asyncio.sleep(0)
         assert len(session.say_calls) == 1
         assert session.say_calls[0] == "It's 555-1234."
+
+
+def _speak_payload(message: str) -> dict:
+    return {
+        "payload": {
+            "message": message,
+            "should_speak": True,
+            "source": "slow_brain",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_speak_guidance_applies_with_message_field(monkeypatch):
+    """SPEAK injects message into context and queues the same text for TTS."""
+    session, notify, set_agent, set_user = await _boot_entrypoint(monkeypatch)
+
+    spoken = "I found it: spot gold is about 4,486 US dollars per troy ounce."
+    notify(_speak_payload(spoken))
+    set_agent("listening")
+    await asyncio.sleep(0.05)
+
+    assert session.say_calls == [spoken]
+
+    notification_lines = []
+    for item in session._chat_ctx.items:
+        raw = getattr(item, "content", None)
+        if raw is None:
+            continue
+        text = (
+            raw
+            if isinstance(raw, str)
+            else " ".join(c for c in raw if isinstance(c, str))
+        )
+        if "[notification]" in text:
+            notification_lines.append(text)
+
+    assert any(
+        spoken in line for line in notification_lines
+    ), "SPEAK guidance must inject message into fast-brain context"

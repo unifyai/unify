@@ -13,7 +13,7 @@ import textwrap
 from typing import Callable, Dict, List
 
 from .types import column_type_schema
-from ..memory_manager.broader_context import get_broader_context
+from ..common.accessible_teams_block import build_accessible_teams_block
 from ..common.prompt_helpers import (
     sig_dict,
     tool_name as _shared_tool_name,
@@ -22,6 +22,7 @@ from ..common.prompt_helpers import (
     PromptParts,
     compose_system_prompt,
 )
+from ..session_details import SESSION_DETAILS
 
 # ────────────────────────────────────────────────────────────────────────────
 # helpers
@@ -48,28 +49,13 @@ def _require_tools(pairs: Dict[str, str | None], tools: Dict[str, Callable]) -> 
 # ────────────────────────────────────────────────────────────────────────────
 
 
-def _rolling_activity_section() -> str:
-    """Return a markdown summary of the agent's historic activity from cache."""
+def _accessible_teams_section() -> str:
+    """Return shared team routing guidance for destination-aware tools."""
 
     try:
-        overview = get_broader_context()
+        return build_accessible_teams_block(SESSION_DETAILS.team_summaries)
     except Exception:  # pragma: no cover
         return ""
-
-    if not overview:
-        return ""
-
-    return "\n".join(
-        [
-            "Historic Activity Overview",
-            "---------------------------",
-            "Below is a summary of the agent's historic activity (tasks, contacts, knowledge, transcripts, etc.).",
-            "Some parts may be useful context for the current task while others might not – use your judgement.",
-            "",
-            overview,
-            "",
-        ],
-    )
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -195,6 +181,13 @@ Files (example)
 
 Anti-patterns to avoid
 ----------------------
+• **Never use `{transform_column_fname}` to set a value for a single row.**
+  That tool rewrites the entire column for ALL rows and can be rejected by
+  protected core columns (e.g. `phone_number` / `email_address` on Contacts).
+  When the request is "add/set X for entity Y" (e.g. "Add Jane Doe's phone
+  number +15559998877"), use `{update_rows_fname}({{row_id: {{field: value}}}})`
+  against the resolved `row_id` — first locate Jane via a filter/search step,
+  then apply the value with `{update_rows_fname}`.
 • Avoid delete+create when a simple rename will do.
 • Avoid duplicated denormalised strings across tables—introduce a key and normalise.
 • Avoid mixed-type columns—split into well-typed columns.
@@ -263,6 +256,7 @@ Tool availability groups (for reference)
             table_schemas_json,
         ],
     )
+    accessible_teams_block = _accessible_teams_section() if include_activity else ""
 
     spec = PromptSpec(
         manager="KnowledgeManager",
@@ -288,9 +282,8 @@ Tool availability groups (for reference)
         images_extras_block=None,
         include_parallelism=True,
         schemas=[],
-        special_blocks=(
-            [case_specific_instructions.strip()] if case_specific_instructions else []
-        ),
+        special_blocks=[accessible_teams_block]
+        + ([case_specific_instructions.strip()] if case_specific_instructions else []),
         include_clarification_footer=True,
         include_time_footer=True,
         time_footer_prefix="Current UTC time is ",
@@ -456,6 +449,7 @@ Anti-patterns to avoid
     usage_examples = textwrap.dedent(usage_examples_base).strip()
     if clarification_block:
         usage_examples = f"{usage_examples}\n\n{clarification_block}"
+    accessible_teams_block = _accessible_teams_section() if include_activity else ""
 
     # Build workflow instructions
     workflow = textwrap.dedent(
@@ -519,7 +513,11 @@ Use the `{ask_fname}` method to see if you can find any missing context *before*
         images_extras_block=None,
         include_parallelism=True,
         schemas=[],
-        special_blocks=[column_schema_block, table_schema_block]
+        special_blocks=[
+            column_schema_block,
+            table_schema_block,
+            accessible_teams_block,
+        ]
         + ([case_specific_instructions.strip()] if case_specific_instructions else []),
         include_clarification_footer=True,
         include_time_footer=True,

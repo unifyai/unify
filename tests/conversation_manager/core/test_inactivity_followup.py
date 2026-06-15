@@ -12,6 +12,8 @@ Covers:
         - returns False on missing config
         - posts to the right URL with admin auth on success
         - swallows exceptions
+    5. activity_sync opt-out / opt-in helpers
+    6. CommsPrimitives.stop_inactivity_followups / resume_inactivity_followups
 """
 
 from __future__ import annotations
@@ -32,8 +34,8 @@ from unity.conversation_manager.domains.inactivity import (
 from unity.conversation_manager.domains.notifications import NotificationBar
 from unity.conversation_manager.events import InactivityFollowup
 from unity.transcript_manager.activity_sync import (
-    cancel_assistant_termination_via_orchestra,
-    terminate_assistant_via_orchestra,
+    opt_in_to_inactivity_followups_via_orchestra,
+    opt_out_of_inactivity_followups_via_orchestra,
     touch_assistant_activity,
 )
 
@@ -104,11 +106,16 @@ class TestInactivityHandler:
         # Brain should know to inspect transcript history to choose variant
         assert "transcript" in text.lower()
 
-    def test_notification_text_includes_lifecycle_primitives(self):
+    def test_notification_text_includes_optout_primitives(self):
         text = _inactivity_notification_text(InactivityFollowup(reason="hi"))
-        # Brain must know it can opt-out / cancel termination via primitives
-        assert "terminate_self" in text
-        assert "cancel_self_termination" in text
+        # Brain must know it can honour an explicit opt-out via primitives,
+        # and the old deletion-oriented primitives must be gone.
+        assert "stop_inactivity_followups" in text
+        assert "resume_inactivity_followups" in text
+        assert "terminate_self" not in text
+        assert "cancel_self_termination" not in text
+        # Opt-out never deletes anything.
+        assert "deleted" in text.lower()
 
     def test_notification_text_directs_email_send(self):
         """Inactivity follow-ups are email-only for V0."""
@@ -260,12 +267,12 @@ class TestTouchAssistantActivity:
 
 
 # ===========================================================================
-# 5. Lifecycle helpers (terminate / cancel-termination via orchestra)
+# 5. Opt-out / opt-in sync helpers
 # ===========================================================================
 
 
-class TestLifecycleSyncHelpers:
-    """terminate_assistant_via_orchestra + cancel_assistant_termination_via_orchestra."""
+class TestFollowupOptOutHelpers:
+    """opt_out_of_inactivity_followups_via_orchestra + opt_in_… ."""
 
     def _make_fake_http(self, *, status: int = 200):
         captured: dict = {}
@@ -282,7 +289,7 @@ class TestLifecycleSyncHelpers:
         http_module.post = fake_post
         return http_module, captured
 
-    def test_terminate_posts_to_correct_url(self):
+    def test_opt_out_posts_to_correct_url(self):
         http_module, captured = self._make_fake_http(status=200)
         with (
             patch(
@@ -295,33 +302,35 @@ class TestLifecycleSyncHelpers:
             ),
             patch.dict("sys.modules", {"unify.utils": MagicMock(http=http_module)}),
         ):
-            assert terminate_assistant_via_orchestra(42) is True
-
-        assert captured["url"] == "http://orchestra.test/admin/assistant/42/terminate"
-        assert captured["headers"] == {"Authorization": "Bearer test-admin-key"}
-
-    def test_cancel_termination_posts_to_correct_url(self):
-        http_module, captured = self._make_fake_http(status=200)
-        with (
-            patch(
-                "unity.transcript_manager.activity_sync._base_url",
-                return_value="http://orchestra.test",
-            ),
-            patch(
-                "unity.transcript_manager.activity_sync._admin_key",
-                return_value="test-admin-key",
-            ),
-            patch.dict("sys.modules", {"unify.utils": MagicMock(http=http_module)}),
-        ):
-            assert cancel_assistant_termination_via_orchestra(42) is True
+            assert opt_out_of_inactivity_followups_via_orchestra(42) is True
 
         assert (
             captured["url"]
-            == "http://orchestra.test/admin/assistant/42/cancel-termination"
+            == "http://orchestra.test/admin/assistant/42/opt-out-followups"
         )
         assert captured["headers"] == {"Authorization": "Bearer test-admin-key"}
 
-    def test_terminate_returns_false_on_missing_config(self):
+    def test_opt_in_posts_to_correct_url(self):
+        http_module, captured = self._make_fake_http(status=200)
+        with (
+            patch(
+                "unity.transcript_manager.activity_sync._base_url",
+                return_value="http://orchestra.test",
+            ),
+            patch(
+                "unity.transcript_manager.activity_sync._admin_key",
+                return_value="test-admin-key",
+            ),
+            patch.dict("sys.modules", {"unify.utils": MagicMock(http=http_module)}),
+        ):
+            assert opt_in_to_inactivity_followups_via_orchestra(42) is True
+
+        assert (
+            captured["url"]
+            == "http://orchestra.test/admin/assistant/42/opt-in-followups"
+        )
+
+    def test_opt_out_returns_false_on_missing_config(self):
         with (
             patch(
                 "unity.transcript_manager.activity_sync._base_url",
@@ -332,20 +341,9 @@ class TestLifecycleSyncHelpers:
                 return_value="key",
             ),
         ):
-            assert terminate_assistant_via_orchestra(42) is False
-        with (
-            patch(
-                "unity.transcript_manager.activity_sync._base_url",
-                return_value="http://orchestra.test",
-            ),
-            patch(
-                "unity.transcript_manager.activity_sync._admin_key",
-                return_value=None,
-            ),
-        ):
-            assert terminate_assistant_via_orchestra(42) is False
+            assert opt_out_of_inactivity_followups_via_orchestra(42) is False
 
-    def test_terminate_returns_false_on_non_2xx(self):
+    def test_opt_out_returns_false_on_non_2xx(self):
         http_module, _ = self._make_fake_http(status=500)
         with (
             patch(
@@ -358,24 +356,9 @@ class TestLifecycleSyncHelpers:
             ),
             patch.dict("sys.modules", {"unify.utils": MagicMock(http=http_module)}),
         ):
-            assert terminate_assistant_via_orchestra(42) is False
+            assert opt_out_of_inactivity_followups_via_orchestra(42) is False
 
-    def test_cancel_termination_returns_false_on_non_2xx(self):
-        http_module, _ = self._make_fake_http(status=500)
-        with (
-            patch(
-                "unity.transcript_manager.activity_sync._base_url",
-                return_value="http://orchestra.test",
-            ),
-            patch(
-                "unity.transcript_manager.activity_sync._admin_key",
-                return_value="key",
-            ),
-            patch.dict("sys.modules", {"unify.utils": MagicMock(http=http_module)}),
-        ):
-            assert cancel_assistant_termination_via_orchestra(42) is False
-
-    def test_swallow_exceptions(self):
+    def test_swallows_exceptions(self):
         def raising_post(*_a, **_kw):
             raise RuntimeError("network down")
 
@@ -393,25 +376,25 @@ class TestLifecycleSyncHelpers:
             ),
             patch.dict("sys.modules", {"unify.utils": MagicMock(http=http_module)}),
         ):
-            assert terminate_assistant_via_orchestra(42) is False
-            assert cancel_assistant_termination_via_orchestra(42) is False
+            assert opt_out_of_inactivity_followups_via_orchestra(42) is False
+            assert opt_in_to_inactivity_followups_via_orchestra(42) is False
 
 
 # ===========================================================================
-# 6. CommsPrimitives.terminate_self / cancel_self_termination
+# 6. CommsPrimitives.stop_inactivity_followups / resume_inactivity_followups
 # ===========================================================================
 
 
-class TestCommsLifecyclePrimitives:
-    """The brain-callable wrappers on CommsPrimitives."""
+class TestCommsFollowupOptOutPrimitives:
+    """The brain-callable opt-out wrappers on CommsPrimitives."""
 
-    def test_lifecycle_methods_in_primitive_methods(self):
+    def test_optout_methods_in_primitive_methods(self):
         """They must be discoverable by the function-manager registry."""
-        assert "terminate_self" in CommsPrimitives._PRIMITIVE_METHODS
-        assert "cancel_self_termination" in CommsPrimitives._PRIMITIVE_METHODS
+        assert "stop_inactivity_followups" in CommsPrimitives._PRIMITIVE_METHODS
+        assert "resume_inactivity_followups" in CommsPrimitives._PRIMITIVE_METHODS
 
     @pytest.mark.anyio
-    async def test_terminate_self_calls_helper_and_returns_shape(self):
+    async def test_stop_calls_helper_and_returns_shape(self):
         primitives = CommsPrimitives.__new__(CommsPrimitives)
         primitives._cm = None
         primitives._event_broker = MagicMock()
@@ -422,17 +405,18 @@ class TestCommsLifecyclePrimitives:
         with (
             patch("unity.comms.primitives.SESSION_DETAILS", fake_session),
             patch(
-                "unity.transcript_manager.activity_sync.terminate_assistant_via_orchestra",
+                "unity.transcript_manager.activity_sync."
+                "opt_out_of_inactivity_followups_via_orchestra",
                 return_value=True,
-            ) as mock_terminate,
+            ) as mock_stop,
         ):
-            result = await primitives.terminate_self()
+            result = await primitives.stop_inactivity_followups()
 
-        mock_terminate.assert_called_once_with(99)
+        mock_stop.assert_called_once_with(99)
         assert result == {"success": True, "assistant_id": 99}
 
     @pytest.mark.anyio
-    async def test_cancel_self_termination_calls_helper_and_returns_shape(self):
+    async def test_resume_calls_helper_and_returns_shape(self):
         primitives = CommsPrimitives.__new__(CommsPrimitives)
         primitives._cm = None
         primitives._event_broker = MagicMock()
@@ -443,17 +427,18 @@ class TestCommsLifecyclePrimitives:
         with (
             patch("unity.comms.primitives.SESSION_DETAILS", fake_session),
             patch(
-                "unity.transcript_manager.activity_sync.cancel_assistant_termination_via_orchestra",
+                "unity.transcript_manager.activity_sync."
+                "opt_in_to_inactivity_followups_via_orchestra",
                 return_value=True,
-            ) as mock_cancel,
+            ) as mock_resume,
         ):
-            result = await primitives.cancel_self_termination()
+            result = await primitives.resume_inactivity_followups()
 
-        mock_cancel.assert_called_once_with(99)
+        mock_resume.assert_called_once_with(99)
         assert result == {"success": True, "assistant_id": 99}
 
     @pytest.mark.anyio
-    async def test_lifecycle_propagates_failure(self):
+    async def test_propagates_failure(self):
         primitives = CommsPrimitives.__new__(CommsPrimitives)
         primitives._cm = None
         primitives._event_broker = MagicMock()
@@ -464,15 +449,16 @@ class TestCommsLifecyclePrimitives:
         with (
             patch("unity.comms.primitives.SESSION_DETAILS", fake_session),
             patch(
-                "unity.transcript_manager.activity_sync.terminate_assistant_via_orchestra",
+                "unity.transcript_manager.activity_sync."
+                "opt_out_of_inactivity_followups_via_orchestra",
                 return_value=False,
             ),
         ):
-            result = await primitives.terminate_self()
+            result = await primitives.stop_inactivity_followups()
         assert result == {"success": False, "assistant_id": 99}
 
     @pytest.mark.anyio
-    async def test_lifecycle_handles_missing_agent_id(self):
+    async def test_handles_missing_agent_id(self):
         primitives = CommsPrimitives.__new__(CommsPrimitives)
         primitives._cm = None
         primitives._event_broker = MagicMock()
@@ -483,9 +469,10 @@ class TestCommsLifecyclePrimitives:
         with (
             patch("unity.comms.primitives.SESSION_DETAILS", fake_session),
             patch(
-                "unity.transcript_manager.activity_sync.terminate_assistant_via_orchestra",
+                "unity.transcript_manager.activity_sync."
+                "opt_out_of_inactivity_followups_via_orchestra",
                 return_value=False,
             ),
         ):
-            result = await primitives.terminate_self()
+            result = await primitives.stop_inactivity_followups()
         assert result == {"success": False, "assistant_id": None}

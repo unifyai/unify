@@ -41,7 +41,12 @@ dump.rdb
 parsed_results_output/
 evals/
 magnitude/
-unity.egg-info/
+# Python build artifacts (setuptools, uv, wheel)
+build/
+dist/
+*.egg-info/
+# Personal/user working directory (Downloads, Traces — not for VCS)
+Local/
 */node_modules*
 *.soffice-profile*
 .tmux_logs/
@@ -57,6 +62,12 @@ assets/*
 !assets/openclaw-architecture.png
 !assets/hermes-architecture.png
 !assets/unity-architecture.png
+!assets/demo-course-correct.png
+!assets/demo-live-introspection.png
+!assets/demo-pause-resume.png
+!assets/demo-concurrent-steering.png
+!assets/demo-clarification-bubbling.png
+!assets/demo-stop-one-branch.png
 discord_messages.md
 .cursor/debug.log
 # ConversationManager sandbox persistent config (project-local)

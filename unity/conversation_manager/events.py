@@ -7,6 +7,7 @@ from dataclasses import dataclass, asdict, field
 
 from pydantic import BaseModel
 
+from unity.common.context_registry import ContextRegistry
 from unity.common.prompt_helpers import now as prompt_now
 
 
@@ -141,6 +142,9 @@ class PhoneCallReceived(Event):
 
     contact: dict
     conference_name: str = ""
+    room_name: str | None = None
+    call_session_id: str | None = None
+    provider_call_sid: str | None = None
 
 
 @dataclass
@@ -171,6 +175,7 @@ class UnifyMeetReceived(Event):
 
     contact: dict
     room_name: str | None = None
+    opening_config: dict | None = None
 
 
 @dataclass
@@ -409,6 +414,9 @@ class RecordingReady(Event):
 
     conference_name: str
     recording_url: str
+    call_session_id: str | None = None
+    provider_call_sid: str | None = None
+    room_name: str | None = None
 
 
 @dataclass
@@ -439,6 +447,9 @@ class WhatsAppCallReceived(Event):
 
     contact: dict
     conference_name: str = ""
+    room_name: str | None = None
+    call_session_id: str | None = None
+    provider_call_sid: str | None = None
 
 
 @dataclass
@@ -562,6 +573,83 @@ class DiscordChannelMessageSent(Event):
     content: str
     channel_id: str = ""
     guild_id: str = ""
+
+
+@dataclass
+class SlackMessageReceived(Event):
+    """A direct message received from a user via a Slack app.
+
+    ``routing_metadata`` carries Orchestra-side routing context (whether
+    the route was created via token addressing, whether the assistant is
+    the coordinator handling a misroute, etc.) and is surfaced to the
+    assistant via the renderer.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:slack_message"
+    content_logged: ClassVar[bool] = True
+
+    contact: dict
+    content: str
+    team_id: str = ""
+    channel_id: str = ""
+    bot_user_id: str = ""
+    event_ts: str = ""
+    thread_ts: str = ""
+    message_id: str = ""
+    attachments: list[dict] = field(default_factory=list)
+    routing_metadata: dict = field(default_factory=dict)
+
+
+@dataclass
+class SlackChannelMessageReceived(Event):
+    """A message received in a Slack channel via @mention of the app.
+
+    ``routing_metadata`` carries Orchestra-side routing context (token
+    used, thread inheritance, coordinator fallback, ambiguous-token
+    fan-out hints) and is surfaced to the assistant via the renderer.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:slack_channel_message"
+    content_logged: ClassVar[bool] = True
+
+    contact: dict
+    content: str
+    team_id: str = ""
+    channel_id: str = ""
+    bot_user_id: str = ""
+    event_ts: str = ""
+    thread_ts: str = ""
+    message_id: str = ""
+    attachments: list[dict] = field(default_factory=list)
+    routing_metadata: dict = field(default_factory=dict)
+
+
+@dataclass
+class SlackMessageSent(Event):
+    """A direct message sent to a Slack user via the app."""
+
+    topic: ClassVar[str | None] = "app:comms:slack_message_sent"
+    content_logged: ClassVar[bool] = True
+
+    contact: dict
+    content: str
+    team_id: str = ""
+    channel_id: str = ""
+    thread_ts: str = ""
+
+
+@dataclass
+class SlackChannelMessageSent(Event):
+    """A message sent to a Slack channel via the app."""
+
+    topic: ClassVar[str | None] = "app:comms:slack_channel_message_sent"
+    content_logged: ClassVar[bool] = True
+
+    contact: dict
+    content: str
+    team_id: str = ""
+    channel_id: str = ""
+    thread_ts: str = ""
 
 
 @dataclass
@@ -731,25 +819,36 @@ class OutboundWhatsAppCallUtterance(Event):
 class FastBrainNotification(Event):
     """Notification delivered to the fast brain during a voice call.
 
-    When should_speak is True, response_text contains the exact text the fast
-    brain should utter via session.say(), bypassing its own LLM. When
-    should_speak is False, the fast brain absorbs the notification silently
-    and must NOT speak in response.
+    ``message`` is injected as silent ``[notification]`` context for non-proactive
+    sources. When ``should_speak`` is True, the fast brain speaks
+    ``spoken_message`` if set, otherwise ``message``, verbatim via TTS.
     """
 
     topic: ClassVar[str | None] = "app:comms:assistant_notification"
 
     contact: dict
-    content: str
-    response_text: str = ""
+    message: str = ""
     should_speak: bool = False
+    spoken_message: str = ""
     source: str = ""
     agent_service_url: str = ""
     llm_log_path: str = ""
 
 
-# Backward-compatible alias for deserialization of persisted events.
-CallGuidance = FastBrainNotification
+@dataclass
+class FastBrainMoodClassified(Event):
+    """Avatar mood classified from the current fast-brain voice transcript."""
+
+    topic: ClassVar[str | None] = "app:comms:fast_brain_mood"
+
+    contact: dict
+    channel: str
+    mood: str
+    avatar_mood: str
+    trigger_role: str
+    trigger_utterance_id: str
+    turn_index: int
+    model: str = ""
 
 
 @dataclass
@@ -925,20 +1024,26 @@ class _SessionConfigBase(Event):
     voice_provider: str = "cartesia"
     assistant_whatsapp_number: str = ""
     assistant_discord_bot_id: str = ""
+    assistant_slack_bot_user_id: str = ""
+    assistant_is_coordinator: bool = False
     assistant_timezone: str = (
         ""  # IANA timezone identifier; default empty for backward compat
     )
     assistant_job_title: str = ""
     assistant_email_provider: str = "google_workspace"
+    self_contact_id: int = 0
+    boss_contact_id: int = 1
     desktop_mode: str = "ubuntu"
     desktop_url: str | None = None
     user_whatsapp_number: str = ""
-    user_desktop_mode: str | None = None
-    user_desktop_filesys_sync: bool = False
-    user_desktop_url: str | None = None
+    # Per-user desktop links: each {owner_user_id, url, os, filesys_sync}.
+    user_desktops: list[dict[str, Any]] = field(default_factory=list)
     org_id: int | None = None
     org_name: str = ""
     team_ids: list[int] = field(default_factory=list)
+    team_summaries: list[dict[str, Any]] = field(default_factory=list)
+    is_coordinator: bool = False
+    update_kind: str = "general"
     wake_reasons: list[dict[str, Any]] = field(default_factory=list)
     # Demo assistant metadata ID. If set, this is a demo session.
     # Unity derives demo_mode from (demo_id is not None).
@@ -1233,6 +1338,7 @@ class TaskDue(Event):
     source_task_log_id: int
     activation_revision: str
     scheduled_for: str
+    destination: str | None = None
     execution_mode: str = "live"
     source_type: str = "scheduled"
     task_label: str = ""
@@ -1281,6 +1387,12 @@ class TaskDue(Event):
             return None
         if not activation_revision or not scheduled_for:
             return None
+        try:
+            destination = ContextRegistry.canonical_destination(
+                payload.get("destination"),
+            )
+        except ValueError:
+            return None
         task_label = str(payload.get("task_label") or "")
         resolved_reason = reason or (
             f"Scheduled task '{task_label}' became due."
@@ -1292,6 +1404,7 @@ class TaskDue(Event):
             source_task_log_id=source_task_log_id,
             activation_revision=activation_revision,
             scheduled_for=scheduled_for,
+            destination=destination,
             execution_mode=str(payload.get("execution_mode") or "live"),
             source_type=str(payload.get("source_type") or "scheduled"),
             task_label=task_label,
@@ -1306,9 +1419,10 @@ class TaskDue(Event):
 
 @dataclass
 class InactivityFollowup(Event):
-    """Orchestra signalled that the assistant has been silent across all
-    contacts for ``settings.inactivity_followup_days`` and should compose
-    a re-engagement message to the boss.
+    """Orchestra signalled that the user has been silent across all of
+    their assistants for ``settings.inactivity_followup_days`` (orchestra
+    side) and this Coordinator should compose a re-engagement message to
+    the boss.
 
     Communication publishes this either as a ``unity_system_event`` to a
     hot pod's Pub/Sub topic or, on a cold start, as an entry in
@@ -1320,6 +1434,96 @@ class InactivityFollowup(Event):
     topic: ClassVar[str | None] = "app:comms:inactivity_followup"
 
     reason: str = ""
+
+
+@dataclass
+class CoordinatorDelegate(Event):
+    """A Coordinator assigned asynchronous work to this colleague.
+
+    Communication publishes this either as a ``unity_system_event`` to a hot
+    pod or as a startup wake reason during cold start. The colleague's brain is
+    responsible for carrying out the instruction through its own manager
+    primitives; the Coordinator only receives dispatch-level confirmation.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:coordinator_delegate"
+
+    requested_by_assistant_id: str
+    instruction: str
+    intent: str = "general"
+    dedupe_key: str | None = None
+    related_context: dict[str, Any] | None = None
+    reason: str = ""
+
+
+@dataclass
+class CoordinatorOnboardingEvent(Event):
+    """Orchestra observed a user action that should be narrated in the
+    Coordinator's onboarding conversation.
+
+    Emitted only while the Coordinator is in
+    ``Coordinator/State.mode == 'onboarding'`` (see
+    ``coordinator_onboarding_event_service`` in orchestra) so day-to-day
+    activity stays silent. Subtypes correspond to onboarding milestones
+    with no other user-visible feedback channel: workspace OAuth landed,
+    an integration secret was saved, or the user opened an onboarding
+    session from the call-or-chat picker. The brain reacts with a
+    one-line acknowledgement that names the thing that just happened
+    and previews the next pending step — see the coordinator block in
+    ``prompt_builders.build_system_prompt``.
+
+    ``subtype`` is the canonical event taxonomy keyed off
+    ``extra_event_fields.subtype`` on the Pub/Sub payload; ``details``
+    carries optional structured context (secret name, specialist id,
+    …) the brain can include in the acknowledgement when relevant.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:coordinator_onboarding_event"
+
+    subtype: str = ""
+    message: str = ""
+    details: dict = field(default_factory=dict)
+
+
+@dataclass
+class IntegrationToolsSyncRequested(Event):
+    """A provider app needs its FunctionManager tools materialized or cleaned up."""
+
+    topic: ClassVar[str | None] = "app:comms:integration_tools_sync_requested"
+
+    app_slug: str
+    app_display_name: str | None = None
+    connection_id: str | None = None
+    operation: str = "materialize"
+    message: str = ""
+
+
+@dataclass
+class IntegrationToolsSyncCompleted(Event):
+    """Unity finished preparing active provider tools for an app."""
+
+    topic: ClassVar[str | None] = "app:comms:integration_tools_sync_completed"
+
+    app_slug: str
+    app_display_name: str | None = None
+    connection_id: str | None = None
+    tool_count: int | None = None
+    operation: str = "materialize"
+    message: str = ""
+
+
+@dataclass
+class IntegrationToolsSyncFailed(Event):
+    """Unity failed to prepare active provider tools for an app."""
+
+    topic: ClassVar[str | None] = "app:comms:integration_tools_sync_failed"
+
+    app_slug: str
+    app_display_name: str | None = None
+    connection_id: str | None = None
+    error: str = ""
+    operation: str = "materialize"
+    message: str = ""
 
 
 @dataclass

@@ -22,12 +22,14 @@ from typing import Any, Callable, Optional, TYPE_CHECKING
 from unity.function_manager.primitives.scope import (
     PrimitiveScope,
     VALID_MANAGER_ALIASES,
+    default_runtime_scope,
 )
 from unity.function_manager.primitives.registry import (
     get_registry,
     _CLASS_PATH_TO_ALIAS,
 )
 from unity.manager_registry import SingletonABCMeta
+from unity.integrations.function_metadata import is_provider_backed_function
 
 if TYPE_CHECKING:
     from unity.comms.primitives import CommsPrimitives
@@ -82,10 +84,13 @@ _COMPUTER_METHODS = (
     "go_back",
     "wait_for",
     "save_browser_state",
+    "solve_captcha",
     "execute_actions",
 )
 
-_DESKTOP_METHODS = tuple(name for name in _COMPUTER_METHODS if name != "get_content")
+_DESKTOP_METHODS = tuple(
+    name for name in _COMPUTER_METHODS if name not in ("get_content", "solve_captcha")
+)
 _WEB_SESSION_METHODS = _COMPUTER_METHODS
 
 
@@ -262,6 +267,71 @@ def _make_session_method(
     return wrapper
 
 
+def _make_user_desktop_method(
+    method_name: str,
+    owner: "ComputerPrimitives",
+    session_resolver,
+    user_id: str,
+):
+    """Build a wrapped async method routing to a *user's* linked desktop.
+
+    Mirrors ``_make_session_method`` but targets a per-user agent-service
+    backend instead of the managed VM.  Differences: it does not gate on the
+    managed-VM readiness event (the user's machine has its own liveness,
+    enforced by the tunnel), it never publishes desktop-invoked events (those
+    drive the assistant's own live view), and any terminal connection error is
+    routed through ``owner._handle_user_desktop_error`` so a dropped tunnel
+    triggers a reconnect on the next call.
+    """
+    from unity.function_manager.computer_backends import (
+        ComputerBackend,
+        ComputerSession,
+    )
+
+    if method_name == "get_screenshot":
+
+        async def screenshot_wrapper(*args, **kwargs):
+            kwargs.pop("_clarification_up_q", None)
+            kwargs.pop("_clarification_down_q", None)
+            import base64, io
+            from PIL import Image as _Image
+
+            session = await session_resolver()
+            try:
+                b64 = await session.get_screenshot()
+            except Exception as e:
+                owner._handle_user_desktop_error(user_id, e)
+                raise
+            return _Image.open(io.BytesIO(base64.b64decode(b64)))
+
+        screenshot_wrapper.__name__ = method_name
+        screenshot_wrapper.__doc__ = (
+            getattr(ComputerBackend, method_name, None).__doc__
+            or getattr(ComputerSession, method_name, None).__doc__
+        )
+        return screenshot_wrapper
+
+    async def wrapper(*args, **kwargs):
+        kwargs.pop("_clarification_up_q", None)
+        kwargs.pop("_clarification_down_q", None)
+        if method_name in owner._SECRET_INJECTED_METHODS and args:
+            resolved = await owner.secret_manager.from_placeholder(args[0])
+            args = (resolved,) + args[1:]
+        session = await session_resolver()
+        try:
+            return await getattr(session, method_name)(*args, **kwargs)
+        except Exception as e:
+            owner._handle_user_desktop_error(user_id, e)
+            raise
+
+    wrapper.__name__ = method_name
+    wrapper.__doc__ = (
+        getattr(ComputerBackend, method_name, None).__doc__
+        or getattr(ComputerSession, method_name, None).__doc__
+    )
+    return wrapper
+
+
 class _ComputerNamespace:
     """Thin wrapper that routes method calls to a lazily-created singleton session.
 
@@ -360,7 +430,12 @@ class _WebSessionFactory:
         self._handles: list[WebSessionHandle] = []
         self._next_id: int = 0
 
-    async def new_session(self, visible: bool = True) -> WebSessionHandle:
+    async def new_session(
+        self,
+        visible: bool = True,
+        *,
+        storage_state_name: str | None = None,
+    ) -> WebSessionHandle:
         """Create a new independent browser session.
 
         Each call spawns a fresh Chromium process with its own browsing
@@ -377,6 +452,14 @@ class _WebSessionFactory:
 
             If False, the browser runs headless on the host machine for
             fast background lookups where visibility is unnecessary.
+        storage_state_name : str, optional
+            Name of a previously-saved browser-state file (created via
+            ``session.save_browser_state(name)``). When provided, the new
+            Chromium context boots with the persisted cookies +
+            localStorage + sessionStorage already populated, so the
+            session starts in an authenticated state. Only honoured for
+            ``visible=False`` (i.e. ``mode='web'``); the web-vm path on
+            the managed VM has its own auth flow.
 
         Returns
         -------
@@ -389,7 +472,11 @@ class _WebSessionFactory:
         self._next_id += 1
         label = f"Web {sid}"
         mode = "web-vm" if visible else "web"
-        session = await self._owner.backend.create_session(mode, label=label)
+        session = await self._owner.backend.create_session(
+            mode,
+            label=label,
+            storage_state_name=storage_state_name,
+        )
         handle = WebSessionHandle(session, self._owner, session_id=sid)
         self._handles.append(handle)
         return handle
@@ -508,6 +595,128 @@ class _WebSessionFactory:
         return result
 
 
+class UserDesktopHandle:
+    """Control handle for a single user's linked local desktop.
+
+    Returned by ``primitives.computer.user_desktop.session(user_id=...)``.
+    Exposes the desktop method set (``act``, ``observe``, ``click``,
+    ``type_text``, ``get_screenshot``, ...) routed to a dedicated
+    agent-service backend connected to that user's machine over the reverse
+    tunnel.  This is the user's *own* computer — not the assistant's managed
+    VM and not the surface shown in the Console live view.  Every call
+    re-checks that the user still consents to remote control, so a runtime
+    revocation or a dropped tunnel fails fast rather than acting on a stale
+    connection.
+    """
+
+    def __init__(
+        self,
+        owner: "ComputerPrimitives",
+        user_id: str,
+        link: Any,
+    ):
+        self._owner = owner
+        self._user_id = user_id
+        self._link = link
+        self._label = f"UserDesktop {user_id}"
+
+        async def _resolve():
+            owner._assert_user_desktop_allowed(user_id)
+            backend = owner._get_user_desktop_backend(link)
+            return await backend.get_session("desktop")
+
+        for name in _DESKTOP_METHODS:
+            setattr(
+                self,
+                name,
+                _make_user_desktop_method(name, owner, _resolve, user_id),
+            )
+
+    @property
+    def user_id(self) -> str:
+        """User who owns the machine this handle controls."""
+        return self._user_id
+
+    @property
+    def os(self) -> str:
+        """Operating system reported for the linked machine."""
+        return getattr(self._link, "os", "")
+
+    @property
+    def label(self) -> str:
+        """Human-readable label for this user-desktop connection."""
+        return self._label
+
+
+class _UserDesktopFactory:
+    """Namespace for controlling users' own linked local desktops.
+
+    Accessed as ``primitives.computer.user_desktop``.  Distinct from
+    ``primitives.computer.desktop`` (the assistant's managed VM, always shown
+    in the Console live view): this drives a *user's* physical machine,
+    exposed over a reverse tunnel and linked by that user in the Console.
+
+    Default posture: operate your *own* desktop.  Only reach for a user's
+    machine when that user has linked it **and** has explicitly asked you to
+    act on it, and proceed with care — it is their personal computer.
+    """
+
+    def __init__(self, owner: "ComputerPrimitives"):
+        self._owner = owner
+
+    def list_linked(self) -> list[dict]:
+        """List the user desktops linked to this assistant.
+
+        Returns one dict per linked machine with keys ``user_id``, ``os``,
+        and ``filesys_sync``.  Use this to discover whose machines are
+        available before calling ``session()``.  An empty list means no user
+        has linked a desktop and only the assistant's own desktop is
+        controllable.
+        """
+        from unity.session_details import SESSION_DETAILS
+
+        return [
+            {
+                "user_id": uid,
+                "os": link.os,
+                "filesys_sync": link.filesys_sync,
+            }
+            for uid, link in SESSION_DETAILS.assistant.user_desktops.items()
+        ]
+
+    def session(self, user_id: str | None = None) -> "UserDesktopHandle":
+        """Return a control handle for a user's linked local desktop.
+
+        Parameters
+        ----------
+        user_id : str, optional
+            Which user's machine to control.  Defaults to the session's
+            primary user, falling back to the sole linked desktop when only
+            one exists.  When several users have linked desktops it must be
+            given explicitly — pass the acting user's id (surfaced in the
+            system prompt) to target the person currently being helped.  Must
+            match a desktop the user linked to this assistant in the Console.
+
+        Returns
+        -------
+        UserDesktopHandle
+            Handle exposing the desktop method set routed to the user's
+            machine.
+
+        Raises
+        ------
+        ValueError
+            If no matching linked desktop exists (or the target is ambiguous
+            across multiple linked users).
+        PermissionError
+            If the user has revoked live remote-control consent.
+        """
+        link = self._owner._resolve_user_desktop_link(user_id)
+        target_uid = link.owner_user_id
+        self._owner._assert_user_desktop_allowed(target_uid)
+        return UserDesktopHandle(self._owner, target_uid, link)
+
+
 class ComputerPrimitives(metaclass=SingletonABCMeta):
     """Multi-mode computer control interface.
 
@@ -552,6 +761,7 @@ class ComputerPrimitives(metaclass=SingletonABCMeta):
         "go_back",
         "wait_for",
         "save_browser_state",
+        "solve_captcha",
         "execute_actions",
     )
     _PRIMITIVE_METHODS = _DYNAMIC_METHODS + ("get_screenshot",) + _LOW_LEVEL_METHODS
@@ -613,6 +823,12 @@ class ComputerPrimitives(metaclass=SingletonABCMeta):
         self._backend = None
         self._desktop_ns: Optional[_ComputerNamespace] = None
         self._web_factory: Optional[_WebSessionFactory] = None
+        self._user_desktop_factory: Optional[_UserDesktopFactory] = None
+        # Dedicated agent-service backends per linked user desktop, keyed by
+        # the resolved ``scheme://netloc/api`` URL.
+        self._user_desktop_backends: dict[str, Any] = {}
+        # Users who have revoked live remote-control of their own desktop.
+        self._user_desktop_revoked: set[str] = set()
         self._pending_url_mappings: dict[str, str] | None = None
 
         self._interject_queues: set[asyncio.Queue] = set()
@@ -715,6 +931,121 @@ class ComputerPrimitives(metaclass=SingletonABCMeta):
         if self._web_factory is None:
             self._web_factory = _WebSessionFactory(self)
         return self._web_factory
+
+    @property
+    def user_desktop(self) -> _UserDesktopFactory:
+        """Namespace for controlling users' own linked local desktops.
+
+        Distinct from ``desktop`` (the assistant's managed VM, always shown
+        in the Console live view).  Default posture: operate your *own*
+        desktop; only drive a user's machine when they have linked it and
+        explicitly asked you to act on it.
+        """
+        if self._user_desktop_factory is None:
+            self._user_desktop_factory = _UserDesktopFactory(self)
+        return self._user_desktop_factory
+
+    # ── User-desktop resolution / consent ────────────────────────────────
+
+    _USER_DESKTOP_REVOKED_MSG = (
+        "The user has revoked remote control of their own desktop. Stop any "
+        "actions targeting their machine immediately. You may continue "
+        "working on your own desktop. Do not retry user-desktop actions until "
+        "the user explicitly re-enables control."
+    )
+
+    def _resolve_user_desktop_link(self, user_id: str | None = None) -> Any:
+        """Resolve the ``UserDesktopLink`` for the target user.
+
+        Defaults to the current session's primary user.  Falls back to the
+        sole linked desktop when there is exactly one and no explicit user
+        was requested.
+        """
+        from unity.session_details import SESSION_DETAILS
+
+        desktops = SESSION_DETAILS.assistant.user_desktops
+        if not desktops:
+            raise ValueError(
+                "No user desktop is linked to this assistant. The user must "
+                "link their machine in the Console before it can be "
+                "controlled.",
+            )
+        if user_id is not None:
+            link = desktops.get(user_id)
+            if link is None:
+                raise ValueError(
+                    f"No linked desktop for user {user_id!r}. "
+                    f"Linked users: {sorted(desktops)}.",
+                )
+            return link
+        session_uid = getattr(SESSION_DETAILS.user, "id", None)
+        if session_uid and session_uid in desktops:
+            return desktops[session_uid]
+        if len(desktops) == 1:
+            return next(iter(desktops.values()))
+        raise ValueError(
+            "Multiple users have linked desktops; specify which one via "
+            "user_id. Pass the acting user's id (the person currently being "
+            f"helped, surfaced in the system prompt). Linked users: "
+            f"{sorted(desktops)}.",
+        )
+
+    def _get_user_desktop_backend(self, link: Any) -> "ComputerBackend":
+        """Lazily create and cache a backend for a user's desktop tunnel."""
+        from urllib.parse import urlparse
+
+        from unity.function_manager.computer_backends import MagnitudeBackend
+
+        parsed = urlparse(link.url)
+        api_url = f"{parsed.scheme}://{parsed.netloc}/api"
+        backend = self._user_desktop_backends.get(api_url)
+        if backend is None:
+            backend = MagnitudeBackend(container_url=api_url, local_url=None)
+            self._user_desktop_backends[api_url] = backend
+        return backend
+
+    def _assert_user_desktop_allowed(self, user_id: str) -> None:
+        """Raise if the user has revoked live remote-control of their desktop."""
+        if user_id in self._user_desktop_revoked:
+            raise PermissionError(
+                f"User {user_id!r} has revoked live remote-control of their "
+                "desktop. Do not attempt further actions on it until they "
+                "re-enable control.",
+            )
+
+    def _handle_user_desktop_error(self, user_id: str, e: Exception) -> None:
+        """Drop cached user-desktop backends on a terminal connection error.
+
+        A dropped tunnel surfaces as a dead-session error; clearing the cache
+        forces a fresh connection attempt on the next call rather than
+        repeatedly hitting a closed socket.
+        """
+        if _is_dead_session_error(e):
+            self._user_desktop_backends.clear()
+
+    def revoke_user_desktop_control(
+        self,
+        user_id: str,
+        conversation_context: str | None = None,
+    ) -> None:
+        """Revoke live remote-control of a user's desktop and notify actors.
+
+        Called when a user withdraws consent mid-session (e.g. via a Console
+        toggle).  Broadcasts an interjection so in-flight actors stop acting
+        on that machine.  The standing Console link is unaffected — control
+        can be re-enabled with ``grant_user_desktop_control``.
+        """
+        self._user_desktop_revoked.add(user_id)
+        payload = self._build_interjection(
+            self._USER_DESKTOP_REVOKED_MSG,
+            conversation_context,
+        )
+        for q in self._interject_queues:
+            q.put_nowait(payload)
+
+    def grant_user_desktop_control(self, user_id: str) -> None:
+        """Re-enable live remote-control of a user's desktop after a revoke."""
+        self._user_desktop_revoked.discard(user_id)
 
     # ── Steering control (not exposed as actor tools) ────────────────────
 
@@ -893,12 +1224,16 @@ _ALIAS_TO_GETTER: dict[str, str] = {
     "secrets": "get_secret_manager",
     "web": "get_web_searcher",
     "files": "get_file_manager",
+    "integrations": "",
     "computer": "",
     "actor": "",
+    "coordinator": "",
 }
 
 # Managers that need async wrapping (sync implementations)
-_SYNC_MANAGERS: frozenset[str] = frozenset({"dashboards", "data", "files"})
+_SYNC_MANAGERS: frozenset[str] = frozenset(
+    {"dashboards", "data", "files", "coordinator"},
+)
 
 
 # =============================================================================
@@ -938,9 +1273,9 @@ class Primitives:
 
         Args:
             primitive_scope: Defines which managers are accessible.
-                           If None, all managers are accessible.
+                           If None, uses role-gated default runtime scope.
         """
-        self._primitive_scope = primitive_scope or PrimitiveScope.all_managers()
+        self._primitive_scope = primitive_scope or default_runtime_scope()
         # Lazy-initialized manager instances
         self._managers: dict[str, Any] = {}
 
@@ -1062,9 +1397,19 @@ class Primitives:
         return self._get_manager("computer")
 
     @property
+    def integrations(self) -> Any:
+        """Provider-backed SaaS app integrations."""
+        return self._get_manager("integrations")
+
+    @property
     def actor(self) -> Any:
         """Actor delegation primitives (run)."""
         return self._get_manager("actor")
+
+    @property
+    def coordinator(self) -> "_AsyncPrimitiveWrapper":
+        """Coordinator admin primitives (assistant/team lifecycle)."""
+        return self._get_manager("coordinator")
 
 
 # =============================================================================
@@ -1107,4 +1452,6 @@ def get_primitive_callable(
     manager = getattr(primitives, manager_alias, None)
     if manager is None:
         return None
+    if manager_alias == "integrations" and is_provider_backed_function(primitive_data):
+        return manager.callable_for_tool(primitive_data)
     return getattr(manager, method_name, None)

@@ -8,6 +8,7 @@ import unity
 
 from unity.logger import LOGGER
 from unity.common.startup_timing import log_startup_timing
+from unity.common.context_registry import ContextRegistry
 from unity.common.hierarchical_logger import DEFAULT_ICON, ICONS
 from unity.settings import SETTINGS
 from unity.session_details import SESSION_DETAILS
@@ -23,6 +24,7 @@ from unity.conversation_manager.events import *
 from unity.common.prompt_helpers import now as prompt_now
 from unity.events.event_bus import EVENT_BUS
 from unity.manager_registry import ManagerRegistry
+from unity.function_manager.primitives import default_runtime_scope
 from unity.conversation_manager.cm_types import Medium, Mode
 
 if TYPE_CHECKING:
@@ -33,6 +35,34 @@ event_broker = get_event_broker()
 
 # Cache for pre-hire exchange ID - used to group all pre-hire messages into one exchange
 _pre_hire_exchange_id: int | None = None
+
+
+def ensure_runtime_context(*, strict: bool = False) -> str:
+    """Rebind runtime context in this task and refresh ContextRegistry base."""
+    full_ctx = f"{SESSION_DETAILS.user_context}/{SESSION_DETAILS.assistant_context}"
+    context_set = False
+    try:
+        import unify as _unify
+
+        active_ctx = _unify.get_active_context() or {}
+        if active_ctx.get("read") != full_ctx or active_ctx.get("write") != full_ctx:
+            _unify.set_context(full_ctx, skip_create=True)
+            context_set = True
+    except Exception as exc:
+        if strict:
+            raise
+        LOGGER.warning(
+            f"{ICONS['managers_worker']} [ManagersWorker] Failed to set runtime context to {full_ctx}: {exc}",
+        )
+    if context_set:
+        LOGGER.debug(
+            f"{ICONS['managers_worker']} [ManagersWorker] Runtime context rebound to {full_ctx}",
+        )
+    # Keep a stable base root for worker threads that do not inherit
+    # contextvars from the main loop.
+    ContextRegistry.set_base_context(full_ctx)
+    return full_ctx
+
 
 # Thought: This entire file could actually be turned into a mixin class
 
@@ -67,6 +97,7 @@ def _get_sender_name(contact: dict | None) -> str:
         or contact.get("phone_number", "")
         or contact.get("email_address", "")
         or contact.get("discord_id", "")
+        or contact.get("slack_user_id", "")
         or "Unknown"
     )
 
@@ -114,6 +145,10 @@ _MESSAGE_PRODUCING_EVENTS = {
     "DiscordMessageSent",
     "DiscordChannelMessageReceived",
     "DiscordChannelMessageSent",
+    "SlackMessageReceived",
+    "SlackMessageSent",
+    "SlackChannelMessageReceived",
+    "SlackChannelMessageSent",
     "TeamsMessageReceived",
     "TeamsMessageSent",
     "TeamsChannelMessageReceived",
@@ -315,6 +350,62 @@ async def hydrate_global_thread(cm: "ConversationManager") -> None:
                     timestamp=ts,
                 )
 
+            # --- Slack Messages ---
+            case "SlackMessageReceived":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.SLACK_MESSAGE,
+                    message_content=cm_event.content,
+                    role="user",
+                    timestamp=ts,
+                    attachments=getattr(cm_event, "attachments", None),
+                    team_id=getattr(cm_event, "team_id", None),
+                    channel_id=getattr(cm_event, "channel_id", None),
+                    thread_ts=getattr(cm_event, "thread_ts", None),
+                    message_id=getattr(cm_event, "message_id", None),
+                    routing_metadata=getattr(cm_event, "routing_metadata", None),
+                )
+            case "SlackMessageSent":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.SLACK_MESSAGE,
+                    message_content=cm_event.content,
+                    role="assistant",
+                    timestamp=ts,
+                    team_id=getattr(cm_event, "team_id", None),
+                    channel_id=getattr(cm_event, "channel_id", None),
+                    thread_ts=getattr(cm_event, "thread_ts", None),
+                )
+            case "SlackChannelMessageReceived":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.SLACK_CHANNEL_MESSAGE,
+                    message_content=cm_event.content,
+                    role="user",
+                    timestamp=ts,
+                    attachments=getattr(cm_event, "attachments", None),
+                    team_id=getattr(cm_event, "team_id", None),
+                    channel_id=getattr(cm_event, "channel_id", None),
+                    thread_ts=getattr(cm_event, "thread_ts", None),
+                    message_id=getattr(cm_event, "message_id", None),
+                    routing_metadata=getattr(cm_event, "routing_metadata", None),
+                )
+            case "SlackChannelMessageSent":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.SLACK_CHANNEL_MESSAGE,
+                    message_content=cm_event.content,
+                    role="assistant",
+                    timestamp=ts,
+                    team_id=getattr(cm_event, "team_id", None),
+                    channel_id=getattr(cm_event, "channel_id", None),
+                    thread_ts=getattr(cm_event, "thread_ts", None),
+                )
+
             # --- Teams Messages ---
             case "TeamsMessageReceived":
                 entry = cm.contact_index.build_message(
@@ -506,7 +597,7 @@ async def hydrate_global_thread(cm: "ConversationManager") -> None:
                     contact_id=contact_id,
                     sender_name=sender_name,
                     thread_name=notif_medium,
-                    message_content=cm_event.content,
+                    message_content=cm_event.message,
                     role="guidance",
                     timestamp=ts,
                 )
@@ -705,19 +796,43 @@ async def actor_watch_result(
     action_type: str = "",
 ) -> None:
     """Await final result and publish completion (or failure), then cleanup."""
-    # await result
+    resolved_action_type = action_type or "act"
     try:
         result = await handle.result()
-    except Exception as e:
-        result = f"Error getting actor result: {e}"
-        LOGGER.error(f"{ICONS['managers_worker']} [ManagersWorker] {result}")
+    except Exception as exc:
+        error_text = f"Error getting actor result: {exc}"
+        LOGGER.error(f"{ICONS['managers_worker']} [ManagersWorker] {error_text}")
+        await event_broker.publish(
+            "app:actor:result",
+            ActorResult(
+                handle_id=handle_id,
+                success=False,
+                result=None,
+                error=error_text,
+                action_type=resolved_action_type,
+            ).to_json(),
+        )
+        return
+
+    success = True
+    error_text: str | None = None
+    if isinstance(result, dict) and "error_kind" in result:
+        success = False
+        error_text = str(result.get("message") or result.get("error_kind"))
+    elif isinstance(result, str):
+        stripped_result = result.lstrip()
+        if stripped_result[:5].lower() == "error":
+            success = False
+            error_text = result
+
     await event_broker.publish(
         "app:actor:result",
         ActorResult(
             handle_id=handle_id,
-            success=False if "Error" in result else True,
+            success=success,
             result=result,
-            action_type=action_type,
+            error=error_text,
+            action_type=resolved_action_type,
         ).to_json(),
     )
 
@@ -857,6 +972,7 @@ async def log_message(
     local_message_id: int | None = None,
 ) -> None:
     """Log a message via TranscriptManager."""
+    ensure_runtime_context()
     event_name = event.__class__.__name__
     LOGGER.debug(f"{DEFAULT_ICON} publishing transcript {event_name}")
     event_name = event_name.lower()
@@ -879,6 +995,12 @@ async def log_message(
             Medium.DISCORD_CHANNEL_MESSAGE
             if "channel" in event_name
             else Medium.DISCORD_MESSAGE
+        )
+    elif "slack" in event_name:
+        medium = (
+            Medium.SLACK_CHANNEL_MESSAGE
+            if "channel" in event_name
+            else Medium.SLACK_MESSAGE
         )
     elif "teams" in event_name:
         medium = (
@@ -903,7 +1025,7 @@ async def log_message(
     contact_id = None
     if isinstance(event, (PreHireMessage,)):
         # PreHireMessage is always boss context
-        contact_id = 1
+        contact_id = SESSION_DETAILS.boss_contact_id
     elif isinstance(
         event,
         (
@@ -932,9 +1054,9 @@ async def log_message(
     elif cm.contact_index.get_contact(contact_id=event.contact["contact_id"]):
         contact_id = event.contact["contact_id"]
     if role == "Assistant":
-        sender_id, receiver_ids = 0, [contact_id]
+        sender_id, receiver_ids = SESSION_DETAILS.self_contact_id, [contact_id]
     else:
-        sender_id, receiver_ids = contact_id, [0]
+        sender_id, receiver_ids = contact_id, [SESSION_DETAILS.self_contact_id]
 
     # For browser-meet utterances (Google Meet / Teams Meet), resolve
     # participant names to contact IDs so receiver_ids reflects all known
@@ -966,7 +1088,7 @@ async def log_message(
                 if resolved_ids:
                     receiver_ids = sorted(resolved_ids)
             else:
-                resolved_ids.add(0)
+                resolved_ids.add(SESSION_DETAILS.self_contact_id)
                 resolved_ids.discard(sender_id)
                 if resolved_ids:
                     receiver_ids = sorted(resolved_ids)
@@ -983,8 +1105,7 @@ async def log_message(
             if role == "Assistant":
                 receiver_ids = sorted(resolved_ids)
             else:
-                # Keep assistant (0) plus all resolved recipients
-                resolved_ids.add(0)
+                resolved_ids.add(SESSION_DETAILS.self_contact_id)
                 receiver_ids = sorted(resolved_ids)
 
     # For Teams, use the conversation roster (already resolved to contact
@@ -1002,11 +1123,11 @@ async def log_message(
         resolved_ids: set[int] = set(getattr(event, "participants", []) or [])
         if resolved_ids:
             if role == "Assistant":
-                resolved_ids.discard(0)
+                resolved_ids.discard(SESSION_DETAILS.self_contact_id)
                 if resolved_ids:
                     receiver_ids = sorted(resolved_ids)
             else:
-                resolved_ids.add(0)
+                resolved_ids.add(SESSION_DETAILS.self_contact_id)
                 resolved_ids.discard(sender_id)
                 if resolved_ids:
                     receiver_ids = sorted(resolved_ids)
@@ -1056,6 +1177,9 @@ async def log_message(
     # publish transcript on a separate thread
     def _publish_transcript() -> int:
         global _pre_hire_exchange_id
+        implicit_destinations = ContextRegistry.implicit_shared_destinations()
+        primary_destination = implicit_destinations[0]
+        message_ids_by_destination: dict[str | None, int] = {}
         try:
             nonlocal exchange_id
             LOGGER.debug(
@@ -1119,8 +1243,25 @@ async def log_message(
                 exchange_id, tm_message_id = (
                     cm.transcript_manager.log_first_message_in_new_exchange(
                         msg_data,
+                        destination=primary_destination,
                     )
                 )
+                if tm_message_id is not None:
+                    message_ids_by_destination[primary_destination] = tm_message_id
+                for destination in implicit_destinations[1:]:
+                    replicated_message = {
+                        **msg_data,
+                        "exchange_id": exchange_id,
+                    }
+                    replica_logs = cm.transcript_manager.log_messages(
+                        replicated_message,
+                        synchronous=True,
+                        destination=destination,
+                    )
+                    if isinstance(replica_logs, list) and replica_logs:
+                        replica_message_id = replica_logs[0].message_id
+                        if replica_message_id is not None:
+                            message_ids_by_destination[destination] = replica_message_id
                 # Cache the exchange_id for subsequent pre-hire messages in the batch
                 if isinstance(event, PreHireMessage):
                     _pre_hire_exchange_id = exchange_id
@@ -1140,15 +1281,28 @@ async def log_message(
                     msg_data["attachments"] = attachments
                 if metadata:
                     msg_data["metadata"] = metadata
-                logged_msgs = cm.transcript_manager.log_messages(
-                    msg_data,
-                    synchronous=True,
-                )
-                if logged_msgs:
-                    tm_message_id = logged_msgs[0].message_id
+                for destination in implicit_destinations:
+                    logged_msgs = cm.transcript_manager.log_messages(
+                        msg_data,
+                        synchronous=True,
+                        destination=destination,
+                    )
+                    if not logged_msgs:
+                        continue
+                    destination_message_id = logged_msgs[0].message_id
+                    if destination_message_id is None:
+                        continue
+                    message_ids_by_destination[destination] = destination_message_id
+                    if tm_message_id is None:
+                        tm_message_id = destination_message_id
 
             if local_message_id is not None and tm_message_id is not None:
                 cm._local_to_global_message_ids[local_message_id] = tm_message_id
+            if local_message_id is not None and message_ids_by_destination:
+                cm._local_to_global_message_ids_by_destination[local_message_id] = (
+                    message_ids_by_destination
+                )
+                cm._local_message_destinations[local_message_id] = primary_destination
 
             LOGGER.debug(
                 f"{ICONS['managers_worker']} [ManagersWorker] Logged message: {medium}"
@@ -1232,12 +1386,12 @@ async def update_session_contacts(
     assistant_job_title: str | None = None,
 ) -> None:
     """
-    Update the assistant (contact_id=0) and boss (contact_id=1) contacts
-    in the ContactManager when session details change.
+    Update the resolved assistant and boss contacts in the ContactManager when
+    session details change.
 
     Called when an AssistantUpdateEvent is received.
 
-    Note: In demo mode, we skip updating the boss contact (contact_id=1) because
+    Note: In demo mode, we skip updating the boss contact because
     the user_* fields contain the demoer's details, not the prospect's. The
     prospect's details are either:
     - Set during initialization from demo metadata (prospect_* fields), or
@@ -1268,7 +1422,7 @@ async def update_session_contacts(
             )
             if whatsapp_number is not None:
                 kwargs["whatsapp_number"] = whatsapp_number
-            if job_title is not None and contact_id == 0:
+            if job_title is not None and contact_id == SESSION_DETAILS.self_contact_id:
                 kwargs["job_title"] = job_title
             await asyncio.to_thread(
                 cm.contact_manager.update_contact,
@@ -1283,7 +1437,7 @@ async def update_session_contacts(
             )
 
     await _update_contact(
-        0,
+        SESSION_DETAILS.self_contact_id,
         assistant_first_name,
         assistant_surname,
         assistant_number,
@@ -1296,11 +1450,11 @@ async def update_session_contacts(
     )
 
     # In demo mode:
-    # - Skip updating boss contact (contact_id=1) - prospect details come from Orchestra meta
+    # - Skip updating boss contact - prospect details come from Orchestra meta
     # - Update demoer contact (contact_id=2) with user_* fields (initially created in _init_managers)
     if SETTINGS.DEMO_MODE:
         LOGGER.info(
-            f"{ICONS['managers_worker']} [ManagersWorker] Demo mode: skipping boss contact (contact_id=1), "
+            f"{ICONS['managers_worker']} [ManagersWorker] Demo mode: skipping boss contact, "
             "updating demoer contact (contact_id=2)",
         )
         await _update_contact(
@@ -1314,7 +1468,7 @@ async def update_session_contacts(
         return
 
     await _update_contact(
-        1,
+        SESSION_DETAILS.boss_contact_id,
         user_first_name,
         user_surname,
         user_number,
@@ -1358,6 +1512,7 @@ async def listen_to_operations(cm: "ConversationManager") -> None:
     """
     # Wait for initialization to complete
     await wait_for_initialization(cm)
+    ensure_runtime_context()
 
     LOGGER.info(
         f"{ICONS['managers_worker']} [ManagersWorker] Operations listener started, processing queue...",
@@ -1456,17 +1611,15 @@ def _init_managers(
     )
     # Wire up ContactManager to ContactIndex for always-fresh contact data
     cm.contact_index.set_contact_manager(cm.contact_manager)
-    # In demo mode, ensure the boss contact (contact_id==1) is always visible
+    # In demo mode, ensure the boss contact is always visible
     # in active_conversations so the slow brain can use inline details on
-    # communication tools (e.g., make_call(contact_id=1, phone_number=...))
-    # and set_boss_details to update their record.
+    # communication tools and set_boss_details can use inline details.
     if SETTINGS.DEMO_MODE:
-        # Ensure boss (contact_id=1) is visible in active conversations for the brain
-        cm.contact_index.get_or_create_conversation(1)
+        cm.contact_index.get_or_create_conversation(SESSION_DETAILS.boss_contact_id)
         # Start the boss contact sparse in demo mode; details can be provided
         # later via set_boss_details or demo prospect metadata.
         cm.contact_manager.update_contact(
-            contact_id=1,
+            contact_id=SESSION_DETAILS.boss_contact_id,
             first_name="",
             surname="",
             email_address="",
@@ -1474,7 +1627,7 @@ def _init_managers(
             should_respond=True,
         )
         # If we have a demo_id, fetch prospect details from Orchestra and apply
-        # them to the boss contact (contact_id=1)
+        # them to the boss contact.
         if SETTINGS.DEMO_ID is not None:
             try:
                 from unity.demo_meta import (
@@ -1599,7 +1752,7 @@ def _init_managers(
             ManagerRegistry.get_conversation_manager_handle(
                 description="production deployment",
                 assistant_id=SESSION_DETAILS.assistant.agent_id,
-                contact_id="1",
+                contact_id=str(SESSION_DETAILS.boss_contact_id),
             )
         )
     else:
@@ -1607,7 +1760,7 @@ def _init_managers(
             ManagerRegistry.get_conversation_manager_handle(
                 event_broker=cm.event_broker,
                 conversation_id=SESSION_DETAILS.assistant.agent_id,
-                contact_id="1",
+                contact_id=str(SESSION_DETAILS.boss_contact_id),
                 transcript_manager=cm.transcript_manager,
                 conversation_manager=cm,
             )
@@ -1682,7 +1835,7 @@ def _init_managers(
                 ComputerEnvironment,
                 ActorEnvironment,
             )
-            from unity.function_manager.primitives import ComputerPrimitives
+            from unity.function_manager.primitives import ComputerPrimitives, Primitives
 
             cp = ComputerPrimitives()
             if _startup_config and _startup_config.get("url_mappings"):
@@ -1694,7 +1847,9 @@ def _init_managers(
             cm.actor = ManagerRegistry.get_actor(
                 description="production deployment",
                 environments=[
-                    StateManagerEnvironment(),
+                    StateManagerEnvironment(
+                        Primitives(primitive_scope=default_runtime_scope()),
+                    ),
                     ComputerEnvironment(cp),
                     ActorEnvironment(),
                 ]
@@ -1744,24 +1899,9 @@ def _init_managers(
     )
     manager_init_total.record(_total_dur)
 
-    # 12. Eager primitive sync (avoids ~7s cold-start on first execute_function).
-    #     Must run after all managers are initialised so the primitive registry
-    #     contains every manager's methods (actor, files, contacts, …).
-    try:
-        LOGGER.debug(
-            f"{ICONS['managers_worker']} [ManagersWorker] Syncing primitives...",
-        )
-        local_start_time = perf_counter()
-        _init_fm = ManagerRegistry.get_function_manager()
-        _init_fm.sync_primitives()
-        _prim_dur = perf_counter() - local_start_time
-        LOGGER.info(
-            f"{ICONS['managers_worker']} [ManagersWorker] Primitives synced in {_prim_dur:.2f} seconds",
-        )
-    except Exception as e:
-        LOGGER.warning(
-            f"{ICONS['managers_worker']} [ManagersWorker] Primitive sync failed (degraded): {e}",
-        )
+    # 12. Static primitives live in the global builtins catalogue (seeded at
+    #     deploy time), so no per-assistant primitive sync is needed here.
+    _init_fm = ManagerRegistry.get_function_manager()
 
     # 13. Pre-warm embedding columns for all managers (best-effort, avoids
     #     cold-start latency on the first vector search after a fresh hire).
@@ -1784,17 +1924,20 @@ def _init_managers(
         )
 
 
-async def _start_file_sync() -> None:
+async def _start_file_sync() -> bool:
     """Start file sync with managed VM after managers are initialized.
 
-    This starts rclone-based file synchronization between ~ (assistant home)
-    and /home (managed VM) if a desktop_url is configured in SESSION_DETAILS.
+    This starts rclone-based file synchronization between the assistant local
+    workspace and the managed desktop when ``desktop_url`` is configured in
+    ``SESSION_DETAILS``.
 
-    Runs asynchronously and logs success/failure.
+    Returns
+    -------
+    bool
+        True when sync started successfully, False otherwise.
     """
     from unity.session_details import SESSION_DETAILS
 
-    # Only sync when a desktop_url is configured
     if not SESSION_DETAILS.assistant.desktop_url:
         LOGGER.debug(
             f"{ICONS['managers_worker']} [ManagersWorker] No desktop_url configured, skipping file sync",
@@ -1803,43 +1946,22 @@ async def _start_file_sync() -> None:
             LOGGER,
             "⏱️ [StartupTiming] managers.file_sync skipped reason=no_desktop_url",
         )
-        return
+        return False
 
+    _file_sync_t0 = perf_counter()
     try:
-        _file_sync_t0 = perf_counter()
         from unity.file_manager.managers.local import LocalFileManager
 
-        # Get LocalFileManager singleton (may already exist from manager init)
         local_fm = LocalFileManager()
         adapter = local_fm._adapter
 
-        # Check if adapter supports sync (LocalFileSystemAdapter does)
         if not hasattr(adapter, "start_sync"):
             LOGGER.debug(
                 f"{ICONS['managers_worker']} [ManagersWorker] Adapter does not support file sync",
             )
-            return
+            return False
 
-        if adapter._enable_sync:
-            LOGGER.debug(
-                f"{ICONS['managers_worker']} [ManagersWorker] Starting file sync with managed VM...",
-            )
-            success = await adapter.start_sync()
-            log_startup_timing(
-                LOGGER,
-                "⏱️ [StartupTiming] managers.file_sync.start_sync duration=%.2fs success=%s",
-                perf_counter() - _file_sync_t0,
-                success,
-            )
-            if success:
-                LOGGER.debug(
-                    f"{ICONS['managers_worker']} [ManagersWorker] File sync started successfully",
-                )
-            else:
-                LOGGER.debug(
-                    f"{ICONS['managers_worker']} [ManagersWorker] File sync not enabled or failed to start",
-                )
-        else:
+        if not adapter._enable_sync:
             LOGGER.debug(
                 f"{ICONS['managers_worker']} [ManagersWorker] File sync disabled by configuration",
             )
@@ -1848,22 +1970,42 @@ async def _start_file_sync() -> None:
                 "⏱️ [StartupTiming] managers.file_sync skipped reason=adapter_disabled duration=%.2fs",
                 perf_counter() - _file_sync_t0,
             )
+            return False
+
+        LOGGER.debug(
+            f"{ICONS['managers_worker']} [ManagersWorker] Starting file sync with managed VM...",
+        )
+        success = await adapter.start_sync()
+        log_startup_timing(
+            LOGGER,
+            "⏱️ [StartupTiming] managers.file_sync.start_sync duration=%.2fs success=%s",
+            perf_counter() - _file_sync_t0,
+            success,
+        )
+        if success:
+            LOGGER.debug(
+                f"{ICONS['managers_worker']} [ManagersWorker] File sync started successfully",
+            )
+        else:
+            LOGGER.debug(
+                f"{ICONS['managers_worker']} [ManagersWorker] File sync not enabled or failed to start",
+            )
+        return bool(success)
 
     except Exception as e:
-        # File sync failure should not block manager initialization
         LOGGER.error(
             f"{ICONS['managers_worker']} [ManagersWorker] Failed to start file sync: {e}",
         )
         import traceback
 
         traceback.print_exc()
+        return False
     finally:
-        if SESSION_DETAILS.assistant.desktop_url:
-            log_startup_timing(
-                LOGGER,
-                "⏱️ [StartupTiming] managers.file_sync.total duration=%.2fs",
-                perf_counter() - _file_sync_t0,
-            )
+        log_startup_timing(
+            LOGGER,
+            "⏱️ [StartupTiming] managers.file_sync.total duration=%.2fs",
+            perf_counter() - _file_sync_t0,
+        )
 
 
 async def _register_computer_act_completed_callback(cm: "ConversationManager") -> None:
@@ -1941,13 +2083,8 @@ async def init_conv_manager(
                 perf_counter() - _t0,
             )
 
-            import unify as _unify
-
-            full_ctx = (
-                f"{SESSION_DETAILS.user_context}/{SESSION_DETAILS.assistant_context}"
-            )
             _t0 = perf_counter()
-            _unify.set_context(full_ctx, skip_create=True)
+            ensure_runtime_context(strict=True)
             log_startup_timing(
                 LOGGER,
                 "⏱️ [StartupTiming] managers.init_conv_manager.reapply_context duration=%.2fs",

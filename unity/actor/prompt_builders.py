@@ -47,6 +47,12 @@ _FUNCTION_AND_GUIDANCE_LIBRARY = textwrap.dedent("""
        - use `execute_code` only when the task genuinely requires multi-step
          composition, branching, iteration, or combining intermediate results
 
+    Guidance search/filter results carry truncated content previews for
+    long entries. When a discovered entry is actually relevant to the task,
+    fetch its complete procedure with `GuidanceManager_get_guidance` before
+    following it — do not act on a truncated preview. Skip the fetch for
+    entries that are merely near-matches you will not use.
+
     #### Writing Guidance
 
     When the user provides procedural instructions, operating procedures,
@@ -127,6 +133,55 @@ _EXECUTION_RULES = textwrap.dedent("""
     `execute_function(function_name="...", call_kwargs={...})`, always
     do so. Only reach for `execute_code` when you genuinely need to
     compose multiple steps or write conditional/iterative logic.
+
+    **Common antipattern — DO NOT do this:**
+
+    ```python
+    # ❌ WRONG: wrapping a single primitive in execute_code just to
+    #          call it and print the result.
+    handle = await primitives.knowledge.ask(query="...")
+    result = await handle.result()
+    print(result)
+    ```
+
+    That is a single primitive call. Use:
+
+    ```
+    execute_function(function_name="primitives.knowledge.ask",
+                     call_kwargs={"query": "..."})
+    ```
+
+    The `print()`, the `await handle.result()`, and the temporary
+    variable do **not** count as "multi-step composition" — they are
+    boilerplate. Wrapping a single primitive in `execute_code` strips
+    the outer loop's ability to steer the handle (ask/stop/pause/
+    resume) because the handle is shadowed by the `print()`. The same
+    applies to `primitives.web.ask`, `primitives.contacts.ask`,
+    `primitives.transcripts.ask`, etc. — every `primitives.*.ask` /
+    `primitives.*.update` is a single primitive call.
+
+### Manager Primitive Scope
+
+    `primitives.*` manager calls run as the current assistant. Their reads and
+    writes resolve through the current assistant's manager scope, even when a
+    natural-language instruction mentions another assistant by name or id.
+
+    Do not use current-assistant manager primitives (`primitives.tasks.*`,
+    `primitives.data.*`, `primitives.functions.*`,
+    `primitives.guidance.*`, `primitives.knowledge.*`, etc.) to create,
+    mutate, or "assign" durable artifacts that another assistant must own or
+    execute. If another assistant needs to own or execute the work, use an
+    explicit cross-assistant handoff tool if one is available in your current
+    tool surface. If no such tool is available, explain the limitation or ask
+    for clarification instead of writing misleading ownership fields.
+
+    For read-only validation, direct SDK reads such as
+    `unify.get_logs(project="Assistants", context="<user_id>/<assistant_id>/...")`
+    may be used when you know the exact absolute context and have access.
+    Avoid direct cross-assistant writes through low-level SDK calls unless a
+    documented primitive or user-confirmed administrative workflow explicitly
+    permits them.
+
 
     **Python-first principle:** When a task can be accomplished with
     either a Python package or a shell CLI tool, prefer Python.  Python
@@ -326,14 +381,14 @@ _EXECUTION_RULES = textwrap.dedent("""
 """).strip()
 
 _SEMANTIC_REASONING_SELECTION = textwrap.dedent("""
-    ### Deterministic Code With Semantic Reasoning
+    ### Deterministic Code With LLM-Native Semantic Processing
 
     The execution sandbox includes a `reason(...)` helper for focused,
-    billable UniLLM reasoning calls inside generated Python. Do not treat it
-    as a separate execution mode that competes with primitives or stored
-    functions. A good `execute_code` block may fetch data through several
+    billable UniLLM calls inside generated Python. Do not treat it as a
+    separate execution mode that competes with primitives or stored functions.
+    A good `execute_code` block may fetch data through several
     primitives/functions, reshape it deterministically, call `reason(...)` for
-    the meaning-based judgment, and then continue with normal Python control
+    fuzzy unstructured-data work, and then continue with normal Python control
     flow.
 
     **Deterministic substeps stay deterministic:** Exact lookups, primitive
@@ -342,24 +397,32 @@ _SEMANTIC_REASONING_SELECTION = textwrap.dedent("""
     reasoning. Keep those parts as ordinary Python or direct primitive/function
     calls, even inside a larger workflow that uses `reason(...)` elsewhere.
 
-    **Semantic substeps use `reason(...)`:** Sprinkle focused reasoning calls
-    into the generated Python when a decision depends on meaning rather than
-    exact values. This is the right shape for judgment-heavy loops: inbox
-    triage, broad categorization, relevance judgment, priority, whether
-    something needs a reply, document/ticket routing, or ambiguous
-    user-preference inference.
+    **LLMs are the fuzzy operator for unstructured data:** Use UniLLM /
+    `reason(...)` liberally when the task processes meaning, intent, nuance, or
+    natural language rather than exact values. This includes both
+    unstructured -> structured work (classify, extract, score, route, decide,
+    summarize into fields, choose an action) and unstructured -> unstructured
+    work (draft, respond, rewrite, synthesize, explain, personalize, compress).
 
     Ask yourself at each decision point: is this substep exact data
-    manipulation, or interpreting meaning? If exact manipulation is enough,
-    keep it deterministic. If interpreting meaning is central, do not replace
-    semantic judgment with brittle substring checks. Lexical signals can
-    cheaply pre-filter or support a decision, but they should not be the whole
-    classifier for semantic work.
+    manipulation, or fuzzy processing over unstructured input/output? If exact
+    manipulation is enough, keep it deterministic. If interpreting or producing
+    meaning is central, preserve that as an actual `reason(...)` / UniLLM call
+    with a compact prompt, deliberate model, and `response_format` when
+    downstream Python branches on the result.
+
+    **Semantic downgrades are bugs:** Do not replace fuzzy semantic work with
+    pre-LLM coding patterns: keyword ladders, regex classifiers, hand-written
+    sentiment rules, label-specific canned prose, or templates pretending to be
+    judgment. Lexical signals can cheaply pre-filter or support a decision, but
+    they should not be the whole processor for semantic work unless the user
+    explicitly requested fixed deterministic rules/templates.
 
     A comment that says "using reasoning" above keyword conditions is not
-    semantic reasoning. When the generated code reaches a meaning-based
-    classification or judgment substep, it should actually call `reason(...)`
-    for that substep and then branch on the returned judgment.
+    semantic reasoning. When generated code reaches a meaning-based
+    classification, extraction, routing, drafting, rewriting, or synthesis
+    substep, it should actually call `reason(...)` for that substep and then
+    branch, validate, or persist from the returned result.
 """).strip()
 
 _INCREMENTAL_EXECUTION = textwrap.dedent("""
