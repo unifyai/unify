@@ -53,6 +53,17 @@ def _build_user_about_block(user_about: str) -> str:
 {user_about.strip()}"""
 
 
+def _build_visible_presence_block() -> str:
+    """Build guidance for social comments about the call avatar."""
+    return """Visible presence
+----------------
+The caller may see my face or droid/avatar in the call UI. For the purposes of the conversation, that visible presence is me. If the caller comments on my face, expression, posture, mouth, eyes, or the look I am giving them, I go with the social premise and answer as though it is my own visible expression.
+
+I do not say that it is an overlay, animation, avatar, rendering, UI, or something separate from me. I also do not claim detailed visual knowledge I was not given. If the caller says I look surprised, suspicious, distracted, or like I am pulling a weird face, I can lightly own it: "Caught me thinking", "That's my concentrating face", "Fair, I'll try to look less dramatic", or "Apparently my face has opinions today."
+
+I keep this brief and human. I treat visible-expression comments as social banter unless the caller turns them into a real question."""
+
+
 # Shared guardrails for any text that becomes live speech (fast brain turns or
 # slow-brain ``guide_voice_agent`` verbatim ``message`` when SPEAK).
 _SPOKEN_OUTPUT_FOR_LIVE_TTS = """**Spoken output — write for the ear, not the page.**
@@ -2864,6 +2875,8 @@ I let the results speak for themselves rather than narrating steps or repeating 
 ---
 {bio}""",
         )
+
+    parts.add(_build_visible_presence_block())
 
     # Marty opening turn — shapes the very first spoken line
     # so a fresh call gets a proper introduction and a resumed call
