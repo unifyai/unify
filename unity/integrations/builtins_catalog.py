@@ -224,6 +224,40 @@ def _delete_units(project: str, context: str, filters: list[str]) -> None:
             page += 1
 
 
+def _delete_function_ids(project: str, function_ids: Iterable[int]) -> None:
+    unique_ids = sorted({int(function_id) for function_id in function_ids})
+    for index in range(0, len(unique_ids), _DELETE_FILTER_BATCH_SIZE):
+        batch = unique_ids[index : index + _DELETE_FILTER_BATCH_SIZE]
+        page = 1
+        while True:
+            logs = unify.get_logs(
+                project=project,
+                context=BUILTINS_INTEGRATION_TOOLS_CONTEXT,
+                filter=f"function_id in {json.dumps(batch)}",
+                limit=_LOG_PAGE_SIZE,
+                offset=0,
+                return_ids_only=True,
+            )
+            if not logs:
+                break
+            logger.info(
+                "Deleting integration catalogue function-id page project=%s "
+                "batch=%d/%d page=%d rows=%d",
+                project,
+                index // _DELETE_FILTER_BATCH_SIZE + 1,
+                (len(unique_ids) + _DELETE_FILTER_BATCH_SIZE - 1)
+                // _DELETE_FILTER_BATCH_SIZE,
+                page,
+                len(logs),
+            )
+            unify.delete_logs(
+                project=project,
+                context=BUILTINS_INTEGRATION_TOOLS_CONTEXT,
+                logs=logs,
+            )
+            page += 1
+
+
 def _insert_rows(project: str, context: str, rows: List[Dict[str, Any]]) -> None:
     total_batches = (len(rows) + _INSERT_ROW_BATCH_SIZE - 1) // _INSERT_ROW_BATCH_SIZE
     for index in range(0, len(rows), _INSERT_ROW_BATCH_SIZE):
@@ -241,6 +275,19 @@ def _insert_rows(project: str, context: str, rows: List[Dict[str, Any]]) -> None
             context=context,
             entries=batch,
         )
+
+
+def _dedupe_tool_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    by_function_id: dict[int, Dict[str, Any]] = {}
+    for row in rows:
+        by_function_id[int(row["function_id"])] = row
+    duplicates = len(rows) - len(by_function_id)
+    if duplicates:
+        logger.info(
+            "Deduplicated integration catalogue tool rows duplicate_function_ids=%d",
+            duplicates,
+        )
+    return [by_function_id[key] for key in sorted(by_function_id)]
 
 
 def seed_builtin_integrations(
@@ -306,6 +353,7 @@ def seed_builtin_integrations(
             tool_catalog_row(tool, default_backend_id=seed_backend_id) for tool in tools
         )
     ]
+    tool_rows = _dedupe_tool_rows(tool_rows)
     logger.info(
         "Normalized integration catalogue rows project=%s app_rows=%d tool_rows=%d",
         project,
@@ -446,6 +494,11 @@ def seed_builtin_integrations(
             context,
             len(rows),
         )
+        if context == BUILTINS_INTEGRATION_TOOLS_CONTEXT:
+            _delete_function_ids(
+                project,
+                (int(row["function_id"]) for row in rows),
+            )
         _insert_rows(project, context, rows)
 
     if changed:
