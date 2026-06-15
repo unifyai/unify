@@ -58,7 +58,7 @@ SYNC_PASSTHROUGH_FIELDS = {
 }
 DEFAULT_COMPOSIO_BATCH_SIZE = 25
 BOOTSTRAP_STATUS_SUCCESS = "success"
-BUILTINS_BOOTSTRAP_SEED_OWNER = "unity-builtins"
+BUILTINS_BOOTSTRAP_SEED_OWNER = "public-builtins"
 
 
 class ProviderBootstrapPlan(NamedTuple):
@@ -377,8 +377,10 @@ def _seed_sync_result(
             result.get("error")
             or f"{sync_payload['backend_id']}: integration catalog sync failed",
         )
-    apps = result.get("apps") or []
-    tools = result.get("tools") or []
+    apps = (result.get("apps") or []) if sync_payload.get("_seed_apps", True) else None
+    tools = (
+        (result.get("tools") or []) if sync_payload.get("_seed_tools", True) else None
+    )
     app_slugs = result.get("matched_app_slugs") or sync_payload.get("app_slugs") or []
     phase = str(sync_payload.get("_seed_phase") or "sync")
     started_at = time.perf_counter()
@@ -387,8 +389,8 @@ def _seed_sync_result(
         "app_slugs=%s prune=%s",
         phase,
         sync_payload["backend_id"],
-        len(apps),
-        len(tools),
+        "omitted" if apps is None else len(apps),
+        "omitted" if tools is None else len(tools),
         len(app_slugs),
         _effective_prune(sync_payload),
     )
@@ -404,8 +406,8 @@ def _seed_sync_result(
         "changed=%s prune=%s elapsed=%.1fs",
         phase,
         sync_payload["backend_id"],
-        len(apps),
-        len(tools),
+        "omitted" if apps is None else len(apps),
+        "omitted" if tools is None else len(tools),
         changed,
         _effective_prune(sync_payload),
         time.perf_counter() - started_at,
@@ -578,7 +580,11 @@ def _sync_and_seed_provider(
         changed = (
             _seed_sync_result(
                 result=batch_result,
-                sync_payload={**batch_payload, "_seed_phase": phase},
+                sync_payload={
+                    **batch_payload,
+                    "_seed_phase": phase,
+                    "_seed_apps": False,
+                },
             )
             or changed
         )

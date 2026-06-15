@@ -75,6 +75,11 @@ def test_seed_builtin_integrations_hash_guards_app_and_tool_units(monkeypatch) -
         lambda *args, **kwargs: calls.append(("create_project", kwargs)),
     )
     monkeypatch.setattr(
+        builtins_catalog,
+        "ensure_builtins_project",
+        lambda project: calls.append(("ensure_builtins_project", {"project": project})),
+    )
+    monkeypatch.setattr(
         builtins_catalog.unify,
         "create_context",
         lambda *args, **kwargs: calls.append(("create_context", kwargs)),
@@ -168,7 +173,7 @@ def test_seed_builtin_integrations_preserves_unlisted_app_scope(monkeypatch) -> 
     filters: list[str] = []
     seen_filters: set[str] = set()
 
-    monkeypatch.setattr(builtins_catalog.unify, "create_project", lambda *_, **__: None)
+    monkeypatch.setattr(builtins_catalog, "ensure_builtins_project", lambda *_: None)
     monkeypatch.setattr(builtins_catalog.unify, "create_context", lambda *_, **__: None)
     monkeypatch.setattr(builtins_catalog, "ensure_vector_column", lambda *_, **__: None)
     monkeypatch.setattr(
@@ -228,7 +233,7 @@ def test_seed_builtin_integrations_prunes_unlisted_app_scope(monkeypatch) -> Non
     filters: list[str] = []
     seen_filters: set[str] = set()
 
-    monkeypatch.setattr(builtins_catalog.unify, "create_project", lambda *_, **__: None)
+    monkeypatch.setattr(builtins_catalog, "ensure_builtins_project", lambda *_: None)
     monkeypatch.setattr(builtins_catalog.unify, "create_context", lambda *_, **__: None)
     monkeypatch.setattr(builtins_catalog, "ensure_vector_column", lambda *_, **__: None)
     monkeypatch.setattr(
@@ -352,7 +357,7 @@ prune_unlisted_apps = true
     assert requests[2][1] == "/admin/integrations/sync"
     assert requests[2][2]["prune_unlisted_apps"] is True
     assert requests[3][1] == "/admin/integrations/bootstrap-state"
-    assert requests[3][2]["last_sync_diagnostics"]["seed_owner"] == "unity-builtins"
+    assert requests[3][2]["last_sync_diagnostics"]["seed_owner"] == "public-builtins"
     assert requests[3][2]["last_sync_diagnostics"]["builtins_seeded"] is True
     assert seeded[0][1]["app_slugs"] == ["gmail"]
 
@@ -392,7 +397,7 @@ app_slugs = ["gmail"]
             "desired_hash": plan.desired_hash,
             "last_status": "success",
             "last_sync_diagnostics": {
-                "seed_owner": "unity-builtins",
+                "seed_owner": "public-builtins",
                 "builtins_seeded": True,
             },
         }
@@ -415,3 +420,58 @@ app_slugs = ["gmail"]
             None,
         ),
     ]
+
+
+def test_seed_builtins_script_full_composio_batches_seed_apps_once(monkeypatch) -> None:
+    module = _seed_script_module()
+    admin_payloads: list[dict] = []
+    seeded_payloads: list[dict] = []
+
+    def fake_admin_request(*, path, payload=None, **_kwargs):
+        assert path == "/admin/integrations/sync"
+        admin_payloads.append(payload)
+        if payload["sync_tools"] is False:
+            return {
+                "status": "success",
+                "apps_upserted": 2,
+                "tools_upserted": 0,
+                "apps": [_app("gmail"), _app("slack")],
+                "tools": [],
+                "matched_app_slugs": ["gmail", "slack"],
+            }
+        return {
+            "status": "success",
+            "apps_upserted": len(payload["app_slugs"]),
+            "tools_upserted": len(payload["app_slugs"]),
+            "apps": [_app(slug.lower()) for slug in payload["app_slugs"]],
+            "tools": [_tool(payload["app_slugs"][0].lower(), "list_threads")],
+            "matched_app_slugs": [slug.lower() for slug in payload["app_slugs"]],
+        }
+
+    def fake_seed_sync_result(*, result, sync_payload):
+        seeded_payloads.append(sync_payload)
+        return True
+
+    monkeypatch.setenv("UNITY_INTEGRATION_BOOTSTRAP_BATCH_SIZE", "1")
+    monkeypatch.setattr(module, "_admin_request", fake_admin_request)
+    monkeypatch.setattr(module, "_seed_sync_result", fake_seed_sync_result)
+
+    changed, result = module._sync_and_seed_provider(
+        base_url="http://orchestra/v0",
+        admin_key="admin",
+        sync_payload={
+            "backend_id": "composio",
+            "app_slugs": [],
+            "sync_mode": "full",
+            "include_all_managed_apps": True,
+            "sync_tools": True,
+            "prune_unlisted_apps": True,
+        },
+    )
+
+    assert changed is True
+    assert result["apps_upserted"] == 2
+    assert len(admin_payloads) == 3
+    assert seeded_payloads[0]["_seed_phase"] == "app-only-sync"
+    assert seeded_payloads[0].get("_seed_apps", True) is True
+    assert [payload["_seed_apps"] for payload in seeded_payloads[1:]] == [False, False]

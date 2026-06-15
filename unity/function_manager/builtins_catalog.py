@@ -19,7 +19,12 @@ from typing import Any, Dict, List, Tuple
 
 import unify
 
-from ..common.builtins import builtins_project, read_seed_hashes, write_seed_hashes
+from ..common.builtins import (
+    builtins_project,
+    ensure_builtins_project,
+    read_seed_hashes,
+    write_seed_hashes,
+)
 from ..common.embed_utils import ensure_vector_column, list_private_fields
 from .primitives.registry import get_registry
 from .primitives.scope import PrimitiveScope
@@ -38,7 +43,7 @@ def _ensure_catalog_storage(project: str) -> None:
     Field types are inferred from the first inserted rows, matching how
     manager-owned contexts behave in practice.
     """
-    unify.create_project(project, exist_ok=True, is_public_read=True)
+    ensure_builtins_project(project)
     unify.create_context(
         BUILTINS_PRIMITIVES_CONTEXT,
         description="Builtin system action primitives with stable explicit IDs.",

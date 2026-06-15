@@ -27,7 +27,12 @@ from typing import Dict, List, Optional
 
 import unify
 
-from ..common.builtins import builtins_project, read_seed_hashes, write_seed_hashes
+from ..common.builtins import (
+    builtins_project,
+    ensure_builtins_project,
+    read_seed_hashes,
+    write_seed_hashes,
+)
 from ..common.embed_utils import ensure_vector_column
 from ..common.model_to_fields import model_to_fields
 from .types.guidance import Guidance
@@ -82,7 +87,7 @@ def _ensure_catalog_storage(project: str) -> None:
     (cross-project FKs do not exist); builtin entries have empty ``images``
     and ``function_ids``.
     """
-    unify.create_project(project, exist_ok=True, is_public_read=True)
+    ensure_builtins_project(project)
     unify.create_context(
         BUILTINS_GUIDANCE_CONTEXT,
         description="Builtin procedural guidance imported from the Agent Skills ecosystem.",
