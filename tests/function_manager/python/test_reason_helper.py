@@ -19,7 +19,7 @@ def test_execution_globals_expose_reason_and_unillm():
 
     assert globals_dict["reason"] is reason
     assert globals_dict["unillm"] is unillm
-    assert "new_llm_client" in globals_dict
+    assert "new_llm_client" not in globals_dict
     assert "unillm" in ENVIRONMENT_MODULES
 
 
