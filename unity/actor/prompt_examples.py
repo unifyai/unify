@@ -68,7 +68,7 @@ def get_reasoning_helper_examples() -> str:
     return r"""
 # Example: direct deterministic work should stay direct
 #
-# If the user asks "Count unread emails from Alice", do not call reason(...).
+# If the user asks "Count unread emails from Alice", do not call query_llm(...).
 # Use the mail primitive/API to fetch unread messages, filter sender exactly,
 # and count the results. The hard part is exact data retrieval, not meaning.
 async def count_unread_from_alice(messages: list[dict]) -> int:
@@ -120,7 +120,7 @@ async def classify_inbox(messages: list[dict]) -> dict[str, list[dict]]:
 
     for message in messages:
         text = f"Subject: {message['subject']}\nFrom: {message['from']}\n\n{message['body']}"
-        classification = await reason(
+        classification = await query_llm(
             text,
             system=rubric,
             response_format=EmailClassification,
@@ -142,7 +142,7 @@ async def find_certificate_followups(certificates: list[dict], today) -> list[di
         if days_until_expiry > 90:
             continue
 
-        decision = await reason(
+        decision = await query_llm(
             "Decide whether this expiring certificate needs a human follow-up. "
             "Consider owner, environment, business impact, and notes.\n"
             f"Certificate: {cert}",
@@ -158,7 +158,7 @@ async def find_certificate_followups(certificates: list[dict], today) -> list[di
 
 # Advanced options: use model overrides sparingly
 async def classify_with_small_model(email_text: str):
-    return await reason(
+    return await query_llm(
         email_text,
         system="Return a compact category and confidence for email triage.",
         model="gpt-4.1-nano@openai",
@@ -168,7 +168,7 @@ async def classify_with_small_model(email_text: str):
 
 # Pattern: reusable function with a semantic drafting step
 #
-# If this code is stored for future reuse, keep the reason(...) call inside the
+# If this code is stored for future reuse, keep the query_llm(...) call inside the
 # function. The loop, filtering, JSON shaping, and file writes are ordinary
 # Python; deciding whether a reply is needed and writing the reply are semantic
 # unstructured-data work.
@@ -188,7 +188,7 @@ async def draft_replies_for_messages(messages: list[dict]) -> list[dict]:
         if "no-reply" in message.get("from", "").lower():
             continue
 
-        decision = await reason(
+        decision = await query_llm(
             "Decide whether this message needs a reply. If it does, draft a "
             "short human-reviewable response using only the message content.\n\n"
             f"Subject: {message.get('subject')}\n"

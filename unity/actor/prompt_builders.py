@@ -383,11 +383,11 @@ _EXECUTION_RULES = textwrap.dedent("""
 _SEMANTIC_REASONING_SELECTION = textwrap.dedent("""
     ### Deterministic Code With LLM-Native Semantic Processing
 
-    The execution sandbox includes a `reason(...)` helper for focused,
+    The execution sandbox includes a `query_llm(...)` helper for focused,
     billable UniLLM calls inside generated Python. Do not treat it as a
     separate execution mode that competes with primitives or stored functions.
     A good `execute_code` block may fetch data through several
-    primitives/functions, reshape it deterministically, call `reason(...)` for
+    primitives/functions, reshape it deterministically, call `query_llm(...)` for
     fuzzy unstructured-data work, and then continue with normal Python control
     flow.
 
@@ -395,10 +395,10 @@ _SEMANTIC_REASONING_SELECTION = textwrap.dedent("""
     calls, API calls, deterministic filters, arithmetic, date comparisons,
     dedupe, schema reshaping, and format conversion do not need semantic
     reasoning. Keep those parts as ordinary Python or direct primitive/function
-    calls, even inside a larger workflow that uses `reason(...)` elsewhere.
+    calls, even inside a larger workflow that uses `query_llm(...)` elsewhere.
 
-    **LLMs are the fuzzy operator for unstructured data:** Use UniLLM /
-    `reason(...)` liberally when the task processes meaning, intent, nuance, or
+    **LLMs are the fuzzy operator for unstructured data:** Use
+    `query_llm(...)` liberally when the task processes meaning, intent, nuance, or
     natural language rather than exact values. This includes both
     unstructured -> structured work (classify, extract, score, route, decide,
     summarize into fields, choose an action) and unstructured -> unstructured
@@ -407,7 +407,7 @@ _SEMANTIC_REASONING_SELECTION = textwrap.dedent("""
     Ask yourself at each decision point: is this substep exact data
     manipulation, or fuzzy processing over unstructured input/output? If exact
     manipulation is enough, keep it deterministic. If interpreting or producing
-    meaning is central, preserve that as an actual `reason(...)` / UniLLM call
+    meaning is central, preserve that as an actual `query_llm(...)` call
     with a compact prompt, deliberate model, and `response_format` when
     downstream Python branches on the result.
 
@@ -421,7 +421,7 @@ _SEMANTIC_REASONING_SELECTION = textwrap.dedent("""
     A comment that says "using reasoning" above keyword conditions is not
     semantic reasoning. When generated code reaches a meaning-based
     classification, extraction, routing, drafting, rewriting, or synthesis
-    substep, it should actually call `reason(...)` for that substep and then
+    substep, it should actually call `query_llm(...)` for that substep and then
     branch, validate, or persist from the returned result.
 """).strip()
 
@@ -942,10 +942,10 @@ def build_code_act_prompt(
 
         parts.append(_EXECUTION_RULES)
         parts.append(_SEMANTIC_REASONING_SELECTION)
-        from unity.common.reasoning import get_reasoning_prompt_context
+        from unity.common.reasoning import get_llm_query_prompt_context
         from unity.common.runtime_oauth import get_oauth_prompt_context
 
-        parts.append(get_reasoning_prompt_context())
+        parts.append(get_llm_query_prompt_context())
         parts.append(get_oauth_prompt_context())
         parts.append(_INCREMENTAL_EXECUTION)
         parts.append(_EXTERNAL_APP_INTEGRATION)

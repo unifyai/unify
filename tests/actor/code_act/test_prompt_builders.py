@@ -157,7 +157,8 @@ def test_code_act_prompt_teaches_refresh_token_oauth_helper():
         tools=dict(actor.get_tools("act")),
     )
 
-    assert "def reason(" in prompt
+    assert "def query_llm(" in prompt
+    assert "def list_llms(provider: 'str | None' = None) -> 'list[str]'" in prompt
     assert (
         "def get_oauth_access_token(provider: str, *, "
         "min_ttl_seconds: int = 300) -> str"
@@ -238,7 +239,7 @@ def test_code_act_prompt_includes_reasoning_helper_decision_guidance():
     )
 
     assert "### Deterministic Code With LLM-Native Semantic Processing" in prompt
-    assert "Semantic Reasoning Helper: `reason(...)`" in prompt
+    assert "LLM Query Helpers: `query_llm(...)` And `list_llms(...)`" in prompt
     assert "billable UniLLM" in prompt
     assert "competes with primitives or stored" in prompt
     assert "fetch data through several" in prompt
@@ -253,17 +254,17 @@ def test_code_act_prompt_includes_reasoning_helper_decision_guidance():
     assert "Semantic downgrades are bugs" in prompt
     assert "templates pretending" in prompt
     assert "A comment that says" in prompt
-    assert "actually call `reason(...)`" in prompt
+    assert "actually call `query_llm(...)`" in prompt
     assert "keyword ladders" in prompt
     assert "reusable function with a semantic drafting step" in prompt
-    assert "keep the reason(...) call inside the" in prompt
+    assert "keep the query_llm(...) call inside the" in prompt
     assert "draft_replies_for_messages" in prompt
-    assert "Choosing A Model For `reason(...)`" in prompt
-    assert "Artificial Analysis: https://artificialanalysis.ai/" in prompt
+    assert "Choosing A Model For `query_llm(...)`" in prompt
+    assert "Artificial Analysis (https://artificialanalysis.ai/)" in prompt
     assert "ARC Prize leaderboard: https://arcprize.org/leaderboard" in prompt
-    assert "Supported UniLLM endpoints currently registered" in prompt
+    assert "Use `list_llms()` to inspect" in prompt
+    assert "Supported UniLLM endpoints currently registered" not in prompt
     assert "gpt-4.1-nano@openai" in prompt
-    assert "gpt-5.5@openai" in prompt
     assert "Do not put benchmark browsing or" in prompt
 
 
@@ -297,13 +298,14 @@ def test_code_act_prompt_does_not_make_reason_mandatory_for_every_loop():
 
     assert "use" in prompt
     assert (
-        "``reason(...)`` only where meaning-based judgment is doing real work" in prompt
+        "``query_llm(...)`` only where meaning-based judgment is doing real work"
+        in prompt
     )
     assert "exact logic is enough" in prompt
     assert "freely mix deterministic substeps and semantic substeps" in prompt
-    assert "do not call reason(...)" in prompt
-    assert "Use reason(...) for every loop" not in prompt
-    assert "Always call reason(...)" not in prompt
+    assert "do not call query_llm(...)" in prompt
+    assert "Use query_llm(...) for every loop" not in prompt
+    assert "Always call query_llm(...)" not in prompt
 
 
 @pytest.mark.timeout(30)

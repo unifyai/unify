@@ -213,7 +213,7 @@ def create_execution_globals() -> Dict[str, Any]:
     - Steerable handle infrastructure for functions that return handles
       (SteerableToolHandle)
     - The `unillm` module for advanced direct LLM usage
-    - The `reason` helper for focused one-shot semantic reasoning steps
+    - The `query_llm` helper for focused one-shot LLM queries
 
     All primitive imports and instantiations are lazy - only the primitives
     actually used by a function are loaded. This means functions that don't
@@ -239,11 +239,12 @@ def create_execution_globals() -> Dict[str, Any]:
     # Steerable handle type - allows compositional functions to return handles
     # that the execution layer can detect and wire up for steering operations.
     from unity.common.async_tool_loop import SteerableToolHandle
-    from unity.common.reasoning import reason
+    from unity.common.reasoning import list_llms, query_llm
     from unity.common.runtime_oauth import get_oauth_access_token
 
     globals_dict["SteerableToolHandle"] = SteerableToolHandle
-    globals_dict["reason"] = reason
+    globals_dict["query_llm"] = query_llm
+    globals_dict["list_llms"] = list_llms
     globals_dict["get_oauth_access_token"] = get_oauth_access_token
     globals_dict["unillm"] = unillm
 

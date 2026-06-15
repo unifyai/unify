@@ -1005,7 +1005,7 @@ def _scheduler_binding(scheduler: MockTaskScheduler) -> str | None:
 
 def _contains_semantic_llm_call(text: str) -> bool:
     lowered = text.lower()
-    return any(term in lowered for term in ("reason(", "unillm", "chat.completions"))
+    return any(term in lowered for term in ("query_llm(", "unillm", "chat.completions"))
 
 
 def _looks_structured(text: str) -> bool:

@@ -545,10 +545,10 @@ class _VenvConnection:
             parts = path.split(".")
             if len(parts) == 2:
                 namespace, method = parts
-                if namespace == "runtime" and method == "reason":
-                    from unity.common.reasoning import reason
+                if namespace == "runtime" and method == "query_llm":
+                    from unity.common.reasoning import query_llm
 
-                    result = await reason(**kwargs)
+                    result = await query_llm(**kwargs)
                     return {
                         "type": "rpc_result",
                         "id": request_id,
@@ -556,6 +556,11 @@ class _VenvConnection:
                             result,
                         ),
                     }
+                if namespace == "runtime" and method == "list_llms":
+                    from unity.common.reasoning import list_llms
+
+                    result = list_llms(provider=kwargs.get("provider"))
+                    return {"type": "rpc_result", "id": request_id, "result": result}
                 if namespace == "runtime" and method == "get_oauth_access_token":
                     from unity.common.runtime_oauth import get_oauth_access_token
 
@@ -5891,10 +5896,15 @@ class FunctionManager(BaseFunctionManager):
 
         manager_name, method_name = parts
 
-        if manager_name == "runtime" and method_name == "reason":
-            from unity.common.reasoning import reason
+        if manager_name == "runtime" and method_name == "query_llm":
+            from unity.common.reasoning import query_llm
 
-            return self._make_json_serializable(await reason(**kwargs))
+            return self._make_json_serializable(await query_llm(**kwargs))
+
+        if manager_name == "runtime" and method_name == "list_llms":
+            from unity.common.reasoning import list_llms
+
+            return list_llms(provider=kwargs.get("provider"))
 
         if manager_name == "runtime" and method_name == "get_oauth_access_token":
             from unity.common.runtime_oauth import get_oauth_access_token

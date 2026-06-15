@@ -167,7 +167,7 @@ def test_live_artifact_inspection_classifies_functions_and_scripts(tmp_path):
         implementations="""
 async def draft_replies_for_recent_emails(dry_run: bool = True) -> list[dict]:
     \"\"\"Draft replies from recent email messages.\"\"\"
-    decision = await reason("draft a reply", model="gpt-4.1-nano@openai")
+    decision = await query_llm("draft a reply", model="gpt-4.1-nano@openai")
     return [{"decision": decision}]
 """,
     )
