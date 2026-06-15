@@ -184,7 +184,8 @@ class TestCoordinatorPrompt:
         assert "always target the active workspace organization" in prompt
         assert "Marty\n----" in prompt
         assert "Role / specialization: Coordinator." in prompt
-        assert "Marty identity" in prompt
+        assert "My identity" in prompt
+        assert "I am Marty, Alice Smith's personal, private assistant" in prompt
 
     def test_personal_coordinator_uses_boss_details_and_routes_org_work_to_switch(
         self,
@@ -214,7 +215,18 @@ class TestCoordinatorPrompt:
     def test_marty_handoff_guidance_is_absent_on_marty_sessions(self):
         coordinator_prompt = _build(is_coordinator=True)
 
-        assert "Marty identity" in coordinator_prompt
+        assert "My identity" in coordinator_prompt
+        assert (
+            "I am Marty, Alice Smith's personal, private assistant"
+            in coordinator_prompt
+        )
+        assert (
+            "Marty is Alice Smith's personal, private assistant"
+            not in coordinator_prompt
+        )
+        assert "My onboarding flow (UI reference)" in coordinator_prompt
+        assert "Give me access to your workspace" in coordinator_prompt
+        assert "Give Marty access to your workspace" not in coordinator_prompt
         assert "I propose handing it to Marty explicitly" not in coordinator_prompt
 
     def test_base_and_coordinator_share_restraint_but_keep_role_specific_sections(self):
@@ -225,7 +237,7 @@ class TestCoordinatorPrompt:
         assert "Intent vs verified outcomes" in coordinator_prompt
         assert "Console knowledge" in base_prompt
         assert "Console knowledge" not in coordinator_prompt
-        assert "Marty Console literacy" in coordinator_prompt
+        assert "My Console literacy" in coordinator_prompt
         assert "Concurrent action and acknowledgment" in base_prompt
         assert "Concurrent action and acknowledgment" in coordinator_prompt
         assert "Onboarding reference" in base_prompt
@@ -342,8 +354,8 @@ class TestPromptSectionOwnershipMatrix:
                     "Act capabilities\n----------------",
                     "Concurrent action and acknowledgment\n------------------------------------",
                     "Marty\n----",
-                    "Marty identity\n--------------",
-                    "Marty Console literacy\n----------------------",
+                    "My identity\n-----------",
+                    "My Console literacy\n----------------------",
                     "Console account & org administration",
                     "Proactive meeting offers\n------------------------",
                 ),
@@ -361,7 +373,7 @@ class TestPromptSectionOwnershipMatrix:
                 },
                 "present": (
                     "Marty\n----",
-                    "Marty identity\n--------------",
+                    "My identity\n-----------",
                     "Authorized humans\n-----------------",
                     "Demo mode\n---------",
                 ),
@@ -383,8 +395,8 @@ class TestPromptSectionOwnershipMatrix:
                     "Organization membership actions are unavailable",
                     "switch to that organization's Marty",
                     "Marty\n----",
-                    "Marty identity\n--------------",
-                    "Marty Console literacy\n----------------------",
+                    "My identity\n-----------",
+                    "My Console literacy\n----------------------",
                     "Console account & org administration",
                     "Proactive meeting offers\n------------------------",
                 ),
@@ -449,9 +461,10 @@ class TestCoordinatorVoicePrompt:
     def test_coordinator_voice_prompt_includes_console_literacy(self):
         prompt = _build_voice(is_coordinator=True)
 
-        assert "Marty identity" in prompt
-        assert "Marty is Dana Owner's personal, private assistant" in prompt
-        assert "Marty Console literacy" in prompt
+        assert "My identity" in prompt
+        assert "I am Marty, Dana Owner's personal, private assistant" in prompt
+        assert "Marty is Dana Owner's personal, private assistant" not in prompt
+        assert "My Console literacy" in prompt
         assert "Left sidebar — selection drives everything" in prompt
         assert "Shared workspaces (Teams in the left sidebar)" in prompt
         assert "Console account & org administration" in prompt
@@ -459,7 +472,9 @@ class TestCoordinatorVoicePrompt:
         assert "Invite org member (both paths)" in prompt
         assert "mention **both in the same reply**" in prompt
         assert "Unify internal operator tools only" in prompt
-        assert "Marty onboarding flow (UI reference)" in prompt
+        assert "My onboarding flow (UI reference)" in prompt
+        assert "Give me access to your workspace" in prompt
+        assert "Give Marty access to your workspace" not in prompt
         assert "Console knowledge\n-----------------" not in prompt
 
 
@@ -567,8 +582,8 @@ class TestExternalAppIntegration:
     def test_onboarding_has_app_integration_qa(self):
         prompt = _build()
         assert "Can you help me manage my apps and online services?" in prompt
-        assert "secure Integrations/Secrets pages on the console" in prompt
-        assert "API credentials or access tokens" in prompt
+        assert "secure **Integrations** tab on the console" in prompt
+        assert "pick the app from the gallery and authorize it" in prompt
         assert "service's Python SDK" in prompt
 
     def test_act_capabilities_has_external_apps_bullet(self):
@@ -585,7 +600,7 @@ class TestExternalAppIntegration:
 
         assert "I can walk through app setup and day-to-day usage directly" in prompt
         assert (
-            "If a credential needs to be shared across the team or org (rather than "
+            "If a credential must be shared across the team or org (rather than "
             "scoped to just me), Marty is the right person to place it"
         ) in prompt
         assert "Marty owns that setup" not in prompt
@@ -719,14 +734,14 @@ class TestConsoleKnowledge:
     def test_console_knowledge_present(self):
         prompt = _build()
         assert "Console knowledge" in prompt
-        assert "Secrets" in prompt
+        assert "Integrations" in prompt
         assert "Contact Details" in prompt
 
     def test_console_knowledge_has_navigation_paths(self):
         prompt = _build()
-        assert "hover over my name in the left sidebar → ⋮ → **Secrets**" in prompt
-        assert "⋮ → **Secrets**" in prompt
-        assert "top-right profile menu" in prompt
+        assert "open the **Integrations** tab" in prompt
+        assert "⋮ → **Contact Details**" in prompt
+        assert "profile menu" in prompt
 
     def test_console_knowledge_absent_in_demo_mode(self):
         prompt = _build(demo_mode=True)
@@ -734,7 +749,7 @@ class TestConsoleKnowledge:
 
     def test_coordinator_uses_console_literacy_not_base_block(self):
         prompt = _build(is_coordinator=True)
-        assert "Marty Console literacy" in prompt
+        assert "My Console literacy" in prompt
         assert "hover over my name in the left sidebar → ⋮ → **Secrets**" not in prompt
         assert "Memory → Guidance" in prompt
         assert "Secrets (on the Integrations tab)" in prompt
