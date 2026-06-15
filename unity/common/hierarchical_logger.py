@@ -70,7 +70,6 @@ ICONS = {
     "proactive_debounce": "⏱️",
     "proactive_decision": "🗣️",
     "proactive_deferred": "⏸️",
-    "proactive_dormant": "💤",
     "proactive_speaking": "🗣️",
     "proactive_published": "📤",
     "proactive_cancelled": "🚫",

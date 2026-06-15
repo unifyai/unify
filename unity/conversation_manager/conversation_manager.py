@@ -2549,6 +2549,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
                         },
                     )
 
+            # Nothing has been said yet — there is no silence to break.  The
+            # cycle re-arms when a real utterance arrives.
+            if not conversation_turns:
+                return
+
             snapshot_state = self.prompt_renderer.render_state(
                 self.contact_index,
                 self.notifications_bar,
@@ -2584,16 +2589,13 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 return
 
             _log.proactive_decision(
-                decision.should_speak,
                 decision.delay,
                 decision.content,
             )
 
-            if not decision.should_speak:
-                _log.proactive_dormant()
-                return
-
             # Wait the requested delay (cancellable if an utterance arrives).
+            # `delay` is unbounded: a few seconds when someone is waiting on a
+            # reply, many minutes during a focused collaborative silence.
             if decision.delay > 0:
                 _log.proactive_speaking(decision.delay, decision.content)
                 await asyncio.sleep(decision.delay)
