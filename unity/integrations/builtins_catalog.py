@@ -21,6 +21,9 @@ BUILTINS_INTEGRATION_APPS_CONTEXT = "Integrations/Apps"
 BUILTINS_INTEGRATION_TOOLS_CONTEXT = "Integrations/Tools"
 BUILTINS_INTEGRATION_META_CONTEXT = "Integrations/Meta"
 _HASH_MAP_KEY = "integration_catalog_hash_by_unit"
+_DELETE_FILTER_BATCH_SIZE = 500
+_LOG_PAGE_SIZE = 500
+_INSERT_ROW_BATCH_SIZE = 500
 
 
 def _stable_int_id(namespace: str, value: str) -> int:
@@ -39,6 +42,7 @@ def _normalize_app_slug(value: Any) -> str:
 
 
 def _ensure_catalog_storage(project: str) -> None:
+    logger.info("Ensuring integration catalogue storage project=%s", project)
     unify.create_project(project, exist_ok=True, is_public_read=True)
     unify.create_context(
         BUILTINS_INTEGRATION_APPS_CONTEXT,
@@ -129,27 +133,56 @@ def _unit_hash(rows: Iterable[Dict[str, Any]], *, fields: tuple[str, ...]) -> st
 def _delete_units(project: str, context: str, filters: list[str]) -> None:
     if not filters:
         return
-    logs = unify.get_logs(
-        project=project,
-        context=context,
-        filter=" or ".join(f"({flt})" for flt in filters),
-        exclude_fields=list_private_fields(context, project=project),
-    )
-    if logs:
-        unify.delete_logs(
-            project=project,
-            context=context,
-            logs=[log.id for log in logs],
-        )
+    for index in range(0, len(filters), _DELETE_FILTER_BATCH_SIZE):
+        batch_filters = filters[index : index + _DELETE_FILTER_BATCH_SIZE]
+        filter_expr = " or ".join(f"({flt})" for flt in batch_filters)
+        page = 1
+        while True:
+            logs = unify.get_logs(
+                project=project,
+                context=context,
+                filter=filter_expr,
+                limit=_LOG_PAGE_SIZE,
+                offset=0,
+                return_ids_only=True,
+            )
+            if not logs:
+                break
+            logger.info(
+                "Deleting integration catalogue page project=%s context=%s "
+                "filter_batch=%d/%d page=%d rows=%d",
+                project,
+                context,
+                index // _DELETE_FILTER_BATCH_SIZE + 1,
+                (len(filters) + _DELETE_FILTER_BATCH_SIZE - 1)
+                // _DELETE_FILTER_BATCH_SIZE,
+                page,
+                len(logs),
+            )
+            unify.delete_logs(
+                project=project,
+                context=context,
+                logs=logs,
+            )
+            page += 1
 
 
 def _insert_rows(project: str, context: str, rows: List[Dict[str, Any]]) -> None:
-    if rows:
+    total_batches = (len(rows) + _INSERT_ROW_BATCH_SIZE - 1) // _INSERT_ROW_BATCH_SIZE
+    for index in range(0, len(rows), _INSERT_ROW_BATCH_SIZE):
+        batch = rows[index : index + _INSERT_ROW_BATCH_SIZE]
+        logger.info(
+            "Writing integration catalogue batch project=%s context=%s batch=%d/%d rows=%d",
+            project,
+            context,
+            index // _INSERT_ROW_BATCH_SIZE + 1,
+            total_batches,
+            len(batch),
+        )
         unify.create_logs(
             project=project,
             context=context,
-            entries=rows,
-            recompute_derived=True,
+            entries=batch,
         )
 
 
@@ -170,29 +203,53 @@ def seed_builtin_integrations(
     """
 
     project = project or builtins_project()
+    logger.info(
+        "Starting integration catalogue seed project=%s backend=%s apps=%s tools=%s "
+        "prune_unlisted_apps=%s",
+        project,
+        backend_id,
+        "omitted" if apps is None else len(apps),
+        "omitted" if tools is None else len(tools),
+        prune_unlisted_apps,
+    )
     _ensure_catalog_storage(project)
     reconcile_apps = apps is not None
     if apps is None and tools is None:
-        ensure_vector_column(
+        for context in (
             BUILTINS_INTEGRATION_APPS_CONTEXT,
-            embed_column="_embedding_text_emb",
-            source_column="embedding_text",
-            project=project,
-        )
-        ensure_vector_column(
             BUILTINS_INTEGRATION_TOOLS_CONTEXT,
-            embed_column="_embedding_text_emb",
-            source_column="embedding_text",
-            project=project,
-        )
+        ):
+            logger.info(
+                "Ensuring integration catalogue embedding column project=%s context=%s",
+                project,
+                context,
+            )
+            ensure_vector_column(
+                context,
+                embed_column="_embedding_text_emb",
+                source_column="embedding_text",
+                project=project,
+            )
         return False
     apps = apps or []
     tools = tools or []
+    logger.info(
+        "Normalizing integration catalogue rows project=%s apps=%d tools=%d",
+        project,
+        len(apps),
+        len(tools),
+    )
     app_rows = [app_catalog_row(app) for app in apps]
     tool_rows = [
         Function.model_validate(row).model_dump(include=set(row.keys()))
         for row in (tool_catalog_row(tool) for tool in tools)
     ]
+    logger.info(
+        "Normalized integration catalogue rows project=%s app_rows=%d tool_rows=%d",
+        project,
+        len(app_rows),
+        len(tool_rows),
+    )
     scope_backends = {str(backend_id)} if backend_id else set()
     scope_slugs = {
         _normalize_app_slug(slug)
@@ -244,24 +301,33 @@ def seed_builtin_integrations(
             "backend_id or catalog rows are required for prune_unlisted_apps",
         )
 
+    logger.info("Reading integration catalogue seed hashes project=%s", project)
     current_hashes = read_seed_hashes(
         project,
         meta_context=BUILTINS_INTEGRATION_META_CONTEXT,
         key=_HASH_MAP_KEY,
     )
+    logger.info(
+        "Read integration catalogue seed hashes project=%s units=%d",
+        project,
+        len(current_hashes),
+    )
     next_hashes = dict(current_hashes)
     changed = False
+    delete_filters_by_context: dict[str, list[str]] = {}
+    insert_rows_by_context: dict[str, list[dict[str, Any]]] = {}
+    changed_unit_count = 0
     for key, (context, filter_expr, rows, row_hash) in by_unit.items():
         if current_hashes.get(key) == row_hash:
             continue
-        _delete_units(project, context, [filter_expr])
-        _insert_rows(project, context, rows)
+        delete_filters_by_context.setdefault(context, []).append(filter_expr)
+        insert_rows_by_context.setdefault(context, []).extend(rows)
         next_hashes[key] = row_hash
+        changed_unit_count += 1
         changed = True
 
     stale_keys = sorted(set(current_hashes) - set(by_unit))
-    app_filters: list[str] = []
-    tool_filters: list[str] = []
+    removed_unit_count = 0
     for key in stale_keys:
         prefix, stale_backend_id, app_slug = key.split(":", 2)
         if scope_backends and stale_backend_id not in scope_backends:
@@ -271,23 +337,58 @@ def seed_builtin_integrations(
         else:
             should_delete = app_slug in scope_slugs
         if prefix == "app" and reconcile_apps and should_delete:
-            app_filters.append(
+            delete_filters_by_context.setdefault(
+                BUILTINS_INTEGRATION_APPS_CONTEXT,
+                [],
+            ).append(
                 f"backend_id == {json.dumps(stale_backend_id)} and canonical_app_slug == {json.dumps(app_slug)}",
             )
             next_hashes.pop(key, None)
+            removed_unit_count += 1
+            changed = True
         elif prefix == "tools" and should_delete:
-            tool_filters.append(
+            delete_filters_by_context.setdefault(
+                BUILTINS_INTEGRATION_TOOLS_CONTEXT,
+                [],
+            ).append(
                 f'metadata["source"] == "provider_backed" and metadata["integration"]["backend_id"] == {json.dumps(stale_backend_id)} and metadata["integration"]["app_slug"] == {json.dumps(app_slug)}',
             )
             next_hashes.pop(key, None)
-    if app_filters:
-        _delete_units(project, BUILTINS_INTEGRATION_APPS_CONTEXT, app_filters)
-        changed = True
-    if tool_filters:
-        _delete_units(project, BUILTINS_INTEGRATION_TOOLS_CONTEXT, tool_filters)
-        changed = True
+            removed_unit_count += 1
+            changed = True
+
+    logger.info(
+        "Computed integration catalogue changes project=%s total_units=%d "
+        "changed_units=%d removed_units=%d",
+        project,
+        len(by_unit),
+        changed_unit_count,
+        removed_unit_count,
+    )
+
+    for context, filters in delete_filters_by_context.items():
+        logger.info(
+            "Deleting integration catalogue units project=%s context=%s units=%d",
+            project,
+            context,
+            len(filters),
+        )
+        _delete_units(project, context, filters)
+    for context, rows in insert_rows_by_context.items():
+        logger.info(
+            "Writing integration catalogue rows project=%s context=%s rows=%d",
+            project,
+            context,
+            len(rows),
+        )
+        _insert_rows(project, context, rows)
 
     if changed:
+        logger.info(
+            "Writing integration catalogue seed hashes project=%s units=%d",
+            project,
+            len(next_hashes),
+        )
         write_seed_hashes(
             project,
             next_hashes,
@@ -301,18 +402,21 @@ def seed_builtin_integrations(
             len(tool_rows),
         )
 
-    ensure_vector_column(
+    for context in (
         BUILTINS_INTEGRATION_APPS_CONTEXT,
-        embed_column="_embedding_text_emb",
-        source_column="embedding_text",
-        project=project,
-    )
-    ensure_vector_column(
         BUILTINS_INTEGRATION_TOOLS_CONTEXT,
-        embed_column="_embedding_text_emb",
-        source_column="embedding_text",
-        project=project,
-    )
+    ):
+        logger.info(
+            "Ensuring integration catalogue embedding column project=%s context=%s",
+            project,
+            context,
+        )
+        ensure_vector_column(
+            context,
+            embed_column="_embedding_text_emb",
+            source_column="embedding_text",
+            project=project,
+        )
     return changed
 
 

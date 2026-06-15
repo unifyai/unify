@@ -322,6 +322,15 @@ def _put_bootstrap_state(
     builtins_changed: bool = False,
     error_message: str | None = None,
 ) -> None:
+    logging.info(
+        "Writing integration bootstrap state backend=%s environment=%s status=%s "
+        "builtins_changed=%s error=%s",
+        plan.backend_id,
+        plan.environment,
+        status,
+        builtins_changed,
+        bool(error_message),
+    )
     diagnostics = _sync_diagnostics(
         plan=plan,
         result=result,
@@ -371,6 +380,18 @@ def _seed_sync_result(
     apps = result.get("apps") or []
     tools = result.get("tools") or []
     app_slugs = result.get("matched_app_slugs") or sync_payload.get("app_slugs") or []
+    phase = str(sync_payload.get("_seed_phase") or "sync")
+    started_at = time.perf_counter()
+    logging.info(
+        "Seeding integration Builtins start phase=%s backend=%s apps=%s tools=%s "
+        "app_slugs=%s prune=%s",
+        phase,
+        sync_payload["backend_id"],
+        len(apps),
+        len(tools),
+        len(app_slugs),
+        _effective_prune(sync_payload),
+    )
     changed = seed_builtin_integrations(
         apps=apps,
         tools=tools,
@@ -379,12 +400,15 @@ def _seed_sync_result(
         prune_unlisted_apps=_effective_prune(sync_payload),
     )
     logging.info(
-        "Seeded integration Builtins backend=%s apps=%s tools=%s changed=%s prune=%s",
+        "Seeding integration Builtins complete phase=%s backend=%s apps=%s tools=%s "
+        "changed=%s prune=%s elapsed=%.1fs",
+        phase,
         sync_payload["backend_id"],
         len(apps),
         len(tools),
         changed,
         _effective_prune(sync_payload),
+        time.perf_counter() - started_at,
     )
     return changed
 
@@ -458,6 +482,12 @@ def _sync_and_seed_provider(
     sync_payload: dict[str, Any],
 ) -> tuple[bool, dict[str, Any]]:
     if not _should_batch_composio_full_sync(sync_payload):
+        logging.info(
+            "Starting integration provider sync backend=%s mode=%s app_slugs=%s",
+            sync_payload["backend_id"],
+            sync_payload.get("sync_mode"),
+            len(sync_payload.get("app_slugs") or []),
+        )
         result = _admin_request(
             base_url=base_url,
             admin_key=admin_key,
@@ -465,7 +495,13 @@ def _sync_and_seed_provider(
             path="/admin/integrations/sync",
             payload=sync_payload,
         )
-        return _seed_sync_result(result=result, sync_payload=sync_payload), result
+        return (
+            _seed_sync_result(
+                result=result,
+                sync_payload={**sync_payload, "_seed_phase": "single-sync"},
+            ),
+            result,
+        )
 
     app_payload = {
         **sync_payload,
@@ -473,6 +509,11 @@ def _sync_and_seed_provider(
         "app_slugs": [],
         "include_all_managed_apps": True,
     }
+    logging.info(
+        "Starting integration app-only sync backend=%s mode=%s",
+        sync_payload["backend_id"],
+        sync_payload.get("sync_mode"),
+    )
     app_result = _admin_request(
         base_url=base_url,
         admin_key=admin_key,
@@ -480,8 +521,17 @@ def _sync_and_seed_provider(
         path="/admin/integrations/sync",
         payload=app_payload,
     )
-    changed = _seed_sync_result(result=app_result, sync_payload=app_payload)
+    changed = _seed_sync_result(
+        result=app_result,
+        sync_payload={**app_payload, "_seed_phase": "app-only-sync"},
+    )
     app_count = int(app_result.get("apps_upserted", 0) or 0)
+    logging.info(
+        "Merging integration app-only sync result backend=%s apps=%s matched_slugs=%s",
+        sync_payload["backend_id"],
+        app_count,
+        len(app_result.get("matched_app_slugs") or []),
+    )
     aggregate = _merge_sync_results(base=None, batch=app_result, app_count=app_count)
     aggregate["sync_mode"] = sync_payload.get("sync_mode") or "full"
     aggregate["requested_app_slugs"] = list(sync_payload.get("app_slugs") or [])
@@ -494,7 +544,14 @@ def _sync_and_seed_provider(
             DEFAULT_COMPOSIO_BATCH_SIZE,
         ),
     )
-    for batch_slugs in _chunks(matched_slugs, max(1, batch_size)):
+    batches = _chunks(matched_slugs, max(1, batch_size))
+    logging.info(
+        "Starting integration tool sync batches backend=%s batches=%s batch_size=%s",
+        sync_payload["backend_id"],
+        len(batches),
+        max(1, batch_size),
+    )
+    for batch_index, batch_slugs in enumerate(batches, start=1):
         batch_payload = {
             **sync_payload,
             "sync_mode": "partial",
@@ -503,6 +560,13 @@ def _sync_and_seed_provider(
             "sync_tools": True,
             "prune_unlisted_apps": False,
         }
+        logging.info(
+            "Starting integration tool sync batch backend=%s batch=%s/%s app_slugs=%s",
+            sync_payload["backend_id"],
+            batch_index,
+            len(batches),
+            len(batch_slugs),
+        )
         batch_result = _admin_request(
             base_url=base_url,
             admin_key=admin_key,
@@ -510,18 +574,35 @@ def _sync_and_seed_provider(
             path="/admin/integrations/sync",
             payload=batch_payload,
         )
+        phase = f"tool-sync-batch-{batch_index}-of-{len(batches)}"
         changed = (
             _seed_sync_result(
                 result=batch_result,
-                sync_payload=batch_payload,
+                sync_payload={**batch_payload, "_seed_phase": phase},
             )
             or changed
+        )
+        logging.info(
+            "Merging integration tool sync batch backend=%s batch=%s/%s "
+            "apps=%s tools=%s",
+            sync_payload["backend_id"],
+            batch_index,
+            len(batches),
+            batch_result.get("apps_upserted", 0),
+            batch_result.get("tools_upserted", 0),
         )
         aggregate = _merge_sync_results(
             base=aggregate,
             batch=batch_result,
             app_count=app_count,
         )
+    logging.info(
+        "Completed integration tool sync batches backend=%s apps=%s tools=%s changed=%s",
+        sync_payload["backend_id"],
+        aggregate.get("apps_upserted", 0),
+        aggregate.get("tools_upserted", 0),
+        changed,
+    )
     return changed, aggregate
 
 
@@ -532,6 +613,11 @@ def _sync_integration_bootstrap_manifest(
     admin_key: str,
 ) -> bool:
     manifest = _load_manifest(manifest_path)
+    logging.info(
+        "Starting integration bootstrap manifest path=%s providers=%s",
+        manifest_path,
+        len(manifest["providers"]),
+    )
     changed = False
     for backend_id, config in sorted(manifest["providers"].items()):
         if not isinstance(config, dict):
@@ -540,6 +626,12 @@ def _sync_integration_bootstrap_manifest(
             manifest=manifest,
             backend_id=str(backend_id),
             config=config,
+        )
+        logging.info(
+            "Checking integration bootstrap state backend=%s environment=%s desired_hash=%s",
+            plan.backend_id,
+            plan.environment,
+            plan.desired_hash,
         )
         state = _bootstrap_state(
             base_url=base_url,
@@ -553,6 +645,11 @@ def _sync_integration_bootstrap_manifest(
                 backend_id,
             )
             continue
+        logging.info(
+            "Registering integration backend backend=%s environment=%s",
+            plan.backend_id,
+            plan.environment,
+        )
         _admin_request(
             base_url=base_url,
             admin_key=admin_key,
@@ -572,10 +669,24 @@ def _sync_integration_bootstrap_manifest(
             )
             continue
         try:
+            logging.info(
+                "Starting integration bootstrap sync backend=%s environment=%s",
+                plan.backend_id,
+                plan.environment,
+            )
             provider_changed, result = _sync_and_seed_provider(
                 base_url=base_url,
                 admin_key=admin_key,
                 sync_payload=plan.sync_payload,
+            )
+            logging.info(
+                "Completed integration bootstrap sync backend=%s status=%s "
+                "apps=%s tools=%s changed=%s",
+                plan.backend_id,
+                result.get("status"),
+                result.get("apps_upserted", 0),
+                result.get("tools_upserted", 0),
+                provider_changed,
             )
             _put_bootstrap_state(
                 base_url=base_url,
@@ -587,6 +698,11 @@ def _sync_integration_bootstrap_manifest(
             )
             changed = provider_changed or changed
         except Exception as exc:
+            logging.info(
+                "Integration bootstrap sync failed backend=%s error=%s",
+                plan.backend_id,
+                str(exc)[:500],
+            )
             _put_bootstrap_state(
                 base_url=base_url,
                 admin_key=admin_key,

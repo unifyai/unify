@@ -1,6 +1,5 @@
 import importlib.util
 from pathlib import Path
-from types import SimpleNamespace
 
 from unity.integrations import builtins_catalog
 
@@ -49,6 +48,7 @@ def test_seed_builtin_integrations_hash_guards_app_and_tool_units(monkeypatch) -
     stored_hashes: dict[str, str] = {}
     deleted: list[tuple[str, list[int]]] = []
     inserted: list[tuple[str, list[dict]]] = []
+    seen_filters: set[str] = set()
 
     app = {
         "backend_id": "composio",
@@ -99,7 +99,11 @@ def test_seed_builtin_integrations_hash_guards_app_and_tool_units(monkeypatch) -
     def fake_get_logs(**kwargs):
         if kwargs.get("context") == builtins_catalog.BUILTINS_INTEGRATION_META_CONTEXT:
             return []
-        return [SimpleNamespace(id=17, entries={})]
+        filter_expr = kwargs["filter"]
+        if filter_expr in seen_filters:
+            return []
+        seen_filters.add(filter_expr)
+        return [17]
 
     monkeypatch.setattr(builtins_catalog.unify, "get_logs", fake_get_logs)
     monkeypatch.setattr(
@@ -163,6 +167,7 @@ def test_seed_builtin_integrations_preserves_unlisted_app_scope(monkeypatch) -> 
         "tools:composio:slack": "old",
     }
     filters: list[str] = []
+    seen_filters: set[str] = set()
 
     monkeypatch.setattr(builtins_catalog.unify, "create_project", lambda *_, **__: None)
     monkeypatch.setattr(builtins_catalog.unify, "create_context", lambda *_, **__: None)
@@ -187,8 +192,12 @@ def test_seed_builtin_integrations_preserves_unlisted_app_scope(monkeypatch) -> 
     def fake_get_logs(**kwargs):
         if kwargs.get("context") == builtins_catalog.BUILTINS_INTEGRATION_META_CONTEXT:
             return []
-        filters.append(kwargs["filter"])
-        return [SimpleNamespace(id=17, entries={})]
+        filter_expr = kwargs["filter"]
+        filters.append(filter_expr)
+        if filter_expr in seen_filters:
+            return []
+        seen_filters.add(filter_expr)
+        return [17]
 
     monkeypatch.setattr(builtins_catalog.unify, "get_logs", fake_get_logs)
     monkeypatch.setattr(builtins_catalog.unify, "delete_logs", lambda **_kwargs: None)
@@ -214,6 +223,7 @@ def test_seed_builtin_integrations_prunes_unlisted_app_scope(monkeypatch) -> Non
         "tools:composio:slack": "old",
     }
     filters: list[str] = []
+    seen_filters: set[str] = set()
 
     monkeypatch.setattr(builtins_catalog.unify, "create_project", lambda *_, **__: None)
     monkeypatch.setattr(builtins_catalog.unify, "create_context", lambda *_, **__: None)
@@ -238,8 +248,12 @@ def test_seed_builtin_integrations_prunes_unlisted_app_scope(monkeypatch) -> Non
     def fake_get_logs(**kwargs):
         if kwargs.get("context") == builtins_catalog.BUILTINS_INTEGRATION_META_CONTEXT:
             return []
-        filters.append(kwargs["filter"])
-        return [SimpleNamespace(id=17, entries={})]
+        filter_expr = kwargs["filter"]
+        filters.append(filter_expr)
+        if filter_expr in seen_filters:
+            return []
+        seen_filters.add(filter_expr)
+        return [17]
 
     monkeypatch.setattr(builtins_catalog.unify, "get_logs", fake_get_logs)
     monkeypatch.setattr(builtins_catalog.unify, "delete_logs", lambda **_kwargs: None)
