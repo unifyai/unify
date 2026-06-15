@@ -119,8 +119,10 @@ def get_reasoning_model_selection_context() -> str:
         repeated classification/routing/extraction work unless that capability
         is genuinely needed.
 
-        Use current external evidence when the model choice matters:
-        - Artificial Analysis: https://artificialanalysis.ai/
+        Use current external evidence when the model choice matters. Start with
+        Artificial Analysis (https://artificialanalysis.ai/) because it is
+        especially useful for comparing model price, speed, latency, and
+        quality/cost tradeoffs across providers. Then supplement with:
         - ARC Prize leaderboard: https://arcprize.org/leaderboard
         - General web search for recent benchmark, pricing, latency, and
           reliability information.

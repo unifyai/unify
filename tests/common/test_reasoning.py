@@ -132,7 +132,8 @@ def test_reasoning_prompt_context_includes_model_selection_guidance():
     context = reasoning.get_reasoning_prompt_context()
 
     assert "Choosing A Model For `reason(...)`" in context
-    assert "Artificial Analysis: https://artificialanalysis.ai/" in context
+    assert "Artificial Analysis (https://artificialanalysis.ai/)" in context
+    assert "comparing model price, speed, latency" in context
     assert "ARC Prize leaderboard: https://arcprize.org/leaderboard" in context
     assert "Supported UniLLM endpoints currently registered" in context
     assert "gpt-4.1-nano@openai" in context

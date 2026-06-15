@@ -185,13 +185,9 @@ def test_steerable_infrastructure_available():
     # Core steerable class should be present
     assert "SteerableToolHandle" in globals_dict
 
-    # Factory function for creating async tool loops
-    assert "start_async_tool_loop" in globals_dict
-    assert callable(globals_dict["start_async_tool_loop"])
-
-    # LLM client factory (required for async tool loops)
-    assert "new_llm_client" in globals_dict
-    assert callable(globals_dict["new_llm_client"])
+    # Low-level LLM loop constructors stay out of stored-function globals.
+    assert "start_async_tool_loop" not in globals_dict
+    assert "new_llm_client" not in globals_dict
 
 
 def test_steerable_handle_is_abc():

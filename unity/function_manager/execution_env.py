@@ -210,9 +210,8 @@ def create_execution_globals() -> Dict[str, Any]:
     Extends create_base_globals() with:
     - The `primitives` object for lazy access to all primitive operations
       (state managers, computer use, etc.)
-    - Steerable handle infrastructure for creating functions that return
-      steerable handles (SteerableToolHandle, start_async_tool_loop,
-      new_llm_client, reason)
+    - Steerable handle infrastructure for functions that return handles
+      (SteerableToolHandle)
     - The `unillm` module for advanced direct LLM usage
     - The `reason` helper for focused one-shot semantic reasoning steps
 
@@ -226,19 +225,6 @@ def create_execution_globals() -> Dict[str, Any]:
     are steerable. The execution layer will detect this at runtime via
     ``isinstance(result, SteerableToolHandle)`` and wire up steering operations.
 
-    Example steerable function::
-
-        async def my_workflow(goal: str) -> SteerableToolHandle:
-            client = new_llm_client()
-            client.set_system_message("You are a helpful assistant.")
-            handle = start_async_tool_loop(
-                client=client,
-                message=goal,
-                tools={},
-                loop_id="my-workflow",
-            )
-            return handle
-
     Returns:
         A dictionary of globals for function execution.
     """
@@ -250,20 +236,13 @@ def create_execution_globals() -> Dict[str, Any]:
     # Inject the primitives instance - all access is lazy
     globals_dict["primitives"] = Primitives(primitive_scope=default_runtime_scope())
 
-    # Steerable handle infrastructure - allows compositional functions to
-    # create and return steerable handles that the execution layer can detect
-    # and wire up for steering operations (interject, pause, stop, etc.)
-    from unity.common.async_tool_loop import (
-        SteerableToolHandle,
-        start_async_tool_loop,
-    )
-    from unity.common.llm_client import new_llm_client
+    # Steerable handle type - allows compositional functions to return handles
+    # that the execution layer can detect and wire up for steering operations.
+    from unity.common.async_tool_loop import SteerableToolHandle
     from unity.common.reasoning import reason
     from unity.common.runtime_oauth import get_oauth_access_token
 
     globals_dict["SteerableToolHandle"] = SteerableToolHandle
-    globals_dict["start_async_tool_loop"] = start_async_tool_loop
-    globals_dict["new_llm_client"] = new_llm_client
     globals_dict["reason"] = reason
     globals_dict["get_oauth_access_token"] = get_oauth_access_token
     globals_dict["unillm"] = unillm
