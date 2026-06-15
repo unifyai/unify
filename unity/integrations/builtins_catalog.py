@@ -64,9 +64,13 @@ def _ensure_catalog_storage(project: str) -> None:
     )
 
 
-def app_catalog_row(app: Dict[str, Any]) -> Dict[str, Any]:
+def app_catalog_row(
+    app: Dict[str, Any],
+    *,
+    default_backend_id: str | None = None,
+) -> Dict[str, Any]:
     slug = _normalize_app_slug(app.get("canonical_app_slug") or app.get("app_slug"))
-    backend_id = str(app.get("backend_id") or "provider")
+    backend_id = str(app.get("backend_id") or default_backend_id or "provider")
     display_name = app.get("display_name") or app.get("app_display_name") or slug
     description = app.get("description") or ""
     source_type = app.get("source_type") or (
@@ -118,9 +122,33 @@ def app_catalog_row(app: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def tool_catalog_row(tool: Dict[str, Any]) -> Dict[str, Any]:
+def tool_catalog_row(
+    tool: Dict[str, Any],
+    *,
+    default_backend_id: str | None = None,
+) -> Dict[str, Any]:
     from unity.function_manager.function_manager import FunctionManager
 
+    tool = dict(tool)
+    backend_id = str(tool.get("backend_id") or default_backend_id or "provider")
+    app_slug = _normalize_app_slug(
+        tool.get("app_slug")
+        or tool.get("canonical_app_slug")
+        or tool.get("provider_app_id"),
+    )
+    tool_name = _normalize_app_slug(
+        tool.get("name") or tool.get("canonical_name") or tool.get("provider_tool_id"),
+    )
+    tool["backend_id"] = backend_id
+    tool["app_slug"] = app_slug
+    tool.setdefault("tool_id", f"{backend_id}:{app_slug}:{tool_name}")
+    tool.setdefault("canonical_name", f"primitives.integrations.{app_slug}.{tool_name}")
+    tool.setdefault(
+        "function_manager_name",
+        f"primitives_integrations__{app_slug}__{tool_name}",
+    )
+    if "display_name" in tool and "tool_display_name" not in tool:
+        tool["tool_display_name"] = tool["display_name"]
     return FunctionManager.__new__(
         FunctionManager,
     )._integration_tool_to_function_row(tool)
@@ -130,12 +158,37 @@ def _unit_hash(rows: Iterable[Dict[str, Any]], *, fields: tuple[str, ...]) -> st
     return stable_hash_for_rows(rows, fields=fields)
 
 
+def _delete_filter_expressions(
+    context: str,
+    backend_to_slugs: dict[str, set[str]],
+) -> list[str]:
+    filters: list[str] = []
+    for backend_id, slugs in sorted(backend_to_slugs.items()):
+        sorted_slugs = sorted(slug for slug in slugs if slug)
+        for index in range(0, len(sorted_slugs), _DELETE_FILTER_BATCH_SIZE):
+            slug_batch = sorted_slugs[index : index + _DELETE_FILTER_BATCH_SIZE]
+            if context == BUILTINS_INTEGRATION_APPS_CONTEXT:
+                filters.append(
+                    f"backend_id == {json.dumps(backend_id)} and "
+                    f"canonical_app_slug in {json.dumps(slug_batch)}",
+                )
+            elif context == BUILTINS_INTEGRATION_TOOLS_CONTEXT:
+                filters.append(
+                    'metadata["source"] == "provider_backed" and '
+                    f'metadata["integration"]["backend_id"] == {json.dumps(backend_id)} and '
+                    f'metadata["integration"]["app_slug"] in {json.dumps(slug_batch)}',
+                )
+            else:
+                raise ValueError(
+                    f"Unsupported integration catalogue context: {context}",
+                )
+    return filters
+
+
 def _delete_units(project: str, context: str, filters: list[str]) -> None:
     if not filters:
         return
-    for index in range(0, len(filters), _DELETE_FILTER_BATCH_SIZE):
-        batch_filters = filters[index : index + _DELETE_FILTER_BATCH_SIZE]
-        filter_expr = " or ".join(f"({flt})" for flt in batch_filters)
+    for index, filter_expr in enumerate(filters):
         page = 1
         while True:
             logs = unify.get_logs(
@@ -153,9 +206,8 @@ def _delete_units(project: str, context: str, filters: list[str]) -> None:
                 "filter_batch=%d/%d page=%d rows=%d",
                 project,
                 context,
-                index // _DELETE_FILTER_BATCH_SIZE + 1,
-                (len(filters) + _DELETE_FILTER_BATCH_SIZE - 1)
-                // _DELETE_FILTER_BATCH_SIZE,
+                index + 1,
+                len(filters),
                 page,
                 len(logs),
             )
@@ -233,16 +285,21 @@ def seed_builtin_integrations(
         return False
     apps = apps or []
     tools = tools or []
+    seed_backend_id = str(backend_id) if backend_id else None
     logger.info(
         "Normalizing integration catalogue rows project=%s apps=%d tools=%d",
         project,
         len(apps),
         len(tools),
     )
-    app_rows = [app_catalog_row(app) for app in apps]
+    app_rows = [
+        app_catalog_row(app, default_backend_id=seed_backend_id) for app in apps
+    ]
     tool_rows = [
         Function.model_validate(row).model_dump(include=set(row.keys()))
-        for row in (tool_catalog_row(tool) for tool in tools)
+        for row in (
+            tool_catalog_row(tool, default_backend_id=seed_backend_id) for tool in tools
+        )
     ]
     logger.info(
         "Normalized integration catalogue rows project=%s app_rows=%d tool_rows=%d",
@@ -256,7 +313,7 @@ def seed_builtin_integrations(
         for slug in (app_slugs or [])
         if _normalize_app_slug(slug)
     }
-    by_unit: dict[str, tuple[str, str, list[dict[str, Any]], str]] = {}
+    by_unit: dict[str, tuple[str, str, str, list[dict[str, Any]], str]] = {}
     for row in app_rows:
         slug = row["canonical_app_slug"]
         scope_backends.add(str(row["backend_id"]))
@@ -264,7 +321,8 @@ def seed_builtin_integrations(
         key = f'app:{row["backend_id"]}:{slug}'
         by_unit[key] = (
             BUILTINS_INTEGRATION_APPS_CONTEXT,
-            f'backend_id == {json.dumps(row["backend_id"])} and canonical_app_slug == {json.dumps(slug)}',
+            str(row["backend_id"]),
+            slug,
             [row],
             _unit_hash([row], fields=tuple(sorted(row))),
         )
@@ -281,7 +339,8 @@ def seed_builtin_integrations(
         key = f"tools:{backend_id}:{app_slug}"
         by_unit[key] = (
             BUILTINS_INTEGRATION_TOOLS_CONTEXT,
-            f'metadata["source"] == "provider_backed" and metadata["integration"]["backend_id"] == {json.dumps(backend_id)} and metadata["integration"]["app_slug"] == {json.dumps(app_slug)}',
+            str(backend_id),
+            str(app_slug),
             rows,
             _unit_hash(
                 rows,
@@ -314,13 +373,16 @@ def seed_builtin_integrations(
     )
     next_hashes = dict(current_hashes)
     changed = False
-    delete_filters_by_context: dict[str, list[str]] = {}
+    delete_scopes_by_context: dict[str, dict[str, set[str]]] = {}
     insert_rows_by_context: dict[str, list[dict[str, Any]]] = {}
     changed_unit_count = 0
-    for key, (context, filter_expr, rows, row_hash) in by_unit.items():
+    for key, (context, unit_backend_id, app_slug, rows, row_hash) in by_unit.items():
         if current_hashes.get(key) == row_hash:
             continue
-        delete_filters_by_context.setdefault(context, []).append(filter_expr)
+        delete_scopes_by_context.setdefault(context, {}).setdefault(
+            unit_backend_id,
+            set(),
+        ).add(app_slug)
         insert_rows_by_context.setdefault(context, []).extend(rows)
         next_hashes[key] = row_hash
         changed_unit_count += 1
@@ -337,22 +399,18 @@ def seed_builtin_integrations(
         else:
             should_delete = app_slug in scope_slugs
         if prefix == "app" and reconcile_apps and should_delete:
-            delete_filters_by_context.setdefault(
+            delete_scopes_by_context.setdefault(
                 BUILTINS_INTEGRATION_APPS_CONTEXT,
-                [],
-            ).append(
-                f"backend_id == {json.dumps(stale_backend_id)} and canonical_app_slug == {json.dumps(app_slug)}",
-            )
+                {},
+            ).setdefault(stale_backend_id, set()).add(app_slug)
             next_hashes.pop(key, None)
             removed_unit_count += 1
             changed = True
         elif prefix == "tools" and should_delete:
-            delete_filters_by_context.setdefault(
+            delete_scopes_by_context.setdefault(
                 BUILTINS_INTEGRATION_TOOLS_CONTEXT,
-                [],
-            ).append(
-                f'metadata["source"] == "provider_backed" and metadata["integration"]["backend_id"] == {json.dumps(stale_backend_id)} and metadata["integration"]["app_slug"] == {json.dumps(app_slug)}',
-            )
+                {},
+            ).setdefault(stale_backend_id, set()).add(app_slug)
             next_hashes.pop(key, None)
             removed_unit_count += 1
             changed = True
@@ -366,11 +424,13 @@ def seed_builtin_integrations(
         removed_unit_count,
     )
 
-    for context, filters in delete_filters_by_context.items():
+    for context, backend_to_slugs in delete_scopes_by_context.items():
+        filters = _delete_filter_expressions(context, backend_to_slugs)
         logger.info(
-            "Deleting integration catalogue units project=%s context=%s units=%d",
+            "Deleting integration catalogue units project=%s context=%s units=%d filters=%d",
             project,
             context,
+            sum(len(slugs) for slugs in backend_to_slugs.values()),
             len(filters),
         )
         _delete_units(project, context, filters)

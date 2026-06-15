@@ -51,7 +51,6 @@ def test_seed_builtin_integrations_hash_guards_app_and_tool_units(monkeypatch) -
     seen_filters: set[str] = set()
 
     app = {
-        "backend_id": "composio",
         "provider_app_id": "gmail",
         "canonical_app_slug": "gmail",
         "display_name": "Gmail",
@@ -59,15 +58,10 @@ def test_seed_builtin_integrations_hash_guards_app_and_tool_units(monkeypatch) -
         "auth_modes": ["oauth"],
     }
     tool = {
-        "tool_id": "composio:gmail:fetch_emails",
-        "backend_id": "composio",
         "provider_app_id": "gmail",
         "provider_tool_id": "gmail.fetch_emails",
-        "canonical_name": "primitives.integrations.gmail.fetch_emails",
-        "function_manager_name": "primitives_integrations__gmail__fetch_emails",
-        "app_slug": "gmail",
         "app_display_name": "Gmail",
-        "tool_display_name": "Fetch emails",
+        "display_name": "Fetch emails",
         "description": "Fetch matching emails.",
         "required_scopes": ["gmail.readonly"],
         "action_class": "read",
@@ -99,6 +93,7 @@ def test_seed_builtin_integrations_hash_guards_app_and_tool_units(monkeypatch) -
     def fake_get_logs(**kwargs):
         if kwargs.get("context") == builtins_catalog.BUILTINS_INTEGRATION_META_CONTEXT:
             return []
+        assert kwargs["return_ids_only"] is True
         filter_expr = kwargs["filter"]
         if filter_expr in seen_filters:
             return []
@@ -132,15 +127,18 @@ def test_seed_builtin_integrations_hash_guards_app_and_tool_units(monkeypatch) -
         builtins_catalog.seed_builtin_integrations(
             apps=[app],
             tools=[tool],
+            backend_id="composio",
             project="Builtins",
         )
         is True
     )
     assert inserted[0][0] == builtins_catalog.BUILTINS_INTEGRATION_APPS_CONTEXT
+    assert inserted[0][1][0]["backend_id"] == "composio"
     assert inserted[1][0] == builtins_catalog.BUILTINS_INTEGRATION_TOOLS_CONTEXT
     assert inserted[1][1][0]["metadata"]["integration"]["required_scopes"] == [
         "gmail.readonly",
     ]
+    assert inserted[1][1][0]["metadata"]["integration"]["backend_id"] == "composio"
     assert "connection_id" not in inserted[1][1][0]["metadata"]["integration"]
     assert stored_hashes
 
@@ -151,6 +149,7 @@ def test_seed_builtin_integrations_hash_guards_app_and_tool_units(monkeypatch) -
         builtins_catalog.seed_builtin_integrations(
             apps=[app],
             tools=[tool],
+            backend_id="composio",
             project="Builtins",
         )
         is False
@@ -192,6 +191,7 @@ def test_seed_builtin_integrations_preserves_unlisted_app_scope(monkeypatch) -> 
     def fake_get_logs(**kwargs):
         if kwargs.get("context") == builtins_catalog.BUILTINS_INTEGRATION_META_CONTEXT:
             return []
+        assert kwargs["return_ids_only"] is True
         filter_expr = kwargs["filter"]
         filters.append(filter_expr)
         if filter_expr in seen_filters:
@@ -212,6 +212,9 @@ def test_seed_builtin_integrations_preserves_unlisted_app_scope(monkeypatch) -> 
     )
 
     assert any("gmail" in item for item in filters)
+    assert any("canonical_app_slug in" in item for item in filters)
+    assert any('metadata["integration"]["app_slug"] in' in item for item in filters)
+    assert not any(" or " in item for item in filters)
     assert not any("slack" in item for item in filters)
 
 
@@ -248,6 +251,7 @@ def test_seed_builtin_integrations_prunes_unlisted_app_scope(monkeypatch) -> Non
     def fake_get_logs(**kwargs):
         if kwargs.get("context") == builtins_catalog.BUILTINS_INTEGRATION_META_CONTEXT:
             return []
+        assert kwargs["return_ids_only"] is True
         filter_expr = kwargs["filter"]
         filters.append(filter_expr)
         if filter_expr in seen_filters:
@@ -269,6 +273,7 @@ def test_seed_builtin_integrations_prunes_unlisted_app_scope(monkeypatch) -> Non
 
     assert any("gmail" in item for item in filters)
     assert any("slack" in item for item in filters)
+    assert not any(" or " in item for item in filters)
 
 
 def test_seed_builtins_script_manifest_payload_supports_prune_flag() -> None:
