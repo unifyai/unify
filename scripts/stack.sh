@@ -59,6 +59,19 @@ _has_env_key() {
   [[ -f "$env_file" ]] && grep -qE "^${key}=.+$" "$env_file"
 }
 
+cleanup_legacy_orchestra_launch_job() {
+  if [[ "$(uname -s)" != "Darwin" ]]; then
+    return 0
+  fi
+  if ! command -v launchctl &>/dev/null; then
+    return 0
+  fi
+  if launchctl list 2>/dev/null | grep -q '[[:space:]]orchestra-local-dev$'; then
+    log_warn "Removing legacy orchestra-local-dev launch job before stack start"
+    launchctl remove orchestra-local-dev 2>/dev/null || true
+  fi
+}
+
 cmd_doctor() {
   local ok=true
   echo ""
@@ -217,6 +230,8 @@ cmd_up() {
   echo "=============================================="
   echo ""
 
+  cleanup_legacy_orchestra_launch_job
+
   if ! cmd_doctor; then
     log_error "Fix doctor findings before running stack up"
     return 1
@@ -238,6 +253,7 @@ cmd_up() {
   export ORCHESTRA_REPO_PATH
   export UNITY_REPO_PATH
   export CONSOLE_REPO_PATH
+  export ORCHESTRA_DB_PORT="${ORCHESTRA_DB_PORT:-55432}"
   export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
   export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNITY_HOME}"
 

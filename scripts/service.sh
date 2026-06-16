@@ -49,6 +49,7 @@ load_self_host_context() {
   export UNITY_REPO_PATH
   export CONSOLE_REPO_PATH
   export ORCHESTRA_REPO_PATH
+  export ORCHESTRA_DB_PORT="${ORCHESTRA_DB_PORT:-55432}"
   export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
@@ -107,6 +108,8 @@ service_install_launchd() {
     <string>${CONSOLE_REPO_PATH}</string>
     <key>ORCHESTRA_REPO_PATH</key>
     <string>${ORCHESTRA_REPO_PATH}</string>
+    <key>ORCHESTRA_DB_PORT</key>
+    <string>${ORCHESTRA_DB_PORT:-55432}</string>
   </dict>
 </dict>
 </plist>
@@ -143,6 +146,7 @@ Environment=UNITY_HOME=${UNITY_HOME:-$HOME/.unity}
 Environment=UNITY_REPO_PATH=${UNITY_REPO_PATH}
 Environment=CONSOLE_REPO_PATH=${CONSOLE_REPO_PATH}
 Environment=ORCHESTRA_REPO_PATH=${ORCHESTRA_REPO_PATH}
+Environment=ORCHESTRA_DB_PORT=${ORCHESTRA_DB_PORT:-55432}
 
 [Install]
 WantedBy=default.target
