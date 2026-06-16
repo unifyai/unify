@@ -44,12 +44,31 @@ log_success() { echo -e "${GREEN}[OK]${NC} $*"; }
 log_warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $*"; }
 
+default_orchestra_db_port() {
+  if command -v docker &>/dev/null; then
+    local mapped
+    mapped="$(docker port orchestra-local-db 5432/tcp 2>/dev/null | head -1 | sed 's/.*://')"
+    if [[ -z "$mapped" ]]; then
+      mapped="$(docker inspect -f '{{(index (index .HostConfig.PortBindings "5432/tcp") 0).HostPort}}' orchestra-local-db 2>/dev/null || true)"
+    fi
+    if [[ -n "$mapped" ]]; then
+      printf '%s' "$mapped"
+      return 0
+    fi
+  fi
+  if [[ -n "${ORCHESTRA_DB_PORT:-}" ]]; then
+    printf '%s' "$ORCHESTRA_DB_PORT"
+    return 0
+  fi
+  printf '55432'
+}
+
 load_self_host_context() {
   export SELF_HOST=1
   export UNITY_REPO_PATH
   export CONSOLE_REPO_PATH
   export ORCHESTRA_REPO_PATH
-  export ORCHESTRA_DB_PORT="${ORCHESTRA_DB_PORT:-55432}"
+  export ORCHESTRA_DB_PORT="$(default_orchestra_db_port)"
   export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090

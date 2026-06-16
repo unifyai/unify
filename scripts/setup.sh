@@ -37,7 +37,6 @@ UNITY_HOME="${UNITY_HOME:-$UNIFY_STACK_ROOT}"
 ORCHESTRA_REPO="${ORCHESTRA_REPO:-${UNITY_HOME}/orchestra}"
 CONSOLE_REPO="${CONSOLE_REPO:-${UNITY_HOME}/console}"
 ORCHESTRA_PORT="${ORCHESTRA_PORT:-8000}"
-ORCHESTRA_DB_PORT="${ORCHESTRA_DB_PORT:-55432}"
 CONSOLE_PORT="${CONSOLE_PORT:-3000}"
 UNITY_BRANCH="${UNITY_BRANCH:-staging}"
 
@@ -57,6 +56,27 @@ has_env_value() {
     local key="$1"
     [[ -f "$UNITY_REPO/.env" ]] && grep -qE "^${key}=.+$" "$UNITY_REPO/.env"
 }
+
+default_orchestra_db_port() {
+    if command -v docker >/dev/null 2>&1; then
+        local mapped
+        mapped="$(docker port orchestra-local-db 5432/tcp 2>/dev/null | head -1 | sed 's/.*://')"
+        if [[ -z "$mapped" ]]; then
+            mapped="$(docker inspect -f '{{(index (index .HostConfig.PortBindings "5432/tcp") 0).HostPort}}' orchestra-local-db 2>/dev/null || true)"
+        fi
+        if [[ -n "$mapped" ]]; then
+            printf '%s' "$mapped"
+            return 0
+        fi
+    fi
+    if [[ -n "${ORCHESTRA_DB_PORT:-}" ]]; then
+        printf '%s' "$ORCHESTRA_DB_PORT"
+        return 0
+    fi
+    printf '55432'
+}
+
+ORCHESTRA_DB_PORT="$(default_orchestra_db_port)"
 
 log_stage() {
     echo ""

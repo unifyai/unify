@@ -238,6 +238,31 @@ class TestPersistentWorkerStartup:
             mock_run.assert_called_once()
 
 
+class TestPersistentWorkerOptions:
+    def test_worker_registers_for_publisher_jobs(self, monkeypatch):
+        from livekit import agents
+        from unity.conversation_manager.medium_scripts import worker
+
+        captured = {}
+
+        def capture_run(opts, *, log_level, devmode, register):
+            captured["opts"] = opts
+            captured["log_level"] = log_level
+            captured["devmode"] = devmode
+            captured["register"] = register
+
+        monkeypatch.setattr(worker.sys, "argv", ["worker.py", "dev", "unity_test"])
+        monkeypatch.setattr(worker, "clear_worker_signal_files", lambda: None)
+        monkeypatch.setattr(worker, "_run_worker_with_registration_signal", capture_run)
+
+        worker.main()
+
+        assert captured["opts"].agent_name == "unity_test"
+        assert captured["opts"].worker_type is agents.WorkerType.PUBLISHER
+        assert captured["devmode"] is True
+        assert captured["register"] is True
+
+
 # ---------------------------------------------------------------------------
 # Job dispatch
 # ---------------------------------------------------------------------------
@@ -358,6 +383,7 @@ class TestJobDispatch:
                 sample_contact,
                 boss_contact,
                 False,
+                extra_metadata=None,
             )
 
 

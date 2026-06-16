@@ -60,6 +60,25 @@ _has_env_key() {
   [[ -f "$env_file" ]] && grep -qE "^${key}=.+$" "$env_file"
 }
 
+default_orchestra_db_port() {
+  if command -v docker &>/dev/null; then
+    local mapped
+    mapped="$(docker port orchestra-local-db 5432/tcp 2>/dev/null | head -1 | sed 's/.*://')"
+    if [[ -z "$mapped" ]]; then
+      mapped="$(docker inspect -f '{{(index (index .HostConfig.PortBindings "5432/tcp") 0).HostPort}}' orchestra-local-db 2>/dev/null || true)"
+    fi
+    if [[ -n "$mapped" ]]; then
+      printf '%s' "$mapped"
+      return 0
+    fi
+  fi
+  if [[ -n "${ORCHESTRA_DB_PORT:-}" ]]; then
+    printf '%s' "$ORCHESTRA_DB_PORT"
+    return 0
+  fi
+  printf '55432'
+}
+
 cleanup_legacy_orchestra_launch_job() {
   if [[ "$(uname -s)" != "Darwin" ]]; then
     return 0
@@ -254,7 +273,7 @@ cmd_up() {
   export ORCHESTRA_REPO_PATH
   export UNITY_REPO_PATH
   export CONSOLE_REPO_PATH
-  export ORCHESTRA_DB_PORT="${ORCHESTRA_DB_PORT:-55432}"
+  export ORCHESTRA_DB_PORT="$(default_orchestra_db_port)"
   export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
   export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNITY_HOME}"
 
