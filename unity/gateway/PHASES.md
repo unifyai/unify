@@ -1,7 +1,14 @@
 # Gateway migration phases
 
+> **Status / provenance.** This is the historical rollout plan for moving
+> Unity's external-comms transport layer into `unity.gateway`. The `communication`
+> repository referenced throughout is **archived** — the hosted runtime, adapters,
+> and infrastructure now live in [`unity-deploy`](https://github.com/unifyai/unity-deploy).
+> Treat the `communication/...` paths below as historical context, not current
+> locations.
+
 This document is the operational rollout plan for moving Unity's
-external-comms transport layer out of the private `communication`
+external-comms transport layer out of the (now-archived) `communication`
 repository and into `unity.gateway`. It is structured so that each
 phase is a self-contained PR with its own risk profile and rollback
 path.

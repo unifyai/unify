@@ -24,14 +24,22 @@
 set -e
 
 # --- Config ---------------------------------------------------------------
-UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
-UNITY_REPO="${UNITY_HOME}/unity"
-ORCHESTRA_REPO="${UNITY_HOME}/orchestra"
+# Resolve repo locations from this script's own location so `unity setup`
+# operates on the checkout it ships with (and the sibling repos beside it) —
+# whether that's the installer's ~/.unity tree or a developer's own clones
+# (e.g. ~/dev/{unity,console,orchestra,...}). This mirrors stack.sh's
+# UNIFY_STACK_ROOT resolution so setup and stack always target the same repos.
+# Explicit UNITY_HOME / UNIFY_STACK_ROOT / *_REPO env vars still win.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+UNITY_REPO="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$UNITY_REPO/.." && pwd -P)}"
+UNITY_HOME="${UNITY_HOME:-$UNIFY_STACK_ROOT}"
+ORCHESTRA_REPO="${ORCHESTRA_REPO:-${UNITY_HOME}/orchestra}"
 CONSOLE_REPO="${CONSOLE_REPO:-${UNITY_HOME}/console}"
 ORCHESTRA_PORT="${ORCHESTRA_PORT:-8000}"
 ORCHESTRA_DB_PORT="${ORCHESTRA_DB_PORT:-55432}"
 CONSOLE_PORT="${CONSOLE_PORT:-3000}"
-UNITY_BRANCH="${UNITY_BRANCH:-main}"
+UNITY_BRANCH="${UNITY_BRANCH:-staging}"
 
 # Ensure user-local tool dirs are on PATH. `uv` and tools `uv` installs
 # (e.g. poetry) land here, and in a fresh shell they may not be picked up.

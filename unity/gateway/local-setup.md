@@ -128,6 +128,7 @@ For real channels, the operator still provides:
 
 ## Relationship to Hosted Communication
 
-The private `communication` repository is not required for self-hosted users. It
-wraps `unity.gateway` for hosted SaaS and owns GCP, Kubernetes, DNS, scheduler,
-tunnel, and hosted runtime-activation infrastructure.
+The private [`unity-deploy`](https://github.com/unifyai/unity-deploy) repository
+is not required for self-hosted users. It wraps `unity.gateway` for hosted SaaS
+and owns GCP, Kubernetes, DNS, scheduler, tunnel, and hosted runtime-activation
+infrastructure.

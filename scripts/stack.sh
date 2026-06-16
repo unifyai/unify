@@ -10,6 +10,7 @@
 #   ./scripts/stack.sh up           Start full stack (+ Coordinator if registered)
 #   ./scripts/stack.sh down [--full]    Stop stack (--full stops background runtime too)
 #   ./scripts/stack.sh status       Show service status
+#   ./scripts/stack.sh logs [svc]   Follow service logs (console|orchestra|pubsub)
 #   ./scripts/stack.sh doctor       Check prerequisites
 #
 # Environment:
@@ -403,6 +404,16 @@ cmd_status() {
   fi
 }
 
+cmd_logs() {
+  if [[ ! -f "$CONSOLE_LOCAL_SCRIPT" ]]; then
+    log_error "Missing $CONSOLE_LOCAL_SCRIPT"
+    return 1
+  fi
+  # Console's local.sh owns the per-service logfiles for the stack
+  # (console|orchestra|pubsub|stripe); delegate so there's one log surface.
+  bash "$CONSOLE_LOCAL_SCRIPT" logs "$@"
+}
+
 main() {
   local cmd="${1:-up}"
   shift || true
@@ -410,6 +421,7 @@ main() {
     up) cmd_up "$@" ;;
     down|stop) cmd_down "$@" ;;
     status) cmd_status "$@" ;;
+    logs) cmd_logs "$@" ;;
     doctor|check) cmd_doctor "$@" ;;
     help|-h|--help)
       sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'

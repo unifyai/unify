@@ -43,7 +43,7 @@ Full architectural comparison with diagrams is [further down](#where-unity-sits-
 **Prerequisites:** Docker, and an LLM provider key (OpenAI, Anthropic, or DeepSeek). macOS, Linux, or WSL2.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/unifyai/unity/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/unifyai/unity/staging/scripts/install.sh | bash
 ```
 
 This pulls prebuilt images via Docker Compose, runs a BYOK wizard, and opens Console at http://127.0.0.1:3000. Register there, then chat with Marty — your assistant. See [`deploy/selfhost/README.md`](deploy/selfhost/README.md) for compose commands and the developer source install (`--source-install`).
@@ -54,7 +54,7 @@ This pulls prebuilt images via Docker Compose, runs a BYOK wizard, and opens Con
 Requires Python 3.12+ in addition to Docker:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/unifyai/unity/main/scripts/install.sh | bash -s -- --source-install
+curl -fsSL https://raw.githubusercontent.com/unifyai/unity/staging/scripts/install.sh | bash -s -- --source-install
 ```
 
 The source installer clones `unity`, `unify`, `unillm`, `console`, and `orchestra` under `~/.unity/`, syncs Python deps with `uv`, and bootstraps a local Orchestra. **Open a new terminal**, then start the stack:
