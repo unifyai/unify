@@ -29,6 +29,8 @@ _HASH_MAP_KEY = "integration_catalog_hash_by_unit"
 _DELETE_FILTER_BATCH_SIZE = 500
 _LOG_PAGE_SIZE = 500
 _INSERT_ROW_BATCH_SIZE = 500
+_ENSURED_STORAGE_PROJECTS: set[str] = set()
+_ENSURED_EMBEDDING_PROJECTS: set[str] = set()
 
 
 def _stable_int_id(namespace: str, value: str) -> int:
@@ -67,6 +69,43 @@ def _ensure_catalog_storage(project: str) -> None:
         unique_keys={"meta_id": "int"},
         project=project,
     )
+
+
+def _ensure_catalog_storage_once(project: str) -> None:
+    if project in _ENSURED_STORAGE_PROJECTS:
+        logger.info("Integration catalogue storage already ensured project=%s", project)
+        return
+    _ensure_catalog_storage(project)
+    _ENSURED_STORAGE_PROJECTS.add(project)
+
+
+def _ensure_catalog_embeddings(project: str) -> None:
+    for context in (
+        BUILTINS_INTEGRATION_APPS_CONTEXT,
+        BUILTINS_INTEGRATION_TOOLS_CONTEXT,
+    ):
+        logger.info(
+            "Ensuring integration catalogue embedding column project=%s context=%s",
+            project,
+            context,
+        )
+        ensure_vector_column(
+            context,
+            embed_column="_embedding_text_emb",
+            source_column="embedding_text",
+            project=project,
+        )
+
+
+def _ensure_catalog_embeddings_once(project: str) -> None:
+    if project in _ENSURED_EMBEDDING_PROJECTS:
+        logger.info(
+            "Integration catalogue embeddings already ensured project=%s",
+            project,
+        )
+        return
+    _ensure_catalog_embeddings(project)
+    _ENSURED_EMBEDDING_PROJECTS.add(project)
 
 
 def app_catalog_row(
@@ -316,24 +355,11 @@ def seed_builtin_integrations(
         "omitted" if tools is None else len(tools),
         prune_unlisted_apps,
     )
-    _ensure_catalog_storage(project)
+    _ensure_catalog_storage_once(project)
     reconcile_apps = apps is not None
+    reconcile_tools = tools is not None
     if apps is None and tools is None:
-        for context in (
-            BUILTINS_INTEGRATION_APPS_CONTEXT,
-            BUILTINS_INTEGRATION_TOOLS_CONTEXT,
-        ):
-            logger.info(
-                "Ensuring integration catalogue embedding column project=%s context=%s",
-                project,
-                context,
-            )
-            ensure_vector_column(
-                context,
-                embed_column="_embedding_text_emb",
-                source_column="embedding_text",
-                project=project,
-            )
+        _ensure_catalog_embeddings_once(project)
         return False
     apps = apps or []
     tools = tools or []
@@ -459,7 +485,7 @@ def seed_builtin_integrations(
             next_hashes.pop(key, None)
             removed_unit_count += 1
             changed = True
-        elif prefix == "tools" and should_delete:
+        elif prefix == "tools" and reconcile_tools and should_delete:
             delete_scopes_by_context.setdefault(
                 BUILTINS_INTEGRATION_TOOLS_CONTEXT,
                 {},
@@ -519,22 +545,16 @@ def seed_builtin_integrations(
             len(app_rows),
             len(tool_rows),
         )
-
-    for context in (
-        BUILTINS_INTEGRATION_APPS_CONTEXT,
-        BUILTINS_INTEGRATION_TOOLS_CONTEXT,
-    ):
+    else:
         logger.info(
-            "Ensuring integration catalogue embedding column project=%s context=%s",
+            "Integration catalogue already up to date project=%s backend=%s units=%d; "
+            "skipping row rewrites",
             project,
-            context,
+            backend_id,
+            len(by_unit),
         )
-        ensure_vector_column(
-            context,
-            embed_column="_embedding_text_emb",
-            source_column="embedding_text",
-            project=project,
-        )
+
+    _ensure_catalog_embeddings_once(project)
     return changed
 
 

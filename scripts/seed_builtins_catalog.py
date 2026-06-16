@@ -525,7 +525,11 @@ def _sync_and_seed_provider(
     )
     changed = _seed_sync_result(
         result=app_result,
-        sync_payload={**app_payload, "_seed_phase": "app-only-sync"},
+        sync_payload={
+            **app_payload,
+            "_seed_phase": "app-only-sync",
+            "_seed_tools": False,
+        },
     )
     app_count = int(app_result.get("apps_upserted", 0) or 0)
     logging.info(
