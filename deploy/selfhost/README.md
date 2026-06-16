@@ -129,6 +129,21 @@ Clone repos and run from source (for Unity development):
 curl -fsSL .../install.sh | bash -s -- --source-install
 ```
 
+This clones `unity`, `unify`, `unillm`, `console`, and `orchestra` and runs the
+one-time bootstrap. From then on the **single canonical local end-to-end
+command is `unity stack up`** (alias: `unity`), which starts Orchestra, the
+Unity gateway, Console (in self-host mode), and the Coordinator runtime.
+Re-run the bootstrap any time with `unity setup`.
+
+```bash
+unity setup        # one-time bootstrap (local Orchestra, Console env, voice)
+unity stack up     # the one command to run the whole stack (alias: unity)
+```
+
+Console's own `scripts/local.sh` is an internal dev/test harness (seeded dev
+data, E2E tests) and is not the way to run the product locally — `unity stack
+up` invokes it with `--self-host` for you.
+
 ## System requirements
 
 - macOS, Linux, or Windows via WSL2
