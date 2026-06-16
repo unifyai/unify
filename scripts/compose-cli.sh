@@ -55,23 +55,12 @@ require_compose() {
   fi
 }
 
-start_integrations_sync() {
-  if ! _has_env COMPOSIO_API_KEY; then
-    return 0
-  fi
-  log_info "Starting Composio catalog sync in the background (may take ~30 minutes)..."
-  compose --profile integrations-sync up -d orchestra-integrations-bootstrap
-  log_info "Console is ready — integrations will appear gradually in the app catalog"
-  log_info "Watch progress: unity stack logs orchestra-integrations-bootstrap"
-}
-
 cmd_up() {
   require_compose
   mkdir -p "$(grep -E '^UNITY_WORKSPACE_HOST=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | sed "s/^\\${HOME}/$HOME/" || echo "$HOME/Unity/Local")"
   log_info "Starting Unity self-host stack..."
   compose up -d "$@"
   if [[ $# -eq 0 ]]; then
-    start_integrations_sync
     if _has_env COMPOSIO_API_KEY; then
       log_info "Builtins catalogue seed runs in the background (~30 min with Composio); Console is ready now"
     else
@@ -88,7 +77,8 @@ cmd_integrations_sync() {
     log_info "COMPOSIO_API_KEY not set — skipping integrations catalog sync"
     return 0
   fi
-  start_integrations_sync
+  log_info "Composio integration catalogue sync runs via unity-builtins-seed"
+  cmd_builtins_sync
 }
 
 cmd_builtins_sync() {
@@ -118,7 +108,6 @@ cmd_restart() {
   require_compose
   log_info "Recreating stack with updated .env..."
   compose up -d --force-recreate
-  start_integrations_sync
   log_info "Builtins catalogue seed runs in the background — unity stack logs unity-builtins-seed"
   log_ok "Restart complete"
 }
@@ -173,24 +162,7 @@ cmd_doctor() {
       log_warn "Voice calls need DEEPGRAM_API_KEY and a TTS key (CARTESIA_API_KEY or ELEVEN_API_KEY)"
     fi
     if _has_env COMPOSIO_API_KEY; then
-      log_ok "Composio API key configured"
-      local bootstrap_status
-      bootstrap_status="$(compose ps -a --format '{{.Service}}\t{{.State}}\t{{.ExitCode}}' 2>/dev/null \
-        | awk '$1=="orchestra-integrations-bootstrap"{print $2"\t"$3; exit}')"
-      case "$bootstrap_status" in
-        running*)
-          log_info "Composio catalog sync in progress (~30 min) — integrations appear gradually"
-          ;;
-        "exited	0")
-          log_ok "Composio catalog sync completed"
-          ;;
-        exited*)
-          log_warn "Composio catalog sync failed (${bootstrap_status//$'\t'/ }) — run: unity stack integrations-sync"
-          ;;
-        *)
-          log_info "Composio catalog sync not started — run: unity stack integrations-sync"
-          ;;
-      esac
+      log_ok "Composio API key configured (integration catalogue seeds via unity-builtins-seed)"
     else
       log_info "COMPOSIO_API_KEY not set — third-party app integrations disabled (optional)"
     fi
