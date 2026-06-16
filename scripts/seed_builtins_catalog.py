@@ -727,6 +727,12 @@ def main(argv: list[str] | None = None) -> int:
     from unity.guidance_manager.builtins_catalog import seed_builtin_guidance
     from unity.integrations.builtins_catalog import seed_builtin_integrations
 
+    project = builtins_project()
+    logging.info(
+        "Starting Builtins catalogue seed project=%s integration_manifest=%s",
+        project,
+        bool(args.integration_bootstrap_manifest),
+    )
     primitives_changed = seed_builtin_primitives()
     guidance_changed = seed_builtin_guidance()
     if args.integration_bootstrap_manifest:
@@ -748,7 +754,6 @@ def main(argv: list[str] | None = None) -> int:
         )
     else:
         integrations_changed = seed_builtin_integrations()
-    project = builtins_project()
     for name, changed in (
         ("primitives", primitives_changed),
         ("guidance", guidance_changed),
@@ -760,6 +765,11 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "Integration manifest bootstrap "
             f"path={args.integration_bootstrap_manifest}",
+        )
+    if not (primitives_changed or guidance_changed or integrations_changed):
+        logging.info(
+            "Builtins catalogue seed found no changes project=%s; exiting successfully",
+            project,
         )
     return 0
 

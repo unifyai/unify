@@ -167,12 +167,24 @@ def seed_builtin_guidance(
     project = project or builtins_project()
     entries = entries if entries is not None else load_snapshot()
 
+    logger.info(
+        "Starting builtins guidance catalogue seed project=%s skills=%d",
+        project,
+        len(entries),
+    )
     _ensure_catalog_storage(project)
 
+    logger.info("Reading builtins guidance seed hashes project=%s", project)
     current = read_seed_hashes(
         project,
         meta_context=BUILTINS_GUIDANCE_META_CONTEXT,
         key=_HASH_MAP_KEY,
+    )
+    logger.info(
+        "Computing builtins guidance hashes project=%s skills=%d stored_hashes=%d",
+        project,
+        len(entries),
+        len(current),
     )
     desired = {
         skill_key: {
@@ -212,8 +224,16 @@ def seed_builtin_guidance(
             len(changed_keys),
             len(removed_keys),
         )
+    else:
+        logger.info(
+            "Builtins guidance catalogue already up to date project=%s skills=%d; "
+            "skipping row rewrites",
+            project,
+            len(entries),
+        )
 
     if desired:
+        logger.info("Ensuring builtins guidance embedding columns project=%s", project)
         ensure_vector_column(
             BUILTINS_GUIDANCE_CONTEXT,
             embed_column="_content_emb",
