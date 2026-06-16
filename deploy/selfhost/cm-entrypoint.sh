@@ -107,6 +107,18 @@ build_cm_env() {
   [[ -n "$nationality" ]] && export ASSISTANT_NATIONALITY="$nationality"
   [[ -n "$timezone" ]] && export ASSISTANT_TIMEZONE="$timezone"
   [[ -n "$user_id" ]] && export USER_ID="$user_id"
+
+  local user_desktops_export=""
+  if [[ -n "${ORCHESTRA_ADMIN_KEY:-}" ]]; then
+    user_desktops_export="$(
+      ORCHESTRA_URL="${ORCHESTRA_URL%/}" \
+        ORCHESTRA_ADMIN_KEY="${ORCHESTRA_ADMIN_KEY}" \
+        python3 "${SCRIPT_DIR}/fetch_assistant_user_desktops.py" "$agent_id" --export-sh 2>/dev/null || true
+    )"
+  fi
+  if [[ -n "$user_desktops_export" ]]; then
+    eval "$user_desktops_export"
+  fi
 }
 
 runtime_signature() {
