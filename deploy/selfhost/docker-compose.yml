@@ -214,6 +214,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+    ports:
+    - "127.0.0.1:8001:8001"
     restart: unless-stopped
 
   console:
