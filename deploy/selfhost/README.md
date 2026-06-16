@@ -17,6 +17,68 @@ Requires **Docker** only. The installer:
 
 Register on `/login`, then chat with your Coordinator.
 
+**What you get out of the box:** Marty can chat, call, and use a **managed Linux desktop** inside Docker (view it from Console during a call via assistant screen share — served at `http://127.0.0.1:8090`).
+
+**macOS — control your physical Mac:** That requires a one-time host install (Screen Sharing + Unify Desktop Assistant). See [Control your Mac](#control-your-mac-macos) below — do this if you want Marty to operate **your apps and files on this machine**, not only the Docker sandbox.
+
+## Control your Mac (macOS)
+
+Use this when Marty should drive **your physical Mac** (Finder, Chrome, logged-in apps). Skip it if the managed Docker desktop is enough.
+
+### 1. Finish the compose install first
+
+Complete [Quick start](#quick-start) above: `unity stack up`, sign in at Console, hire or open your Coordinator.
+
+Copy your API key from Console (assistant row → **Connect your desktop** → **Copy API Key**), or read it from `~/.unity/coordinator-runtime.json` after sign-in.
+
+### 2. Install Unify Desktop Assistant
+
+Download the latest **`unify-desktop-assistant_*_macos.pkg`** from [GitHub Releases](https://github.com/unifyai/unify-desktop-assistant/releases) and run the installer.
+
+Full tray-app details: [unify-desktop-assistant/macos/README.md](https://github.com/unifyai/unify-desktop-assistant/blob/staging/macos/README.md).
+
+**Developer alternative** (no `.pkg`): clone [unify-desktop-assistant](https://github.com/unifyai/unify-desktop-assistant) and run:
+
+```bash
+cd unify-desktop-assistant/macos/tools
+./setup.sh --self-host --unify-key YOUR_KEY --link-coordinator
+```
+
+### 3. Enable Screen Sharing
+
+The Desktop Assistant installer (or `setup.sh`) turns on **Screen Sharing** (Remote Management) and starts background services via launchd:
+
+| Service | Port | Role |
+|---------|------|------|
+| Apple Screen Sharing (VNC) | 5900 | Your Mac's display |
+| websockify (noVNC) | 6080 | Local proxy for the agent |
+| agent-service | 13000 | Unity control API (Console keeps **3000**) |
+
+On first run, macOS may prompt for **Screen Sharing** / **Accessibility** permissions — approve them.
+
+If services show red in the menu-bar app, open **Unify Desktop Assistant → Settings…**, paste your API key again (compose self-host is detected automatically), or run **Start Services**.
+
+Verify locally (optional): tray app → open desktop viewer, or check the menu-bar status is green.
+
+### 4. Register and link in Console
+
+Open the Desktop Assistant menu bar app → **Settings…** and paste your coordinator API key. Self-host is auto-detected (`~/.unity/docker-compose.yml`); setup registers `http://host.docker.internal:13000` and links the Coordinator.
+
+Then in Console → assistant **⋯** → **Connect your desktop**:
+
+- Confirm your Mac appears in the list and link it to the Coordinator if needed.
+- **Save User Password** (macOS login password) if prompted — used later for unlock/accessibility.
+
+### 5. Restart Unity so CM picks up the link
+
+```bash
+unity restart
+```
+
+Ask Marty to do something on your Mac (e.g. “take a screenshot of my desktop”). You do **not** need to open `http://127.0.0.1:6080/vnc.html` — that URL is for local debugging; Console shows Marty’s **managed** desktop at `:8090`, not your Mac’s noVNC feed.
+
+A copy of this guide is written to `~/.unity/README.md` when you run the installer.
+
 ## Daily commands
 
 | Command | Effect |
