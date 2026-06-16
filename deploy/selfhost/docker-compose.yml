@@ -117,6 +117,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 30
+    ports:
+    - "127.0.0.1:8000:8000"
     restart: unless-stopped
 
   unity-builtins-seed:
@@ -166,6 +168,8 @@ services:
   livekit:
     image: livekit/livekit-server:latest
     command: ["--dev", "--bind", "0.0.0.0", "--config", "/etc/livekit.yaml"]
+    extra_hosts:
+    - "host.docker.internal:host-gateway"
     volumes:
     - ./livekit.yaml:/etc/livekit.yaml:ro
     ports:
