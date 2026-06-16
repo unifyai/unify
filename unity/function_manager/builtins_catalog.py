@@ -109,15 +109,24 @@ def seed_builtin_primitives(*, project: str | None = None) -> bool:
     project = project or builtins_project()
     registry = get_registry()
 
+    logger.info("Starting builtins primitive catalogue seed project=%s", project)
     _ensure_catalog_storage(project)
 
+    logger.info("Reading builtins primitive seed hashes project=%s", project)
     current_hashes = read_seed_hashes(
         project,
         meta_context=BUILTINS_META_CONTEXT,
         key=_HASH_MAP_KEY,
     )
+    manager_aliases = sorted(PrimitiveScope.all_managers().scoped_managers)
+    logger.info(
+        "Computing builtins primitive hashes project=%s managers=%d stored_hashes=%d",
+        project,
+        len(manager_aliases),
+        len(current_hashes),
+    )
     pending: List[Tuple[str, List[Dict[str, Any]], str]] = []
-    for manager_alias in sorted(PrimitiveScope.all_managers().scoped_managers):
+    for manager_alias in manager_aliases:
         expected_hash = registry.compute_hash_for_manager(manager_alias)
         if current_hashes.get(manager_alias) == expected_hash:
             continue
@@ -154,7 +163,15 @@ def seed_builtin_primitives(*, project: str | None = None) -> bool:
             [alias for alias, _, _ in pending],
             len(all_rows),
         )
+    else:
+        logger.info(
+            "Builtins primitive catalogue already up to date project=%s managers=%d; "
+            "skipping row rewrites",
+            project,
+            len(manager_aliases),
+        )
 
+    logger.info("Ensuring builtins primitive embedding column project=%s", project)
     ensure_vector_column(
         BUILTINS_PRIMITIVES_CONTEXT,
         embed_column="_embedding_text_emb",
