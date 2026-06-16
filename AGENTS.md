@@ -27,6 +27,7 @@ self-host mode), and your Coordinator (Marty) — comes up with a single command
 ```bash
 unity setup        # one-time bootstrap: deps, local Orchestra, Console env, voice keys
 unity stack up     # run the whole stack end-to-end (alias: `unity`)
+unity stack smoke  # verify the running local product end-to-end
 ```
 
 - `unity` is the CLI shim the installer drops in `~/.local/bin/`. The
@@ -43,6 +44,9 @@ unity stack up     # run the whole stack end-to-end (alias: `unity`)
 
 If you already bootstrapped once, `unity stack up` (or `bash scripts/stack.sh
 up`) alone is enough — it re-checks prerequisites and brings everything up.
+Run `unity stack smoke` after startup when you need a machine-checkable verdict
+that Console, Orchestra, the gateway, signup, integrations, and Coordinator
+wakeup are all usable.
 
 **Prerequisites:** Docker running, plus an LLM provider key (OpenAI,
 Anthropic, or DeepSeek). Browser voice calls additionally need a Deepgram (STT)

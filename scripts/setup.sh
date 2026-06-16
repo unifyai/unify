@@ -624,6 +624,7 @@ main() {
     echo ""
     echo "  Next:  ${CYAN}unity stack doctor${NC}  Check self-host prerequisites (optional)"
     echo "         ${CYAN}unity stack up${NC}     Console + Coordinator (scheduled tasks enabled)"
+    echo "         ${CYAN}unity stack smoke${NC}  Verify the running local product"
     echo "         ${CYAN}unity stack down${NC}   UI off; tasks keep running"
     echo "  Dev REPL:  ${CYAN}unity sandbox${NC}"
     if [[ "$boot_runtime" != "true" ]]; then

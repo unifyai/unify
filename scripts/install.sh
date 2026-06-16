@@ -544,6 +544,13 @@ case "\${1:-}" in
             exit 1
         fi
         ;;
+    smoke)
+        if [ -d "\$CONSOLE_REPO" ] && [ -x "\$UNITY_REPO/scripts/stack.sh" ]; then
+            exec bash "\$UNITY_REPO/scripts/stack.sh" smoke
+        fi
+        echo "self-host stack not installed; smoke requires Console + Orchestra repos." >&2
+        exit 1
+        ;;
     restart)
         if [ -d "\$CONSOLE_REPO" ] && [ -x "\$UNITY_REPO/scripts/stack.sh" ]; then
             bash "\$UNITY_REPO/scripts/stack.sh" down || true
@@ -817,12 +824,14 @@ Usage:
   unity stop                         Alias for \`unity down\`
   unity restart                      Restart the self-host stack
   unity status                       Show self-host stack status
+  unity smoke                        Verify the running self-host stack end-to-end
   unity logs [service...]            Follow stack logs (console|orchestra|pubsub)
   unity sandbox                      Dev/eval REPL (see sandboxes/conversation_manager/README.md)
   unity --live-voice                 Sandbox with live voice in the browser
 
   unity setup [--boot-runtime]       Bootstrap orchestra + enable background scheduling
-  unity stack up|down|status|logs    Console + ingress (down keeps scheduled tasks running)
+  unity stack up|down|status|logs|smoke
+                                     Console + ingress (down keeps scheduled tasks running)
   unity stack down --full            Stop everything (or: unity service disable)
   unity service status|stop|disable  Background runtime control (advanced)
   unity doctor                       Diagnose missing deps, keys, and PATH
