@@ -90,6 +90,7 @@ A copy of this guide is written to `~/.unity/README.md` when you run the install
 | `unity down --full` | Stop all services |
 | `unity restart` | Recreate containers after editing `.env` |
 | `unity status` | Show container status |
+| `unity smoke` | Verify the running local stack end-to-end |
 | `unity logs [service...]` | Follow logs (optionally for specific services) |
 | `unity pull` | Pull the latest images |
 | `unity doctor` | Docker + key + service health |

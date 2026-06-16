@@ -12,6 +12,7 @@
 #   ./scripts/stack.sh status       Show service status
 #   ./scripts/stack.sh logs [svc]   Follow service logs (console|orchestra|pubsub)
 #   ./scripts/stack.sh doctor       Check prerequisites
+#   ./scripts/stack.sh smoke        Verify the running local product
 #
 # Environment:
 #   UNIFY_STACK_ROOT          Parent dir with orchestra/console/unity siblings
@@ -420,6 +421,143 @@ cmd_status() {
   fi
 }
 
+cmd_smoke() {
+  export SELF_HOST=1
+  export ORCHESTRA_REPO_PATH
+  export UNITY_REPO_PATH
+  export CONSOLE_REPO_PATH
+  export ORCHESTRA_DB_PORT="${ORCHESTRA_DB_PORT:-55432}"
+  export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
+  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNITY_HOME}"
+
+  if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
+    # shellcheck disable=SC1090
+    source "$SELF_HOST_ENV_SCRIPT"
+    export_self_host_coordinator_runtime_file
+  fi
+
+  local py="$UNITY_REPO_PATH/.venv/bin/python"
+  if [[ ! -x "$py" ]]; then
+    py="python3"
+  fi
+
+  CONSOLE_PORT="${CONSOLE_PORT:-3000}" \
+    ORCHESTRA_PORT="${ORCHESTRA_PORT:-8000}" \
+    UNITY_GATEWAY_HOST="${UNITY_GATEWAY_HOST:-127.0.0.1}" \
+    UNITY_GATEWAY_PORT="${UNITY_GATEWAY_PORT:-8001}" \
+    SELF_HOST_COORDINATOR_RUNTIME_FILE="${SELF_HOST_COORDINATOR_RUNTIME_FILE:-}" \
+    "$py" <<'PY'
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+
+def log(kind: str, message: str) -> None:
+    print(f"[{kind}] {message}")
+
+
+def request_status(method: str, url: str, *, headers=None, body=None, timeout=15):
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers = {"Content-Type": "application/json", **(headers or {})}
+    req = urllib.request.Request(url, data=data, headers=headers or {}, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return response.status, response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode("utf-8", errors="replace")
+    except Exception as exc:  # noqa: BLE001 - smoke output should report any transport failure.
+        return 0, f"{type(exc).__name__}: {exc}"
+
+
+failures: list[str] = []
+
+
+def check(name: str, method: str, url: str, expected: set[int], *, headers=None, body=None) -> None:
+    status, text = request_status(method, url, headers=headers, body=body)
+    if status in expected:
+        log("OK", f"{name}: HTTP {status}")
+        return
+    preview = text.replace("\n", " ")[:300]
+    failures.append(name)
+    log("ERROR", f"{name}: expected {sorted(expected)}, got HTTP {status}. {preview}")
+
+
+console = f"http://127.0.0.1:{os.environ['CONSOLE_PORT']}"
+orchestra = f"http://127.0.0.1:{os.environ['ORCHESTRA_PORT']}"
+gateway = f"http://{os.environ['UNITY_GATEWAY_HOST']}:{os.environ['UNITY_GATEWAY_PORT']}"
+
+check("Console", "GET", console, {200})
+check("Orchestra features", "GET", f"{orchestra}/v0/features", {200})
+check("Unity gateway", "GET", f"{gateway}/health", {200})
+check(
+    "Registration path",
+    "POST",
+    f"{console}/api/auth/email/register",
+    {422},
+    body={
+        "email": "unity-smoke@example.local",
+        "name": "Smoke",
+        "lastName": "Check",
+        "password": "Aa1!TemporaryLocalSmokePassword12345",  # pragma: allowlist secret
+    },
+)
+
+runtime_file = os.environ.get("SELF_HOST_COORDINATOR_RUNTIME_FILE")
+credentials: dict = {}
+if runtime_file:
+    try:
+        credentials = json.loads(Path(runtime_file).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        pass
+    except json.JSONDecodeError as exc:
+        failures.append("Coordinator runtime file")
+        log("ERROR", f"Coordinator runtime file is invalid JSON: {exc}")
+
+api_key = credentials.get("apiKey") or credentials.get("api_key")
+assistant_id = credentials.get("coordinatorAgentId") or credentials.get("coordinator_agent_id")
+if api_key and assistant_id:
+    auth_headers = {"apiKey": str(api_key)}
+    check(
+        "Integration catalog",
+        "GET",
+        (
+            f"{console}/api/integrations/provider/apps"
+            f"?owner_scope=assistant&assistant_id={assistant_id}&limit=100&offset=0&detail_level=summary"
+        ),
+        {200},
+        headers=auth_headers,
+    )
+    check(
+        "Assistant presence wake",
+        "POST",
+        f"{console}/api/assistant/{assistant_id}/system-event",
+        {202},
+        headers=auth_headers,
+        body={
+            "eventType": "assistant_presence_observed",
+            "message": "Self-host smoke check.",
+            "extraEventFields": {
+                "source": "assistant_profile",
+                "reason": "selection",
+            },
+        },
+    )
+else:
+    log("INFO", "Coordinator checks skipped: register or sign in first.")
+
+if failures:
+    log("ERROR", "Self-host smoke failed: " + ", ".join(failures))
+    sys.exit(1)
+
+log("OK", "Self-host smoke passed")
+PY
+}
+
 cmd_logs() {
   if [[ ! -f "$CONSOLE_LOCAL_SCRIPT" ]]; then
     log_error "Missing $CONSOLE_LOCAL_SCRIPT"
@@ -438,6 +576,7 @@ main() {
     down|stop) cmd_down "$@" ;;
     status) cmd_status "$@" ;;
     logs) cmd_logs "$@" ;;
+    smoke) cmd_smoke "$@" ;;
     doctor|check) cmd_doctor "$@" ;;
     help|-h|--help)
       sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'

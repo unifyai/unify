@@ -141,6 +141,7 @@ unity down               Stop the Console UI; runtime keeps running
 unity down --full        Stop every service
 unity restart            Recreate containers after editing ~/.unity/.env
 unity status             Show container status
+unity smoke              Verify the running local stack end-to-end
 unity logs [service...]  Follow logs (optionally for specific services)
 unity pull               Pull the latest images
 unity doctor             Check Docker, keys, and service health
