@@ -67,9 +67,59 @@ ORG_INVITE_ROLES = ("Admin", "Member", "Viewer")
 # Onboarding checklist (coordinator "Assistant info" → Onboarding tab). Each
 # entry: (step_id, title, one-line description). Phase headers carry their
 # short progress-bar label in ONBOARDING_PHASES.
-ONBOARDING_PHASES = (("meet", "Meet"), ("connect", "Connect"), ("work", "Delegate"))
+ONBOARDING_PHASES = (
+    ("meet", "Meet"),
+    ("comms", "Comms"),
+    ("connect", "Connect"),
+    ("work", "Delegate"),
+)
 ONBOARDING_STEPS = {
     "meet": ("Meet {name}", "Say hi to {name}."),
+    "comms": ("Try comms", "Prove email, WhatsApp, phone, Slack, and Discord."),
+    "email-reply": (
+        "Reply to email",
+        "Marty sends you a quick email.",
+    ),
+    "whatsapp-number": (
+        "Add your WhatsApp number",
+        "Add the WhatsApp number Marty should use for this workspace.",
+    ),
+    "whatsapp-message": (
+        "Reply to a WhatsApp message",
+        "Send Marty a WhatsApp message and get a reply.",
+    ),
+    "whatsapp-call": (
+        "Answer a WhatsApp call",
+        "Talk to Marty over WhatsApp voice.",
+    ),
+    "phone-number": (
+        "Add your phone number",
+        "Add the phone number Marty should use for calls and SMS.",
+    ),
+    "sms-message": (
+        "Reply to an SMS message",
+        "Text Marty and get an SMS reply.",
+    ),
+    "phone-call": (
+        "Answer a phone call",
+        "Talk to Marty over a phone call.",
+    ),
+    "slack-connect": (
+        "Connect Slack",
+        "Connect Marty through the Unify Slack app.",
+    ),
+    "slack-message": (
+        "Send a Slack message",
+        "Send Marty a Slack DM or mention.",
+    ),
+    "discord-connect": (
+        "Connect Discord",
+        "Connect Marty through the public Discord bot.",
+    ),
+    "discord-message": (
+        "Send a Discord message",
+        "Send Marty a Discord DM or mention.",
+    ),
     "connect": ("Connect {name}", "Plug it into your workspace and apps."),
     "workspace": (
         "Give {name} access to your workspace",

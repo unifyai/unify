@@ -882,6 +882,7 @@ async def entrypoint(ctx: agents.JobContext):
     # to its generic copy.
     coordinator_completed_onboarding_steps: list[str] | None = None
     coordinator_skipped_onboarding_steps: list[str] | None = None
+    coordinator_active_onboarding_step: str | None = None
     if (
         SESSION_DETAILS.is_coordinator
         and SESSION_DETAILS.assistant.agent_id is not None
@@ -910,6 +911,10 @@ async def entrypoint(ctx: agents.JobContext):
                     if isinstance(_skipped_steps, list)
                     else []
                 )
+                _active_step = _state_info.get("onboarding_step")
+                coordinator_active_onboarding_step = (
+                    _active_step if isinstance(_active_step, str) else None
+                )
         except Exception as exc:
             _log.warning(
                 f"Coordinator state fetch failed; voice opener stays generic: {exc}",
@@ -937,6 +942,7 @@ async def entrypoint(ctx: agents.JobContext):
         is_org_workspace=SESSION_DETAILS.org_id is not None,
         coordinator_completed_onboarding_steps=coordinator_completed_onboarding_steps,
         coordinator_skipped_onboarding_steps=coordinator_skipped_onboarding_steps,
+        coordinator_active_onboarding_step=coordinator_active_onboarding_step,
     ).flatten()
     _log.config(f"System prompt ({len(system_prompt)} chars)")
 

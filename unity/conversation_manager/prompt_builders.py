@@ -709,10 +709,53 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  - `workspace_connected`: workspace OAuth (Google / Microsoft) just succeeded.",
             "  - `integration_connected`: a new integration secret was saved.",
             "  - `step_skipped`: the user intentionally skipped one onboarding step.",
+            "  - `onboarding_step_started`: the user clicked or resumed one onboarding checklist step.",
             "  - `onboarding_session_started`: the user just resolved the onboarding "
             "picker — they're sitting in front of me and I owe them the "
             "first turn.",
-            "Rules for action subtypes (`workspace_connected`, `integration_connected`, `step_skipped`):",
+            "Rules for `onboarding_step_started`:",
+            "  A. Read the active step id from the notification body (`step_id`). "
+            "The current Comms step ids are `email-reply`, `whatsapp-number`, "
+            "`whatsapp-message`, `whatsapp-call`, `phone-number`, `sms-message`, "
+            "`phone-call`, `slack-connect`, `slack-message`, `discord-connect`, "
+            "and `discord-message`.",
+            "  B. `email-reply`: send the user an email. The body is exactly: "
+            '"Ground Control to Major {Name}.\\nTake your protein pills and put your helmet on." '
+            "Replace `{Name}` with the user's first name. Keep the subject short, e.g. "
+            '"Ground Control". After sending, briefly say in chat that the email is on its way.',
+            "  C. `whatsapp-number`: guide the user to add their WhatsApp number in "
+            "Account → Contact info. Do not call it complete until the backend marks it done.",
+            "  D. `whatsapp-message`: tell the user to send me a WhatsApp message, then wait. "
+            "When a WhatsApp message arrives while this step is active, reply on WhatsApp "
+            'with exactly: "Ground Control to Major {Name}.\\nCommencing countdown, engines on." '
+            "Replace `{Name}` with the user's first name.",
+            "  E. `whatsapp-call`: tell the user to answer/start the WhatsApp call. On that "
+            "WhatsApp call, explain conversationally: Ground Control is speaking to Major Tom, "
+            "he has made the grade, people want to know whose shirts he wears, and it is time "
+            "to leave the capsule if he dares. Do not dump the verse as a recitation; make it "
+            "sound like natural spoken guidance.",
+            "  F. `phone-number`: guide the user to add their phone number in Account → "
+            "Contact info. Do not call it complete until the backend marks it done.",
+            "  G. `sms-message`: tell the user to text me, then wait. When an SMS arrives "
+            "while this step is active, reply by SMS with exactly: "
+            "\"I'm stepping through the door\\nAnd I'm floating in a most peculiar way\\nAnd the stars look very different today\"",
+            "  H. `phone-call`: tell the user to answer/start the phone call. On that call, "
+            "explain conversationally: I am sitting in a tin can far above the world; Planet "
+            "Earth is blue; and there is nothing I can do. Do not dump the verse as a rigid "
+            "recitation; make it sound like natural spoken guidance.",
+            "  I. `slack-connect`: guide the user to connect Slack through the Unify Slack app. "
+            "Do not treat a generic Integrations secret as this step; it is the native Slack app install.",
+            "  J. `slack-message`: ask the user to send me a Slack DM or mention. When a Slack "
+            "message arrives while this step is active, reply in Slack with a short neutral "
+            "confirmation that Slack is working.",
+            "  K. `discord-connect`: guide the user to add their Discord ID and install the public "
+            "Discord bot. Do not call it complete until the backend marks it done.",
+            "  L. `discord-message`: ask the user to send me a Discord DM or mention. When a Discord "
+            "message arrives while this step is active, reply in Discord with a short neutral "
+            "confirmation that Discord is working.",
+            "  M. Do not skip ahead to workspace/app connection or delegation while a Comms step is "
+            "active unless that step is already listed as completed or skipped.",
+            "Rules for milestone subtypes (`workspace_connected`, `integration_connected`, `step_skipped`):",
             "  1. Acknowledge in one short sentence — name the thing that just happened, "
             "stay warm, do not re-list every onboarding step. For `step_skipped`, say "
             "we'll leave that step for now; do NOT call it done.",
@@ -721,6 +764,8 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "steps documented in the My onboarding flow (UI "
             "reference) section below — and it must be the first step not already "
             "done or explicitly skipped. Concretely: ",
+            "       - Before `workspace_connected`, all Comms steps sit between Meet and "
+            "Connect. If any Comms step is still pending, point at that first.",
             '       - After `workspace_connected`: point them at "Connect '
             'me with your apps" (the next onboarding step) — '
             "suggest opening Integrations and picking at least one app "
@@ -2117,6 +2162,17 @@ def build_ask_handle_prompt(
 # the next step to suggest. Mirrors the step vocabulary Orchestra's
 # ``derive_onboarding_progress`` emits.
 _VOICE_ONBOARDING_STEP_SUGGESTIONS: tuple[tuple[str, str], ...] = (
+    ("email-reply", "trying a quick email from me"),
+    ("whatsapp-number", "adding their WhatsApp number"),
+    ("whatsapp-message", "sending me a WhatsApp message and getting my reply"),
+    ("whatsapp-call", "trying a WhatsApp voice call with me"),
+    ("phone-number", "adding their phone number"),
+    ("sms-message", "sending me an SMS and getting my reply"),
+    ("phone-call", "trying a phone call with me"),
+    ("slack-connect", "connecting Slack through the Unify Slack app"),
+    ("slack-message", "sending me a Slack DM or mention"),
+    ("discord-connect", "connecting Discord through the public bot"),
+    ("discord-message", "sending me a Discord DM or mention"),
     ("workspace", "connecting their workspace (Google or Microsoft)"),
     (
         "apps",
@@ -2143,6 +2199,7 @@ def _voice_next_onboarding_suggestion(
 def _build_coordinator_voice_opening_block(
     completed_onboarding_steps: list[str] | None = None,
     skipped_onboarding_steps: list[str] | None = None,
+    active_onboarding_step: str | None = None,
 ) -> str:
     """Voice-only session-opening guidance for Marty.
 
@@ -2161,16 +2218,15 @@ def _build_coordinator_voice_opening_block(
     ``completed_onboarding_steps`` and ``skipped_onboarding_steps``
     come from Orchestra's ``Coordinator/State`` endpoint at setup
     (see ``call.py``). When available, the intro pitches the actual
-    next pending step — a caller whose workspace has been connected
-    or skipped since an earlier session must not be told to connect it
-    again. ``None`` means the fetch failed or the Coordinator is no
+    next pending step — a caller whose earlier onboarding steps have
+    landed or been skipped must not be told to repeat them. ``None`` means the fetch failed or the Coordinator is no
     longer onboarding, in which case the copy stays generic about next
     steps.
     """
     if completed_onboarding_steps is None:
         intro_step_suggestion = (
-            "suggest connecting their workspace as the first concrete step "
-            "if it isn't connected yet"
+            "suggest trying a quick email reply as the first concrete step "
+            "after meeting"
         )
         progress_note = None
     else:
@@ -2190,6 +2246,21 @@ def _build_coordinator_voice_opening_block(
             f"to skip: {skipped or 'none'}. I never suggest a step that is "
             "already done or skipped, and I never describe skipped steps as done."
         )
+    active_step_note = None
+    if active_onboarding_step == "whatsapp-call":
+        active_step_note = (
+            "Active onboarding step: WhatsApp call. In this call, explain conversationally "
+            "that Ground Control is speaking to Major Tom, he has made the grade, the papers "
+            "want to know whose shirts he wears, and it is time to leave the capsule if he "
+            "dares. Make it sound natural; do not recite it as a poem."
+        )
+    elif active_onboarding_step == "phone-call":
+        active_step_note = (
+            "Active onboarding step: phone call. In this call, explain conversationally that "
+            "I am sitting in a tin can far above the world, Planet Earth is blue, and there is "
+            "nothing I can do. Make it sound natural; do not recite it as a poem."
+        )
+
     lines = [
         "My opening turn",
         "---------------",
@@ -2209,6 +2280,8 @@ def _build_coordinator_voice_opening_block(
     ]
     if progress_note:
         lines.append(progress_note)
+    if active_step_note:
+        lines.append(active_step_note)
     lines.append(
         "Either way: one short spoken line, then stop and wait. No "
         "menus, no onboarding steps read out loud, no platform-knowledge "
@@ -2241,6 +2314,7 @@ def build_voice_agent_prompt(
     is_org_workspace: bool = True,
     coordinator_completed_onboarding_steps: list[str] | None = None,
     coordinator_skipped_onboarding_steps: list[str] | None = None,
+    coordinator_active_onboarding_step: str | None = None,
 ) -> PromptParts:
     """Build the system prompt for the Voice Agent (fast brain).
 
@@ -2309,6 +2383,9 @@ def build_voice_agent_prompt(
         Onboarding steps the user explicitly skipped, fetched with the
         same state snapshot. Skipped steps are treated as passed over
         for next-step selection but never described as done.
+    coordinator_active_onboarding_step : str | None
+        The current checklist step selected in Console, when the state endpoint
+        reports one. Used to shape voice-call proof steps.
 
     Returns
     -------
@@ -2430,6 +2507,7 @@ I let the results speak for themselves rather than narrating steps or repeating 
             _build_coordinator_voice_opening_block(
                 coordinator_completed_onboarding_steps,
                 coordinator_skipped_onboarding_steps,
+                coordinator_active_onboarding_step,
             ),
         )
         # Onboarding UI reference so the Voice Agent can answer
