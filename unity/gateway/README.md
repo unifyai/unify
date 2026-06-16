@@ -85,11 +85,11 @@ compatibility tests rather than configured in provider dashboards.
 
 ## Hosted Usage
 
-The hosted `communication` service composes this gateway app and injects hosted
-infrastructure backends: Pub/Sub envelope delivery and Communication's existing
-AssistantSession activation infrastructure. Hosted-only VM pools, tunnels,
-Cloud Scheduler/Tasks, DNS, and Kubernetes controllers remain in
-`communication/infra`.
+The hosted deployment in [`unity-deploy`](https://github.com/unifyai/unity-deploy)
+composes this gateway app and injects hosted infrastructure backends: Pub/Sub
+envelope delivery and the hosted AssistantSession activation infrastructure.
+Hosted-only VM pools, tunnels, Cloud Scheduler/Tasks, DNS, and Kubernetes
+controllers live in `unity-deploy` as well.
 
 ## Relationship to `unity.conversation_manager`
 
@@ -99,20 +99,22 @@ flows through `HttpEnvelopeSink` into the runtime-side local ingress endpoint;
 hosted inbound delivery flows through Pub/Sub topics consumed by Unity runtime
 workers.
 
-## Relationship to `communication/`
+## Relationship to `unity-deploy`
 
-`communication/` is the hosted infrastructure wrapper around `unity.gateway`.
-The pieces that stay there are:
+[`unity-deploy`](https://github.com/unifyai/unity-deploy) is the hosted
+infrastructure wrapper around `unity.gateway`. The hosted-only pieces that live
+there are:
 
-- `communication/infra/`: GCE pool VMs, Cloud DNS, ACME wildcard cert renewal,
-  tunnel server, and hosted runtime activation.
-- `communication/assistant_session_controller/`: Kubernetes per-binding session
-  orchestration.
-- `communication/cloudbuild/`, `communication/k8s/`,
-  `communication/sbc-proxy/`, and `communication/scripts/`: deployment and
-  runbook surfaces for Unity's hosted topology.
-- `communication/Dockerfile-*`: hosted images that install Unity and run the
-  hosted wrapper around `unity.gateway`.
+- GCE pool VMs, Cloud DNS, ACME wildcard cert renewal, tunnel server, and
+  hosted runtime activation.
+- The Kubernetes per-binding AssistantSession orchestration.
+- The deploy and runbook surfaces (Cloud Build, k8s manifests, SBC proxy, ops
+  scripts) for Unity's hosted topology.
+- The hosted Docker images that install Unity and run the wrapper around
+  `unity.gateway`.
+
+(These previously lived in a separate `communication` repository, now archived;
+the hosted runtime, adapters, and infrastructure moved into `unity-deploy`.)
 
 Self-hosted users never touch the private repo. They install Unity, provide
 provider credentials and a public callback URL, and run the Unity gateway

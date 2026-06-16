@@ -305,24 +305,23 @@
                 <span class="copy-label">Copy</span>
               </button>
             </div>
-            <pre id="install-block" class="terminal-body"><code><span class="c-dim"># one-liner: install + local Orchestra + .env wiring</span>
-curl -fsSL https://raw.githubusercontent.com/unifyai/unity/main/scripts/install.sh | bash
+            <pre id="install-block" class="terminal-body"><code><span class="c-dim"># one-liner: pulls prebuilt images and runs the whole local stack</span>
+curl -fsSL https://raw.githubusercontent.com/unifyai/unity/staging/scripts/install.sh | bash
 
-<span class="c-dim"># add an LLM provider key</span>
-$EDITOR ~/.unity/unity/.env
+<span class="c-dim"># the installer prompts for an LLM key; to add or change one later:</span>
+$EDITOR ~/.unity/.env && unity restart
 
-<span class="c-dim"># launch the sandbox</span>
-unity --project_name Sandbox --overwrite</code></pre>
+<span class="c-dim"># start the stack, then open Console at http://127.0.0.1:3000</span>
+unity</code></pre>
           </div>
 
           <p class="install-note">
-            Installs <code>unity</code>, <code>unify</code>,
-            <code>unillm</code>, and <code>orchestra</code> as siblings
-            under <code>~/.unity/</code>. Pass
-            <code>--skip-setup</code> to install code only;
-            <code>unity setup</code> can bootstrap (or re-bootstrap)
-            Orchestra anytime; <code>unity stop</code> / <code>unity
-            status</code> control it.
+            Writes <code>docker-compose.yml</code> and <code>.env</code>
+            into <code>~/.unity/</code> and runs the stack from prebuilt
+            images. <code>unity</code> starts it; <code>unity down</code> /
+            <code>unity status</code> / <code>unity logs</code> control it.
+            For a from-source developer install, add
+            <code>--source-install</code>.
           </p>
           <p class="install-note install-note-secondary">
             Prefer not to run the local stack yourself? Hosted deployment is

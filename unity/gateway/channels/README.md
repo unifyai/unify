@@ -141,6 +141,6 @@ Self-hosted users still need provider accounts, provider credentials, a public
 HTTPS callback URL, and any provider-side app/webhook/OAuth configuration. Unity
 does not run a tunnel service or mutate provider consoles.
 
-Hosted SaaS still uses the private `communication` repository for GCP,
-Kubernetes, DNS, scheduler, tunnel, and runtime-activation infrastructure.
-Self-hosted users do not need that repository.
+Hosted SaaS runs the private [`unity-deploy`](https://github.com/unifyai/unity-deploy)
+repository for GCP, Kubernetes, DNS, scheduler, tunnel, and runtime-activation
+infrastructure. Self-hosted users do not need that repository.

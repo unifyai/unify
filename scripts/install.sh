@@ -7,7 +7,7 @@
 # $UNITY_HOME and editable-installs the Python repos with uv.
 #
 # Quick install:
-#   curl -fsSL https://raw.githubusercontent.com/unifyai/unity/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/unifyai/unity/staging/scripts/install.sh | bash
 #
 # Options:
 #   --dir PATH        Installation directory (default: ~/.unity)
@@ -292,7 +292,7 @@ check_system_deps() {
             linux)
                 echo "    Quick fix:"
                 echo "      sudo apt-get update && sudo apt-get install -y build-essential python3-dev portaudio19-dev"
-                echo "    Then re-run: curl -fsSL https://raw.githubusercontent.com/unifyai/unity/main/scripts/install.sh | bash"
+                echo "    Then re-run: curl -fsSL https://raw.githubusercontent.com/unifyai/unity/staging/scripts/install.sh | bash"
                 ;;
             macos)
                 echo "    Quick fix:"
@@ -522,7 +522,7 @@ case "\${1:-}" in
         shift
         exec bash "\$UNITY_REPO/scripts/setup.sh" "\$@"
         ;;
-    stop)
+    stop|down)
         if [ -d "\$CONSOLE_REPO" ] && [ -x "\$UNITY_REPO/scripts/stack.sh" ]; then
             exec bash "\$UNITY_REPO/scripts/stack.sh" down "\$@"
         fi
@@ -557,6 +557,13 @@ case "\${1:-}" in
         fi
         ;;
     logs|tail)
+        shift || true
+        # On a self-host stack install, follow the real service logs
+        # (console|orchestra|pubsub). Fall back to the sandbox dev log only
+        # when there is no stack (sandbox-only install).
+        if [ -d "\$CONSOLE_REPO" ] && [ -x "\$UNITY_REPO/scripts/stack.sh" ]; then
+            exec bash "\$UNITY_REPO/scripts/stack.sh" logs "\$@"
+        fi
         LOG_FILE="\$UNITY_REPO/.logs_conversation_sandbox.txt"
         # Ensure the file exists so 'tail' starts cleanly even before the first
         # 'unity' run has written anything.
@@ -565,8 +572,10 @@ case "\${1:-}" in
         # -F = follow + retry on rename/truncate (works on macOS BSD tail and GNU tail).
         exec tail -F "\$LOG_FILE"
         ;;
-    update)
+    update|pull)
         # Pull --rebase across the four sibling repos and re-sync the venv.
+        # (On a source install there are no prebuilt images to "pull"; the
+        # equivalent is updating the checkouts, so \`unity pull\` aliases this.)
         # Per-repo failures are surfaced inline but never abort other repos;
         # the user can always run \`unity doctor\` afterwards.
         GREEN="\$(printf '\\033[0;32m')"; RED="\$(printf '\\033[0;31m')"
@@ -799,23 +808,25 @@ Unity CLI
 Two-terminal layout (self-host install with Console):
 
   Terminal 1:     unity              Start stack + open Console (Coordinator auto-starts after login)
-  Terminal 2:     unity logs         Tail runtime logs (sandbox dev mode)
+  Terminal 2:     unity logs         Tail stack service logs
 
 Usage:
   unity                              Start self-host stack (Console + infra + Coordinator if registered)
-  unity start                        Same as bare \`unity\`
-  unity stop                         Stop self-host stack (or sandbox orchestra if no Console)
+  unity up | start                   Same as bare \`unity\`
+  unity down [--full]                Stop the stack (default keeps scheduled tasks; --full stops everything)
+  unity stop                         Alias for \`unity down\`
+  unity restart                      Restart the self-host stack
+  unity status                       Show self-host stack status
+  unity logs [service...]            Follow stack logs (console|orchestra|pubsub)
   unity sandbox                      Dev/eval REPL (see sandboxes/conversation_manager/README.md)
   unity --live-voice                 Sandbox with live voice in the browser
 
   unity setup [--boot-runtime]       Bootstrap orchestra + enable background scheduling
-  unity stack up|down|status         Console + ingress (down keeps scheduled tasks running)
+  unity stack up|down|status|logs    Console + ingress (down keeps scheduled tasks running)
   unity stack down --full            Stop everything (or: unity service disable)
   unity service status|stop|disable  Background runtime control (advanced)
-  unity status                       Show self-host stack status (or orchestra if no Console)
-  unity restart                      Restart self-host stack (or orchestra if no Console)
   unity doctor                       Diagnose missing deps, keys, and PATH
-  unity update                       git pull --rebase the four repos + uv sync
+  unity update | pull                git pull --rebase the repos + uv sync
 
   unity voice setup                  Install + start local LiveKit for --live-voice
   unity voice stop                   Stop local LiveKit server
@@ -840,7 +851,7 @@ HELP
         source .venv/bin/activate
         exec python -m sandboxes.conversation_manager.sandbox "\$@"
         ;;
-    ""|start)
+    ""|start|up)
         if [ -d "\$CONSOLE_REPO" ] && [ -x "\$UNITY_REPO/scripts/stack.sh" ]; then
             [ -n "\${1:-}" ] && shift
             exec bash "\$UNITY_REPO/scripts/stack.sh" up "\$@"
