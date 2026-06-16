@@ -234,6 +234,7 @@ if [[ -f "\$UNITY_HOME/docker-compose.yml" ]]; then
     logs)              shift || true; exec bash "\$COMPOSE_CLI" logs "\$@" ;;
     pull)              shift || true; exec bash "\$COMPOSE_CLI" pull "\$@" ;;
     integrations-sync) shift || true; exec bash "\$COMPOSE_CLI" integrations-sync "\$@" ;;
+    builtins-sync) shift || true; exec bash "\$COMPOSE_CLI" builtins-sync "\$@" ;;
     setup)
       echo "Compose install is already configured at \$UNITY_HOME" >&2
       echo "Edit \$UNITY_HOME/.env for keys, then run: unity restart" >&2
@@ -251,6 +252,7 @@ unity — Docker Compose self-host control
   unity pull               Pull the latest images
   unity doctor             Check Docker, keys, and service health
   unity integrations-sync  Sync the Composio app catalog (needs COMPOSIO_API_KEY)
+  unity builtins-sync      Retry the Builtins catalogue seed (background)
 
 Edit keys in ~/.unity/.env, then run: unity restart
 USAGE

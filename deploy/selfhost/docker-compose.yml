@@ -176,6 +176,8 @@ services:
     depends_on:
       orchestra:
         condition: service_healthy
+      orchestra-owner-bootstrap:
+        condition: service_completed_successfully
     restart: "no"
 
   pubsub-emulator:
@@ -284,8 +286,6 @@ services:
         condition: service_healthy
       gateway:
         condition: service_healthy
-      unity-builtins-seed:
-        condition: service_completed_successfully
     restart: unless-stopped
 
   unity-cm:
@@ -336,8 +336,6 @@ services:
         condition: service_healthy
       pubsub-emulator:
         condition: service_started
-      unity-builtins-seed:
-        condition: service_completed_successfully
     restart: unless-stopped
 
   desktop:
