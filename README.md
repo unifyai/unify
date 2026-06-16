@@ -65,6 +65,8 @@ unity
 
 Console opens at http://127.0.0.1:3000 — register and chat with Marty there. Tail logs in another terminal with `unity logs`.
 
+`unity` is an alias for **`unity stack up`** — the single command that runs the whole local stack end-to-end. `unity setup` performs the one-time bootstrap (local Orchestra, Console env, voice) and can be re-run any time; everything else (`stop`, `status`, `restart`) drives that same stack.
+
 </details>
 
 ```text

@@ -388,6 +388,23 @@ gen_secret() {
     fi
 }
 
+# Idempotently set KEY=VALUE in an env file. Replaces an existing assignment or
+# appends a new one, leaving every other key untouched. Creates the file if it
+# does not exist.
+upsert_env_var() {
+    local file="$1" key="$2" value="$3"
+    touch "$file"
+    if grep -qE "^${key}=" "$file"; then
+        local tmp
+        tmp="$(mktemp)"
+        grep -vE "^${key}=" "$file" > "$tmp"
+        printf '%s=%s\n' "$key" "$value" >> "$tmp"
+        mv "$tmp" "$file"
+    else
+        printf '%s=%s\n' "$key" "$value" >> "$file"
+    fi
+}
+
 # Generate console/.env.local for self-host. Console has no database of its
 # own — it uses JWT sessions + OrchestraAdapter, so all persistence flows
 # through the local Orchestra. The only required config is therefore auth
@@ -404,7 +421,13 @@ bootstrap_console_env() {
 
     local env_file="$CONSOLE_REPO/.env.local"
     if [ -f "$env_file" ]; then
-        log_success "Console .env.local already present — leaving it untouched."
+        # Don't clobber an existing file's secrets or wiring, but ensure the
+        # durable self-host topology flags are set so any local Console start
+        # (including a bare `npm run dev`) resolves as a self-host deployment.
+        log_info "Console .env.local present — ensuring self-host flags are set..."
+        upsert_env_var "$env_file" SELF_HOST 1
+        upsert_env_var "$env_file" NEXT_PUBLIC_SELF_HOST 1
+        log_success "Ensured self-host flags in $env_file"
         return 0
     fi
 
@@ -437,6 +460,13 @@ NEXTAUTH_URL=http://localhost:${CONSOLE_PORT}
 # override these at runtime too, but they keep standalone Console runs working.
 ORCHESTRA_URL=http://127.0.0.1:${ORCHESTRA_PORT}
 ORCHESTRA_ADMIN_KEY=${admin_key}
+
+# Deployment topology: a single-owner self-host install. These flags make
+# Console resolve as self-host on every local start, so multi-tenant surfaces
+# (Organizations, Billing) stay hidden and registration is the only way in.
+# See console/src/lib/environment/environment.ts.
+SELF_HOST=1
+NEXT_PUBLIC_SELF_HOST=1
 EOF
 
     log_success "Wrote $env_file"

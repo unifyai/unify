@@ -534,6 +534,9 @@ case "\${1:-}" in
         fi
         ;;
     status)
+        if [ -d "\$CONSOLE_REPO" ] && [ -x "\$UNITY_REPO/scripts/stack.sh" ]; then
+            exec bash "\$UNITY_REPO/scripts/stack.sh" status
+        fi
         if [ -x "\$ORCHESTRA_REPO/scripts/local.sh" ]; then
             exec bash "\$ORCHESTRA_REPO/scripts/local.sh" status
         else
@@ -542,6 +545,10 @@ case "\${1:-}" in
         fi
         ;;
     restart)
+        if [ -d "\$CONSOLE_REPO" ] && [ -x "\$UNITY_REPO/scripts/stack.sh" ]; then
+            bash "\$UNITY_REPO/scripts/stack.sh" down || true
+            exec bash "\$UNITY_REPO/scripts/stack.sh" up
+        fi
         if [ -x "\$ORCHESTRA_REPO/scripts/local.sh" ]; then
             exec bash "\$ORCHESTRA_REPO/scripts/local.sh" restart
         else
@@ -805,8 +812,8 @@ Usage:
   unity stack up|down|status         Console + ingress (down keeps scheduled tasks running)
   unity stack down --full            Stop everything (or: unity service disable)
   unity service status|stop|disable  Background runtime control (advanced)
-  unity status                       Show local orchestra status
-  unity restart                      Restart local orchestra (preserves data)
+  unity status                       Show self-host stack status (or orchestra if no Console)
+  unity restart                      Restart self-host stack (or orchestra if no Console)
   unity doctor                       Diagnose missing deps, keys, and PATH
   unity update                       git pull --rebase the four repos + uv sync
 
