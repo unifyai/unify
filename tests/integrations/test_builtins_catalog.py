@@ -281,6 +281,106 @@ def test_seed_builtin_integrations_prunes_unlisted_app_scope(monkeypatch) -> Non
     assert not any(" or " in item for item in filters)
 
 
+def test_seed_builtin_integrations_app_only_prune_preserves_tool_units(
+    monkeypatch,
+) -> None:
+    stored_hashes = {
+        "app:composio:gmail": "old",
+        "tools:composio:gmail": "old",
+        "app:composio:slack": "old",
+        "tools:composio:slack": "old",
+    }
+    deleted: list[tuple[str, list[int]]] = []
+    inserted: list[tuple[str, list[dict]]] = []
+    seen_filters: set[str] = set()
+
+    builtins_catalog._ENSURED_STORAGE_PROJECTS.clear()
+    builtins_catalog._ENSURED_EMBEDDING_PROJECTS.clear()
+    monkeypatch.setattr(builtins_catalog, "ensure_builtins_project", lambda *_: None)
+    monkeypatch.setattr(builtins_catalog.unify, "create_context", lambda *_, **__: None)
+    monkeypatch.setattr(builtins_catalog, "ensure_vector_column", lambda *_, **__: None)
+    monkeypatch.setattr(
+        builtins_catalog,
+        "list_private_fields",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        builtins_catalog,
+        "read_seed_hashes",
+        lambda *_args, **_kwargs: dict(stored_hashes),
+    )
+
+    def fake_write_seed_hashes(_project, hashes, **_kwargs):
+        stored_hashes.clear()
+        stored_hashes.update(hashes)
+
+    monkeypatch.setattr(
+        builtins_catalog,
+        "write_seed_hashes",
+        fake_write_seed_hashes,
+    )
+
+    def fake_get_logs(**kwargs):
+        if kwargs.get("context") == builtins_catalog.BUILTINS_INTEGRATION_META_CONTEXT:
+            return []
+        assert kwargs["return_ids_only"] is True
+        filter_expr = kwargs["filter"]
+        if filter_expr in seen_filters:
+            return []
+        seen_filters.add(filter_expr)
+        return [17]
+
+    monkeypatch.setattr(builtins_catalog.unify, "get_logs", fake_get_logs)
+    monkeypatch.setattr(
+        builtins_catalog.unify,
+        "delete_logs",
+        lambda **kwargs: deleted.append((kwargs["context"], list(kwargs["logs"]))),
+    )
+    monkeypatch.setattr(
+        builtins_catalog.unify,
+        "create_logs",
+        lambda **kwargs: inserted.append((kwargs["context"], list(kwargs["entries"]))),
+    )
+
+    assert builtins_catalog.seed_builtin_integrations(
+        apps=[_app("gmail")],
+        tools=None,
+        backend_id="composio",
+        app_slugs=["gmail", "slack"],
+        prune_unlisted_apps=True,
+        project="Builtins",
+    )
+
+    assert (
+        builtins_catalog.BUILTINS_INTEGRATION_TOOLS_CONTEXT,
+        [17],
+    ) not in deleted
+    assert "tools:composio:gmail" in stored_hashes
+    assert "tools:composio:slack" in stored_hashes
+    assert "app:composio:slack" not in stored_hashes
+
+    deleted.clear()
+    inserted.clear()
+    seen_filters.clear()
+
+    assert (
+        builtins_catalog.seed_builtin_integrations(
+            apps=[_app("gmail")],
+            tools=None,
+            backend_id="composio",
+            app_slugs=["gmail", "slack"],
+            prune_unlisted_apps=True,
+            project="Builtins",
+        )
+        is False
+    )
+
+    assert deleted == []
+    assert inserted == []
+    assert "tools:composio:gmail" in stored_hashes
+    assert "tools:composio:slack" in stored_hashes
+
+
 def test_seed_builtins_script_manifest_payload_supports_prune_flag() -> None:
     payload = _seed_script_module()._sync_payload(
         backend_id="composio",
@@ -474,6 +574,7 @@ def test_seed_builtins_script_full_composio_batches_seed_apps_once(monkeypatch) 
     assert len(admin_payloads) == 3
     assert seeded_payloads[0]["_seed_phase"] == "app-only-sync"
     assert seeded_payloads[0].get("_seed_apps", True) is True
+    assert seeded_payloads[0]["_seed_tools"] is False
     assert [payload["_seed_apps"] for payload in seeded_payloads[1:]] == [False, False]
 
 
