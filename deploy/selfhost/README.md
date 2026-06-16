@@ -29,7 +29,7 @@ Use this when Marty should drive **your physical Mac** (Finder, Chrome, logged-i
 
 Complete [Quick start](#quick-start) above: `unity stack up`, sign in at Console, hire or open your Coordinator.
 
-Copy your **coordinator API key** from Console: assistant row → **⋯** → **Connect your desktop** → **Copy API Key**. Paste it into the Desktop Assistant installer or tray **Settings…** when prompted. This key is **not** written to `~/.unity/.env` (that file is only for stack secrets and BYOK provider keys).
+Copy **your API key** from Console: assistant row → **⋯** → **Connect your desktop** → **Copy API Key**. This is your Orchestra user key (the same one Marty uses), not `ORCHESTRA_ADMIN_KEY`. Paste it into the Desktop Assistant installer or tray **Settings…** when prompted. It is **not** written to `~/.unity/.env` (that file is only for stack secrets and BYOK provider keys).
 
 ### 2. Install Unify Desktop Assistant
 
@@ -43,6 +43,8 @@ Full tray-app details: [unify-desktop-assistant/macos/README.md](https://github.
 cd unify-desktop-assistant/macos/tools
 ./setup.sh --self-host --unify-key YOUR_KEY --link-coordinator
 ```
+
+`YOUR_KEY` is the same **Copy API Key** value from Console (**Connect your desktop**), not `ORCHESTRA_ADMIN_KEY` from `~/.unity/.env`.
 
 ### 3. Enable Screen Sharing
 
@@ -62,7 +64,7 @@ Verify locally (optional): tray app → open desktop viewer, or check the menu-b
 
 ### 4. Register and link in Console
 
-With `unity stack up` running, open **Unify Desktop Assistant → Settings…** and paste your coordinator API key if you did not enter it during install. Compose self-host is auto-detected (`~/.unity/docker-compose.yml`); setup registers `http://host.docker.internal:13000` and links the Coordinator.
+With `unity stack up` running, open **Unify Desktop Assistant → Settings…** and paste your API key (from **Connect your desktop** in Console) if you did not enter it during install. Compose self-host is auto-detected (`~/.unity/docker-compose.yml`); setup registers `http://host.docker.internal:13000` and links the Coordinator.
 
 Then in Console → assistant **⋯** → **Connect your desktop**:
 
