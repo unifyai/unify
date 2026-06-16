@@ -29,7 +29,7 @@ Use this when Marty should drive **your physical Mac** (Finder, Chrome, logged-i
 
 Complete [Quick start](#quick-start) above: `unity stack up`, sign in at Console, hire or open your Coordinator.
 
-Copy your API key from Console (assistant row → **Connect your desktop** → **Copy API Key**), or read it from `~/.unity/coordinator-runtime.json` after sign-in.
+Copy your **coordinator API key** from Console: assistant row → **⋯** → **Connect your desktop** → **Copy API Key**. Paste it into the Desktop Assistant installer or tray **Settings…** when prompted. This key is **not** written to `~/.unity/.env` (that file is only for stack secrets and BYOK provider keys).
 
 ### 2. Install Unify Desktop Assistant
 
@@ -62,7 +62,7 @@ Verify locally (optional): tray app → open desktop viewer, or check the menu-b
 
 ### 4. Register and link in Console
 
-Open the Desktop Assistant menu bar app → **Settings…** and paste your coordinator API key. Self-host is auto-detected (`~/.unity/docker-compose.yml`); setup registers `http://host.docker.internal:13000` and links the Coordinator.
+With `unity stack up` running, open **Unify Desktop Assistant → Settings…** and paste your coordinator API key if you did not enter it during install. Compose self-host is auto-detected (`~/.unity/docker-compose.yml`); setup registers `http://host.docker.internal:13000` and links the Coordinator.
 
 Then in Console → assistant **⋯** → **Connect your desktop**:
 
