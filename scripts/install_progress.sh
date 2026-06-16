@@ -21,7 +21,7 @@ _INSTALL_PROGRESS_USE_TTY=false
 
 _install_progress_init_tty() {
   _INSTALL_PROGRESS_USE_TTY=false
-  if [[ -r /dev/tty && -w /dev/tty ]]; then
+  if [[ -r /dev/tty && -w /dev/tty ]] && { : >/dev/tty; } 2>/dev/null; then
     _INSTALL_PROGRESS_USE_TTY=true
     return 0
   fi
