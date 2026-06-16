@@ -313,9 +313,7 @@ start_composio_catalog_sync() {
   if ! grep -qE '^COMPOSIO_API_KEY=.+$' "$UNITY_HOME/.env" 2>/dev/null; then
     return 0
   fi
-  log_info "Starting Composio catalog sync in the background (may take ~30 minutes)..."
-  compose_cmd --profile integrations-sync up -d orchestra-integrations-bootstrap
-  log_info "Console is ready — integrations will appear gradually in the app catalog"
+  log_info "Composio integration catalogue sync runs via unity-builtins-seed (watch: unity stack logs unity-builtins-seed)"
 }
 
 pull_and_start() {
