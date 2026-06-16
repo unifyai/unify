@@ -434,6 +434,39 @@ class SecretManager(BaseSecretManager):
             except Exception:
                 continue
 
+    def _sync_workspace_file_policy(self) -> None:
+        """Mirror the workspace file-access allowlist into the runtime policy store.
+
+        Orchestra owns the per-assistant, per-provider Drive/SharePoint
+        allowlist (configured in Console). The enforcement connector
+        (``primitives.workspace_files``) reads it from an in-process cache; this
+        keeps that cache current. Best-effort: failures leave the prior cache.
+        """
+        from ..session_details import SESSION_DETAILS
+
+        agent_id = SESSION_DETAILS.assistant.agent_id
+        if agent_id is None:
+            return
+
+        base_url = SETTINGS.ORCHESTRA_URL
+        admin_key = SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()
+        if not base_url or not admin_key:
+            return
+
+        from unify.utils import http
+
+        from unity.workspace_files.policy import get_policy_store
+
+        resp = http.get(
+            f"{base_url}/admin/assistant/{int(agent_id)}/workspace-file-access",
+            headers={"Authorization": f"Bearer {admin_key}"},
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return
+        info = resp.json().get("info") or {}
+        get_policy_store().set_policies(info.get("policies") or [])
+
     def sync_assistant_secrets_if_stale(
         self,
         ttl_seconds: float = 60.0,
@@ -484,6 +517,7 @@ class SecretManager(BaseSecretManager):
             try:
                 self._sync_assistant_secrets()
                 self._sync_dotenv()
+                self._sync_workspace_file_policy()
             except Exception:
                 self._last_assistant_secret_sync_failure_at = monotonic()
                 logger.warning(

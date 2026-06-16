@@ -592,6 +592,18 @@ _EXTERNAL_APP_INTEGRATION = textwrap.dedent("""
        google_token = get_oauth_access_token("google")
        ```
 
+       **Connected-account files are off-limits to raw API calls.** Reading,
+       listing, or searching files and folders in the connected Google Drive /
+       Shared Drives or OneDrive / SharePoint libraries MUST go through
+       `primitives.workspace_files.*` (`list_roots`, `list_children`,
+       `search`, `get_item`, `read_file`). That manager enforces the
+       per-assistant file-access allowlist and masks anything the user has not
+       permitted, so disallowed items simply appear not to exist. Do NOT call
+       the Google Drive or Microsoft Graph file/drive/site endpoints directly
+       with `get_oauth_access_token(...)` — that bypasses the allowlist and is
+       not permitted. `get_oauth_access_token(...)` remains appropriate for
+       non-file provider APIs (e.g. calendar, contacts, tasks).
+
     4. **Store for reuse**: After a successful integration, store reusable
        functions via `store_skills` and document the setup via
        `GuidanceManager_add_guidance` so future interactions can reuse the

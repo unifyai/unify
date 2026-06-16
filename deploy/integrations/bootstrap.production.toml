@@ -37,7 +37,6 @@ app_slugs = [
   "microsoft_outlook",
   "microsoft_teams",
   "microsoft_excel",
-  "onedrive",
   "airtable",
   "linear",
   "salesforce"
