@@ -75,6 +75,27 @@ services:
         condition: service_completed_successfully
     restart: "no"
 
+  orchestra-owner-bootstrap:
+    <<: *orchestra_image
+    command: ["python", "scripts/bootstrap_self_host.py"]
+    environment:
+      ORCHESTRA_DB_HOST: postgres
+      ORCHESTRA_DB_PORT: 5432
+      ORCHESTRA_DB_USER: orchestra
+      ORCHESTRA_DB_PASS: ${POSTGRES_PASSWORD:-orchestra}
+      ORCHESTRA_DB_BASE: orchestra
+      SELF_HOST: "1"
+      SELF_HOST_BOOTSTRAP_OUTPUT: /runtime/self-host-bootstrap.json
+      COMPOSIO_API_KEY: ${COMPOSIO_API_KEY:-}
+    volumes:
+    - runtime:/runtime
+    depends_on:
+      orchestra-seed:
+        condition: service_completed_successfully
+      volumes-init:
+        condition: service_completed_successfully
+    restart: "no"
+
   # Named volumes are created root-owned; orchestra (uid 999) and the
   # gateway (uid 1000) create bucket directories at the local-bucket root,
   # and the console (uid 1001) writes the coordinator runtime file.
@@ -127,6 +148,16 @@ services:
     - /bin/bash
     - -c
     - |
+      bootstrap_json="/runtime/self-host-bootstrap.json"
+      if [ ! -f "$$bootstrap_json" ]; then
+        echo "Missing /runtime/self-host-bootstrap.json; orchestra-owner-bootstrap must run first." >&2
+        exit 1
+      fi
+      export UNIFY_KEY="$$(python3 -c "import json; print(json.load(open('/runtime/self-host-bootstrap.json'))['api_key'])")"
+      if [ -z "$$UNIFY_KEY" ]; then
+        echo "Self-host bootstrap JSON is missing api_key." >&2
+        exit 1
+      fi
       if [ -z "$${COMPOSIO_API_KEY:-}" ]; then
         echo "COMPOSIO_API_KEY not set; seeding static Builtins catalogues only."
         python3 scripts/seed_builtins_catalog.py
@@ -137,7 +168,6 @@ services:
     environment:
       ORCHESTRA_URL: http://orchestra:8000/v0
       ORCHESTRA_ADMIN_KEY: ${ORCHESTRA_ADMIN_KEY}
-      UNIFY_KEY: ${ORCHESTRA_ADMIN_KEY}
       UNITY_BUILTINS_PROJECT: ${UNITY_BUILTINS_PROJECT:-Builtins}
       COMPOSIO_API_KEY: ${COMPOSIO_API_KEY:-}
     volumes:
