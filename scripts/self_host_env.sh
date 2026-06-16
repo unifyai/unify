@@ -81,6 +81,36 @@ PYEOF
   fi
 }
 
+self_host_apply_user_desktops_export() {
+  local agent_id="${1:-}"
+  local unity_repo="${UNITY_REPO:-${UNITY_REPO_PATH:-}}"
+  local script="${unity_repo}/deploy/selfhost/fetch_assistant_user_desktops.py"
+  local admin_key="${ORCHESTRA_ADMIN_KEY:-}"
+  local orchestra_url="${ORCHESTRA_URL:-http://127.0.0.1:8000/v0}"
+  local export_line=""
+
+  if [[ -z "$agent_id" || ! -f "$script" ]]; then
+    return 0
+  fi
+
+  if [[ -z "$admin_key" && -n "${ENV_LOCAL:-}" && -f "$ENV_LOCAL" ]]; then
+    admin_key="$(grep -E "^ORCHESTRA_ADMIN_KEY=" "$ENV_LOCAL" 2>/dev/null | sed 's/^[^=]*=//' | tr -d '"' || true)"
+  fi
+  if [[ -z "$admin_key" ]]; then
+    return 0
+  fi
+
+  export_line="$(
+    ORCHESTRA_URL="${orchestra_url%/}" \
+      ORCHESTRA_ADMIN_KEY="$admin_key" \
+      python3 "$script" "$agent_id" --export-sh 2>/dev/null || true
+  )"
+  if [[ -n "$export_line" ]]; then
+    # shellcheck disable=SC1090
+    eval "$export_line"
+  fi
+}
+
 append_self_host_unity_runtime_env() {
   local -n _target_array="$1"
   local env_file="${2:-${SELF_HOST_ENV_FILE:-${UNITY_ENV_FILE:-${UNITY_REPO:-}/.env}}}"
