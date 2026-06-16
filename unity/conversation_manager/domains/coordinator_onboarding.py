@@ -55,6 +55,23 @@ _SUBTYPE_DEFAULT_MESSAGES: dict[str, str] = {
 _SUBTYPE_ONBOARDING_SESSION_STARTED = "onboarding_session_started"
 _SUBTYPE_STEP_SKIPPED = "step_skipped"
 _SUBTYPE_STEP_STARTED = "onboarding_step_started"
+_SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED = "reference_quiz_clue_requested"
+
+_REFERENCE_QUIZ_CHANNEL_TO_TOOL = {
+    "email": "send_email",
+    "whatsapp_message": "send_whatsapp",
+    "sms_message": "send_sms",
+    "slack_message": "send_slack_message",
+    "discord_message": "send_discord_message",
+    "phone_call": "make_call_to_boss",
+    "whatsapp_call": "make_whatsapp_call_to_boss",
+}
+_REFERENCE_QUIZ_CALL_CHANNELS = {"phone_call", "whatsapp_call"}
+
+
+def _detail_string(details: dict[str, Any], key: str) -> str:
+    value = details.get(key)
+    return value.strip() if isinstance(value, str) else ""
 
 
 def _coordinator_onboarding_event_from_payload(
@@ -125,6 +142,61 @@ def _coordinator_onboarding_notification_text(
     """
     body = (event.message or _SUBTYPE_DEFAULT_MESSAGES.get(event.subtype, "")).strip()
     subtype_hint = f"[onboarding subtype: {event.subtype}]"
+    if event.subtype == _SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED:
+        details = event.details if isinstance(event.details, dict) else {}
+        channel = _detail_string(details, "channel")
+        clue = _detail_string(details, "clue")
+        quote = _detail_string(details, "quote")
+        answer = _detail_string(details, "answer")
+        trigger_step_id = _detail_string(details, "trigger_step_id")
+        reply_step_id = _detail_string(details, "reply_step_id")
+        tool_name = _REFERENCE_QUIZ_CHANNEL_TO_TOOL.get(channel, "")
+        channel_note = f" Target outbound channel: `{channel}`." if channel else ""
+        tool_note = (
+            f" Use `{tool_name}` for this trigger."
+            if tool_name
+            else " Use the matching outbound comms tool for this trigger."
+        )
+        step_note = (
+            f" Trigger step id: `{trigger_step_id}`. Reply step id now active in Console: `{reply_step_id}`."
+            if trigger_step_id or reply_step_id
+            else ""
+        )
+        clue_note = (
+            f' Clue to send exactly as the user-facing clue: "{clue}".' if clue else ""
+        )
+        quote_note = f' Underlying quote: "{quote}".' if quote else ""
+        answer_note = (
+            f' Correct answer: "{answer}". Do not reveal it unless the user asks for the answer or is clearly stuck.'
+            if answer
+            else ""
+        )
+        shared_rules = (
+            " This is a Coordinator onboarding mini-game called guess the reference. "
+            "Send the clue without revealing the answer, then wait for the user's guess. "
+            "If they ask to hear or see it again, repeat the clue. If they ask for a hint, "
+            "give a light hint without immediately revealing the answer. If they ask for "
+            "the answer, or they are stuck for a long time, reveal it warmly and close the "
+            "mini-game naturally. Do not skip ahead to later onboarding steps until the "
+            "reply step is complete or skipped."
+        )
+        if channel in _REFERENCE_QUIZ_CALL_CHANNELS:
+            call_rules = (
+                " For this call trigger, start the outbound call with the listed call tool "
+                "and put the whole mini-game briefing in the `context` argument: greet the "
+                "user by first name when natural; say the next reference is the quote; ask "
+                "if they can guess what it is; speak conversationally; support repeats, "
+                "hints, answer reveal, and a natural close."
+            )
+            return (
+                f"{subtype_hint} {body}{channel_note}{step_note}{clue_note}{quote_note}"
+                f"{answer_note}{tool_note}{shared_rules}{call_rules}"
+            ).strip()
+        return (
+            f"{subtype_hint} {body}{channel_note}{step_note}{clue_note}{quote_note}"
+            f"{answer_note}{tool_note}{shared_rules}"
+        ).strip()
+
     if event.subtype == _SUBTYPE_ONBOARDING_SESSION_STARTED:
         medium = ""
         details = event.details if isinstance(event.details, dict) else {}

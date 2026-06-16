@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from unity.conversation_manager.domains import coordinator_onboarding as onboarding
 from unity.conversation_manager.prompt_builders import (
+    _build_coordinator_onboarding_narration_block,
     _build_coordinator_voice_opening_block,
     _voice_next_onboarding_suggestion,
 )
@@ -82,6 +83,59 @@ def test_step_started_notification_names_active_comms_step() -> None:
     assert "Do not skip ahead to Connect or Delegate" in text
 
 
+def test_reference_quiz_notification_briefs_text_channel() -> None:
+    event = onboarding._coordinator_onboarding_event_from_payload(
+        {
+            "subtype": "reference_quiz_clue_requested",
+            "details": {
+                "game": "guess_the_reference",
+                "trigger_step_id": "slack-reference",
+                "reply_step_id": "slack-message",
+                "channel": "slack_message",
+                "clue": 'The clue is: "Phone home."',
+                "quote": "Phone home.",
+                "answer": "Battlestar Galactica",
+            },
+        },
+        message="User triggered a reference clue.",
+    )
+
+    assert event is not None
+    text = onboarding._coordinator_onboarding_notification_text(event)
+
+    assert "guess the reference" in text
+    assert "send_slack_message" in text
+    assert "Phone home." in text
+    assert "Do not reveal" in text
+    assert "Battlestar Galactica" in text
+
+
+def test_reference_quiz_notification_briefs_call_context() -> None:
+    event = onboarding._coordinator_onboarding_event_from_payload(
+        {
+            "subtype": "reference_quiz_clue_requested",
+            "details": {
+                "trigger_step_id": "phone-call-reference",
+                "reply_step_id": "phone-call",
+                "channel": "phone_call",
+                "clue": 'The clue is: "To infinity and beyond!"',
+                "quote": "To infinity and beyond!",
+                "answer": "The Empire Strikes Back / Luke",
+            },
+        },
+        message="User triggered a phone clue.",
+    )
+
+    assert event is not None
+    text = onboarding._coordinator_onboarding_notification_text(event)
+
+    assert "make_call_to_boss" in text
+    assert "`context` argument" in text
+    assert "repeat" in text
+    assert "hints" in text
+    assert "The Empire Strikes Back / Luke" in text
+
+
 def test_voice_next_onboarding_suggestion_ignores_done_and_skipped_steps() -> None:
     suggestion = _voice_next_onboarding_suggestion(
         completed_steps=[*COMMS_STEP_IDS, "workspace"],
@@ -91,6 +145,18 @@ def test_voice_next_onboarding_suggestion_ignores_done_and_skipped_steps() -> No
     assert "one-off job" in suggestion
 
 
+def test_onboarding_narration_block_documents_reference_quiz_not_space_oddity_scripts() -> (
+    None
+):
+    block = _build_coordinator_onboarding_narration_block()
+
+    assert "reference_quiz_clue_requested" in block
+    assert "guess-the-reference" in block
+    assert "make_call_to_boss" in block
+    assert "Ground Control to Major" not in block
+    assert "tin can far above the world" not in block
+
+
 def test_voice_opening_block_includes_active_phone_call_guidance() -> None:
     block = _build_coordinator_voice_opening_block(
         completed_onboarding_steps=[],
@@ -98,5 +164,6 @@ def test_voice_opening_block_includes_active_phone_call_guidance() -> None:
         active_onboarding_step="phone-call",
     )
 
-    assert "Active onboarding step: phone call" in block
-    assert "tin can far above the world" in block
+    assert "Active onboarding step: phone-call" in block
+    assert "reference quiz trigger" in block
+    assert "hardcoded reference text" in block

@@ -69,13 +69,20 @@ ORG_INVITE_ROLES = ("Admin", "Member", "Viewer")
 # short progress-bar label in ONBOARDING_PHASES.
 ONBOARDING_PHASES = (
     ("meet", "Meet"),
-    ("comms", "Comms"),
+    ("comms", "Quiz"),
     ("connect", "Connect"),
     ("work", "Delegate"),
 )
 ONBOARDING_STEPS = {
     "meet": ("Meet {name}", "Say hi to {name}."),
-    "comms": ("Try comms", "Prove email, WhatsApp, phone, Slack, and Discord."),
+    "comms": (
+        "Guess the reference",
+        "Identify clues sent over email, WhatsApp, phone, Slack, and Discord.",
+    ),
+    "email-reference": (
+        "Email the first reference",
+        "Marty sends the first reference clue over email.",
+    ),
     "email-reply": (
         "Reply to email",
         "Marty sends you a quick email.",
@@ -84,41 +91,65 @@ ONBOARDING_STEPS = {
         "Add your WhatsApp number",
         "Add the WhatsApp number Marty should use for this workspace.",
     ),
+    "whatsapp-message-reference": (
+        "WhatsApp the next reference",
+        "Marty sends the next reference clue over WhatsApp.",
+    ),
     "whatsapp-message": (
-        "Reply to a WhatsApp message",
-        "Send Marty a WhatsApp message and get a reply.",
+        "Guess a WhatsApp clue",
+        "Marty sends you a reference clue over WhatsApp.",
+    ),
+    "whatsapp-call-reference": (
+        "WhatsApp call for the next reference",
+        "Marty calls with the next reference clue over WhatsApp.",
     ),
     "whatsapp-call": (
-        "Answer a WhatsApp call",
-        "Talk to Marty over WhatsApp voice.",
+        "Guess a WhatsApp call clue",
+        "Marty gives you a reference clue over WhatsApp voice.",
     ),
     "phone-number": (
         "Add your phone number",
         "Add the phone number Marty should use for calls and SMS.",
     ),
+    "sms-reference": (
+        "Text the next reference",
+        "Marty sends the next reference clue over SMS.",
+    ),
     "sms-message": (
-        "Reply to an SMS message",
-        "Text Marty and get an SMS reply.",
+        "Guess an SMS clue",
+        "Marty sends you a reference clue over SMS.",
+    ),
+    "phone-call-reference": (
+        "Call for the next reference",
+        "Marty calls with the next reference clue.",
     ),
     "phone-call": (
-        "Answer a phone call",
-        "Talk to Marty over a phone call.",
+        "Guess a phone call clue",
+        "Marty gives you a reference clue over a phone call.",
     ),
     "slack-connect": (
         "Connect Slack",
         "Connect Marty through the Unify Slack app.",
     ),
+    "slack-reference": (
+        "Send the next reference via Slack",
+        "Marty sends the next reference clue in Slack.",
+    ),
     "slack-message": (
-        "Send a Slack message",
-        "Send Marty a Slack DM or mention.",
+        "Guess a Slack clue",
+        "Marty sends you a reference clue in Slack.",
     ),
     "discord-connect": (
         "Connect Discord",
         "Connect Marty through the public Discord bot.",
     ),
+    "discord-reference": (
+        "Send the next reference via discord",
+        "Marty sends the next reference clue in Discord.",
+    ),
     "discord-message": (
-        "Send a Discord message",
-        "Send Marty a Discord DM or mention.",
+        "Guess a Discord clue",
+        "Marty sends you a reference clue in Discord.",
     ),
     "connect": ("Connect {name}", "Plug it into your workspace and apps."),
     "workspace": (
@@ -557,6 +588,25 @@ def build_coordinator_onboarding_flow_reference_block(
         else f"{coordinator_name} onboarding flow (UI reference)"
     )
     meet_title = ONBOARDING_STEPS["meet"][0].format(name=step_name)
+    comms_title = ONBOARDING_STEPS["comms"][0]
+    email_reference_title = ONBOARDING_STEPS["email-reference"][0]
+    email_reply_title = ONBOARDING_STEPS["email-reply"][0]
+    whatsapp_number_title = ONBOARDING_STEPS["whatsapp-number"][0]
+    whatsapp_reference_title = ONBOARDING_STEPS["whatsapp-message-reference"][0]
+    whatsapp_reply_title = ONBOARDING_STEPS["whatsapp-message"][0]
+    whatsapp_call_reference_title = ONBOARDING_STEPS["whatsapp-call-reference"][0]
+    whatsapp_call_reply_title = ONBOARDING_STEPS["whatsapp-call"][0]
+    phone_number_title = ONBOARDING_STEPS["phone-number"][0]
+    sms_reference_title = ONBOARDING_STEPS["sms-reference"][0]
+    sms_reply_title = ONBOARDING_STEPS["sms-message"][0]
+    phone_call_reference_title = ONBOARDING_STEPS["phone-call-reference"][0]
+    phone_call_reply_title = ONBOARDING_STEPS["phone-call"][0]
+    slack_connect_title = ONBOARDING_STEPS["slack-connect"][0]
+    slack_reference_title = ONBOARDING_STEPS["slack-reference"][0]
+    slack_reply_title = ONBOARDING_STEPS["slack-message"][0]
+    discord_connect_title = ONBOARDING_STEPS["discord-connect"][0]
+    discord_reference_title = ONBOARDING_STEPS["discord-reference"][0]
+    discord_reply_title = ONBOARDING_STEPS["discord-message"][0]
     connect_title = ONBOARDING_STEPS["connect"][0].format(name=step_name)
     workspace_title = ONBOARDING_STEPS["workspace"][0].format(name=step_name)
     apps_title = ONBOARDING_STEPS["apps"][0].format(name=step_name)
@@ -574,7 +624,7 @@ def build_coordinator_onboarding_flow_reference_block(
             "From then on the onboarding **checklist** lives in my **Assistant "
             "info** panel (inside Chat) under the **Onboarding** tab. Layout I "
             'should picture when answering "where do I click":',
-            "  - A progress bar across three phases — **Meet**, **Connect**, "
+            "  - A progress bar across four phases — **Meet**, **Quiz**, **Connect**, "
             "**Delegate** — above a list of steps grouped into those phases. Each "
             "row has a marker, a title, an info tooltip (what it does + a rough time "
             "estimate), and — for the current step — a **Next** pill. Clicking an "
@@ -590,7 +640,44 @@ def build_coordinator_onboarding_flow_reference_block(
             f"  1. **{meet_title}** (`meet`). Auto-completes once we exchange the "
             "opening turn — saying anything in the chat (or starting the call) "
             "clears it. Nothing to click.",
-            f"  2. **{connect_title}** (`connect`, grouping row). No action of its "
+            f"  2. **{comms_title}** (`comms`, grouping row). The user plays a "
+            "lightweight guess-the-reference game across the configured channels. "
+            "Trigger rows send a clue immediately and auto-complete; the following "
+            "reply rows wait for the user's guess. Children:",
+            f"     - **{email_reference_title}** (`email-reference`). Clicking the row "
+            "asks me to send the first reference clue over email.",
+            f"     - **{email_reply_title}** (`email-reply`). The user replies with "
+            "their guess once they receive the email clue.",
+            f"     - **{whatsapp_number_title}** (`whatsapp-number`). Opens Account "
+            "-> Contact info so the user can add/verify the WhatsApp number.",
+            f"     - **{whatsapp_reference_title}** (`whatsapp-message-reference`). "
+            "Clicking sends the next clue over WhatsApp.",
+            f"     - **{whatsapp_reply_title}** (`whatsapp-message`). The user guesses "
+            "the WhatsApp clue.",
+            f"     - **{whatsapp_call_reference_title}** (`whatsapp-call-reference`). "
+            "Clicking starts or requests a WhatsApp voice clue.",
+            f"     - **{whatsapp_call_reply_title}** (`whatsapp-call`). The user guesses "
+            "during the WhatsApp voice exchange.",
+            f"     - **{phone_number_title}** (`phone-number`). Opens Account -> "
+            "Contact info so the user can add/verify the phone number.",
+            f"     - **{sms_reference_title}** (`sms-reference`). Clicking texts the "
+            "next clue.",
+            f"     - **{sms_reply_title}** (`sms-message`). The user guesses the SMS clue.",
+            f"     - **{phone_call_reference_title}** (`phone-call-reference`). Clicking "
+            "starts or requests a phone-call clue.",
+            f"     - **{phone_call_reply_title}** (`phone-call`). The user guesses during "
+            "the phone call.",
+            f"     - **{slack_connect_title}** (`slack-connect`). Opens the Slack setup "
+            "path for the Unify Slack app.",
+            f"     - **{slack_reference_title}** (`slack-reference`). Clicking sends the "
+            "next clue via Slack.",
+            f"     - **{slack_reply_title}** (`slack-message`). The user guesses the Slack clue.",
+            f"     - **{discord_connect_title}** (`discord-connect`). Guides the user to "
+            "add their Discord ID and install the public Discord bot.",
+            f"     - **{discord_reference_title}** (`discord-reference`). Clicking sends "
+            "the next clue via Discord.",
+            f"     - **{discord_reply_title}** (`discord-message`). The user guesses the Discord clue.",
+            f"  3. **{connect_title}** (`connect`, grouping row). No action of its "
             "own; resolves when both children are done or deferred. Children:",
             f"     - **{workspace_title}** (`workspace`). Clicking the row opens the "
             "workspace OAuth dialog (Google Workspace or Microsoft 365). Completing "
@@ -599,7 +686,7 @@ def build_coordinator_onboarding_flow_reference_block(
             f"     - **{apps_title}** (`apps`). Clicking the row opens the "
             "**Integrations** tab; they connect at least one app (Slack, Gmail, "
             "Notion, etc.) from the gallery and authorize it.",
-            "  3. **Get work done** (`work`, grouping row). Children, in order:",
+            "  4. **Get work done** (`work`, grouping row). Children, in order:",
             f"     - **{act_title}** (`act`). Point-in-time work: the user hands me a "
             "one-off job that runs immediately and watches it execute live in the "
             "**Actions** tab (which opens automatically). The step completes the "
