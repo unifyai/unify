@@ -72,6 +72,12 @@ cmd_up() {
   compose up -d "$@"
   if [[ $# -eq 0 ]]; then
     start_integrations_sync
+    if _has_env COMPOSIO_API_KEY; then
+      log_info "Builtins catalogue seed runs in the background (~30 min with Composio); Console is ready now"
+    else
+      log_info "Builtins catalogue seed runs in the background (usually a few minutes)"
+    fi
+    log_info "Watch progress: unity stack logs unity-builtins-seed"
   fi
   log_ok "Stack is up — open ${NEXTAUTH_URL:-http://127.0.0.1:3000}"
 }
@@ -83,6 +89,16 @@ cmd_integrations_sync() {
     return 0
   fi
   start_integrations_sync
+}
+
+cmd_builtins_sync() {
+  require_compose
+  log_info "Starting Builtins catalogue seed in the background..."
+  compose up -d --force-recreate unity-builtins-seed
+  if _has_env COMPOSIO_API_KEY; then
+    log_info "Composio configured — full catalogue may take ~30 minutes"
+  fi
+  log_info "Watch progress: unity stack logs unity-builtins-seed"
 }
 
 cmd_down() {
@@ -103,6 +119,7 @@ cmd_restart() {
   log_info "Recreating stack with updated .env..."
   compose up -d --force-recreate
   start_integrations_sync
+  log_info "Builtins catalogue seed runs in the background — unity stack logs unity-builtins-seed"
   log_ok "Restart complete"
 }
 
@@ -190,6 +207,23 @@ cmd_doctor() {
   else
     log_warn "orchestra-seed not found — run: unity stack up"
   fi
+  local builtins_status
+  builtins_status="$(compose ps -a --format '{{.Service}}\t{{.State}}\t{{.ExitCode}}' 2>/dev/null \
+    | awk '$1=="unity-builtins-seed"{print $2"\t"$3; exit}')"
+  case "$builtins_status" in
+    running*)
+      log_info "Builtins catalogue seed in progress — unity stack logs unity-builtins-seed"
+      ;;
+    "exited	0")
+      log_ok "Builtins catalogue seed completed"
+      ;;
+    exited*)
+      log_warn "Builtins catalogue seed failed (${builtins_status//$'\t'/ }) — run: unity stack builtins-sync"
+      ;;
+    *)
+      log_info "Builtins catalogue seed not started — run: unity stack builtins-sync"
+      ;;
+  esac
   compose ps --format 'table {{.Name}}\t{{.Status}}\t{{.Ports}}'
 }
 
@@ -210,8 +244,9 @@ main() {
     doctor) cmd_doctor "$@" ;;
     pull) cmd_pull "$@" ;;
     integrations-sync) cmd_integrations_sync "$@" ;;
+    builtins-sync) cmd_builtins_sync "$@" ;;
     *)
-      echo "Usage: compose-cli.sh {up|down|restart|status|logs|doctor|pull|integrations-sync}" >&2
+      echo "Usage: compose-cli.sh {up|down|restart|status|logs|doctor|pull|integrations-sync|builtins-sync}" >&2
       exit 1
       ;;
   esac
