@@ -36,6 +36,37 @@ def _json_list(value: Any) -> list[Any]:
     return parsed if isinstance(parsed, list) else []
 
 
+def _clean_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in payload.items() if value is not None}
+
+
+def _execution_descriptor_from_row(row: dict[str, Any]) -> dict[str, Any]:
+    metadata = integration_metadata(row)
+    labels = metadata.get("labels") if isinstance(metadata.get("labels"), dict) else {}
+    return _clean_payload(
+        {
+            "backend_id": metadata.get("backend_id"),
+            "provider_app_id": metadata.get("provider_app_id"),
+            "canonical_app_slug": metadata.get("app_slug"),
+            "app_display_name": metadata.get("app_display_name")
+            or labels.get("app_display_name"),
+            "app_icon_url": metadata.get("app_icon_url") or labels.get("app_icon_url"),
+            "provider_tool_id": metadata.get("provider_tool_id"),
+            "canonical_name": row.get("name"),
+            "function_manager_name": row.get("primitive_method"),
+            "tool_display_name": metadata.get("tool_display_name")
+            or labels.get("tool_display_name"),
+            "action_class": metadata.get("action_class"),
+            "behavior_hints": metadata.get("behavior_hints"),
+            "required_scopes": metadata.get("required_scopes"),
+            "input_schema": metadata.get("input_schema"),
+            "output_schema": metadata.get("output_schema"),
+            "examples": metadata.get("examples"),
+            "confirmation_required": metadata.get("confirmation_required"),
+        },
+    )
+
+
 def _annotation_for_schema(schema: Any) -> Any:
     if not isinstance(schema, dict):
         return Any
@@ -760,6 +791,7 @@ class IntegrationPrimitives:
         confirmation_token: Optional[str] = None,
         connection_id: Optional[str] = None,
         approval_audit_id: Optional[int] = None,
+        _tool_descriptor: Optional[dict[str, Any]] = None,
     ) -> Any:
         """Execute a provider tool through Orchestra policy and audit checks.
 
@@ -820,6 +852,7 @@ class IntegrationPrimitives:
             tool_id,
             arguments or {},
             confirmation_token=confirmation_token,
+            **(_tool_descriptor or {}),
             **effective_scope,
         )
 
@@ -1095,6 +1128,7 @@ class IntegrationPrimitives:
                 confirmation_token=confirmation_token,
                 connection_id=override_connection_id,
                 approval_audit_id=approval_audit_id,
+                _tool_descriptor=_execution_descriptor_from_row(primitive_data),
             )
 
         _call.__name__ = primitive_data.get("primitive_method") or "integration_tool"

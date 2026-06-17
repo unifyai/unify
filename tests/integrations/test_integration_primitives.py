@@ -823,6 +823,10 @@ async def test_dynamic_app_tool_namespace_resolves_from_materialized_row(
             {
                 "owner_scope": "assistant",
                 "confirmation_token": None,
+                "canonical_name": "primitives.integrations.hubspot.search_contacts",
+                "function_manager_name": (
+                    "primitives__integrations__hubspot__search_contacts"
+                ),
             },
         ),
     ]
@@ -857,6 +861,10 @@ async def test_first_wave_dynamic_namespace_executes_discord_tool(monkeypatch) -
                 "owner_scope": "assistant",
                 "assistant_id": 42,
                 "confirmation_token": None,
+                "canonical_name": "primitives.integrations.discord.list_my_guilds",
+                "function_manager_name": (
+                    "primitives__integrations__discord__list_my_guilds"
+                ),
             },
         ),
     ]
@@ -901,11 +909,18 @@ async def test_callable_for_tool_keeps_execution_identity_out_of_arguments(
 
     callable_tool = primitives.callable_for_tool(
         {
+            "name": "primitives.integrations.gmail.fetch_emails",
             "primitive_method": "primitives_integrations__gmail__fetch_emails",
             "metadata": {
                 "source": "provider_backed",
                 "integration": {
                     "tool_id": "composio:gmail:fetch_emails",
+                    "backend_id": "composio",
+                    "provider_app_id": "gmail",
+                    "app_slug": "gmail",
+                    "provider_tool_id": "gmail.fetch_emails",
+                    "tool_display_name": "Fetch emails",
+                    "action_class": "read",
                     "connection_id": "conn-gmail",
                 },
             },
@@ -937,6 +952,14 @@ async def test_callable_for_tool_keeps_execution_identity_out_of_arguments(
             "assistant_id": 42,
             "connection_id": "conn-gmail",
             "owner_scope": "assistant",
+            "backend_id": "composio",
+            "provider_app_id": "gmail",
+            "canonical_app_slug": "gmail",
+            "provider_tool_id": "gmail.fetch_emails",
+            "canonical_name": "primitives.integrations.gmail.fetch_emails",
+            "function_manager_name": "primitives_integrations__gmail__fetch_emails",
+            "tool_display_name": "Fetch emails",
+            "action_class": "read",
         },
     )
 
@@ -1031,6 +1054,10 @@ async def test_default_owner_scope_is_shared_across_helper_and_namespace_executi
         ("composio:hubspot:search_contacts", {"query": "alice"}),
         {
             "confirmation_token": None,
+            "canonical_name": "primitives.integrations.hubspot.search_contacts",
+            "function_manager_name": (
+                "primitives__integrations__hubspot__search_contacts"
+            ),
             "owner_scope": "assistant",
             "assistant_id": 42,
         },
