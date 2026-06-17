@@ -15,10 +15,13 @@ platform admin account on hosted deployments; the shared key on self-host):
 The run is idempotent and hash-guarded (per manager for primitives, per
 skill for guidance), so it is safe (and cheap) to invoke on every deploy.
 
-Provider-backed integration catalogs can be bootstrapped from the same manifest
-used to configure Orchestra provider backends:
+Self-host and local provider-backed integration catalogs can be bootstrapped
+from the same manifest used to configure Orchestra provider backends. Select
+exactly one executor; the script never falls back to another executor after
+failure:
 
     UNIFY_KEY=<admin-key> ORCHESTRA_ADMIN_KEY=<admin-key> ORCHESTRA_URL=<api-url> \
+        UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR=direct_worker \
         .venv/bin/python scripts/seed_builtins_catalog.py \
         --integration-bootstrap-manifest deploy/selfhost/integration-bootstrap.selfhost.toml
 """
@@ -30,7 +33,10 @@ import hashlib
 import json
 import logging
 import os
+import shlex
+import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 from pathlib import Path
@@ -41,7 +47,7 @@ _repo_root = Path(__file__).resolve().parent.parent
 if str(_repo_root) not in sys.path:
     sys.path.insert(0, str(_repo_root))
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv()
 
@@ -59,6 +65,7 @@ SYNC_PASSTHROUGH_FIELDS = {
 DEFAULT_COMPOSIO_BATCH_SIZE = 25
 BOOTSTRAP_STATUS_SUCCESS = "success"
 BUILTINS_BOOTSTRAP_SEED_OWNER = "public-builtins"
+INTEGRATION_BOOTSTRAP_EXECUTORS = {"direct_worker", "api", "none"}
 
 
 class ProviderBootstrapPlan(NamedTuple):
@@ -90,7 +97,36 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         default=os.environ.get("ORCHESTRA_ADMIN_KEY", ""),
         help="Orchestra admin key. Defaults to ORCHESTRA_ADMIN_KEY.",
     )
+    parser.add_argument(
+        "--skip-integrations",
+        action="store_true",
+        default=os.environ.get("UNITY_SKIP_BUILTINS_INTEGRATIONS", "").lower()
+        in {"1", "true", "yes"},
+        help="Seed only primitives and guidance; integration bootstrap is handled elsewhere.",
+    )
     return parser.parse_args(argv)
+
+
+def _integration_bootstrap_executor(environment: str) -> str:
+    executor = os.environ.get("UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR", "").strip()
+    if not executor:
+        raise ValueError(
+            "UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR is required when an integration "
+            "bootstrap manifest is provided. Select exactly one of: "
+            f"{', '.join(sorted(INTEGRATION_BOOTSTRAP_EXECUTORS))}",
+        )
+    if executor not in INTEGRATION_BOOTSTRAP_EXECUTORS:
+        raise ValueError(
+            f"Invalid UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR={executor!r}; expected one "
+            f"of {', '.join(sorted(INTEGRATION_BOOTSTRAP_EXECUTORS))}",
+        )
+    if environment in {"staging", "production", "prod"}:
+        raise ValueError(
+            f"Hosted environment {environment!r} integration sync is handled by "
+            "unity-deploy Cloud Run Job. Run this script with --skip-integrations "
+            "for hosted deployments.",
+        )
+    return executor
 
 
 def _load_manifest(path: str) -> dict[str, Any]:
@@ -206,6 +242,7 @@ def _admin_request(
     method: str,
     path: str,
     payload: dict[str, Any] | None = None,
+    timeout: float = 120,
 ) -> dict[str, Any]:
     import json
 
@@ -222,7 +259,7 @@ def _admin_request(
         },
     )
     try:
-        with request.urlopen(req, timeout=120) as response:
+        with request.urlopen(req, timeout=timeout) as response:
             body = response.read().decode("utf-8")
             logging.info(
                 "Orchestra admin request complete method=%s path=%s status=%s elapsed=%.1fs",
@@ -302,13 +339,25 @@ def _sync_diagnostics(
             "prune_unlisted_apps",
             "apps_pruned",
             "tools_pruned",
+            "apps_upserted",
+            "tools_upserted",
+            "apps_inserted",
+            "apps_updated",
+            "tools_inserted",
+            "tools_updated",
+            "skipped_batches",
+            "completed_batches",
+            "executor",
+            "run_id",
+            "desired_hash",
+            "elapsed_seconds",
+            "exit_code",
         ):
             if field in result:
                 diagnostics[field] = result[field]
-        if sync_mode != "full":
-            for field in ("skipped_apps", "matched_app_slugs"):
-                if field in result:
-                    diagnostics[field] = result[field]
+        for field in ("skipped_apps", "matched_app_slugs", "diagnostics"):
+            if field in result:
+                diagnostics[field] = result[field]
     return diagnostics
 
 
@@ -477,143 +526,156 @@ def _should_batch_composio_full_sync(sync_payload: dict[str, Any]) -> bool:
     )
 
 
+def _builtins_sync_request_payload(
+    *,
+    plan: ProviderBootstrapPlan,
+    sync_payload: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "backend_id": plan.backend_id,
+        "environment": plan.environment,
+        "desired_hash": plan.desired_hash,
+        "desired_config": plan.desired_config,
+        "cache_version": sync_payload.get("cache_version"),
+        "mode": "all",
+        "app_slugs": list(sync_payload.get("app_slugs") or []),
+        "prune_unlisted_apps": _effective_prune(sync_payload),
+        "sync_payload": sync_payload,
+        "batch_size": int(
+            os.environ.get(
+                "UNITY_INTEGRATION_BOOTSTRAP_BATCH_SIZE",
+                DEFAULT_COMPOSIO_BATCH_SIZE,
+            ),
+        ),
+        "workers": int(os.environ.get("UNITY_INTEGRATION_BOOTSTRAP_WORKERS", "4")),
+    }
+
+
+def _parse_final_json(stdout: str) -> dict[str, Any]:
+    for line in reversed(stdout.splitlines()):
+        line = line.strip()
+        if not line or not line.startswith("{"):
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    raise RuntimeError("executor did not emit final JSON status")
+
+
+def _run_json_command(
+    command: list[str],
+    *,
+    request_payload: dict[str, Any],
+) -> dict[str, Any]:
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        suffix=".json",
+    ) as request_file:
+        json.dump(request_payload, request_file)
+        request_file.flush()
+        completed = subprocess.run(
+            [*command, "--request-file", request_file.name],
+            check=False,
+            capture_output=True,
+            encoding="utf-8",
+        )
+    if completed.returncode != 0:
+        try:
+            result = _parse_final_json(completed.stdout)
+        except Exception:
+            result = {}
+        error = (
+            result.get("error") or completed.stderr.strip() or completed.stdout.strip()
+        )
+        raise RuntimeError(
+            error or f"executor failed with exit code {completed.returncode}",
+        )
+    return _parse_final_json(completed.stdout)
+
+
+def _run_direct_worker_executor(payload: dict[str, Any]) -> dict[str, Any]:
+    command = os.environ.get(
+        "UNITY_INTEGRATION_BOOTSTRAP_DIRECT_WORKER_CMD",
+        f"{sys.executable} -m orchestra.workers.builtins_artifacts_seed_job",
+    )
+    return _run_json_command(shlex.split(command), request_payload=payload)
+
+
+def _run_api_executor(
+    *,
+    base_url: str,
+    admin_key: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    result = _admin_request(
+        base_url=base_url,
+        admin_key=admin_key,
+        method="POST",
+        path="/admin/integrations/builtins-sync/start",
+        payload=payload,
+        timeout=float(os.environ.get("UNITY_INTEGRATION_BOOTSTRAP_TIMEOUT", "3600")),
+    )
+    return result
+
+
 def _sync_and_seed_provider(
     *,
     base_url: str,
     admin_key: str,
+    plan: ProviderBootstrapPlan,
     sync_payload: dict[str, Any],
+    executor: str = "api",
 ) -> tuple[bool, dict[str, Any]]:
-    if not _should_batch_composio_full_sync(sync_payload):
-        logging.info(
-            "Starting integration provider sync backend=%s mode=%s app_slugs=%s",
-            sync_payload["backend_id"],
-            sync_payload.get("sync_mode"),
-            len(sync_payload.get("app_slugs") or []),
-        )
-        result = _admin_request(
-            base_url=base_url,
-            admin_key=admin_key,
-            method="POST",
-            path="/admin/integrations/sync",
-            payload=sync_payload,
-        )
-        return (
-            _seed_sync_result(
-                result=result,
-                sync_payload={**sync_payload, "_seed_phase": "single-sync"},
-            ),
-            result,
-        )
-
-    app_payload = {
-        **sync_payload,
-        "sync_tools": False,
-        "app_slugs": [],
-        "include_all_managed_apps": True,
-    }
     logging.info(
-        "Starting integration app-only sync backend=%s mode=%s",
-        sync_payload["backend_id"],
+        "Starting Builtins integrations artifact seed backend=%s environment=%s mode=%s executor=%s",
+        plan.backend_id,
+        plan.environment,
         sync_payload.get("sync_mode"),
+        executor,
     )
-    app_result = _admin_request(
-        base_url=base_url,
-        admin_key=admin_key,
-        method="POST",
-        path="/admin/integrations/sync",
-        payload=app_payload,
-    )
-    changed = _seed_sync_result(
-        result=app_result,
-        sync_payload={
-            **app_payload,
-            "_seed_phase": "app-only-sync",
-            "_seed_tools": False,
-        },
-    )
-    app_count = int(app_result.get("apps_upserted", 0) or 0)
-    logging.info(
-        "Merging integration app-only sync result backend=%s apps=%s matched_slugs=%s",
-        sync_payload["backend_id"],
-        app_count,
-        len(app_result.get("matched_app_slugs") or []),
-    )
-    aggregate = _merge_sync_results(base=None, batch=app_result, app_count=app_count)
-    aggregate["sync_mode"] = sync_payload.get("sync_mode") or "full"
-    aggregate["requested_app_slugs"] = list(sync_payload.get("app_slugs") or [])
-    matched_slugs = [str(slug) for slug in app_result.get("matched_app_slugs") or []]
-    if not matched_slugs:
-        raise RuntimeError("Composio full sync returned no app slugs")
-    batch_size = int(
-        os.environ.get(
-            "UNITY_INTEGRATION_BOOTSTRAP_BATCH_SIZE",
-            DEFAULT_COMPOSIO_BATCH_SIZE,
-        ),
-    )
-    batches = _chunks(matched_slugs, max(1, batch_size))
-    logging.info(
-        "Starting integration tool sync batches backend=%s batches=%s batch_size=%s",
-        sync_payload["backend_id"],
-        len(batches),
-        max(1, batch_size),
-    )
-    for batch_index, batch_slugs in enumerate(batches, start=1):
-        batch_payload = {
-            **sync_payload,
-            "sync_mode": "partial",
-            "app_slugs": [slug.upper() for slug in batch_slugs],
-            "include_all_managed_apps": False,
-            "sync_tools": True,
-            "prune_unlisted_apps": False,
-        }
-        logging.info(
-            "Starting integration tool sync batch backend=%s batch=%s/%s app_slugs=%s",
-            sync_payload["backend_id"],
-            batch_index,
-            len(batches),
-            len(batch_slugs),
-        )
-        batch_result = _admin_request(
+    payload = _builtins_sync_request_payload(plan=plan, sync_payload=sync_payload)
+    if executor == "api":
+        result = _run_api_executor(
             base_url=base_url,
             admin_key=admin_key,
-            method="POST",
-            path="/admin/integrations/sync",
-            payload=batch_payload,
+            payload=payload,
         )
-        phase = f"tool-sync-batch-{batch_index}-of-{len(batches)}"
-        changed = (
-            _seed_sync_result(
-                result=batch_result,
-                sync_payload={
-                    **batch_payload,
-                    "_seed_phase": phase,
-                    "_seed_apps": False,
-                },
-            )
-            or changed
-        )
-        logging.info(
-            "Merging integration tool sync batch backend=%s batch=%s/%s "
-            "apps=%s tools=%s",
-            sync_payload["backend_id"],
-            batch_index,
-            len(batches),
-            batch_result.get("apps_upserted", 0),
-            batch_result.get("tools_upserted", 0),
-        )
-        aggregate = _merge_sync_results(
-            base=aggregate,
-            batch=batch_result,
-            app_count=app_count,
-        )
+    elif executor == "direct_worker":
+        result = _run_direct_worker_executor(payload)
+    elif executor == "none":
+        result = {
+            "status": BOOTSTRAP_STATUS_SUCCESS,
+            "executor": "none",
+            "apps_upserted": 0,
+            "tools_upserted": 0,
+            "skipped_batches": 0,
+            "completed_batches": 0,
+        }
+    else:
+        raise ValueError(f"Unsupported integration bootstrap executor: {executor}")
     logging.info(
-        "Completed integration tool sync batches backend=%s apps=%s tools=%s changed=%s",
-        sync_payload["backend_id"],
-        aggregate.get("apps_upserted", 0),
-        aggregate.get("tools_upserted", 0),
-        changed,
+        "Completed Builtins integrations artifact seed backend=%s status=%s apps=%s tools=%s "
+        "skipped_batches=%s completed_batches=%s",
+        plan.backend_id,
+        result.get("status"),
+        result.get("apps_upserted", 0),
+        result.get("tools_upserted", 0),
+        result.get("skipped_batches", 0),
+        result.get("completed_batches", 0),
     )
-    return changed, aggregate
+    if result.get("status") != BOOTSTRAP_STATUS_SUCCESS:
+        raise RuntimeError(
+            result.get("error") or "Builtins integrations artifact seed failed",
+        )
+    changed = bool(
+        int(result.get("apps_upserted", 0) or 0)
+        or int(result.get("tools_upserted", 0) or 0),
+    )
+    return changed, result
 
 
 def _sync_integration_bootstrap_manifest(
@@ -637,11 +699,13 @@ def _sync_integration_bootstrap_manifest(
             backend_id=str(backend_id),
             config=config,
         )
+        executor = _integration_bootstrap_executor(plan.environment)
         logging.info(
-            "Checking integration bootstrap state backend=%s environment=%s desired_hash=%s",
+            "Checking integration bootstrap state backend=%s environment=%s desired_hash=%s executor=%s",
             plan.backend_id,
             plan.environment,
             plan.desired_hash,
+            executor,
         )
         state = _bootstrap_state(
             base_url=base_url,
@@ -687,7 +751,9 @@ def _sync_integration_bootstrap_manifest(
             provider_changed, result = _sync_and_seed_provider(
                 base_url=base_url,
                 admin_key=admin_key,
+                plan=plan,
                 sync_payload=plan.sync_payload,
+                executor=executor,
             )
             logging.info(
                 "Completed integration bootstrap sync backend=%s status=%s "
@@ -739,8 +805,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     primitives_changed = seed_builtin_primitives()
     guidance_changed = seed_builtin_guidance()
-    if args.integration_bootstrap_manifest:
-        integrations_changed = seed_builtin_integrations()
+    if args.skip_integrations:
+        integrations_changed = False
+    elif args.integration_bootstrap_manifest:
         base_url = os.environ.get("ORCHESTRA_URL", "").rstrip("/")
         if not base_url:
             raise ValueError("ORCHESTRA_URL is required for integration bootstrap")
@@ -748,13 +815,10 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError(
                 "ORCHESTRA_ADMIN_KEY or --admin-key is required for integration bootstrap",
             )
-        integrations_changed = (
-            _sync_integration_bootstrap_manifest(
-                manifest_path=args.integration_bootstrap_manifest,
-                base_url=base_url,
-                admin_key=args.admin_key,
-            )
-            or integrations_changed
+        integrations_changed = _sync_integration_bootstrap_manifest(
+            manifest_path=args.integration_bootstrap_manifest,
+            base_url=base_url,
+            admin_key=args.admin_key,
         )
     else:
         integrations_changed = seed_builtin_integrations()
