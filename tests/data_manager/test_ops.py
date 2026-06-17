@@ -70,7 +70,6 @@ def test_insert_chunk_forwards_duplicate_key_replay_flag(monkeypatch):
         "context": "Data/test",
         "rows": [{"key": "a"}],
         "kwargs": {
-            "add_to_all_context": False,
             "ignore_duplicate_composite_key_errors": True,
         },
     }

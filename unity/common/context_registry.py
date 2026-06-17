@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from unify import create_fields
 
 from unity.common.authorship import SHARED_SCOPED_TABLES, fields_with_authoring
-from unity.common.context_store import _PRIVATE_FIELDS, _create_context_with_retry
+from unity.common.context_store import _create_context_with_retry
 from unity.common.state_managers import BaseStateManager
 from unity.common.tool_outcome import ToolError, ToolErrorException
 from unity.session_details import SESSION_DETAILS
@@ -304,95 +304,9 @@ class ContextRegistry:
             except Exception:
                 pass  # Fields already exist or transient failure
 
-        # Also create aggregation contexts for cross-assistant and cross-user queries
-        cls._ensure_all_contexts(target_name, table)
-
         cls._registry[(manager_name, table.name, entry["root_identity"])] = target_name
 
         return target_name
-
-    @classmethod
-    def _ensure_all_contexts(cls, target_name: str, table: TableContext) -> None:
-        """
-        Ensure aggregation contexts exist for cross-assistant and cross-user queries.
-
-        Creates two contexts:
-          - {user_id}/All/{suffix} - all assistants for this user
-          - All/{suffix}           - all users, all assistants
-
-        For test contexts (starting with "tests/"), the aggregation contexts are
-        scoped to the test root for proper isolation:
-          - {test_root}/{user_id}/All/{suffix}
-          - {test_root}/All/{suffix}
-
-        These contexts:
-        - Have the same fields as the source context (for consistent querying)
-        - Include private fields (_user, _user_id, _assistant, _assistant_id, _org, _org_id)
-        - Have NO unique_keys or auto_counting (logs are added by reference)
-        """
-        if target_name.startswith(TEAM_CONTEXT_PREFIX):
-            return
-
-        parts = target_name.split("/")
-        if len(parts) < 3:
-            return
-
-        # Handle test contexts: tests/.../{default_user_id}/{default_assistant_id}/Suffix
-        # Find the user position by looking for the UNASSIGNED_USER_CONTEXT marker
-        if parts[0] == "tests":
-            from unity.session_details import UNASSIGNED_USER_CONTEXT
-
-            try:
-                user_idx = parts.index(UNASSIGNED_USER_CONTEXT)
-            except ValueError:
-                # Can't determine structure without the UNASSIGNED_USER_CONTEXT marker
-                return
-
-            # Need at least User/Assistant/Suffix after the test root
-            if user_idx + 2 >= len(parts):
-                return
-
-            test_root = "/".join(parts[:user_idx])
-            user_ctx = parts[user_idx]
-            suffix = "/".join(parts[user_idx + 2 :])
-
-            all_ctxs = [
-                (
-                    f"{test_root}/{user_ctx}/All/{suffix}",
-                    f"Aggregation of {table.name} across all assistants for this user",
-                ),
-                (
-                    f"{test_root}/All/{suffix}",
-                    f"Global aggregation of {table.name} across all users and assistants",
-                ),
-            ]
-        else:
-            # Production path: User/Assistant/Suffix
-            user_ctx = parts[0]
-            suffix = "/".join(parts[2:])
-
-            all_ctxs = [
-                (
-                    f"{user_ctx}/All/{suffix}",
-                    f"Aggregation of {table.name} across all assistants for this user",
-                ),
-                (
-                    f"All/{suffix}",
-                    f"Global aggregation of {table.name} across all users and assistants",
-                ),
-            ]
-
-        for all_ctx, description in all_ctxs:
-            _create_context_with_retry(all_ctx, description=description)
-
-            # Mirror fields from source context + add private fields
-            if table.fields:
-                fields_with_private = dict(table.fields)
-                fields_with_private.update(_PRIVATE_FIELDS)
-                try:
-                    create_fields(fields_with_private, context=all_ctx)
-                except Exception:
-                    pass  # Fields already exist or transient failure
 
     @classmethod
     def refresh(

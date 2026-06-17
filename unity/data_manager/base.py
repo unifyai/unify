@@ -2110,7 +2110,6 @@ class BaseDataManager(BaseStateManager):
         context: str,
         rows: List[Dict[str, Any]],
         *,
-        add_to_all_context: bool = False,
         batched: bool = True,
         destination: str | None = None,
     ) -> List[int]:
@@ -2137,9 +2136,6 @@ class BaseDataManager(BaseStateManager):
             All rows should have consistent structure.
 
             Example: ``[{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]``
-
-        add_to_all_context : bool, default ``False``
-            Whether to also add rows to aggregation contexts.
 
         batched : bool, default ``True``
             When ``True`` (recommended), uses batched log creation for better
@@ -2366,7 +2362,6 @@ class BaseDataManager(BaseStateManager):
         chunk_size: int = 1000,
         auto_counting: Optional[Dict[str, Optional[str]]] = None,
         infer_untyped_fields: bool = False,
-        add_to_all_context: bool = False,
         execution: Optional["IngestExecutionConfig"] = None,
         post_ingest: Optional["PostIngestConfig"] = None,
         on_task_complete: Optional[Callable] = None,
@@ -2462,10 +2457,6 @@ class BaseDataManager(BaseStateManager):
         infer_untyped_fields : bool, default ``False``
             When ``True``, Unify infers types for fields not declared in
             *fields*.
-
-        add_to_all_context : bool, default ``False``
-            Whether to also add inserted rows to aggregation contexts.
-            Used by FileManager to populate cross-assistant shared tables.
 
         destination : str | None, default ``None``
             Where Data-owned rows should be stored. Pass ``"personal"`` (the

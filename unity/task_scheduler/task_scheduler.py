@@ -214,7 +214,6 @@ class TaskScheduler(BaseTaskScheduler):
         - Maintains in‑memory pointers to the single primed task and the current active task handle (if any).
         """
         super().__init__()
-        self.include_in_multi_assistant_table = True
 
         # Get ContactManager via registry so its bound methods can act as tools
         self._contact_manager = ManagerRegistry.get_contact_manager()
@@ -684,10 +683,7 @@ class TaskScheduler(BaseTaskScheduler):
     def _provision_storage(self) -> None:
         """Ensure Tasks context, schema and local view exist (idempotent)."""
         # Install storage adapter and ensure context/fields exist
-        self._store = TasksStore(
-            self._ctx,
-            add_to_all_context=self.include_in_multi_assistant_table,
-        )
+        self._store = TasksStore(self._ctx)
 
         # Centralised local view for queue membership, allocator and light caching.
         self._view = LocalTaskView(self._store)
@@ -712,13 +708,7 @@ class TaskScheduler(BaseTaskScheduler):
 
         if context_name in self._root_views:
             return self._root_views[context_name]
-        store = TasksStore(
-            context_name,
-            add_to_all_context=(
-                self.include_in_multi_assistant_table
-                and not context_name.startswith(TEAM_CONTEXT_PREFIX)
-            ),
-        )
+        store = TasksStore(context_name)
         view = LocalTaskView(store)
         self._root_stores[context_name] = store
         self._root_views[context_name] = view

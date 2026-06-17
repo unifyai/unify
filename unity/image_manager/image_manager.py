@@ -609,7 +609,6 @@ class ImageManager(BaseImageManager):
         ]
 
     def __init__(self) -> None:
-        self.include_in_multi_assistant_table = True
         self._ctx = ContextRegistry.get_context(self, IMAGES_TABLE)
 
         # Local DataStore mirror for Images (write-through on reads/writes)
@@ -726,13 +725,6 @@ class ImageManager(BaseImageManager):
                 destination=f"team:{from_root.split('/')[1]}",
             )
         return from_root.rstrip("/")
-
-    def _should_add_to_all_context(self, context: str) -> bool:
-        """Return whether writes to this Images context should mirror into All/*."""
-
-        return self.include_in_multi_assistant_table and not context.startswith(
-            TEAM_CONTEXT_PREFIX,
-        )
 
     # ------------------------------ Reads ---------------------------------
     def filter_images(
@@ -1202,7 +1194,6 @@ class ImageManager(BaseImageManager):
                 context=context,
                 entries=prepared,
                 batched=True,
-                add_to_all_context=self._should_add_to_all_context(context),
             )
 
             # Helper: write-through to DataStore with a given row payload
@@ -1310,7 +1301,6 @@ class ImageManager(BaseImageManager):
                         **payload,
                         new=True,
                         mutable=False,
-                        add_to_all_context=self._should_add_to_all_context(context),
                     )
                     try:
                         self._put_preserve_temp(lg.entries, context)
@@ -1591,7 +1581,6 @@ class ImageManager(BaseImageManager):
                 **payload,
                 new=True,
                 mutable=False,
-                add_to_all_context=self._should_add_to_all_context(target_context),
             )
 
         unify.delete_logs(context=source_context, logs=rows[0].id)

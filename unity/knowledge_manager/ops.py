@@ -42,7 +42,6 @@ def add_rows(
     return dm.insert_rows(
         ctx,
         rows=rows,
-        add_to_all_context=knowledge_manager.include_in_multi_assistant_table,
     )
 
 
