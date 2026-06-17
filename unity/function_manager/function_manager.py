@@ -1725,7 +1725,6 @@ class FunctionManager(BaseFunctionManager):
         self._daemon = daemon
         # ToDo: expose tools to LLM once needed
         self._tools: Dict[str, callable] = {}
-        self.include_in_multi_assistant_table = True
 
         # Internal monotonically-increasing function-id counter.  We keep it local
         # to the manager to avoid an expensive scan across *all* logs every
@@ -2625,7 +2624,6 @@ class FunctionManager(BaseFunctionManager):
                         {"meta_id": 1, field_name: hashes},
                     ],
                     stamp_authoring=True,
-                    add_to_all_context=self.include_in_multi_assistant_table,
                 )
         except Exception as e:
             logger.warning("Failed to store %s hash map: %s", field_name, e)
@@ -3307,7 +3305,6 @@ class FunctionManager(BaseFunctionManager):
                     context=self._meta_ctx,
                     entries=[{"meta_id": 1, "custom_functions_hash": hash_value}],
                     stamp_authoring=True,
-                    add_to_all_context=self.include_in_multi_assistant_table,
                 )
         except Exception as e:
             logger.warning(f"Failed to store custom functions hash: {e}")
@@ -3367,7 +3364,6 @@ class FunctionManager(BaseFunctionManager):
             context=self._compositional_ctx,
             entries=[insert_data],
             stamp_authoring=True,
-            add_to_all_context=self.include_in_multi_assistant_table,
             recompute_derived=True,
         )
         # unity_create_logs can return either a dict or a list of Log objects
@@ -3425,7 +3421,6 @@ class FunctionManager(BaseFunctionManager):
                     context=self._meta_ctx,
                     entries=[{"meta_id": 1, "custom_venvs_hash": hash_value}],
                     stamp_authoring=True,
-                    add_to_all_context=self.include_in_multi_assistant_table,
                 )
         except Exception as e:
             logger.warning(f"Failed to store custom venvs hash: {e}")
@@ -3482,7 +3477,6 @@ class FunctionManager(BaseFunctionManager):
             context=self._venvs_ctx,
             entries=[insert_data],
             stamp_authoring=True,
-            add_to_all_context=self.include_in_multi_assistant_table,
         )
         # unity_create_logs can return either a dict or a list of Log objects
         if isinstance(result, list) and len(result) > 0:
@@ -4049,7 +4043,6 @@ class FunctionManager(BaseFunctionManager):
                     entries=entries_to_create,
                     stamp_authoring=True,
                     batched=True,
-                    add_to_all_context=self.include_in_multi_assistant_table,
                     recompute_derived=True,
                 )
             except Exception as e:
@@ -4221,7 +4214,6 @@ class FunctionManager(BaseFunctionManager):
                     entries=entries_to_create,
                     stamp_authoring=True,
                     batched=True,
-                    add_to_all_context=self.include_in_multi_assistant_table,
                     recompute_derived=True,
                 )
             except Exception as e:
@@ -5438,7 +5430,6 @@ class FunctionManager(BaseFunctionManager):
             context=self._venvs_ctx,
             entries=[{"venv": venv}],
             stamp_authoring=True,
-            add_to_all_context=self.include_in_multi_assistant_table,
         )
         # unity_create_logs can return either a dict or a list of Log objects
         if isinstance(result, list) and len(result) > 0:

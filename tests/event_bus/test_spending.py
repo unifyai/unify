@@ -101,7 +101,6 @@ class TestAtomicUpsert:
                                 "_assistant_id": "456",
                                 "month": "2026-01",
                             },
-                            add_to_all_context=True,
                         )
 
         assert result.log_id == 789
@@ -300,7 +299,6 @@ class TestUpdateCumulativeSpend:
         assert call_kwargs["context"] == "user123/456/Spending/Monthly"
         assert call_kwargs["field"] == "cumulative_spend"
         assert "+5.5" in call_kwargs["operation"]
-        assert call_kwargs["add_to_all_context"] is True
         assert call_kwargs["project"] == "Assistants"
 
     @pytest.mark.asyncio
@@ -1987,55 +1985,6 @@ class TestE2ESpendingLimits:
         assert (
             spend_after >= spend_before
         ), f"Spend should increase after concurrent calls: {spend_before} -> {spend_after}"
-
-    @pytest.mark.asyncio
-    @pytest.mark.llm_call
-    async def test_all_spending_monthly_context(self, e2e_config):
-        """Test that spend logs are mirrored to All/Spending/Monthly context."""
-        import unity
-        import unillm
-
-        unity.init()
-
-        # Make an LLM call to generate spend
-        llm_client = unillm.AsyncUnify(e2e_config.model)
-        try:
-            await llm_client.generate(
-                messages=[{"role": "user", "content": "Aggregation test"}],
-                max_tokens=10,
-            )
-        except unillm.SpendingLimitExceededError:
-            pytest.skip("Limit exceeded - cannot test aggregation")
-
-        # Wait for async logging
-        await asyncio.sleep(2.0)
-
-        # Query All/Spending/Monthly context
-        headers = {"Authorization": f"Bearer {e2e_config.api_key}"}
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(
-                f"{e2e_config.base_url}/logs",
-                headers=headers,
-                params={
-                    "project_name": "Assistants",
-                    "context": "All/Spending/Monthly",
-                },
-            )
-
-        if response.status_code == 200:
-            logs = response.json().get("logs", [])
-            # Should find at least one log with required fields
-            current_month = datetime.now().strftime("%Y-%m")
-            matching_logs = [
-                log
-                for log in logs
-                if log.get("entries", {}).get("month") == current_month
-                and log.get("entries", {}).get("_assistant_id")
-                == str(e2e_config.test_agent_id)
-            ]
-            assert (
-                len(matching_logs) > 0 or len(logs) > 0
-            ), "Should find spending logs in All/Spending/Monthly context"
 
     @pytest.mark.asyncio
     @pytest.mark.llm_call

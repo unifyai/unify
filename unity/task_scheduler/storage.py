@@ -17,11 +17,9 @@ from functools import cached_property
 
 import unify
 
-from unity.common.context_registry import TEAM_CONTEXT_PREFIX
 from unity.settings import SETTINGS
 from unify.utils.http import RequestError as _UnifyRequestError
 from unity.common.authorship import strip_authoring_assistant_id
-from unity.common.context_store import _PRIVATE_FIELDS
 from unity.common.log_utils import log as unity_log, create_logs as unity_create_logs
 from unity.task_scheduler.types.queue_summary import QueueSummary
 from pydantic import BaseModel
@@ -43,11 +41,9 @@ class TasksStore:
         self,
         context: str,
         *,
-        add_to_all_context: bool = False,
         project: str | None = None,
     ) -> None:
         self._ctx = context
-        self._add_to_all_context = add_to_all_context
         self._project = project or unify.active_project()
 
     # ----------------------------- Context ---------------------------------
@@ -118,90 +114,6 @@ class TasksStore:
         except Exception:
             normalised = {k: str(v) for k, v in updated.items()}
         self.__dict__["fields"] = normalised
-
-        # Ensure aggregation contexts exist for cross-assistant and cross-user queries
-        all_ctxs = self._all_contexts()
-        if all_ctxs:
-            self._ensure_all_contexts(all_ctxs=all_ctxs, fields=fields)
-
-    def _all_contexts(self) -> List[str]:
-        """
-        Derive aggregation contexts for this user/assistant-scoped context.
-
-        Returns two contexts for cross-assistant and cross-user aggregation:
-          - {user_id}/All/{suffix} - all assistants for this user
-          - All/{suffix}           - all users, all assistants
-
-        Example: "42/7/Tasks" returns:
-          - "42/All/Tasks"
-          - "All/Tasks"
-
-        Returns empty list if context doesn't have user_id/assistant_id prefix.
-        """
-        if self._ctx.startswith(TEAM_CONTEXT_PREFIX):
-            return []
-        parts = self._ctx.split("/")
-        if len(parts) < 3:
-            return []
-        user_ctx = parts[0]
-        suffix = "/".join(parts[2:])  # Everything after user_id/assistant_id
-        return [
-            f"{user_ctx}/All/{suffix}",  # User-level aggregation
-            f"All/{suffix}",  # Global aggregation
-        ]
-
-    def _ensure_all_contexts(
-        self,
-        *,
-        all_ctxs: List[str],
-        fields: Dict[str, str],
-    ) -> None:
-        """
-        Ensure aggregation contexts exist for cross-assistant and cross-user queries.
-
-        Unlike the main context, these do not use unique_keys or auto_counting
-        since logs are added by reference from multiple assistant contexts.
-        """
-        for all_ctx in all_ctxs:
-            # Determine description based on aggregation level
-            if all_ctx.startswith("All/"):
-                description = f"Global aggregation of {self._ctx.split('/')[-1]} across all users and assistants"
-            else:
-                description = f"Aggregation of {self._ctx.split('/')[-1]} across all assistants for this user"
-
-            unify.create_context(
-                all_ctx,
-                description=description,
-                project=self._project,
-            )
-
-            # Merge manager fields with private fields for All context
-            fields_with_private = dict(fields)
-            fields_with_private.update(_PRIVATE_FIELDS)
-
-            # Ensure all required fields exist (idempotent per-field)
-            try:
-                existing = (
-                    unify.get_fields(
-                        project=self._project,
-                        context=all_ctx,
-                    )
-                    or {}
-                )
-            except Exception:
-                existing = {}
-            missing = {
-                k: v for k, v in fields_with_private.items() if k not in existing
-            }
-            if missing:
-                try:
-                    unify.create_fields(
-                        missing,
-                        project=self._project,
-                        context=all_ctx,
-                    )
-                except Exception:
-                    pass  # Fields already exist or transient failure
 
     # ------------------------------- Reads ---------------------------------
     @cached_property
@@ -432,7 +344,6 @@ class TasksStore:
             context=self._ctx,
             new=new,
             stamp_authoring=True,
-            add_to_all_context=self._add_to_all_context,
             **norm_entries,
         )
 
@@ -455,7 +366,6 @@ class TasksStore:
                 context=self._ctx,
                 entries=normalised,
                 stamp_authoring=True,
-                add_to_all_context=self._add_to_all_context,
             )
         except Exception:
             # Fallback: create sequentially (preserves correctness if batch API is unavailable)
@@ -466,7 +376,6 @@ class TasksStore:
                     context=self._ctx,
                     new=True,
                     stamp_authoring=True,
-                    add_to_all_context=self._add_to_all_context,
                     **e,
                 )
                 try:

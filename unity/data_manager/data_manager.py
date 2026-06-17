@@ -118,13 +118,6 @@ class DataManager(BaseDataManager):
     def __init__(self) -> None:
         """Initialize DataManager with context registration."""
         super().__init__()
-        # TODO: Re-enable once the backend stops incrementing auto_counting
-        # counters on add_logs_to_context reference writes to All/ aggregation
-        # contexts.  Same root cause as the FileManager file_id gap — row_id
-        # values get non-sequential when rows are mirrored to aggregation
-        # contexts, and DM tables default to auto_counting={"row_id": None}.
-        self.include_in_multi_assistant_table = False
-
         self._base_ctx = ContextRegistry.get_context(self, "Data")
 
         logger.debug("DataManager initialized with base context: %s", self._base_ctx)
@@ -1074,7 +1067,6 @@ class DataManager(BaseDataManager):
         context: str,
         rows: List[Dict[str, Any]],
         *,
-        add_to_all_context: bool = False,
         batched: bool = True,
         destination: str | None = None,
     ) -> List[int]:
@@ -1088,7 +1080,6 @@ class DataManager(BaseDataManager):
         return insert_rows_impl(
             resolved,
             rows,
-            add_to_all_context=add_to_all_context,
             batched=batched,
         )
 
@@ -1155,7 +1146,6 @@ class DataManager(BaseDataManager):
         chunk_size: int = 1000,
         auto_counting: Optional[Dict[str, Optional[str]]] = None,
         infer_untyped_fields: bool = False,
-        add_to_all_context: bool = False,
         execution: Optional["IngestExecutionConfig"] = None,
         post_ingest: Optional["PostIngestConfig"] = None,
         on_task_complete=None,
@@ -1193,7 +1183,6 @@ class DataManager(BaseDataManager):
             chunk_size=chunk_size,
             auto_counting=auto_counting,
             infer_untyped_fields=infer_untyped_fields,
-            add_to_all_context=add_to_all_context,
             execution=execution,
             post_ingest=post_ingest,
             on_task_complete=on_task_complete,

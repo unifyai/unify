@@ -897,7 +897,6 @@ class SimulatedDataManager(BaseDataManager):
         context: str,
         rows: List[Dict[str, Any]],
         *,
-        add_to_all_context: bool = False,
         batched: bool = True,
         destination: str | None = None,
     ) -> List[int]:
@@ -1008,7 +1007,6 @@ class SimulatedDataManager(BaseDataManager):
         chunk_size: int = 1000,
         auto_counting: Optional[Dict[str, Optional[str]]] = None,
         infer_untyped_fields: bool = False,
-        add_to_all_context: bool = False,
         execution: Optional[IngestExecutionConfig] = None,
         post_ingest: Optional[PostIngestConfig] = None,
         on_task_complete=None,

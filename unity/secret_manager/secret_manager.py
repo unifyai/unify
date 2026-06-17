@@ -403,7 +403,6 @@ class SecretManager(BaseSecretManager):
                         new=True,
                         mutable=True,
                         stamp_authoring=True,
-                        add_to_all_context=False,
                     )
                 self._env_set(name, value)
                 written += 1
@@ -1291,7 +1290,6 @@ class SecretManager(BaseSecretManager):
             new=True,
             mutable=True,
             stamp_authoring=True,
-            add_to_all_context=False,
         )
 
         try:
