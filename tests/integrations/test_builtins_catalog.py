@@ -575,7 +575,7 @@ def test_seed_builtins_script_full_composio_batches_seed_apps_once(monkeypatch) 
     assert admin_payloads[0]["sync_payload"]["include_all_managed_apps"] is True
 
 
-def test_seed_builtins_script_hosted_manifest_fails_before_mutation(
+def test_seed_builtins_script_hosted_manifest_uses_explicit_api_executor(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -599,19 +599,25 @@ app_slugs = ["gmail"]
 
     def fake_admin_request(*, method, path, payload=None, **_kwargs):
         requests.append((method, path, payload))
+        if path.endswith("/bootstrap-state"):
+            return {}
+        if path == "/admin/integrations/builtins-sync/start":
+            return {"status": "success", "apps_upserted": 1, "tools_upserted": 1}
         return {}
 
-    monkeypatch.setenv("UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR", "direct_worker")
+    monkeypatch.setenv("UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR", "api")
     monkeypatch.setattr(module, "_admin_request", fake_admin_request)
 
-    with pytest.raises(ValueError, match="unity-deploy Cloud Run Job"):
-        module._sync_integration_bootstrap_manifest(
-            manifest_path=str(manifest),
-            base_url="http://orchestra/v0",
-            admin_key="admin",
-        )
+    assert module._sync_integration_bootstrap_manifest(
+        manifest_path=str(manifest),
+        base_url="http://orchestra/v0",
+        admin_key="admin",
+    )
 
-    assert requests == []
+    assert any(path == "/admin/integrations/backends" for _, path, _ in requests)
+    assert any(
+        path == "/admin/integrations/builtins-sync/start" for _, path, _ in requests
+    )
 
 
 def test_seed_builtins_script_selfhost_executor_uses_direct_worker(

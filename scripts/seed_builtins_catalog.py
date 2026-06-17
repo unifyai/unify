@@ -120,12 +120,6 @@ def _integration_bootstrap_executor(environment: str) -> str:
             f"Invalid UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR={executor!r}; expected one "
             f"of {', '.join(sorted(INTEGRATION_BOOTSTRAP_EXECUTORS))}",
         )
-    if environment in {"staging", "production", "prod"}:
-        raise ValueError(
-            f"Hosted environment {environment!r} integration sync is handled by "
-            "unity-deploy Cloud Run Job. Run this script with --skip-integrations "
-            "for hosted deployments.",
-        )
     return executor
 
 
