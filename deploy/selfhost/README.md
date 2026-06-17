@@ -178,7 +178,7 @@ A copy of this guide is written to `~/.unity/README.md` when you run the install
 | `unity logs [service...]` | Follow logs (optionally for specific services) |
 | `unity pull` | Pull the latest images |
 | `unity doctor` | Docker + key + service health |
-| `unity integrations-sync` | Sync the Composio app catalog (needs `COMPOSIO_API_KEY`) |
+| `unity integrations-sync` | Rerun the Builtins integrations artifact seed (needs `COMPOSIO_API_KEY`) |
 
 Every command is also available under `unity stack <command>` (e.g. `unity stack logs`).
 
@@ -192,11 +192,23 @@ The installer generates local secrets (`POSTGRES_PASSWORD`, `ORCHESTRA_ADMIN_KEY
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `DEEPSEEK_API_KEY` | Coordinator chat (wizard: pick one) |
 | `OPENAI_API_KEY` | Tool-search embeddings (recommended even with other chat providers) |
 | `DEEPGRAM_API_KEY` + `CARTESIA_API_KEY` or `ELEVEN_API_KEY` | Browser voice calls (STT + TTS) |
+| `COMPOSIO_API_KEY` | Optional provider-backed integration catalog sync |
 | `UNIFY_MODEL` | Optional override; Unity picks a default when unset |
 
 On first `docker compose up`, the one-shot `orchestra-seed` service inserts billing
 plan rows Postgres needs before registration. Always start with `unity stack up`
 (full stack) — starting individual services manually can skip that seed step.
+
+The stack also seeds Builtins artifacts through the `unity-builtins-seed` one-shot
+service. Core artifacts (functions and guidance) are seeded from the Unity image.
+If `COMPOSIO_API_KEY` is set, the self-host integration manifest at
+`deploy/selfhost/integration-bootstrap.selfhost.toml` seeds provider-backed
+integration apps/tools into Orchestra's `Builtins/Integrations/*` contexts. Rerun
+that artifact seed after changing provider keys or manifests:
+
+```bash
+unity integrations-sync
+```
 
 Edit `~/.unity/.env` for BYOK keys and secrets. After changes:
 
@@ -228,6 +240,31 @@ unity stack up     # the one command to run the whole stack (alias: unity)
 Console's own `scripts/local.sh` is an internal dev/test harness (seeded dev
 data, E2E tests) and is not the way to run the product locally — `unity stack
 up` invokes it with `--self-host` for you.
+
+## Builtins Artifacts
+
+The compose bootstrap creates the shared `Builtins` project and seeds the core
+Unity artifacts used by self-hosted assistants. Provider-backed integration
+artifacts, such as Composio app/tool rows, are explicit because they require the
+provider credential for the selected backend.
+
+For development source installs, run the direct worker path from the local
+`orchestra` checkout after Postgres and Orchestra migrations are available:
+
+```bash
+cd ../orchestra
+poetry run python scripts/run_builtins_artifacts_seed_self_host.py \
+  --manifest deploy/integrations/bootstrap.selfhost.toml \
+  --backend-id composio \
+  --workers 4 \
+  --batch-size 25 \
+  --write-request-file /tmp/builtins-artifacts-request.json
+```
+
+This path has no Cloud Run, GCS, `gcloud`, Cloud SQL connector, or Secret
+Manager dependency. It writes `IntegrationBootstrapState` plus Builtins
+`Integrations/Meta` checkpoint rows, so rerunning the same request resumes from
+completed batches instead of falling back to the inline API path.
 
 ## System requirements
 
