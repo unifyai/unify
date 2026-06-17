@@ -784,7 +784,7 @@ def test_disconnect_cleanup_removes_materialized_rows(monkeypatch) -> None:
     assert fm._deleted_apps == [("composio", "hubspot")]
 
 
-def test_disconnect_cleanup_deletes_legacy_top_level_provider_rows(
+def test_disconnect_cleanup_deletes_only_metadata_provider_rows(
     monkeypatch,
 ) -> None:
     deleted: list[int] = []
@@ -838,11 +838,11 @@ def test_disconnect_cleanup_deletes_legacy_top_level_provider_rows(
         [("composio", "gmail")],
     )
 
-    assert removed == 2
-    assert deleted == [1, 2]
+    assert removed == 1
+    assert deleted == [2]
     assert 'metadata["source"] == "provider_backed"' in captured["filter"]
-    assert 'integration_source == "provider_backed"' in captured["filter"]
-    assert 'app_slug == "gmail"' in captured["filter"]
+    assert 'metadata["integration"]["app_slug"] == "gmail"' in captured["filter"]
+    assert 'integration_source == "provider_backed"' not in captured["filter"]
 
 
 def test_connection_cleanup_removes_app_rows_when_last_connection_drops(
