@@ -19,7 +19,7 @@ Register on `/login`, then chat with your Coordinator.
 
 **What you get out of the box:** Marty can chat, call, and use a **managed Linux desktop** inside Docker (view it from Console during a call via assistant screen share — served at `http://127.0.0.1:8090`).
 
-**macOS — control your physical Mac:** That requires a one-time host install (Screen Sharing + Unify Desktop Assistant). See [Control your Mac](#control-your-mac-macos) below — do this if you want Marty to operate **your apps and files on this machine**, not only the Docker sandbox.
+**Control your physical machine (optional):** To let Marty drive **your real desktop** (apps and files on the host, not the Docker sandbox), install Unify Desktop Assistant on that machine. See [Control your Mac](#control-your-mac-macos), [Control your Linux desktop](#control-your-linux-desktop), or [Control your Windows desktop](#control-your-windows-desktop) below.
 
 ## Control your Mac (macOS)
 
@@ -78,6 +78,90 @@ unity restart
 ```
 
 Ask Marty to do something on your Mac (e.g. “take a screenshot of my desktop”). You do **not** need to open `http://127.0.0.1:6080/vnc.html` — that URL is for local debugging; Console shows Marty’s **managed** desktop at `:8090`, not your Mac’s noVNC feed.
+
+## Control your Linux desktop
+
+Use this when Marty should drive **your physical Linux session** (your logged-in desktop, not the Docker sandbox at `:8090`). Requires a graphical desktop (X11) and `unity stack up` running first.
+
+### 1. Finish the compose install first
+
+Same as [Quick start](#quick-start): `unity stack up`, sign in at Console, open your Coordinator.
+
+Copy **your API key** from Console → assistant **⋯** → **Connect your desktop** → **Copy API Key** (your Orchestra user key, not `ORCHESTRA_ADMIN_KEY`).
+
+### 2. Install Unify Desktop Assistant
+
+Download **`unify-desktop-assistant-staging.deb`** from [GitHub Releases](https://github.com/unifyai/unify-desktop-assistant/releases) and install:
+
+```bash
+sudo apt install ./unify-desktop-assistant-staging.deb
+```
+
+Enter your API key when prompted. If `~/.unity/docker-compose.yml` exists, the installer auto-detects compose self-host: agent listens on **13000** (Console stays on **3000**).
+
+**Developer alternative** (no `.deb`):
+
+```bash
+cd unify-desktop-assistant/ubuntu/tools
+./setup.sh --self-host --unify-key YOUR_KEY --link-coordinator
+```
+
+### 3. Background services
+
+The assistant starts **x11vnc** (5900), **websockify/noVNC** (6080), and **agent-service** (13000 in self-host mode). The tray icon should turn green when all are up.
+
+If registration failed because Orchestra was not up yet, run **`unity stack up`**, then tray **Settings…** → paste your API key again (or `setup.sh --reconfigure --unify-key YOUR_KEY`).
+
+### 4. Link in Console and restart Unity
+
+Console → **Connect your desktop** → link your machine → then:
+
+```bash
+unity restart
+```
+
+Ask Marty to do something on **your Linux desktop** (e.g. “take a screenshot of my desktop”).
+
+## Control your Windows desktop
+
+Use this when Marty should drive **your physical Windows desktop** (not the Docker sandbox). Requires **`unity stack up`** running (Docker Desktop) before or during assistant setup.
+
+### 1. Finish the compose install first
+
+Same as [Quick start](#quick-start). Copy **your API key** from Console → **Connect your desktop** → **Copy API Key**.
+
+### 2. Install Unify Desktop Assistant
+
+Download **`unify-desktop-assistant-staging.exe`** from [GitHub Releases](https://github.com/unifyai/unify-desktop-assistant/releases) and run the installer.
+
+When `%USERPROFILE%\.unity\docker-compose.yml` exists, the installer detects compose self-host: **TightVNC** + **websockify** + **agent-service** on port **13000** (Console keeps **3000**).
+
+**Developer alternative**:
+
+```powershell
+cd unify-desktop-assistant\windows\tools
+.\setup.ps1 -UnifyKey YOUR_KEY -SelfHost -LinkCoordinator
+```
+
+### 3. Start stack before registration (if needed)
+
+If install logged `Failed to connect to 127.0.0.1 port 8000`, start the stack and re-register:
+
+```powershell
+unity stack up
+# then tray Settings → paste API key, or:
+.\setup.ps1 -Reconfigure -UnifyKey YOUR_KEY
+```
+
+### 4. Link in Console and restart Unity
+
+Console → **Connect your desktop** → link your PC → then:
+
+```bash
+unity restart
+```
+
+Ask Marty to do something on **your Windows desktop**.
 
 A copy of this guide is written to `~/.unity/README.md` when you run the installer.
 
