@@ -21,6 +21,45 @@ import { getLlmConfig } from './llmConfig';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+const DESKTOP_NOVNC_HOST = process.env.DESKTOP_NOVNC_HOST || '127.0.0.1';
+const DESKTOP_NOVNC_PORT = Number(process.env.DESKTOP_NOVNC_PORT || 6080);
+
+/** VNC password matches setup.sh (first 8 chars of UNIFY_KEY). */
+function buildDesktopNoVncUrl(): string {
+  const password = (process.env.UNIFY_KEY || '').slice(0, 8);
+  const params = new URLSearchParams({
+    password,
+    autoconnect: '1',
+    resize: 'scale',
+    reconnect: '1',
+    show_dot: '1',
+  });
+  return `http://${DESKTOP_NOVNC_HOST}:${DESKTOP_NOVNC_PORT}/vnc.html?${params}`;
+}
+
+/** Playwright desktop mode loads the local noVNC page; fail fast if websockify is down. */
+async function waitForLocalNoVnc(timeoutMs = 20000): Promise<void> {
+  const probeUrl = buildDesktopNoVncUrl();
+  const deadline = Date.now() + timeoutMs;
+  let lastError = 'unknown';
+  while (Date.now() < deadline) {
+    try {
+      const resp = await fetch(probeUrl, { redirect: 'manual' });
+      if (resp.ok) {
+        return;
+      }
+      lastError = `HTTP ${resp.status}`;
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+    }
+    await sleep(500);
+  }
+  throw new Error(
+    `noVNC is not reachable at http://${DESKTOP_NOVNC_HOST}:${DESKTOP_NOVNC_PORT} (${lastError}). ` +
+    'Start websockify on port 6080 before user-desktop control.',
+  );
+}
+
 // --- Debug logging helpers ---
 const MAGNITUDE_DEBUG = process.env.MAGNITUDE_DEBUG === 'true';
 const MAGNITUDE_LOG_DIR = process.env.MAGNITUDE_LOG_DIR || '';
@@ -613,7 +652,10 @@ process.on('exit', cleanupDemoSites);
 
 // --- Agent Initialization ---
 console.log(`Starting Magnitude BrowserAgent...`);
-app.listen(port, () => {
+const root = express();
+root.use('/api', app);
+root.use(app);
+root.listen(port, () => {
   console.log(`🚀 BrowserAgent service listening on http://localhost:${port}`);
 });
 
@@ -672,8 +714,8 @@ const getLaunchOptions = (
 
 const startDesktop = async (): Promise<BrowserAgent> => {
   try {
-    const encodedPassword = encodeURIComponent(process.env.UNIFY_KEY || '');
-    const desktopUrl = `http://localhost:6080/custom.html?password=${encodedPassword}`;
+    await waitForLocalNoVnc();
+    const desktopUrl = buildDesktopNoVncUrl();
     const desktopOrigin = new URL(desktopUrl).origin;
     const agent = await startBrowserAgent({
       url: desktopUrl,
