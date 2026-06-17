@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 from unity.integrations import builtins_catalog
 
 
@@ -421,30 +423,25 @@ prune_unlisted_apps = true
         encoding="utf-8",
     )
     requests: list[tuple[str, str, dict | None]] = []
-    seeded: list[tuple[dict, dict]] = []
 
     def fake_admin_request(*, method, path, payload=None, **_kwargs):
         requests.append((method, path, payload))
         if method == "GET":
             raise RuntimeError("GET bootstrap-state failed with HTTP 404")
-        if path == "/admin/integrations/sync":
+        if path == "/admin/integrations/builtins-sync/start":
             return {
                 "status": "success",
                 "apps_upserted": 1,
                 "tools_upserted": 1,
-                "apps": [_app("gmail")],
-                "tools": [_tool("gmail", "list_threads")],
+                "completed_batches": 1,
+                "skipped_batches": 0,
                 "matched_app_slugs": ["gmail"],
                 "cache_version": payload["cache_version"],
             }
         return {}
 
-    def fake_seed_sync_result(*, result, sync_payload):
-        seeded.append((result, sync_payload))
-        return True
-
+    monkeypatch.setenv("UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR", "api")
     monkeypatch.setattr(module, "_admin_request", fake_admin_request)
-    monkeypatch.setattr(module, "_seed_sync_result", fake_seed_sync_result)
 
     assert module._sync_integration_bootstrap_manifest(
         manifest_path=str(manifest),
@@ -454,12 +451,15 @@ prune_unlisted_apps = true
 
     assert requests[0][0] == "GET"
     assert requests[1][1] == "/admin/integrations/backends"
-    assert requests[2][1] == "/admin/integrations/sync"
+    assert requests[2][1] == "/admin/integrations/builtins-sync/start"
     assert requests[2][2]["prune_unlisted_apps"] is True
+    assert requests[2][2]["app_slugs"] == ["gmail"]
+    assert requests[2][2]["sync_payload"]["app_slugs"] == ["gmail"]
+    assert requests[2][2]["desired_hash"]
     assert requests[3][1] == "/admin/integrations/bootstrap-state"
     assert requests[3][2]["last_sync_diagnostics"]["seed_owner"] == "public-builtins"
     assert requests[3][2]["last_sync_diagnostics"]["builtins_seeded"] is True
-    assert seeded[0][1]["app_slugs"] == ["gmail"]
+    assert requests[3][2]["last_sync_diagnostics"]["completed_batches"] == 1
 
 
 def test_seed_builtins_script_skips_previously_seeded_manifest(
@@ -471,7 +471,7 @@ def test_seed_builtins_script_skips_previously_seeded_manifest(
     manifest.write_text(
         """
 schema_version = 1
-environment = "staging"
+environment = "selfhost"
 
 [providers.composio]
 status = "enabled"
@@ -502,6 +502,7 @@ app_slugs = ["gmail"]
             },
         }
 
+    monkeypatch.setenv("UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR", "direct_worker")
     monkeypatch.setattr(module, "_admin_request", fake_admin_request)
 
     assert (
@@ -516,7 +517,7 @@ app_slugs = ["gmail"]
     assert requests == [
         (
             "GET",
-            "/admin/integrations/bootstrap-state?environment=staging&backend_id=composio",
+            "/admin/integrations/bootstrap-state?environment=selfhost&backend_id=composio",
             None,
         ),
     ]
@@ -525,40 +526,35 @@ app_slugs = ["gmail"]
 def test_seed_builtins_script_full_composio_batches_seed_apps_once(monkeypatch) -> None:
     module = _seed_script_module()
     admin_payloads: list[dict] = []
-    seeded_payloads: list[dict] = []
 
     def fake_admin_request(*, path, payload=None, **_kwargs):
-        assert path == "/admin/integrations/sync"
+        assert path == "/admin/integrations/builtins-sync/start"
         admin_payloads.append(payload)
-        if payload["sync_tools"] is False:
-            return {
-                "status": "success",
-                "apps_upserted": 2,
-                "tools_upserted": 0,
-                "apps": [_app("gmail"), _app("slack")],
-                "tools": [],
-                "matched_app_slugs": ["gmail", "slack"],
-            }
         return {
             "status": "success",
-            "apps_upserted": len(payload["app_slugs"]),
-            "tools_upserted": len(payload["app_slugs"]),
-            "apps": [_app(slug.lower()) for slug in payload["app_slugs"]],
-            "tools": [_tool(payload["app_slugs"][0].lower(), "list_threads")],
-            "matched_app_slugs": [slug.lower() for slug in payload["app_slugs"]],
+            "apps_upserted": 2,
+            "tools_upserted": 2,
+            "completed_batches": 2,
+            "skipped_batches": 0,
+            "matched_app_slugs": ["gmail", "slack"],
         }
 
-    def fake_seed_sync_result(*, result, sync_payload):
-        seeded_payloads.append(sync_payload)
-        return True
-
     monkeypatch.setenv("UNITY_INTEGRATION_BOOTSTRAP_BATCH_SIZE", "1")
+    monkeypatch.setenv("UNITY_INTEGRATION_BOOTSTRAP_WORKERS", "3")
     monkeypatch.setattr(module, "_admin_request", fake_admin_request)
-    monkeypatch.setattr(module, "_seed_sync_result", fake_seed_sync_result)
+    plan = module.ProviderBootstrapPlan(
+        backend_id="composio",
+        environment="staging",
+        desired_hash="desired-hash",
+        desired_config={},
+        backend_payload={},
+        sync_payload={},
+    )
 
     changed, result = module._sync_and_seed_provider(
         base_url="http://orchestra/v0",
         admin_key="admin",
+        plan=plan,
         sync_payload={
             "backend_id": "composio",
             "app_slugs": [],
@@ -566,16 +562,189 @@ def test_seed_builtins_script_full_composio_batches_seed_apps_once(monkeypatch) 
             "include_all_managed_apps": True,
             "sync_tools": True,
             "prune_unlisted_apps": True,
+            "cache_version": "cache-v1",
         },
     )
 
     assert changed is True
     assert result["apps_upserted"] == 2
-    assert len(admin_payloads) == 3
-    assert seeded_payloads[0]["_seed_phase"] == "app-only-sync"
-    assert seeded_payloads[0].get("_seed_apps", True) is True
-    assert seeded_payloads[0]["_seed_tools"] is False
-    assert [payload["_seed_apps"] for payload in seeded_payloads[1:]] == [False, False]
+    assert len(admin_payloads) == 1
+    assert admin_payloads[0]["desired_hash"] == "desired-hash"
+    assert admin_payloads[0]["batch_size"] == 1
+    assert admin_payloads[0]["workers"] == 3
+    assert admin_payloads[0]["sync_payload"]["include_all_managed_apps"] is True
+
+
+def test_seed_builtins_script_hosted_manifest_fails_before_mutation(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    module = _seed_script_module()
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text(
+        """
+schema_version = 1
+environment = "staging"
+
+[providers.composio]
+status = "enabled"
+
+[providers.composio.sync]
+mode = "partial"
+app_slugs = ["gmail"]
+""",
+        encoding="utf-8",
+    )
+    requests: list[tuple[str, str, dict | None]] = []
+
+    def fake_admin_request(*, method, path, payload=None, **_kwargs):
+        requests.append((method, path, payload))
+        return {}
+
+    monkeypatch.setenv("UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR", "direct_worker")
+    monkeypatch.setattr(module, "_admin_request", fake_admin_request)
+
+    with pytest.raises(ValueError, match="unity-deploy Cloud Run Job"):
+        module._sync_integration_bootstrap_manifest(
+            manifest_path=str(manifest),
+            base_url="http://orchestra/v0",
+            admin_key="admin",
+        )
+
+    assert requests == []
+
+
+def test_seed_builtins_script_selfhost_executor_uses_direct_worker(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    module = _seed_script_module()
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text(
+        """
+schema_version = 1
+environment = "selfhost"
+
+[providers.composio]
+status = "enabled"
+
+[providers.composio.sync]
+mode = "partial"
+app_slugs = ["gmail"]
+""",
+        encoding="utf-8",
+    )
+    worker_payloads: list[dict] = []
+
+    def fake_admin_request(*, method, **_kwargs):
+        if method == "GET":
+            raise RuntimeError("GET bootstrap-state failed with HTTP 404")
+        return {}
+
+    def fake_worker(payload):
+        worker_payloads.append(payload)
+        return {"status": "success", "apps_upserted": 0, "tools_upserted": 1}
+
+    monkeypatch.setenv("UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR", "direct_worker")
+    monkeypatch.setattr(module, "_admin_request", fake_admin_request)
+    monkeypatch.setattr(module, "_run_direct_worker_executor", fake_worker)
+
+    assert module._sync_integration_bootstrap_manifest(
+        manifest_path=str(manifest),
+        base_url="http://orchestra/v0",
+        admin_key="admin",
+    )
+
+    assert worker_payloads[0]["environment"] == "selfhost"
+    assert worker_payloads[0]["sync_payload"]["app_slugs"] == ["gmail"]
+
+
+def test_seed_builtins_script_missing_executor_fails_before_mutation(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    module = _seed_script_module()
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text(
+        """
+schema_version = 1
+environment = "selfhost"
+
+[providers.composio]
+status = "enabled"
+
+[providers.composio.sync]
+mode = "partial"
+app_slugs = ["gmail"]
+""",
+        encoding="utf-8",
+    )
+    requests: list[tuple[str, str]] = []
+
+    def fake_admin_request(*, method, path, **_kwargs):
+        requests.append((method, path))
+        return {}
+
+    monkeypatch.delenv("UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR", raising=False)
+    monkeypatch.setattr(module, "_admin_request", fake_admin_request)
+
+    with pytest.raises(ValueError, match="UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR"):
+        module._sync_integration_bootstrap_manifest(
+            manifest_path=str(manifest),
+            base_url="http://orchestra/v0",
+            admin_key="admin",
+        )
+
+    assert requests == []
+
+
+def test_seed_builtins_script_executor_failure_does_not_api_fallback(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    module = _seed_script_module()
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text(
+        """
+schema_version = 1
+environment = "selfhost"
+
+[providers.composio]
+status = "enabled"
+
+[providers.composio.sync]
+mode = "partial"
+app_slugs = ["gmail"]
+""",
+        encoding="utf-8",
+    )
+    requests: list[tuple[str, str, dict | None]] = []
+
+    def fake_admin_request(*, method, path, payload=None, **_kwargs):
+        requests.append((method, path, payload))
+        if method == "GET":
+            raise RuntimeError("GET bootstrap-state failed with HTTP 404")
+        return {}
+
+    def failing_worker(_payload):
+        raise RuntimeError("worker failed")
+
+    monkeypatch.setenv("UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR", "direct_worker")
+    monkeypatch.setattr(module, "_admin_request", fake_admin_request)
+    monkeypatch.setattr(module, "_run_direct_worker_executor", failing_worker)
+
+    with pytest.raises(RuntimeError, match="worker failed"):
+        module._sync_integration_bootstrap_manifest(
+            manifest_path=str(manifest),
+            base_url="http://orchestra/v0",
+            admin_key="admin",
+        )
+
+    assert "/admin/integrations/builtins-sync/start" not in [
+        path for _, path, _ in requests
+    ]
+    assert requests[-1][1] == "/admin/integrations/bootstrap-state"
+    assert requests[-1][2]["last_status"] == "failed"
 
 
 def test_seed_builtin_integrations_dedupes_and_deletes_tools_by_function_id(
