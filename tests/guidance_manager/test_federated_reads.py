@@ -73,6 +73,31 @@ def test_filter_includes_builtins_catalog_spec(monkeypatch):
     ]
 
 
+def test_filter_normalizes_legacy_null_is_builtin(monkeypatch):
+    gm = _manager_stub()
+
+    def fake_filter(*_args, **_kwargs):
+        return [
+            {
+                "guidance_id": 1,
+                "title": "Legacy row",
+                "content": "Created before builtins.",
+                "images": [],
+                "function_ids": [],
+                "is_builtin": None,
+            },
+        ]
+
+    monkeypatch.setattr(
+        "unity.guidance_manager.guidance_manager.federated_filter",
+        fake_filter,
+    )
+
+    rows = gm.filter(limit=10)
+
+    assert rows[0].is_builtin is False
+
+
 def test_num_items_counts_builtins_catalog(monkeypatch):
     gm = _manager_stub()
     gm._exclude_ids = frozenset({7})
