@@ -88,8 +88,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         default=os.environ.get("UNITY_INTEGRATION_BOOTSTRAP_MANIFEST", ""),
         help=(
             "Optional provider bootstrap manifest. When provided, this script "
-            "syncs Orchestra provider catalog rows and immediately seeds the "
-            "returned app-scoped rows into Builtins."
+            "fetches provider catalog artifacts and seeds the returned "
+            "app-scoped rows into Builtins."
         ),
     )
     parser.add_argument(
