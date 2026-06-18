@@ -108,6 +108,33 @@ def _publish_desktop_invoked(method_name: str) -> None:
         pass
 
 
+def _publish_user_file_access(
+    user_id: str,
+    operation: str,
+    path: str,
+    dest: str = "",
+) -> None:
+    """Fire-and-forget audit publish for user-home filesystem access."""
+    try:
+        from unity.events.event_bus import EVENT_BUS, Event
+
+        asyncio.get_running_loop().create_task(
+            EVENT_BUS.publish(
+                Event(
+                    type="UserDesktopFileAccess",
+                    payload={
+                        "user_id": user_id,
+                        "operation": operation,
+                        "path": path,
+                        "dest": dest,
+                    },
+                ),
+            ),
+        )
+    except Exception:
+        pass
+
+
 def _publish_computer_act_completed(instruction: str, result: "ActResult") -> None:
     """Fire-and-forget EventBus publish when a visible session's act() completes."""
     try:
@@ -662,18 +689,18 @@ class _UserDesktopFilesNamespace:
     def __init__(self, owner: "ComputerPrimitives"):
         self._owner = owner
 
-    async def _client(self, user_id: str | None):
+    async def _client(self, user_id: str | None) -> tuple[str, Any]:
         link = self._owner._resolve_user_desktop_link(user_id)
         target_uid = link.owner_user_id
-        self._owner._assert_user_desktop_allowed(target_uid)
+        self._owner._assert_user_filesys_allowed(target_uid)
         if not getattr(link, "filesys_available", False):
             raise ValueError(
                 f"Filesystem access is not enabled for user {target_uid!r}. "
                 "Ask them to turn on filesystem access for this assistant in "
                 "the Console.",
             )
-        _publish_desktop_invoked("user_desktop.files")
-        return await self._owner._get_user_home_sftp(target_uid, link)
+        client = await self._owner._get_user_home_sftp(target_uid, link)
+        return target_uid, client
 
     async def list(self, path: str = "", user_id: str | None = None) -> list[str]:
         """List entries under a home-relative directory on the user's machine.
@@ -681,8 +708,10 @@ class _UserDesktopFilesNamespace:
         ``path`` is relative to the user's home (``""`` lists the home root).
         Returns names (directories carry a trailing ``/``).
         """
-        client = await self._client(user_id)
-        return await client.list_dir(path)
+        target_uid, client = await self._client(user_id)
+        entries = await client.list_dir(path)
+        _publish_user_file_access(target_uid, "list", path or "")
+        return entries
 
     async def pull(self, path: str, user_id: str | None = None) -> str:
         """Fetch a file from the user's home into the local workspace.
@@ -690,8 +719,10 @@ class _UserDesktopFilesNamespace:
         ``path`` is relative to the user's home.  Returns the local path of the
         staged copy, which can then be read or parsed like any local file.
         """
-        client = await self._client(user_id)
-        return await client.pull(path)
+        target_uid, client = await self._client(user_id)
+        local_path = await client.pull(path)
+        _publish_user_file_access(target_uid, "pull", path)
+        return local_path
 
     async def push(
         self,
@@ -705,8 +736,10 @@ class _UserDesktopFilesNamespace:
         user's original is never overwritten; the new content is saved alongside
         it under a review folder.  Returns the remote path of the saved copy.
         """
-        client = await self._client(user_id)
-        return await client.push(local_path, dest_path)
+        target_uid, client = await self._client(user_id)
+        remote_dest = await client.push(local_path, dest_path)
+        _publish_user_file_access(target_uid, "push", dest_path, dest=remote_dest)
+        return remote_dest
 
 
 class _UserDesktopFactory:
@@ -903,6 +936,10 @@ class ComputerPrimitives(metaclass=SingletonABCMeta):
         self._user_home_sftp: dict[str, Any] = {}
         # Users who have revoked live remote-control of their own desktop.
         self._user_desktop_revoked: set[str] = set()
+        # Users who have revoked live access to their own home filesystem. This
+        # is a separate consent from remote-control: a user may permit one
+        # without the other, and either can be withdrawn mid-session.
+        self._user_filesys_revoked: set[str] = set()
         self._pending_url_mappings: dict[str, str] | None = None
 
         self._interject_queues: set[asyncio.Queue] = set()
@@ -1108,6 +1145,15 @@ class ComputerPrimitives(metaclass=SingletonABCMeta):
                 "re-enable control.",
             )
 
+    def _assert_user_filesys_allowed(self, user_id: str) -> None:
+        """Raise if the user has revoked live access to their home filesystem."""
+        if user_id in self._user_filesys_revoked:
+            raise PermissionError(
+                f"User {user_id!r} has revoked access to their home "
+                "filesystem. Do not attempt further reads or writebacks on it "
+                "until they re-enable access.",
+            )
+
     def _handle_user_desktop_error(self, user_id: str, e: Exception) -> None:
         """Drop cached user-desktop backends on a terminal connection error.
 
@@ -1144,6 +1190,42 @@ class ComputerPrimitives(metaclass=SingletonABCMeta):
     def grant_user_desktop_control(self, user_id: str) -> None:
         """Re-enable live remote-control of a user's desktop after a revoke."""
         self._user_desktop_revoked.discard(user_id)
+
+    _USER_FILESYS_REVOKED_MSG = (
+        "The user has revoked access to their home filesystem. Stop any reads "
+        "or writebacks targeting their files immediately. You may continue "
+        "other work. Do not retry filesystem actions on their machine until "
+        "the user explicitly re-enables access."
+    )
+
+    def revoke_user_filesys_access(
+        self,
+        user_id: str,
+        conversation_context: str | None = None,
+    ) -> None:
+        """Revoke live access to a user's home filesystem and notify actors.
+
+        Called when a user withdraws filesystem consent mid-session (e.g. via a
+        Console toggle).  Broadcasts an interjection so in-flight actors stop
+        reading from or writing back to that machine, and drops any cached SFTP
+        client so a later re-grant reconnects cleanly.  The standing Console
+        link is unaffected — access can be re-enabled with
+        ``grant_user_filesys_access``.
+        """
+        self._user_filesys_revoked.add(user_id)
+        client = self._user_home_sftp.pop(user_id, None)
+        if client is not None:
+            client.cleanup()
+        payload = self._build_interjection(
+            self._USER_FILESYS_REVOKED_MSG,
+            conversation_context,
+        )
+        for q in self._interject_queues:
+            q.put_nowait(payload)
+
+    def grant_user_filesys_access(self, user_id: str) -> None:
+        """Re-enable live access to a user's home filesystem after a revoke."""
+        self._user_filesys_revoked.discard(user_id)
 
     # ── Steering control (not exposed as actor tools) ────────────────────
 

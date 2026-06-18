@@ -16,6 +16,23 @@ class DesktopPrimitivePayload(BaseModel):
     )
 
 
+class UserDesktopFileAccessPayload(BaseModel):
+    """Audit record for on-demand access to a user's own home filesystem.
+
+    Emitted for every pull/push/list against a user's linked machine so the
+    access is traceable: who was accessed, which path, and where a writeback
+    copy landed.
+    """
+
+    user_id: str = Field(description="Owner of the machine that was accessed.")
+    operation: str = Field(description="Access type: 'pull', 'push', or 'list'.")
+    path: str = Field(description="Home-relative path that was accessed.")
+    dest: str = Field(
+        default="",
+        description="Remote path of the writeback copy (push only).",
+    )
+
+
 class ComputerActCompletedPayload(BaseModel):
     """Fired when a visible computer session's act() completes (desktop or web-vm).
 
