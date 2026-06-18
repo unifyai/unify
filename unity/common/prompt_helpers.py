@@ -35,7 +35,6 @@ __all__ = [
     "clarification_else_policy",
     "special_contacts_block",
     "two_table_reasoning_block",
-    "task_queue_invariants_block",
     "images_extras_for_transcripts",
     "images_first_ask_for_tasks",
 ]
@@ -773,21 +772,6 @@ def two_table_reasoning_block(
     return "\n".join(parts)
 
 
-def task_queue_invariants_block() -> str:
-    """Shared queue/schedule invariants used in TaskScheduler.update."""
-    return "\n".join(
-        [
-            "Schedule/Queue invariants (must-follow)",
-            "---------------------------------------",
-            "• If you provide a schedule with start_at on the head (prev_task is None), status must be 'scheduled' – never 'queued'.",
-            "• Non-head tasks (prev_task is not None) must not define start_at; the timestamp belongs to the head only.",
-            "• 'primed' must only be used for a head task (prev_task is None).",
-            "• A 'scheduled' task must have either a prev_task or a start_at timestamp.",
-            "• Status is updated implicitly based on operations (activation, scheduling, completion). Do not set status explicitly.",
-        ],
-    )
-
-
 def images_extras_for_transcripts(
     *,
     get_imgs_msg_fname: Optional[str],
@@ -862,7 +846,7 @@ def images_first_ask_for_tasks(*, ask_image_name: Optional[str]) -> str:
     lines.extend(
         [
             "• If captions already describe the scene and intent clearly, you may skip the broad question and either ask a targeted image question or proceed to a semantic tasks lookup guided by the inferred activity.",
-            "• Only ask the image for structured values when they are visibly present on-screen; never assume task metadata (task_id, queue_id, due dates) is visible in generic screenshots.",
+            "• Only ask the image for structured values when they are visibly present on-screen; never assume task metadata (task_id, due dates) is visible in generic screenshots.",
         ],
     )
     return "\n".join(lines)
