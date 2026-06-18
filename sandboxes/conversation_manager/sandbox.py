@@ -591,10 +591,27 @@ async def _main_async() -> None:
             # falling through to the interactive error prompt.
             if not bool(getattr(args, "gui", False)) and _should_offer_agent_help():
                 await _attempt_agent_service_recovery()
+                # Recompute the effective URL — recovery may have started a local
+                # agent-service process that sets args._agent_service_process and
+                # args.local_url, which _validate_kwargs above could not see yet.
+                _post_recovery_proc = getattr(args, "_agent_service_process", None)
+                _post_recovery_alive = (
+                    _post_recovery_proc is not None
+                    and hasattr(_post_recovery_proc, "poll")
+                    and _post_recovery_proc.poll() is None
+                )
+                _post_recovery_url = (
+                    getattr(args, "local_url", "http://localhost:3001")
+                    if _post_recovery_alive
+                    else getattr(args, "agent_server_url", "http://localhost:3000")
+                )
                 vr = await asyncio.to_thread(
                     cfg_mgr.validate_config,
                     selected,
-                    **_validate_kwargs,
+                    agent_server_url=_post_recovery_url,
+                    require_agent_service_running=(
+                        not bool(getattr(args, "gui", False))
+                    ),
                 )
                 if vr.ok:
                     break
