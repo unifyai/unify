@@ -923,7 +923,7 @@ async def execute_task_by_description_with_guidance(description: str) -> str:
     )
     task_info = await lookup_handle.result()
 
-    # Step 2: Execute using the task_id (returns a steerable ActiveQueue handle).
+    # Step 2: Execute using the task_id (returns a steerable handle).
     handle = await primitives.tasks.execute(task_id=task_info.task_id)
 
     # Inject guidance early in execution
@@ -973,36 +973,6 @@ async def create_description_driven_recurring_tasks() -> str:
     triggered_result = await triggered.result()
     return f"{scheduled_result}\\n{triggered_result}"
 """
-
-
-def get_primitives_dynamic_methods_example() -> str:
-    """Example: using dynamic handle methods."""
-
-    return '''
-# Example: Dynamic handle methods (append_to_queue)
-async def execute_task_and_append(task_a_id: int, task_b_id: int) -> str:
-    """Execute a task and append another to its queue.
-
-    TaskScheduler.execute returns an ActiveQueue handle that exposes
-    a dynamic method: append_to_queue_<tool>_<id>(task_id=...)
-    """
-    notify({"type": "progress", "message": f"Running task {task_a_id} and appending task {task_b_id} to the queue."})
-
-    # Start task A
-    handle = await primitives.tasks.execute(task_id=task_a_id)
-
-    # The handle exposes a dynamic append method
-    # (exact name depends on handle instance; use introspection or ask)
-    # For this example, assume we know the method name pattern
-
-    # Append task B to the queue while A is running
-    # Note: In practice, the LLM discovers this method via tool introspection
-    await handle.append_to_queue(task_id=task_b_id)
-
-    # Wait for completion (both tasks will execute in order)
-    result = await handle.result()
-    return result
-'''
 
 
 def get_primitives_files_describe_example() -> str:
@@ -2111,7 +2081,6 @@ def get_example_function_map() -> dict[str, callable]:
         # Tasks
         "get_primitives_task_execute_example": get_primitives_task_execute_example,
         "get_primitives_task_recurring_creation_example": get_primitives_task_recurring_creation_example,
-        "get_primitives_dynamic_methods_example": get_primitives_dynamic_methods_example,
         # Knowledge
         "get_primitives_knowledge_ask_example": get_primitives_cross_manager_example,
         "get_primitives_knowledge_update_example": lambda: "",  # placeholder
