@@ -958,7 +958,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         repository: unifyai/magnitude
-        ref: droid-modifications
+        ref: unity-modifications
         path: magnitude
         token: ${{ secrets.CLONE_TOKEN }}
         fetch-depth: 1

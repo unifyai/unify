@@ -20,7 +20,7 @@ The repo uses Droid's modified `magnitude-core` for the agent service (see `agen
 
 **1. Build local magnitude-core:**
 ```bash
-cd magnitude && git checkout droid-modifications
+cd magnitude && git checkout unity-modifications
 cd packages/magnitude-core && npm install && npm run build
 ```
 

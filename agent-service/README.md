@@ -22,7 +22,7 @@ This Node.js service acts as an HTTP wrapper for the Magnitude `BrowserAgent`, a
     gh repo clone unifyai/magnitude magnitude
 
     cd magnitude
-    git checkout droid-modifications  # Our branch with Droid enhancements
+    git checkout unity-modifications  # Our branch with Droid enhancements
 
     # Build magnitude-core
     cd packages/magnitude-core
@@ -90,7 +90,7 @@ npm install --force   # ensures the local file: dependency is re-copied
 
 The `magnitude/` directory is our fork of the magnitude repository with Droid-specific modifications. Key points:
 
-- **Branch**: Always work on `droid-modifications` branch
+- **Branch**: Always work on `unity-modifications` branch
 - **Upstream sync**: Use `upstream-main` branch to pull in latest magnitude changes
 - **Private repo**: This is a private fork; use `CLONE_TOKEN` or `gh` CLI for authenticated access
 

@@ -125,7 +125,7 @@ uv_sync() {
 # ----------------------------------------------------------------------------
 clone_or_update_magnitude() {
     local magnitude_dir="$DROID_REPO/magnitude"
-    local magnitude_branch="droid-modifications"
+    local magnitude_branch="unity-modifications"
     if [ -d "$magnitude_dir/.git" ]; then
         log_info "Updating magnitude checkout at $magnitude_dir..."
         git -C "$magnitude_dir" fetch --depth 1 origin "$magnitude_branch" 2>/dev/null || true
@@ -333,9 +333,9 @@ case "\${1:-}" in
         (cd "\$DROID_REPO" && uv sync --all-groups)
         MAGNITUDE_DIR="\$DROID_REPO/magnitude"
         if [ -d "\$MAGNITUDE_DIR/.git" ]; then
-            echo "Updating magnitude checkout (droid-modifications)..."
-            git -C "\$MAGNITUDE_DIR" fetch --depth 1 origin droid-modifications 2>/dev/null || true
-            git -C "\$MAGNITUDE_DIR" checkout droid-modifications 2>/dev/null || true
+            echo "Updating magnitude checkout (unity-modifications)..."
+            git -C "\$MAGNITUDE_DIR" fetch --depth 1 origin unity-modifications 2>/dev/null || true
+            git -C "\$MAGNITUDE_DIR" checkout unity-modifications 2>/dev/null || true
             git -C "\$MAGNITUDE_DIR" pull --rebase || true
         fi
         if command -v npm >/dev/null 2>&1 && [ -d "\$DROID_REPO/agent-service" ] && [ -d "\$MAGNITUDE_DIR" ]; then
