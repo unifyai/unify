@@ -561,12 +561,22 @@ async def _main_async() -> None:
                 ):
                     await _attempt_agent_service_recovery()
 
+            # If a local agent-service process is running (started on local_url /
+            # port 3001), validate against that URL rather than the container URL
+            # (agent_server_url / port 3000) which may not be running.
+            _local_proc = getattr(args, "_agent_service_process", None)
+            _local_proc_alive = (
+                _local_proc is not None
+                and hasattr(_local_proc, "poll")
+                and _local_proc.poll() is None
+            )
+            _effective_agent_url = (
+                getattr(args, "local_url", "http://localhost:3001")
+                if _local_proc_alive
+                else getattr(args, "agent_server_url", "http://localhost:3000")
+            )
             _validate_kwargs = dict(
-                agent_server_url=getattr(
-                    args,
-                    "agent_server_url",
-                    "http://localhost:3000",
-                ),
+                agent_server_url=_effective_agent_url,
                 require_agent_service_running=(not bool(getattr(args, "gui", False))),
             )
             vr = await asyncio.to_thread(
