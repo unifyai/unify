@@ -1,4 +1,4 @@
-"""Task model: queue membership, scheduling/triggering, priority, and metadata."""
+"""Task model: scheduling, triggering, priority, and metadata."""
 
 from enum import Enum
 from pydantic import Field, model_validator
@@ -34,23 +34,19 @@ class TaskBase(AuthoredRow):
         default=None,
         description="Shared-team destination for routed task writes, if any.",
     )
-    # Top-level queue identifier for tasks that are members of a runnable queue.
-    # When a task is queued/scheduled, this must be populated. The schedule
-    # object never carries a queue_id field; use this top-level column solely.
-    queue_id: Optional[int] = Field(
-        default=None,
-        description=("Identifier of the runnable queue this task belongs to."),
-    )
     name: str = Field(description="Short title of the task")
     description: str = Field(
         description="Detailed explanation of what the task involves",
     )
     status: Status = Field(
-        description="Current state of the task (e.g., queued, active, completed)",
+        description=(
+            "Current state of the task. "
+            "Valid values: scheduled, triggerable, active, completed, cancelled, failed."
+        ),
     )
     schedule: Optional[Schedule] = Field(
         default=None,
-        description="Information about task scheduling, including adjacent tasks in the queue and ideal start time",
+        description="Optional scheduling information, including ideal start time.",
         json_schema_extra={"unify_type": "dict"},
     )
     trigger: Optional[Trigger] = Field(
@@ -112,7 +108,7 @@ class TaskBase(AuthoredRow):
 
     @model_validator(mode="after")
     def _mutually_exclusive_schedule_trigger(self):
-        """Enforce the invariants that must hold for every local task payload."""
+        """Enforce that schedule and trigger are mutually exclusive."""
 
         if self.schedule is not None and self.trigger is not None:
             raise ValueError("A task cannot have both *schedule* and *trigger*.")
@@ -136,19 +132,7 @@ class TaskBase(AuthoredRow):
         )
 
     def to_post_json(self) -> dict:
-        exclude: set[str] = set()
-        # Allow backend auto-increment for queue_id by omitting it when unset
-        if self.queue_id is None:
-            exclude.add("queue_id")
-        return self.model_dump(mode="json", exclude=exclude)
-
-    @property
-    def schedule_next(self) -> Optional[int]:
-        return self.schedule.next_task if self.schedule is not None else None
-
-    @property
-    def schedule_prev(self) -> Optional[int]:
-        return self.schedule.prev_task if self.schedule is not None else None
+        return self.model_dump(mode="json")
 
     @property
     def schedule_start_at(self) -> Optional[datetime]:
