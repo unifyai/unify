@@ -2784,6 +2784,44 @@ class TranscriptGenerator:
         return transcript
 
 
+def _seed_session_details_for_sandbox() -> None:
+    """Populate SESSION_DETAILS with identity fields before unity.init() runs.
+
+    unity.init() computes the Unify context path as
+    ``{SESSION_DETAILS.user_context}/{SESSION_DETAILS.assistant_context}``,
+    and that path is used for every manager context for the rest of the
+    session.  In production the Comms App delivers a StartupEvent that calls
+    cm.set_details() first, ensuring both values are populated.  In the
+    sandbox there is no StartupEvent, so we bootstrap them here from the
+    environment and a lightweight Orchestra call.
+
+    Failures are non-fatal: the sandbox can still run with the fallback
+    ``default/{agent_id}`` path, but transcripts will not appear in the
+    hosted Console.
+    """
+    from unity.session_details import SESSION_DETAILS
+
+    # Agent id from env (ASSISTANT_ID) — sets assistant_context component.
+    SESSION_DETAILS.populate_from_env()
+
+    # User UUID from Orchestra — sets user_context component so contexts land
+    # under ``{user_uuid}/{agent_id}/...`` matching what the Console expects.
+    try:
+        import unify as _unify
+
+        info = _unify.get_user_basic_info()
+        user_id = info.get("user_id") or ""
+        if user_id:
+            SESSION_DETAILS.user.id = user_id
+    except Exception as exc:
+        lg = logging.getLogger(__name__)
+        lg.debug(
+            "Could not fetch user_id from Orchestra; context path will use "
+            "default fallback (transcripts may not appear in Console): %s",
+            exc,
+        )
+
+
 def activate_project(project_name: str, overwrite: bool = False) -> None:
     """
     Activate *project_name* and re-initialise the global EventBus singleton so
@@ -2913,6 +2951,13 @@ def activate_project(project_name: str, overwrite: bool = False) -> None:
         pass
 
     _maybe_autostart_local_orchestra()
+
+    # Seed SESSION_DETAILS with agent_id and user_id *before* unity.init() so
+    # the context path computed there (``{user_id}/{agent_id}``) is correct.
+    # unity.init() is idempotent-guarded by _INITIALISED, so it must use the
+    # right values on its first call; any call after that returns immediately
+    # without re-running ContextRegistry.setup().
+    _seed_session_details_for_sandbox()
 
     unity.init(
         project_name,
