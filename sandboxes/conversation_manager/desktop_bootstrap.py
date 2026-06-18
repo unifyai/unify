@@ -217,7 +217,7 @@ def stop_desktop_container(
 
 
 def _free_desktop_ports(
-    ports: tuple[int, ...] = (5900, 6080, 3000),
+    ports: tuple[int, ...] = (5901, 6080, 3000),
     *,
     progress: Optional[ProgressCallback] = None,
 ) -> None:
@@ -399,7 +399,7 @@ def _start_container(
         "-p",
         "6080:6080",
         "-p",
-        "5900:5900",
+        "5901:5900",
         "-p",
         "3000:3000",
         # Allow the container to reach host-side services (e.g. Orchestra).
@@ -644,7 +644,7 @@ def diagnose_desktop_setup(
         lines.append("  Start it with:")
         lines.append(
             f"    docker run --rm -d --name {DESKTOP_CONTAINER_NAME} "
-            f"-p 6080:6080 -p 5900:5900 -p 3000:3000 --env-file .env {DESKTOP_IMAGE_TAG}",
+            f"-p 6080:6080 -p 5901:5900 -p 3000:3000 --env-file .env {DESKTOP_IMAGE_TAG}",
         )
     lines.append("")
 
