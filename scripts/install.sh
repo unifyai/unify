@@ -160,21 +160,29 @@ install_agent_service() {
         log_warn "magnitude not cloned — skipping agent-service install"
         return 0
     fi
+    # Install the magnitude workspace root's devDependencies (baml-cli, pkgroll,
+    # tsup) so we get the exact versions pinned in magnitude's package.json —
+    # using `npx --yes` would pull the latest release and may clash with the
+    # version declared in baml_src/generators.baml.
+    log_info "Installing magnitude workspace tools..."
+    (cd "$magnitude_dir" && npm install --ignore-scripts --silent) || \
+        log_warn "magnitude workspace install failed — trying to build anyway"
+    local ws_bin="$magnitude_dir/node_modules/.bin"
+
     # Build magnitude-core from source. The build pipeline is:
     #   1. baml-cli generate  (generates src/ai/baml_client from baml_src/)
     #   2. pkgroll            (bundles the TypeScript into dist/)
-    # Both tools are available via npx without a global install.
     local core_dir="$magnitude_dir/packages/magnitude-core"
     if [ -d "$core_dir" ] && [ ! -d "$core_dir/dist" ]; then
         log_info "Building magnitude-core (generating baml_client + bundling)..."
-        (cd "$core_dir" && npx --yes @boundaryml/baml generate 2>/dev/null && npx --yes pkgroll) || \
+        (cd "$core_dir" && PATH="$ws_bin:$PATH" baml-cli generate 2>/dev/null && PATH="$ws_bin:$PATH" pkgroll) || \
             log_warn "magnitude-core build failed — computer use may be unavailable"
     fi
     # magnitude-extract: build with tsup (listed in its devDependencies).
     local extract_dir="$magnitude_dir/packages/magnitude-extract"
     if [ -d "$extract_dir" ] && [ ! -d "$extract_dir/dist" ]; then
         log_info "Building magnitude-extract..."
-        (cd "$extract_dir" && npx --yes tsup --config tsup.config.ts) || \
+        (cd "$extract_dir" && PATH="$ws_bin:$PATH" tsup --config tsup.config.ts) || \
             log_warn "magnitude-extract build failed — computer use may be unavailable"
     fi
     log_info "Installing agent-service dependencies (npm ci)..."
