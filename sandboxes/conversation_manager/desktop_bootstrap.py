@@ -216,6 +216,67 @@ def stop_desktop_container(
         pass
 
 
+def _free_desktop_ports(
+    ports: tuple[int, ...] = (5900, 6080, 3000),
+    *,
+    progress: Optional[ProgressCallback] = None,
+) -> None:
+    """Stop any Docker container (any name) that holds the given ports, then kill
+    non-Docker processes that are still listening, so ``docker run`` does not fail
+    with "address already in use".
+    """
+    progress = progress or (lambda _m: None)
+    for port in ports:
+        # Find containers (running or stopped) that bind this port.
+        try:
+            result = subprocess.run(
+                [
+                    "docker",
+                    "ps",
+                    "-a",
+                    "--filter",
+                    f"publish={port}",
+                    "--format",
+                    "{{.Names}}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            for cname in (result.stdout or "").splitlines():
+                cname = cname.strip()
+                if not cname:
+                    continue
+                progress(
+                    f"[desktop] Removing container '{cname}' holding port {port}...",
+                )
+                subprocess.run(
+                    ["docker", "rm", "-f", cname],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                )
+        except Exception:
+            pass
+        # Kill any non-Docker process still listening on the port.
+        try:
+            import signal
+
+            lsof = subprocess.run(
+                ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            for pid_s in (lsof.stdout or "").splitlines():
+                try:
+                    os.kill(int(pid_s.strip()), signal.SIGTERM)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+
 def _validate_agent_service(
     *,
     agent_server_url: str,
@@ -431,6 +492,10 @@ def try_start_desktop_direct(
             ),
         )
 
+    # Free any port conflicts before starting — another container or process may
+    # already hold ports 5900/6080/3000 from a previous session.
+    _free_desktop_ports(progress=progress)
+
     container_id = _start_container(
         repo_root=repo_root,
         progress=progress,
@@ -508,6 +573,10 @@ def try_auto_bootstrap_desktop(
                 ok=False,
                 summary="Failed to build desktop Docker image",
             )
+
+    # Free any port conflicts before starting — another container or process may
+    # already hold ports 5900/6080/3000 from a previous session.
+    _free_desktop_ports(progress=progress)
 
     container_id = _start_container(
         repo_root=repo_root,
