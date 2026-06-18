@@ -160,26 +160,24 @@ install_agent_service() {
         log_warn "magnitude not cloned — skipping agent-service install"
         return 0
     fi
-    # magnitude-core ships a pre-built tarball; use it directly so we don't need
-    # baml-cli or the full monorepo build toolchain.
-    local core_tgz
-    core_tgz="$(ls "$magnitude_dir/packages/magnitude-core"/magnitude-core-*.tgz 2>/dev/null | sort -V | tail -1)"
-    if [ -n "$core_tgz" ]; then
-        log_info "Installing magnitude-core from pre-built tarball..."
-        (cd "$agent_service_dir" && npm install --silent "$core_tgz") || true
+    # Build magnitude-core from source. The build pipeline is:
+    #   1. baml-cli generate  (generates src/ai/baml_client from baml_src/)
+    #   2. pkgroll            (bundles the TypeScript into dist/)
+    # Both tools are available via npx without a global install.
+    local core_dir="$magnitude_dir/packages/magnitude-core"
+    if [ -d "$core_dir" ] && [ ! -d "$core_dir/dist" ]; then
+        log_info "Building magnitude-core (generating baml_client + bundling)..."
+        (cd "$core_dir" && npx --yes @boundaryml/baml generate 2>/dev/null && npx --yes pkgroll) || \
+            log_warn "magnitude-core build failed — computer use may be unavailable"
     fi
-    # magnitude-extract has no tarball; build it with tsup (bundled in its devDeps).
+    # magnitude-extract: build with tsup (listed in its devDependencies).
     local extract_dir="$magnitude_dir/packages/magnitude-extract"
     if [ -d "$extract_dir" ] && [ ! -d "$extract_dir/dist" ]; then
         log_info "Building magnitude-extract..."
-        (cd "$extract_dir" && npm install --silent && npx tsup --config tsup.config.ts) 2>/dev/null || \
+        (cd "$extract_dir" && npx --yes tsup --config tsup.config.ts) || \
             log_warn "magnitude-extract build failed — computer use may be unavailable"
     fi
-    if [ -d "$extract_dir/dist" ]; then
-        log_info "Installing magnitude-extract..."
-        (cd "$agent_service_dir" && npm install --silent "$extract_dir") || true
-    fi
-    log_info "Installing remaining agent-service dependencies (npm ci)..."
+    log_info "Installing agent-service dependencies (npm ci)..."
     (cd "$agent_service_dir" && npm ci --silent) || {
         log_warn "npm ci failed — agent-service may not start (run 'cd $agent_service_dir && npm ci' to retry)"
         return 0
