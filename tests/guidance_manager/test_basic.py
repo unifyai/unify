@@ -3,9 +3,20 @@ from __future__ import annotations
 import pytest
 
 from unity.guidance_manager.guidance_manager import GuidanceManager
+from unity.guidance_manager.types.guidance import Guidance
 from tests.helpers import _handle_project
 from unity.image_manager.types import AnnotatedImageRef
 from pydantic import ValidationError
+
+
+def test_guidance_legacy_null_is_builtin_normalizes_to_false():
+    row = Guidance(
+        title="Legacy guidance",
+        content="Created before builtins.",
+        is_builtin=None,
+    )
+
+    assert row.is_builtin is False
 
 
 @_handle_project

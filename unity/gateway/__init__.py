@@ -33,11 +33,12 @@ be deployed locally in the same shape as those projects.
 Status
 ======
 
-Phase A (this package landing) provides the seam only: protocols,
-in-process default implementations, and Pydantic envelope schemas. The
-channel routers themselves (Twilio, Microsoft Graph, Discord, etc.) still
-live in the private ``communication`` repository and are migrated in
-later phases. See ``unity/gateway/PHASES.md`` for the rollout plan.
+This package provides the seam — protocols, in-process default
+implementations, and Pydantic envelope schemas — plus the channel routers
+(Twilio, Microsoft Graph, Discord, etc.) under ``unity.gateway.channels``.
+The hosted infrastructure that wraps these routers (VM pools, tunnels,
+schedulers, Kubernetes activation) lives in the ``unity-deploy`` repository.
+See ``unity/gateway/PHASES.md`` for the migration history.
 """
 
 from unity.gateway.event_broker import (

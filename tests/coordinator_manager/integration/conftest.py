@@ -100,7 +100,7 @@ def require_local_stack(managed_local_stack, local_stack_urls) -> LocalStackUrls
         pytest.skip(
             "Local stack is not running. Start it with "
             "`ORCHESTRA_REPO_PATH=... COMMUNICATION_REPO_PATH=... "
-            "UNITY_REPO_PATH=... ./scripts/stack.sh up` "
+            "UNITY_REPO_PATH=... unity-deploy/selfhost/stack.sh up` "
             "or unset LOCAL_STACK_NO_AUTO to auto-manage.",
         )
 

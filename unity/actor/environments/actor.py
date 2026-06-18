@@ -335,6 +335,7 @@ class _ActorRunner:
         can_compose: bool = True,
         can_store: bool = False,
         can_spawn_sub_agents: bool = False,
+        llm_profile: str | None = None,
         _clarification_up_q: Optional[asyncio.Queue[str]] = None,
         _clarification_down_q: Optional[asyncio.Queue[str]] = None,
     ) -> "SteerableToolHandle":
@@ -502,6 +503,14 @@ class _ActorRunner:
         can_spawn_sub_agents : bool, default False
             Whether the actor can itself spawn deeper actors.
             Use with caution to avoid excessive nesting.
+        llm_profile : str, optional
+            Optional curated model profile for this actor run. Leave unset for
+            the default profile, normally ``deepseek-v4-max@deepseek``.
+            Available premium profiles are ``gpt_5_5_low``,
+            ``gpt_5_5_medium``, and ``gpt_5_5_high``. Use ``gpt_5_5_high``
+            when the sub-task itself needs maximum thinking effort. This
+            parameter is explicit: sub-agents do not automatically inherit the
+            parent actor's profile.
 
         Returns
         -------
@@ -574,6 +583,7 @@ class _ActorRunner:
             _parent_chat_context=_parent_chat_context,
             _clarification_up_q=_clarification_up_q,
             _clarification_down_q=_clarification_down_q,
+            llm_profile=llm_profile,
         )
 
         # Attach inner actor cleanup to the handle's lifecycle.

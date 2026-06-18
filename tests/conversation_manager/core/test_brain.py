@@ -426,7 +426,9 @@ class TestBuildBrainSpecCoordinatorPrompt:
 
         prompt = spec.system_prompt.flatten()
         assert "Authorized humans" in prompt
-        assert "Marty identity" in prompt
+        assert "My identity" in prompt
+        assert "I am Marty, Dana Owner's personal, private assistant" in prompt
+        assert "Marty is Dana Owner's personal, private assistant" not in prompt
         assert "I propose handing it to Marty explicitly" not in prompt
         assert "I cannot forward it automatically" not in prompt
         list_org_members.assert_called_once_with(
@@ -468,7 +470,7 @@ class TestBuildBrainSpecCoordinatorPrompt:
             spec = build_brain_spec(_make_cm(), _make_snapshot())
 
         prompt = spec.system_prompt.flatten()
-        assert "Authorized humans" not in prompt
+        assert "Authorized humans\n-----------------" not in prompt
         assert "Boss details" in prompt
         list_org_members.assert_not_called()
         list_assistants.assert_not_called()

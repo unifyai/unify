@@ -137,9 +137,6 @@ def ensure_exchanges_records(
                     new=True,
                     mutable=True,
                     stamp_authoring=True,
-                    add_to_all_context=self._should_add_to_all_context(
-                        exchanges_context,
-                    ),
                 )
             except Exception:
                 # Ignore duplicates or backend races

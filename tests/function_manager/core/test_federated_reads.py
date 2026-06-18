@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from unity.common.builtins import builtins_project
 from unity.function_manager.function_manager import FunctionManager
 
 
@@ -24,6 +25,7 @@ def test_filter_functions_uses_federated_filter_window_and_context_filters():
     fm = _manager_stub()
     fm._filter_scope = "language == 'python'"
     fm._exclude_primitive_ids = frozenset({99})
+    builtins = builtins_project()
     calls = []
 
     def get_logs(context, *, filter=None, offset=0, limit=None, project=None):
@@ -33,7 +35,7 @@ def test_filter_functions_uses_federated_filter_window_and_context_filters():
                 {"name": "comp-1", "implementation": "def comp_1(): pass"},
                 {"name": "comp-2", "implementation": "def comp_2(): pass"},
             ],
-            ("Functions/Primitives", "Builtins"): [
+            ("Functions/Primitives", builtins): [
                 {"name": "prim-1", "implementation": None},
                 {"name": "prim-2", "implementation": None},
             ],
@@ -72,7 +74,7 @@ def test_filter_functions_uses_federated_filter_window_and_context_filters():
         ),
         (
             "Functions/Primitives",
-            "Builtins",
+            builtins,
             f"('tool' in docstring) and ({scoped_primitive_filter})",
             0,
             3,
@@ -81,7 +83,7 @@ def test_filter_functions_uses_federated_filter_window_and_context_filters():
             "Functions/Primitives",
             None,
             "('tool' in docstring) and "
-            f'(({scoped_primitive_filter}) and integration_source == "provider_backed")',
+            f'(({scoped_primitive_filter}) and metadata["source"] == "provider_backed")',
             0,
             3,
         ),
@@ -108,6 +110,7 @@ def test_search_functions_uses_federated_ranked_search_contexts(monkeypatch):
     fm = _manager_stub()
     fm._filter_scope = "language == 'python'"
     fm._exclude_compositional_ids = frozenset({1})
+    builtins = builtins_project()
     captured = {}
 
     def fake_ranked_search(contexts, references, *, limit, **kwargs):
@@ -142,7 +145,7 @@ def test_search_functions_uses_federated_ranked_search_contexts(monkeypatch):
     contexts = captured["contexts"]
     assert [(spec.context, spec.project) for spec in contexts] == [
         ("Functions/Compositional", None),
-        ("Functions/Primitives", "Builtins"),
+        ("Functions/Primitives", builtins),
         ("Functions/Primitives", None),
     ]
     assert [spec.source for spec in contexts] == [
@@ -154,7 +157,7 @@ def test_search_functions_uses_federated_ranked_search_contexts(monkeypatch):
     assert contexts[1].row_filter == "primitive_class == 'Primitives'"
     assert contexts[2].row_filter == (
         "(primitive_class == 'Primitives') "
-        'and integration_source == "provider_backed"'
+        'and metadata["source"] == "provider_backed"'
     )
     assert "embedding_text" in contexts[0].allowed_fields
     assert contexts[0].allowed_fields == contexts[1].allowed_fields

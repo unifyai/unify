@@ -48,7 +48,14 @@ class FakeIntegrationClient:
 
     def list_connections(self, **scope):
         self.calls.append(("list_connections", (), scope))
-        return [{"connection_id": "conn-1"}]
+        return [
+            {
+                "connection_id": "conn-1",
+                "canonical_app_slug": "hubspot",
+                "status": "connected",
+                "external_account_label": "Sales Hub",
+            },
+        ]
 
     def search_tools(self, query=None, **payload):
         self.calls.append(("search_tools", (query,), payload))
@@ -101,9 +108,6 @@ class FakeIntegrationClient:
 
 def patch_ops_from_client(monkeypatch, client: FakeIntegrationClient) -> None:
     monkeypatch.setattr(ops_module, "list_connections", client.list_connections)
-    monkeypatch.setattr(ops_module, "search_apps", client.search_apps)
-    monkeypatch.setattr(ops_module, "search_tools", client.search_tools)
-    monkeypatch.setattr(ops_module, "get_tool_schema", client.get_tool_schema)
     monkeypatch.setattr(ops_module, "run_tool", client.run_tool)
     monkeypatch.setattr(ops_module, "get_tool_policy", client.get_tool_policy)
     monkeypatch.setattr(ops_module, "patch_tool_policy", client.patch_tool_policy)
@@ -230,26 +234,6 @@ def test_ops_functions_delegate_to_unify_integration_helpers(monkeypatch) -> Non
         raising=False,
     )
     monkeypatch.setattr(
-        "unity.integrations.ops.unify.search_integration_apps",
-        helper("search_apps"),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "unity.integrations.ops.unify.get_integration_tools",
-        helper("get_tools"),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "unity.integrations.ops.unify.search_integration_tools",
-        helper("search_tools"),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "unity.integrations.ops.unify.get_integration_tool_schema",
-        helper("get_tool_schema"),
-        raising=False,
-    )
-    monkeypatch.setattr(
         "unity.integrations.ops.unify.run_integration_tool",
         helper("run_tool"),
         raising=False,
@@ -283,26 +267,6 @@ def test_ops_functions_delegate_to_unify_integration_helpers(monkeypatch) -> Non
     ops_module.list_connections(
         owner_scope="assistant",
         assistant_id=42,
-    )
-    ops_module.search_apps(
-        "Slack",
-        owner_scope="assistant",
-        assistant_id=42,
-        limit=3,
-    )
-    ops_module.get_tools(
-        canonical_app_slug="slack",
-        owner_scope="assistant",
-        assistant_id=42,
-    )
-    ops_module.search_tools(
-        "Discord guilds",
-        owner_scope="assistant",
-        assistant_id=42,
-    )
-    ops_module.get_tool_schema(
-        "tool-1",
-        owner_scope="assistant",
     )
     ops_module.run_tool(
         "tool-1",
@@ -345,50 +309,6 @@ def test_ops_functions_delegate_to_unify_integration_helpers(monkeypatch) -> Non
             {
                 "owner_scope": "assistant",
                 "assistant_id": 42,
-            },
-        ),
-        (
-            "search_apps",
-            ("Slack",),
-            {
-                "limit": 3,
-                "offset": 0,
-                "owner_scope": "assistant",
-                "assistant_id": 42,
-            },
-        ),
-        (
-            "get_tools",
-            (),
-            {
-                "limit": 100,
-                "offset": 0,
-                "canonical_app_slug": "slack",
-                "activation_state": None,
-                "include_unconnected": False,
-                "include_schema": False,
-                "owner_scope": "assistant",
-                "assistant_id": 42,
-            },
-        ),
-        (
-            "search_tools",
-            ("Discord guilds",),
-            {
-                "limit": 20,
-                "offset": 0,
-                "include_unconnected": False,
-                "canonical_app_slug": None,
-                "include_schema": False,
-                "owner_scope": "assistant",
-                "assistant_id": 42,
-            },
-        ),
-        (
-            "get_tool_schema",
-            ("tool-1",),
-            {
-                "owner_scope": "assistant",
             },
         ),
         (
@@ -459,13 +379,13 @@ def test_ops_functions_re_raise_unify_keyerror_like_unify_logging(monkeypatch) -
         raise KeyError("UNIFY_KEY is missing. Please make sure it is set correctly!")
 
     monkeypatch.setattr(
-        "unity.integrations.ops.unify.search_integration_apps",
+        "unity.integrations.ops.unify.list_integration_connections",
         raise_missing_key,
         raising=False,
     )
 
     with pytest.raises(KeyError, match="UNIFY_KEY is missing"):
-        ops_module.search_apps("Slack")
+        ops_module.list_connections(owner_scope="assistant")
 
 
 def test_ops_module_no_longer_owns_raw_integration_routes_or_client_class() -> None:
@@ -486,27 +406,80 @@ async def test_helper_methods_delegate_to_client_with_scope_payloads(
 ) -> None:
     client = FakeIntegrationClient()
     patch_ops_from_client(monkeypatch, client)
+    catalog_rows = [
+        {
+            "name": "primitives.integrations.hubspot.search_contacts",
+            "docstring": "Search HubSpot leads and contacts.",
+            "embedding_text": "HubSpot leads contacts",
+            "metadata": {
+                "source": "provider_backed",
+                "integration": {
+                    "tool_id": "composio:hubspot:search_contacts",
+                    "app_slug": "hubspot",
+                    "input_schema": {"type": "object"},
+                    "output_schema": {"type": "object"},
+                    "examples": [],
+                    "required_scopes": ["crm.objects.contacts.read"],
+                    "action_class": "read",
+                    "confirmation_required": False,
+                    "schema_available": True,
+                    "labels": {"tool_display_name": "Search contacts"},
+                },
+            },
+        },
+    ]
+    monkeypatch.setattr(
+        "unity.integrations.primitives.list_catalog_tools",
+        lambda **_kwargs: catalog_rows,
+    )
     primitives = IntegrationPrimitives(owner_scope={})
 
     assert await primitives.list_connected(
         owner_scope="assistant",
         assistant_id=42,
         user_id="user-1",
-    ) == [{"connection_id": "conn-1"}]
-    assert (
-        await primitives.search_tools(
-            "HubSpot leads",
-            assistant_id=42,
-            user_id="user-1",
-            include_unconnected=False,
-            limit=7,
-        )
-        == client.search_results
-    )
-    assert await primitives.get_tool_schema(
-        "tool-1",
+    ) == [
+        {
+            "connection_id": "conn-1",
+            "canonical_app_slug": "hubspot",
+            "status": "connected",
+            "external_account_label": "Sales Hub",
+        },
+    ]
+    assert await primitives.search_tools(
+        "HubSpot leads",
         assistant_id=42,
-    ) == {"tool_id": "tool-1", "input_schema": {"type": "object"}}
+        user_id="user-1",
+        include_unconnected=False,
+        limit=7,
+    ) == [
+        {
+            "tool_id": "composio:hubspot:search_contacts",
+            "canonical_name": "primitives.integrations.hubspot.search_contacts",
+            "display_name": "Search contacts",
+            "description": "Search HubSpot leads and contacts.",
+            "activation_state": "connected_ready",
+            "required_scopes": ["crm.objects.contacts.read"],
+            "action_class": "read",
+            "confirmation_required": False,
+            "schema_available": True,
+        },
+    ]
+    assert await primitives.get_tool_schema(
+        "composio:hubspot:search_contacts",
+        assistant_id=42,
+    ) == {
+        "status": "ok",
+        "tool_id": "composio:hubspot:search_contacts",
+        "canonical_name": "primitives.integrations.hubspot.search_contacts",
+        "input_schema": {"type": "object"},
+        "output_schema": {"type": "object"},
+        "examples": [],
+        "required_scopes": ["crm.objects.contacts.read"],
+        "action_class": "read",
+        "confirmation_required": False,
+        "schema_available": True,
+    }
     assert await primitives.execute_tool(
         "tool-1",
         {"query": "alice"},
@@ -559,18 +532,8 @@ async def test_helper_methods_delegate_to_client_with_scope_payloads(
             },
         ),
         (
-            "search_tools",
-            ("HubSpot leads",),
-            {
-                "owner_scope": "assistant",
-                "assistant_id": 42,
-                "include_unconnected": False,
-                "limit": 7,
-            },
-        ),
-        (
-            "get_tool_schema",
-            ("tool-1",),
+            "list_connections",
+            (),
             {
                 "owner_scope": "assistant",
                 "assistant_id": 42,
@@ -641,6 +604,10 @@ async def test_search_integrations_reports_connection_and_materialization_status
 ) -> None:
     client = FakeIntegrationClient()
     patch_ops_from_client(monkeypatch, client)
+    monkeypatch.setattr(
+        "unity.integrations.primitives.list_catalog_apps",
+        lambda **_kwargs: list(client.app_results),
+    )
     stub_materialized_app(
         monkeypatch,
         app_slug="hubspot",
@@ -701,12 +668,11 @@ async def test_search_integrations_reports_connection_and_materialization_status
     )
     assert client.calls == [
         (
-            "search_apps",
-            ("HubSpot",),
+            "list_connections",
+            (),
             {
                 "owner_scope": "assistant",
                 "assistant_id": 42,
-                "limit": 7,
             },
         ),
     ]
@@ -727,6 +693,10 @@ async def test_search_integrations_enriches_native_app_activation(monkeypatch) -
             "match_reason": "embedding similarity over integration app catalog text",
         },
     ]
+    monkeypatch.setattr(
+        "unity.integrations.primitives.list_catalog_apps",
+        lambda **_kwargs: list(client.app_results),
+    )
     stub_native_app(
         monkeypatch,
         app_slug="matterport",
@@ -753,6 +723,10 @@ async def test_search_integrations_returns_supported_empty_result_without_tool_s
     client = FakeIntegrationClient()
     patch_ops_from_client(monkeypatch, client)
     client.app_results = []
+    monkeypatch.setattr(
+        "unity.integrations.primitives.list_catalog_apps",
+        lambda **_kwargs: list(client.app_results),
+    )
     primitives = IntegrationPrimitives(owner_scope={})
 
     result = await primitives.search_integrations("UnsupportedApp")
@@ -765,9 +739,9 @@ async def test_search_integrations_returns_supported_empty_result_without_tool_s
     }
     assert client.calls == [
         (
-            "search_apps",
-            ("UnsupportedApp",),
-            {"owner_scope": "assistant", "limit": 10},
+            "list_connections",
+            (),
+            {"owner_scope": "assistant"},
         ),
     ]
 
@@ -776,6 +750,10 @@ async def test_search_integrations_returns_supported_empty_result_without_tool_s
 async def test_search_integrations_allows_omitted_query(monkeypatch) -> None:
     client = FakeIntegrationClient()
     patch_ops_from_client(monkeypatch, client)
+    monkeypatch.setattr(
+        "unity.integrations.primitives.list_catalog_apps",
+        lambda **_kwargs: list(client.app_results),
+    )
     primitives = IntegrationPrimitives(owner_scope={})
 
     result = await primitives.search_integrations(limit=2)
@@ -784,9 +762,9 @@ async def test_search_integrations_allows_omitted_query(monkeypatch) -> None:
     assert result["query"] is None
     assert client.calls == [
         (
-            "search_apps",
-            (None,),
-            {"owner_scope": "assistant", "limit": 2},
+            "list_connections",
+            (),
+            {"owner_scope": "assistant"},
         ),
     ]
 
@@ -811,6 +789,27 @@ async def test_dynamic_app_tool_namespace_resolves_from_materialized_row(
         name="primitives.integrations.hubspot.search_contacts",
         tool_id="composio:hubspot:search_contacts",
     )
+    monkeypatch.setattr(
+        "unity.integrations.primitives.list_catalog_tools",
+        lambda **_kwargs: [
+            {
+                "name": "primitives.integrations.hubspot.search_contacts",
+                "docstring": "Search HubSpot contacts.",
+                "embedding_text": "HubSpot contacts",
+                "metadata": {
+                    "source": "provider_backed",
+                    "integration": {
+                        "tool_id": "composio:hubspot:search_contacts",
+                        "app_slug": "hubspot",
+                        "required_scopes": [],
+                        "action_class": "read",
+                        "confirmation_required": False,
+                        "schema_available": True,
+                    },
+                },
+            },
+        ],
+    )
     primitives = IntegrationPrimitives(owner_scope={})
 
     result = await primitives.hubspot.search_contacts(query="alice@example.com")
@@ -824,6 +823,10 @@ async def test_dynamic_app_tool_namespace_resolves_from_materialized_row(
             {
                 "owner_scope": "assistant",
                 "confirmation_token": None,
+                "canonical_name": "primitives.integrations.hubspot.search_contacts",
+                "function_manager_name": (
+                    "primitives__integrations__hubspot__search_contacts"
+                ),
             },
         ),
     ]
@@ -858,6 +861,10 @@ async def test_first_wave_dynamic_namespace_executes_discord_tool(monkeypatch) -
                 "owner_scope": "assistant",
                 "assistant_id": 42,
                 "confirmation_token": None,
+                "canonical_name": "primitives.integrations.discord.list_my_guilds",
+                "function_manager_name": (
+                    "primitives__integrations__discord__list_my_guilds"
+                ),
             },
         ),
     ]
@@ -902,11 +909,18 @@ async def test_callable_for_tool_keeps_execution_identity_out_of_arguments(
 
     callable_tool = primitives.callable_for_tool(
         {
+            "name": "primitives.integrations.gmail.fetch_emails",
             "primitive_method": "primitives_integrations__gmail__fetch_emails",
             "metadata": {
                 "source": "provider_backed",
                 "integration": {
                     "tool_id": "composio:gmail:fetch_emails",
+                    "backend_id": "composio",
+                    "provider_app_id": "gmail",
+                    "app_slug": "gmail",
+                    "provider_tool_id": "gmail.fetch_emails",
+                    "tool_display_name": "Fetch emails",
+                    "action_class": "read",
                     "connection_id": "conn-gmail",
                 },
             },
@@ -938,6 +952,14 @@ async def test_callable_for_tool_keeps_execution_identity_out_of_arguments(
             "assistant_id": 42,
             "connection_id": "conn-gmail",
             "owner_scope": "assistant",
+            "backend_id": "composio",
+            "provider_app_id": "gmail",
+            "canonical_app_slug": "gmail",
+            "provider_tool_id": "gmail.fetch_emails",
+            "canonical_name": "primitives.integrations.gmail.fetch_emails",
+            "function_manager_name": "primitives_integrations__gmail__fetch_emails",
+            "tool_display_name": "Fetch emails",
+            "action_class": "read",
         },
     )
 
@@ -1020,11 +1042,9 @@ async def test_default_owner_scope_is_shared_across_helper_and_namespace_executi
     await primitives.hubspot.search_contacts(query="alice")
 
     assert client.calls[0] == (
-        "search_tools",
-        ("HubSpot contacts",),
+        "list_connections",
+        (),
         {
-            "include_unconnected": False,
-            "limit": 20,
             "owner_scope": "assistant",
             "assistant_id": 42,
         },
@@ -1034,6 +1054,10 @@ async def test_default_owner_scope_is_shared_across_helper_and_namespace_executi
         ("composio:hubspot:search_contacts", {"query": "alice"}),
         {
             "confirmation_token": None,
+            "canonical_name": "primitives.integrations.hubspot.search_contacts",
+            "function_manager_name": (
+                "primitives__integrations__hubspot__search_contacts"
+            ),
             "owner_scope": "assistant",
             "assistant_id": 42,
         },

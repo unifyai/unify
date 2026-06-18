@@ -82,6 +82,7 @@ from unity.integrations.function_metadata import (
     is_provider_backed_function,
     provider_function_metadata,
 )
+from unity.integrations.builtins_catalog import list_catalog_tools
 from .custom_functions import (
     compute_custom_functions_hash,
     compute_custom_venvs_hash,
@@ -544,10 +545,10 @@ class _VenvConnection:
             parts = path.split(".")
             if len(parts) == 2:
                 namespace, method = parts
-                if namespace == "runtime" and method == "reason":
-                    from unity.common.reasoning import reason
+                if namespace == "runtime" and method == "query_llm":
+                    from unity.common.reasoning import query_llm
 
-                    result = await reason(**kwargs)
+                    result = await query_llm(**kwargs)
                     return {
                         "type": "rpc_result",
                         "id": request_id,
@@ -555,6 +556,11 @@ class _VenvConnection:
                             result,
                         ),
                     }
+                if namespace == "runtime" and method == "list_llms":
+                    from unity.common.reasoning import list_llms
+
+                    result = list_llms(provider=kwargs.get("provider"))
+                    return {"type": "rpc_result", "id": request_id, "result": result}
                 if namespace == "runtime" and method == "get_oauth_access_token":
                     from unity.common.runtime_oauth import get_oauth_access_token
 
@@ -1719,7 +1725,6 @@ class FunctionManager(BaseFunctionManager):
         self._daemon = daemon
         # ToDo: expose tools to LLM once needed
         self._tools: Dict[str, callable] = {}
-        self.include_in_multi_assistant_table = True
 
         # Internal monotonically-increasing function-id counter.  We keep it local
         # to the manager to avoid an expensive scan across *all* logs every
@@ -2619,7 +2624,6 @@ class FunctionManager(BaseFunctionManager):
                         {"meta_id": 1, field_name: hashes},
                     ],
                     stamp_authoring=True,
-                    add_to_all_context=self.include_in_multi_assistant_table,
                 )
         except Exception as e:
             logger.warning("Failed to store %s hash map: %s", field_name, e)
@@ -2681,19 +2685,6 @@ class FunctionManager(BaseFunctionManager):
             )
         return " and ".join(clauses)
 
-    @staticmethod
-    def _legacy_provider_integration_filter(
-        *,
-        backend_id: str | None = None,
-        app_slug: str | None = None,
-    ) -> str:
-        clauses = ['integration_source == "provider_backed"']
-        if backend_id is not None:
-            clauses.append(f'backend_id == {json.dumps(backend_id or "provider")}')
-        if app_slug is not None:
-            clauses.append(f"app_slug == {json.dumps(app_slug)}")
-        return " and ".join(clauses)
-
     def _provider_row_matches_app_keys(
         self,
         row: Dict[str, Any] | None,
@@ -2704,9 +2695,6 @@ class FunctionManager(BaseFunctionManager):
         if is_provider_backed_function(row):
             backend_id = integration_backend_id(row) or "provider"
             app_slug = integration_app_slug(row) or ""
-        elif row.get("integration_source") == "provider_backed":
-            backend_id = str(row.get("backend_id") or "provider")
-            app_slug = str(row.get("app_slug") or "")
         else:
             return False
         return any(
@@ -2741,14 +2729,8 @@ class FunctionManager(BaseFunctionManager):
         if not app_keys:
             return 0
         filter_expr = " or ".join(
-            clause
+            f"({self._provider_integration_filter(backend_id=backend_id, app_slug=app_slug)})"
             for backend_id, app_slug in app_keys
-            for clause in (
-                f"({self._provider_integration_filter(backend_id=backend_id, app_slug=app_slug)})",
-                # TODO: Remove this legacy top-level row cleanup after deployed
-                # projects no longer contain pre-metadata provider primitive rows.
-                f"({self._legacy_provider_integration_filter(backend_id=backend_id, app_slug=app_slug)})",
-            )
         )
         try:
             logs = unify.get_logs(
@@ -3089,79 +3071,10 @@ class FunctionManager(BaseFunctionManager):
             )
             return result
 
-        tools_response: list[dict[str, Any]] = []
-        offset = 0
-        total_tools: int | None = None
-        max_pages = 10_000
-        page_count = 0
-        while total_tools is None or offset < total_tools:
-            page = integration_ops.get_tools(
-                limit=limit,
-                offset=offset,
-                activation_state="connected_ready",
-                include_unconnected=False,
-                include_schema=True,
-                canonical_app_slug=normalized_app,
-                **owner_scope,
-            )
-            if isinstance(page, dict) and page.get("error"):
-                log_staging_diagnostic(
-                    logger,
-                    (
-                        "Provider integration sync failed app_slug=%s "
-                        "reason=get_tools_error offset=%d error=%s duration=%.2fs"
-                    ),
-                    normalized_app or "-",
-                    offset,
-                    page.get("error"),
-                    _sync_duration(),
-                )
-                return {"status": "error", "error": page.get("error"), "apps": []}
-            page_has_total = isinstance(page, dict)
-            if page_has_total:
-                page_items = list(page.get("items") or [])
-                total_tools = int(page.get("total") or 0)
-            else:
-                # Backward-compatible fallback for older Orchestra deployments.
-                page_items = list(page or [])
-            tools_response.extend(page_items)
-            page_count += 1
-            log_staging_diagnostic(
-                logger,
-                (
-                    "Provider integration sync get_tools page app_slug=%s "
-                    "page=%d offset=%d page_size=%d total=%s"
-                ),
-                normalized_app or "-",
-                page_count,
-                offset,
-                len(page_items),
-                total_tools if total_tools is not None else "-",
-            )
-            if page_count > max_pages:
-                log_staging_diagnostic(
-                    logger,
-                    (
-                        "Provider integration sync failed app_slug=%s "
-                        "reason=pagination_exceeded pages=%d duration=%.2fs"
-                    ),
-                    normalized_app or "-",
-                    page_count,
-                    _sync_duration(),
-                )
-                return {
-                    "status": "error",
-                    "error": {
-                        "code": "provider_tool_pagination_exceeded",
-                        "message": "Provider tool list pagination exceeded the safety page limit.",
-                    },
-                    "apps": [],
-                }
-            if not page_items:
-                break
-            if not page_has_total and len(page_items) < limit:
-                break
-            offset += limit
+        tools_response = list_catalog_tools(
+            canonical_app_slug=normalized_app,
+            limit=limit,
+        )
 
         active_app_slugs = {
             normalize_app_slug(connection["canonical_app_slug"])
@@ -3171,16 +3084,27 @@ class FunctionManager(BaseFunctionManager):
         rows_by_key: dict[str, list[Dict[str, Any]]] = {}
         key_to_app: dict[str, tuple[str | None, str]] = {}
         for item in tools_response or []:
-            raw_item_app = item.get("app_slug")
-            item_app = (
-                normalize_app_slug(raw_item_app)
-                if isinstance(raw_item_app, str)
-                else raw_item_app
-            )
+            if is_provider_backed_function(item):
+                row = dict(item)
+                raw_item_app = integration_app_slug(row)
+                item_app = (
+                    normalize_app_slug(raw_item_app)
+                    if isinstance(raw_item_app, str)
+                    else raw_item_app
+                )
+            else:
+                if item.get("activation_state") not in (None, "connected_ready"):
+                    continue
+                raw_item_app = item.get("app_slug")
+                item_app = (
+                    normalize_app_slug(raw_item_app)
+                    if isinstance(raw_item_app, str)
+                    else raw_item_app
+                )
+                item = {**item, "app_slug": item_app}
+                row = self._integration_tool_to_function_row(item)
             if not item_app or item_app not in active_app_slugs:
                 continue
-            item = {**item, "app_slug": item_app}
-            row = self._integration_tool_to_function_row(item)
             backend_id = integration_backend_id(row) or "provider"
             key = self._integration_hash_key(backend_id=backend_id, app_slug=item_app)
             rows_by_key.setdefault(key, []).append(row)
@@ -3381,7 +3305,6 @@ class FunctionManager(BaseFunctionManager):
                     context=self._meta_ctx,
                     entries=[{"meta_id": 1, "custom_functions_hash": hash_value}],
                     stamp_authoring=True,
-                    add_to_all_context=self.include_in_multi_assistant_table,
                 )
         except Exception as e:
             logger.warning(f"Failed to store custom functions hash: {e}")
@@ -3441,7 +3364,6 @@ class FunctionManager(BaseFunctionManager):
             context=self._compositional_ctx,
             entries=[insert_data],
             stamp_authoring=True,
-            add_to_all_context=self.include_in_multi_assistant_table,
             recompute_derived=True,
         )
         # unity_create_logs can return either a dict or a list of Log objects
@@ -3499,7 +3421,6 @@ class FunctionManager(BaseFunctionManager):
                     context=self._meta_ctx,
                     entries=[{"meta_id": 1, "custom_venvs_hash": hash_value}],
                     stamp_authoring=True,
-                    add_to_all_context=self.include_in_multi_assistant_table,
                 )
         except Exception as e:
             logger.warning(f"Failed to store custom venvs hash: {e}")
@@ -3556,7 +3477,6 @@ class FunctionManager(BaseFunctionManager):
             context=self._venvs_ctx,
             entries=[insert_data],
             stamp_authoring=True,
-            add_to_all_context=self.include_in_multi_assistant_table,
         )
         # unity_create_logs can return either a dict or a list of Log objects
         if isinstance(result, list) and len(result) > 0:
@@ -4123,7 +4043,6 @@ class FunctionManager(BaseFunctionManager):
                     entries=entries_to_create,
                     stamp_authoring=True,
                     batched=True,
-                    add_to_all_context=self.include_in_multi_assistant_table,
                     recompute_derived=True,
                 )
             except Exception as e:
@@ -4295,7 +4214,6 @@ class FunctionManager(BaseFunctionManager):
                     entries=entries_to_create,
                     stamp_authoring=True,
                     batched=True,
-                    add_to_all_context=self.include_in_multi_assistant_table,
                     recompute_derived=True,
                 )
             except Exception as e:
@@ -5512,7 +5430,6 @@ class FunctionManager(BaseFunctionManager):
             context=self._venvs_ctx,
             entries=[{"venv": venv}],
             stamp_authoring=True,
-            add_to_all_context=self.include_in_multi_assistant_table,
         )
         # unity_create_logs can return either a dict or a list of Log objects
         if isinstance(result, list) and len(result) > 0:
@@ -5948,10 +5865,15 @@ class FunctionManager(BaseFunctionManager):
 
         manager_name, method_name = parts
 
-        if manager_name == "runtime" and method_name == "reason":
-            from unity.common.reasoning import reason
+        if manager_name == "runtime" and method_name == "query_llm":
+            from unity.common.reasoning import query_llm
 
-            return self._make_json_serializable(await reason(**kwargs))
+            return self._make_json_serializable(await query_llm(**kwargs))
+
+        if manager_name == "runtime" and method_name == "list_llms":
+            from unity.common.reasoning import list_llms
+
+            return list_llms(provider=kwargs.get("provider"))
 
         if manager_name == "runtime" and method_name == "get_oauth_access_token":
             from unity.common.runtime_oauth import get_oauth_access_token

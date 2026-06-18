@@ -167,20 +167,21 @@ print(r.model_dump_json())
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(30)
-async def test_sandbox_exposes_reason_helper_for_generated_code():
-    """Generated Python sessions should expose the semantic reasoning helper."""
+async def test_sandbox_exposes_query_llm_helper_for_generated_code():
+    """Generated Python sessions should expose the LLM query helper."""
     sandbox = PythonExecutionSession()
 
-    assert "reason" in sandbox.global_state
+    assert "query_llm" in sandbox.global_state
+    assert "reason" not in sandbox.global_state
 
-    async def fake_reason(prompt: str, **kwargs):
+    async def fake_query_llm(prompt: str, **kwargs):
         assert "reply" in prompt
         return "yes"
 
-    sandbox.global_state["reason"] = fake_reason
+    sandbox.global_state["query_llm"] = fake_query_llm
     result = await sandbox.execute(
         """
-decision = await reason("Does this email need a reply?")
+decision = await query_llm("Does this email need a reply?")
 print(decision)
 decision
 """,

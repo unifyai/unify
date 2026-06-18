@@ -2168,6 +2168,7 @@ async def _(event: StartupEvent, cm: "ConversationManager", *args, **kwargs):
             )
 
         payload = event.to_dict()["payload"]
+        previous_unify_key = SESSION_DETAILS.unify_key
         cm.set_details(payload)
 
         # Restart agent-service with the user's API key.
@@ -2184,7 +2185,10 @@ async def _(event: StartupEvent, cm: "ConversationManager", *args, **kwargs):
 
         cm.call_manager.set_config(cm.get_call_config())
         try:
-            cm.call_manager.start_persistent_worker()
+            await cm.call_manager.refresh_persistent_worker_after_key_change(
+                previous_unify_key,
+                SESSION_DETAILS.unify_key,
+            )
         except Exception as e:
             LOGGER.error(
                 "LiveKit worker failed to start, voice calls unavailable: %s",
@@ -2240,6 +2244,16 @@ async def _(event: AssistantUpdateEvent, cm: "ConversationManager", *args, **kwa
         )
 
     cm.call_manager.set_config(cm.get_call_config())
+    try:
+        await cm.call_manager.refresh_persistent_worker_after_key_change(
+            old_key,
+            SESSION_DETAILS.unify_key,
+        )
+    except Exception as e:
+        LOGGER.error(
+            "LiveKit worker failed to refresh after assistant update: %s",
+            e,
+        )
 
     # Sync OAuth tokens that may have changed after a re-authorization
     await managers_utils.queue_operation(managers_utils.sync_assistant_secrets)
@@ -2320,6 +2334,20 @@ async def _(
 ):
     if await _handle_inactivity_followup_event(event, cm):
         await cm.request_llm_run(delay=0)
+
+
+@EventHandler.register(AssistantPresenceObserved)
+async def _(
+    event: AssistantPresenceObserved,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    if hasattr(cm, "_session_logger"):
+        cm._session_logger.debug(
+            "assistant_presence_observed",
+            f"Assistant presence observed from {event.source or 'console'}.",
+        )
 
 
 @EventHandler.register(CoordinatorDelegate)

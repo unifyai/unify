@@ -27,7 +27,6 @@ def insert_rows_impl(
     context: str,
     rows: List[Dict[str, Any]],
     *,
-    add_to_all_context: bool = False,
     batched: bool = True,
     ignore_duplicate_composite_key_errors: bool = False,
 ) -> List[int]:
@@ -44,8 +43,6 @@ def insert_rows_impl(
         Fully-qualified Unify context path.
     rows : list[dict[str, Any]]
         Row dictionaries to insert.
-    add_to_all_context : bool, default False
-        Whether to also add to aggregation contexts.
     batched : bool, default True
         When True, uses batched log creation for better performance.
     ignore_duplicate_composite_key_errors : bool, default False
@@ -69,7 +66,6 @@ def insert_rows_impl(
             context=context,
             entries=rows,
             stamp_authoring=is_shared_authored_context(context),
-            add_to_all_context=add_to_all_context,
             batched=batched,
         )
     except RequestError as exc:

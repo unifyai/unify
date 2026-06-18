@@ -824,6 +824,14 @@ class CommsManager:
                         event,
                         message=r,
                     ),
+                    "assistant_presence_observed": lambda r: AssistantPresenceObserved(
+                        reason=str(
+                            event.get("reason") or r or "User presence observed.",
+                        ),
+                        source=str(event.get("source") or "console"),
+                        page_visibility=str(event.get("page_visibility") or ""),
+                        occurred_at=str(event.get("occurred_at") or ""),
+                    ),
                     "assistant_screen_share_started": lambda r: AssistantScreenShareStarted(
                         reason=r or "User enabled assistant screen sharing.",
                     ),

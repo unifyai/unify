@@ -160,6 +160,108 @@ class TestPersistentWorkerStartup:
             mock_run.assert_called_once()
             assert call_manager._worker_proc is new_proc
 
+    @pytest.mark.asyncio
+    async def test_refresh_restarts_worker_when_unify_key_changes(self, call_manager):
+        with patch(
+            "unity.conversation_manager.domains.call_manager.run_script",
+        ) as mock_run:
+            mock_proc = MagicMock()
+            mock_proc.poll.return_value = None
+            mock_run.return_value = mock_proc
+            call_manager.start_persistent_worker()
+
+            async def _terminate_worker():
+                call_manager._worker_proc = None
+
+            with patch.object(
+                call_manager,
+                "cleanup_persistent_worker",
+                side_effect=_terminate_worker,
+            ) as mock_cleanup:
+                await call_manager.refresh_persistent_worker_after_key_change(
+                    "old-build-key",
+                    "new-org-key",
+                )
+
+            mock_cleanup.assert_awaited_once()
+            assert mock_run.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_refresh_skips_restart_when_key_unchanged(self, call_manager):
+        with (
+            patch(
+                "unity.conversation_manager.domains.call_manager.run_script",
+            ) as mock_run,
+            patch.object(
+                call_manager,
+                "cleanup_persistent_worker",
+                new_callable=AsyncMock,
+            ) as mock_cleanup,
+        ):
+            mock_proc = MagicMock()
+            mock_proc.poll.return_value = None
+            mock_run.return_value = mock_proc
+            call_manager.start_persistent_worker()
+
+            await call_manager.refresh_persistent_worker_after_key_change(
+                "same-key",
+                "same-key",
+            )
+
+            mock_cleanup.assert_not_awaited()
+            mock_run.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_refresh_skips_restart_during_active_call(self, call_manager):
+        call_manager._active_job = True
+        with (
+            patch(
+                "unity.conversation_manager.domains.call_manager.run_script",
+            ) as mock_run,
+            patch.object(
+                call_manager,
+                "cleanup_persistent_worker",
+                new_callable=AsyncMock,
+            ) as mock_cleanup,
+        ):
+            mock_proc = MagicMock()
+            mock_proc.poll.return_value = None
+            mock_run.return_value = mock_proc
+            call_manager.start_persistent_worker()
+
+            await call_manager.refresh_persistent_worker_after_key_change(
+                "old-key",
+                "new-key",
+            )
+
+            mock_cleanup.assert_not_awaited()
+            mock_run.assert_called_once()
+
+
+class TestPersistentWorkerOptions:
+    def test_worker_registers_for_publisher_jobs(self, monkeypatch):
+        from livekit import agents
+        from unity.conversation_manager.medium_scripts import worker
+
+        captured = {}
+
+        def capture_run(opts, *, log_level, devmode, register):
+            captured["opts"] = opts
+            captured["log_level"] = log_level
+            captured["devmode"] = devmode
+            captured["register"] = register
+
+        monkeypatch.setattr(worker.sys, "argv", ["worker.py", "dev", "unity_test"])
+        monkeypatch.setattr(worker, "clear_worker_signal_files", lambda: None)
+        monkeypatch.setattr(worker, "_run_worker_with_registration_signal", capture_run)
+
+        worker.main()
+
+        assert captured["opts"].agent_name == "unity_test"
+        assert captured["opts"].worker_type is agents.WorkerType.PUBLISHER
+        assert captured["devmode"] is True
+        assert captured["register"] is True
+
 
 # ---------------------------------------------------------------------------
 # Job dispatch
@@ -281,6 +383,7 @@ class TestJobDispatch:
                 sample_contact,
                 boss_contact,
                 False,
+                extra_metadata=None,
             )
 
 

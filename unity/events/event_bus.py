@@ -42,7 +42,7 @@ from uuid import uuid4
 
 __all__ = ["Event", "EventBus", "Subscription", "EVENT_BUS"]
 from ..common.global_docstrings import CLEAR_METHOD_DOCSTRING
-from ..common.log_utils import _derive_all_contexts, _inject_private_fields
+from ..common.log_utils import _inject_private_fields
 from ..common.model_to_fields import model_to_fields
 from ..logger import LOGGER
 from .stream_filters import is_streaming_noise
@@ -505,15 +505,11 @@ class EventBus:
         1. Creates the context if it doesn't exist
         2. Creates fields from the Pydantic payload model using model_to_fields
         3. Registers the context in _specific_ctxs
-        4. Creates aggregation contexts for multi-assistant/multi-user views
 
         This ensures fields exist before any logs are written, preventing
         type inference issues from the first log value.
         """
         from .types import PAYLOAD_REGISTRY
-
-        # Create aggregation contexts for the global Events context
-        self._ensure_aggregation_contexts(self._global_ctx)
 
         for event_type, payload_model in PAYLOAD_REGISTRY.items():
             ctx_name = f"{self._global_ctx}/{event_type}"
@@ -537,27 +533,6 @@ class EventBus:
             # Register in our tracking dicts
             self._specific_ctxs[event_type] = ctx_name
             self._window_sizes.setdefault(event_type, self._default_window)
-
-            # Create aggregation contexts for this event type
-            self._ensure_aggregation_contexts(ctx_name)
-
-    def _ensure_aggregation_contexts(self, context: str) -> None:
-        """Create aggregation contexts for multi-assistant and multi-user views.
-
-        For a context like {User}/{Assistant}/Events or {User}/{Assistant}/Events/LLM,
-        this creates:
-        - {User}/All/Events (or {User}/All/Events/LLM) for user-level aggregation
-        - All/Events (or All/Events/LLM) for global aggregation
-
-        These contexts store references to the same logs (not copies), enabling
-        cross-assistant and cross-user queries.
-        """
-        all_ctxs = _derive_all_contexts(context)
-        for all_ctx in all_ctxs:
-            try:
-                unify.create_context(all_ctx)
-            except Exception:
-                pass  # Context may already exist; proceed
 
     # ------------------------------------------------------------------
     # Public readonly state helpers
@@ -1121,7 +1096,7 @@ class EventBus:
 
         for context, entries_list in batches.items():
             try:
-                logs = unify.create_logs(
+                unify.create_logs(
                     project=project,
                     context=context,
                     entries=entries_list,
@@ -1140,27 +1115,6 @@ class EventBus:
                     exc_info=True,
                 )
                 continue
-
-            # Mirror to aggregation contexts in bulk
-            all_ctxs = _derive_all_contexts(context)
-            if all_ctxs and logs:
-                log_ids = [lg.id for lg in logs if lg.id is not None]
-                if log_ids:
-                    for all_ctx in all_ctxs:
-                        try:
-                            unify.add_logs_to_context(
-                                log_ids,
-                                context=all_ctx,
-                                project=project,
-                            )
-                        except Exception as exc:
-                            LOGGER.debug(
-                                "EventBus flush: aggregation mirror failed: "
-                                "context=%s target=%s error=%s",
-                                context,
-                                all_ctx,
-                                exc,
-                            )
 
     def join_published(self):
         """Ensures all published events have been uploaded."""
@@ -1564,15 +1518,12 @@ class EventBus:
         # 2. Flush all buffered writes before cleanup
         self.flush()
 
-        # 3. Delete all Unify contexts owned by this EventBus instance
+        # 3. Delete all Unify contexts owned by this EventBus instance: one
+        #    server-side subtree delete (the global Events context + every
+        #    …/Events/<TYPE>, …/Events/_callbacks child) instead of enumerating
+        #    and deleting each individually.
         if delete_contexts:
-            # First remove children (…/Events/<TYPE>, …/Events/_callbacks, …)
-            upstream_ctxs = list(unify.get_contexts(prefix=self._global_ctx) or [])
-            for ctx in upstream_ctxs:
-                unify.delete_context(ctx)
-
-            # Finally remove the global Events context itself
-            unify.delete_context(self._global_ctx)
+            unify.delete_context(self._global_ctx, delete_children=True)
 
         # 4. Re-initialise this *same* instance
         self._get_logger().clear_queue()

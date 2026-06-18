@@ -57,6 +57,7 @@ def mock_cm():
     cm.event_broker = MagicMock()
     cm.event_broker.publish = AsyncMock()
     cm.call_manager = MagicMock()
+    cm.suppress_duplicate_commissioning_tool.return_value = None
     return cm
 
 
@@ -169,6 +170,65 @@ class TestActPersistParameter:
 
         action_data = next(iter(mock_cm.in_flight_actions.values()))
         assert action_data["persist"] is False
+
+
+class TestActLLMProfileParameter:
+    """Tests for the llm_profile parameter on the act tool."""
+
+    def test_llm_profile_in_signature(self, brain_action_tools):
+        sig = inspect.signature(brain_action_tools.act)
+
+        assert "llm_profile" in sig.parameters
+        assert sig.parameters["llm_profile"].default is None
+
+    def test_llm_profile_in_tool_schema(self, brain_action_tools):
+        from unity.common.llm_helpers import method_to_schema
+
+        schema = method_to_schema(brain_action_tools.act, include_class_name=False)
+        params = schema["function"]["parameters"]
+
+        assert "llm_profile" in params["properties"]
+        assert "llm_profile" not in params.get("required", [])
+        description = schema["function"]["description"]
+        assert "gpt_5_5_high" in description
+        assert "use all of your thinking effort" in description
+        assert "11.5x" in description
+        assert "34.5x" in description
+
+    @pytest.mark.asyncio
+    async def test_llm_profile_forwarded_to_actor(
+        self,
+        brain_action_tools,
+        mock_cm,
+    ):
+        actor, captured = _make_fake_actor()
+        mock_cm.actor = actor
+
+        await brain_action_tools.act(
+            query="Hard research task",
+            requesting_contact_id=1,
+            llm_profile="gpt_5_5_high",
+        )
+
+        assert captured.get("llm_profile") == "gpt_5_5_high"
+
+    @pytest.mark.asyncio
+    async def test_llm_profile_stored_in_action_metadata(
+        self,
+        brain_action_tools,
+        mock_cm,
+    ):
+        actor, _ = _make_fake_actor()
+        mock_cm.actor = actor
+
+        await brain_action_tools.act(
+            query="Hard research task",
+            requesting_contact_id=1,
+            llm_profile="gpt_5_5_high",
+        )
+
+        action_data = next(iter(mock_cm.in_flight_actions.values()))
+        assert action_data["llm_profile"] == "gpt_5_5_high"
 
 
 # ═════════════════════════════════════════════════════════════════════════════

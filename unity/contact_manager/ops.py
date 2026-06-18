@@ -222,10 +222,6 @@ def create_contact(
         new=True,
         mutable=True,
         stamp_authoring=True,
-        add_to_all_context=(
-            self.include_in_multi_assistant_table
-            and not context_name.startswith("Teams/")
-        ),
     )
     try:
         store.put(log.entries)

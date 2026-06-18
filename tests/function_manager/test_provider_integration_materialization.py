@@ -130,7 +130,16 @@ def test_materializes_connected_provider_tools_with_active_only_search(
         "unity.integrations.ops.list_connections",
         client.list_connections,
     )
-    monkeypatch.setattr("unity.integrations.ops.get_tools", client.get_tools)
+    catalog_calls: list[dict[str, object]] = []
+
+    def fake_list_catalog_tools(**kwargs):
+        catalog_calls.append(kwargs)
+        return list(client.results)
+
+    monkeypatch.setattr(
+        "unity.function_manager.function_manager.list_catalog_tools",
+        fake_list_catalog_tools,
+    )
     fm = _fake_function_manager()
 
     result = fm.sync_provider_integration_tools(app_slug="hubspot")
@@ -139,20 +148,6 @@ def test_materializes_connected_provider_tools_with_active_only_search(
     assert result["apps"] == [{"key": "composio:hubspot", "rows": 1, "rows_deleted": 0}]
     assert client.calls == [
         ("list_connections", (), {"owner_scope": "assistant", "assistant_id": 42}),
-        (
-            "get_tools",
-            (),
-            {
-                "limit": 500,
-                "offset": 0,
-                "activation_state": "connected_ready",
-                "include_unconnected": False,
-                "include_schema": True,
-                "canonical_app_slug": "hubspot",
-                "owner_scope": "assistant",
-                "assistant_id": 42,
-            },
-        ),
     ]
     row = fm._inserted_rows[0]
     assert row["name"] == "primitives.integrations.hubspot.search_contacts"
@@ -368,7 +363,16 @@ def test_materialization_excludes_unconnected_tools(monkeypatch) -> None:
         "unity.integrations.ops.list_connections",
         client.list_connections,
     )
-    monkeypatch.setattr("unity.integrations.ops.get_tools", client.get_tools)
+    catalog_calls: list[dict[str, object]] = []
+
+    def fake_list_catalog_tools(**kwargs):
+        catalog_calls.append(kwargs)
+        return list(client.results)
+
+    monkeypatch.setattr(
+        "unity.function_manager.function_manager.list_catalog_tools",
+        fake_list_catalog_tools,
+    )
     fm = _fake_function_manager()
 
     result = fm.sync_provider_integration_tools(app_slug="hubspot")
@@ -385,7 +389,10 @@ def test_staging_sync_logs_zero_row_state(monkeypatch, caplog) -> None:
         "unity.integrations.ops.list_connections",
         client.list_connections,
     )
-    monkeypatch.setattr("unity.integrations.ops.get_tools", client.get_tools)
+    monkeypatch.setattr(
+        "unity.function_manager.function_manager.list_catalog_tools",
+        lambda **_kwargs: list(client.results),
+    )
     fm = _fake_function_manager()
     sync_logger = _capture_function_manager_logs(caplog)
 
@@ -423,7 +430,10 @@ def test_staging_sync_logs_insert_mismatch(monkeypatch, caplog) -> None:
         "unity.integrations.ops.list_connections",
         client.list_connections,
     )
-    monkeypatch.setattr("unity.integrations.ops.get_tools", client.get_tools)
+    monkeypatch.setattr(
+        "unity.function_manager.function_manager.list_catalog_tools",
+        lambda **_kwargs: list(client.results),
+    )
     monkeypatch.setattr(
         "unity.function_manager.function_manager.list_private_fields",
         lambda _context: [],
@@ -465,23 +475,24 @@ def test_materialization_pages_app_scoped_provider_tools(monkeypatch) -> None:
         "unity.integrations.ops.list_connections",
         client.list_connections,
     )
-    monkeypatch.setattr("unity.integrations.ops.get_tools", client.get_tools)
+    catalog_calls: list[dict[str, object]] = []
+
+    def fake_list_catalog_tools(**kwargs):
+        catalog_calls.append(kwargs)
+        return list(client.results)
+
+    monkeypatch.setattr(
+        "unity.function_manager.function_manager.list_catalog_tools",
+        fake_list_catalog_tools,
+    )
     fm = _fake_function_manager()
 
     result = fm.sync_provider_integration_tools(app_slug="HubSpot", limit=1)
 
     assert result["status"] == "synced"
     assert result["apps"] == [{"key": "composio:hubspot", "rows": 2, "rows_deleted": 0}]
-    assert [call[2]["offset"] for call in client.calls if call[0] == "get_tools"] == [
-        0,
-        1,
-    ]
     assert all(call[0] != "search_tools" for call in client.calls)
-    assert all(
-        call[2]["canonical_app_slug"] == "hubspot"
-        for call in client.calls
-        if call[0] == "get_tools"
-    )
+    assert catalog_calls == [{"canonical_app_slug": "hubspot", "limit": 1}]
     assert [row["name"] for row in fm._inserted_rows] == [
         "primitives.integrations.hubspot.search_contacts",
         "primitives.integrations.hubspot.create_contact",
@@ -524,7 +535,10 @@ def test_materialized_rows_include_pipedream_metadata_without_user_state(
         "unity.integrations.ops.list_connections",
         client.list_connections,
     )
-    monkeypatch.setattr("unity.integrations.ops.get_tools", client.get_tools)
+    monkeypatch.setattr(
+        "unity.function_manager.function_manager.list_catalog_tools",
+        lambda **_kwargs: list(client.results),
+    )
     fm = _fake_function_manager()
 
     result = fm.sync_provider_integration_tools(app_slug="slack")
@@ -688,7 +702,6 @@ def test_function_manager_queries_do_not_call_integration_ops(monkeypatch) -> No
         )
 
     monkeypatch.setattr("unity.integrations.ops.list_connections", fail_ops)
-    monkeypatch.setattr("unity.integrations.ops.get_tools", fail_ops)
     monkeypatch.setattr(
         "unify.get_logs",
         lambda **kwargs: (
@@ -731,7 +744,10 @@ def test_materialization_hash_match_skips_delete_and_insert(monkeypatch) -> None
         "unity.integrations.ops.list_connections",
         client.list_connections,
     )
-    monkeypatch.setattr("unity.integrations.ops.get_tools", client.get_tools)
+    monkeypatch.setattr(
+        "unity.function_manager.function_manager.list_catalog_tools",
+        lambda **_kwargs: list(client.results),
+    )
     fm = _fake_function_manager()
     fm._get_stored_integration_tool_hash_by_app = lambda: {
         "composio:hubspot": current_hash,
@@ -752,7 +768,10 @@ def test_disconnect_cleanup_removes_materialized_rows(monkeypatch) -> None:
         "unity.integrations.ops.list_connections",
         client.list_connections,
     )
-    monkeypatch.setattr("unity.integrations.ops.get_tools", client.get_tools)
+    monkeypatch.setattr(
+        "unity.function_manager.function_manager.list_catalog_tools",
+        lambda **_kwargs: list(client.results),
+    )
     fm = _fake_function_manager()
     fm._get_stored_integration_tool_hash_by_app = lambda: {
         "composio:hubspot": "old-hash",
@@ -765,7 +784,7 @@ def test_disconnect_cleanup_removes_materialized_rows(monkeypatch) -> None:
     assert fm._deleted_apps == [("composio", "hubspot")]
 
 
-def test_disconnect_cleanup_deletes_legacy_top_level_provider_rows(
+def test_disconnect_cleanup_deletes_only_metadata_provider_rows(
     monkeypatch,
 ) -> None:
     deleted: list[int] = []
@@ -819,11 +838,11 @@ def test_disconnect_cleanup_deletes_legacy_top_level_provider_rows(
         [("composio", "gmail")],
     )
 
-    assert removed == 2
-    assert deleted == [1, 2]
+    assert removed == 1
+    assert deleted == [2]
     assert 'metadata["source"] == "provider_backed"' in captured["filter"]
-    assert 'integration_source == "provider_backed"' in captured["filter"]
-    assert 'app_slug == "gmail"' in captured["filter"]
+    assert 'metadata["integration"]["app_slug"] == "gmail"' in captured["filter"]
+    assert 'integration_source == "provider_backed"' not in captured["filter"]
 
 
 def test_connection_cleanup_removes_app_rows_when_last_connection_drops(
@@ -835,7 +854,10 @@ def test_connection_cleanup_removes_app_rows_when_last_connection_drops(
         "unity.integrations.ops.list_connections",
         client.list_connections,
     )
-    monkeypatch.setattr("unity.integrations.ops.get_tools", client.get_tools)
+    monkeypatch.setattr(
+        "unity.function_manager.function_manager.list_catalog_tools",
+        lambda **_kwargs: list(client.results),
+    )
     fm = _fake_function_manager()
     fm._get_stored_integration_tool_hash_by_app = lambda: {
         "composio:hubspot": "old-hash",
@@ -868,7 +890,10 @@ def test_connection_cleanup_keeps_rows_while_other_connection_remains(
         "unity.integrations.ops.list_connections",
         client.list_connections,
     )
-    monkeypatch.setattr("unity.integrations.ops.get_tools", client.get_tools)
+    monkeypatch.setattr(
+        "unity.function_manager.function_manager.list_catalog_tools",
+        lambda **_kwargs: list(client.results),
+    )
     fm = _fake_function_manager()
     fm._get_stored_integration_tool_hash_by_app = lambda: {
         "composio:hubspot": "old-hash",
@@ -896,7 +921,10 @@ def test_missing_active_connection_for_specific_sync_returns_error(monkeypatch) 
         "unity.integrations.ops.list_connections",
         client.list_connections,
     )
-    monkeypatch.setattr("unity.integrations.ops.get_tools", client.get_tools)
+    monkeypatch.setattr(
+        "unity.function_manager.function_manager.list_catalog_tools",
+        lambda **_kwargs: list(client.results),
+    )
     fm = _fake_function_manager()
 
     result = fm.sync_provider_integration_tools(

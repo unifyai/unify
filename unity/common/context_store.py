@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import unify
 from unify.utils.http import RequestError as _UnifyRequestError
@@ -12,15 +12,6 @@ from unity.common.authorship import fields_with_authoring, is_shared_authored_co
 logger = logging.getLogger(__name__)
 
 # Private fields injected by log_utils wrappers
-_PRIVATE_FIELDS: Dict[str, str] = {
-    "_user": "str",
-    "_user_id": "str",
-    "_assistant": "str",
-    "_assistant_id": "str",
-    "_org": "str",
-    "_org_id": "int",
-}
-
 _CREATE_CONTEXT_MAX_ATTEMPTS = 3
 _CREATE_CONTEXT_BACKOFF_SECS = (0.5, 1.5)
 
@@ -50,6 +41,8 @@ def _create_context_with_retry(
     auto_counting: Optional[Dict[str, Optional[str]]] = None,
     description: Optional[str] = None,
     foreign_keys: Optional[list[Dict[str, Any]]] = None,
+    owner_scope: Optional[str] = None,
+    owner_id: Optional[int] = None,
     project: Optional[str] = None,
 ) -> None:
     """Call ``unify.create_context`` with retry on transient failures.
@@ -58,6 +51,10 @@ def _create_context_with_retry(
     backoff for transient HTTP errors (5xx, 429, network).  Non-transient
     errors (4xx) are raised immediately (except "already exists" which the
     SDK handles via ``exist_ok=True``).
+
+    ``owner_scope`` / ``owner_id`` make the context's ownership explicit (the
+    unit of O(owner) bulk deletion); when omitted the backend infers it from
+    the context name.
     """
     last_exc: Optional[Exception] = None
     for attempt in range(_CREATE_CONTEXT_MAX_ATTEMPTS):
@@ -68,6 +65,8 @@ def _create_context_with_retry(
                 auto_counting=auto_counting,
                 description=description,
                 foreign_keys=foreign_keys,
+                owner_scope=owner_scope,
+                owner_id=owner_id,
                 project=project,
             )
             return
@@ -133,85 +132,8 @@ class TableStore:
     # ──────────────────────────────────────────────────────────────────────
     # Provisioning
     # ──────────────────────────────────────────────────────────────────────
-    def _all_contexts(self) -> List[str]:
-        """
-        Derive aggregation contexts for this user/assistant-scoped context.
-
-        Returns two contexts for cross-assistant and cross-user aggregation:
-          - {user_id}/All/{suffix} - all assistants for this user
-          - All/{suffix}           - all users, all assistants
-
-        Example: "42/7/Contacts" returns:
-          - "42/All/Contacts"
-          - "All/Contacts"
-
-        Returns empty list if context doesn't have user_id/assistant_id prefix.
-        """
-        parts = self._ctx.split("/")
-        if len(parts) < 3:
-            return []
-
-        # Handle test contexts: tests/.../{default_user_id}/{default_assistant_id}/Suffix
-        # Scope aggregations to the test root to avoid cross-test contamination.
-        if parts[0] == "tests":
-            from unity.session_details import UNASSIGNED_USER_CONTEXT
-
-            try:
-                user_idx = parts.index(UNASSIGNED_USER_CONTEXT)
-            except ValueError:
-                return []
-
-            # Need at least User/Assistant/Suffix after the test root
-            if user_idx + 2 >= len(parts):
-                return []
-
-            test_root = "/".join(parts[:user_idx])
-            user_ctx = parts[user_idx]
-            suffix = "/".join(parts[user_idx + 2 :])
-            return [
-                f"{test_root}/{user_ctx}/All/{suffix}",
-                f"{test_root}/All/{suffix}",
-            ]
-
-        # Production path: User/Assistant/Suffix
-        user_ctx = parts[0]
-        suffix = "/".join(parts[2:])  # Everything after user_id/assistant_id
-        return [
-            f"{user_ctx}/All/{suffix}",
-            f"All/{suffix}",
-        ]
-
-    def _ensure_all_contexts(self, all_ctxs: List[str]) -> None:
-        """Ensure aggregation contexts exist for cross-assistant / cross-user queries.
-
-        These contexts mirror the source context's fields (plus private fields)
-        but have no unique_keys or auto_counting.
-        """
-        for all_ctx in all_ctxs:
-            key = (self._project, all_ctx)
-            if key in self._ENSURED:
-                continue
-
-            if all_ctx.startswith("All/"):
-                description = f"Global aggregation of {self._ctx.split('/')[-1]} across all users and assistants"
-            else:
-                description = f"Aggregation of {self._ctx.split('/')[-1]} across all assistants for this user"
-
-            _create_context_with_retry(all_ctx, description=description)
-
-            fields_with_private = dict(self._fields)
-            fields_with_private.update(_PRIVATE_FIELDS)
-
-            if fields_with_private:
-                try:
-                    unify.create_fields(fields_with_private, context=all_ctx)
-                except Exception:
-                    pass
-
-            self._ENSURED.add(key)
-
     def ensure_context(self) -> None:
-        """Create the context (and its fields / aggregation siblings) in Orchestra.
+        """Create the context (and its fields) in Orchestra.
 
         Uses ``_create_context_with_retry`` so transient HTTP errors (5xx / 429 /
         network) are retried with backoff.  Non-transient errors propagate
@@ -237,10 +159,6 @@ class TableStore:
                 pass
 
         self._ENSURED.add(key)
-
-        all_ctxs = self._all_contexts()
-        if all_ctxs:
-            self._ensure_all_contexts(all_ctxs)
 
     # ──────────────────────────────────────────────────────────────────────
     # Accessors with 404→ensure→retry

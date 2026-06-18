@@ -48,7 +48,6 @@ class BlackListManager(BaseBlackListManager):
     # ------------------------------------------------------------------ #
     def __init__(self) -> None:
         super().__init__()
-        self.include_in_multi_assistant_table = True
         self._ctx = ContextRegistry.get_context(self, "BlackList")
 
         # Local DataStore mirror (write-through only; never read from it)
@@ -219,10 +218,6 @@ class BlackListManager(BaseBlackListManager):
             new=True,
             mutable=True,
             stamp_authoring=True,
-            add_to_all_context=(
-                self.include_in_multi_assistant_table
-                and not context.startswith(TEAM_CONTEXT_PREFIX)
-            ),
             **payload,
         )
         self._data_store_for_context(context).put(log.entries)
@@ -324,27 +319,13 @@ class BlackListManager(BaseBlackListManager):
             raise RuntimeError(
                 f"Multiple blacklist rows found with blacklist_id {blacklist_id}. Data integrity issue.",
             )
-        # create_blacklist_entry uses unity_log(add_to_all_context=True),
-        # which (per current orchestra semantics) creates a separate log
-        # row in each aggregation context, each with its own log id. A
-        # single-context delete using the primary log id therefore leaves
-        # the aggregation copies behind — visible to filter_blacklist /
-        # any get_logs against the All/* contexts. Resolve and delete
-        # per-context so the cascade fully propagates regardless of
-        # whether orchestra later moves to true reference semantics.
-        contexts_to_clear: list[str] = [context]
-        if self.include_in_multi_assistant_table:
-            from ..common.log_utils import _derive_all_contexts
-
-            contexts_to_clear.extend(_derive_all_contexts(context))
-        for ctx in contexts_to_clear:
-            ids_in_ctx = unify.get_logs(
-                context=ctx,
-                filter=f"blacklist_id == {int(blacklist_id)}",
-                return_ids_only=True,
-            )
-            for log_id in ids_in_ctx:
-                unify.delete_logs(context=ctx, logs=log_id)
+        ids_in_ctx = unify.get_logs(
+            context=context,
+            filter=f"blacklist_id == {int(blacklist_id)}",
+            return_ids_only=True,
+        )
+        for log_id in ids_in_ctx:
+            unify.delete_logs(context=context, logs=log_id)
         try:
             self._data_store_for_context(context).delete(blacklist_id)
         except KeyError:

@@ -114,7 +114,6 @@ class ContactManager(BaseContactManager):
             Whether to include the rolling activity summary in prompts by default.
         """
         super().__init__()
-        self.include_in_multi_assistant_table = True
         self._ctx = ContextRegistry.get_context(self, "Contacts")
 
         # Local DataStore mirror (write-through only; never read from it)

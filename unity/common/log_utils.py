@@ -20,15 +20,8 @@ Replace direct unify.log/create_logs calls with these wrappers:
     # Instead of: unify.create_logs(context=ctx, entries=entries_list)
     create_logs(context=ctx, entries=entries_list)
 
-The wrappers automatically:
-- Inject _user, _user_id, _assistant, _assistant_id, _org, _org_id as private fields
-- Add logs to aggregation contexts by reference (when add_to_all_context=True):
-  - {user_id}/All/{Suffix} - user-level aggregation (all assistants for this user)
-  - All/{Suffix} - global aggregation (all users, all assistants)
-
-For test contexts (starting with "tests/"), aggregation is scoped to the test root:
-  - {test_root}/{user_id}/All/{Suffix}
-  - {test_root}/All/{Suffix}
+The wrappers automatically inject _user, _user_id, _assistant, _assistant_id,
+_org, _org_id as private fields.
 """
 
 from __future__ import annotations
@@ -128,93 +121,9 @@ def _inject_private_fields(entries: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-def _derive_all_contexts(context: str) -> List[str]:
-    """
-    Derive aggregation contexts from a user/assistant-scoped context.
-
-    Returns two contexts for cross-assistant and cross-user aggregation:
-      - {user_id}/All/{suffix} - all assistants for this user
-      - All/{suffix}           - all users, all assistants
-
-    For test contexts (starting with "tests/"), the aggregation contexts are
-    scoped to the test root for proper isolation:
-      - {test_root}/{user_id}/All/{suffix}
-      - {test_root}/All/{suffix}
-
-    Examples:
-        Production:
-        "42/7/Contacts" -> ["42/All/Contacts", "All/Contacts"]
-
-        Testing:
-        "tests/foo/default/default-assistant/Contacts" ->
-            ["tests/foo/default/All/Contacts", "tests/foo/All/Contacts"]
-
-        Invalid (too few parts):
-        "42/Contacts" -> []
-        "Contacts" -> []
-    """
-    parts = context.split("/")
-    if len(parts) < 3:
-        return []
-
-    # Handle test contexts: tests/.../{default_user_id}/{default_assistant_id}/Suffix
-    # Find the user position by looking for the UNASSIGNED_USER_CONTEXT marker
-    if parts[0] == "tests":
-        from unity.session_details import UNASSIGNED_USER_CONTEXT
-
-        try:
-            user_idx = parts.index(UNASSIGNED_USER_CONTEXT)
-        except ValueError:
-            # Can't determine structure without the UNASSIGNED_USER_CONTEXT marker
-            return []
-
-        # Need at least User/Assistant/Suffix after the test root
-        if user_idx + 2 >= len(parts):
-            return []
-
-        test_root = "/".join(parts[:user_idx])
-        user_ctx = parts[user_idx]
-        suffix = "/".join(parts[user_idx + 2 :])
-
-        return [
-            f"{test_root}/{user_ctx}/All/{suffix}",  # User-level aggregation
-            f"{test_root}/All/{suffix}",  # Global aggregation
-        ]
-
-    # Production path: User/Assistant/Suffix
-    user_ctx = parts[0]
-    suffix = "/".join(parts[2:])
-    return [
-        f"{user_ctx}/All/{suffix}",  # User-level aggregation
-        f"All/{suffix}",  # Global aggregation
-    ]
-
-
-def _add_to_all(
-    log_ids: List[int],
-    context: str,
-    *,
-    project: Optional[str] = None,
-) -> None:
-    """Add logs by reference to all aggregation contexts (best-effort)."""
-    if not log_ids:
-        return
-    all_ctxs = _derive_all_contexts(context)
-    for all_ctx in all_ctxs:
-        try:
-            unify.add_logs_to_context(
-                log_ids,
-                context=all_ctx,
-                project=project or unify.active_project(),
-            )
-        except Exception:
-            pass  # Best-effort: don't fail the main operation
-
-
 def log(
     context: str,
     *,
-    add_to_all_context: bool = False,
     new: bool = True,
     mutable: bool = False,
     project: Optional[str] = None,
@@ -222,16 +131,12 @@ def log(
     **entries: Any,
 ) -> unify.Log:
     """
-    Wrapper around unify.log with private field injection and aggregation context addition.
+    Wrapper around unify.log with private field injection.
 
     Parameters
     ----------
     context : str
         The context to log to (e.g., "42/7/Contacts")
-    add_to_all_context : bool, default False
-        If True, add the log to aggregation contexts by reference:
-        - {user_id}/All/{Ctx} (user-level)
-        - All/{Ctx} (global)
     new : bool, default True
         Whether to create a new log entry
     mutable : bool, default False
@@ -247,7 +152,7 @@ def log(
     if stamp_authoring:
         entries[AUTHORING_ASSISTANT_ID_FIELD] = current_authoring_assistant_id()
     entries = _inject_private_fields(entries)
-    result = unify.log(
+    return unify.log(
         project=project,
         context=context,
         new=new,
@@ -255,26 +160,17 @@ def log(
         **entries,
     )
 
-    if add_to_all_context:
-        try:
-            _add_to_all([result.id], context, project=project)
-        except Exception:
-            pass
-
-    return result
-
 
 def create_logs(
     context: str,
     *,
     entries: List[Dict[str, Any]],
-    add_to_all_context: bool = False,
     project: Optional[str] = None,
     stamp_authoring: bool = False,
     **kwargs: Any,
 ) -> Any:
     """
-    Wrapper around unify.create_logs with private field injection and aggregation context addition.
+    Wrapper around unify.create_logs with private field injection.
 
     Parameters
     ----------
@@ -282,10 +178,6 @@ def create_logs(
         The context to log to (e.g., "42/7/Tasks")
     entries : List[Dict[str, Any]]
         List of entry dicts to create
-    add_to_all_context : bool, default False
-        If True, add logs to aggregation contexts by reference:
-        - {user_id}/All/{Ctx} (user-level)
-        - All/{Ctx} (global)
     **kwargs
         Additional arguments passed to unify.create_logs (e.g., batched=True)
 
@@ -311,27 +203,12 @@ def create_logs(
         )
         for entry in entries
     ]
-    result = unify.create_logs(
+    return unify.create_logs(
         project=project,
         context=context,
         entries=entries,
         **kwargs,
     )
-
-    if add_to_all_context:
-        # Handle both dict (normal) and list (batched=True) return types
-        if isinstance(result, dict):
-            log_ids = result.get("log_event_ids", [])
-        elif isinstance(result, list):
-            # batched=True returns a list of Log objects
-            log_ids = [lg.id for lg in result if hasattr(lg, "id")]
-        else:
-            log_ids = []
-
-        if log_ids:
-            _add_to_all(log_ids, context, project=project)
-
-    return result
 
 
 # =============================================================================
@@ -356,7 +233,6 @@ async def atomic_upsert(
     field: str,
     operation: str,
     initial_data: Optional[Dict[str, Any]] = None,
-    add_to_all_context: bool = False,
     project: Optional[str] = None,
     data_overrides: Optional[Dict[str, Any]] = None,
 ) -> AtomicUpsertResult:
@@ -368,7 +244,6 @@ async def atomic_upsert(
     2. Acquires advisory lock on unique key values (prevents race on first insert)
     3. Finds log by unique_keys or creates it with initial_data
     4. Applies atomic operation to field
-    5. Optionally mirrors to All/* archive context
 
     Parameters
     ----------
@@ -384,8 +259,6 @@ async def atomic_upsert(
     initial_data : Dict[str, Any], optional
         Data for creating a new log if one doesn't exist.
         Must include all unique key values.
-    add_to_all_context : bool, default False
-        If True, mirror the log to All/* archive context
     project : str, optional
         The project name. Defaults to the active project.
     data_overrides : Dict[str, Any], optional
@@ -421,7 +294,6 @@ async def atomic_upsert(
         "field": field,
         "operation": operation,
         "initial_data": initial_data,
-        "add_to_all_context": add_to_all_context,
     }
 
     # Get API credentials
@@ -456,7 +328,6 @@ def atomic_upsert_sync(
     field: str,
     operation: str,
     initial_data: Optional[Dict[str, Any]] = None,
-    add_to_all_context: bool = False,
     project: Optional[str] = None,
 ) -> AtomicUpsertResult:
     """
@@ -480,7 +351,6 @@ def atomic_upsert_sync(
         "field": field,
         "operation": operation,
         "initial_data": initial_data,
-        "add_to_all_context": add_to_all_context,
     }
 
     # Get API credentials

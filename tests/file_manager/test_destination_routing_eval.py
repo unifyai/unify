@@ -9,14 +9,14 @@ from tests.destination_routing_helpers import (
     routing_decision_prompt,
     tool_name,
 )
-from unity.common.reasoning import reason
+from unity.common.reasoning import query_llm
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
 
 @pytest.mark.asyncio
 async def test_team_reference_file_routes_to_patch_space():
-    decision = await reason(
+    decision = await query_llm(
         routing_decision_prompt(
             "Save the new Patch-1 customer-handling SOP so every operative can "
             "look it up before visiting tenants. The file is attached as "
@@ -33,7 +33,7 @@ async def test_team_reference_file_routes_to_patch_space():
 
 @pytest.mark.asyncio
 async def test_personal_screenshot_stays_personal():
-    decision = await reason(
+    decision = await query_llm(
         routing_decision_prompt(
             "Save this browser screenshot for me so I can refer back to it later "
             "while I finish my own notes.",

@@ -178,6 +178,40 @@ class LivekitCallManager:
         if self._worker_watchdog_task is None or self._worker_watchdog_task.done():
             self._worker_watchdog_task = asyncio.create_task(self._worker_watchdog())
 
+    async def refresh_persistent_worker_after_key_change(
+        self,
+        previous_key: str,
+        current_key: str,
+    ) -> None:
+        """Respawn the LiveKit worker when UNIFY_KEY changes after idle-pool pre-warm.
+
+        Idle containers start the persistent worker at boot with the image-baked
+        UNIFY_KEY. Assignment updates os.environ in this process, but the worker
+        subprocess tree keeps the stale key until it is restarted.
+        """
+        if not os.environ.get("LIVEKIT_URL"):
+            return
+
+        worker_running = (
+            self._worker_proc is not None and self._worker_proc.poll() is None
+        )
+        key_changed = bool(current_key) and current_key != previous_key
+
+        if key_changed and worker_running:
+            if self.has_active_call:
+                LOGGER.warning(
+                    f"{ICONS['ipc']} [LivekitCallManager] Skipping persistent "
+                    "worker restart while a voice call is active",
+                )
+            else:
+                LOGGER.info(
+                    f"{ICONS['ipc']} [LivekitCallManager] Restarting persistent "
+                    "worker so voice subprocesses inherit updated UNIFY_KEY",
+                )
+                await self.cleanup_persistent_worker()
+
+        self.start_persistent_worker()
+
     async def _worker_watchdog(self) -> None:
         """Restart the persistent worker if it exits unexpectedly,
         and emit an INFO log when the warm pool is ready."""

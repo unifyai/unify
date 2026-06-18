@@ -81,7 +81,7 @@ def test_storage_prompt_encourages_bounded_agent_loop_distillation():
     assert "execute_code` -> observe -> agent reasoning -> `execute_code" in prompt
     assert "bounded semantic judgment inside an otherwise stable" in prompt
     assert "distill the trajectory into one function" in prompt
-    assert "focused `reason(...)` / UniLLM calls" in prompt
+    assert "focused `query_llm(...)` calls" in prompt
     assert "Semantic downgrades are bugs" in prompt
     assert "human-facing synthesis" in prompt
     assert "label-specific canned prose" in prompt

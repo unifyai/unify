@@ -129,14 +129,16 @@ def prepare_shared_project() -> None:
             print(f"Note: unity.init() returned: {e}", file=sys.stderr)
 
     # Seed the global builtins catalogues (public-read project shared by
-    # primitives and guidance). Hash-guarded, so this is a no-op in all but
-    # the first run after a primitive surface or snapshot change.
+    # primitives, guidance, and integration catalogues). Hash-guarded, so
+    # this is a no-op in all but the first run after a catalogue change.
     from unity.function_manager.builtins_catalog import seed_builtin_primitives
     from unity.guidance_manager.builtins_catalog import seed_builtin_guidance
+    from unity.integrations.builtins_catalog import seed_builtin_integrations
 
     seed_builtin_primitives()
     seed_builtin_guidance()
-    print("Seeded builtins catalogues (primitives + guidance)")
+    seed_builtin_integrations()
+    print("Seeded builtins catalogues (primitives + guidance + integrations)")
 
     print(f"Prepared shared project '{PROJECT}'")
 

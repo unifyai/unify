@@ -20,7 +20,7 @@ class _FakeClient:
 
 
 @pytest.mark.asyncio
-async def test_reason_uses_standard_client_defaults(monkeypatch: pytest.MonkeyPatch):
+async def test_query_llm_uses_standard_client_defaults(monkeypatch: pytest.MonkeyPatch):
     client = _FakeClient("yes")
     created: list[tuple[str | None, dict[str, Any]]] = []
 
@@ -30,7 +30,7 @@ async def test_reason_uses_standard_client_defaults(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(reasoning, "new_llm_client", fake_new_llm_client)
 
-    result = await reasoning.reason("Does this need a reply?")
+    result = await reasoning.query_llm("Does this need a reply?")
 
     assert result == "yes"
     assert created == [
@@ -39,14 +39,14 @@ async def test_reason_uses_standard_client_defaults(monkeypatch: pytest.MonkeyPa
             {
                 "async_client": True,
                 "stateful": False,
-                "origin": "CodeActActor.reason",
+                "origin": "CodeActActor.query_llm",
             },
         ),
     ]
     assert client.generate_calls == [
         {
             "user_message": "Does this need a reply?",
-            "system_message": reasoning.DEFAULT_REASONING_SYSTEM,
+            "system_message": reasoning.DEFAULT_LLM_QUERY_SYSTEM,
             "response_format": None,
             "temperature": 0.0,
         },
@@ -54,7 +54,7 @@ async def test_reason_uses_standard_client_defaults(monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.asyncio
-async def test_reason_supports_pydantic_structured_output(
+async def test_query_llm_supports_pydantic_structured_output(
     monkeypatch: pytest.MonkeyPatch,
 ):
     class Decision(BaseModel):
@@ -71,7 +71,7 @@ async def test_reason_supports_pydantic_structured_output(
         lambda *args, **kwargs: client,
     )
 
-    result = await reasoning.reason(
+    result = await reasoning.query_llm(
         "Classify this message.",
         system="Use the inbox triage rubric.",
         response_format=Decision,
@@ -86,7 +86,7 @@ async def test_reason_supports_pydantic_structured_output(
 
 
 @pytest.mark.asyncio
-async def test_reason_supports_dict_structured_output(
+async def test_query_llm_supports_dict_structured_output(
     monkeypatch: pytest.MonkeyPatch,
 ):
     response_format = {"type": "json_object"}
@@ -97,7 +97,7 @@ async def test_reason_supports_dict_structured_output(
         lambda *args, **kwargs: client,
     )
 
-    result = await reasoning.reason(
+    result = await reasoning.query_llm(
         "Does this certificate need follow-up?",
         response_format=response_format,
     )
@@ -106,8 +106,8 @@ async def test_reason_supports_dict_structured_output(
     assert client.generate_calls[0]["response_format"] == response_format
 
 
-def test_reason_docstring_contains_actor_usage_guidance():
-    doc = reasoning.reason.__doc__ or ""
+def test_query_llm_docstring_contains_actor_usage_guidance():
+    doc = reasoning.query_llm.__doc__ or ""
 
     assert "Good uses" in doc
     assert "Prefer direct symbolic code instead" in doc
@@ -122,19 +122,37 @@ def test_reason_docstring_contains_actor_usage_guidance():
     assert "label-specific canned prose or templates" in doc
 
 
-def test_reasoning_prompt_context_uses_introspected_signature():
-    context = reasoning.get_reasoning_prompt_context()
+def test_llm_query_prompt_context_uses_introspected_signatures():
+    context = reasoning.get_llm_query_prompt_context()
 
-    assert f"async def reason{inspect.signature(reasoning.reason)}" in context
+    assert f"async def query_llm{inspect.signature(reasoning.query_llm)}" in context
+    assert f"def list_llms{inspect.signature(reasoning.list_llms)}" in context
 
 
-def test_reasoning_prompt_context_includes_model_selection_guidance():
-    context = reasoning.get_reasoning_prompt_context()
+def test_llm_query_prompt_context_includes_model_selection_guidance():
+    context = reasoning.get_llm_query_prompt_context()
 
-    assert "Choosing A Model For `reason(...)`" in context
-    assert "Artificial Analysis: https://artificialanalysis.ai/" in context
+    assert "LLM Query Helpers: `query_llm(...)` And `list_llms(...)`" in context
+    assert "Choosing A Model For `query_llm(...)`" in context
+    assert "Artificial Analysis (https://artificialanalysis.ai/)" in context
+    assert "comparing model price, speed, latency" in context
     assert "ARC Prize leaderboard: https://arcprize.org/leaderboard" in context
-    assert "Supported UniLLM endpoints currently registered" in context
-    assert "gpt-4.1-nano@openai" in context
-    assert "gpt-5.5@openai" in context
+    assert "Use `list_llms()` to inspect" in context
+    assert "Supported UniLLM endpoints currently registered" not in context
+    assert "gpt-5.5@openai, gpt-5.5" not in context
     assert "Do not put benchmark browsing or" in context
+
+
+def test_list_llms_returns_registered_endpoint_strings():
+    endpoints = reasoning.list_llms()
+
+    assert "gpt-4.1-nano@openai" in endpoints
+    assert "gpt-5.5@openai" in endpoints
+    assert all("@" in endpoint for endpoint in endpoints)
+
+
+def test_list_llms_filters_by_provider():
+    endpoints = reasoning.list_llms("openai")
+
+    assert "gpt-5.5@openai" in endpoints
+    assert all(endpoint.endswith("@openai") for endpoint in endpoints)

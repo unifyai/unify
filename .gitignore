@@ -70,6 +70,8 @@ assets/*
 !assets/demo-stop-one-branch.png
 discord_messages.md
 .cursor/debug.log
+/.cursor/projects/
+/.cursor/plans/
 # ConversationManager sandbox persistent config (project-local)
 .cm_sandbox_config
 # Ignore log contents but keep the README and utility scripts
