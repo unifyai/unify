@@ -8,7 +8,7 @@ from unify.utils.http import RequestError
 
 _log = logging.getLogger(__name__)
 
-_CONTACT_MEMBERSHIP_PATH = "/admin/assistant/{assistant_id}/contact-memberships"
+_CONTACT_MEMBERSHIP_PATH = "/assistant/{assistant_id}/contact-memberships"
 _PERSONAL_SCOPE = "personal"
 _SELF_RELATIONSHIP = "self"
 _BOSS_RELATIONSHIP = "boss"
@@ -58,11 +58,12 @@ def _upsert_personal_contact_membership(
     if not SESSION_DETAILS.is_initialized or SESSION_DETAILS.assistant.agent_id is None:
         return
 
-    admin_key = SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()
-    if not admin_key:
-        raise RuntimeError(
-            "ORCHESTRA_ADMIN_KEY is required to provision contact memberships.",
+    api_key = SESSION_DETAILS.unify_key
+    if not api_key:
+        _log.warning(
+            "UNIFY_KEY is not set; skipping contact membership provisioning.",
         )
+        return
 
     from unify.utils import http
 
@@ -73,7 +74,7 @@ def _upsert_personal_contact_membership(
     )
     response = http.post(
         url,
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"Authorization": f"Bearer {api_key}"},
         json={
             "contact_id": int(contact_id),
             "target_scope": _PERSONAL_SCOPE,
