@@ -124,7 +124,7 @@ uv_sync() {
 # local file references in agent-service/package.json.
 # ----------------------------------------------------------------------------
 clone_or_update_magnitude() {
-    local magnitude_dir="$UNITY_HOME/magnitude"
+    local magnitude_dir="$UNITY_REPO/magnitude"
     local magnitude_branch="unity-modifications"
     if [ -d "$magnitude_dir/.git" ]; then
         log_info "Updating magnitude checkout at $magnitude_dir..."
@@ -305,7 +305,7 @@ case "\${1:-}" in
         echo "Updating unity checkout..."
         git -C "\$UNITY_REPO" pull --rebase || true
         (cd "\$UNITY_REPO" && uv sync --all-groups)
-        MAGNITUDE_DIR="\$UNITY_HOME/magnitude"
+        MAGNITUDE_DIR="\$UNITY_REPO/magnitude"
         if [ -d "\$MAGNITUDE_DIR/.git" ]; then
             echo "Updating magnitude checkout (unity-modifications)..."
             git -C "\$MAGNITUDE_DIR" fetch --depth 1 origin unity-modifications 2>/dev/null || true
