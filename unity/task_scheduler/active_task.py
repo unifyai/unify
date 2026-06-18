@@ -2,11 +2,9 @@
 ActiveTask provides a handle for a single running task backed by an actor.
 
 It wraps a SteerableToolHandle returned by a BaseActor and, when a scheduler
-is provided, mirrors lifecycle status to the task row and clears the scheduler's
-active pointer on completion or stop. It supports read-only ask, steering via
-interject (cancel/defer), pausing/resuming, stopping, and result retrieval. On
-defer, it attempts to reinstate the task to its previous queue position using
-the scheduler.
+is provided, mirrors lifecycle status to the task row on completion or stop.
+It supports read-only ask, steering via interject (cancel intent only), stopping,
+and result retrieval.
 """
 
 import functools
@@ -57,17 +55,14 @@ async def classify_steering_intent(
     message: str,
     parent_chat_context: Optional[List[Dict[str, Any]]] = None,  # type: ignore[name-defined]
 ) -> tuple[str, str]:
-    """Classify steering into: cancel | defer | pause | resume | continue | none."""
+    """Classify steering into: cancel | continue | none."""
     try:
         client = new_llm_client(origin="ActiveTask.classify_steering_intent")
         system = (
             "You are a router that classifies an in-flight steering message.\n"
-            "Labels: cancel | defer | pause | resume | continue | none.\n"
+            "Labels: cancel | continue | none.\n"
             "Definitions:\n"
             "- cancel: abandon/kill/drop the task (terminal).\n"
-            "- defer: stop for now but resume later / return to prior queue/schedule.\n"
-            "- pause: temporarily pause, expecting explicit resume soon.\n"
-            "- resume: continue after a pause.\n"
             "- continue: keep going (no change).\n"
             "- none: message is not a steering instruction.\n"
             'Output ONLY JSON with rationale first: {"rationale": <short string>, "action": <label>, "reason": <short substring or null>}'
@@ -106,7 +101,7 @@ async def classify_steering_intent(
             data = _json.loads(raw)
             action = str(data.get("action", "none")).strip().lower()
             reason = data.get("reason")
-            if action not in {"cancel", "defer", "pause", "resume", "continue", "none"}:
+            if action not in {"cancel", "continue", "none"}:
                 action = "none"
             if reason is not None:
                 reason = str(reason)
@@ -115,7 +110,7 @@ async def classify_steering_intent(
             return action, str(reason)
         except Exception:
             low = (raw or "").lower()
-            for tok in ["cancel", "defer", "pause", "resume", "continue"]:
+            for tok in ["cancel", "continue"]:
                 if tok in low:
                     return tok, message
             return "none", message
@@ -224,12 +219,11 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                         _parent_chat_context=_parent_chat_context,
                         _clarification_up_q=_clarification_up_q,
                         _clarification_down_q=_clarification_down_q,
-                        # Always pass entrypoint to the actor so it can immediately run the function
                         entrypoint=entrypoint,
                         entrypoint_kwargs=entrypoint_kwargs,
                         entrypoint_repair_attempts=entrypoint_repair_attempts,
                         entrypoint_repair_context=entrypoint_repair_context,
-                        persist=False,  # Scheduler-run plans should complete instead of pausing for interjection
+                        persist=False,
                     )
             except Exception as exc:
                 if task_run_reference is not None:
@@ -288,115 +282,41 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         *,
         _parent_chat_context_cont: list[dict] | None = None,
     ) -> None:
-        # Classify steering intent and enforce lifecycle synchronization for stop/defer/cancel.
         intent: Optional[str] = None
         reason: Optional[str] = None
 
         try:
-            # Attempt scheduler-provided classifier first (broad signature compatibility)
-            if self._scheduler is not None and hasattr(
-                self._scheduler,
-                "_classify_steering_intent",
-            ):
-                try:
-                    # Prefer calling with only the message to avoid kwarg name mismatches
-                    intent, reason = await self._scheduler._classify_steering_intent(  # type: ignore[attr-defined]
-                        message,
-                    )
-                except TypeError:
-                    # Retry with underscore-style kwarg for compatibility with some implementations
-                    intent, reason = await self._scheduler._classify_steering_intent(  # type: ignore[attr-defined]
-                        message,
-                        _parent_chat_context=None,
-                    )
-            else:
-                intent, reason = await classify_steering_intent(
-                    message,
-                    parent_chat_context=_parent_chat_context_cont,
-                )
-        except Exception as e:
-            # Robust fallback: use built-in classifier to avoid losing the steering signal entirely
-            try:
-                intent, reason = await classify_steering_intent(
-                    message,
-                    parent_chat_context=_parent_chat_context_cont,
-                )
-            except Exception as _e:
-                intent, reason = None, None
+            intent, reason = await classify_steering_intent(
+                message,
+                parent_chat_context=_parent_chat_context_cont,
+            )
+        except Exception:
+            intent, reason = "none", message
 
         self._last_intent = intent
         self._last_intent_reason = reason or message
 
-        # If the interjection semantically requests stopping, enforce correct lifecycle handling.
-        if intent in ("cancel", "defer"):
-            # Forward stop to the underlying actor handle via forward_handle_call
-            # which introspects the target signature and handles kwargs the actor
-            # may not accept (e.g. ``cancel``).  Fire-and-forget via create_task
-            # since the interject path should not block on the stop completing.
+        if intent == "cancel":
             stop_reason = reason or message
             if hasattr(self._actor_handle, "stop"):
                 asyncio.create_task(
                     forward_handle_call(
                         self._actor_handle,
                         "stop",
-                        {"reason": stop_reason, "cancel": (intent == "cancel")},
+                        {"reason": stop_reason, "cancel": True},
                         fallback_positional_keys=("reason",),
                     ),
                 )
-
-            self._was_stopped = True  # prevents result() from marking 'completed'
-
-            try:
-                if self._scheduler and self._task_id is not None:
-                    if intent == "cancel":
-                        # Explicit cancellation: mark cancelled.
-                        self._mirror_status(Status.cancelled)
-                    else:
-                        # Defer: restore prior queue/schedule position via public API when available.
-                        try:
-                            self._call_reinstate_public(task_id=self._task_id)
-                        except Exception:
-                            # Fallback: downgrade status to prior state from plan or 'queued'.
-                            try:
-                                plan = None
-                                if self._instance_id is not None:
-                                    plan = self._scheduler._reintegration_plans.get(  # type: ignore[attr-defined]
-                                        (self._task_id, self._instance_id),
-                                    )
-                                prior_status = (
-                                    str(getattr(plan, "original_status", ""))
-                                    if plan is not None
-                                    else ""
-                                )
-                                target_status = (
-                                    prior_status if prior_status else Status.queued
-                                )
-                                if self._instance_id is not None:
-                                    self._scheduler._update_task_status_instance(  # type: ignore[attr-defined]
-                                        task_id=self._task_id,
-                                        instance_id=self._instance_id,
-                                        new_status=target_status,
-                                    )
-                            except Exception:
-                                pass
-            except Exception:
-                # Best-effort: failure to reinstate or fallback must not break stop semantics
-                pass
-
+            self._was_stopped = True
+            self._mirror_status(Status.cancelled)
             asyncio.create_task(
                 self._persist_task_run_terminal_state(
                     state="cancelled",
-                    result_summary=(
-                        f"Task {intent or 'stop'} requested: {stop_reason}"
-                        if stop_reason
-                        else "Task execution cancelled."
-                    ),
+                    result_summary=f"Task cancelled: {stop_reason}",
                 ),
             )
-            self._clear_active_pointer()
             return
 
-        # No stop/defer/cancel intent ⇒ forward interjection to the actor.
         await self._actor_handle.interject(message)  # type: ignore[arg-type]
 
     @functools.wraps(BaseActiveTask.stop, updated=())
@@ -407,17 +327,12 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         reason: Optional[str] = None,
         **kwargs,
     ) -> None:
-        """Stop the running activity with explicit intent.
+        """Stop the running activity.
 
-        When ``cancel`` is True the task instance is marked cancelled. When False, the
-        task is deferred and we attempt to reinstate it to its previous queue/schedule
-        position using the stored reintegration plan (when available).
+        Both ``cancel=True`` and ``cancel=False`` mark the task as cancelled,
+        since without queue semantics there is no prior schedule position to
+        reinstate the task to.
         """
-        # Forward stop to the underlying actor handle.  forward_handle_call
-        # introspects the target signature and silently drops kwargs the actor
-        # does not accept (e.g. ``cancel``), avoiding fragile try/except
-        # TypeError cascades.  See the signature extension contract documented
-        # on SteerableToolHandle.
         await forward_handle_call(
             self._actor_handle,
             "stop",
@@ -425,51 +340,29 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
             fallback_positional_keys=("reason",),
         )
         self._was_stopped = True
-
-        final_status = "cancelled" if cancel else "stopped"
-
-        # Cancel → mark cancelled; Defer → try reinstatement
-        if cancel:
-            self._mirror_status(Status.cancelled)
-        else:
-            try:
-                if self._scheduler and self._task_id is not None:
-                    # Prefer strict reinstatement using the stored plan when present.
-                    self._call_reinstate_public(task_id=self._task_id)
-            except Exception:
-                # Best-effort – failure to reinstate must not break stop semantics
-                pass
-
+        self._mirror_status(Status.cancelled)
         asyncio.create_task(
             self._persist_task_run_terminal_state(
                 state="cancelled",
-                result_summary=reason or f"Task {final_status}.",
+                result_summary=reason or "Task stopped.",
             ),
         )
-        asyncio.create_task(self._save_final_summary(final_status))
-
-        self._clear_active_pointer()
+        asyncio.create_task(self._save_final_summary("cancelled"))
 
     @functools.wraps(BaseActiveTask.pause, updated=())
     async def pause(self) -> Optional[str]:
-        ret = await self._actor_handle.pause()
-        self._mirror_status(Status.paused)
-        return ret
+        return await self._actor_handle.pause()
 
     @functools.wraps(BaseActiveTask.resume, updated=())
     async def resume(self) -> Optional[str]:
-        ret = await self._actor_handle.resume()
-        self._mirror_status(Status.active)
-        return ret
+        return await self._actor_handle.resume()
 
     @functools.wraps(BaseActiveTask.done, updated=())
     def done(self) -> bool:
         return self._actor_handle.done()
 
     async def _generate_summary_from_log(self, action_log: List[str]) -> str:
-        """
-        Generates a concise, human-readable summary of the execution from the Actor's action_log which captures a trace of the task's execution.
-        """
+        """Generate a concise summary of the execution from the actor's action log."""
         client = new_llm_client(origin="ActiveTask.generate_summary")
         prompt = textwrap.dedent(
             f"""
@@ -495,12 +388,10 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
             return summary.strip()
         except Exception as e:
             logger.error("Error during summary generation: %s", e)
-            return "Summary generation failed. Final Status: <UNKNOWN>"  # Status added in _save_final_summary
+            return "Summary generation failed. Final Status: <UNKNOWN>"
 
     async def _save_final_summary(self, final_status: str):
-        """
-        Generates the final summary and updates the task row in the database.
-        """
+        """Generate the final summary and update the task row in the database."""
         if (
             self._scheduler
             and self._task_id is not None
@@ -508,7 +399,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         ):
             summary = "No execution log was available to generate a summary."
             try:
-                # The _actor_handle may have an action_log attribute
                 if (
                     hasattr(self._actor_handle, "action_log")
                     and self._actor_handle.action_log
@@ -519,11 +409,8 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                 else:
                     summary = f"Task finished with status '{final_status}'. No detailed log found."
 
-                # Replace <UNKNOWN> status in fallback summaries
                 summary = summary.replace("<UNKNOWN>", final_status)
 
-                # Update the task instance with the generated summary
-                # Write the human-readable summary to the 'info' field (status is finalized in result())
                 self._scheduler._update_task_instance(  # type: ignore[attr-defined]
                     task_id=self._task_id,
                     instance_id=self._instance_id,
@@ -567,16 +454,12 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         error: Optional[Exception] = None
 
         try:
-            # Await the underlying actor's result
             ret = await self._actor_handle.result()
-            # If we get here without error and it wasn't stopped, mark as completed
             if not self._was_stopped:
                 final_status = "completed"
 
         except Exception as e:
-            # Capture the error if the actor's result raised one
             error = e
-            # Only mark as failed if it wasn't explicitly stopped/cancelled beforehand
             if not self._was_stopped:
                 final_status = "failed"
                 ret = f"Task failed with error: {type(e).__name__}({e})"
@@ -588,8 +471,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                 )
 
         finally:
-            # Save summary if a terminal status (completed/failed) was determined
-            # during this call AND the task wasn't already marked as stopped externally.
             if (
                 final_status
                 and not self._was_stopped
@@ -597,8 +478,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                 and self._task_id is not None
                 and self._instance_id is not None
             ):
-                # Finalize terminal status synchronously so callers observe a non-active row
-                # and the reintegration plan is cleared immediately after result() returns.
                 self._scheduler._update_task_status_instance(  # type: ignore[attr-defined]
                     task_id=self._task_id,
                     instance_id=self._instance_id,
@@ -610,7 +489,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                     error=str(error) if error is not None else None,
                 )
 
-                # Idempotently schedule generation of the human-readable summary
                 if not getattr(self, "_summary_scheduled", False):
                     try:
                         logger.info(
@@ -624,19 +502,11 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                     except Exception as summary_e:
                         logger.error("Error creating summary task: %s", summary_e)
 
-            # Clear the scheduler's active pointer if the task reached a terminal state
-            # (completed/failed) OR if it was stopped externally (_was_stopped).
-            if final_status or self._was_stopped:
-                self._clear_active_pointer()
-
         if error and final_status == "failed":
-            # If an error occurred and we marked it as failed, re-raise the original error
             raise error
         elif self._was_stopped and not ret:
-            # If stopped but no specific result string was set (e.g. via stop reason)
-            return "Task stopped."  # Provide a default message
+            return "Task stopped."
         elif ret is not None:
-            # Return the result from the actor or the formatted error message for failures
             return ret
         else:
             return "Task finished."
@@ -681,37 +551,3 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                 instance_id=self._instance_id,
                 new_status=new_status,
             )
-
-    def _clear_active_pointer(self) -> None:
-        """Free the scheduler's active-task slot, if any."""
-        if self._scheduler and getattr(self._scheduler, "_active_task", None):
-            active = self._scheduler._active_task  # type: ignore[attr-defined]
-            if (
-                getattr(active, "task_id", None) == self._task_id
-                and getattr(active, "instance_id", None) == self._instance_id
-            ):
-                self._scheduler._active_task = None  # type: ignore[attr-defined]
-
-    # Centralized reinstate caller to avoid duplication and select an available scheduler API
-    def _call_reinstate_public(self, *, task_id: int) -> None:
-        sched = self._scheduler
-        if sched is None:
-            return
-        try:
-            # Prefer public API when available
-            if hasattr(sched, "_reinstate_to_previous_queue"):
-                try:
-                    # Try with allow_active=True
-                    sched._reinstate_to_previous_queue(task_id=task_id, allow_active=True)  # type: ignore[attr-defined]
-                except TypeError:
-                    # Fallback without allow_active (defensive)
-                    sched._reinstate_to_previous_queue(task_id=task_id)  # type: ignore[attr-defined]
-                return
-        except Exception:
-            pass
-
-        # Fallback to private method if the public API is unavailable; handle optional arguments
-        try:
-            sched._reinstate_task_to_previous_queue(task_id=task_id, _allow_active=True)  # type: ignore[attr-defined]
-        except TypeError:
-            sched._reinstate_task_to_previous_queue(task_id=task_id)  # type: ignore[attr-defined]
