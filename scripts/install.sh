@@ -147,6 +147,7 @@ clone_or_update_magnitude() {
 # ----------------------------------------------------------------------------
 install_agent_service() {
     local agent_service_dir="$UNITY_REPO/agent-service"
+    local magnitude_dir="$UNITY_REPO/magnitude"
     if [ ! -d "$agent_service_dir" ]; then
         log_warn "agent-service directory not found — skipping npm install"
         return 0
@@ -155,11 +156,30 @@ install_agent_service() {
         log_warn "npm not found — skipping agent-service install (install Node.js to enable computer use)"
         return 0
     fi
-    if [ ! -d "$UNITY_HOME/magnitude" ]; then
+    if [ ! -d "$magnitude_dir" ]; then
         log_warn "magnitude not cloned — skipping agent-service install"
         return 0
     fi
-    log_info "Installing agent-service dependencies (npm ci)..."
+    # magnitude-core ships a pre-built tarball; use it directly so we don't need
+    # baml-cli or the full monorepo build toolchain.
+    local core_tgz
+    core_tgz="$(ls "$magnitude_dir/packages/magnitude-core"/magnitude-core-*.tgz 2>/dev/null | sort -V | tail -1)"
+    if [ -n "$core_tgz" ]; then
+        log_info "Installing magnitude-core from pre-built tarball..."
+        (cd "$agent_service_dir" && npm install --silent "$core_tgz") || true
+    fi
+    # magnitude-extract has no tarball; build it with tsup (bundled in its devDeps).
+    local extract_dir="$magnitude_dir/packages/magnitude-extract"
+    if [ -d "$extract_dir" ] && [ ! -d "$extract_dir/dist" ]; then
+        log_info "Building magnitude-extract..."
+        (cd "$extract_dir" && npm install --silent && npx tsup --config tsup.config.ts) 2>/dev/null || \
+            log_warn "magnitude-extract build failed — computer use may be unavailable"
+    fi
+    if [ -d "$extract_dir/dist" ]; then
+        log_info "Installing magnitude-extract..."
+        (cd "$agent_service_dir" && npm install --silent "$extract_dir") || true
+    fi
+    log_info "Installing remaining agent-service dependencies (npm ci)..."
     (cd "$agent_service_dir" && npm ci --silent) || {
         log_warn "npm ci failed — agent-service may not start (run 'cd $agent_service_dir && npm ci' to retry)"
         return 0
