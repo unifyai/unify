@@ -23,7 +23,7 @@ failure:
     UNIFY_KEY=<admin-key> ORCHESTRA_ADMIN_KEY=<admin-key> ORCHESTRA_URL=<api-url> \
         UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR=direct_worker \
         .venv/bin/python scripts/seed_builtins_catalog.py \
-        --integration-bootstrap-manifest deploy/selfhost/integration-bootstrap.selfhost.toml
+        --integration-bootstrap-manifest <path-to-integration-bootstrap.toml>
 """
 
 from __future__ import annotations

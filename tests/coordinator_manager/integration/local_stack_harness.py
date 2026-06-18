@@ -83,11 +83,14 @@ def resolve_sibling_repo(name: str) -> Path:
 
 
 def _resolve_stack_script() -> tuple[Path, Path]:
-    unity_repo = resolve_sibling_repo("unity")
-    stack_script = unity_repo / "scripts" / "stack.sh"
+    # The self-host stack orchestration lives in the private unity-deploy repo
+    # (selfhost/stack.sh), which drives the sibling unity/console/orchestra
+    # checkouts. Returns (cwd, stack.sh path).
+    deploy_repo = resolve_sibling_repo("unity-deploy")
+    stack_script = deploy_repo / "selfhost" / "stack.sh"
     if not stack_script.is_file():
         raise FileNotFoundError(f"stack.sh not found at {stack_script}")
-    return unity_repo, stack_script
+    return deploy_repo, stack_script
 
 
 def _self_host_credentials_path() -> Path:

@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
+import pytest
+
 from unity.conversation_manager.domains import coordinator_onboarding as onboarding
 from unity.conversation_manager.prompt_builders import (
     _build_coordinator_onboarding_narration_block,
     _build_coordinator_voice_opening_block,
     _voice_next_onboarding_suggestion,
 )
+from unity.settings import SETTINGS
 
 COMMS_STEP_IDS = [
     "email-reply",
@@ -167,3 +172,47 @@ def test_voice_opening_block_includes_active_phone_call_guidance() -> None:
     assert "Active onboarding step: phone-call" in block
     assert "reference quiz trigger" in block
     assert "hardcoded reference text" in block
+
+
+def _onboarding_event():
+    event = onboarding._coordinator_onboarding_event_from_payload(
+        {
+            "subtype": "onboarding_step_started",
+            "details": {"step_id": "sms-message"},
+        },
+        message="User started the 'sms-message' onboarding step.",
+    )
+    assert event is not None
+    return event
+
+
+@pytest.mark.asyncio
+async def test_onboarding_handler_inert_without_console_ui(monkeypatch) -> None:
+    """With no Console front-end, onboarding events are dropped entirely:
+    no notification is pushed and no LLM run is requested."""
+    monkeypatch.setattr(SETTINGS, "UNITY_CONSOLE_UI", False)
+    cm = MagicMock()
+
+    result = await onboarding._handle_coordinator_onboarding_event(
+        _onboarding_event(),
+        cm,
+    )
+
+    assert result is False
+    cm.notifications_bar.push_notif.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_onboarding_handler_active_with_console_ui(monkeypatch) -> None:
+    """With a Console present, the handler pushes a notification and asks for
+    an LLM run (default behavior, unchanged)."""
+    monkeypatch.setattr(SETTINGS, "UNITY_CONSOLE_UI", True)
+    cm = MagicMock()
+
+    result = await onboarding._handle_coordinator_onboarding_event(
+        _onboarding_event(),
+        cm,
+    )
+
+    assert result is True
+    cm.notifications_bar.push_notif.assert_called_once()

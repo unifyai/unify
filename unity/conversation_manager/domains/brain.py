@@ -284,6 +284,7 @@ def build_brain_spec(
         is_coordinator=SESSION_DETAILS.is_coordinator,
         authorized_humans=authorized_humans,
         is_org_workspace=SESSION_DETAILS.org_id is not None,
+        console_ui_present=SETTINGS.UNITY_CONSOLE_UI,
     )
     _system_prompt_ms = _mark_step()
 

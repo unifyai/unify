@@ -13,60 +13,40 @@ Unity implements an AI assistant's brain as a **distributed back office**. A cen
 Sibling repos consumed via editable installs (see `[tool.uv.sources]` in `pyproject.toml`):
 - **`unify`** — Python SDK wrapping the Orchestra REST API
 - **`unillm`** — LLM client with caching, provider normalization, observability
-- **`orchestra`** — backend API + Postgres (started locally via Docker)
-- **`console`** — Next.js web UI (the local front end, runs in self-host mode)
+
+The open agent runtime (`unity`, `unify`, `unillm`) talks to the **hosted Orchestra backend** (`ORCHESTRA_URL`, default `https://api.unify.ai/v0`). `orchestra` and `console` are private/hosted and are not part of the open-source repo set.
 
 ---
 
-## Deploy the system locally
+## Run the agent locally (public path)
 
-There is exactly **one** way to run the whole product locally, and this is it.
-The full stack — Orchestra (Postgres + API), the Unity gateway, Console (in
-self-host mode), and your Coordinator (Marty) — comes up with a single command:
+The open-source runtime runs on your machine against the **hosted** Orchestra
+backend. Provision a `UNIFY_KEY` and an assistant (`ASSISTANT_ID`) at
+[console.unify.ai](https://console.unify.ai), then:
 
 ```bash
-unity setup        # one-time bootstrap: deps, local Orchestra, Console env, voice keys
-unity stack up     # run the whole stack end-to-end (alias: `unity`)
-unity stack smoke  # verify the running local product end-to-end
+curl -fsSL https://raw.githubusercontent.com/unifyai/unity/staging/scripts/install.sh | bash
+unity            # interactive local chat (alias: unity chat)
+unity serve      # headless: ConversationManager + gateway
+unity setup      # re-run the key/credential wizard
 ```
 
-- `unity` is the CLI shim the installer drops in `~/.local/bin/`. The
-  equivalent **direct invocations from this checkout** are `bash
-  scripts/setup.sh` and `bash scripts/stack.sh up`.
-- `scripts/stack.sh` finds the sibling `console` and `orchestra` checkouts
-  **next to this `unity` repo** (i.e. `../console`, `../orchestra`); override
-  with `UNIFY_STACK_ROOT`. So a checkout layout like
-  `~/dev/{unity,console,orchestra,unify,unillm}` works out of the box.
-- Console opens at **http://127.0.0.1:3000**. On first visit you create your
-  account; Marty starts automatically. `unity stack down` stops the UI
-  (`--full` stops everything), `unity stack status` shows health, and
-  `unity stack up` is also the restart.
+- `unity` is the CLI shim the installer drops in `~/.local/bin/`. From a
+  checkout, the equivalents are `.venv/bin/python -m
+  sandboxes.conversation_manager.sandbox` (chat) and `bash scripts/local.sh
+  start --full` (headless).
+- Configuration lives in `unity/.env`: `UNIFY_KEY`, `ASSISTANT_ID`,
+  `ORCHESTRA_URL` (hosted), one LLM provider key, and optional voice/research
+  keys (`scripts/prompt_byok_keys.sh`).
+- No Docker, local Orchestra, or Console is involved in the public path. The
+  onboarding flow, inbound channels, workspace connect, third-party app
+  integrations, and screen-share are part of the hosted product.
 
-If you already bootstrapped once, `unity stack up` (or `bash scripts/stack.sh
-up`) alone is enough — it re-checks prerequisites and brings everything up.
-Run `unity stack smoke` after startup when you need a machine-checkable verdict
-that Console, Orchestra, the gateway, signup, integrations, and Coordinator
-wakeup are all usable.
-
-**Prerequisites:** Docker running, plus an LLM provider key (OpenAI,
-Anthropic, or DeepSeek). Browser voice calls additionally need a Deepgram (STT)
-key and one of Cartesia/ElevenLabs (TTS); `unity setup` prompts for all of
-these and writes them to `unity/.env`.
-
-**What is NOT a full-system deploy** (do not reach for these to "run the
-system" — `unity stack up` drives them for you):
-- `console/scripts/local.sh` and `orchestra/scripts/local.sh` — internal
-  dev/test harnesses for those repos in isolation.
-- `tests/parallel_run.sh` — only spins up Orchestra for the test suite.
-- raw `docker compose` against `~/.unity/` — the Compose product path, managed
-  by the `unity` shim after a non-source install.
-
-**Clean machine, nothing cloned yet?** Use the installer instead of cloning by
-hand: `curl -fsSL …/scripts/install.sh | bash` does the prebuilt-image Docker
-Compose install, and `… | bash -s -- --source-install` clones all five repos
-and runs this same `unity stack up` path. Exact one-liners and compose commands
-live in [`README.md`](README.md) and
-[`deploy/selfhost/README.md`](deploy/selfhost/README.md).
+**Internal full-local self-host stack.** The "all-repo fully local" stack
+(local Orchestra + Console + Coordinator + gateway, via Docker Compose) is an
+internal-only path and lives in the private **`unity-deploy`** repo under
+`selfhost/` (`stack.sh`, `setup.sh`, `service.sh`, compose bundle). It drives
+sibling `unity`/`console`/`orchestra` checkouts under `UNIFY_STACK_ROOT`.
 
 ---
 
