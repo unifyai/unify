@@ -28,13 +28,13 @@ import pytest
 import unify
 
 from tests.helpers import _handle_project
-from unity.session_details import SESSION_DETAILS
-from unity.task_scheduler.local_scheduler import LocalActivationScheduler
-from unity.task_scheduler.machine_state import list_scheduled_activations
-from unity.task_scheduler.task_scheduler import TaskScheduler
-from unity.task_scheduler.types.repetition import Frequency, RepeatPattern
-from unity.task_scheduler.types.schedule import Schedule
-from unity.task_scheduler.types.status import Status
+from droid.session_details import SESSION_DETAILS
+from droid.task_scheduler.local_scheduler import LocalActivationScheduler
+from droid.task_scheduler.machine_state import list_scheduled_activations
+from droid.task_scheduler.task_scheduler import TaskScheduler
+from droid.task_scheduler.types.repetition import Frequency, RepeatPattern
+from droid.task_scheduler.types.schedule import Schedule
+from droid.task_scheduler.types.status import Status
 
 
 def _local_orchestra_authenticated() -> bool:

@@ -4,13 +4,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from unity.conversation_manager.domains import coordinator_onboarding as onboarding
-from unity.conversation_manager.prompt_builders import (
+from droid.conversation_manager.domains import coordinator_onboarding as onboarding
+from droid.conversation_manager.prompt_builders import (
     _build_coordinator_onboarding_narration_block,
     _build_coordinator_voice_opening_block,
     _voice_next_onboarding_suggestion,
 )
-from unity.settings import SETTINGS
+from droid.settings import SETTINGS
 
 COMMS_STEP_IDS = [
     "email-reply",
@@ -190,7 +190,7 @@ def _onboarding_event():
 async def test_onboarding_handler_inert_without_console_ui(monkeypatch) -> None:
     """With no Console front-end, onboarding events are dropped entirely:
     no notification is pushed and no LLM run is requested."""
-    monkeypatch.setattr(SETTINGS, "UNITY_CONSOLE_UI", False)
+    monkeypatch.setattr(SETTINGS, "DROID_CONSOLE_UI", False)
     cm = MagicMock()
 
     result = await onboarding._handle_coordinator_onboarding_event(
@@ -206,7 +206,7 @@ async def test_onboarding_handler_inert_without_console_ui(monkeypatch) -> None:
 async def test_onboarding_handler_active_with_console_ui(monkeypatch) -> None:
     """With a Console present, the handler pushes a notification and asks for
     an LLM run (default behavior, unchanged)."""
-    monkeypatch.setattr(SETTINGS, "UNITY_CONSOLE_UI", True)
+    monkeypatch.setattr(SETTINGS, "DROID_CONSOLE_UI", True)
     cm = MagicMock()
 
     result = await onboarding._handle_coordinator_onboarding_event(

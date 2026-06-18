@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from unity.conversation_manager import assistant_jobs
-from unity.deploy_runtime import register_deploy_runtime, reset_deploy_runtime
+from droid.conversation_manager import assistant_jobs
+from droid.deploy_runtime import register_deploy_runtime, reset_deploy_runtime
 
 
 class _RecordingJobsBackend:
@@ -33,7 +33,7 @@ def test_mark_job_done_delegates_to_registered_backend():
     register_deploy_runtime(jobs=backend)
 
     assistant_jobs.mark_job_done(
-        "unity-job-1",
+        "droid-job-1",
         inactivity_timeout=30.0,
         shutdown_reason="idle_timeout",
     )
@@ -41,7 +41,7 @@ def test_mark_job_done_delegates_to_registered_backend():
     assert backend.calls == [
         (
             "mark_job_done",
-            ("unity-job-1",),
+            ("droid-job-1",),
             {"inactivity_timeout": 30.0, "shutdown_reason": "idle_timeout"},
         ),
     ]
@@ -52,7 +52,7 @@ def test_mark_job_label_delegates_to_registered_backend():
     register_deploy_runtime(jobs=backend)
 
     result = assistant_jobs.mark_job_label(
-        "unity-job-1",
+        "droid-job-1",
         "running",
         assistant_id="42",
         ack_ts="1711800000",
@@ -62,7 +62,7 @@ def test_mark_job_label_delegates_to_registered_backend():
     assert backend.calls == [
         (
             "mark_job_label",
-            ("unity-job-1", "running"),
+            ("droid-job-1", "running"),
             {
                 "assistant_id": "42",
                 "ack_ts": "1711800000",

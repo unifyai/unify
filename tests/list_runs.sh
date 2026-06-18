@@ -12,7 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "$SCRIPT_DIR/_shell_common.sh"
 
-CURRENT_SOCKET="$UNITY_TMUX_SOCKET"
+CURRENT_SOCKET="$DROID_TMUX_SOCKET"
 
 QUIET=0
 SHOW_ALL=0
@@ -53,11 +53,11 @@ while (( "$#" )); do
   esac
 done
 
-# Find all unity sockets
+# Find all droid sockets
 SOCKETS=()
 while IFS= read -r sock; do
   [[ -n "$sock" ]] && SOCKETS+=( "$sock" )
-done < <(_get_unity_sockets)
+done < <(_get_droid_sockets)
 
 if (( ${#SOCKETS[@]} == 0 )); then
   if (( QUIET )); then

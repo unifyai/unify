@@ -4,11 +4,11 @@ import pytest
 from datetime import datetime, UTC
 import unify
 
-from unity.transcript_manager.types.message import Message
-from unity.conversation_manager.cm_types import VALID_MEDIA
-from unity.transcript_manager.transcript_manager import TranscriptManager
+from droid.transcript_manager.types.message import Message
+from droid.conversation_manager.cm_types import VALID_MEDIA
+from droid.transcript_manager.transcript_manager import TranscriptManager
 from tests.helpers import _handle_project
-from unity.contact_manager.contact_manager import ContactManager
+from droid.contact_manager.contact_manager import ContactManager
 
 CONTACTS = [
     {

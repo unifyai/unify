@@ -21,8 +21,8 @@ import pytest
 from dataclasses import dataclass
 from unittest.mock import patch
 
-from unity.contact_manager.simulated import SimulatedContactManager
-from unity.conversation_manager.in_memory_event_broker import (
+from droid.contact_manager.simulated import SimulatedContactManager
+from droid.conversation_manager.in_memory_event_broker import (
     create_in_memory_event_broker,
     reset_in_memory_event_broker,
 )
@@ -69,7 +69,7 @@ def broker():
 @pytest.fixture
 def mock_session_details():
     """Mock SESSION_DETAILS for testing."""
-    with patch("unity.conversation_manager.comms_manager.SESSION_DETAILS") as mock:
+    with patch("droid.conversation_manager.comms_manager.SESSION_DETAILS") as mock:
         mock.assistant.agent_id = 42
         mock.assistant.email = "assistant@test.com"
         mock.user.name = "Test User"
@@ -93,7 +93,7 @@ def mock_session_details():
 @pytest.fixture
 def mock_settings():
     """Mock SETTINGS for testing."""
-    with patch("unity.conversation_manager.comms_manager.SETTINGS") as mock:
+    with patch("droid.conversation_manager.comms_manager.SETTINGS") as mock:
         mock.DEPLOY_ENV = "production"
         mock.ENV_SUFFIX = ""
         yield mock
@@ -158,7 +158,7 @@ class TestUnknownSMSContactCreation:
         mock_settings,
     ):
         """Test that SMS from unknown sender creates a contact with correct settings."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -181,11 +181,11 @@ class TestUnknownSMSContactCreation:
 
             with (
                 patch(
-                    "unity.conversation_manager.comms_manager._is_blacklisted",
+                    "droid.conversation_manager.comms_manager._is_blacklisted",
                     return_value=False,
                 ),
                 patch(
-                    "unity.manager_registry.ManagerRegistry.get_contact_manager",
+                    "droid.manager_registry.ManagerRegistry.get_contact_manager",
                     return_value=contact_manager,
                 ),
             ):
@@ -215,7 +215,7 @@ class TestUnknownSMSContactCreation:
         mock_settings,
     ):
         """Test that UnknownContactCreated event is published for unknown SMS sender."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -237,11 +237,11 @@ class TestUnknownSMSContactCreation:
 
             with (
                 patch(
-                    "unity.conversation_manager.comms_manager._is_blacklisted",
+                    "droid.conversation_manager.comms_manager._is_blacklisted",
                     return_value=False,
                 ),
                 patch(
-                    "unity.manager_registry.ManagerRegistry.get_contact_manager",
+                    "droid.manager_registry.ManagerRegistry.get_contact_manager",
                     return_value=contact_manager,
                 ),
             ):
@@ -269,7 +269,7 @@ class TestUnknownSMSContactCreation:
         mock_settings,
     ):
         """Test that SMS from known contact doesn't create a new contact."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -296,7 +296,7 @@ class TestUnknownSMSContactCreation:
             )
 
             with patch(
-                "unity.conversation_manager.comms_manager._is_blacklisted",
+                "droid.conversation_manager.comms_manager._is_blacklisted",
                 return_value=False,
             ):
                 cm.handle_message(message)
@@ -334,7 +334,7 @@ class TestUnknownEmailContactCreation:
         mock_settings,
     ):
         """Test that email from unknown sender creates a contact with correct settings."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -358,11 +358,11 @@ class TestUnknownEmailContactCreation:
 
             with (
                 patch(
-                    "unity.conversation_manager.comms_manager._is_blacklisted",
+                    "droid.conversation_manager.comms_manager._is_blacklisted",
                     return_value=False,
                 ),
                 patch(
-                    "unity.manager_registry.ManagerRegistry.get_contact_manager",
+                    "droid.manager_registry.ManagerRegistry.get_contact_manager",
                     return_value=contact_manager,
                 ),
             ):
@@ -392,7 +392,7 @@ class TestUnknownEmailContactCreation:
         mock_settings,
     ):
         """Test that UnknownContactCreated event is published for unknown email sender."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -416,11 +416,11 @@ class TestUnknownEmailContactCreation:
 
             with (
                 patch(
-                    "unity.conversation_manager.comms_manager._is_blacklisted",
+                    "droid.conversation_manager.comms_manager._is_blacklisted",
                     return_value=False,
                 ),
                 patch(
-                    "unity.manager_registry.ManagerRegistry.get_contact_manager",
+                    "droid.manager_registry.ManagerRegistry.get_contact_manager",
                     return_value=contact_manager,
                 ),
             ):
@@ -466,7 +466,7 @@ class TestDuplicatePrevention:
         mock_settings,
     ):
         """Test that second message from same unknown sender uses existing contact."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -489,11 +489,11 @@ class TestDuplicatePrevention:
 
             with (
                 patch(
-                    "unity.conversation_manager.comms_manager._is_blacklisted",
+                    "droid.conversation_manager.comms_manager._is_blacklisted",
                     return_value=False,
                 ),
                 patch(
-                    "unity.manager_registry.ManagerRegistry.get_contact_manager",
+                    "droid.manager_registry.ManagerRegistry.get_contact_manager",
                     return_value=contact_manager,
                 ),
             ):
@@ -520,11 +520,11 @@ class TestDuplicatePrevention:
 
             with (
                 patch(
-                    "unity.conversation_manager.comms_manager._is_blacklisted",
+                    "droid.conversation_manager.comms_manager._is_blacklisted",
                     return_value=False,
                 ),
                 patch(
-                    "unity.manager_registry.ManagerRegistry.get_contact_manager",
+                    "droid.manager_registry.ManagerRegistry.get_contact_manager",
                     return_value=contact_manager,
                 ),
             ):

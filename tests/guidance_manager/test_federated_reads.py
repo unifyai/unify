@@ -7,8 +7,8 @@ with scoping and field projections applied per source.
 
 from __future__ import annotations
 
-from unity.guidance_manager.guidance_manager import GuidanceManager
-from unity.guidance_manager.types.guidance import Guidance
+from droid.guidance_manager.guidance_manager import GuidanceManager
+from droid.guidance_manager.types.guidance import Guidance
 
 
 def _manager_stub() -> GuidanceManager:
@@ -32,7 +32,7 @@ def test_search_includes_builtins_catalog_spec(monkeypatch):
         return []
 
     monkeypatch.setattr(
-        "unity.guidance_manager.guidance_manager.federated_ranked_search",
+        "droid.guidance_manager.guidance_manager.federated_ranked_search",
         fake_ranked_search,
     )
 
@@ -59,7 +59,7 @@ def test_filter_includes_builtins_catalog_spec(monkeypatch):
         return []
 
     monkeypatch.setattr(
-        "unity.guidance_manager.guidance_manager.federated_filter",
+        "droid.guidance_manager.guidance_manager.federated_filter",
         fake_filter,
     )
 
@@ -89,7 +89,7 @@ def test_filter_normalizes_legacy_null_is_builtin(monkeypatch):
         ]
 
     monkeypatch.setattr(
-        "unity.guidance_manager.guidance_manager.federated_filter",
+        "droid.guidance_manager.guidance_manager.federated_filter",
         fake_filter,
     )
 
@@ -110,7 +110,7 @@ def test_num_items_counts_builtins_catalog(monkeypatch):
         return 3
 
     monkeypatch.setattr(
-        "unity.guidance_manager.guidance_manager.federated_count",
+        "droid.guidance_manager.guidance_manager.federated_count",
         fake_count,
     )
 

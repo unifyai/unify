@@ -25,18 +25,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from unity.conversation_manager.domains.speech_dedup import (
+from droid.conversation_manager.domains.speech_dedup import (
     SpeechDedup,
     SpeechDeduplicationChecker,
 )
-from unity.conversation_manager.events import (
+from droid.conversation_manager.events import (
     InboundPhoneUtterance,
     InboundUnifyMeetUtterance,
     PhoneCallStarted,
     UnifyMeetReceived,
     UnifyMeetStarted,
 )
-from unity.conversation_manager.cm_types import Medium, Mode
+from droid.conversation_manager.cm_types import Medium, Mode
 
 from tests.conversation_manager.conftest import BOSS, TEST_CONTACTS
 from tests.helpers import _handle_project
@@ -71,7 +71,7 @@ class TestSpeechDeduplicationCheckerUnit:
         see ``test_evaluate_sends_user_role_message`` for the message-shape
         contract, and the eval test for a full default-model call.
         """
-        from unity.settings import SETTINGS
+        from droid.settings import SETTINGS
 
         checker = SpeechDeduplicationChecker(
             model=SETTINGS.conversation.FAST_BRAIN_MODEL,
@@ -120,7 +120,7 @@ class TestSpeechDeduplicationCheckerUnit:
         mock_client.generate = AsyncMock(side_effect=capture_generate)
 
         with patch(
-            "unity.conversation_manager.domains.speech_dedup.new_llm_client",
+            "droid.conversation_manager.domains.speech_dedup.new_llm_client",
             return_value=mock_client,
         ):
             checker = SpeechDeduplicationChecker(model="claude-3-5-haiku@anthropic")
@@ -205,7 +205,7 @@ class TestSpeechGateContradictionDetection:
         mock_client.generate = AsyncMock(side_effect=capture_generate)
 
         with patch(
-            "unity.conversation_manager.domains.speech_dedup.new_llm_client",
+            "droid.conversation_manager.domains.speech_dedup.new_llm_client",
             return_value=mock_client,
         ):
             checker = SpeechDeduplicationChecker()
@@ -239,7 +239,7 @@ class TestSpeechGateContradictionDetection:
         mock_client.generate = AsyncMock(side_effect=capture_generate)
 
         with patch(
-            "unity.conversation_manager.domains.speech_dedup.new_llm_client",
+            "droid.conversation_manager.domains.speech_dedup.new_llm_client",
             return_value=mock_client,
         ):
             checker = SpeechDeduplicationChecker()
@@ -287,7 +287,7 @@ class TestSpeechGateContradictionDetection:
         mock_client.generate = AsyncMock(side_effect=capture_generate)
 
         with patch(
-            "unity.conversation_manager.domains.speech_dedup.new_llm_client",
+            "droid.conversation_manager.domains.speech_dedup.new_llm_client",
             return_value=mock_client,
         ):
             checker = SpeechDeduplicationChecker()
@@ -310,7 +310,7 @@ class TestSpeechGateContradictionEval:
     async def test_detects_offering_setup_when_already_complete(self):
         """The gate should suppress speech that offers setup steps when
         a notification confirms the setup is already complete."""
-        from unity.settings import SETTINGS
+        from droid.settings import SETTINGS
 
         checker = SpeechDeduplicationChecker(
             model=SETTINGS.conversation.FAST_BRAIN_MODEL,
@@ -338,7 +338,7 @@ class TestSpeechGateContradictionEval:
     async def test_allows_genuinely_new_information(self):
         """The gate should allow speech that contains genuinely new
         information not present in utterances or notifications."""
-        from unity.settings import SETTINGS
+        from droid.settings import SETTINGS
 
         checker = SpeechDeduplicationChecker(
             model=SETTINGS.conversation.FAST_BRAIN_MODEL,

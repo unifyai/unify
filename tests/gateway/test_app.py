@@ -1,4 +1,4 @@
-"""Aggregator tests for ``unity.gateway.app``.
+"""Aggregator tests for ``droid.gateway.app``.
 
 Covers:
 
@@ -23,7 +23,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from unity.gateway.app import create_app
+from droid.gateway.app import create_app
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -33,7 +33,7 @@ from unity.gateway.app import create_app
 @pytest.fixture
 def _admin_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub SETTINGS for the admin-auth dependency."""
-    from unity.gateway.common import auth
+    from droid.gateway.common import auth
 
     stub_secret = SimpleNamespace(get_secret_value=lambda: "test-admin-key")
     monkeypatch.setattr(
@@ -273,7 +273,7 @@ class TestLifespan:
 
         Shutdown: cancels the health task.
         """
-        from unity.gateway import app as app_module
+        from droid.gateway import app as app_module
 
         sync_called = False
 
@@ -293,11 +293,11 @@ class TestLifespan:
 
         with (
             patch(
-                "unity.gateway.channels.discord.bot_manager.sync_from_orchestra",
+                "droid.gateway.channels.discord.bot_manager.sync_from_orchestra",
                 new=fake_sync,
             ),
             patch(
-                "unity.gateway.channels.discord.bot_manager.start_health_check_loop",
+                "droid.gateway.channels.discord.bot_manager.start_health_check_loop",
                 new=fake_health_loop,
             ),
         ):
@@ -317,7 +317,7 @@ class TestLifespan:
         We don't want a sync hiccup to block the app from serving the
         other 9 channels.
         """
-        from unity.gateway import app as app_module
+        from droid.gateway import app as app_module
 
         async def boom() -> int:
             raise RuntimeError("Orchestra unreachable")
@@ -327,11 +327,11 @@ class TestLifespan:
 
         with (
             patch(
-                "unity.gateway.channels.discord.bot_manager.sync_from_orchestra",
+                "droid.gateway.channels.discord.bot_manager.sync_from_orchestra",
                 new=boom,
             ),
             patch(
-                "unity.gateway.channels.discord.bot_manager.start_health_check_loop",
+                "droid.gateway.channels.discord.bot_manager.start_health_check_loop",
                 new=quiet_loop,
             ),
         ):
@@ -347,7 +347,7 @@ class TestLifespan:
 
 def _patch_discord_lifespan(monkeypatch: pytest.MonkeyPatch) -> None:
     """Quiet the built-in Discord lifespan so it doesn't hit httpx."""
-    from unity.gateway.channels.discord import bot_manager
+    from droid.gateway.channels.discord import bot_manager
 
     async def _noop_sync() -> int:
         return 0
@@ -374,7 +374,7 @@ class TestExtraRouters:
         the no-plugin path is a pure no-op.
         """
         _patch_discord_lifespan(monkeypatch)
-        from unity.gateway.app import app as oss_app
+        from droid.gateway.app import app as oss_app
 
         plain = create_app()
 
@@ -398,8 +398,8 @@ class TestExtraRouters:
         _patch_discord_lifespan(monkeypatch)
         from fastapi import APIRouter
 
-        from unity.gateway.app import ExtraRouter
-        from unity.gateway.common.auth import admin_auth_dependency
+        from droid.gateway.app import ExtraRouter
+        from droid.gateway.common.auth import admin_auth_dependency
 
         plugin = APIRouter()
 
@@ -440,7 +440,7 @@ class TestExtraRouters:
         _patch_discord_lifespan(monkeypatch)
         from fastapi import APIRouter
 
-        from unity.gateway.app import ExtraRouter
+        from droid.gateway.app import ExtraRouter
 
         plugin = APIRouter()
 
@@ -465,8 +465,8 @@ class TestExtraRouters:
         _patch_discord_lifespan(monkeypatch)
         from fastapi import APIRouter
 
-        from unity.gateway.app import ExtraRouter
-        from unity.gateway.common.auth import admin_auth_dependency
+        from droid.gateway.app import ExtraRouter
+        from droid.gateway.common.auth import admin_auth_dependency
 
         admin_part = APIRouter()
         public_part = APIRouter()
@@ -622,7 +622,7 @@ class TestExtraRouterDataclass:
     def test_dependencies_defaults_to_empty(self) -> None:
         from fastapi import APIRouter
 
-        from unity.gateway.app import ExtraRouter
+        from droid.gateway.app import ExtraRouter
 
         r = ExtraRouter(router=APIRouter(), prefix="/x")
         assert list(r.dependencies) == []
@@ -634,7 +634,7 @@ class TestExtraRouterDataclass:
 
         from fastapi import APIRouter
 
-        from unity.gateway.app import ExtraRouter
+        from droid.gateway.app import ExtraRouter
 
         r = ExtraRouter(router=APIRouter(), prefix="/x")
         with pytest.raises(FrozenInstanceError):

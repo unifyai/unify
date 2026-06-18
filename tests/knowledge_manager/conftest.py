@@ -6,9 +6,9 @@ from typing import List, Dict, Tuple, Any
 import os
 
 import unify
-from unity.knowledge_manager.knowledge_manager import KnowledgeManager
-from unity.manager_registry import ManagerRegistry
-from unity.common.context_registry import ContextRegistry
+from droid.knowledge_manager.knowledge_manager import KnowledgeManager
+from droid.manager_registry import ManagerRegistry
+from droid.common.context_registry import ContextRegistry
 from tests.helpers import mutation_test_lock
 
 SCENARIO_COMMIT_HASHES: Dict[str, Any] = {}
@@ -254,7 +254,7 @@ def _serial_tool_calls(monkeypatch):
     small per-turn latency cost on uncached runs but pays for itself through
     reliable cache reuse on every future run.
     """
-    import unity.knowledge_manager.knowledge_manager as km_mod
+    import droid.knowledge_manager.knowledge_manager as km_mod
 
     _original = km_mod.start_async_tool_loop
 

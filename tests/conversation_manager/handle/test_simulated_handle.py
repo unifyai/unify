@@ -6,7 +6,7 @@ import pytest
 import functools
 import re
 from pydantic import BaseModel, Field
-from unity.conversation_manager.simulated import SimulatedConversationManagerHandle
+from droid.conversation_manager.simulated import SimulatedConversationManagerHandle
 from tests.helpers import (
     _handle_project,
     _assert_blocks_while_paused,

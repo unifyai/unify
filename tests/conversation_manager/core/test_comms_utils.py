@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from unity.conversation_manager.domains import comms_utils
+from droid.conversation_manager.domains import comms_utils
 
 pytestmark = pytest.mark.real_comms_functions
 
@@ -72,10 +72,10 @@ class TestUploadUnifyAttachment:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "droid.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session_details,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "droid.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_session_details.assistant.agent_id = 42
@@ -108,10 +108,10 @@ class TestUploadUnifyAttachment:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "droid.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session_details,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "droid.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_session_details.assistant.agent_id = 42
@@ -135,7 +135,7 @@ class TestUploadUnifyAttachment:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "droid.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_settings.conversation.ADAPTERS_URL = ADAPTERS_URL
@@ -162,10 +162,10 @@ class TestUploadUnifyAttachment:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "droid.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session_details,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "droid.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_session_details.assistant.agent_id = 42
@@ -200,10 +200,10 @@ class TestUploadUnifyAttachment:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "droid.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session_details,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "droid.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_session_details.assistant.agent_id = 42
@@ -237,10 +237,10 @@ class TestSendSms:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "droid.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session_details,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "droid.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_session_details.assistant.number = "+15551234567"
@@ -265,7 +265,7 @@ class TestSendSms:
     async def test_send_sms_no_from_number(self):
         """Returns failure when assistant has no phone number."""
         with patch(
-            "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+            "droid.conversation_manager.domains.comms_utils.SESSION_DETAILS",
         ) as mock_session_details:
             mock_session_details.assistant.number = None
 
@@ -290,10 +290,10 @@ class TestStartCall:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "droid.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session_details,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "droid.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_session_details.assistant.number = "+15551234567"
@@ -314,7 +314,7 @@ class TestStartCall:
     async def test_start_call_no_from_number(self):
         """Returns failure when assistant has no phone number."""
         with patch(
-            "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+            "droid.conversation_manager.domains.comms_utils.SESSION_DETAILS",
         ) as mock_session_details:
             mock_session_details.assistant.number = None
 
@@ -331,13 +331,13 @@ class TestSendUnifyMessage:
         """Sends message without attachment via Pub/Sub."""
         with (
             patch(
-                "unity.conversation_manager.domains.comms_utils._get_publisher",
+                "droid.conversation_manager.domains.comms_utils._get_publisher",
             ) as mock_get_publisher,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "droid.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "droid.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_settings.DEPLOY_ENV = "production"
@@ -348,7 +348,7 @@ class TestSendUnifyMessage:
             mock_future = MagicMock()
             mock_future.result.return_value = "message-id-123"
             mock_publisher.publish.return_value = mock_future
-            mock_publisher.topic_path.return_value = "projects/test/topics/unity-test"
+            mock_publisher.topic_path.return_value = "projects/test/topics/droid-test"
             mock_get_publisher.return_value = mock_publisher
 
             result = await comms_utils.send_unify_message(
@@ -360,20 +360,20 @@ class TestSendUnifyMessage:
             mock_publisher.publish.assert_called_once()
 
             call_args = mock_publisher.publish.call_args
-            assert call_args[0][0] == "projects/test/topics/unity-test"
+            assert call_args[0][0] == "projects/test/topics/droid-test"
 
     @pytest.mark.asyncio
     async def test_send_with_attachment(self):
         """Sends message with attachment included in Pub/Sub event."""
         with (
             patch(
-                "unity.conversation_manager.domains.comms_utils._get_publisher",
+                "droid.conversation_manager.domains.comms_utils._get_publisher",
             ) as mock_get_publisher,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "droid.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "droid.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_settings.DEPLOY_ENV = "production"
@@ -384,7 +384,7 @@ class TestSendUnifyMessage:
             mock_future = MagicMock()
             mock_future.result.return_value = "message-id-123"
             mock_publisher.publish.return_value = mock_future
-            mock_publisher.topic_path.return_value = "projects/test/topics/unity-test"
+            mock_publisher.topic_path.return_value = "projects/test/topics/droid-test"
             mock_get_publisher.return_value = mock_publisher
 
             attachment = {
@@ -421,10 +421,10 @@ class TestSendEmailViaAddress:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "droid.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session_details,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "droid.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_session_details.assistant.email = "assistant@test.com"
@@ -458,10 +458,10 @@ class TestSendEmailViaAddress:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "droid.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session_details,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "droid.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_session_details.assistant.email = "assistant@test.com"
@@ -495,10 +495,10 @@ class TestSendEmailViaAddress:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "droid.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session_details,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "droid.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_session_details.assistant.email = "assistant@outlook.unify.ai"
@@ -521,15 +521,15 @@ class TestLocalCommsBackends:
     async def test_send_sms_uses_local_twilio_backend(self):
         with (
             patch(
-                "unity.conversation_manager.domains.comms_utils._use_local_comms",
+                "droid.conversation_manager.domains.comms_utils._use_local_comms",
                 return_value=True,
             ),
             patch(
-                "unity.conversation_manager.local_providers.twilio.send_sms_message",
+                "droid.conversation_manager.local_providers.twilio.send_sms_message",
                 new=AsyncMock(return_value={"success": True, "sid": "SM123"}),
             ) as mock_send_sms,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "droid.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session_details,
         ):
             mock_session_details.assistant.number = "+15551234567"
@@ -554,22 +554,22 @@ class TestLocalCommsBackends:
         surface, even when ``LOCAL_COMMS_MODE=local``.
         """
         mock_publisher = MagicMock()
-        mock_publisher.topic_path.return_value = "projects/p/topics/unity-1"
+        mock_publisher.topic_path.return_value = "projects/p/topics/droid-1"
         mock_future = MagicMock()
         mock_future.result.return_value = "msg-id-1"
         mock_publisher.publish.return_value = mock_future
 
         with (
             patch(
-                "unity.conversation_manager.domains.comms_utils._use_local_comms",
+                "droid.conversation_manager.domains.comms_utils._use_local_comms",
                 return_value=True,
             ),
             patch(
-                "unity.conversation_manager.domains.comms_utils._publish_local_outbox_async",
+                "droid.conversation_manager.domains.comms_utils._publish_local_outbox_async",
                 new=AsyncMock(return_value=True),
             ) as mock_outbox,
             patch(
-                "unity.conversation_manager.domains.comms_utils._get_publisher",
+                "droid.conversation_manager.domains.comms_utils._get_publisher",
                 return_value=mock_publisher,
             ),
         ):
@@ -595,11 +595,11 @@ class TestLocalCommsBackends:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.conversation_manager.domains.comms_utils._use_local_comms",
+                "droid.conversation_manager.domains.comms_utils._use_local_comms",
                 return_value=True,
             ),
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "droid.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_settings.conversation.LOCAL_COMMS_PUBLIC_URL = ""
@@ -622,11 +622,11 @@ class TestLocalCommsBackends:
     async def test_send_email_uses_local_email_backend(self):
         with (
             patch(
-                "unity.conversation_manager.domains.comms_utils._use_local_comms",
+                "droid.conversation_manager.domains.comms_utils._use_local_comms",
                 return_value=True,
             ),
             patch(
-                "unity.conversation_manager.local_providers.email.send_email",
+                "droid.conversation_manager.local_providers.email.send_email",
                 new=AsyncMock(return_value={"success": True, "id": "email-123"}),
             ) as mock_send_email,
         ):
@@ -654,7 +654,7 @@ class TestLocalCommsBackends:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.manager_registry.ManagerRegistry.get_file_manager",
+                "droid.manager_registry.ManagerRegistry.get_file_manager",
                 return_value=mock_file_manager,
             ),
         ):
@@ -702,10 +702,10 @@ class TestAddEmailAttachmentsRouting:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "droid.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
             patch(
-                "unity.manager_registry.ManagerRegistry.get_file_manager",
+                "droid.manager_registry.ManagerRegistry.get_file_manager",
                 return_value=mock_file_manager,
             ),
         ):

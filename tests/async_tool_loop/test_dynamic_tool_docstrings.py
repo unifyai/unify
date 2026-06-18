@@ -1,6 +1,6 @@
 import inspect
 import pytest
-import unity.common.llm_helpers as llmh
+import droid.common.llm_helpers as llmh
 
 
 # Helper: mimic the docstring assignment logic from our updated `_reg_tool`

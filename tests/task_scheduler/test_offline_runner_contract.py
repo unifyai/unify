@@ -14,7 +14,7 @@ from datetime import datetime, timezone  # noqa: F401  (timezone used by golden 
 
 import pytest
 
-from unity.task_scheduler.offline_runner_contract import (
+from droid.task_scheduler.offline_runner_contract import (
     build_offline_run_key,
     build_offline_runner_env,
     normalize_run_key_component,
@@ -44,29 +44,29 @@ class TestBuildOfflineRunnerEnv:
     def test_required_env_vars_present(self):
         env = self._make_env()
         required = {
-            "UNITY_OFFLINE_TASK_MODE",
+            "DROID_OFFLINE_TASK_MODE",
             "EVENTBUS_PUBLISHING_ENABLED",
             "EVENTBUS_PUBSUB_STREAMING",
-            "UNITY_OFFLINE_TASK_RUN_KEY",
-            "UNITY_OFFLINE_TASK_ID",
-            "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID",
-            "UNITY_OFFLINE_TASK_ACTIVATION_REVISION",
-            "UNITY_OFFLINE_TASK_FUNCTION_ID",
-            "UNITY_OFFLINE_TASK_REQUEST",
-            "UNITY_OFFLINE_TASK_NAME",
-            "UNITY_OFFLINE_TASK_DESCRIPTION",
-            "UNITY_OFFLINE_TASK_SOURCE_TYPE",
-            "UNITY_OFFLINE_TASK_SCHEDULED_FOR",
-            "UNITY_OFFLINE_TASK_SOURCE_REF",
-            "UNITY_OFFLINE_TASK_SOURCE_MEDIUM",
-            "UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID",
+            "DROID_OFFLINE_TASK_RUN_KEY",
+            "DROID_OFFLINE_TASK_ID",
+            "DROID_OFFLINE_TASK_SOURCE_TASK_LOG_ID",
+            "DROID_OFFLINE_TASK_ACTIVATION_REVISION",
+            "DROID_OFFLINE_TASK_FUNCTION_ID",
+            "DROID_OFFLINE_TASK_REQUEST",
+            "DROID_OFFLINE_TASK_NAME",
+            "DROID_OFFLINE_TASK_DESCRIPTION",
+            "DROID_OFFLINE_TASK_SOURCE_TYPE",
+            "DROID_OFFLINE_TASK_SCHEDULED_FOR",
+            "DROID_OFFLINE_TASK_SOURCE_REF",
+            "DROID_OFFLINE_TASK_SOURCE_MEDIUM",
+            "DROID_OFFLINE_TASK_SOURCE_CONTACT_ID",
             "ASSISTANT_ID",
         }
         assert required - set(env.keys()) == set()
 
     def test_mode_is_actor(self):
         env = self._make_env()
-        assert env["UNITY_OFFLINE_TASK_MODE"] == "actor"
+        assert env["DROID_OFFLINE_TASK_MODE"] == "actor"
 
     def test_eventbus_disabled(self):
         env = self._make_env()
@@ -75,62 +75,62 @@ class TestBuildOfflineRunnerEnv:
 
     def test_function_id_blank_without_entrypoint(self):
         env = self._make_env(entrypoint=None)
-        assert env["UNITY_OFFLINE_TASK_FUNCTION_ID"] == ""
+        assert env["DROID_OFFLINE_TASK_FUNCTION_ID"] == ""
 
     def test_function_id_serialised_with_entrypoint(self):
         env = self._make_env(entrypoint=42)
-        assert env["UNITY_OFFLINE_TASK_FUNCTION_ID"] == "42"
+        assert env["DROID_OFFLINE_TASK_FUNCTION_ID"] == "42"
 
     def test_request_text_uses_description_first(self):
         env = self._make_env(
             task_description="The full description",
             task_name="Short name",
         )
-        assert env["UNITY_OFFLINE_TASK_REQUEST"] == "The full description"
+        assert env["DROID_OFFLINE_TASK_REQUEST"] == "The full description"
 
     def test_request_text_falls_back_to_name(self):
         env = self._make_env(task_description="", task_name="Just the name")
-        assert env["UNITY_OFFLINE_TASK_REQUEST"] == "Just the name"
+        assert env["DROID_OFFLINE_TASK_REQUEST"] == "Just the name"
 
     def test_request_text_synthesised_when_both_empty(self):
         env = self._make_env(task_description="", task_name="")
-        assert env["UNITY_OFFLINE_TASK_REQUEST"] == "Execute task 101"
+        assert env["DROID_OFFLINE_TASK_REQUEST"] == "Execute task 101"
 
     def test_scheduled_for_normalised_to_utc(self):
         env = self._make_env(scheduled_for="2030-04-10T11:00:00+02:00")
-        assert env["UNITY_OFFLINE_TASK_SCHEDULED_FOR"] == "2030-04-10T09:00:00+00:00"
+        assert env["DROID_OFFLINE_TASK_SCHEDULED_FOR"] == "2030-04-10T09:00:00+00:00"
 
     def test_scheduled_for_z_suffix_normalised(self):
         env = self._make_env(scheduled_for="2030-04-10T09:00:00Z")
-        assert env["UNITY_OFFLINE_TASK_SCHEDULED_FOR"] == "2030-04-10T09:00:00+00:00"
+        assert env["DROID_OFFLINE_TASK_SCHEDULED_FOR"] == "2030-04-10T09:00:00+00:00"
 
     def test_scheduled_for_naive_treated_as_utc(self):
         env = self._make_env(
             scheduled_for=datetime(2030, 4, 10, 9, 0, 0),  # naive
         )
-        assert env["UNITY_OFFLINE_TASK_SCHEDULED_FOR"] == "2030-04-10T09:00:00+00:00"
+        assert env["DROID_OFFLINE_TASK_SCHEDULED_FOR"] == "2030-04-10T09:00:00+00:00"
 
     def test_scheduled_for_none_serialises_to_empty_string(self):
         env = self._make_env(scheduled_for=None)
-        assert env["UNITY_OFFLINE_TASK_SCHEDULED_FOR"] == ""
+        assert env["DROID_OFFLINE_TASK_SCHEDULED_FOR"] == ""
 
     def test_display_name_only_when_provided(self):
         env_with = self._make_env(source_contact_display_name="Alice")
         env_without = self._make_env(source_contact_display_name=None)
-        assert env_with["UNITY_OFFLINE_TASK_SOURCE_CONTACT_DISPLAY_NAME"] == "Alice"
-        assert "UNITY_OFFLINE_TASK_SOURCE_CONTACT_DISPLAY_NAME" not in env_without
+        assert env_with["DROID_OFFLINE_TASK_SOURCE_CONTACT_DISPLAY_NAME"] == "Alice"
+        assert "DROID_OFFLINE_TASK_SOURCE_CONTACT_DISPLAY_NAME" not in env_without
 
     def test_job_name_only_when_provided(self):
-        env_with = self._make_env(job_name="unity-offline-abc")
+        env_with = self._make_env(job_name="droid-offline-abc")
         env_without = self._make_env(job_name="")
-        assert env_with["UNITY_OFFLINE_TASK_JOB_NAME"] == "unity-offline-abc"
-        assert "UNITY_OFFLINE_TASK_JOB_NAME" not in env_without
+        assert env_with["DROID_OFFLINE_TASK_JOB_NAME"] == "droid-offline-abc"
+        assert "DROID_OFFLINE_TASK_JOB_NAME" not in env_without
 
     def test_contact_id_str_or_int_both_serialised(self):
         env_int = self._make_env(source_contact_id=77)
         env_str = self._make_env(source_contact_id="77")
-        assert env_int["UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID"] == "77"
-        assert env_str["UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID"] == "77"
+        assert env_int["DROID_OFFLINE_TASK_SOURCE_CONTACT_ID"] == "77"
+        assert env_str["DROID_OFFLINE_TASK_SOURCE_CONTACT_ID"] == "77"
 
 
 # --------------------------------------------------------------------------- #
@@ -272,7 +272,7 @@ class TestNormalizeRunKeyComponent:
 # the original Communication-side function and the new shared+hosted-layer   #
 # composition produce identical env dicts. If they ever diverged, the same   #
 # task would execute differently across topologies. These tests reproduce    #
-# the field shape exactly so any drift fails loudly here, in Unity's test    #
+# the field shape exactly so any drift fails loudly here, in Droid's test    #
 # suite, before reaching Communication's deployment.                         #
 # --------------------------------------------------------------------------- #
 
@@ -322,25 +322,25 @@ def _original_communication_env_builder(
         return req.scheduled_for.astimezone(timezone.utc).isoformat()
 
     return {
-        "UNITY_OFFLINE_TASK_MODE": "actor",
+        "DROID_OFFLINE_TASK_MODE": "actor",
         "EVENTBUS_PUBLISHING_ENABLED": "false",
         "EVENTBUS_PUBSUB_STREAMING": "false",
-        "UNITY_OFFLINE_TASK_RUN_KEY": run_key,
-        "UNITY_OFFLINE_TASK_JOB_NAME": job_name,
-        "UNITY_OFFLINE_TASK_ID": str(request.task_id),
-        "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID": str(request.source_task_log_id),
-        "UNITY_OFFLINE_TASK_ACTIVATION_REVISION": request.activation_revision,
-        "UNITY_OFFLINE_TASK_FUNCTION_ID": str(int(entrypoint)) if entrypoint else "",
-        "UNITY_OFFLINE_TASK_REQUEST": task_request,
-        "UNITY_OFFLINE_TASK_NAME": str(activation.get("task_name") or ""),
-        "UNITY_OFFLINE_TASK_DESCRIPTION": str(activation.get("task_description") or ""),
-        "UNITY_OFFLINE_TASK_SOURCE_TYPE": request.source_type,
-        "UNITY_OFFLINE_TASK_SCHEDULED_FOR": _request_scheduled_for_iso(request) or "",
-        "UNITY_OFFLINE_TASK_SOURCE_REF": request.source_ref or "",
-        "UNITY_OFFLINE_TASK_SOURCE_MEDIUM": (
+        "DROID_OFFLINE_TASK_RUN_KEY": run_key,
+        "DROID_OFFLINE_TASK_JOB_NAME": job_name,
+        "DROID_OFFLINE_TASK_ID": str(request.task_id),
+        "DROID_OFFLINE_TASK_SOURCE_TASK_LOG_ID": str(request.source_task_log_id),
+        "DROID_OFFLINE_TASK_ACTIVATION_REVISION": request.activation_revision,
+        "DROID_OFFLINE_TASK_FUNCTION_ID": str(int(entrypoint)) if entrypoint else "",
+        "DROID_OFFLINE_TASK_REQUEST": task_request,
+        "DROID_OFFLINE_TASK_NAME": str(activation.get("task_name") or ""),
+        "DROID_OFFLINE_TASK_DESCRIPTION": str(activation.get("task_description") or ""),
+        "DROID_OFFLINE_TASK_SOURCE_TYPE": request.source_type,
+        "DROID_OFFLINE_TASK_SCHEDULED_FOR": _request_scheduled_for_iso(request) or "",
+        "DROID_OFFLINE_TASK_SOURCE_REF": request.source_ref or "",
+        "DROID_OFFLINE_TASK_SOURCE_MEDIUM": (
             request.source_medium or str(activation.get("trigger_medium") or "")
         ),
-        "UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID": (
+        "DROID_OFFLINE_TASK_SOURCE_CONTACT_ID": (
             str(request.source_contact_id)
             if request.source_contact_id is not None
             else ""
@@ -391,7 +391,7 @@ def _new_communication_env_builder(
 ) -> dict[str, str]:
     """Reproduces Communication's NEW _build_offline_runner_env composition.
 
-    Layer 1: shared Unity contract. Layer 2: hosted-only assistant identity.
+    Layer 1: shared Droid contract. Layer 2: hosted-only assistant identity.
     Mirrors the refactored Communication function exactly.
     """
 
@@ -523,14 +523,14 @@ class TestCommunicationEnvBuilderEquivalence:
             activation=activation,
             assistant_data=assistant_data,
             run_key="offline:scheduled:assistant-123:101:rev:once",
-            job_name="unity-offline-abc",
+            job_name="droid-offline-abc",
         )
         new = _new_communication_env_builder(
             request=request,
             activation=activation,
             assistant_data=assistant_data,
             run_key="offline:scheduled:assistant-123:101:rev:once",
-            job_name="unity-offline-abc",
+            job_name="droid-offline-abc",
         )
         assert new == old
 
@@ -550,14 +550,14 @@ class TestCommunicationEnvBuilderEquivalence:
             activation=activation,
             assistant_data=assistant_data,
             run_key="offline:triggered:assistant-123:101:rev:contact-77",
-            job_name="unity-offline-xyz",
+            job_name="droid-offline-xyz",
         )
         new = _new_communication_env_builder(
             request=request,
             activation=activation,
             assistant_data=assistant_data,
             run_key="offline:triggered:assistant-123:101:rev:contact-77",
-            job_name="unity-offline-xyz",
+            job_name="droid-offline-xyz",
         )
         assert new == old
 
@@ -581,7 +581,7 @@ class TestCommunicationEnvBuilderEquivalence:
             job_name="j",
         )
         assert new == old
-        assert old["UNITY_OFFLINE_TASK_FUNCTION_ID"] == "777"
+        assert old["DROID_OFFLINE_TASK_FUNCTION_ID"] == "777"
 
     def test_missing_assistant_identity_envs_match(self):
         request, activation, _ = self._scenario()

@@ -17,10 +17,10 @@ import pytest
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
-from unity.task_scheduler.task_scheduler import TaskScheduler
-from unity.task_scheduler.types.status import Status
-from unity.common.llm_helpers import _dumps
-from unity.common.llm_client import new_llm_client
+from droid.task_scheduler.task_scheduler import TaskScheduler
+from droid.task_scheduler.types.status import Status
+from droid.common.llm_helpers import _dumps
+from droid.common.llm_client import new_llm_client
 from tests.assertion_helpers import assertion_failed
 
 # ---------------- Ground-truth helpers ---------------- #

@@ -10,11 +10,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from unity.gateway.app import create_app
-from unity.gateway.context import GatewayContext
-from unity.gateway.public_url import StaticPublicUrlProvider
-from unity.gateway.runtime import LocalRuntimeActivator
-from unity.gateway.scheduler import LocalScheduler
+from droid.gateway.app import create_app
+from droid.gateway.context import GatewayContext
+from droid.gateway.public_url import StaticPublicUrlProvider
+from droid.gateway.runtime import LocalRuntimeActivator
+from droid.gateway.scheduler import LocalScheduler
 
 ADMIN_KEY = "test-admin-key"
 ADMIN_HEADERS = {"Authorization": f"Bearer {ADMIN_KEY}"}
@@ -92,8 +92,8 @@ async def _noop_lifespan(app: FastAPI):
 
 @pytest.fixture
 def app(gateway_context: GatewayContext, monkeypatch: pytest.MonkeyPatch) -> FastAPI:
-    from unity.gateway.adapters import common
-    from unity.gateway.common import auth
+    from droid.gateway.adapters import common
+    from droid.gateway.common import auth
 
     stub_secret = SimpleNamespace(get_secret_value=lambda: ADMIN_KEY)
     settings = SimpleNamespace(
@@ -111,9 +111,9 @@ def app(gateway_context: GatewayContext, monkeypatch: pytest.MonkeyPatch) -> Fas
             "assistant_id": assistant_id or "123",
             "boss_contact_id": 456,
             "self_contact_id": 789,
-            "assistant_first_name": "Unity",
+            "assistant_first_name": "Droid",
             "assistant_surname": "Assistant",
-            "assistant_email": "unity@example.com",
+            "assistant_email": "droid@example.com",
             "assistant_number": "+15555550123",
             "assistant_whatsapp_number": "",
             "assistant_discord_bot_id": "",
@@ -152,7 +152,7 @@ def test_twilio_whatsapp_reject_ambiguous_returns_closed_response(
     gateway_context: GatewayContext,
 ) -> None:
     with patch(
-        "unity.gateway.adapters.twilio.resolve_whatsapp_route",
+        "droid.gateway.adapters.twilio.resolve_whatsapp_route",
         new=AsyncMock(return_value={"action": "reject_ambiguous"}),
     ):
         response = client.post(
@@ -183,9 +183,9 @@ def test_twilio_whatsapp_call_uses_call_session_room(
             "assistant_id": assistant_id or "123",
             "boss_contact_id": 456,
             "self_contact_id": 789,
-            "assistant_first_name": "Unity",
+            "assistant_first_name": "Droid",
             "assistant_surname": "Assistant",
-            "assistant_email": "unity@example.com",
+            "assistant_email": "droid@example.com",
             "assistant_number": "+15555550123",
             "assistant_whatsapp_number": "",
             "assistant_discord_bot_id": "",
@@ -201,24 +201,24 @@ def test_twilio_whatsapp_call_uses_call_session_room(
 
     with (
         patch(
-            "unity.gateway.adapters.twilio.resolve_whatsapp_route",
+            "droid.gateway.adapters.twilio.resolve_whatsapp_route",
             new=AsyncMock(return_value={"assistant_id": 123, "role": "owner"}),
         ),
         patch(
-            "unity.gateway.adapters.twilio.ensure_call_scoped_dispatch_rule",
+            "droid.gateway.adapters.twilio.ensure_call_scoped_dispatch_rule",
             new=AsyncMock(return_value="rule-CA111"),
         ),
         patch(
-            "unity.gateway.adapters.twilio.build_twilio_wa_client",
+            "droid.gateway.adapters.twilio.build_twilio_wa_client",
             return_value=twilio_client,
         ),
         patch(
-            "unity.gateway.adapters.twilio.upsert_whatsapp_call_session",
+            "droid.gateway.adapters.twilio.upsert_whatsapp_call_session",
             new=AsyncMock(
                 side_effect=lambda payload: sessions.append(payload) or payload,
             ),
         ),
-        patch("unity.gateway.adapters.twilio.get_assistant", new=fake_get_assistant),
+        patch("droid.gateway.adapters.twilio.get_assistant", new=fake_get_assistant),
     ):
         response = client.post(
             "/twilio/whatsapp-call",
@@ -231,10 +231,10 @@ def test_twilio_whatsapp_call_uses_call_session_room(
 
     assert response.status_code == 200
     assert sessions[0]["provider_call_sid"] == "CA111"
-    assert sessions[0]["livekit_room"] == "unity_wa_room_123_CA111"
+    assert sessions[0]["livekit_room"] == "droid_wa_room_123_CA111"
     published = gateway_context.envelope_sink.published
     assert published[0][1]["thread"] == "whatsapp_call"
-    assert published[0][1]["event"]["livekit_room"] == "unity_wa_room_123_CA111"
+    assert published[0][1]["event"]["livekit_room"] == "droid_wa_room_123_CA111"
     assert published[0][1]["event"]["provider_call_sid"] == "CA111"
 
 
@@ -247,8 +247,8 @@ def test_twilio_whatsapp_call_status_uses_session_not_route(
         "assistant_id": 123,
         "from_number": "+15550810002",
         "to_number": "+15550810001",
-        "conference_name": "unity_wa_conf_CA111",
-        "livekit_room": "unity_wa_room_123_CA111",
+        "conference_name": "droid_wa_conf_CA111",
+        "livekit_room": "droid_wa_room_123_CA111",
         "metadata": {"sip_dispatch_rule_id": "rule-CA111"},
     }
 
@@ -257,9 +257,9 @@ def test_twilio_whatsapp_call_status_uses_session_not_route(
             "assistant_id": assistant_id or "123",
             "boss_contact_id": 456,
             "self_contact_id": 789,
-            "assistant_first_name": "Unity",
+            "assistant_first_name": "Droid",
             "assistant_surname": "Assistant",
-            "assistant_email": "unity@example.com",
+            "assistant_email": "droid@example.com",
             "assistant_number": "+15555550123",
             "assistant_whatsapp_number": "",
             "assistant_discord_bot_id": "",
@@ -275,22 +275,22 @@ def test_twilio_whatsapp_call_status_uses_session_not_route(
 
     with (
         patch(
-            "unity.gateway.adapters.twilio.resolve_whatsapp_route",
+            "droid.gateway.adapters.twilio.resolve_whatsapp_route",
             new=AsyncMock(side_effect=AssertionError("should not reroute")),
         ),
         patch(
-            "unity.gateway.adapters.twilio.get_whatsapp_call_session",
+            "droid.gateway.adapters.twilio.get_whatsapp_call_session",
             new=AsyncMock(return_value=session),
         ),
         patch(
-            "unity.gateway.adapters.twilio.update_whatsapp_call_session",
+            "droid.gateway.adapters.twilio.update_whatsapp_call_session",
             new=AsyncMock(return_value=session),
         ) as update_session,
         patch(
-            "unity.gateway.adapters.twilio.delete_sip_dispatch_rule",
+            "droid.gateway.adapters.twilio.delete_sip_dispatch_rule",
             new=AsyncMock(),
         ),
-        patch("unity.gateway.adapters.twilio.get_assistant", new=fake_get_assistant),
+        patch("droid.gateway.adapters.twilio.get_assistant", new=fake_get_assistant),
     ):
         response = client.post(
             "/twilio/whatsapp-call-status",
@@ -301,7 +301,7 @@ def test_twilio_whatsapp_call_status_uses_session_not_route(
     update_session.assert_awaited_once()
     published = gateway_context.envelope_sink.published
     assert published[0][1]["thread"] == "whatsapp_call_answered"
-    assert published[0][1]["event"]["livekit_room"] == "unity_wa_room_123_CA111"
+    assert published[0][1]["event"]["livekit_room"] == "droid_wa_room_123_CA111"
     assert published[0][1]["event"]["provider_call_sid"] == "CA111"
 
 
@@ -314,26 +314,26 @@ def test_twilio_whatsapp_completed_status_cleans_rule_without_publish(
         "assistant_id": 123,
         "from_number": "+15550810002",
         "to_number": "+15550810001",
-        "conference_name": "unity_wa_conf_CA111",
-        "livekit_room": "unity_wa_room_123_CA111",
+        "conference_name": "droid_wa_conf_CA111",
+        "livekit_room": "droid_wa_room_123_CA111",
         "metadata": {"sip_dispatch_rule_id": "rule-CA111"},
     }
 
     with (
         patch(
-            "unity.gateway.adapters.twilio.get_whatsapp_call_session",
+            "droid.gateway.adapters.twilio.get_whatsapp_call_session",
             new=AsyncMock(return_value=session),
         ),
         patch(
-            "unity.gateway.adapters.twilio.update_whatsapp_call_session",
+            "droid.gateway.adapters.twilio.update_whatsapp_call_session",
             new=AsyncMock(return_value=session),
         ) as update_session,
         patch(
-            "unity.gateway.adapters.twilio.delete_sip_dispatch_rule",
+            "droid.gateway.adapters.twilio.delete_sip_dispatch_rule",
             new=AsyncMock(),
         ) as delete_rule,
         patch(
-            "unity.gateway.adapters.twilio._assistant_for_whatsapp_route",
+            "droid.gateway.adapters.twilio._assistant_for_whatsapp_route",
             new=AsyncMock(side_effect=AssertionError("completed should not publish")),
         ),
     ):
@@ -352,7 +352,7 @@ def test_console_can_create_phone_with_empty_body(client: TestClient) -> None:
     twilio_client = MagicMock()
     number = MagicMock(phone_number="+15555550123")
     incoming = MagicMock(phone_number="+15555550123", sid="PN_created")
-    service = MagicMock(friendly_name="Unity")
+    service = MagicMock(friendly_name="Droid")
     twilio_client.available_phone_numbers.return_value.local.list.return_value = [
         number,
     ]
@@ -366,11 +366,11 @@ def test_console_can_create_phone_with_empty_body(client: TestClient) -> None:
 
     with (
         patch(
-            "unity.gateway.channels.phone.views.build_twilio_client",
+            "droid.gateway.channels.phone.views.build_twilio_client",
             return_value=twilio_client,
         ),
         patch(
-            "unity.gateway.channels.phone.views.get_livekit_api",
+            "droid.gateway.channels.phone.views.get_livekit_api",
             return_value=livekit_api,
         ),
     ):
@@ -387,11 +387,11 @@ def test_console_can_delete_phone_with_snake_case_body(client: TestClient) -> No
 
     with (
         patch(
-            "unity.gateway.channels.phone.views.build_twilio_client",
+            "droid.gateway.channels.phone.views.build_twilio_client",
             return_value=twilio_client,
         ),
         patch(
-            "unity.gateway.channels.phone.views._delete_sip_trunk_for_phone_number",
+            "droid.gateway.channels.phone.views._delete_sip_trunk_for_phone_number",
             new=AsyncMock(return_value=True),
         ),
     ):
@@ -418,11 +418,11 @@ def test_console_can_send_social_verification_with_snake_case_body(
     client: TestClient,
 ) -> None:
     twilio_client = MagicMock()
-    service = MagicMock(friendly_name="Unity", sid="MG_test")
+    service = MagicMock(friendly_name="Droid", sid="MG_test")
     twilio_client.messaging.v1.services.list.return_value = [service]
 
     with patch(
-        "unity.gateway.channels.social.views.build_twilio_client",
+        "droid.gateway.channels.social.views.build_twilio_client",
         return_value=twilio_client,
     ):
         response = client.post(
@@ -447,15 +447,15 @@ def test_console_can_create_whatsapp_sender_with_snake_case_body(
 
     with (
         patch(
-            "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+            "droid.gateway.channels.whatsapp.views.httpx.AsyncClient",
             return_value=httpx_client,
         ),
         patch(
-            "unity.gateway.channels.whatsapp.views._twilio_whatsapp_auth_headers",
+            "droid.gateway.channels.whatsapp.views._twilio_whatsapp_auth_headers",
             return_value={"Authorization": "Basic test"},
         ),
         patch(
-            "unity.gateway.channels.whatsapp.views._attach_voice_app",
+            "droid.gateway.channels.whatsapp.views._attach_voice_app",
             new=AsyncMock(return_value=True),
         ),
     ):
@@ -481,11 +481,11 @@ def test_console_can_delete_whatsapp_sender(client: TestClient) -> None:
 
     with (
         patch(
-            "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+            "droid.gateway.channels.whatsapp.views.httpx.AsyncClient",
             return_value=httpx_client,
         ),
         patch(
-            "unity.gateway.channels.whatsapp.views._twilio_whatsapp_auth_headers",
+            "droid.gateway.channels.whatsapp.views._twilio_whatsapp_auth_headers",
             return_value={"Authorization": "Basic test"},
         ),
     ):
@@ -572,7 +572,7 @@ def test_console_system_event_publishes_runtime_event(
     gateway_context: GatewayContext,
 ) -> None:
     response = client.post(
-        "/unity/system-event",
+        "/droid/system-event",
         headers=ADMIN_HEADERS,
         json={
             "assistant_id": "123",
@@ -585,5 +585,5 @@ def test_console_system_event_publishes_runtime_event(
     sink = gateway_context.envelope_sink
     assert isinstance(sink, FakeEnvelopeSink)
     _assistant_id, envelope, _thread = sink.published[-1]
-    assert envelope["thread"] == "unity_system_event"
+    assert envelope["thread"] == "droid_system_event"
     assert envelope["event"]["event_type"] == "user_remote_control_started"

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from unity.conversation_manager.domains import managers_utils
-from unity.conversation_manager.events import ActorResult, Event
+from droid.conversation_manager.domains import managers_utils
+from droid.conversation_manager.events import ActorResult, Event
 
 
 class _FakeHandle:

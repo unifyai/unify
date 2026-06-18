@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from unity.knowledge_manager.knowledge_manager import KnowledgeManager
+from droid.knowledge_manager.knowledge_manager import KnowledgeManager
 from tests.helpers import _handle_project, capture_events
 
 # All tests in this file require EventBus publishing to verify event behavior

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from io import StringIO
 
-from unity.gateway.local_setup import select_channel_setups
-from unity.gateway.wizard import (
+from droid.gateway.local_setup import select_channel_setups
+from droid.gateway.wizard import (
     load_env_file,
     mask_value,
     read_env_file,
@@ -78,7 +78,7 @@ def test_interactive_setup_writes_selected_values(tmp_path) -> None:
 
     assert exit_code == 0
     contents = env_file.read_text(encoding="utf-8")
-    assert "UNITY_GATEWAY_PUBLIC_URL=https://callbacks.example.com" in contents
+    assert "DROID_GATEWAY_PUBLIC_URL=https://callbacks.example.com" in contents
     assert "SLACK_SIGNING_SECRET=secret" in contents
     assert "ORCHESTRA_ADMIN_KEY=admin" in contents
-    assert "Unity gateway local setup wizard" in output.getvalue()
+    assert "Droid gateway local setup wizard" in output.getvalue()

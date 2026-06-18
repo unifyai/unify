@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from unittest.mock import Mock, MagicMock, patch
 
-from unity.conversation_manager.in_memory_event_broker import (
+from droid.conversation_manager.in_memory_event_broker import (
     create_in_memory_event_broker,
     reset_in_memory_event_broker,
 )
@@ -50,7 +50,7 @@ async def _wait_for_condition(
     return False
 
 
-from unity.conversation_manager.events import (
+from droid.conversation_manager.events import (
     Event,
     BackupContactsEvent,
     SMSReceived,
@@ -75,7 +75,7 @@ from unity.conversation_manager.events import (
     UserWebcamStarted,
     UserWebcamStopped,
 )
-from unity.contact_manager.types.contact import UNASSIGNED
+from droid.contact_manager.types.contact import UNASSIGNED
 
 # =============================================================================
 # Contact Schema Tests (existing test preserved)
@@ -110,10 +110,10 @@ def test_get_local_contact_has_correct_keys():
     mock_session.user = mock_user
 
     with patch(
-        "unity.conversation_manager.comms_manager.SESSION_DETAILS",
+        "droid.conversation_manager.comms_manager.SESSION_DETAILS",
         mock_session,
     ):
-        from unity.conversation_manager.comms_manager import _get_local_contact
+        from droid.conversation_manager.comms_manager import _get_local_contact
 
         contact = _get_local_contact()
 
@@ -157,7 +157,7 @@ def broker():
 @pytest.fixture
 def mock_session_details():
     """Mock SESSION_DETAILS for testing."""
-    with patch("unity.conversation_manager.comms_manager.SESSION_DETAILS") as mock:
+    with patch("droid.conversation_manager.comms_manager.SESSION_DETAILS") as mock:
         mock.assistant.agent_id = 42
         mock.assistant.email = "assistant@test.com"
         mock.user.first_name = "Test User"
@@ -173,10 +173,10 @@ def mock_session_details():
 @pytest.fixture
 def mock_settings():
     """Mock SETTINGS for testing."""
-    with patch("unity.conversation_manager.comms_manager.SETTINGS") as mock:
+    with patch("droid.conversation_manager.comms_manager.SETTINGS") as mock:
         mock.DEPLOY_ENV = "production"
         mock.ENV_SUFFIX = ""
-        mock.conversation.JOB_NAME = "unity-job-test"
+        mock.conversation.JOB_NAME = "droid-job-test"
         yield mock
 
 
@@ -250,29 +250,29 @@ class TestHelperFunctions:
 
     def test_get_subscription_id_non_staging(self, mock_session_details, mock_settings):
         """Test subscription ID generation for non-staging environment."""
-        from unity.conversation_manager.comms_manager import _get_subscription_id
+        from droid.conversation_manager.comms_manager import _get_subscription_id
 
         mock_session_details.assistant.agent_id = 123
         mock_settings.DEPLOY_ENV = "production"
         mock_settings.ENV_SUFFIX = ""
 
         result = _get_subscription_id()
-        assert result == "unity-123-sub"
+        assert result == "droid-123-sub"
 
     def test_get_subscription_id_staging(self, mock_session_details, mock_settings):
         """Test subscription ID generation for staging environment."""
-        from unity.conversation_manager.comms_manager import _get_subscription_id
+        from droid.conversation_manager.comms_manager import _get_subscription_id
 
         mock_session_details.assistant.agent_id = 123
         mock_settings.DEPLOY_ENV = "staging"
         mock_settings.ENV_SUFFIX = "-staging"
 
         result = _get_subscription_id()
-        assert result == "unity-123-staging-sub"
+        assert result == "droid-123-staging-sub"
 
     def test_get_local_contact(self, mock_session_details):
         """Test local contact generation from session details."""
-        from unity.conversation_manager.comms_manager import _get_local_contact
+        from droid.conversation_manager.comms_manager import _get_local_contact
 
         result = _get_local_contact()
         assert result["contact_id"] == -1
@@ -300,7 +300,7 @@ class TestCommsManagerInit:
         mock_settings,
     ):
         """Test that CommsManager initializes with empty subscribers dict."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         assert cm.subscribers == {}
@@ -316,7 +316,7 @@ class TestCommsManagerInit:
         mock_settings,
     ):
         """Test that CommsManager stores reference to event loop."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         assert cm.loop is not None
@@ -338,7 +338,7 @@ class TestThreadSafePublishing:
         mock_settings,
     ):
         """Test that _publish_from_callback schedules async publish on event loop."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -381,7 +381,7 @@ class TestSMSMessageHandling:
         mock_settings,
     ):
         """Test handling of incoming SMS message."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -443,7 +443,7 @@ class TestEmailMessageHandling:
         mock_settings,
     ):
         """Test handling of incoming email message."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -493,13 +493,13 @@ class TestEmailMessageHandling:
         mock_settings,
     ):
         """Test handling of email with attachments schedules download."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
 
         with patch(
-            "unity.conversation_manager.comms_manager.add_email_attachments",
+            "droid.conversation_manager.comms_manager.add_email_attachments",
         ) as mock_add:
             mock_add.return_value = None  # Coroutine return value
 
@@ -549,7 +549,7 @@ class TestUnifyMessageHandling:
         mock_settings,
     ):
         """Test handling of incoming UnifyMessage."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -599,7 +599,7 @@ class TestUnifyMessageHandling:
         mock_settings,
     ):
         """Test that UnifyMessage without contact_id is rejected (no silent default)."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -645,7 +645,7 @@ class TestUnifyMessageHandling:
         mock_settings,
     ):
         """Test that UnifyMessage with unknown contact_id is rejected (no silent fallback)."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -701,7 +701,7 @@ class TestPhoneCallHandling:
         mock_settings,
     ):
         """Test handling of incoming phone call."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -747,7 +747,7 @@ class TestPhoneCallHandling:
         mock_settings,
     ):
         """Test handling of outbound call answered event."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -799,7 +799,7 @@ class TestUnifyMeetHandling:
         mock_settings,
     ):
         """Test handling of Unify Meet session start."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -848,7 +848,7 @@ class TestUnifyMeetHandling:
 
     @pytest.mark.asyncio
     @patch(
-        "unity.conversation_manager.comms_manager._get_local_contact",
+        "droid.conversation_manager.comms_manager._get_local_contact",
         return_value={
             "contact_id": 0,
             "first_name": "Assistant",
@@ -880,7 +880,7 @@ class TestUnifyMeetHandling:
         been cached yet.  This test goes through handle_message (the real
         Pub/Sub callback path) to verify subscriber delivery order.
         """
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -950,7 +950,7 @@ class TestStartupEvents:
         mock_settings,
     ):
         """Test handling of assistant update event."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -1004,7 +1004,7 @@ class TestStartupEvents:
         mock_settings,
     ):
         """assistant_update carries the Coordinator role flag."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -1055,8 +1055,8 @@ class TestStartupEvents:
         mock_settings,
     ):
         """AssistantSession bootstrap payload carries the Coordinator role flag."""
-        from unity.conversation_manager.comms_manager import CommsManager
-        from unity.conversation_manager.events import StartupEvent
+        from droid.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.events import StartupEvent
 
         startup_payload = {
             "api_key": "key",
@@ -1089,18 +1089,18 @@ class TestStartupEvents:
 
             with (
                 patch(
-                    "unity.conversation_manager.comms_manager.wait_for_assistant_session_name",
+                    "droid.conversation_manager.comms_manager.wait_for_assistant_session_name",
                     return_value="session-a",
                 ),
                 patch(
-                    "unity.conversation_manager.comms_manager.read_job_assignment_record",
+                    "droid.conversation_manager.comms_manager.read_job_assignment_record",
                     return_value=SimpleNamespace(
                         session_name="session-a",
                         binding_id="binding-a",
                     ),
                 ),
                 patch(
-                    "unity.conversation_manager.comms_manager.read_assistant_session",
+                    "droid.conversation_manager.comms_manager.read_assistant_session",
                     return_value={
                         "spec": {
                             "assistantId": "7",
@@ -1111,7 +1111,7 @@ class TestStartupEvents:
                     },
                 ),
                 patch(
-                    "unity.conversation_manager.comms_manager.read_session_bootstrap_secret_record",
+                    "droid.conversation_manager.comms_manager.read_session_bootstrap_secret_record",
                     return_value=SimpleNamespace(
                         name="secret-a",
                         payload=startup_payload,
@@ -1120,7 +1120,7 @@ class TestStartupEvents:
                     ),
                 ),
                 patch(
-                    "unity.conversation_manager.comms_manager.mark_job_container_ready",
+                    "droid.conversation_manager.comms_manager.mark_job_container_ready",
                 ),
             ):
                 await cm._poll_for_assignment()
@@ -1141,7 +1141,7 @@ class TestStartupEvents:
         mock_settings,
     ):
         """assistant_update with email_provider propagates it into the event."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -1193,7 +1193,7 @@ class TestStartupEvents:
         mock_settings,
     ):
         """assistant_update without email_provider defaults to google_workspace."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -1243,7 +1243,7 @@ class TestStartupEvents:
         mock_settings,
     ):
         """assistant_update carries membership fields into the runtime event."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -1312,7 +1312,7 @@ class TestStartupEvents:
         mock_settings,
     ):
         """assistant_update fails loud instead of restoring legacy contact defaults."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -1344,7 +1344,7 @@ class TestStartupEvents:
             )
 
             with patch(
-                "unity.conversation_manager.comms_manager.publish_system_error",
+                "droid.conversation_manager.comms_manager.publish_system_error",
             ) as mock_error:
                 cm.handle_message(message)
                 await _wait_for_condition(lambda: message._acked)
@@ -1373,7 +1373,7 @@ class TestSystemEvents:
         mock_settings,
     ):
         """Test handling of sync_contacts system event."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -1382,7 +1382,7 @@ class TestSystemEvents:
             await pubsub.psubscribe("app:comms:*")
 
             message = create_pubsub_message(
-                "unity_system_event",
+                "droid_system_event",
                 {
                     "event_type": "sync_contacts",
                     "message": "Manual sync requested",
@@ -1410,7 +1410,7 @@ class TestSystemEvents:
     ):
         """Scheduled task system events should map onto the typed task_due channel."""
 
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -1419,7 +1419,7 @@ class TestSystemEvents:
             await pubsub.psubscribe("app:comms:*")
 
             message = create_pubsub_message(
-                "unity_system_event",
+                "droid_system_event",
                 {
                     "event_type": "task_due",
                     "message": "Scheduled task 'Morning briefing' became due.",
@@ -1465,7 +1465,7 @@ class TestSystemEvents:
     ):
         """Coordinator delegate system events should map onto the typed channel."""
 
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -1474,7 +1474,7 @@ class TestSystemEvents:
             await pubsub.psubscribe("app:comms:*")
 
             message = create_pubsub_message(
-                "unity_system_event",
+                "droid_system_event",
                 {
                     "event_type": "coordinator_delegate",
                     "message": "Coordinator 2071 assigned schedule_task work.",
@@ -1511,7 +1511,7 @@ class TestSystemEvents:
         mock_settings,
     ):
         """Console presence events map onto a typed no-op comms event."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -1520,7 +1520,7 @@ class TestSystemEvents:
             await pubsub.psubscribe("app:comms:*")
 
             message = create_pubsub_message(
-                "unity_system_event",
+                "droid_system_event",
                 {
                     "event_type": "assistant_presence_observed",
                     "message": "User presence observed in Console.",
@@ -1556,7 +1556,7 @@ class TestSystemEvents:
     ):
         """task_due destinations are normalized to canonical team:<id> labels."""
 
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -1565,7 +1565,7 @@ class TestSystemEvents:
             await pubsub.psubscribe("app:comms:*")
 
             message = create_pubsub_message(
-                "unity_system_event",
+                "droid_system_event",
                 {
                     "event_type": "task_due",
                     "task_id": 101,
@@ -1594,7 +1594,7 @@ class TestSystemEvents:
     ):
         """task_due payloads with non-canonical destinations are ignored."""
 
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -1603,7 +1603,7 @@ class TestSystemEvents:
             await pubsub.psubscribe("app:comms:*")
 
             message = create_pubsub_message(
-                "unity_system_event",
+                "droid_system_event",
                 {
                     "event_type": "task_due",
                     "task_id": 101,
@@ -1635,7 +1635,7 @@ class TestMeetInteractionSystemEvents:
 
     These events are published by the Console frontend when the user toggles
     screen sharing or remote control during a Unify Meet session. They arrive
-    as unity_system_event messages and should be routed to app:comms:*.
+    as droid_system_event messages and should be routed to app:comms:*.
     """
 
     _EVENT_CASES = [
@@ -1697,7 +1697,7 @@ class TestMeetInteractionSystemEvents:
         message,
     ):
         """System events for meet interactions are routed to app:comms:<event_type>."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -1706,7 +1706,7 @@ class TestMeetInteractionSystemEvents:
             await pubsub.psubscribe("app:comms:*")
 
             msg = create_pubsub_message(
-                "unity_system_event",
+                "droid_system_event",
                 {"event_type": event_type, "message": message},
             )
 
@@ -1731,7 +1731,7 @@ class TestMeetInteractionSystemEvents:
         mock_settings,
     ):
         """Meet interaction events use a default reason when message is None."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -1740,7 +1740,7 @@ class TestMeetInteractionSystemEvents:
             await pubsub.psubscribe("app:comms:*")
 
             msg = create_pubsub_message(
-                "unity_system_event",
+                "droid_system_event",
                 {"event_type": "assistant_screen_share_started", "message": None},
             )
 
@@ -1763,13 +1763,13 @@ class TestMeetInteractionSystemEvents:
         mock_settings,
     ):
         """Unrecognized system event types are acked without publishing."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
 
         msg = create_pubsub_message(
-            "unity_system_event",
+            "droid_system_event",
             {"event_type": "some_unknown_event", "message": "test"},
         )
 
@@ -1794,7 +1794,7 @@ class TestPreHireChatLogging:
         mock_settings,
     ):
         """Test handling of pre-hire chat messages."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -1863,7 +1863,7 @@ class TestPreHireChatLogging:
         - First message with UNASSIGNED creates a new exchange
         - Subsequent messages with UNASSIGNED will use the cached exchange_id
         """
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -1925,7 +1925,7 @@ class TestPreHireChatLogging:
         mock_settings,
     ):
         """Test handling of pre-hire chat with empty body."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -1974,7 +1974,7 @@ class TestErrorHandling:
         mock_settings,
     ):
         """Test handling of malformed JSON message."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -1995,7 +1995,7 @@ class TestErrorHandling:
         mock_settings,
     ):
         """Test handling of unknown thread type."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -2019,7 +2019,7 @@ class TestErrorHandling:
         mock_settings,
     ):
         """Test handling of SMS with phone number not matching any contact."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -2070,7 +2070,7 @@ class TestPingMechanism:
         mock_settings,
     ):
         """Test that send_pings publishes keepalive ping events."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
 
@@ -2125,7 +2125,7 @@ class TestSubscriptionManagement:
         mock_settings,
     ):
         """Test that subscribe_to_topic stores the streaming pull future."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
 
@@ -2137,7 +2137,7 @@ class TestSubscriptionManagement:
         )
 
         with patch(
-            "unity.conversation_manager.comms_manager.pubsub_v1.SubscriberClient",
+            "droid.conversation_manager.comms_manager.pubsub_v1.SubscriberClient",
             return_value=mock_subscriber,
         ):
             cm.subscribe_to_topic("test-sub")
@@ -2153,7 +2153,7 @@ class TestSubscriptionManagement:
         mock_settings,
     ):
         """Test that subscribe uses credentials if provided."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from droid.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.credentials = Mock()  # Set credentials
@@ -2165,7 +2165,7 @@ class TestSubscriptionManagement:
         )
 
         with patch(
-            "unity.conversation_manager.comms_manager.pubsub_v1.SubscriberClient",
+            "droid.conversation_manager.comms_manager.pubsub_v1.SubscriberClient",
             return_value=mock_subscriber,
         ) as mock_client_class:
             cm.subscribe_to_topic("test-sub")
@@ -2184,7 +2184,7 @@ class TestEventsMap:
 
     def test_events_map_contains_expected_threads(self):
         """Test that events_map has the expected thread mappings."""
-        from unity.conversation_manager.comms_manager import events_map
+        from droid.conversation_manager.comms_manager import events_map
 
         assert "msg" in events_map
         assert events_map["msg"] is SMSReceived

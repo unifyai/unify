@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import pytest
 
-from unity.knowledge_manager.simulated import (
+from droid.knowledge_manager.simulated import (
     SimulatedKnowledgeManager,
 )
 
@@ -22,8 +22,8 @@ def test_simulated_km_docstrings_match_base():
     Public methods in SimulatedKnowledgeManager should copy the real
     BaseKnowledgeManager doc-strings one-for-one (via functools.wraps).
     """
-    from unity.knowledge_manager.base import BaseKnowledgeManager
-    from unity.knowledge_manager.simulated import SimulatedKnowledgeManager
+    from droid.knowledge_manager.base import BaseKnowledgeManager
+    from droid.knowledge_manager.simulated import SimulatedKnowledgeManager
 
     assert (
         BaseKnowledgeManager.ask.__doc__.strip()

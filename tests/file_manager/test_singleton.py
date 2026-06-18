@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from unity.file_manager.managers.local import LocalFileManager
-from unity.file_manager import simulated as sim_mod
+from droid.file_manager.managers.local import LocalFileManager
+from droid.file_manager import simulated as sim_mod
 
 
 def test_local_is_singleton(fm_root):

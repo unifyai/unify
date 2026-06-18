@@ -2,8 +2,8 @@ import pytest
 from datetime import datetime, UTC
 
 
-from unity.transcript_manager.transcript_manager import TranscriptManager
-from unity.contact_manager.types.contact import Contact
+from droid.transcript_manager.transcript_manager import TranscriptManager
+from droid.contact_manager.types.contact import Contact
 from tests.helpers import _handle_project
 
 

@@ -36,7 +36,7 @@ from livekit import api
 _VOICE_AGENT_LOG_NAME = ".logs_voice_agent.txt"
 _CONNECTION_FILE = Path(".live_voice_connect.json")
 _READINESS_POLL_INTERVAL_SECONDS = 0.25
-_SANDBOX_LAUNCH_CWD_ENV = "UNITY_SANDBOX_LAUNCH_CWD"
+_SANDBOX_LAUNCH_CWD_ENV = "DROID_SANDBOX_LAUNCH_CWD"
 
 _PLAYGROUND_DIR = Path(__file__).resolve().parents[2] / ".livekit-playground"
 _PLAYGROUND_REPO = "https://github.com/livekit/agents-playground.git"
@@ -130,14 +130,14 @@ def _spawn_quiet(log_path: Path):
     Redirect all output during voice-agent subprocess spawn to *log_path*.
 
     Patches both the *module-level* binding of ``run_script`` in
-    ``call_manager`` (``from unity.helpers import run_script`` creates a
+    ``call_manager`` (``from droid.helpers import run_script`` creates a
     local copy) and ``sys.stdout``/``sys.stderr`` so parent-process prints
     don't leak into the terminal either.
 
     Returns ``(log_fh, restore_fn)``.
     """
-    import unity.conversation_manager.domains.call_manager as _cm_mod
-    import unity.helpers as _helpers
+    import droid.conversation_manager.domains.call_manager as _cm_mod
+    import droid.helpers as _helpers
 
     log_fh = open(log_path, "w")
     orig_helpers, orig_cm = _helpers.run_script, _cm_mod.run_script
@@ -489,7 +489,7 @@ async def _wait_for_readiness(
 
 def _restore_call_manager_methods(cm) -> None:
     """Undo test mocks on call_manager so live voice can use the real methods."""
-    from unity.conversation_manager.domains.call_manager import LivekitCallManager
+    from droid.conversation_manager.domains.call_manager import LivekitCallManager
 
     mgr = cm.call_manager
     for name in ("start_call", "start_unify_meet"):
@@ -529,12 +529,12 @@ async def start_session(
     finally:
         restore()
 
-    # When UNITY_COMMS_URL is unset (no --real-comms), call.py's
+    # When DROID_COMMS_URL is unset (no --real-comms), call.py's
     # dispatch_livekit_agent() is skipped, so we dispatch directly via the
-    # LiveKit API.  When UNITY_COMMS_URL IS set, call.py already dispatched
+    # LiveKit API.  When DROID_COMMS_URL IS set, call.py already dispatched
     # via the comms service — a second dispatch here would create a duplicate
     # agent process (LiveKit does not deduplicate CreateAgentDispatch calls).
-    from unity.settings import SETTINGS
+    from droid.settings import SETTINGS
 
     if not SETTINGS.conversation.COMMS_URL:
         await asyncio.sleep(8)

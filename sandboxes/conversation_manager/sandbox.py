@@ -144,7 +144,7 @@ def _build_worker_config(*, args: Any, actor_config: ActorConfig) -> dict:
         "voice": bool(getattr(args, "voice", False)),
         "debug": bool(getattr(args, "debug", False)),
         # Project
-        "project_name": getattr(args, "project_name", "unity"),
+        "project_name": getattr(args, "project_name", "droid"),
         "overwrite": bool(getattr(args, "overwrite", False)),
         # Worker-only flags (still part of the stable config contract)
         "agent_service_bootstrap": (
@@ -300,7 +300,7 @@ async def _main_async() -> None:
     inactivity_shutdown = False
 
     parser = build_cli_parser("ConversationManager sandbox")
-    # CM-specific override: `unity` is the install-and-live entrypoint, so its
+    # CM-specific override: `droid` is the install-and-live entrypoint, so its
     # default workspace is the fixed `Assistants` project rather than the
     # generic `Sandbox` default used by the per-manager dev sandboxes. The
     # `--project_name` flag itself stays available for dev/eval use.
@@ -377,8 +377,8 @@ async def _main_async() -> None:
         ),
     )
     args = parser.parse_args()
-    os.environ.setdefault("UNITY_SANDBOX_LAUNCH_CWD", str(Path.cwd().resolve()))
-    os.environ.setdefault("UNITY_TERMINAL_LOG", "false")
+    os.environ.setdefault("DROID_SANDBOX_LAUNCH_CWD", str(Path.cwd().resolve()))
+    os.environ.setdefault("DROID_TERMINAL_LOG", "false")
     os.environ.setdefault("UNILLM_TERMINAL_LOG", "false")
     unillm_log_dir = _enable_unillm_boundary_logging()
 

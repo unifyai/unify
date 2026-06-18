@@ -8,9 +8,9 @@ import unify
 
 from tests.assertion_helpers import assertion_failed
 from tests.helpers import _handle_project
-from unity.session_details import SESSION_DETAILS
-from unity.transcript_manager.transcript_manager import TranscriptManager
-from unity.transcript_manager.types.message import Message
+from droid.session_details import SESSION_DETAILS
+from droid.transcript_manager.transcript_manager import TranscriptManager
+from droid.transcript_manager.types.message import Message
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 

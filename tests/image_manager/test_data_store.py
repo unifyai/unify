@@ -5,10 +5,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 import unify
-from unity.image_manager.image_manager import ImageManager
-from unity.common.data_store import DataStore
+from droid.image_manager.image_manager import ImageManager
+from droid.common.data_store import DataStore
 from tests.helpers import _handle_project
-from unity.image_manager.utils import make_solid_png_base64
+from droid.image_manager.utils import make_solid_png_base64
 
 PNG_RED_B64 = make_solid_png_base64(32, 32, (255, 0, 0))
 PNG_BLUE_B64 = make_solid_png_base64(32, 32, (0, 0, 255))

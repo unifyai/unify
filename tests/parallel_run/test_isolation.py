@@ -16,7 +16,7 @@ import subprocess
 from tests.parallel_run.conftest import (
     TESTS_DIR,
     list_tmux_sessions,
-    get_unity_sockets,
+    get_droid_sockets,
 )
 
 
@@ -29,7 +29,7 @@ class TestSocketIsolation:
         The explicit "socket: <name>" line was part of the removed
         Observe section (65bd78f9d, 2025-12-26). The socket name is
         still surfaced — embedded in the log-directory path the runner
-        prints (e.g. `logs/pytest/2026-05-28T08-53-55_unity_test_153907/`)
+        prints (e.g. `logs/pytest/2026-05-28T08-53-55_droid_test_153907/`)
         and exposed on RunResult.socket. Assert presence via either
         path so the test is robust to output reformatting that doesn't
         affect the actual socket-name surfacing contract.
@@ -60,8 +60,8 @@ class TestSocketIsolation:
         # Socket should be extracted from output
         assert result.socket, "Socket name should be extracted from output"
         assert result.socket.startswith(
-            "unity",
-        ), f"Socket should start with 'unity': {result.socket}"
+            "droid",
+        ), f"Socket should start with 'droid': {result.socket}"
 
     def test_sessions_created_in_isolated_socket(self, runner):
         """Sessions should be created in the isolated socket."""
@@ -77,17 +77,17 @@ class TestSocketIsolation:
 
             # Our session should be in this socket (may have auto-closed if passed)
             # Just verify the socket exists
-            sockets = get_unity_sockets()
+            sockets = get_droid_sockets()
             assert result.socket in sockets or len(result.sessions_created) > 0
 
     def test_explicit_socket_override(self, runner):
-        """UNITY_TEST_SOCKET env var should override auto-detection."""
-        custom_socket = "unity_test_custom_socket"
+        """DROID_TEST_SOCKET env var should override auto-detection."""
+        custom_socket = "droid_test_custom_socket"
 
         result = runner.run(
             runner.fixture_path("test_always_pass.py"),
             wait_for_completion=True,
-            env={"UNITY_TEST_SOCKET": custom_socket},
+            env={"DROID_TEST_SOCKET": custom_socket},
         )
 
         assert result.exit_code == 0
@@ -131,16 +131,16 @@ class TestHelperScripts:
 class TestSocketNaming:
     """Tests for socket naming convention."""
 
-    def test_socket_starts_with_unity_prefix(self, runner):
-        """Socket names should start with 'unity' prefix."""
+    def test_socket_starts_with_droid_prefix(self, runner):
+        """Socket names should start with 'droid' prefix."""
         result = runner.run(
             runner.fixture_path("test_always_pass.py"),
             wait_for_completion=True,
         )
 
         assert result.socket.startswith(
-            "unity",
-        ), f"Socket should start with 'unity': {result.socket}"
+            "droid",
+        ), f"Socket should start with 'droid': {result.socket}"
 
     def test_multiple_runs_same_terminal_same_socket(self, runner):
         """Multiple runs from same terminal should use same socket."""

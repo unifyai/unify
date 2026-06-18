@@ -10,9 +10,9 @@ import pytest
 import pytest_asyncio
 import unify
 
-from unity.task_scheduler.task_scheduler import TaskScheduler
-from unity.manager_registry import ManagerRegistry
-from unity.common.context_registry import ContextRegistry
+from droid.task_scheduler.task_scheduler import TaskScheduler
+from droid.manager_registry import ManagerRegistry
+from droid.common.context_registry import ContextRegistry
 from tests.helpers import (
     is_task_scenario_seeded,
     rebuild_task_id_mapping,

@@ -1,8 +1,8 @@
 #!/usr/bin/env zsh
-# Unity test helper shell initialization
+# Droid test helper shell initialization
 #
 # Add this single line to your ~/.zshrc:
-#   source /path/to/your/unity/clone/tests/shell_init.zsh
+#   source /path/to/your/droid/clone/tests/shell_init.zsh
 #
 # This sets up shell functions and tab completions for all test helper scripts.
 #
@@ -11,30 +11,30 @@
 # (e.g., Cursor Background Agents) without any extra configuration.
 
 # ---- Directory detection ----
-UNITY_TESTS_DIR="${0:A:h}"  # Absolute path to directory containing this script
+DROID_TESTS_DIR="${0:A:h}"  # Absolute path to directory containing this script
 
 # ---- Socket name (captured at init time for completions) ----
 # Must be computed here because `tty` doesn't work inside completion functions
-_unity_tty_id=$(tty 2>/dev/null)
-if [[ "$_unity_tty_id" == "not a tty" || -z "$_unity_tty_id" || ! "$_unity_tty_id" =~ ^/ ]]; then
-    _UNITY_SOCKET="unity_default"
+_droid_tty_id=$(tty 2>/dev/null)
+if [[ "$_droid_tty_id" == "not a tty" || -z "$_droid_tty_id" || ! "$_droid_tty_id" =~ ^/ ]]; then
+    _DROID_SOCKET="droid_default"
 else
-    _UNITY_SOCKET="unity${_unity_tty_id//\//_}"
+    _DROID_SOCKET="droid${_droid_tty_id//\//_}"
 fi
-unset _unity_tty_id
+unset _droid_tty_id
 
 # ---- Dynamic script resolver ----
 # Returns the path to a test script, preferring the current git repo's version.
 # This enables worktree support: when you're in a worktree, commands use that
 # worktree's scripts (and thus test that worktree's code).
-_unity_resolve_script() {
+_droid_resolve_script() {
     local script_name="$1"
     local git_root
     git_root=$(git rev-parse --show-toplevel 2>/dev/null)
     if [[ -n "$git_root" && -x "$git_root/tests/$script_name" ]]; then
         echo "$git_root/tests/$script_name"
     else
-        echo "$UNITY_TESTS_DIR/$script_name"
+        echo "$DROID_TESTS_DIR/$script_name"
     fi
 }
 
@@ -43,53 +43,53 @@ _unity_resolve_script() {
 # seamless operation in git worktrees without manual path adjustments.
 
 parallel_run() {
-    "$(_unity_resolve_script parallel_run.sh)" "$@"
+    "$(_droid_resolve_script parallel_run.sh)" "$@"
 }
 
 parallel_cloud_run() {
-    "$(_unity_resolve_script parallel_cloud_run.sh)" "$@"
+    "$(_droid_resolve_script parallel_cloud_run.sh)" "$@"
 }
 
 watch_tests() {
-    "$(_unity_resolve_script watch_tests.sh)" "$@"
+    "$(_droid_resolve_script watch_tests.sh)" "$@"
 }
 
 attach() {
-    "$(_unity_resolve_script attach.sh)" "$@"
+    "$(_droid_resolve_script attach.sh)" "$@"
 }
 
 kill_failed() {
-    "$(_unity_resolve_script kill_failed.sh)" "$@"
+    "$(_droid_resolve_script kill_failed.sh)" "$@"
 }
 
 kill_server() {
-    "$(_unity_resolve_script kill_server.sh)" "$@"
+    "$(_droid_resolve_script kill_server.sh)" "$@"
 }
 
 list_runs() {
-    "$(_unity_resolve_script list_runs.sh)" "$@"
+    "$(_droid_resolve_script list_runs.sh)" "$@"
 }
 
 monitor_resources() {
-    "$(_unity_resolve_script monitor_resources.sh)" "$@"
+    "$(_droid_resolve_script monitor_resources.sh)" "$@"
 }
 
 project_cleanup() {
-    "$(_unity_resolve_script project_cleanup.sh)" "$@"
+    "$(_droid_resolve_script project_cleanup.sh)" "$@"
 }
 
 orchestra() {
     # Orchestra management is now handled by the orchestra repo's scripts/local.sh.
-    # Find the orchestra repo relative to the unity repo.
+    # Find the orchestra repo relative to the droid repo.
     local git_root
     git_root=$(git rev-parse --show-toplevel 2>/dev/null)
-    local orchestra_repo="${ORCHESTRA_REPO_PATH:-${git_root:-$UNITY_TESTS_DIR/..}/../orchestra}"
+    local orchestra_repo="${ORCHESTRA_REPO_PATH:-${git_root:-$DROID_TESTS_DIR/..}/../orchestra}"
 
     if [[ -x "$orchestra_repo/scripts/local.sh" ]]; then
         # Set defaults if not already set
         export ORCHESTRA_SEED_USER="${ORCHESTRA_SEED_USER:-1}"
-        export ORCHESTRA_TEST_USER_ID="${ORCHESTRA_TEST_USER_ID:-unity-test-user-001}"
-        export ORCHESTRA_TEST_EMAIL="${ORCHESTRA_TEST_EMAIL:-unity-test@debug.local}"
+        export ORCHESTRA_TEST_USER_ID="${ORCHESTRA_TEST_USER_ID:-droid-test-user-001}"
+        export ORCHESTRA_TEST_EMAIL="${ORCHESTRA_TEST_EMAIL:-droid-test@debug.local}"
         "$orchestra_repo/scripts/local.sh" "$@"
     else
         echo "Error: Orchestra script not found at $orchestra_repo/scripts/local.sh" >&2
@@ -99,16 +99,16 @@ orchestra() {
 }
 
 # ---- Completion: attach ----
-_unity_attach_complete() {
+_droid_attach_complete() {
     local -a sessions
-    sessions=(${(f)"$(tmux -L "$_UNITY_SOCKET" list-sessions -F '#{session_name}' 2>/dev/null)"})
+    sessions=(${(f)"$(tmux -L "$_DROID_SOCKET" list-sessions -F '#{session_name}' 2>/dev/null)"})
     [[ -n "${sessions[*]}" ]] && compadd "${sessions[@]}"
 }
-compdef _unity_attach_complete attach
+compdef _droid_attach_complete attach
 
 # ---- Completion: parallel_run ----
 # Completes flags and test directories/files
-_unity_parallel_run_complete() {
+_droid_parallel_run_complete() {
     _arguments \
         '-t[Timeout in seconds]:timeout:(60 120 300 600)' \
         '--timeout[Timeout in seconds]:timeout:(60 120 300 600)' \
@@ -128,37 +128,37 @@ _unity_parallel_run_complete() {
         '--help[Show help]' \
         '*:test path:_files'
 }
-compdef _unity_parallel_run_complete parallel_run
+compdef _droid_parallel_run_complete parallel_run
 
 # ---- Completion: parallel_cloud_run ----
 # Completes --env flags and test directories/files
-_unity_parallel_cloud_run_complete() {
+_droid_parallel_cloud_run_complete() {
     _arguments \
         '*--env[Set environment variable]:var:' \
         '*:test path:_files'
 }
-compdef _unity_parallel_cloud_run_complete parallel_cloud_run
+compdef _droid_parallel_cloud_run_complete parallel_cloud_run
 
 # ---- Completion: list_runs ----
-_unity_list_runs_complete() {
+_droid_list_runs_complete() {
     _arguments \
         '--all[List sessions from all terminals]' \
         '-h[Show help]' \
         '--help[Show help]'
 }
-compdef _unity_list_runs_complete list_runs
+compdef _droid_list_runs_complete list_runs
 
 # ---- Completion: kill_failed ----
-_unity_kill_failed_complete() {
+_droid_kill_failed_complete() {
     _arguments \
         '--all[Kill failed sessions from all terminals]' \
         '-h[Show help]' \
         '--help[Show help]'
 }
-compdef _unity_kill_failed_complete kill_failed
+compdef _droid_kill_failed_complete kill_failed
 
 # ---- Completion: project_cleanup ----
-_unity_project_cleanup_complete() {
+_droid_project_cleanup_complete() {
     _arguments \
         '--dry-run[Show matching projects without deleting]' \
         '-y[Skip confirmation prompt]' \
@@ -173,4 +173,4 @@ _unity_project_cleanup_complete() {
         '-h[Show help]' \
         '--help[Show help]'
 }
-compdef _unity_project_cleanup_complete project_cleanup
+compdef _droid_project_cleanup_complete project_cleanup

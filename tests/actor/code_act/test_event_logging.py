@@ -21,16 +21,16 @@ from typing import Any
 import pytest
 
 from tests.helpers import _handle_project, capture_events
-from unity.actor.code_act_actor import CodeActActor
-from unity.actor.execution import (
+from droid.actor.code_act_actor import CodeActActor
+from droid.actor.execution import (
     PythonExecutionSession,
     _CURRENT_SANDBOX,
     parts_to_text,
 )
-from unity.common._async_tool.loop_config import TOOL_LOOP_LINEAGE
-from unity.events.event_bus import EVENT_BUS
-from unity.events.manager_event_logging import log_manager_call
-from unity.function_manager.function_manager import _LineageTrackedFunction
+from droid.common._async_tool.loop_config import TOOL_LOOP_LINEAGE
+from droid.events.event_bus import EVENT_BUS
+from droid.events.manager_event_logging import log_manager_call
+from droid.function_manager.function_manager import _LineageTrackedFunction
 
 pytestmark = pytest.mark.enable_eventbus
 
@@ -307,7 +307,7 @@ async def test_execute_function_propagates_lineage_to_nested_manager():
                 "name": name,
                 "implementation": (
                     "def my_func(**kwargs):\n"
-                    "    from unity.common._async_tool.loop_config import TOOL_LOOP_LINEAGE\n"
+                    "    from droid.common._async_tool.loop_config import TOOL_LOOP_LINEAGE\n"
                     "    return list(TOOL_LOOP_LINEAGE.get([]))\n"
                 ),
                 "language": "python",
@@ -550,7 +550,7 @@ async def test_execute_function_environments_accessible_in_sandbox():
     """Environments injected into the actor are accessible from within
     execute_function's sandbox execution, just like execute_code."""
 
-    from unity.actor.environments import create_env
+    from droid.actor.environments import create_env
 
     class _DummyService:
         value = "hello_from_env"

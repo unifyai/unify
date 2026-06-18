@@ -7,9 +7,9 @@ body:
   attributes:
     value: |
       Before submitting:
-      - Search [existing issues](https://github.com/unifyai/unity/issues) — someone may have proposed this already.
+      - Search [existing issues](https://github.com/unifyai/droid/issues) — someone may have proposed this already.
       - For new procedural how-tos or executable functions for *your* assistant, consider that `GuidanceManager` and `FunctionManager` are designed to absorb those at runtime, no code change required. Feature requests in this repo are for changes to the runtime itself.
-      - See [`ARCHITECTURE.md`](https://github.com/unifyai/unity/blob/main/ARCHITECTURE.md) for how the manager / primitive boundary works.
+      - See [`ARCHITECTURE.md`](https://github.com/unifyai/droid/blob/main/ARCHITECTURE.md) for how the manager / primitive boundary works.
 
 - type: textarea
   id: problem
@@ -56,7 +56,7 @@ body:
   id: breaking
   attributes:
     label: Is this a breaking change?
-    description: Unity has a zero-backward-compatibility policy — breaking is fine, but flag it.
+    description: Droid has a zero-backward-compatibility policy — breaking is fine, but flag it.
     options:
     - "No"
     - "Yes — manager API change"

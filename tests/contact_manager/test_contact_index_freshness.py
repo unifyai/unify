@@ -16,8 +16,8 @@ Note: These tests require the REAL ContactManager (not simulated) because
 they test database-backed data freshness behavior.
 """
 
-from unity.contact_manager.contact_manager import ContactManager
-from unity.conversation_manager.domains.contact_index import ContactIndex
+from droid.contact_manager.contact_manager import ContactManager
+from droid.conversation_manager.domains.contact_index import ContactIndex
 from tests.helpers import _handle_project
 
 

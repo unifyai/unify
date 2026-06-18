@@ -4,14 +4,14 @@ import json
 import asyncio
 import threading
 
-from unity.common.async_tool_loop import (
+from droid.common.async_tool_loop import (
     start_async_tool_loop,
     AsyncToolLoopHandle,
     SteerableToolHandle,
 )
-from unity.common.tool_spec import ToolSpec
+from droid.common.tool_spec import ToolSpec
 from tests.helpers import _handle_project
-from unity.common.llm_client import new_llm_client
+from droid.common.llm_client import new_llm_client
 from tests.async_helpers import (
     _wait_for_tool_request,
     _wait_for_tool_result,

@@ -6,16 +6,16 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-import unity.coordinator_manager.activity as activity_module
-from unity.coordinator_manager.activity import (
+import droid.coordinator_manager.activity as activity_module
+from droid.coordinator_manager.activity import (
     activity_entity,
     flush_pending_coordinator_activity_publishes,
     publish_coordinator_activity,
     safe_activity_text,
 )
-from unity.events.stream_filters import is_streaming_noise
-from unity.events.types.coordinator_activity import CoordinatorActivityPayload
-from unity.session_details import SESSION_DETAILS
+from droid.events.stream_filters import is_streaming_noise
+from droid.events.types.coordinator_activity import CoordinatorActivityPayload
+from droid.session_details import SESSION_DETAILS
 
 
 def test_activity_schema_rejects_extra_fields_and_shapes_entities():

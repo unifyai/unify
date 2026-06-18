@@ -17,8 +17,8 @@ import uuid
 import pytest
 import shutil
 
-from unity.function_manager.function_manager import FunctionManager
-from unity.common.context_registry import ContextRegistry
+from droid.function_manager.function_manager import FunctionManager
+from droid.common.context_registry import ContextRegistry
 from tests.helpers import _handle_project
 
 # Module-level unique ID to namespace PID files for this test session.
@@ -56,7 +56,7 @@ def spawn_workers(num_workers: int = 3) -> str:
         '''Worker that sleeps indefinitely.'''
         os_mod = __import__('os')
         time_mod = __import__('time')
-        pid_file = f"/tmp/unity_test_{session_id}_worker_{{os_mod.getpid()}}.pid"
+        pid_file = f"/tmp/droid_test_{session_id}_worker_{{os_mod.getpid()}}.pid"
         fd = os_mod.open(pid_file, os_mod.O_CREAT | os_mod.O_WRONLY, 0o644)
         os_mod.write(fd, str(os_mod.getpid()).encode())
         os_mod.close(fd)
@@ -91,7 +91,7 @@ async def spawn_and_wait(num_workers: int = 2) -> str:
         '''Worker that sleeps indefinitely and writes its PID.'''
         os_mod = __import__('os')
         time_mod = __import__('time')
-        pid_file = f"/tmp/unity_test_{session_id}_worker_{{os_mod.getpid()}}.pid"
+        pid_file = f"/tmp/droid_test_{session_id}_worker_{{os_mod.getpid()}}.pid"
         # Use os.open and os.write for file I/O
         fd = os_mod.open(pid_file, os_mod.O_CREAT | os_mod.O_WRONLY, 0o644)
         os_mod.write(fd, str(os_mod.getpid()).encode())
@@ -110,7 +110,7 @@ async def spawn_and_wait(num_workers: int = 2) -> str:
     await asyncio.sleep(1.0)
 
     # Write parent PID to signal we're ready
-    pid_file = f"/tmp/unity_test_{session_id}_parent_{{os.getpid()}}.pid"
+    pid_file = f"/tmp/droid_test_{session_id}_parent_{{os.getpid()}}.pid"
     fd = os.open(pid_file, os.O_CREAT | os.O_WRONLY, 0o644)
     os.write(fd, str(os.getpid()).encode())
     os.close(fd)
@@ -127,7 +127,7 @@ def make_long_running_function(session_id: str) -> str:
 async def long_running_task() -> str:
     '''A task that runs for a long time.'''
     os = __import__('os')
-    pid_file = f"/tmp/unity_test_{session_id}_longrun_{{os.getpid()}}.pid"
+    pid_file = f"/tmp/droid_test_{session_id}_longrun_{{os.getpid()}}.pid"
     fd = os.open(pid_file, os.O_CREAT | os.O_WRONLY, 0o644)
     os.write(fd, str(os.getpid()).encode())
     os.close(fd)
@@ -171,7 +171,7 @@ def cleanup_test_pid_files():
     import glob
 
     # Clean up any stale PID files from this session BEFORE test
-    pattern = f"/tmp/unity_test_{_TEST_SESSION_ID}_*.pid"
+    pattern = f"/tmp/droid_test_{_TEST_SESSION_ID}_*.pid"
     for pid_file in glob.glob(pattern):
         try:
             os.unlink(pid_file)
@@ -193,7 +193,7 @@ def get_test_worker_pids() -> list[int]:
     import glob
 
     pids = []
-    pattern = f"/tmp/unity_test_{_TEST_SESSION_ID}_worker_*.pid"
+    pattern = f"/tmp/droid_test_{_TEST_SESSION_ID}_worker_*.pid"
     for pid_file in glob.glob(pattern):
         try:
             with open(pid_file) as f:
@@ -253,7 +253,7 @@ async def test_execute_in_venv_terminates_subprocess_on_cleanup(
         # Get the subprocess PID from the file
         import glob
 
-        pattern = f"/tmp/unity_test_{_TEST_SESSION_ID}_longrun_*.pid"
+        pattern = f"/tmp/droid_test_{_TEST_SESSION_ID}_longrun_*.pid"
         pid_files = glob.glob(pattern)
         assert len(pid_files) == 1, f"Expected 1 PID file, found {len(pid_files)}"
 
@@ -293,7 +293,7 @@ async def wait_for_parent_pid_file(timeout: float = 10.0) -> bool:
     """Wait for the parent PID file to appear, indicating workers are ready."""
     import glob
 
-    pattern = f"/tmp/unity_test_{_TEST_SESSION_ID}_parent_*.pid"
+    pattern = f"/tmp/droid_test_{_TEST_SESSION_ID}_parent_*.pid"
     start = asyncio.get_event_loop().time()
     while asyncio.get_event_loop().time() - start < timeout:
         pid_files = glob.glob(pattern)
@@ -367,7 +367,7 @@ async def test_multiprocessing_children_terminated_on_cleanup(
         # Clean up parent PID files too
         import glob
 
-        pattern = f"/tmp/unity_test_{_TEST_SESSION_ID}_parent_*.pid"
+        pattern = f"/tmp/droid_test_{_TEST_SESSION_ID}_parent_*.pid"
         for f in glob.glob(pattern):
             try:
                 os.unlink(f)

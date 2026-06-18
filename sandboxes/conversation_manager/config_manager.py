@@ -171,7 +171,7 @@ class ConfigurationManager:
 
         This is intentionally conservative: we only validate hard prerequisites.
         """
-        from unity.function_manager.primitives import DEFAULT_AGENT_SERVER_URL
+        from droid.function_manager.primitives import DEFAULT_AGENT_SERVER_URL
 
         # Resolve URL for validation (use default for sandbox/local dev)
         resolved_url = agent_server_url or DEFAULT_AGENT_SERVER_URL

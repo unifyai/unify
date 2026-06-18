@@ -6,7 +6,7 @@ from typing import Literal
 
 import pytest
 
-from unity.manager_registry import ManagerRegistry
+from droid.manager_registry import ManagerRegistry
 
 
 def _in_tree(request: pytest.FixtureRequest, segment: str) -> bool:
@@ -23,28 +23,28 @@ def _apply_impl_overrides(
     impl: Literal["real", "simulated"],
 ) -> None:
     """Apply IMPL overrides for all state managers used by Actor primitives."""
-    # Env vars (documented contract): each manager settings uses prefix UNITY_<X>_.
-    monkeypatch.setenv("UNITY_CONTACT_IMPL", impl)
-    monkeypatch.setenv("UNITY_TASK_IMPL", impl)
-    monkeypatch.setenv("UNITY_TRANSCRIPT_IMPL", impl)
-    monkeypatch.setenv("UNITY_KNOWLEDGE_IMPL", impl)
-    monkeypatch.setenv("UNITY_GUIDANCE_IMPL", impl)
-    monkeypatch.setenv("UNITY_SECRET_IMPL", impl)
-    monkeypatch.setenv("UNITY_WEB_IMPL", impl)
-    monkeypatch.setenv("UNITY_FILE_IMPL", impl)
-    monkeypatch.setenv("UNITY_DATA_IMPL", impl)
-    monkeypatch.setenv("UNITY_DASHBOARD_IMPL", impl)
+    # Env vars (documented contract): each manager settings uses prefix DROID_<X>_.
+    monkeypatch.setenv("DROID_CONTACT_IMPL", impl)
+    monkeypatch.setenv("DROID_TASK_IMPL", impl)
+    monkeypatch.setenv("DROID_TRANSCRIPT_IMPL", impl)
+    monkeypatch.setenv("DROID_KNOWLEDGE_IMPL", impl)
+    monkeypatch.setenv("DROID_GUIDANCE_IMPL", impl)
+    monkeypatch.setenv("DROID_SECRET_IMPL", impl)
+    monkeypatch.setenv("DROID_WEB_IMPL", impl)
+    monkeypatch.setenv("DROID_FILE_IMPL", impl)
+    monkeypatch.setenv("DROID_DATA_IMPL", impl)
+    monkeypatch.setenv("DROID_DASHBOARD_IMPL", impl)
 
     # Optional managers are disabled by default; enable them for simulated manager tests.
     # This keeps routing tests meaningful (the Actor can actually call these tools).
-    monkeypatch.setenv("UNITY_FILE_ENABLED", "true")
-    monkeypatch.setenv("UNITY_GUIDANCE_ENABLED", "true")
-    monkeypatch.setenv("UNITY_WEB_ENABLED", "true")
-    monkeypatch.setenv("UNITY_KNOWLEDGE_ENABLED", "true")
+    monkeypatch.setenv("DROID_FILE_ENABLED", "true")
+    monkeypatch.setenv("DROID_GUIDANCE_ENABLED", "true")
+    monkeypatch.setenv("DROID_WEB_ENABLED", "true")
+    monkeypatch.setenv("DROID_KNOWLEDGE_ENABLED", "true")
 
     # Also update the already-instantiated SETTINGS singleton so ManagerRegistry's
     # settings accessors (lambda: SETTINGS.<x>) see the new IMPL values.
-    from unity.settings import SETTINGS
+    from droid.settings import SETTINGS
 
     monkeypatch.setattr(SETTINGS.contact, "IMPL", impl, raising=False)
     monkeypatch.setattr(SETTINGS.task, "IMPL", impl, raising=False)

@@ -1,6 +1,6 @@
 """
 End-to-end tests for the *control-tool* extension of
-`unity.common.async_tool_loop._async_tool_use_loop_inner`.
+`droid.common.async_tool_loop._async_tool_use_loop_inner`.
 
 What we verify
 --------------
@@ -23,11 +23,11 @@ import asyncio
 from typing import List
 
 import pytest
-from unity.common.async_tool_loop import start_async_tool_loop, SteerableToolHandle
+from droid.common.async_tool_loop import start_async_tool_loop, SteerableToolHandle
 
 # Shared helpers
 from tests.helpers import _handle_project
-from unity.common.llm_client import new_llm_client
+from droid.common.llm_client import new_llm_client
 from tests.async_helpers import (
     _wait_for_tool_request,
     _wait_for_assistant_call_prefix,
@@ -583,7 +583,7 @@ async def test_only_one_of_pause_or_resume_is_exposed(client):
     )
 
     # Spy tool exposure at the exact callsite by wrapping the symbol actually used in the loop
-    from unity.common._async_tool import loop as _loop
+    from droid.common._async_tool import loop as _loop
 
     seen_tools: list[list[str]] = []
     orig_gwp = _loop.generate_with_preprocess
@@ -738,7 +738,7 @@ async def test_helpers_hide_notification_clarification(client):
     )
 
     # Minimal spy: capture dynamic helper registrations only (source of truth)
-    from unity.common._async_tool import dynamic_tools_factory as _dtf
+    from droid.common._async_tool import dynamic_tools_factory as _dtf
 
     # Also spy the dynamic tool registration point to capture exact helper names
     registered_helpers: list[str] = []
@@ -814,7 +814,7 @@ async def test_helpers_hide_get_history(client, llm_config):
     )
 
     # Spy dynamic helper registrations
-    from unity.common._async_tool import dynamic_tools_factory as _dtf
+    from droid.common._async_tool import dynamic_tools_factory as _dtf
 
     registered_helpers: list[str] = []
     orig_register_tool = _dtf.DynamicToolFactory._register_tool
@@ -867,7 +867,7 @@ async def test_new_tool_scheduled_while_paused_starts_paused(client, monkeypatch
     (its `_pause_event` is cleared). Before the change, the event started set.
     """
     # Patch the loop's LLM call to emit a tool-call only AFTER we pause
-    from unity.common._async_tool import loop as _loop
+    from droid.common._async_tool import loop as _loop
 
     llm_started = asyncio.Event()
     release_llm = asyncio.Event()
@@ -951,7 +951,7 @@ async def test_resume_unblocks_base_tool(client, monkeypatch):
     never calls a `resume_…` helper. This would have failed before the
     auto-resume improvement.
     """
-    from unity.common._async_tool import loop as _loop
+    from droid.common._async_tool import loop as _loop
 
     llm_started = asyncio.Event()
     release_llm = asyncio.Event()

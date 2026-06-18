@@ -1,4 +1,4 @@
-"""Tests for :mod:`unity.common.pipeline.dispatch`.
+"""Tests for :mod:`droid.common.pipeline.dispatch`.
 
 Covers the symbolic contract enforced by :func:`publish_parse_request`:
 
@@ -22,11 +22,11 @@ from typing import Any
 
 import pytest
 
-from unity.common.pipeline import (
+from droid.common.pipeline import (
     DispatchTarget,
     publish_parse_request,
 )
-from unity.common.pipeline.types import DmBinding, FmBinding
+from droid.common.pipeline.types import DmBinding, FmBinding
 
 # ---------------------------------------------------------------------------
 # Fakes
@@ -157,7 +157,7 @@ class TestFmModeBytes:
         published = pubsub.published[0]
         assert (
             published["topic"]
-            == "projects/unit-test-project/topics/unity-parse-staging"
+            == "projects/unit-test-project/topics/droid-parse-staging"
         )
         payload = json.loads(published["data"].decode("utf-8"))
         assert payload["ingestion_mode"] == "fm"
@@ -457,7 +457,7 @@ class TestIngestBindingShape:
     """
 
     def test_fm_binding_is_ingest_binding(self) -> None:
-        from unity.common.pipeline.types import IngestBinding
+        from droid.common.pipeline.types import IngestBinding
 
         binding = FmBinding(
             user_id="alice",
@@ -470,7 +470,7 @@ class TestIngestBindingShape:
         assert binding.user_id == "alice"
 
     def test_dm_binding_is_ingest_binding(self) -> None:
-        from unity.common.pipeline.types import IngestBinding
+        from droid.common.pipeline.types import IngestBinding
 
         binding = DmBinding(
             user_id="alice",
@@ -491,7 +491,7 @@ class TestIngestBindingShape:
 
     def test_parent_binding_rejects_missing_assistant_id(self) -> None:
         from pydantic import ValidationError
-        from unity.common.pipeline.types import IngestBinding
+        from droid.common.pipeline.types import IngestBinding
 
         with pytest.raises(ValidationError):
             IngestBinding(user_id="alice")  # type: ignore[call-arg]

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from unity.data_manager.simulated import SimulatedDataManager
-from unity.file_manager.managers.utils.ingest_ops import ingest_table_batch
+from droid.data_manager.simulated import SimulatedDataManager
+from droid.file_manager.managers.utils.ingest_ops import ingest_table_batch
 
 
 def test_ingest_table_batch_forwards_resume_row_count_validation():

@@ -99,8 +99,8 @@ async def test_parse_all_formats(file_manager, supported_file_examples: dict):
         display_name = str(example_data["path"])  # absolute path
 
         # Parse the file
-        from unity.file_manager.types import FilePipelineConfig
-        from unity.file_manager.types.ingest import IngestedFullFile
+        from droid.file_manager.types import FilePipelineConfig
+        from droid.file_manager.types.ingest import IngestedFullFile
 
         result = fm.ingest_files(
             display_name,
@@ -151,8 +151,8 @@ async def test_parse_errors(file_manager, tmp_path: Path):
     assert fm.exists(str(bad_file))
 
     # Parsing should return a result (unknown extensions are treated as best-effort text)
-    from unity.file_manager.types import FilePipelineConfig
-    from unity.file_manager.types.ingest import IngestedFullFile
+    from droid.file_manager.types import FilePipelineConfig
+    from droid.file_manager.types.ingest import IngestedFullFile
 
     result = fm.ingest_files(
         str(bad_file),
@@ -184,7 +184,7 @@ async def test_content_preservation(file_manager, supported_file_examples: dict)
         # Parse by absolute path instead of importing
         display_name = str(example_data["path"])  # absolute path
 
-        from unity.file_manager.types import FilePipelineConfig
+        from droid.file_manager.types import FilePipelineConfig
 
         result = fm.ingest_files(
             display_name,
@@ -221,7 +221,7 @@ async def test_structure_integrity(
     fm.clear()
     for filename, example_data in supported_file_examples.items():
         display_name = str(example_data["path"])  # absolute path
-        from unity.file_manager.types import FilePipelineConfig
+        from droid.file_manager.types import FilePipelineConfig
 
         result = fm.ingest_files(
             display_name,
@@ -239,7 +239,7 @@ async def test_structure_integrity(
         def _ctype(r):
             return getattr(r, "content_type", None)
 
-        from unity.file_manager.file_parsers.types.enums import ContentType
+        from droid.file_manager.file_parsers.types.enums import ContentType
 
         doc_records = [r for r in rows if _ctype(r) == ContentType.DOCUMENT]
         assert (

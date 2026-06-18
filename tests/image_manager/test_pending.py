@@ -7,9 +7,9 @@ import unify
 
 import pytest
 
-from unity.image_manager.image_manager import ImageManager
-from unity.image_manager.utils import make_solid_png_base64
-from unity.common.data_store import DataStore
+from droid.image_manager.image_manager import ImageManager
+from droid.image_manager.utils import make_solid_png_base64
+from droid.common.data_store import DataStore
 from tests.helpers import _handle_project
 
 PNG_RED_B64 = make_solid_png_base64(32, 32, (255, 0, 0))
@@ -301,7 +301,7 @@ async def test_pending_update_persists_after_resolution_and_backend_reflects(
     monkeypatch,
 ):
     im = ImageManager()
-    from unity.common.data_store import DataStore as _DS
+    from droid.common.data_store import DataStore as _DS
 
     ds = _DS.for_context(im._ctx, key_fields=("image_id",))
 

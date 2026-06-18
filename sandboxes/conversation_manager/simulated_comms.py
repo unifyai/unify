@@ -5,7 +5,7 @@ In simulated mode, the sandbox should be able to exercise the ConversationManage
 "brain" without requiring any external comms infrastructure (COMMS service, GCP
 Pub/Sub, provisioned phone numbers, etc.).
 
-We implement this by monkey-patching `unity.conversation_manager.domains.comms_utils`
+We implement this by monkey-patching `droid.conversation_manager.domains.comms_utils`
 to return successful responses without performing any network calls.
 
 This module is sandbox-only. It must be applied AFTER `run_conversation_manager()`
@@ -34,7 +34,7 @@ def apply_simulated_comms() -> Callable[[], None]:
     Returns:
         A restore() callback that reverts the monkey patches.
     """
-    from unity.conversation_manager.domains import comms_utils
+    from droid.conversation_manager.domains import comms_utils
 
     originals = _Originals(
         send_sms_message_via_number=comms_utils.send_sms_message_via_number,

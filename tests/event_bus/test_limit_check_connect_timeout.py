@@ -25,10 +25,10 @@ def _patch_context(*, org_id=None):
 
             stack = contextlib.ExitStack()
             stack.enter_context(
-                patch("unity.spending_limits._get_api_key", return_value="test-key"),
+                patch("droid.spending_limits._get_api_key", return_value="test-key"),
             )
             mock_session = stack.enter_context(
-                patch("unity.session_details.SESSION_DETAILS"),
+                patch("droid.session_details.SESSION_DETAILS"),
             )
             mock_session.assistant.agent_id = 1
             mock_session.user_id = "user_1"
@@ -69,7 +69,7 @@ class TestSharedSpendClient:
     @pytest.mark.asyncio
     async def test_single_client_for_personal_context(self):
         """Personal context (assistant + user) should use ONE shared client."""
-        import unity.spending_limits as sl
+        import droid.spending_limits as sl
 
         mock_client = _make_mock_client()
         sl._spend_client = None
@@ -91,7 +91,7 @@ class TestSharedSpendClient:
     @pytest.mark.asyncio
     async def test_single_client_for_org_context(self):
         """Org context (assistant + member + org) should use ONE shared client."""
-        import unity.spending_limits as sl
+        import droid.spending_limits as sl
 
         mock_client = _make_mock_client()
         sl._spend_client = None
@@ -117,7 +117,7 @@ class TestSharedSpendClient:
         5 concurrent LLM calls should NOT create 10 separate connections —
         they should all reuse a single pooled client.
         """
-        import unity.spending_limits as sl
+        import droid.spending_limits as sl
 
         mock_client = _make_mock_client()
         sl._spend_client = None
@@ -144,13 +144,13 @@ class TestSharedSpendClient:
     @pytest.mark.asyncio
     async def test_get_spend_client_reuses_existing(self):
         """_get_spend_client should return the same instance on repeated calls."""
-        import unity.spending_limits as sl
+        import droid.spending_limits as sl
 
         mock_client = MagicMock()
         mock_client.closed = False
         sl._spend_client = mock_client
 
-        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
+        with patch("droid.spending_limits._get_api_key", return_value="test-key"):
             client1 = sl._get_spend_client()
             client2 = sl._get_spend_client()
             client3 = sl._get_spend_client()
@@ -164,13 +164,13 @@ class TestSharedSpendClient:
     @pytest.mark.asyncio
     async def test_get_spend_client_recreates_if_closed(self):
         """_get_spend_client should create a new client if the previous one is closed."""
-        import unity.spending_limits as sl
+        import droid.spending_limits as sl
 
         mock_client = MagicMock()
         mock_client.closed = True
         sl._spend_client = mock_client
 
-        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
+        with patch("droid.spending_limits._get_api_key", return_value="test-key"):
             new_client = sl._get_spend_client()
 
         assert new_client is not mock_client
@@ -181,7 +181,7 @@ class TestSharedSpendClient:
     @pytest.mark.asyncio
     async def test_no_raw_httpx_usage_during_check(self):
         """Spending limit checks should use AsyncSpendClient, not raw httpx."""
-        import unity.spending_limits as sl
+        import droid.spending_limits as sl
 
         assert not hasattr(sl, "_get_http_client"), (
             "_get_http_client still exists — spending_limits should use "

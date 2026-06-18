@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from unity.common.builtins import builtins_project
-from unity.function_manager.function_manager import FunctionManager
+from droid.common.builtins import builtins_project
+from droid.function_manager.function_manager import FunctionManager
 
 
 def _manager_stub(*, include_primitives: bool = True) -> FunctionManager:
@@ -127,7 +127,7 @@ def test_search_functions_uses_federated_ranked_search_contexts(monkeypatch):
         ]
 
     monkeypatch.setattr(
-        "unity.function_manager.function_manager.federated_ranked_search",
+        "droid.function_manager.function_manager.federated_ranked_search",
         fake_ranked_search,
     )
 

@@ -24,7 +24,7 @@ from sandboxes.conversation_manager.commands import (
     parse_command,
 )
 from sandboxes.conversation_manager.event_publisher import EventPublisher
-from unity.conversation_manager.events import (
+from droid.conversation_manager.events import (
     AssistantScreenShareStarted,
     AssistantScreenShareStopped,
     UserRemoteControlStarted,
@@ -289,7 +289,7 @@ class CommandRouter:
         # Generate call transcript from the voice agent log if available.
         import os
 
-        _launch_cwd = os.environ.get("UNITY_SANDBOX_LAUNCH_CWD", "").strip()
+        _launch_cwd = os.environ.get("DROID_SANDBOX_LAUNCH_CWD", "").strip()
         _voice_root = Path(_launch_cwd).resolve() if _launch_cwd else repo_root
         voice_log = _voice_root / ".logs_voice_agent.txt"
         if voice_log.exists():
@@ -591,7 +591,7 @@ class CommandRouter:
         except Exception:
             pass
         try:
-            from unity.conversation_manager.cm_types import Mode
+            from droid.conversation_manager.cm_types import Mode
 
             cm.mode = Mode.TEXT
         except Exception:

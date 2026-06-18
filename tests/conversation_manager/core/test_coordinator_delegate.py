@@ -6,18 +6,18 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from unity.conversation_manager.domains.coordinator_delegate import (
+from droid.conversation_manager.domains.coordinator_delegate import (
     _SEEN_DEDUPE_KEYS,
     _coordinator_delegate_event_from_payload,
     _coordinator_delegate_event_from_wake_reason,
     _handle_coordinator_delegate_event,
 )
-from unity.conversation_manager.domains.event_handlers import EventHandler
-from unity.conversation_manager.domains.notifications import NotificationBar
-from unity.conversation_manager.domains.task_activation import (
+from droid.conversation_manager.domains.event_handlers import EventHandler
+from droid.conversation_manager.domains.notifications import NotificationBar
+from droid.conversation_manager.domains.task_activation import (
     _consume_startup_wake_reasons,
 )
-from unity.conversation_manager.events import CoordinatorDelegate
+from droid.conversation_manager.events import CoordinatorDelegate
 
 
 def _delegate_payload() -> dict:

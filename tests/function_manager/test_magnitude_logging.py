@@ -4,7 +4,7 @@ Tests for magnitude agent-service logging integration.
 Verifies that:
 1. _get_current_lineage() reads TOOL_LOOP_LINEAGE correctly
 2. ComputerSession.act() passes lineage in the HTTP payload
-3. MagnitudeBackend._log_consumer routes logs through Unity's LOGGER
+3. MagnitudeBackend._log_consumer routes logs through Droid's LOGGER
 4. _handle_magnitude_debug_payload persists TEXT/IMG/TRACE payloads
 5. _log_consumer routes __MAG_DEBUG__ lines to the debug handler
 """
@@ -15,8 +15,8 @@ import logging
 import pytest
 from unittest import mock
 
-from unity.common._async_tool.loop_config import TOOL_LOOP_LINEAGE
-from unity.function_manager.computer_backends import (
+from droid.common._async_tool.loop_config import TOOL_LOOP_LINEAGE
+from droid.function_manager.computer_backends import (
     _get_current_lineage,
     _handle_magnitude_debug_payload,
     ComputerSession,
@@ -118,10 +118,10 @@ class TestComputerSessionActLineage:
 
 
 class TestLogConsumerUsesUnityLogger:
-    """MagnitudeBackend._log_consumer routes messages through Unity's LOGGER."""
+    """MagnitudeBackend._log_consumer routes messages through Droid's LOGGER."""
 
     @pytest.mark.asyncio
-    async def test_log_consumer_emits_to_unity_logger(self):
+    async def test_log_consumer_emits_to_droid_logger(self):
         backend = MagnitudeBackend.__new__(MagnitudeBackend)
         backend._network_log_queue = asyncio.Queue()
         backend._current_capture_queue = None
@@ -129,8 +129,8 @@ class TestLogConsumerUsesUnityLogger:
         backend._log_buffer = {}
 
         captured: list[str] = []
-        unity_logger = logging.getLogger("unity")
-        original_level = unity_logger.level
+        droid_logger = logging.getLogger("droid")
+        original_level = droid_logger.level
 
         class _Capture(logging.Handler):
             def emit(self, record):
@@ -138,7 +138,7 @@ class TestLogConsumerUsesUnityLogger:
 
         handler = _Capture()
         handler.setLevel(logging.INFO)
-        unity_logger.addHandler(handler)
+        droid_logger.addHandler(handler)
 
         try:
             await backend._network_log_queue.put(
@@ -161,8 +161,8 @@ class TestLogConsumerUsesUnityLogger:
             assert "Completed mouse:click" in captured[1]
             assert "[CodeActActor.act(ab12)->desktop.act]" in captured[0]
         finally:
-            unity_logger.removeHandler(handler)
-            unity_logger.setLevel(original_level)
+            droid_logger.removeHandler(handler)
+            droid_logger.setLevel(original_level)
 
     @pytest.mark.asyncio
     async def test_log_consumer_buffers_when_processing(self):
@@ -209,15 +209,15 @@ class TestLogConsumerUsesUnityLogger:
 
 
 class TestHandleMagnitudeDebugPayload:
-    """_handle_magnitude_debug_payload handles TEXT payloads on the Unity side.
+    """_handle_magnitude_debug_payload handles TEXT payloads on the Droid side.
 
     IMG and TRACE payloads are saved locally by agent-service (not streamed
-    over WebSocket), so the Unity-side handler only processes TEXT.
+    over WebSocket), so the Droid-side handler only processes TEXT.
     """
 
     def test_text_payload_appends_to_log(self, tmp_path):
         with mock.patch(
-            "unity.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
+            "droid.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
             str(tmp_path),
         ):
             payload = json.dumps({"line": "debug coordinate transform x=100 y=200"})
@@ -230,7 +230,7 @@ class TestHandleMagnitudeDebugPayload:
 
     def test_text_payload_appends_multiple_lines(self, tmp_path):
         with mock.patch(
-            "unity.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
+            "droid.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
             str(tmp_path),
         ):
             _handle_magnitude_debug_payload(
@@ -245,10 +245,10 @@ class TestHandleMagnitudeDebugPayload:
             assert "line one" in lines[0]
             assert "line two" in lines[1]
 
-    def test_img_payload_ignored_by_unity_consumer(self, tmp_path):
+    def test_img_payload_ignored_by_droid_consumer(self, tmp_path):
         """IMG payloads are saved locally by agent-service, not handled here."""
         with mock.patch(
-            "unity.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
+            "droid.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
             str(tmp_path),
         ):
             payload = json.dumps(
@@ -261,10 +261,10 @@ class TestHandleMagnitudeDebugPayload:
             _handle_magnitude_debug_payload(f"IMG {payload}")
             assert not (tmp_path / "acts").exists()
 
-    def test_trace_payload_ignored_by_unity_consumer(self, tmp_path):
+    def test_trace_payload_ignored_by_droid_consumer(self, tmp_path):
         """TRACE payloads are saved locally by agent-service, not handled here."""
         with mock.patch(
-            "unity.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
+            "droid.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
             str(tmp_path),
         ):
             payload = json.dumps({"actId": "act456", "task": "click"})
@@ -273,7 +273,7 @@ class TestHandleMagnitudeDebugPayload:
 
     def test_noop_when_log_dir_unset(self, tmp_path):
         with mock.patch(
-            "unity.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
+            "droid.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
             "",
         ):
             _handle_magnitude_debug_payload(
@@ -283,7 +283,7 @@ class TestHandleMagnitudeDebugPayload:
 
     def test_malformed_json_ignored(self, tmp_path):
         with mock.patch(
-            "unity.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
+            "droid.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
             str(tmp_path),
         ):
             _handle_magnitude_debug_payload("TEXT {not valid json}")
@@ -302,8 +302,8 @@ class TestLogConsumerDebugRouting:
         backend._log_buffer = {}
 
         captured_by_logger: list[str] = []
-        unity_logger = logging.getLogger("unity")
-        original_level = unity_logger.level
+        droid_logger = logging.getLogger("droid")
+        original_level = droid_logger.level
 
         class _Capture(logging.Handler):
             def emit(self, record):
@@ -311,11 +311,11 @@ class TestLogConsumerDebugRouting:
 
         handler = _Capture()
         handler.setLevel(logging.INFO)
-        unity_logger.addHandler(handler)
+        droid_logger.addHandler(handler)
 
         try:
             with mock.patch(
-                "unity.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
+                "droid.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
                 str(tmp_path),
             ):
                 debug_line = "__MAG_DEBUG__ TEXT " + json.dumps({"line": "debug info"})
@@ -339,5 +339,5 @@ class TestLogConsumerDebugRouting:
                 assert log_file.exists()
                 assert "debug info" in log_file.read_text()
         finally:
-            unity_logger.removeHandler(handler)
-            unity_logger.setLevel(original_level)
+            droid_logger.removeHandler(handler)
+            droid_logger.setLevel(original_level)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from unity.common.federated_search import (
+from droid.common.federated_search import (
     FederatedSearchContext,
     SortSpec,
     default_filter_fetcher,
@@ -220,7 +220,7 @@ def test_default_filter_fetcher_combines_context_and_caller_filters(monkeypatch)
         calls.append(kwargs)
         return [Row({"name": "row"})]
 
-    monkeypatch.setattr("unity.common.federated_search.unify.get_logs", fake_get_logs)
+    monkeypatch.setattr("droid.common.federated_search.unify.get_logs", fake_get_logs)
 
     rows = default_filter_fetcher(
         FederatedSearchContext(
@@ -259,7 +259,7 @@ def test_default_filter_fetcher_fetches_all_rows_when_missing_first(monkeypatch)
         calls.append(kwargs)
         return [Row({"name": f"row-{kwargs['offset']}"})]
 
-    monkeypatch.setattr("unity.common.federated_search.unify.get_logs", fake_get_logs)
+    monkeypatch.setattr("droid.common.federated_search.unify.get_logs", fake_get_logs)
 
     rows = default_filter_fetcher(
         FederatedSearchContext("ctx", "source"),
@@ -332,7 +332,7 @@ def test_federated_ranked_search_backfills_to_limit_across_contexts(monkeypatch)
         return list(initial_rows) + [{"id": 9}]
 
     monkeypatch.setattr(
-        "unity.common.federated_search.backfill_rows",
+        "droid.common.federated_search.backfill_rows",
         fake_backfill,
     )
 
@@ -355,7 +355,7 @@ def test_federated_ranked_search_without_references_backfills_only(monkeypatch):
     contexts = [FederatedSearchContext("ctx/a", "a")]
 
     monkeypatch.setattr(
-        "unity.common.federated_search.backfill_rows",
+        "droid.common.federated_search.backfill_rows",
         lambda context, initial_rows, k, **kwargs: [{"id": 1}, {"id": 2}],
     )
 

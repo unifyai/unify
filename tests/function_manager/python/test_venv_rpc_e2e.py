@@ -14,10 +14,10 @@ import shutil
 
 import pytest
 
-from unity.function_manager.function_manager import FunctionManager
-from unity.function_manager.primitives import Primitives
-from unity.contact_manager.contact_manager import ContactManager
-from unity.common.context_registry import ContextRegistry
+from droid.function_manager.function_manager import FunctionManager
+from droid.function_manager.primitives import Primitives
+from droid.contact_manager.contact_manager import ContactManager
+from droid.common.context_registry import ContextRegistry
 from tests.helpers import _handle_project
 
 # Sample pyproject.toml with minimal dependencies

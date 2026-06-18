@@ -1,4 +1,4 @@
-"""Tests for ``unity.gateway.common.orchestra``."""
+"""Tests for ``droid.gateway.common.orchestra``."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from unity.gateway.common import orchestra
-from unity.gateway.credentials import EnvCredentialStore
+from droid.gateway.common import orchestra
+from droid.gateway.credentials import EnvCredentialStore
 
 
 @pytest.fixture
@@ -40,7 +40,7 @@ async def test_lookup_assistant_returns_first_match_on_200(
     fake_client.__aenter__.return_value = fake_client
     fake_client.get.return_value = fake_response
     with patch(
-        "unity.gateway.common.orchestra.httpx.AsyncClient",
+        "droid.gateway.common.orchestra.httpx.AsyncClient",
         return_value=fake_client,
     ):
         result = await orchestra.lookup_assistant("user@example.com", credentials)
@@ -78,7 +78,7 @@ async def test_lookup_assistant_raises_404_on_non_200(
     fake_client.__aenter__.return_value = fake_client
     fake_client.get.return_value = fake_response
     with patch(
-        "unity.gateway.common.orchestra.httpx.AsyncClient",
+        "droid.gateway.common.orchestra.httpx.AsyncClient",
         return_value=fake_client,
     ):
         with pytest.raises(HTTPException) as exc:
@@ -102,7 +102,7 @@ async def test_lookup_assistant_raises_404_on_empty_info(
     fake_client.__aenter__.return_value = fake_client
     fake_client.get.return_value = fake_response
     with patch(
-        "unity.gateway.common.orchestra.httpx.AsyncClient",
+        "droid.gateway.common.orchestra.httpx.AsyncClient",
         return_value=fake_client,
     ):
         with pytest.raises(HTTPException) as exc:

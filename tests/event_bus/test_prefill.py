@@ -1,11 +1,11 @@
 import pytest
 import datetime as dt
 
-from unity.events.event_bus import EventBus, Event
-from unity.events.types.comms import CommsPayload
-from unity.events.types.coordinator_activity import CoordinatorActivityPayload
-from unity.transcript_manager.types.message import Message
-from unity.conversation_manager.cm_types import Medium
+from droid.events.event_bus import EventBus, Event
+from droid.events.types.comms import CommsPayload
+from droid.events.types.coordinator_activity import CoordinatorActivityPayload
+from droid.transcript_manager.types.message import Message
+from droid.conversation_manager.cm_types import Medium
 from tests.helpers import _handle_project
 
 

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Unity voice setup — bring up the local stack for `--live-voice` calls
+# Droid voice setup — bring up the local stack for `--live-voice` calls
 # ============================================================================
 # Sub-commands:
 #   setup    Install livekit-server (if missing), boot it in --dev mode,
 #            and write LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET
-#            to ~/.unity/unity/.env. Idempotent: re-running is safe.
+#            to ~/.droid/droid/.env. Idempotent: re-running is safe.
 #   stop     Stop the backgrounded livekit-server process.
 #   status   Report whether livekit-server is running + reachable.
 #
-# After `unity voice setup`, the user still needs:
+# After `droid voice setup`, the user still needs:
 #   - DEEPGRAM_API_KEY  (https://deepgram.com — free tier)
 #   - CARTESIA_API_KEY or ELEVEN_API_KEY  (https://cartesia.ai or
 #     https://elevenlabs.io — both have free credits)
@@ -17,7 +17,7 @@
 # account; we deliberately do not auto-provision them.
 #
 # Then:
-#   unity --live-voice --project_name Sandbox --overwrite
+#   droid --live-voice --project_name Sandbox --overwrite
 #   cm> call
 # opens a LiveKit Agents Playground in the browser (auto-bootstrapped on
 # first use; needs Node.js + npm/pnpm) and connects to the voice agent.
@@ -25,10 +25,10 @@
 
 set -e
 
-UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
-UNITY_REPO="${UNITY_REPO:-${UNITY_REPO_PATH:-$UNITY_HOME/unity}}"
-VOICE_PIDFILE="${UNITY_HOME}/.livekit-server.pid"
-VOICE_LOGFILE="${UNITY_HOME}/.livekit-server.log"
+DROID_HOME="${DROID_HOME:-$HOME/.droid}"
+DROID_REPO="${DROID_REPO:-${DROID_REPO_PATH:-$DROID_HOME/droid}}"
+VOICE_PIDFILE="${DROID_HOME}/.livekit-server.pid"
+VOICE_LOGFILE="${DROID_HOME}/.livekit-server.log"
 
 # LiveKit `--dev` mode hard-codes these placeholder credentials. They are
 # fine for local-only development since the server only binds 127.0.0.1.
@@ -51,15 +51,15 @@ ensure_livekit_installed() {
         log_success "livekit-server present: $(livekit-server --version 2>&1 | head -1)"
         return 0
     fi
-    if [ ! -x "$UNITY_REPO/scripts/install_livekit.sh" ]; then
-        log_error "Installer not found at $UNITY_REPO/scripts/install_livekit.sh"
-        log_info  "  Re-run \`unity setup\` first, then retry \`unity voice setup\`."
+    if [ ! -x "$DROID_REPO/scripts/install_livekit.sh" ]; then
+        log_error "Installer not found at $DROID_REPO/scripts/install_livekit.sh"
+        log_info  "  Re-run \`droid setup\` first, then retry \`droid voice setup\`."
         return 1
     fi
     log_info "Installing livekit-server (one binary, one-time)..."
     local install_dir="${HOME}/.local/bin"
     mkdir -p "$install_dir"
-    bash "$UNITY_REPO/scripts/install_livekit.sh" "$install_dir" || {
+    bash "$DROID_REPO/scripts/install_livekit.sh" "$install_dir" || {
         log_error "livekit-server install failed."
         return 1
     }
@@ -143,9 +143,9 @@ stop_livekit() {
 # .env wiring
 # ---------------------------------------------------------------------------
 wire_voice_env() {
-    local env_file="$UNITY_REPO/.env"
+    local env_file="$DROID_REPO/.env"
     if [ ! -f "$env_file" ]; then
-        log_error ".env not found at $env_file. Run \`unity setup\` first."
+        log_error ".env not found at $env_file. Run \`droid setup\` first."
         return 1
     fi
     upsert() {
@@ -178,7 +178,7 @@ PYEOF
 # Helper: report which voice-provider keys still need to be filled in
 # ---------------------------------------------------------------------------
 report_byok_status() {
-    local env_file="$UNITY_REPO/.env"
+    local env_file="$DROID_REPO/.env"
     [ -f "$env_file" ] || return 0
     has_value() { grep -qE "^${1}=.+$" "$env_file"; }
 
@@ -200,7 +200,7 @@ report_byok_status() {
     fi
     echo ""
     echo -e "${BOLD}Then start a live call:${NC}"
-    echo "  ${CYAN}\$ unity --live-voice --project_name Sandbox --overwrite${NC}"
+    echo "  ${CYAN}\$ droid --live-voice --project_name Sandbox --overwrite${NC}"
     echo "  ${CYAN}cm> call${NC}    (browser opens; talk to the assistant)"
     echo ""
 }
@@ -212,10 +212,10 @@ cmd="${1:-setup}"
 case "$cmd" in
     setup)
         echo ""
-        echo -e "${BOLD}Unity voice setup${NC} — bootstrapping local LiveKit"
+        echo -e "${BOLD}Droid voice setup${NC} — bootstrapping local LiveKit"
         echo ""
-        if [ ! -d "$UNITY_REPO" ]; then
-            log_error "Unity is not installed at $UNITY_REPO. Run \`unity setup\` first."
+        if [ ! -d "$DROID_REPO" ]; then
+            log_error "Droid is not installed at $DROID_REPO. Run \`droid setup\` first."
             exit 1
         fi
         ensure_livekit_installed || exit 1
@@ -239,7 +239,7 @@ case "$cmd" in
         fi
         ;;
     *)
-        echo "usage: unity voice {setup|stop|status}" >&2
+        echo "usage: droid voice {setup|stop|status}" >&2
         exit 2
         ;;
 esac

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 from tests.helpers import _handle_project
-from unity.file_manager.types import (
+from droid.file_manager.types import (
     FilePipelineConfig,
     ParseConfig,
     IngestConfig,

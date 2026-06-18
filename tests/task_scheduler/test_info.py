@@ -3,11 +3,11 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 from tests.helpers import _handle_project
-from unity.task_scheduler.task_scheduler import TaskScheduler
-from unity.actor.simulated import SimulatedActor, SimulatedActorHandle
-from unity.task_scheduler.types.status import Status
-from unity.task_scheduler.active_task import ActiveTask
-from unity.task_scheduler.types.repetition import Frequency
+from droid.task_scheduler.task_scheduler import TaskScheduler
+from droid.actor.simulated import SimulatedActor, SimulatedActorHandle
+from droid.task_scheduler.types.status import Status
+from droid.task_scheduler.active_task import ActiveTask
+from droid.task_scheduler.types.repetition import Frequency
 
 # Define a predictable summary string for mocked LLM calls
 MOCK_SUMMARY = "Mock summary: Task completed important steps."

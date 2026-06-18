@@ -3,7 +3,7 @@ import json
 import pytest
 import unify
 
-from unity.function_manager.function_manager import FunctionManager
+from droid.function_manager.function_manager import FunctionManager
 from tests.helpers import _handle_project
 
 

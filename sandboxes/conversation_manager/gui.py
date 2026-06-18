@@ -1469,7 +1469,7 @@ if _TEXTUAL_AVAILABLE:
             if channel.startswith("eventbus:"):
                 kind = channel.split(":", 1)[1]
                 if kind == "ManagerMethod":
-                    from unity.events.types.manager_method import ManagerMethodPayload
+                    from droid.events.types.manager_method import ManagerMethodPayload
 
                     try:
                         mm = ManagerMethodPayload.model_validate(
@@ -1576,7 +1576,7 @@ if _TEXTUAL_AVAILABLE:
             """
             Update log buffers from broker events so the GUI log panes stay populated.
 
-            `event` is expected to match `unity.conversation_manager.events.Event.to_dict()`.
+            `event` is expected to match `droid.conversation_manager.events.Event.to_dict()`.
             """
 
             rt = self.runtime
@@ -1924,7 +1924,7 @@ if _TEXTUAL_AVAILABLE:
 
             import os
 
-            _launch_cwd = os.environ.get("UNITY_SANDBOX_LAUNCH_CWD", "").strip()
+            _launch_cwd = os.environ.get("DROID_SANDBOX_LAUNCH_CWD", "").strip()
             _voice_root = Path(_launch_cwd).resolve() if _launch_cwd else repo_root
             voice_log = _voice_root / ".logs_voice_agent.txt"
             if voice_log.exists():

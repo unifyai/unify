@@ -5,8 +5,8 @@ import pytest
 import unify
 
 from tests.helpers import _handle_project
-from unity.common.context_store import TableStore
-from unity.common.search_utils import table_search_top_k
+from droid.common.context_store import TableStore
+from droid.common.search_utils import table_search_top_k
 
 
 @pytest.mark.asyncio

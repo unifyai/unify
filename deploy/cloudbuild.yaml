@@ -6,7 +6,7 @@ steps:
   args:
   - '-c'
   - |
-    docker pull ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:latest || true
+    docker pull ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/droid-base:latest || true
 
   # Resolve latest commit SHAs from dependency repos so the Docker layer cache
   # is busted whenever unify or unillm change (git clone text is static, so
@@ -35,29 +35,29 @@ steps:
   - |
     DEP_SHA=$$(cat /workspace/dep_repos_sha.txt)
     DOCKER_BUILDKIT=1 docker build \
-      --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:latest \
+      --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/droid-base:latest \
       --build-arg BUILDKIT_INLINE_CACHE=1 \
       --build-arg UNIFY_KEY=$$ORCHESTRA_API_KEY \
       --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
       --build-arg DEP_REPOS_SHA=$$DEP_SHA \
       -f deploy/Dockerfile \
-      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:${SHORT_SHA} \
-      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:latest .
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/droid-base:${SHORT_SHA} \
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/droid-base:latest .
   secretEnv: ['ORCHESTRA_API_KEY', 'GITHUB_TOKEN']
   waitFor: ['pull-cache', 'resolve-dep-shas']
 
   # Push Docker Image (SHA and latest tags in parallel)
 - name: 'gcr.io/cloud-builders/docker'
   id: 'push-sha-tag'
-  args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:${SHORT_SHA}']
+  args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/droid-base:${SHORT_SHA}']
   waitFor: ['build-image']
 
 - name: 'gcr.io/cloud-builders/docker'
   id: 'push-latest-tag'
-  args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:latest']
+  args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/droid-base:latest']
   waitFor: ['build-image']
 
-  # Build job-watcher image (reuses the same repo root context as Unity)
+  # Build job-watcher image (reuses the same repo root context as Droid)
 - name: 'gcr.io/cloud-builders/docker'
   id: 'build-job-watcher'
   entrypoint: 'bash'
@@ -84,7 +84,7 @@ steps:
   args:
   - '-c'
   - |
-    gcloud container clusters get-credentials unity --region ${_REGION} --project ${PROJECT_ID}
+    gcloud container clusters get-credentials droid --region ${_REGION} --project ${PROJECT_ID}
     sed "s|image:.*job-watcher.*|image: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/job-watcher:${SHORT_SHA}|" \
       deploy/scripts/job-watcher/deployment.yaml | kubectl apply -f -
   waitFor: ['push-job-watcher']
@@ -103,7 +103,7 @@ steps:
   - '--project=${PROJECT_ID}'
   - '--region=${_REGION}'
   - '--branch=main'
-  - '--substitutions=_BASE_IMAGE=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:${SHORT_SHA}'
+  - '--substitutions=_BASE_IMAGE=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/droid-base:${SHORT_SHA}'
   waitFor: ['push-sha-tag', 'push-latest-tag']
 
 # Options
@@ -114,7 +114,7 @@ options:
 # Substitution variables
 substitutions:
   _REGION: 'us-central1'
-  _REPOSITORY: 'unity'
+  _REPOSITORY: 'droid'
 
 # Available secrets
 availableSecrets:
@@ -129,7 +129,7 @@ timeout: '1800s'  # 30 minutes
 
 # Images to be pushed (for Cloud Build history)
 images:
-- '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:${SHORT_SHA}'
-- '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:latest'
+- '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/droid-base:${SHORT_SHA}'
+- '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/droid-base:latest'
 - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/job-watcher:${SHORT_SHA}'
 - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/job-watcher:latest'

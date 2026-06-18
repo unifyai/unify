@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 from tests.helpers import _handle_project
-from unity.function_manager.function_manager import FunctionManager
+from droid.function_manager.function_manager import FunctionManager
 
 
 def _FM(**kwargs) -> FunctionManager:
@@ -559,7 +559,7 @@ def test_inject_dependencies_resolves_actor_act():
     and place the resulting Primitives instance in the namespace
     under the key "primitives".
     """
-    from unity.function_manager.primitives.runtime import Primitives
+    from droid.function_manager.primitives.runtime import Primitives
 
     fm = _FM()
 
@@ -599,7 +599,7 @@ def test_inject_dependencies_actor_idempotent():
 def test_inject_dependencies_mixed_actor_and_primitives():
     """A function depending on both "primitives.actor.act" and "primitives.contacts.ask"
     gets a single Primitives root injected into the namespace."""
-    from unity.function_manager.primitives.runtime import Primitives
+    from droid.function_manager.primitives.runtime import Primitives
 
     fm = _FM()
 
@@ -688,7 +688,7 @@ def test_inject_callables_for_stored_actor_function():
     3. Verify the namespace contains a live Primitives instance
     4. Verify the returned callable is valid
     """
-    from unity.function_manager.primitives.runtime import Primitives
+    from droid.function_manager.primitives.runtime import Primitives
 
     fm = _FM()
 

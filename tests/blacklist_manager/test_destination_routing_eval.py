@@ -10,7 +10,7 @@ from tests.destination_routing_helpers import (
     routing_decision_prompt,
     tool_name,
 )
-from unity.common.reasoning import query_llm
+from droid.common.reasoning import query_llm
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 

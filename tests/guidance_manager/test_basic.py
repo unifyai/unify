@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from unity.guidance_manager.guidance_manager import GuidanceManager
-from unity.guidance_manager.types.guidance import Guidance
+from droid.guidance_manager.guidance_manager import GuidanceManager
+from droid.guidance_manager.types.guidance import Guidance
 from tests.helpers import _handle_project
-from unity.image_manager.types import AnnotatedImageRef
+from droid.image_manager.types import AnnotatedImageRef
 from pydantic import ValidationError
 
 

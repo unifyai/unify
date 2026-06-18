@@ -12,13 +12,13 @@ from tests.actor.state_managers.utils import (
     instrument_basic_primitives_calls,
     wait_for_recorded_primitives_call,
 )
-from unity.actor.code_act_actor import CodeActActor
-from unity.actor.environments import StateManagerEnvironment
-from unity.common.context_registry import ContextRegistry
-from unity.events import manager_event_logging
-from unity.function_manager.primitives import PrimitiveScope, Primitives
-from unity.manager_registry import ManagerRegistry
-from unity.session_details import SESSION_DETAILS, AssistantDetails
+from droid.actor.code_act_actor import CodeActActor
+from droid.actor.environments import StateManagerEnvironment
+from droid.common.context_registry import ContextRegistry
+from droid.events import manager_event_logging
+from droid.function_manager.primitives import PrimitiveScope, Primitives
+from droid.manager_registry import ManagerRegistry
+from droid.session_details import SESSION_DETAILS, AssistantDetails
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
@@ -32,10 +32,10 @@ class _NoopEventBus:
 
 @pytest.fixture(autouse=True)
 def _reset_runtime_context() -> None:
-    previous_impl = os.environ.get("UNITY_FUNCTION_IMPL")
+    previous_impl = os.environ.get("DROID_FUNCTION_IMPL")
     previous_base_context = getattr(ContextRegistry, "_base_context", None)
     previous_event_bus = manager_event_logging.EVENT_BUS
-    os.environ["UNITY_FUNCTION_IMPL"] = "simulated"
+    os.environ["DROID_FUNCTION_IMPL"] = "simulated"
     SESSION_DETAILS.reset()
     ContextRegistry.clear()
     ContextRegistry.set_base_context("UnityTests/CoordinatorCodeAct")
@@ -43,9 +43,9 @@ def _reset_runtime_context() -> None:
     manager_event_logging.EVENT_BUS = _NoopEventBus()
     yield
     if previous_impl is None:
-        os.environ.pop("UNITY_FUNCTION_IMPL", None)
+        os.environ.pop("DROID_FUNCTION_IMPL", None)
     else:
-        os.environ["UNITY_FUNCTION_IMPL"] = previous_impl
+        os.environ["DROID_FUNCTION_IMPL"] = previous_impl
     SESSION_DETAILS.reset()
     ContextRegistry.clear()
     if previous_base_context:
@@ -89,7 +89,7 @@ async def test_code_act_routes_to_coordinator_list_assistants(monkeypatch) -> No
         return expected_assistants
 
     monkeypatch.setattr(
-        "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+        "droid.coordinator_manager.coordinator_manager.unify.list_assistants",
         _fake_list_assistants,
     )
     primitives = Primitives(primitive_scope=PrimitiveScope.single("coordinator"))
@@ -128,7 +128,7 @@ async def test_code_act_enforces_coordinator_permission_gate(monkeypatch) -> Non
         raise AssertionError(f"Unexpected upstream call: {kwargs}")
 
     monkeypatch.setattr(
-        "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+        "droid.coordinator_manager.coordinator_manager.unify.list_assistants",
         _should_not_call_upstream,
     )
     primitives = Primitives(primitive_scope=PrimitiveScope.single("coordinator"))

@@ -1,0 +1,2236 @@
+from datetime import timedelta
+import asyncio
+import os
+from time import perf_counter
+from typing import TYPE_CHECKING
+
+import droid
+
+from droid.logger import LOGGER
+from droid.common.startup_timing import log_startup_timing
+from droid.common.context_registry import ContextRegistry
+from droid.common.hierarchical_logger import DEFAULT_ICON, ICONS
+from droid.settings import SETTINGS
+from droid.session_details import SESSION_DETAILS
+from droid.conversation_manager.metrics import (
+    manager_init_total,
+    per_manager_init,
+)
+from droid.common.async_tool_loop import SteerableToolHandle
+from droid.contact_manager.types.contact import UNASSIGNED
+from droid.conversation_manager.domains.comms_utils import publish_system_error
+from droid.conversation_manager.event_broker import get_event_broker
+from droid.conversation_manager.events import *
+from droid.common.prompt_helpers import now as prompt_now
+from droid.events.event_bus import EVENT_BUS
+from droid.manager_registry import ManagerRegistry
+from droid.function_manager.primitives import default_runtime_scope
+from droid.conversation_manager.cm_types import Medium, Mode
+
+if TYPE_CHECKING:
+    from droid.actor.base import BaseActor
+    from droid.conversation_manager.conversation_manager import ConversationManager
+
+event_broker = get_event_broker()
+
+# Cache for pre-hire exchange ID - used to group all pre-hire messages into one exchange
+_pre_hire_exchange_id: int | None = None
+
+
+def ensure_runtime_context(*, strict: bool = False) -> str:
+    """Rebind runtime context in this task and refresh ContextRegistry base."""
+    full_ctx = f"{SESSION_DETAILS.user_context}/{SESSION_DETAILS.assistant_context}"
+    context_set = False
+    try:
+        import unify as _unify
+
+        active_ctx = _unify.get_active_context() or {}
+        if active_ctx.get("read") != full_ctx or active_ctx.get("write") != full_ctx:
+            _unify.set_context(full_ctx, skip_create=True)
+            context_set = True
+    except Exception as exc:
+        if strict:
+            raise
+        LOGGER.warning(
+            f"{ICONS['managers_worker']} [ManagersWorker] Failed to set runtime context to {full_ctx}: {exc}",
+        )
+    if context_set:
+        LOGGER.debug(
+            f"{ICONS['managers_worker']} [ManagersWorker] Runtime context rebound to {full_ctx}",
+        )
+    # Keep a stable base root for worker threads that do not inherit
+    # contextvars from the main loop.
+    ContextRegistry.set_base_context(full_ctx)
+    return full_ctx
+
+
+# Thought: This entire file could actually be turned into a mixin class
+
+
+# EVENT BUS
+async def get_last_store_chat_history() -> StoreChatHistory:
+    _t0 = perf_counter()
+    bus_events = await EVENT_BUS.search(
+        filter='type == "Comms" and payload_cls == "StoreChatHistory"',
+        limit=1,
+    )
+    log_startup_timing(
+        LOGGER,
+        "⏱️ [StartupTiming] managers.get_last_store_chat_history duration=%.2fs events=%d",
+        perf_counter() - _t0,
+        len(bus_events),
+    )
+    if len(bus_events):
+        return Event.from_bus_event(bus_events[0])
+    return None
+
+
+def _get_sender_name(contact: dict | None) -> str:
+    """Extract display name from a contact dict."""
+    if not contact:
+        return "Unknown"
+    first_name = contact.get("first_name", "")
+    surname = contact.get("surname", "")
+    name = f"{first_name} {surname}".strip()
+    return (
+        name
+        or contact.get("phone_number", "")
+        or contact.get("email_address", "")
+        or contact.get("discord_id", "")
+        or contact.get("slack_user_id", "")
+        or "Unknown"
+    )
+
+
+# Event types that produce push_message calls during hydration.
+_MESSAGE_PRODUCING_EVENTS = {
+    "SMSReceived",
+    "SMSSent",
+    "EmailReceived",
+    "EmailSent",
+    "UnifyMessageReceived",
+    "UnifyMessageSent",
+    "InboundPhoneUtterance",
+    "OutboundPhoneUtterance",
+    "InboundUnifyMeetUtterance",
+    "OutboundUnifyMeetUtterance",
+    "InboundWhatsAppCallUtterance",
+    "OutboundWhatsAppCallUtterance",
+    "InboundGoogleMeetUtterance",
+    "OutboundGoogleMeetUtterance",
+    "InboundTeamsMeetUtterance",
+    "OutboundTeamsMeetUtterance",
+    "FastBrainNotification",
+    "PhoneCallReceived",
+    "PhoneCallSent",
+    "UnifyMeetReceived",
+    "GoogleMeetReceived",
+    "TeamsMeetReceived",
+    "PhoneCallStarted",
+    "UnifyMeetStarted",
+    "GoogleMeetStarted",
+    "TeamsMeetStarted",
+    "PhoneCallNotAnswered",
+    "WhatsAppReceived",
+    "WhatsAppSent",
+    "WhatsAppCallReceived",
+    "WhatsAppCallSent",
+    "WhatsAppCallStarted",
+    "WhatsAppCallNotAnswered",
+    "WhatsAppCallInviteSent",
+    "WhatsAppCallPermissionResponse",
+    "ApiMessageReceived",
+    "ApiMessageSent",
+    "DiscordMessageReceived",
+    "DiscordMessageSent",
+    "DiscordChannelMessageReceived",
+    "DiscordChannelMessageSent",
+    "SlackMessageReceived",
+    "SlackMessageSent",
+    "SlackChannelMessageReceived",
+    "SlackChannelMessageSent",
+    "TeamsMessageReceived",
+    "TeamsMessageSent",
+    "TeamsChannelMessageReceived",
+    "TeamsChannelMessageSent",
+}
+
+
+async def hydrate_global_thread(cm: "ConversationManager") -> None:
+    """Populate the shared global deque from persisted EventBus Comms events.
+
+    Called after initialization to restore conversation state from the previous
+    session.  Hydrated (historical) messages are prepended to the global thread
+    so that any messages that arrived during initialization keep their correct
+    chronological position at the end.
+    """
+    from droid.conversation_manager.domains.contact_index import ContactIndex
+
+    deque_size = (
+        cm.contact_index.global_thread.maxlen or ContactIndex.DEFAULT_GLOBAL_THREAD_SIZE
+    )
+
+    _t0 = perf_counter()
+    bus_events = await EVENT_BUS.search(
+        filter='type == "Comms"',
+        limit=deque_size,
+    )
+    log_startup_timing(
+        LOGGER,
+        "⏱️ [StartupTiming] managers.hydrate_global_thread.search duration=%.2fs events=%d limit=%d",
+        perf_counter() - _t0,
+        len(bus_events),
+        deque_size,
+    )
+
+    if not bus_events:
+        LOGGER.info(
+            f"{ICONS['managers_worker']} [Hydration] No Comms events found, skipping hydration",
+        )
+        return
+
+    # Bus events come in descending order (most recent first), reverse for chronological
+    bus_events.reverse()
+
+    # Build entries into a buffer via build_message (no append to the live
+    # deque), so we can prepend them all at once and preserve chronological
+    # ordering relative to any messages that arrived during initialization.
+    hydrated_entries: list = []
+
+    restored = 0
+    _t0 = perf_counter()
+    for bus_event in bus_events:
+        payload_cls = bus_event.payload_cls
+        # Strip module prefix if present (e.g., "droid.conversation_manager.events.SMSReceived")
+        if "." in payload_cls:
+            payload_cls = payload_cls.rsplit(".", 1)[-1]
+
+        if payload_cls not in _MESSAGE_PRODUCING_EVENTS:
+            continue
+
+        try:
+            cm_event = Event.from_bus_event(bus_event)
+        except Exception:
+            continue
+
+        contact = getattr(cm_event, "contact", None) or {}
+        contact_id = contact.get("contact_id")
+        if contact_id is None:
+            continue
+        sender_name = _get_sender_name(contact)
+        ts = cm_event.timestamp
+
+        entry = None
+        match payload_cls:
+            # --- SMS ---
+            case "SMSReceived":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.SMS_MESSAGE,
+                    message_content=cm_event.content,
+                    role="user",
+                    timestamp=ts,
+                )
+            case "SMSSent":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.SMS_MESSAGE,
+                    message_content=cm_event.content,
+                    role="assistant",
+                    timestamp=ts,
+                )
+
+            # --- WhatsApp Messages ---
+            case "WhatsAppReceived":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.WHATSAPP_MESSAGE,
+                    message_content=cm_event.content,
+                    role="user",
+                    timestamp=ts,
+                    attachments=getattr(cm_event, "attachments", None),
+                )
+            case "WhatsAppSent":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.WHATSAPP_MESSAGE,
+                    message_content=cm_event.content,
+                    role="assistant",
+                    timestamp=ts,
+                    attachments=getattr(cm_event, "attachments", None),
+                )
+
+            # --- Unify Messages ---
+            case "UnifyMessageReceived":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.UNIFY_MESSAGE,
+                    message_content=cm_event.content,
+                    role="user",
+                    timestamp=ts,
+                    attachments=getattr(cm_event, "attachments", None),
+                )
+            case "UnifyMessageSent":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.UNIFY_MESSAGE,
+                    message_content=cm_event.content,
+                    role="assistant",
+                    timestamp=ts,
+                    attachments=getattr(cm_event, "attachments", None),
+                )
+
+            # --- API Messages ---
+            case "ApiMessageReceived":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.API_MESSAGE,
+                    message_content=cm_event.content,
+                    role="user",
+                    timestamp=ts,
+                    attachments=getattr(cm_event, "attachments", None),
+                    tags=getattr(cm_event, "tags", None),
+                )
+            case "ApiMessageSent":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.API_MESSAGE,
+                    message_content=cm_event.content,
+                    role="assistant",
+                    timestamp=ts,
+                    attachments=getattr(cm_event, "attachments", None),
+                    tags=getattr(cm_event, "tags", None),
+                )
+
+            # --- Discord Messages ---
+            case "DiscordMessageReceived":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.DISCORD_MESSAGE,
+                    message_content=cm_event.content,
+                    role="user",
+                    timestamp=ts,
+                    attachments=getattr(cm_event, "attachments", None),
+                )
+            case "DiscordMessageSent":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.DISCORD_MESSAGE,
+                    message_content=cm_event.content,
+                    role="assistant",
+                    timestamp=ts,
+                )
+            case "DiscordChannelMessageReceived":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.DISCORD_CHANNEL_MESSAGE,
+                    message_content=cm_event.content,
+                    role="user",
+                    timestamp=ts,
+                    attachments=getattr(cm_event, "attachments", None),
+                )
+            case "DiscordChannelMessageSent":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.DISCORD_CHANNEL_MESSAGE,
+                    message_content=cm_event.content,
+                    role="assistant",
+                    timestamp=ts,
+                )
+
+            # --- Slack Messages ---
+            case "SlackMessageReceived":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.SLACK_MESSAGE,
+                    message_content=cm_event.content,
+                    role="user",
+                    timestamp=ts,
+                    attachments=getattr(cm_event, "attachments", None),
+                    team_id=getattr(cm_event, "team_id", None),
+                    channel_id=getattr(cm_event, "channel_id", None),
+                    thread_ts=getattr(cm_event, "thread_ts", None),
+                    message_id=getattr(cm_event, "message_id", None),
+                    routing_metadata=getattr(cm_event, "routing_metadata", None),
+                )
+            case "SlackMessageSent":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.SLACK_MESSAGE,
+                    message_content=cm_event.content,
+                    role="assistant",
+                    timestamp=ts,
+                    team_id=getattr(cm_event, "team_id", None),
+                    channel_id=getattr(cm_event, "channel_id", None),
+                    thread_ts=getattr(cm_event, "thread_ts", None),
+                )
+            case "SlackChannelMessageReceived":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.SLACK_CHANNEL_MESSAGE,
+                    message_content=cm_event.content,
+                    role="user",
+                    timestamp=ts,
+                    attachments=getattr(cm_event, "attachments", None),
+                    team_id=getattr(cm_event, "team_id", None),
+                    channel_id=getattr(cm_event, "channel_id", None),
+                    thread_ts=getattr(cm_event, "thread_ts", None),
+                    message_id=getattr(cm_event, "message_id", None),
+                    routing_metadata=getattr(cm_event, "routing_metadata", None),
+                )
+            case "SlackChannelMessageSent":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.SLACK_CHANNEL_MESSAGE,
+                    message_content=cm_event.content,
+                    role="assistant",
+                    timestamp=ts,
+                    team_id=getattr(cm_event, "team_id", None),
+                    channel_id=getattr(cm_event, "channel_id", None),
+                    thread_ts=getattr(cm_event, "thread_ts", None),
+                )
+
+            # --- Teams Messages ---
+            case "TeamsMessageReceived":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.TEAMS_MESSAGE,
+                    message_content=cm_event.content,
+                    role="user",
+                    timestamp=ts,
+                    attachments=getattr(cm_event, "attachments", None),
+                    chat_id=getattr(cm_event, "chat_id", None),
+                    message_id=getattr(cm_event, "message_id", None),
+                )
+            case "TeamsMessageSent":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.TEAMS_MESSAGE,
+                    message_content=cm_event.content,
+                    role="assistant",
+                    timestamp=ts,
+                    attachments=getattr(cm_event, "attachments", None),
+                    chat_id=getattr(cm_event, "chat_id", None),
+                )
+            case "TeamsChannelMessageReceived":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.TEAMS_CHANNEL_MESSAGE,
+                    message_content=cm_event.content,
+                    role="user",
+                    timestamp=ts,
+                    attachments=getattr(cm_event, "attachments", None),
+                    team_id=getattr(cm_event, "team_id", None),
+                    channel_id=getattr(cm_event, "channel_id", None),
+                    thread_id=getattr(cm_event, "thread_id", None),
+                    message_id=getattr(cm_event, "message_id", None),
+                )
+            case "TeamsChannelMessageSent":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.TEAMS_CHANNEL_MESSAGE,
+                    message_content=cm_event.content,
+                    role="assistant",
+                    timestamp=ts,
+                    attachments=getattr(cm_event, "attachments", None),
+                    team_id=getattr(cm_event, "team_id", None),
+                    channel_id=getattr(cm_event, "channel_id", None),
+                )
+
+            # --- Email ---
+            case "EmailReceived":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.EMAIL,
+                    subject=cm_event.subject,
+                    body=cm_event.body,
+                    email_id=getattr(cm_event, "email_id", None),
+                    attachments=getattr(cm_event, "attachments", None),
+                    role="user",
+                    timestamp=ts,
+                    to=getattr(cm_event, "to", None),
+                    cc=getattr(cm_event, "cc", None),
+                    bcc=getattr(cm_event, "bcc", None),
+                    contact_role="sender",
+                )
+            case "EmailSent":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.EMAIL,
+                    subject=cm_event.subject,
+                    body=cm_event.body,
+                    attachments=getattr(cm_event, "attachments", None),
+                    role="assistant",
+                    timestamp=ts,
+                    to=getattr(cm_event, "to", None),
+                    cc=getattr(cm_event, "cc", None),
+                    bcc=getattr(cm_event, "bcc", None),
+                )
+
+            # --- Phone/Meet utterances ---
+            case "InboundPhoneUtterance":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.PHONE_CALL,
+                    message_content=cm_event.content,
+                    role="user",
+                    timestamp=ts,
+                )
+            case "OutboundPhoneUtterance":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.PHONE_CALL,
+                    message_content=cm_event.content,
+                    role="assistant",
+                    timestamp=ts,
+                )
+            case "InboundUnifyMeetUtterance":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.UNIFY_MEET,
+                    message_content=cm_event.content,
+                    role="user",
+                    timestamp=ts,
+                )
+            case "OutboundUnifyMeetUtterance":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.UNIFY_MEET,
+                    message_content=cm_event.content,
+                    role="assistant",
+                    timestamp=ts,
+                )
+            case "InboundWhatsAppCallUtterance":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.WHATSAPP_CALL,
+                    message_content=cm_event.content,
+                    role="user",
+                    timestamp=ts,
+                )
+            case "OutboundWhatsAppCallUtterance":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.WHATSAPP_CALL,
+                    message_content=cm_event.content,
+                    role="assistant",
+                    timestamp=ts,
+                )
+            case "InboundGoogleMeetUtterance":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.GOOGLE_MEET,
+                    message_content=cm_event.content,
+                    role="user",
+                    timestamp=ts,
+                )
+            case "OutboundGoogleMeetUtterance":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.GOOGLE_MEET,
+                    message_content=cm_event.content,
+                    role="assistant",
+                    timestamp=ts,
+                )
+            case "InboundTeamsMeetUtterance":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.TEAMS_MEET,
+                    message_content=cm_event.content,
+                    role="user",
+                    timestamp=ts,
+                )
+            case "OutboundTeamsMeetUtterance":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.TEAMS_MEET,
+                    message_content=cm_event.content,
+                    role="assistant",
+                    timestamp=ts,
+                )
+
+            # --- Fast brain notification ---
+            case "FastBrainNotification":
+                if cm.call_manager.has_active_google_meet:
+                    notif_medium = Medium.GOOGLE_MEET
+                elif cm.call_manager.has_active_teams_meet:
+                    notif_medium = Medium.TEAMS_MEET
+                elif cm.mode == Mode.MEET:
+                    notif_medium = Medium.UNIFY_MEET
+                elif cm.call_manager._call_channel == "whatsapp_call":
+                    notif_medium = Medium.WHATSAPP_CALL
+                else:
+                    notif_medium = Medium.PHONE_CALL
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=notif_medium,
+                    message_content=cm_event.message,
+                    role="guidance",
+                    timestamp=ts,
+                )
+
+            # --- Call lifecycle ---
+            case "PhoneCallReceived":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.PHONE_CALL,
+                    message_content="<Receiving Call...>",
+                    role="user",
+                    timestamp=ts,
+                )
+            case "PhoneCallSent":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.PHONE_CALL,
+                    message_content="<Sending Call...>",
+                    role="assistant",
+                    timestamp=ts,
+                )
+            case "UnifyMeetReceived":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.UNIFY_MEET,
+                    message_content="<Receiving Call...>",
+                    role="user",
+                    timestamp=ts,
+                )
+            case "GoogleMeetReceived":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.GOOGLE_MEET,
+                    message_content="<Joining Google Meet...>",
+                    role="assistant",
+                    timestamp=ts,
+                )
+            case "TeamsMeetReceived":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.TEAMS_MEET,
+                    message_content="<Joining Teams meeting...>",
+                    role="assistant",
+                    timestamp=ts,
+                )
+            case (
+                "PhoneCallStarted"
+                | "UnifyMeetStarted"
+                | "GoogleMeetStarted"
+                | "TeamsMeetStarted"
+            ):
+                medium = (
+                    Medium.GOOGLE_MEET
+                    if payload_cls == "GoogleMeetStarted"
+                    else (
+                        Medium.TEAMS_MEET
+                        if payload_cls == "TeamsMeetStarted"
+                        else (
+                            Medium.UNIFY_MEET
+                            if payload_cls == "UnifyMeetStarted"
+                            else Medium.PHONE_CALL
+                        )
+                    )
+                )
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=medium,
+                    message_content="<Call Started>",
+                    role="user",
+                    timestamp=ts,
+                )
+            case "WhatsAppCallReceived":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.WHATSAPP_CALL,
+                    message_content="<Receiving WhatsApp Call...>",
+                    role="user",
+                    timestamp=ts,
+                )
+            case "WhatsAppCallStarted":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.WHATSAPP_CALL,
+                    message_content="<Call Started>",
+                    role="user",
+                    timestamp=ts,
+                )
+            case "WhatsAppCallSent":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.WHATSAPP_CALL,
+                    message_content="<Sending WhatsApp Call...>",
+                    role="assistant",
+                    timestamp=ts,
+                )
+            case "WhatsAppCallNotAnswered":
+                reason = getattr(cm_event, "reason", "no-answer") or "no-answer"
+                reason_display = {
+                    "no-answer": "did not answer",
+                    "busy": "was busy",
+                    "canceled": "call was canceled",
+                    "failed": "call failed",
+                }.get(reason, f"not answered ({reason})")
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.WHATSAPP_CALL,
+                    message_content=f"<WhatsApp Call Not Answered: {reason_display}>",
+                    role="assistant",
+                    timestamp=ts,
+                )
+            case "WhatsAppCallInviteSent":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.WHATSAPP_CALL,
+                    message_content="<WhatsApp Call Invite Sent>",
+                    role="assistant",
+                    timestamp=ts,
+                )
+            case "WhatsAppCallPermissionResponse":
+                accepted = getattr(cm_event, "accepted", False)
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.WHATSAPP_CALL,
+                    message_content=f"<Call Permission: {'Accepted' if accepted else 'Rejected'}>",
+                    role="user",
+                    timestamp=ts,
+                )
+            case "PhoneCallNotAnswered":
+                reason = getattr(cm_event, "reason", "no-answer") or "no-answer"
+                reason_display = {
+                    "no-answer": "did not answer",
+                    "busy": "was busy",
+                    "canceled": "call was canceled",
+                    "failed": "call failed",
+                }.get(reason, f"not answered ({reason})")
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.PHONE_CALL,
+                    message_content=f"<Call Not Answered: {reason_display}>",
+                    role="assistant",
+                    timestamp=ts,
+                )
+
+        if entry is not None:
+            hydrated_entries.append(entry)
+            restored += 1
+
+    # Prepend hydrated entries so historical messages appear before any
+    # messages that arrived during initialization.
+    cm.contact_index.prepend_entries(hydrated_entries)
+    log_startup_timing(
+        LOGGER,
+        "⏱️ [StartupTiming] managers.hydrate_global_thread.render duration=%.2fs restored=%d events=%d",
+        perf_counter() - _t0,
+        restored,
+        len(bus_events),
+    )
+
+    LOGGER.info(
+        f"{ICONS['managers_worker']} [Hydration] Restored {restored} messages from {len(bus_events)} Comms events",
+    )
+
+
+async def publish_bus_events(event):
+    try:
+        event_name = event.__class__.__name__
+        bus_event = event.to_bus_event()
+        bus_event.payload.pop("api_key", None)
+        bus_event.payload.pop("email_id", None)
+        LOGGER.debug(f"{DEFAULT_ICON} Publishing bus event {event_name}")
+        await EVENT_BUS.publish(bus_event)
+    except Exception as e:
+        LOGGER.error(
+            f"{ICONS['managers_worker']} [ManagersWorker] Error publishing bus event: {e}",
+        )
+
+
+# ACTOR
+async def actor_watch_result(
+    handle_id: int,
+    handle: SteerableToolHandle,
+    *,
+    action_type: str = "",
+) -> None:
+    """Await final result and publish completion (or failure), then cleanup."""
+    resolved_action_type = action_type or "act"
+    try:
+        result = await handle.result()
+    except Exception as exc:
+        error_text = f"Error getting actor result: {exc}"
+        LOGGER.error(f"{ICONS['managers_worker']} [ManagersWorker] {error_text}")
+        await event_broker.publish(
+            "app:actor:result",
+            ActorResult(
+                handle_id=handle_id,
+                success=False,
+                result=None,
+                error=error_text,
+                action_type=resolved_action_type,
+            ).to_json(),
+        )
+        return
+
+    success = True
+    error_text: str | None = None
+    if isinstance(result, dict) and "error_kind" in result:
+        success = False
+        error_text = str(result.get("message") or result.get("error_kind"))
+    elif isinstance(result, str):
+        stripped_result = result.lstrip()
+        if stripped_result[:5].lower() == "error":
+            success = False
+            error_text = result
+
+    await event_broker.publish(
+        "app:actor:result",
+        ActorResult(
+            handle_id=handle_id,
+            success=success,
+            result=result,
+            error=error_text,
+            action_type=resolved_action_type,
+        ).to_json(),
+    )
+
+
+async def actor_watch_notifications(
+    handle_id: int,
+    handle: SteerableToolHandle,
+) -> None:
+    """Forward notifications and responses from the handle until it completes.
+
+    The handle's notification queue carries two kinds of messages:
+
+    - **``type="notification"``** — progress updates emitted by ``notify()``
+      while the actor is still working.
+    - **``type="response"``** — turn-complete signals emitted when a
+      persistent session enters its wait state. These mean the actor has
+      finished the current turn and is awaiting the next ``interject``.
+
+    Each type is published as a distinct CM event so the brain can tell
+    them apart.
+    """
+    while not handle.done():
+        try:
+            notif = await asyncio.wait_for(handle.next_notification(), timeout=30)
+        except asyncio.TimeoutError:
+            continue
+
+        # Determine whether this is a turn-complete response or a progress
+        # notification. The loop emits responses with {"type": "response", ...}.
+        is_response = isinstance(notif, dict) and notif.get("type") == "response"
+
+        if is_response:
+            content = str(notif.get("content", ""))
+            await event_broker.publish(
+                "app:actor:session_response",
+                ActorSessionResponse(
+                    handle_id=handle_id,
+                    content=content,
+                ).to_json(),
+            )
+        else:
+            # Extract a human-friendly message.
+            #
+            # Contract:
+            # - Notifications may be plain strings (already display-ready), OR
+            # - Structured dict payloads (recommended: include both "type" and "message").
+            #
+            # Fallback chain: "message" → "result_summary" → "type" → JSON dump.
+            # "result_summary" is checked before "type" because step_complete
+            # payloads carry their useful content in that field, not "message".
+            msg: str
+            if isinstance(notif, dict):
+                if notif.get("message") is not None:
+                    msg = str(notif.get("message"))
+                elif notif.get("result_summary") is not None:
+                    msg = str(notif.get("result_summary"))
+                elif notif.get("type") is not None:
+                    msg = str(notif.get("type"))
+                else:
+                    try:
+                        import json as _json
+
+                        msg = _json.dumps(notif, ensure_ascii=False, default=str)
+                    except Exception:
+                        msg = str(notif)
+            else:
+                msg = str(notif)
+
+            completed = (
+                bool(notif.get("completed", False))
+                if isinstance(notif, dict)
+                else False
+            )
+            await event_broker.publish(
+                "app:actor:notification",
+                ActorNotification(
+                    handle_id=handle_id,
+                    response=msg,
+                    completed=completed,
+                ).to_json(),
+            )
+
+
+async def actor_watch_clarifications(
+    handle_id: int,
+    handle: SteerableToolHandle,
+) -> None:
+    """Forward clarifications to CM until handle completes."""
+    while not handle.done():
+        # await clarification request
+        try:
+            clar = await asyncio.wait_for(handle.next_clarification(), timeout=30)
+        except asyncio.TimeoutError:
+            continue
+
+        # get question and call id
+        q = clar.get("question") if isinstance(clar, dict) else str(clar)
+        call_id = clar.get("call_id") if isinstance(clar, dict) else None
+
+        # publish clarification request
+        await event_broker.publish(
+            "app:actor:clarification_request",
+            ActorClarificationRequest(
+                handle_id=handle_id,
+                query=q,
+                call_id=call_id,
+            ).to_json(),
+        )
+
+
+def _resolve_meet_name_to_contact(
+    cm: "ConversationManager",
+    display_name: str,
+) -> dict | None:
+    """Best-effort resolution of a browser-meet display name to a contact.
+
+    Iterates the contact_index's fallback cache and checks for exact
+    full-name or first-name matches.  Returns the contact dict on match,
+    None otherwise.
+    """
+    if not display_name:
+        return None
+    dn_lower = display_name.strip().lower()
+    for c in cm.contact_index._fallback_contacts.values():
+        full = f"{c.get('first_name', '')} {c.get('surname', '')}".strip()
+        if full.lower() == dn_lower:
+            return c
+        if c.get("first_name", "").lower() == dn_lower:
+            return c
+    return None
+
+
+async def log_message(
+    cm: "ConversationManager",
+    event: Event,
+    *,
+    local_message_id: int | None = None,
+) -> None:
+    """Log a message via TranscriptManager."""
+    ensure_runtime_context()
+    event_name = event.__class__.__name__
+    LOGGER.debug(f"{DEFAULT_ICON} publishing transcript {event_name}")
+    event_name = event_name.lower()
+    if "apimessage" in event_name:
+        medium = Medium.API_MESSAGE
+    elif "unify" in event_name or "prehire" in event_name:
+        medium = Medium.UNIFY_MEET if "meet" in event_name else Medium.UNIFY_MESSAGE
+    elif "phone" in event_name:
+        medium = Medium.PHONE_CALL
+    elif "whatsapp" in event_name:
+        medium = (
+            Medium.WHATSAPP_CALL if "call" in event_name else Medium.WHATSAPP_MESSAGE
+        )
+    elif "sms" in event_name:
+        medium = Medium.SMS_MESSAGE
+    elif "googlemeet" in event_name:
+        medium = Medium.GOOGLE_MEET
+    elif "discord" in event_name:
+        medium = (
+            Medium.DISCORD_CHANNEL_MESSAGE
+            if "channel" in event_name
+            else Medium.DISCORD_MESSAGE
+        )
+    elif "slack" in event_name:
+        medium = (
+            Medium.SLACK_CHANNEL_MESSAGE
+            if "channel" in event_name
+            else Medium.SLACK_MESSAGE
+        )
+    elif "teams" in event_name:
+        medium = (
+            Medium.TEAMS_CHANNEL_MESSAGE
+            if "channel" in event_name
+            else Medium.TEAMS_MESSAGE
+        )
+    else:
+        medium = Medium.EMAIL
+    role = (
+        "Assistant"
+        if "sent" in event_name or "assistant" in event_name or "outbound" in event_name
+        else "User"
+    )
+    if "prehire" in event_name:
+        role = event.role.capitalize()
+    if isinstance(event, (EmailSent, EmailReceived)):
+        content = event.subject + "\n\n" + event.body
+    else:
+        content = event.content
+
+    contact_id = None
+    if isinstance(event, (PreHireMessage,)):
+        # PreHireMessage is always boss context
+        contact_id = SESSION_DETAILS.boss_contact_id
+    elif isinstance(
+        event,
+        (
+            UnifyMessageSent,
+            UnifyMessageReceived,
+            InboundUnifyMeetUtterance,
+            OutboundUnifyMeetUtterance,
+            InboundGoogleMeetUtterance,
+            OutboundGoogleMeetUtterance,
+            InboundTeamsMeetUtterance,
+            OutboundTeamsMeetUtterance,
+            ApiMessageSent,
+            ApiMessageReceived,
+        ),
+    ):
+        # Use contact from event - contact_id must be valid, no silent fallback
+        evt_contact_id = event.contact.get("contact_id")
+        if cm.contact_index.get_contact(contact_id=evt_contact_id):
+            contact_id = evt_contact_id
+        else:
+            LOGGER.warning(
+                f"{DEFAULT_ICON} contact_id {evt_contact_id} not in contact_index, "
+                f"using contact from event",
+            )
+            contact_id = evt_contact_id
+    elif cm.contact_index.get_contact(contact_id=event.contact["contact_id"]):
+        contact_id = event.contact["contact_id"]
+    if role == "Assistant":
+        sender_id, receiver_ids = SESSION_DETAILS.self_contact_id, [contact_id]
+    else:
+        sender_id, receiver_ids = contact_id, [SESSION_DETAILS.self_contact_id]
+
+    # For browser-meet utterances (Google Meet / Teams Meet), resolve
+    # participant names to contact IDs so receiver_ids reflects all known
+    # meeting participants.
+    meet_participants_meta: list[dict] = []
+    if isinstance(
+        event,
+        (
+            InboundGoogleMeetUtterance,
+            OutboundGoogleMeetUtterance,
+            InboundTeamsMeetUtterance,
+            OutboundTeamsMeetUtterance,
+        ),
+    ):
+        participant_names = getattr(event, "participant_names", None) or []
+        if participant_names:
+            resolved_ids: set[int] = set()
+            for name in participant_names:
+                resolved = _resolve_meet_name_to_contact(cm, name)
+                cid = resolved.get("contact_id") if resolved else None
+                if cid is not None:
+                    resolved_ids.add(cid)
+                meet_participants_meta.append(
+                    {"name": name, "contact_id": cid},
+                )
+            if role == "Assistant":
+                if contact_id is not None:
+                    resolved_ids.add(contact_id)
+                if resolved_ids:
+                    receiver_ids = sorted(resolved_ids)
+            else:
+                resolved_ids.add(SESSION_DETAILS.self_contact_id)
+                resolved_ids.discard(sender_id)
+                if resolved_ids:
+                    receiver_ids = sorted(resolved_ids)
+
+    # For emails, resolve to/cc/bcc addresses to contact IDs so that
+    # receiver_ids reflects all known recipients.
+    if isinstance(event, (EmailSent, EmailReceived)):
+        resolved_ids: set[int] = set()
+        for addr in (event.to or []) + (event.cc or []) + (event.bcc or []):
+            resolved = cm.contact_index.get_contact(email=addr)
+            if resolved and resolved.get("contact_id") is not None:
+                resolved_ids.add(resolved["contact_id"])
+        if resolved_ids:
+            if role == "Assistant":
+                receiver_ids = sorted(resolved_ids)
+            else:
+                resolved_ids.add(SESSION_DETAILS.self_contact_id)
+                receiver_ids = sorted(resolved_ids)
+
+    # For Teams, use the conversation roster (already resolved to contact
+    # IDs upstream by comms_manager from the adapter-supplied participants
+    # list) so receiver_ids reflects everyone in the chat/channel.
+    if isinstance(
+        event,
+        (
+            TeamsMessageReceived,
+            TeamsChannelMessageReceived,
+            TeamsMessageSent,
+            TeamsChannelMessageSent,
+        ),
+    ):
+        resolved_ids: set[int] = set(getattr(event, "participants", []) or [])
+        if resolved_ids:
+            if role == "Assistant":
+                resolved_ids.discard(SESSION_DETAILS.self_contact_id)
+                if resolved_ids:
+                    receiver_ids = sorted(resolved_ids)
+            else:
+                resolved_ids.add(SESSION_DETAILS.self_contact_id)
+                resolved_ids.discard(sender_id)
+                if resolved_ids:
+                    receiver_ids = sorted(resolved_ids)
+
+    exchange_id = getattr(event, "exchange_id", UNASSIGNED)
+
+    # For pre-hire messages, reuse the cached exchange_id if available
+    # This ensures all messages from a pre-hire chat batch go into the same exchange
+    if isinstance(event, PreHireMessage):
+        if _pre_hire_exchange_id is not None:
+            exchange_id = _pre_hire_exchange_id
+        # else: stays UNASSIGNED, will create new exchange
+    elif medium in (Medium.PHONE_CALL, Medium.WHATSAPP_CALL):
+        exchange_id = cm.call_manager.call_exchange_id
+    elif medium == Medium.UNIFY_MEET:
+        exchange_id = cm.call_manager.unify_meet_exchange_id
+    elif medium == Medium.GOOGLE_MEET:
+        exchange_id = cm.call_manager.google_meet_exchange_id
+    elif medium == Medium.TEAMS_MEET:
+        exchange_id = cm.call_manager.teams_meet_exchange_id
+
+    call_utterance_timestamp = ""
+    call_start = (
+        cm.call_manager.call_start_timestamp
+        if medium in (Medium.PHONE_CALL, Medium.WHATSAPP_CALL)
+        else (
+            cm.call_manager.unify_meet_start_timestamp
+            if medium == Medium.UNIFY_MEET
+            else (
+                cm.call_manager.google_meet_start_timestamp
+                if medium == Medium.GOOGLE_MEET
+                else (
+                    cm.call_manager.teams_meet_start_timestamp
+                    if medium == Medium.TEAMS_MEET
+                    else None
+                )
+            )
+        )
+    )
+    if call_start:
+        delta = prompt_now(as_string=False) - call_start
+        if role == "Assistant":
+            delta += timedelta(seconds=2)
+        minutes, seconds = divmod(int(delta.total_seconds()), 60)
+        call_utterance_timestamp = f"{minutes:02d}.{seconds:02d}"
+
+    # publish transcript on a separate thread
+    def _publish_transcript() -> int:
+        global _pre_hire_exchange_id
+        implicit_destinations = ContextRegistry.implicit_shared_destinations()
+        primary_destination = implicit_destinations[0]
+        message_ids_by_destination: dict[str | None, int] = {}
+        try:
+            nonlocal exchange_id
+            LOGGER.debug(
+                f"{ICONS['managers_worker']} [ManagersWorker] Logging message: {event.to_dict()}",
+            )
+
+            # Extract attachments from event if present (now always list[dict])
+            attachments = getattr(event, "attachments", [])
+
+            # Build medium-specific metadata for the transcript record.
+            metadata = None
+            if isinstance(event, EmailReceived):
+                metadata = {
+                    "email_id": event.email_id,
+                    "to": event.to,
+                    "cc": event.cc,
+                    "bcc": event.bcc,
+                }
+            elif isinstance(event, EmailSent):
+                metadata = {
+                    "email_id_replied_to": event.email_id_replied_to,
+                    "to": event.to,
+                    "cc": event.cc,
+                    "bcc": event.bcc,
+                }
+            elif isinstance(
+                event,
+                (
+                    InboundGoogleMeetUtterance,
+                    OutboundGoogleMeetUtterance,
+                    InboundTeamsMeetUtterance,
+                    OutboundTeamsMeetUtterance,
+                ),
+            ):
+                participant_names = getattr(event, "participant_names", None) or []
+                if participant_names:
+                    metadata = metadata or {}
+                    metadata["meet_participants"] = meet_participants_meta
+                dia_sid = getattr(event, "diarization_speaker_id", None)
+                if dia_sid:
+                    metadata = metadata or {}
+                    metadata["diarization_speaker_id"] = dia_sid
+
+            if call_utterance_timestamp:
+                metadata = metadata or {}
+                metadata["call_utterance_timestamp"] = call_utterance_timestamp
+
+            tm_message_id = None
+            if exchange_id == UNASSIGNED:
+                msg_data = {
+                    "medium": medium,
+                    "sender_id": sender_id,
+                    "receiver_ids": receiver_ids,
+                    "timestamp": event.timestamp,
+                    "content": content,
+                }
+                if attachments:
+                    msg_data["attachments"] = attachments
+                if metadata:
+                    msg_data["metadata"] = metadata
+                exchange_id, tm_message_id = (
+                    cm.transcript_manager.log_first_message_in_new_exchange(
+                        msg_data,
+                        destination=primary_destination,
+                    )
+                )
+                if tm_message_id is not None:
+                    message_ids_by_destination[primary_destination] = tm_message_id
+                for destination in implicit_destinations[1:]:
+                    replicated_message = {
+                        **msg_data,
+                        "exchange_id": exchange_id,
+                    }
+                    replica_logs = cm.transcript_manager.log_messages(
+                        replicated_message,
+                        synchronous=True,
+                        destination=destination,
+                    )
+                    if isinstance(replica_logs, list) and replica_logs:
+                        replica_message_id = replica_logs[0].message_id
+                        if replica_message_id is not None:
+                            message_ids_by_destination[destination] = replica_message_id
+                # Cache the exchange_id for subsequent pre-hire messages in the batch
+                if isinstance(event, PreHireMessage):
+                    _pre_hire_exchange_id = exchange_id
+                    LOGGER.debug(
+                        f"{ICONS['managers_worker']} [ManagersWorker] Cached pre-hire exchange_id: {exchange_id}",
+                    )
+            else:
+                msg_data = {
+                    "medium": medium,
+                    "sender_id": sender_id,
+                    "receiver_ids": receiver_ids,
+                    "timestamp": event.timestamp,
+                    "content": content,
+                    "exchange_id": exchange_id,
+                }
+                if attachments:
+                    msg_data["attachments"] = attachments
+                if metadata:
+                    msg_data["metadata"] = metadata
+                for destination in implicit_destinations:
+                    logged_msgs = cm.transcript_manager.log_messages(
+                        msg_data,
+                        synchronous=True,
+                        destination=destination,
+                    )
+                    if not logged_msgs:
+                        continue
+                    destination_message_id = logged_msgs[0].message_id
+                    if destination_message_id is None:
+                        continue
+                    message_ids_by_destination[destination] = destination_message_id
+                    if tm_message_id is None:
+                        tm_message_id = destination_message_id
+
+            if local_message_id is not None and tm_message_id is not None:
+                cm._local_to_global_message_ids[local_message_id] = tm_message_id
+            if local_message_id is not None and message_ids_by_destination:
+                cm._local_to_global_message_ids_by_destination[local_message_id] = (
+                    message_ids_by_destination
+                )
+                cm._local_message_destinations[local_message_id] = primary_destination
+
+            LOGGER.debug(
+                f"{ICONS['managers_worker']} [ManagersWorker] Logged message: {medium}"
+                f" from {sender_id} to {receiver_ids}",
+            )
+            return exchange_id
+        except Exception as e:
+            LOGGER.error(
+                f"{ICONS['managers_worker']} [ManagersWorker] Error logging message: {e}",
+            )
+
+    exchange_id = await asyncio.to_thread(_publish_transcript)
+
+    # Cache the exchange_id on the call manager immediately so that
+    # subsequent queued utterances in the same call reuse it.  The
+    # LogMessageResponse handler also sets this, but it runs
+    # asynchronously on the event loop — by which time the worker may
+    # have already started the next log_message call and created a
+    # duplicate exchange.
+    if exchange_id is not None and exchange_id != UNASSIGNED:
+        if (
+            medium in (Medium.PHONE_CALL, Medium.WHATSAPP_CALL)
+            and cm.call_manager.call_exchange_id == UNASSIGNED
+        ):
+            cm.call_manager.call_exchange_id = exchange_id
+        elif (
+            medium == Medium.UNIFY_MEET
+            and cm.call_manager.unify_meet_exchange_id == UNASSIGNED
+        ):
+            cm.call_manager.unify_meet_exchange_id = exchange_id
+        elif (
+            medium == Medium.GOOGLE_MEET
+            and cm.call_manager.google_meet_exchange_id == UNASSIGNED
+        ):
+            cm.call_manager.google_meet_exchange_id = exchange_id
+        elif (
+            medium == Medium.TEAMS_MEET
+            and cm.call_manager.teams_meet_exchange_id == UNASSIGNED
+        ):
+            cm.call_manager.teams_meet_exchange_id = exchange_id
+
+    # publish reply as event envelope
+    await event_broker.publish(
+        "app:logging:message_logged",
+        LogMessageResponse(
+            medium=medium,
+            exchange_id=exchange_id,
+        ).to_json(),
+    )
+    LOGGER.debug(
+        f"{ICONS['managers_worker']} [ManagersWorker] Published exchange_id {exchange_id}",
+    )
+
+
+# OAuth secret sync
+
+
+async def sync_assistant_secrets() -> None:
+    """Pull OAuth tokens from Orchestra into the SecretManager's Secrets context."""
+    from droid.manager_registry import ManagerRegistry
+
+    sm = ManagerRegistry.get_secret_manager()
+    sm.sync_assistant_secrets_if_stale(force=True, reason="assistant_update")
+
+
+# Contact updates
+
+
+async def update_session_contacts(
+    cm: "ConversationManager",
+    assistant_first_name: str,
+    assistant_surname: str,
+    assistant_number: str,
+    assistant_email: str,
+    user_first_name: str,
+    user_surname: str,
+    user_number: str,
+    user_email: str,
+    assistant_whatsapp_number: str | None = None,
+    user_whatsapp_number: str | None = None,
+    assistant_job_title: str | None = None,
+) -> None:
+    """
+    Update the resolved assistant and boss contacts in the ContactManager when
+    session details change.
+
+    Called when an AssistantUpdateEvent is received.
+
+    Note: In demo mode, we skip updating the boss contact because
+    the user_* fields contain the demoer's details, not the prospect's. The
+    prospect's details are either:
+    - Set during initialization from demo metadata (prospect_* fields), or
+    - Updated dynamically via set_boss_details during the demo
+    """
+    if cm.contact_manager is None:
+        LOGGER.info(
+            f"{ICONS['managers_worker']} [ManagersWorker] Cannot update contacts: contact_manager is None",
+        )
+        return
+
+    async def _update_contact(
+        contact_id: int,
+        first_name: str,
+        surname: str,
+        phone_number: str,
+        email_address: str,
+        whatsapp_number: str | None = None,
+        job_title: str | None = None,
+    ):
+        try:
+            kwargs: dict = dict(
+                contact_id=contact_id,
+                phone_number=phone_number,
+                email_address=email_address,
+                first_name=first_name,
+                surname=surname,
+            )
+            if whatsapp_number is not None:
+                kwargs["whatsapp_number"] = whatsapp_number
+            if job_title is not None and contact_id == SESSION_DETAILS.self_contact_id:
+                kwargs["job_title"] = job_title
+            await asyncio.to_thread(
+                cm.contact_manager.update_contact,
+                **kwargs,
+            )
+            LOGGER.info(
+                f"{ICONS['managers_worker']} [ManagersWorker] Updated contact {contact_id}: {first_name} {surname}",
+            )
+        except Exception as e:
+            LOGGER.error(
+                f"{ICONS['managers_worker']} [ManagersWorker] Failed to update contact {contact_id}: {e}",
+            )
+
+    await _update_contact(
+        SESSION_DETAILS.self_contact_id,
+        assistant_first_name,
+        assistant_surname,
+        assistant_number,
+        assistant_email,
+        assistant_whatsapp_number,
+        # Pass through assistant_job_title so the AssistantUpdateEvent flow
+        # keeps contact 0 in sync with the backend's value (and triggers the
+        # backend sync helper, which is a no-op when the value matches).
+        assistant_job_title,
+    )
+
+    # In demo mode:
+    # - Skip updating boss contact - prospect details come from Orchestra meta
+    # - Update demoer contact (contact_id=2) with user_* fields (initially created in _init_managers)
+    if SETTINGS.DEMO_MODE:
+        LOGGER.info(
+            f"{ICONS['managers_worker']} [ManagersWorker] Demo mode: skipping boss contact, "
+            "updating demoer contact (contact_id=2)",
+        )
+        await _update_contact(
+            2,
+            user_first_name,
+            user_surname,
+            user_number,
+            user_email,
+            user_whatsapp_number,
+        )
+        return
+
+    await _update_contact(
+        SESSION_DETAILS.boss_contact_id,
+        user_first_name,
+        user_surname,
+        user_number,
+        user_email,
+        user_whatsapp_number,
+    )
+
+
+# Queueing operations that need managers
+
+_operations_queue = asyncio.Queue()
+
+
+async def queue_operation(async_func: callable, *args, **kwargs) -> None:
+    """
+    Queue an async operation to be executed when managers are initialized.
+    The operation will be processed by listen_to_operations().
+    """
+    await _operations_queue.put((async_func, args, kwargs))
+
+
+async def wait_for_initialization(
+    cm: "ConversationManager",
+) -> None:
+    """
+    Wait for initialization to complete.
+
+    Polls cm.initialized with no timeout. Initialization failures are
+    surfaced by init_conv_manager itself (logged errors, pod inactivity
+    shutdown). A timeout here would silently kill the operations queue
+    processor on slow cold starts, causing queued work to be orphaned.
+    """
+    while not cm.initialized:
+        await asyncio.sleep(0.1)
+
+
+async def listen_to_operations(cm: "ConversationManager") -> None:
+    """
+    Worker loop that processes queued operations once initialized.
+    Should be started as a background task alongside init_conv_manager.
+    """
+    # Wait for initialization to complete
+    await wait_for_initialization(cm)
+    ensure_runtime_context()
+
+    LOGGER.info(
+        f"{ICONS['managers_worker']} [ManagersWorker] Operations listener started, processing queue...",
+    )
+
+    # Process operations as they come in
+    while True:
+        # Wait for next operation (with timeout to allow checking for shutdown)
+        try:
+            async_func, args, kwargs = await asyncio.wait_for(
+                _operations_queue.get(),
+                timeout=1.0,
+            )
+        except asyncio.TimeoutError:
+            continue
+
+        # Execute the operation
+        func_name = getattr(async_func, "__name__", str(async_func))
+        try:
+            await async_func(*args, **kwargs)
+        except Exception as e:
+            LOGGER.error(
+                f"{ICONS['managers_worker']} [ManagersWorker] Error executing {func_name}: {e}",
+            )
+        finally:
+            _operations_queue.task_done()
+
+
+# Initialization
+
+_init_lock = asyncio.Lock()
+
+
+def _init_managers(
+    cm: "ConversationManager",
+    loop: asyncio.AbstractEventLoop,
+    actor: "BaseActor | None" = None,
+) -> None:
+    """
+    Initialize all managers in a separate thread.
+    The main event loop is passed for managers that need to schedule async tasks.
+
+    Args:
+        cm: The ConversationManager instance to initialize.
+        loop: The main event loop for scheduling async tasks.
+        actor: Optional pre-instantiated Actor. If provided, used directly instead
+            of creating one via ManagerRegistry. Useful for testing with specific
+            Actor implementations.
+    """
+    start_time = perf_counter()
+
+    # 0. Initialize droid (idempotent — SESSION_DETAILS.assistant.agent_id is
+    #    already set by the startup handler, so droid.init() reads it for context).
+    LOGGER.debug(f"{ICONS['managers_worker']} [ManagersWorker] Initializing droid...")
+    local_start_time = perf_counter()
+    droid.init()
+    _droid_init_dur = perf_counter() - local_start_time
+    LOGGER.info(
+        f"{ICONS['managers_worker']} [ManagersWorker] Droid initialized in {_droid_init_dur:.2f} seconds",
+    )
+    per_manager_init.record(_droid_init_dur, {"manager": "droid"})
+
+    # Get API key from SESSION_DETAILS (set by ConversationManager on startup)
+    api_key = SESSION_DETAILS.unify_key or None
+
+    # 1. Configure EventBus
+    LOGGER.debug(f"{ICONS['managers_worker']} [ManagersWorker] Configuring EventBus...")
+    local_start_time = perf_counter()
+    if api_key:
+        EVENT_BUS._get_logger().session.headers["Authorization"] = f"Bearer {api_key}"
+    EVENT_BUS.set_window("Comms", 100)
+    _eventbus_dur = perf_counter() - local_start_time
+    LOGGER.info(
+        f"{ICONS['managers_worker']} [ManagersWorker] EventBus configured in {_eventbus_dur:.2f} seconds",
+    )
+    per_manager_init.record(_eventbus_dur, {"manager": "event_bus"})
+
+    # 1b. Kick off hydration concurrently — it only needs droid.init() and
+    # EventBus config (both done). Runs on the main event loop while the
+    # remaining managers initialize in this thread.
+    LOGGER.info(
+        f"{ICONS['managers_worker']} [ManagersWorker] Starting concurrent hydration...",
+    )
+    cm._hydration_future = asyncio.run_coroutine_threadsafe(
+        hydrate_global_thread(cm),
+        loop,
+    )
+
+    # 2. Initialize ContactManager (respects SETTINGS.contact.IMPL)
+    LOGGER.info(
+        f"{ICONS['managers_worker']} [ManagersWorker] Initializing ContactManager...",
+    )
+    local_start_time = perf_counter()
+    cm.contact_manager = ManagerRegistry.get_contact_manager(
+        description="production deployment",
+    )
+    # Wire up ContactManager to ContactIndex for always-fresh contact data
+    cm.contact_index.set_contact_manager(cm.contact_manager)
+    # In demo mode, ensure the boss contact is always visible
+    # in active_conversations so the slow brain can use inline details on
+    # communication tools and set_boss_details can use inline details.
+    if SETTINGS.DEMO_MODE:
+        cm.contact_index.get_or_create_conversation(SESSION_DETAILS.boss_contact_id)
+        # Start the boss contact sparse in demo mode; details can be provided
+        # later via set_boss_details or demo prospect metadata.
+        cm.contact_manager.update_contact(
+            contact_id=SESSION_DETAILS.boss_contact_id,
+            first_name="",
+            surname="",
+            email_address="",
+            phone_number="",
+            should_respond=True,
+        )
+        # If we have a demo_id, fetch prospect details from Orchestra and apply
+        # them to the boss contact.
+        if SETTINGS.DEMO_ID is not None:
+            try:
+                from droid.demo_meta import (
+                    fetch_demo_meta,
+                    apply_prospect_to_boss_contact,
+                )
+
+                # Run async fetch_demo_meta on the event loop from this sync context
+                future = asyncio.run_coroutine_threadsafe(
+                    fetch_demo_meta(SETTINGS.DEMO_ID),
+                    loop,
+                )
+                prospect = future.result(timeout=10.0)  # 10 second timeout
+                if prospect and prospect.has_any_details():
+                    apply_prospect_to_boss_contact(cm.contact_manager, prospect)
+                    LOGGER.info(
+                        f"{ICONS['managers_worker']} [ManagersWorker] Applied prospect details from demo_id={SETTINGS.DEMO_ID}",
+                    )
+            except Exception as e:
+                LOGGER.error(
+                    f"{ICONS['managers_worker']} [ManagersWorker] Failed to fetch/apply demo prospect details: {e}",
+                )
+
+        # Create demoer contact (contact_id=2) with the user's details
+        # In demo mode, SESSION_DETAILS.user contains the demoer's info
+        # Note: We don't add to active_conversations as the demoer isn't someone
+        # the assistant would typically interact with (call/email)
+        try:
+            demoer_first = SESSION_DETAILS.user.first_name
+            demoer_last = SESSION_DETAILS.user.surname
+            # Use _create_contact since contact_id=2 doesn't exist yet
+            cm.contact_manager._create_contact(
+                first_name=demoer_first,
+                surname=demoer_last,
+                phone_number=SESSION_DETAILS.user.number or "",
+                email_address=SESSION_DETAILS.user.email or "",
+                should_respond=True,
+                is_system=True,
+            )
+            LOGGER.info(
+                f"{ICONS['managers_worker']} [ManagersWorker] Created demoer contact (id=2): {demoer_first} {demoer_last}",
+            )
+        except Exception as e:
+            LOGGER.error(
+                f"{ICONS['managers_worker']} [ManagersWorker] Failed to create demoer contact: {e}",
+            )
+    _contact_dur = perf_counter() - local_start_time
+    LOGGER.info(
+        f"{ICONS['managers_worker']} [ManagersWorker] ContactManager ({type(cm.contact_manager).__name__}) initialized in "
+        f"{_contact_dur:.2f} seconds",
+    )
+    per_manager_init.record(_contact_dur, {"manager": "contact_manager"})
+
+    # 3. Initialize TranscriptManager (respects SETTINGS.transcript.IMPL)
+    LOGGER.info(
+        f"{ICONS['managers_worker']} [ManagersWorker] Initializing TranscriptManager...",
+    )
+    local_start_time = perf_counter()
+    cm.transcript_manager = ManagerRegistry.get_transcript_manager(
+        description="production deployment",
+        contact_manager=cm.contact_manager,
+    )
+    _transcript_dur = perf_counter() - local_start_time
+    LOGGER.info(
+        f"{ICONS['managers_worker']} [ManagersWorker] TranscriptManager ({type(cm.transcript_manager).__name__}) initialized in "
+        f"{_transcript_dur:.2f} seconds",
+    )
+    per_manager_init.record(_transcript_dur, {"manager": "transcript_manager"})
+
+    # 4. Configure TranscriptManager logger (only for real implementation)
+    # Check hasattr instead of SETTINGS to be defensive against implementation mismatches
+    if api_key and hasattr(cm.transcript_manager, "_get_logger"):
+        cm.transcript_manager._get_logger().session.headers[
+            "Authorization"
+        ] = f"Bearer {api_key}"
+
+    # 5. Initialize MemoryManager (optional - respects SETTINGS.memory.ENABLED and IMPL)
+    if SETTINGS.memory.ENABLED:
+        try:
+            from droid.memory_manager.memory_manager import MemoryManager
+
+            LOGGER.info(
+                f"{ICONS['managers_worker']} [ManagersWorker] Initializing MemoryManager...",
+            )
+            local_start_time = perf_counter()
+            mem_cfg = MemoryManager.MemoryConfig(
+                contacts=SETTINGS.memory.CONTACTS,
+                bios=SETTINGS.memory.BIOS,
+                rolling_summaries=SETTINGS.memory.ROLLING_SUMMARIES,
+                response_policies=SETTINGS.memory.RESPONSE_POLICIES,
+                knowledge=SETTINGS.memory.KNOWLEDGE,
+                tasks=SETTINGS.memory.TASKS,
+            )
+            cm.memory_manager = ManagerRegistry.get_memory_manager(
+                transcript_manager=cm.transcript_manager,
+                contact_manager=cm.contact_manager,
+                config=mem_cfg,
+                loop=loop,
+            )
+            _memory_dur = perf_counter() - local_start_time
+            LOGGER.info(
+                f"{ICONS['managers_worker']} [ManagersWorker] MemoryManager initialized in {_memory_dur:.2f} seconds",
+            )
+            per_manager_init.record(_memory_dur, {"manager": "memory_manager"})
+        except Exception as e:
+            LOGGER.warning(
+                f"{ICONS['managers_worker']} [ManagersWorker] MemoryManager init failed (degraded): {e}",
+            )
+    else:
+        LOGGER.info(
+            f"{ICONS['managers_worker']} [ManagersWorker] MemoryManager disabled (SETTINGS.memory.ENABLED=False)",
+        )
+
+    # 6. Initialize ConversationManagerHandle (respects SETTINGS.conversation.IMPL)
+    LOGGER.info(
+        f"{ICONS['managers_worker']} [ManagersWorker] Initializing ConversationManagerHandle...",
+    )
+    local_start_time = perf_counter()
+    # ConversationManagerHandle has different constructor args for real vs simulated
+    if SETTINGS.conversation.IMPL == "simulated":
+        cm._conversation_manager_handle = (
+            ManagerRegistry.get_conversation_manager_handle(
+                description="production deployment",
+                assistant_id=SESSION_DETAILS.assistant.agent_id,
+                contact_id=str(SESSION_DETAILS.boss_contact_id),
+            )
+        )
+    else:
+        cm._conversation_manager_handle = (
+            ManagerRegistry.get_conversation_manager_handle(
+                event_broker=cm.event_broker,
+                conversation_id=SESSION_DETAILS.assistant.agent_id,
+                contact_id=str(SESSION_DETAILS.boss_contact_id),
+                transcript_manager=cm.transcript_manager,
+                conversation_manager=cm,
+            )
+        )
+    _cmhandle_dur = perf_counter() - local_start_time
+    LOGGER.info(
+        f"{ICONS['managers_worker']} [ManagersWorker] ConversationManagerHandle ({type(cm._conversation_manager_handle).__name__}) initialized in "
+        f"{_cmhandle_dur:.2f} seconds",
+    )
+    per_manager_init.record(_cmhandle_dur, {"manager": "conversation_manager_handle"})
+
+    # 7. Run startup hooks (environment-gated plugin discovery)
+    _startup_config: dict | None = None
+    _hook_group = os.environ.get("_DROID_STARTUP_HOOK_GROUP")
+    _hook_package = os.environ.get("_DROID_STARTUP_HOOK_PACKAGE")
+    if _hook_group:
+        try:
+            from importlib.metadata import entry_points as _eps
+
+            for ep in _eps(group=_hook_group):
+                if _hook_package and ep.dist.name != _hook_package:
+                    LOGGER.warning(
+                        f"{ICONS['managers_worker']} [ManagersWorker] "
+                        f"Ignoring startup hook from unexpected package: {ep.dist.name}",
+                    )
+                    continue
+                LOGGER.info(
+                    f"{ICONS['managers_worker']} [ManagersWorker] "
+                    f"Running startup hook: {ep.name}",
+                )
+                local_start_time = perf_counter()
+                hook_fn = ep.load()
+                _startup_config = hook_fn(cm, SESSION_DETAILS)
+                _runtime_backends = (_startup_config or {}).get("runtime_backends")
+                if _runtime_backends:
+                    from droid.deploy_runtime import (
+                        DeployRuntimeBackends,
+                        register_deploy_runtime,
+                    )
+
+                    if isinstance(_runtime_backends, DeployRuntimeBackends):
+                        register_deploy_runtime(_runtime_backends)
+                    else:
+                        register_deploy_runtime(
+                            session=_runtime_backends.get("session"),
+                            jobs=_runtime_backends.get("jobs"),
+                            metrics=_runtime_backends.get("metrics"),
+                            logs=_runtime_backends.get("logs"),
+                        )
+                _hook_dur = perf_counter() - local_start_time
+                LOGGER.info(
+                    f"{ICONS['managers_worker']} [ManagersWorker] "
+                    f"Startup hook '{ep.name}' completed in {_hook_dur:.2f}s",
+                )
+        except Exception as e:
+            LOGGER.warning(
+                f"{ICONS['managers_worker']} [ManagersWorker] "
+                f"Startup hook failed (degraded): {e}",
+            )
+
+    # 8. Initialize Actor (use provided actor or create via ManagerRegistry)
+    LOGGER.debug(f"{ICONS['managers_worker']} [ManagersWorker] Initializing Actor...")
+    try:
+        local_start_time = perf_counter()
+        if actor is not None:
+            # Use pre-instantiated actor (e.g., for testing)
+            cm.actor = actor
+        else:
+            # Create via ManagerRegistry (respects SETTINGS.actor.IMPL)
+            from droid.actor.environments import (
+                StateManagerEnvironment,
+                ComputerEnvironment,
+                ActorEnvironment,
+            )
+            from droid.function_manager.primitives import ComputerPrimitives, Primitives
+
+            cp = ComputerPrimitives()
+            if _startup_config and _startup_config.get("url_mappings"):
+                cp.url_mappings = _startup_config["url_mappings"]
+
+            extra_envs = (_startup_config or {}).get("environments", [])
+            actor_kwargs = (_startup_config or {}).get("actor_kwargs", {})
+
+            cm.actor = ManagerRegistry.get_actor(
+                description="production deployment",
+                environments=[
+                    StateManagerEnvironment(
+                        Primitives(primitive_scope=default_runtime_scope()),
+                    ),
+                    ComputerEnvironment(cp),
+                    ActorEnvironment(),
+                ]
+                + extra_envs,
+                **actor_kwargs,
+            )
+        _actor_dur = perf_counter() - local_start_time
+        actor_cls = type(cm.actor).__name__
+        LOGGER.info(
+            f"{ICONS['managers_worker']} [ManagersWorker] Actor ({actor_cls}) initialized in "
+            f"{_actor_dur:.2f} seconds",
+        )
+        per_manager_init.record(_actor_dur, {"manager": "actor"})
+    except Exception as e:
+        LOGGER.error(
+            f"{ICONS['managers_worker']} [ManagersWorker] Error initializing Actor: {e}",
+        )
+
+    # 11. Initialize FileManager (eagerly, so the FileRecords context exists
+    #     before any file operations or background tasks attempt to use it)
+    try:
+        LOGGER.info(
+            f"{ICONS['managers_worker']} [ManagersWorker] Initializing FileManager...",
+        )
+        local_start_time = perf_counter()
+        fm = ManagerRegistry.get_file_manager()
+        # Force the lazy DataManager property to resolve now while ContextVars
+        # are correct.  The ingestion pipeline later accesses _data_manager from
+        # ThreadPoolExecutor workers where ContextVars may not propagate — eager
+        # init avoids the resulting empty-context / double-slash paths.
+        _ = fm._data_manager  # noqa: F841
+        _file_dur = perf_counter() - local_start_time
+        LOGGER.info(
+            f"{ICONS['managers_worker']} [ManagersWorker] FileManager initialized in "
+            f"{_file_dur:.2f} seconds",
+        )
+        per_manager_init.record(_file_dur, {"manager": "file_manager"})
+    except Exception as e:
+        LOGGER.warning(
+            f"{ICONS['managers_worker']} [ManagersWorker] FileManager init failed (degraded): {e}",
+        )
+
+    # U2: Total manager init duration
+    _total_dur = perf_counter() - start_time
+    LOGGER.info(
+        f"{ICONS['managers_worker']} [ManagersWorker] All managers initialized in {_total_dur:.2f} seconds",
+    )
+    manager_init_total.record(_total_dur)
+
+    # 12. Static primitives live in the global builtins catalogue (seeded at
+    #     deploy time), so no per-assistant primitive sync is needed here.
+    _init_fm = ManagerRegistry.get_function_manager()
+
+    # 13. Pre-warm embedding columns for all managers (best-effort, avoids
+    #     cold-start latency on the first vector search after a fresh hire).
+    #     Also explicitly warm the FunctionManager (not in the singleton cache
+    #     due to _force_new=True) so Primitives embeddings are ready.
+    try:
+        LOGGER.debug(
+            f"{ICONS['managers_worker']} [ManagersWorker] Warming embedding columns...",
+        )
+        local_start_time = perf_counter()
+        ManagerRegistry.warm_all_embeddings()
+        _init_fm.warm_embeddings()
+        _warm_dur = perf_counter() - local_start_time
+        LOGGER.info(
+            f"{ICONS['managers_worker']} [ManagersWorker] Embedding columns warmed in {_warm_dur:.2f} seconds",
+        )
+    except Exception as e:
+        LOGGER.warning(
+            f"{ICONS['managers_worker']} [ManagersWorker] Embedding warm-up failed (degraded): {e}",
+        )
+
+
+async def _start_file_sync() -> bool:
+    """Start file sync with managed VM after managers are initialized.
+
+    This starts rclone-based file synchronization between the assistant local
+    workspace and the managed desktop when ``desktop_url`` is configured in
+    ``SESSION_DETAILS``.
+
+    Returns
+    -------
+    bool
+        True when sync started successfully, False otherwise.
+    """
+    from droid.session_details import SESSION_DETAILS
+
+    if not SESSION_DETAILS.assistant.desktop_url:
+        LOGGER.debug(
+            f"{ICONS['managers_worker']} [ManagersWorker] No desktop_url configured, skipping file sync",
+        )
+        log_startup_timing(
+            LOGGER,
+            "⏱️ [StartupTiming] managers.file_sync skipped reason=no_desktop_url",
+        )
+        return False
+
+    _file_sync_t0 = perf_counter()
+    try:
+        from droid.file_manager.managers.local import LocalFileManager
+
+        local_fm = LocalFileManager()
+        adapter = local_fm._adapter
+
+        if not hasattr(adapter, "start_sync"):
+            LOGGER.debug(
+                f"{ICONS['managers_worker']} [ManagersWorker] Adapter does not support file sync",
+            )
+            return False
+
+        if not adapter._enable_sync:
+            LOGGER.debug(
+                f"{ICONS['managers_worker']} [ManagersWorker] File sync disabled by configuration",
+            )
+            log_startup_timing(
+                LOGGER,
+                "⏱️ [StartupTiming] managers.file_sync skipped reason=adapter_disabled duration=%.2fs",
+                perf_counter() - _file_sync_t0,
+            )
+            return False
+
+        LOGGER.debug(
+            f"{ICONS['managers_worker']} [ManagersWorker] Starting file sync with managed VM...",
+        )
+        success = await adapter.start_sync()
+        log_startup_timing(
+            LOGGER,
+            "⏱️ [StartupTiming] managers.file_sync.start_sync duration=%.2fs success=%s",
+            perf_counter() - _file_sync_t0,
+            success,
+        )
+        if success:
+            LOGGER.debug(
+                f"{ICONS['managers_worker']} [ManagersWorker] File sync started successfully",
+            )
+        else:
+            LOGGER.debug(
+                f"{ICONS['managers_worker']} [ManagersWorker] File sync not enabled or failed to start",
+            )
+        return bool(success)
+
+    except Exception as e:
+        LOGGER.error(
+            f"{ICONS['managers_worker']} [ManagersWorker] Failed to start file sync: {e}",
+        )
+        import traceback
+
+        traceback.print_exc()
+        return False
+    finally:
+        log_startup_timing(
+            LOGGER,
+            "⏱️ [StartupTiming] managers.file_sync.total duration=%.2fs",
+            perf_counter() - _file_sync_t0,
+        )
+
+
+async def _register_computer_act_completed_callback(cm: "ConversationManager") -> None:
+    """Bridge ``ComputerActCompleted`` events from the in-process EventBUS to the
+    CM's ``event_broker`` so both the slow brain and fast brain see them.
+
+    Only publishes when the assistant is actively screen-sharing on a meet.
+    """
+    from droid.conversation_manager.events import ComputerActCompleted
+
+    async def _on_computer_act_completed(events):  # noqa: ANN001
+        if not cm.assistant_screen_share_active:
+            return
+        for evt in events:
+            payload = evt.payload if isinstance(evt.payload, dict) else {}
+            cm_event = ComputerActCompleted(
+                instruction=payload.get("instruction", ""),
+                summary=payload.get("summary", ""),
+            )
+            await cm.event_broker.publish(
+                "app:actor:computer_act_completed",
+                cm_event.to_json(),
+            )
+
+    try:
+        await EVENT_BUS.register_callback(
+            event_type="ComputerActCompleted",
+            callback=_on_computer_act_completed,
+            every_n=1,
+        )
+    except Exception:
+        pass
+
+
+async def init_conv_manager(
+    cm: "ConversationManager",
+    *,
+    actor: "BaseActor | None" = None,
+) -> None:
+    """
+    Initialize all managers for the ConversationManager.
+    All initialization runs in a separate thread (non-blocking).
+
+    Args:
+        cm: The ConversationManager instance to initialize.
+        actor: Optional pre-instantiated Actor. If provided, used directly instead
+            of creating one via ManagerRegistry. Useful for testing with specific
+            Actor implementations (e.g., SimulatedActor).
+    """
+    LOGGER.debug(f"{ICONS['managers_worker']} [ManagersWorker] Processing startup")
+
+    async with _init_lock:
+        start_time = perf_counter()
+        if cm.initialized:
+            LOGGER.info(
+                f"{ICONS['managers_worker']} [ManagersWorker] Already initialized, skipping",
+            )
+            return
+
+        try:
+            # Get the main event loop to pass to managers that need it
+            loop = asyncio.get_running_loop()
+
+            # Run all manager initialization in a thread (non-blocking).
+            # droid.init() inside _init_managers sets Unify ContextVars
+            # (CONTEXT_READ/CONTEXT_WRITE) but asyncio.to_thread runs on a
+            # copy of the caller's context — changes don't propagate back.
+            # Re-apply the context afterwards so any lazily-created managers
+            # in the main async context see the correct values.
+            _t0 = perf_counter()
+            await asyncio.to_thread(_init_managers, cm, loop, actor)
+            log_startup_timing(
+                LOGGER,
+                "⏱️ [StartupTiming] managers.init_conv_manager.to_thread duration=%.2fs",
+                perf_counter() - _t0,
+            )
+
+            _t0 = perf_counter()
+            ensure_runtime_context(strict=True)
+            log_startup_timing(
+                LOGGER,
+                "⏱️ [StartupTiming] managers.init_conv_manager.reapply_context duration=%.2fs",
+                perf_counter() - _t0,
+            )
+
+            store_chat_history = await get_last_store_chat_history()
+            if store_chat_history:
+                _t0 = perf_counter()
+                await cm.event_broker.publish(
+                    "app:comms:chat_history",
+                    GetChatHistory(
+                        chat_history=store_chat_history.chat_history,
+                    ).to_json(),
+                )
+                log_startup_timing(
+                    LOGGER,
+                    "⏱️ [StartupTiming] managers.init_conv_manager.publish_chat_history duration=%.2fs",
+                    perf_counter() - _t0,
+                )
+
+            cm.initialized = True
+
+            # Await the concurrent hydration that was kicked off inside
+            # _init_managers right after EventBus config.  In practice it
+            # finishes long before this point (hidden behind ContactManager
+            # init), so this is effectively a no-op await.
+            hydration_future = getattr(cm, "_hydration_future", None)
+            if hydration_future is not None:
+                try:
+                    _t0 = perf_counter()
+                    await asyncio.wrap_future(hydration_future)
+                    log_startup_timing(
+                        LOGGER,
+                        "⏱️ [StartupTiming] managers.init_conv_manager.await_hydration duration=%.2fs",
+                        perf_counter() - _t0,
+                    )
+                    LOGGER.info(
+                        f"{ICONS['managers_worker']} [ManagersWorker] "
+                        "Concurrent hydration completed",
+                    )
+                except Exception as e:
+                    LOGGER.error(
+                        f"{ICONS['managers_worker']} [ManagersWorker] "
+                        f"Global thread hydration failed: {e}",
+                    )
+                    import traceback
+
+                    traceback.print_exc()
+                finally:
+                    cm._hydration_future = None
+
+            _t0 = perf_counter()
+            await _register_computer_act_completed_callback(cm)
+            log_startup_timing(
+                LOGGER,
+                "⏱️ [StartupTiming] managers.init_conv_manager.register_callbacks duration=%.2fs",
+                perf_counter() - _t0,
+            )
+
+            os.environ["DROID_CM_INITIALIZED"] = "1"
+
+            # Start the in-process activation scheduler (local installs only).
+            # In hosted mode this resolves to ``NoopMaterializer`` and is a
+            # no-op; in local mode it starts the asyncio supervisor that
+            # fires scheduled tasks without going through Communication +
+            # Cloud Tasks. Must run after managers are initialised because
+            # the scheduler reads ``Tasks/Activations`` through the same
+            # storage layer the managers configure.
+            try:
+                from droid.task_scheduler.local_scheduler import build_materializer
+
+                _t0 = perf_counter()
+                cm._activation_materializer = build_materializer(cm)
+                await cm._activation_materializer.start()
+                log_startup_timing(
+                    LOGGER,
+                    "⏱️ [StartupTiming] managers.init_conv_manager.start_local_scheduler duration=%.2fs",
+                    perf_counter() - _t0,
+                )
+            except Exception as exc:
+                LOGGER.warning(
+                    f"{ICONS['managers_worker']} [ManagersWorker] "
+                    f"LocalActivationScheduler failed to start (degraded): {exc}",
+                )
+                cm._activation_materializer = None
+
+            # Publish initialization complete event.  The registered
+            # InitializationComplete handler pushes a notification and
+            # triggers a brain turn so it can follow up on deferred requests.
+            _t0 = perf_counter()
+            await event_broker.publish(
+                "app:comms:initialization_complete",
+                InitializationComplete().to_json(),
+            )
+            log_startup_timing(
+                LOGGER,
+                "⏱️ [StartupTiming] managers.init_conv_manager.publish_initialization_complete duration=%.2fs",
+                perf_counter() - _t0,
+            )
+
+            _init_dur = perf_counter() - start_time
+            LOGGER.info(
+                f"{ICONS['managers_worker']} [ManagersWorker] Initialization complete in {_init_dur:.2f} seconds",
+            )
+
+            try:
+                from droid.conversation_manager.memory_dump import (
+                    write_memory_dump,
+                )
+
+                loop = asyncio.get_running_loop()
+
+                def _on_dump_done(fut):
+                    try:
+                        dump_path = fut.result()
+                        if dump_path:
+                            LOGGER.info(
+                                f"{ICONS['managers_worker']} [ManagersWorker] "
+                                f"Startup memory dump written to {dump_path}",
+                            )
+                    except Exception as exc:
+                        LOGGER.warning(
+                            f"{ICONS['managers_worker']} [ManagersWorker] "
+                            f"Startup memory dump failed: {exc}",
+                        )
+
+                fut = loop.run_in_executor(
+                    None,
+                    write_memory_dump,
+                    "startup_memory_dump.txt",
+                )
+                fut.add_done_callback(_on_dump_done)
+            except Exception as exc:
+                LOGGER.warning(
+                    f"{ICONS['managers_worker']} [ManagersWorker] "
+                    f"Startup memory dump failed: {exc}",
+                )
+
+        except Exception as e:
+            LOGGER.error(
+                f"{ICONS['managers_worker']} [ManagersWorker] Error during initialization: {e}",
+            )
+            publish_system_error(
+                "The assistant failed to initialize and may not respond "
+                "correctly. Please try again shortly.",
+                error_type="init_failed",
+            )
+            raise

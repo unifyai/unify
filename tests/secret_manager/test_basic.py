@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import unify
 
-from unity.secret_manager.secret_manager import SecretManager
+from droid.secret_manager.secret_manager import SecretManager
 
 
 def test_create_secret(secret_manager_context):

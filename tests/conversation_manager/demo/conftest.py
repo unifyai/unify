@@ -76,11 +76,11 @@ def _enable_demo_mode() -> None:
     the Orchestra assistant record before initialization).
     """
     os.environ["DEMO_MODE"] = "true"
-    from unity.settings import SETTINGS
+    from droid.settings import SETTINGS
 
     SETTINGS.DEMO_MODE = True
 
-    from unity.session_details import SESSION_DETAILS
+    from droid.session_details import SESSION_DETAILS
 
     SESSION_DETAILS.user.first_name = DEMO_OPERATOR["first_name"]
     SESSION_DETAILS.user.surname = DEMO_OPERATOR["surname"]
@@ -96,11 +96,11 @@ def _enable_demo_mode() -> None:
 def _disable_demo_mode() -> None:
     """Restore SETTINGS and env after a demo-mode fixture tears down."""
     os.environ.pop("DEMO_MODE", None)
-    from unity.settings import SETTINGS
+    from droid.settings import SETTINGS
 
     SETTINGS.DEMO_MODE = False
 
-    from unity.session_details import SESSION_DETAILS
+    from droid.session_details import SESSION_DETAILS
 
     SESSION_DETAILS.user.first_name = ""
     SESSION_DETAILS.user.surname = ""
@@ -127,11 +127,11 @@ async def conversation_manager(request) -> CMStepDriver:
     - Boss contact (contact_id=1) is left sparse (no name, no email, no phone)
     - Demo operator (contact_id=2) is seeded
     """
-    from unity.actor.simulated import SimulatedActor
-    from unity.conversation_manager.event_broker import reset_event_broker
-    from unity.conversation_manager import start_async, stop_async
-    from unity.conversation_manager.domains import managers_utils
-    from unity.settings import SETTINGS
+    from droid.actor.simulated import SimulatedActor
+    from droid.conversation_manager.event_broker import reset_event_broker
+    from droid.conversation_manager import start_async, stop_async
+    from droid.conversation_manager.domains import managers_utils
+    from droid.settings import SETTINGS
 
     _enable_demo_mode()
 
@@ -212,14 +212,14 @@ def initialized_cm(conversation_manager: CMStepDriver):
     _complete_in_flight_actions(conversation_manager)
     conversation_manager.contact_index.clear_conversations()
 
-    import unity.conversation_manager.domains.brain_action_tools as bat
+    import droid.conversation_manager.domains.brain_action_tools as bat
 
     bat._next_handle_id = 0
 
     conversation_manager.cm.chat_history.clear()
     conversation_manager.all_tool_calls.clear()
 
-    from unity.common.prompt_helpers import now as prompt_now
+    from droid.common.prompt_helpers import now as prompt_now
 
     conversation_manager.cm.last_snapshot = prompt_now(as_string=False)
 

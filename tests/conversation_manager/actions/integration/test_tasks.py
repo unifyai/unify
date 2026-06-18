@@ -21,7 +21,7 @@ from tests.conversation_manager.actions.integration.helpers import (
     verify_task_in_db,
     wait_for_actor_completion,
 )
-from unity.conversation_manager.events import SMSReceived
+from droid.conversation_manager.events import SMSReceived
 
 pytestmark = [pytest.mark.integration, pytest.mark.eval]
 
@@ -73,7 +73,7 @@ async def test_task_lookup_by_name_returns_description(initialized_cm_codeact):
     task_desc = f"Send Alice a quick note about the meeting. Ref: TASK-QUERY-{uniq}."
 
     # Create deterministically out-of-band so CM can't answer from recent chat history.
-    from unity.manager_registry import ManagerRegistry
+    from droid.manager_registry import ManagerRegistry
 
     scheduler = ManagerRegistry.get_task_scheduler()
     assert scheduler is not None, "TaskScheduler is not available"
@@ -147,7 +147,7 @@ async def test_task_update_description_persists(initialized_cm_codeact):
     # ActorResult from the completed action sits in the broker unprocessed.
     # Explicitly step the CM with the ActorResult so it moves the action
     # from in_flight_actions to completed_actions before the next message.
-    from unity.conversation_manager.events import ActorResult
+    from droid.conversation_manager.events import ActorResult
 
     await cm.step(
         ActorResult(handle_id=h1, success=True, result=final1),

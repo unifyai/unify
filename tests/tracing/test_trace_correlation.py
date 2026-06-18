@@ -1,11 +1,11 @@
 """
-Tests for OpenTelemetry trace correlation between Unity and Orchestra.
+Tests for OpenTelemetry trace correlation between Droid and Orchestra.
 
 Verifies that:
 1. Each test gets a unique trace_id
 2. The trace_id is logged to pytest output
 3. HTTP clients propagate traceparent header
-4. End-to-end: trace_id propagates from Unity test to Orchestra trace files
+4. End-to-end: trace_id propagates from Droid test to Orchestra trace files
 """
 
 import json
@@ -21,7 +21,7 @@ class TestTraceCorrelation:
 
     def test_trace_id_is_assigned(self):
         """Verify the test gets a trace_id from OpenTelemetry."""
-        from unity.common.test_tracing import get_current_trace_id
+        from droid.common.test_tracing import get_current_trace_id
 
         trace_id = get_current_trace_id()
         # Should have a valid trace_id (32 hex chars)
@@ -31,7 +31,7 @@ class TestTraceCorrelation:
 
     def test_different_tests_get_different_trace_ids(self):
         """Verify each test gets a unique trace_id."""
-        from unity.common.test_tracing import get_current_trace_id
+        from droid.common.test_tracing import get_current_trace_id
 
         # Store this test's trace_id for comparison
         trace_id = get_current_trace_id()
@@ -41,7 +41,7 @@ class TestTraceCorrelation:
 
     def test_trace_id_differs_from_previous(self):
         """Verify this test has a different trace_id than the previous test."""
-        from unity.common.test_tracing import get_current_trace_id
+        from droid.common.test_tracing import get_current_trace_id
 
         trace_id = get_current_trace_id()
         assert trace_id is not None
@@ -59,7 +59,7 @@ class TestTraceparentHeader:
         """Verify HTTPXClientInstrumentor injects traceparent header."""
         import httpx
 
-        from unity.common.test_tracing import get_current_trace_id
+        from droid.common.test_tracing import get_current_trace_id
 
         trace_id = get_current_trace_id()
         if trace_id is None:
@@ -97,7 +97,7 @@ class TestTraceparentHeader:
         """Verify async HTTPXClientInstrumentor injects traceparent header."""
         import httpx
 
-        from unity.common.test_tracing import get_current_trace_id
+        from droid.common.test_tracing import get_current_trace_id
 
         trace_id = get_current_trace_id()
         if trace_id is None:
@@ -123,10 +123,10 @@ class TestTraceparentHeader:
 
 
 class TestEndToEndTraceCorrelation:
-    """End-to-end tests verifying trace_id propagates from Unity to Orchestra.
+    """End-to-end tests verifying trace_id propagates from Droid to Orchestra.
 
     These tests make real HTTP calls to a running Orchestra instance and verify
-    that the trace_id from Unity's OpenTelemetry span appears in Orchestra's
+    that the trace_id from Droid's OpenTelemetry span appears in Orchestra's
     trace files.
 
     Requirements:
@@ -145,8 +145,8 @@ class TestEndToEndTraceCorrelation:
             return Path(trace_dir)
 
         # Fall back to scanning logs/orchestra for most recent session
-        unity_root = Path(__file__).parent.parent.parent
-        orchestra_logs = unity_root / "logs" / "orchestra"
+        droid_root = Path(__file__).parent.parent.parent
+        orchestra_logs = droid_root / "logs" / "orchestra"
         if orchestra_logs.exists():
             # Find most recent session directory
             sessions = sorted(orchestra_logs.iterdir(), reverse=True)
@@ -212,11 +212,11 @@ class TestEndToEndTraceCorrelation:
         return "/projects"
 
     def test_trace_id_propagates_to_orchestra(self):
-        """Verify trace_id from Unity test appears in Orchestra trace files.
+        """Verify trace_id from Droid test appears in Orchestra trace files.
 
         This is the critical end-to-end test that proves the full correlation
         chain works:
-        1. Unity test creates a trace span
+        1. Droid test creates a trace span
         2. HTTP call includes traceparent header with trace_id
         3. Orchestra receives and uses the same trace_id
         4. Orchestra writes trace file with that trace_id
@@ -225,7 +225,7 @@ class TestEndToEndTraceCorrelation:
         """
         import httpx
 
-        from unity.common.test_tracing import get_current_trace_id
+        from droid.common.test_tracing import get_current_trace_id
 
         # Skip if tracing not enabled
         trace_id = get_current_trace_id()
@@ -289,7 +289,7 @@ class TestEndToEndTraceCorrelation:
 
         # Success! Log for debugging
         print(f"\n✅ Trace correlation verified!")
-        print(f"   Unity trace_id: {trace_id}")
+        print(f"   Droid trace_id: {trace_id}")
         print(f"   Orchestra file: {trace_file.name}")
         print(f"   Spans recorded: {len(data['spans'])}")
 
@@ -298,7 +298,7 @@ class TestEndToEndTraceCorrelation:
         """Verify async HTTP calls also propagate trace_id to Orchestra."""
         import httpx
 
-        from unity.common.test_tracing import get_current_trace_id
+        from droid.common.test_tracing import get_current_trace_id
 
         trace_id = get_current_trace_id()
         if trace_id is None:

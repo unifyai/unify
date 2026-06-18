@@ -4,9 +4,9 @@ import hashlib
 
 import pytest
 
-from unity.function_manager.hash_utils import stable_hash_for_rows
-from unity.function_manager.primitives.scope import PrimitiveScope
-from unity.function_manager.primitives.registry import (
+from droid.function_manager.hash_utils import stable_hash_for_rows
+from droid.function_manager.primitives.scope import PrimitiveScope
+from droid.function_manager.primitives.registry import (
     get_registry,
     get_primitive_sources,
     ManagerSpec,
@@ -234,8 +234,8 @@ def test_primitive_row_filter():
     filter_expr = registry.primitive_row_filter(scope)
     assert "primitive_class in [" in filter_expr
     assert " or " not in filter_expr
-    assert "unity.contact_manager.contact_manager.ContactManager" in filter_expr
-    assert "unity.file_manager.managers.file_manager.FileManager" in filter_expr
+    assert "droid.contact_manager.contact_manager.ContactManager" in filter_expr
+    assert "droid.file_manager.managers.file_manager.FileManager" in filter_expr
     # Should NOT include unscoped managers
     assert "TaskScheduler" not in filter_expr
 
@@ -281,7 +281,7 @@ def test_integrations_discovery_primitive_is_collected():
     row = primitives["primitives.integrations.search_integrations"]
     assert row["primitive_method"] == "search_integrations"
     assert (
-        row["primitive_class"] == "unity.integrations.primitives.IntegrationPrimitives"
+        row["primitive_class"] == "droid.integrations.primitives.IntegrationPrimitives"
     )
     assert "support" in row["docstring"].lower()
     assert "primitives.integrations.search_tools" not in primitives
@@ -442,7 +442,7 @@ def test_compute_primitives_hash_accepts_precomputed():
 
 def test_manager_specs_includes_all_aliases():
     """_MANAGER_SPECS covers every alias in VALID_MANAGER_ALIASES."""
-    from unity.function_manager.primitives.scope import VALID_MANAGER_ALIASES
+    from droid.function_manager.primitives.scope import VALID_MANAGER_ALIASES
 
     spec_aliases = {s.manager_alias for s in _MANAGER_SPECS}
     assert spec_aliases == VALID_MANAGER_ALIASES
@@ -515,7 +515,7 @@ def test_all_primitive_methods_have_summary_and_parameters():
         fallback_cls = None
         if spec.manager_alias == "computer":
             try:
-                from unity.function_manager.computer_backends import ComputerBackend
+                from droid.function_manager.computer_backends import ComputerBackend
 
                 fallback_cls = ComputerBackend
             except ImportError:

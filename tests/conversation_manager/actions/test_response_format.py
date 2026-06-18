@@ -23,12 +23,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from unity.conversation_manager.domains.brain_action_tools import (
+from droid.conversation_manager.domains.brain_action_tools import (
     ConversationManagerBrainActionTools,
     schema_dict_to_pydantic,
 )
-from unity.conversation_manager.domains.contact_index import ContactIndex
-from unity.conversation_manager.domains.notifications import NotificationBar
+from droid.conversation_manager.domains.contact_index import ContactIndex
+from droid.conversation_manager.domains.notifications import NotificationBar
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixtures
@@ -57,7 +57,7 @@ def mock_cm():
 def brain_action_tools(mock_cm):
     """ConversationManagerBrainActionTools wired to the mock CM."""
     with patch(
-        "unity.conversation_manager.domains.brain_action_tools.get_event_broker",
+        "droid.conversation_manager.domains.brain_action_tools.get_event_broker",
     ) as mock_broker:
         mock_broker.return_value = MagicMock()
         mock_broker.return_value.publish = AsyncMock()
@@ -181,7 +181,7 @@ class TestActToolSignature:
 
     def test_response_format_is_optional_in_tool_schema(self, brain_action_tools):
         """response_format should NOT be in the required list of the tool schema."""
-        from unity.common.llm_helpers import method_to_schema
+        from droid.common.llm_helpers import method_to_schema
 
         schema = method_to_schema(brain_action_tools.act, include_class_name=False)
         fn_schema = schema["function"]
