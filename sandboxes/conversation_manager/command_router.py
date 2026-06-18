@@ -218,12 +218,6 @@ class CommandRouter:
         cfg = getattr(self.args, "_actor_config", None)
         if td is None:
             return RouterResult(lines=["⚠️ Trace display is not initialized."])
-        if getattr(cfg, "actor_type", "simulated") == "simulated":
-            return RouterResult(
-                lines=[
-                    "⚠️ Trace display only available for CodeActActor configurations.",
-                ],
-            )
         n = 3
         try:
             if (args or "").strip():
@@ -517,25 +511,7 @@ class CommandRouter:
         except Exception as exc:
             return RouterResult(lines=[f"❌ Failed to snapshot project: {exc}"])
 
-        # Prompt for config choice (reuse same menu as startup, but inline).
-        last_used = cfg_mgr.load_config()
-
-        def _prompt_choice() -> ActorConfig:
-            print("Select Actor Configuration:")
-            print(
-                "1. SandboxSimulatedActor (simulated managers, no computer interface)",
-            )
-            print("2. CodeActActor + Simulated Managers (mock computer backend)")
-            print("3. CodeActActor + Real Managers + Real Computer Interface")
-            raw = input("Enter choice (1-3) or press Enter for last used: ").strip()
-            if not raw:
-                return last_used
-            m = {"1": "simulated", "2": "codeact_simulated", "3": "codeact_real"}
-            if raw in m:
-                return ActorConfig(actor_type=m[raw])  # type: ignore[arg-type]
-            return last_used
-
-        new_cfg = await asyncio.to_thread(_prompt_choice)
+        new_cfg = ActorConfig(actor_type="codeact_real")
 
         # Validate with retry/switch/exit (switch returns to prompt).
         while True:

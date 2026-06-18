@@ -28,27 +28,23 @@ from sandboxes.conversation_manager.agent_service_bootstrap import (
 
 LG = logging.getLogger("conversation_manager_sandbox")
 
-ActorType = Literal["simulated", "codeact_simulated", "codeact_real"]
+ActorType = Literal["codeact_real"]
 
 
 @dataclass(frozen=True)
 class ActorConfig:
-    """User-facing sandbox configuration for actor + manager + computer backend mode."""
+    """Sandbox configuration: CodeAct actor, real managers, real computer interface."""
 
-    actor_type: ActorType = "simulated"
+    actor_type: ActorType = "codeact_real"
     version: int = 1
     last_updated: Optional[str] = None
 
     @property
-    def managers_mode(self) -> Literal["simulated", "real"]:
-        return "real" if self.actor_type == "codeact_real" else "simulated"
+    def managers_mode(self) -> Literal["real"]:
+        return "real"
 
     @property
-    def computer_backend_mode(self) -> Literal["none", "mock", "real"]:
-        if self.actor_type == "simulated":
-            return "none"
-        if self.actor_type == "codeact_simulated":
-            return "mock"
+    def computer_backend_mode(self) -> Literal["real"]:
         return "real"
 
     def to_json_obj(self) -> dict:
@@ -60,13 +56,10 @@ class ActorConfig:
 
     @classmethod
     def from_json_obj(cls, obj: dict) -> "ActorConfig":
-        actor_type = obj.get("actor_type") or "simulated"
-        if actor_type not in {"simulated", "codeact_simulated", "codeact_real"}:
-            actor_type = "simulated"
         version = int(obj.get("version") or 1)
         last_updated = obj.get("last_updated")
         return cls(
-            actor_type=actor_type,  # type: ignore[arg-type]
+            actor_type="codeact_real",
             version=version,
             last_updated=last_updated if isinstance(last_updated, str) else None,
         )
