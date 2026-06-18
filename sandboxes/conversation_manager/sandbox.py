@@ -452,54 +452,10 @@ async def _main_async() -> None:
 
     selected: ActorConfig | None = None
 
-    def _prompt() -> ActorConfig:
-        last_used = cfg_mgr.load_config()
-        print("Unity runtime")
-        print("═══════════════════════════════════════════════════════════")
-        print("")
-        print("Select runtime mode:")
-        print("")
-        print("1. Simulated actor + simulated managers (no computer interface)")
-        print("2. Real CodeAct actor + simulated managers (mock computer backend)")
-        print(
-            "3. Real CodeAct actor + real managers + real computer interface  [install-and-live]",
-        )
-        print("")
-        print(
-            f"Last used: [{_to_choice(last_used.actor_type)}] {_label(last_used.actor_type)}",
-        )
-        print("")
-        raw = input("Enter choice (1-3) or press Enter for last used: ").strip()
-        if not raw:
-            return last_used
-        if raw in {"1", "2", "3"}:
-            return ActorConfig(actor_type=_from_choice(raw))
-        print("⚠️ Invalid choice, using last used.")
-        return last_used
-
-    def _to_choice(actor_type: str) -> str:
-        return {"simulated": "1", "codeact_simulated": "2", "codeact_real": "3"}.get(
-            actor_type,
-            "1",
-        )
-
-    def _from_choice(choice: str) -> str:
-        return {"1": "simulated", "2": "codeact_simulated", "3": "codeact_real"}[choice]
-
-    def _label(actor_type: str) -> str:
-        return {
-            "simulated": "SandboxSimulatedActor (simulated managers, no computer interface)",
-            "codeact_simulated": "CodeActActor + Simulated Managers (mock computer backend)",
-            "codeact_real": "CodeActActor + Real Managers + Real Computer Interface",
-        }.get(
-            actor_type,
-            "SandboxSimulatedActor (simulated managers, no computer interface)",
-        )
-
     # Outer loop supports runtime config switching (REPL command `config`).
     while True:
         if selected is None:
-            selected = await asyncio.to_thread(_prompt)
+            selected = ActorConfig(actor_type="codeact_real")
         # Validate infra with retry/switch/exit loop.
         while True:
 

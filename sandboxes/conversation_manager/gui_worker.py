@@ -458,7 +458,7 @@ def _coerce_actor_config(config: dict) -> ActorConfig:
         return ActorConfig.from_json_obj(raw if isinstance(raw, dict) else {})
     except Exception:
         # Safe default.
-        return ActorConfig(actor_type="simulated")
+        return ActorConfig(actor_type="codeact_real")
 
 
 def _build_args_namespace(*, config: dict, sender: _Sender) -> Any:
@@ -630,27 +630,7 @@ async def _ipc_loop(
                 state.awaiting_config_choice = False
                 sender.send_lines(["(config switch cancelled)"], id=cmd_id)
                 continue
-            actor_type = {
-                "1": "simulated",
-                "2": "codeact_simulated",
-                "3": "codeact_real",
-            }.get(
-                choice,
-            )
-            if actor_type is None and choice in {
-                "simulated",
-                "codeact_simulated",
-                "codeact_real",
-            }:
-                actor_type = choice
-            if actor_type is None:
-                sender.send_lines(
-                    [
-                        "⚠️ Please choose 1, 2, or 3 (or type 'cancel').",
-                    ],
-                    id=cmd_id,
-                )
-                continue
+            actor_type = "codeact_real"
 
             new_cfg = ActorConfig(actor_type=actor_type)  # type: ignore[arg-type]
             try:
@@ -708,12 +688,9 @@ async def _ipc_loop(
             state.awaiting_config_choice = True
             sender.send_lines(
                 [
-                    "Select actor configuration:",
-                    "1. Simulated (no computer interface)",
-                    "2. CodeAct + simulated managers (mock computer backend)",
-                    "3. CodeAct + real managers + real computer interface",
+                    "Restart with CodeAct + real managers + real computer interface?",
                     "",
-                    "Reply with 1, 2, or 3 (or type 'cancel').",
+                    "Reply 'yes' to confirm or 'cancel' to abort.",
                 ],
                 id=cmd_id,
             )

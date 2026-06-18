@@ -530,13 +530,11 @@ if _TEXTUAL_AVAILABLE:
                     rt: GuiRuntime = app.runtime  # type: ignore[attr-defined]
                     cfg = getattr(rt.args, "_actor_config", None)
                     actor_type = (
-                        getattr(cfg, "actor_type", "simulated") if cfg else "simulated"
-                    )
-                    mgrs = (
-                        getattr(cfg, "managers_mode", "simulated")
+                        getattr(cfg, "actor_type", "codeact_real")
                         if cfg
-                        else "simulated"
+                        else "codeact_real"
                     )
+                    mgrs = getattr(cfg, "managers_mode", "real") if cfg else "simulated"
                     backend_mode = (
                         getattr(cfg, "computer_backend_mode", "none") if cfg else "none"
                     )

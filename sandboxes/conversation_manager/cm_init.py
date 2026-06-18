@@ -66,7 +66,7 @@ async def initialize_cm(
     cfg: ActorConfig = getattr(
         args,
         "_actor_config",
-        ActorConfig(actor_type="simulated"),
+        ActorConfig(actor_type="codeact_real"),
     )
     use_real_managers = cfg.managers_mode == "real"
 
