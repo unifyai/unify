@@ -78,7 +78,7 @@ def reduce_logs(
         :func:`normalize_filter_expr` for consistency with other tools.
     group_by : str | list[str] | None, default None
         Optional field(s) to group by. Use a single column name for a single
-        grouping level, or a list like ``[\"status\", \"queue_id\"]`` to group
+        grouping level, or a list like ``[\"status\", \"priority\"]`` to group
         hierarchically in the given order. When provided, the return value
         follows the grouped forms described in the Unify ``get_logs_metric``
         docs (nested ``dict`` structures keyed by group values).

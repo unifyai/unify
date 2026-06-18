@@ -501,7 +501,6 @@ _EXAMPLE_GENERATORS: Dict[str, List[str]] = {
     ],
     "tasks": [
         "get_primitives_task_execute_example",
-        "get_primitives_dynamic_methods_example",
     ],
     "knowledge": [
         "get_primitives_knowledge_ask_example",
