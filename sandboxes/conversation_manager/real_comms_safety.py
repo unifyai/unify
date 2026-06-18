@@ -1,7 +1,7 @@
 """
 Real-comms safety layer for the ConversationManager sandbox.
 
-Sandbox-only monkey patching of `unity.conversation_manager.domains.comms_utils`
+Sandbox-only monkey patching of `droid.conversation_manager.domains.comms_utils`
 to require an explicit Y/N confirmation before sending any *real* outbound comms.
 """
 
@@ -46,9 +46,9 @@ def apply_real_comms_safety(*, config: SafetyConfig) -> None:
 
     Must be called AFTER `run_conversation_manager()` so imports are initialized.
     """
-    from unity.conversation_manager.domains import comms_utils
-    from unity.session_details import SESSION_DETAILS
-    from unity.settings import SETTINGS
+    from droid.conversation_manager.domains import comms_utils
+    from droid.session_details import SESSION_DETAILS
+    from droid.settings import SETTINGS
 
     original_send_sms = comms_utils.send_sms_message_via_number
     original_send_email = comms_utils.send_email_via_address

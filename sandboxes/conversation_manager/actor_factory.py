@@ -22,10 +22,10 @@ from sandboxes.conversation_manager.computer_activity import (
     install_computer_activity_hooks,
 )
 from sandboxes.conversation_manager.config_manager import ActorConfig
-from unity.actor.code_act_actor import CodeActActor
-from unity.actor.environments import ComputerEnvironment, StateManagerEnvironment
-from unity.function_manager.primitives import ComputerPrimitives, Primitives
-from unity.manager_registry import ManagerRegistry
+from droid.actor.code_act_actor import CodeActActor
+from droid.actor.environments import ComputerEnvironment, StateManagerEnvironment
+from droid.function_manager.primitives import ComputerPrimitives, Primitives
+from droid.manager_registry import ManagerRegistry
 
 LG = logging.getLogger("conversation_manager_sandbox")
 
@@ -149,22 +149,22 @@ class ActorFactory:
         impl = "real"
 
         # State managers
-        os.environ["UNITY_CONTACT_IMPL"] = impl
-        os.environ["UNITY_TRANSCRIPT_IMPL"] = impl
-        os.environ["UNITY_TASK_IMPL"] = impl
-        os.environ["UNITY_KNOWLEDGE_IMPL"] = impl
-        os.environ["UNITY_GUIDANCE_IMPL"] = impl
-        os.environ["UNITY_SECRET_IMPL"] = impl
-        os.environ["UNITY_WEB_IMPL"] = impl
-        os.environ["UNITY_FILE_IMPL"] = impl
+        os.environ["DROID_CONTACT_IMPL"] = impl
+        os.environ["DROID_TRANSCRIPT_IMPL"] = impl
+        os.environ["DROID_TASK_IMPL"] = impl
+        os.environ["DROID_KNOWLEDGE_IMPL"] = impl
+        os.environ["DROID_GUIDANCE_IMPL"] = impl
+        os.environ["DROID_SECRET_IMPL"] = impl
+        os.environ["DROID_WEB_IMPL"] = impl
+        os.environ["DROID_FILE_IMPL"] = impl
 
         # Support managers commonly used by CM / primitives
-        os.environ["UNITY_DATA_IMPL"] = impl
-        os.environ["UNITY_FUNCTION_IMPL"] = impl
-        os.environ["UNITY_CONVERSATION_IMPL"] = impl
+        os.environ["DROID_DATA_IMPL"] = impl
+        os.environ["DROID_FUNCTION_IMPL"] = impl
+        os.environ["DROID_CONVERSATION_IMPL"] = impl
 
         # Memory is optional; keep it aligned so behavior is predictable.
-        os.environ["UNITY_MEMORY_IMPL"] = impl
+        os.environ["DROID_MEMORY_IMPL"] = impl
 
         # Config manager for per-company actor configuration.
-        os.environ["UNITY_CONFIG_IMPL"] = impl
+        os.environ["DROID_CONFIG_IMPL"] = impl

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 
-from unity.function_manager.primitives import (
+from droid.function_manager.primitives import (
     Primitives,
     _AsyncPrimitiveWrapper,
     _create_async_wrapper,
@@ -71,7 +71,7 @@ def test_data_manager_has_expected_methods():
 
 def test_data_manager_metadata_registered():
     """DataManager metadata should be in ToolSurfaceRegistry."""
-    from unity.function_manager.primitives import get_registry
+    from droid.function_manager.primitives import get_registry
 
     registry = get_registry()
     spec = registry.get_manager_spec("data")
@@ -85,17 +85,17 @@ def test_data_manager_metadata_registered():
 
 def test_data_manager_in_primitive_registry():
     """DataManager should be registered in ToolSurfaceRegistry."""
-    from unity.function_manager.primitives import get_registry
+    from droid.function_manager.primitives import get_registry
 
     registry = get_registry()
     spec = registry.get_manager_spec("data")
     assert spec is not None
-    assert spec.primitive_class_path == "unity.data_manager.data_manager.DataManager"
+    assert spec.primitive_class_path == "droid.data_manager.data_manager.DataManager"
 
 
 def test_data_manager_alias_to_getter():
     """DataManager should have entry in _ALIAS_TO_GETTER."""
-    from unity.function_manager.primitives.runtime import _ALIAS_TO_GETTER
+    from droid.function_manager.primitives.runtime import _ALIAS_TO_GETTER
 
     assert "data" in _ALIAS_TO_GETTER
     assert _ALIAS_TO_GETTER["data"] == "get_data_manager"
@@ -117,7 +117,7 @@ def test_file_manager_has_data_manager_access():
     assert dm is not None
 
     # Both should be the same type
-    from unity.data_manager.base import BaseDataManager
+    from droid.data_manager.base import BaseDataManager
 
     assert isinstance(dm, BaseDataManager)
 
@@ -177,7 +177,7 @@ def test_file_manager_already_async_methods_unchanged():
 
 def test_async_patching_is_idempotent():
     """Creating multiple wrappers for the same manager should work."""
-    from unity.manager_registry import ManagerRegistry
+    from droid.manager_registry import ManagerRegistry
 
     dm = ManagerRegistry.get_data_manager()
 
@@ -195,7 +195,7 @@ def test_async_patching_is_idempotent():
 
 def test_primitives_returns_async_wrapper():
     """primitives.data should return an async wrapper that delegates to DataManager."""
-    from unity.manager_registry import ManagerRegistry
+    from droid.manager_registry import ManagerRegistry
 
     primitives = Primitives()
     dm_wrapper = primitives.data
@@ -213,7 +213,7 @@ def test_primitives_returns_async_wrapper():
 
 def test_primitives_files_returns_async_wrapper():
     """primitives.files should return an async wrapper that delegates to FileManager."""
-    from unity.manager_registry import ManagerRegistry
+    from droid.manager_registry import ManagerRegistry
 
     primitives = Primitives()
     fm_wrapper = primitives.files

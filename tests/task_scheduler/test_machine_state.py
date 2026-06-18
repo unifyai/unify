@@ -1,7 +1,7 @@
 import hashlib
 
-from unity.task_scheduler import machine_state
-from unity.task_scheduler.machine_state import (
+from droid.task_scheduler import machine_state
+from droid.task_scheduler.machine_state import (
     TASK_MACHINE_STATE_PROJECT,
     TaskActivationSnapshot,
     TaskOutboundOperationProvenance,
@@ -141,7 +141,7 @@ def test_get_task_activation_queries_for_null_personal_destination(monkeypatch):
         captured.update(kwargs)
         return []
 
-    monkeypatch.setattr("unity.task_scheduler.storage.unify.get_logs", _fake_get_logs)
+    monkeypatch.setattr("droid.task_scheduler.storage.unify.get_logs", _fake_get_logs)
     monkeypatch.setattr(machine_state.SESSION_DETAILS.user, "id", "user-1")
     monkeypatch.setattr(machine_state.SESSION_DETAILS.assistant, "agent_id", 2069)
 
@@ -188,7 +188,7 @@ def test_get_task_activation_queries_assistants_machine_state_project(monkeypatc
         captured.update(kwargs)
         return [_FakeRow()]
 
-    monkeypatch.setattr("unity.task_scheduler.storage.unify.get_logs", _fake_get_logs)
+    monkeypatch.setattr("droid.task_scheduler.storage.unify.get_logs", _fake_get_logs)
     monkeypatch.setattr(machine_state.SESSION_DETAILS.user, "id", "user-1")
     monkeypatch.setattr(machine_state.SESSION_DETAILS.assistant, "agent_id", 42)
 

@@ -29,10 +29,10 @@ import datetime as dt
 import pytest
 
 from tests.helpers import _handle_project
-from unity.events.event_bus import EventBus, Event
-from unity.events.types.comms import CommsPayload
-from unity.events.types.tool_loop import ToolLoopPayload, ToolLoopKind
-from unity.events.types.manager_method import ManagerMethodPayload
+from droid.events.event_bus import EventBus, Event
+from droid.events.types.comms import CommsPayload
+from droid.events.types.tool_loop import ToolLoopPayload, ToolLoopKind
+from droid.events.types.manager_method import ManagerMethodPayload
 
 
 def _get_seq(payload) -> int:

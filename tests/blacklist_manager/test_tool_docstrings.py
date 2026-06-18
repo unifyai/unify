@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unity.blacklist_manager.base import BaseBlackListManager
+from droid.blacklist_manager.base import BaseBlackListManager
 
 
 def test_blacklist_write_tools_expose_destination_guidance():

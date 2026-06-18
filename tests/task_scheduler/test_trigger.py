@@ -8,11 +8,11 @@ from datetime import datetime, timezone, timedelta
 import pytest
 
 from tests.helpers import _handle_project
-from unity.actor.simulated import SimulatedActor
-from unity.task_scheduler.task_scheduler import TaskScheduler
-from unity.task_scheduler.types.status import Status
-from unity.task_scheduler.types.schedule import Schedule
-from unity.task_scheduler.types.trigger import Trigger, Medium
+from droid.actor.simulated import SimulatedActor
+from droid.task_scheduler.task_scheduler import TaskScheduler
+from droid.task_scheduler.types.status import Status
+from droid.task_scheduler.types.schedule import Schedule
+from droid.task_scheduler.types.trigger import Trigger, Medium
 
 # --------------------------------------------------------------------------- #
 # 1.  Creation – triggerable tasks                                            #

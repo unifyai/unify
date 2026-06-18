@@ -15,8 +15,8 @@ from types import SimpleNamespace
 
 import unify
 
-import unity.common.semantic_search as semantic_search
-from unity.common.semantic_search import (
+import droid.common.semantic_search as semantic_search
+from droid.common.semantic_search import (
     COMBINED_COSINE_KEY,
     fetch_top_k_by_terms_combined_client_side,
     fetch_top_k_by_terms_with_score,

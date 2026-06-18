@@ -8,9 +8,9 @@ import unillm
 
 from tests.helpers import _handle_project
 
-from unity.common.llm_client import new_llm_client
-from unity.common.async_tool_loop import start_async_tool_loop
-from unity.common.read_only_ask_guard import ReadOnlyAskGuardHandle
+from droid.common.llm_client import new_llm_client
+from droid.common.async_tool_loop import start_async_tool_loop
+from droid.common.read_only_ask_guard import ReadOnlyAskGuardHandle
 
 
 @pytest.mark.asyncio

@@ -10,7 +10,7 @@ assistant identity is known and before manager initialization.
 
 WHY THESE TESTS MATTER:
 -----------------------
-In production, Unity containers start in an idle state: no assistant ID,
+In production, Droid containers start in an idle state: no assistant ID,
 no API key, no user details. The container must stay alive by processing
 Ping keepalives while waiting for a StartupEvent from the adapter. Manager
 initialization must ONLY be triggered by StartupEvent (production) or
@@ -41,7 +41,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import pytest_asyncio
 
-from unity.conversation_manager.in_memory_event_broker import (
+from droid.conversation_manager.in_memory_event_broker import (
     create_in_memory_event_broker,
     reset_in_memory_event_broker,
 )
@@ -74,7 +74,7 @@ def _make_startup_event_kwargs() -> dict:
 
 def _make_idle_cm(event_broker):
     """Create a ConversationManager in idle state (uninitialized, no assistant)."""
-    from unity.conversation_manager.conversation_manager import ConversationManager
+    from droid.conversation_manager.conversation_manager import ConversationManager
 
     stop = asyncio.Event()
     cm = ConversationManager(
@@ -136,7 +136,7 @@ class TestIdleContainerEventProcessing:
         event loop for non-config events, this test will deadlock/timeout.
         This directly reproduces the bug from commit b3814ca2.
         """
-        from unity.conversation_manager.events import Ping
+        from droid.conversation_manager.events import Ping
 
         cm = _make_idle_cm(event_broker)
 
@@ -191,7 +191,7 @@ class TestIdleContainerEventProcessing:
         dependent work (like logging to TranscriptManager) is deferred
         via queue_operation, but the event itself must flow through.
         """
-        from unity.conversation_manager.events import SMSReceived
+        from droid.conversation_manager.events import SMSReceived
 
         cm = _make_idle_cm(event_broker)
 
@@ -234,7 +234,7 @@ class TestIdleContainerEventProcessing:
             await asyncio.sleep(0.3)
 
             # The SMS should have been added to the contact index
-            from unity.conversation_manager.cm_types import Medium
+            from droid.conversation_manager.cm_types import Medium
 
             msgs = cm.contact_index.get_messages_for_contact(1, Medium.SMS_MESSAGE)
             assert len(msgs) >= 1, (
@@ -257,7 +257,7 @@ class TestIdleContainerEventProcessing:
         This simulates the production scenario where an idle container
         sends keepalive pings every 30 seconds to avoid inactivity timeout.
         """
-        from unity.conversation_manager.events import Ping
+        from droid.conversation_manager.events import Ping
 
         cm = _make_idle_cm(event_broker)
         assert not cm.initialized
@@ -307,8 +307,8 @@ class TestStartupTriggersInitialization:
         We mock init_conv_manager to verify it's called and to flip
         cm.initialized without needing real Orchestra/Unify backends.
         """
-        from unity.conversation_manager.events import StartupEvent
-        from unity.conversation_manager.domains import managers_utils
+        from droid.conversation_manager.events import StartupEvent
+        from droid.conversation_manager.domains import managers_utils
 
         cm = _make_idle_cm(event_broker)
         assert not cm.initialized
@@ -343,7 +343,7 @@ class TestStartupTriggersInitialization:
                     mock_listen_to_operations,
                 ),
                 patch(
-                    "unity.conversation_manager.domains.event_handlers._startup_sequence",
+                    "droid.conversation_manager.domains.event_handlers._startup_sequence",
                     mock_startup_sequence,
                 ),
             ):
@@ -387,13 +387,13 @@ class TestFullIdleToLiveFlow:
 
         This is the "does our system hang forever" guardrail test.
         """
-        from unity.conversation_manager.events import (
+        from droid.conversation_manager.events import (
             Ping,
             StartupEvent,
             SMSReceived,
             InitializationComplete,
         )
-        from unity.conversation_manager.domains import managers_utils
+        from droid.conversation_manager.domains import managers_utils
 
         cm = _make_idle_cm(event_broker)
         assert not cm.initialized
@@ -447,7 +447,7 @@ class TestFullIdleToLiveFlow:
                     mock_listen_to_operations,
                 ),
                 patch(
-                    "unity.conversation_manager.domains.event_handlers._startup_sequence",
+                    "droid.conversation_manager.domains.event_handlers._startup_sequence",
                     mock_startup_sequence,
                 ),
             ):
@@ -490,7 +490,7 @@ class TestFullIdleToLiveFlow:
             # Wait for SMS to be processed
             await asyncio.sleep(0.3)
 
-            from unity.conversation_manager.cm_types import Medium
+            from droid.conversation_manager.cm_types import Medium
 
             msgs = cm.contact_index.get_messages_for_contact(1, Medium.SMS_MESSAGE)
             assert len(msgs) >= 1, (
@@ -523,7 +523,7 @@ class TestActBeforeInitialization:
         Calling act() on an uninitialized CM should return within a
         reasonable time — it must not deadlock waiting for initialization.
         """
-        from unity.conversation_manager.domains.brain_action_tools import (
+        from droid.conversation_manager.domains.brain_action_tools import (
             ConversationManagerBrainActionTools,
         )
 
@@ -535,7 +535,7 @@ class TestActBeforeInitialization:
         mock_cm.actor.act = AsyncMock(return_value=MagicMock())
 
         with patch(
-            "unity.conversation_manager.domains.brain_action_tools.get_event_broker",
+            "droid.conversation_manager.domains.brain_action_tools.get_event_broker",
         ) as mock_get_broker:
             mock_broker = MagicMock()
             mock_broker.publish = AsyncMock()

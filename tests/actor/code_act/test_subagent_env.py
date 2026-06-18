@@ -2,16 +2,16 @@
 
 import pytest
 
-from unity.actor.code_act_actor import (
+from droid.actor.code_act_actor import (
     AgentContext,
     get_current_agent_context,
     _CURRENT_AGENT_CONTEXT,
 )
-from unity.actor.environments import create_env, BaseEnvironment
-from unity.actor.environments.actor import (
+from droid.actor.environments import create_env, BaseEnvironment
+from droid.actor.environments.actor import (
     _resolve_parent_environments,
 )
-from unity.actor.execution.session import _CURRENT_ENVIRONMENTS
+from droid.actor.execution.session import _CURRENT_ENVIRONMENTS
 
 
 class TestCreateEnv:

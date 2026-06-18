@@ -8,9 +8,9 @@ import pytest
 import unify
 
 from tests.helpers import _handle_project
-from unity.image_manager.image_manager import ImageManager
-from unity.image_manager.utils import make_solid_png_base64
-from unity.session_details import SESSION_DETAILS
+from droid.image_manager.image_manager import ImageManager
+from droid.image_manager.utils import make_solid_png_base64
+from droid.session_details import SESSION_DETAILS
 
 
 def _team_id() -> int:

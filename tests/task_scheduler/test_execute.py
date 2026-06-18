@@ -15,20 +15,20 @@ from datetime import datetime, timezone, timedelta
 
 import pytest
 
-from unity.task_scheduler import task_scheduler as task_scheduler_module
-from unity.task_scheduler.machine_state import (
+from droid.task_scheduler import task_scheduler as task_scheduler_module
+from droid.task_scheduler.machine_state import (
     TaskRunProvenance,
     TaskRunReference,
     remember_live_task_run_provenance,
 )
-from unity.task_scheduler.task_scheduler import TaskScheduler
-from unity.actor.simulated import SimulatedActor
-from unity.actor.simulated import SimulatedActorHandle
-from unity.task_scheduler.types.schedule import Schedule
-from unity.task_scheduler.types.activated_by import ActivatedBy
-from unity.task_scheduler.types.repetition import Frequency, RepeatPattern
-from unity.task_scheduler.types.status import Status
-from unity.common.task_execution_context import (
+from droid.task_scheduler.task_scheduler import TaskScheduler
+from droid.actor.simulated import SimulatedActor
+from droid.actor.simulated import SimulatedActorHandle
+from droid.task_scheduler.types.schedule import Schedule
+from droid.task_scheduler.types.activated_by import ActivatedBy
+from droid.task_scheduler.types.repetition import Frequency, RepeatPattern
+from droid.task_scheduler.types.status import Status
+from droid.common.task_execution_context import (
     current_post_run_review_context,
     current_task_execution_delegate,
 )
@@ -145,11 +145,11 @@ async def test_execute_materializes_live_run_after_actor_start(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "unity.task_scheduler.active_task.create_or_adopt_live_task_run",
+        "droid.task_scheduler.active_task.create_or_adopt_live_task_run",
         _fake_create_or_adopt,
     )
     monkeypatch.setattr(
-        "unity.task_scheduler.active_task.update_task_run_record",
+        "droid.task_scheduler.active_task.update_task_run_record",
         lambda *args, **kwargs: None,
     )
 
@@ -209,11 +209,11 @@ async def test_scheduled_execution_consumes_provenance_and_rearms(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "unity.task_scheduler.active_task.create_or_adopt_live_task_run",
+        "droid.task_scheduler.active_task.create_or_adopt_live_task_run",
         _fake_create_or_adopt,
     )
     monkeypatch.setattr(
-        "unity.task_scheduler.active_task.update_task_run_record",
+        "droid.task_scheduler.active_task.update_task_run_record",
         lambda run_reference, updates: run_updates.append(
             (run_reference, dict(updates)),
         ),
@@ -300,11 +300,11 @@ async def test_scheduled_execution_live_delegate_materializes_run_and_rearms(
         ),
     )
     monkeypatch.setattr(
-        "unity.task_scheduler.active_task.create_or_adopt_live_task_run",
+        "droid.task_scheduler.active_task.create_or_adopt_live_task_run",
         _fake_create_or_adopt,
     )
     monkeypatch.setattr(
-        "unity.task_scheduler.active_task.update_task_run_record",
+        "droid.task_scheduler.active_task.update_task_run_record",
         lambda run_reference, updates: run_updates.append(
             (run_reference, dict(updates)),
         ),
@@ -348,7 +348,7 @@ async def test_scheduled_execution_live_delegate_materializes_run_and_rearms(
 async def test_scheduled_execution_offline_delegate_materializes_run_and_rearms(
     monkeypatch,
 ):
-    from unity.task_scheduler import offline_runner
+    from droid.task_scheduler import offline_runner
 
     scheduler = TaskScheduler()
     task_id = scheduler._create_task(
@@ -414,11 +414,11 @@ async def test_scheduled_execution_offline_delegate_materializes_run_and_rearms(
         ),
     )
     monkeypatch.setattr(
-        "unity.task_scheduler.active_task.create_or_adopt_live_task_run",
+        "droid.task_scheduler.active_task.create_or_adopt_live_task_run",
         _fake_create_or_adopt,
     )
     monkeypatch.setattr(
-        "unity.task_scheduler.active_task.update_task_run_record",
+        "droid.task_scheduler.active_task.update_task_run_record",
         lambda run_reference, updates: run_updates.append(
             (run_reference, dict(updates)),
         ),
@@ -482,7 +482,7 @@ async def test_offline_recurring_execution_uses_physical_source_instance(
     monkeypatch,
     entrypoint,
 ):
-    from unity.task_scheduler import offline_runner
+    from droid.task_scheduler import offline_runner
 
     scheduler = TaskScheduler()
     task_id = scheduler._create_task(
@@ -515,7 +515,7 @@ async def test_offline_recurring_execution_uses_physical_source_instance(
     monkeypatch.setattr(task_scheduler_module.SESSION_DETAILS.assistant, "agent_id", 42)
     monkeypatch.setattr(offline_runner, "_build_offline_actor", _FakeOfflineActor)
     monkeypatch.setattr(
-        "unity.task_scheduler.active_task.create_or_adopt_live_task_run",
+        "droid.task_scheduler.active_task.create_or_adopt_live_task_run",
         lambda provenance: TaskRunReference(
             assistant_id=provenance.assistant_id,
             run_key=(
@@ -526,7 +526,7 @@ async def test_offline_recurring_execution_uses_physical_source_instance(
         ),
     )
     monkeypatch.setattr(
-        "unity.task_scheduler.active_task.update_task_run_record",
+        "droid.task_scheduler.active_task.update_task_run_record",
         lambda run_reference, updates: None,
     )
 
@@ -588,7 +588,7 @@ async def test_offline_recurring_execution_uses_physical_source_instance(
 async def test_offline_scheduled_execution_reconciles_stale_active_blocker(
     monkeypatch,
 ):
-    from unity.task_scheduler import offline_runner
+    from droid.task_scheduler import offline_runner
 
     scheduler = TaskScheduler()
     task_id = scheduler._create_task(
@@ -628,7 +628,7 @@ async def test_offline_scheduled_execution_reconciles_stale_active_blocker(
     monkeypatch.setattr(task_scheduler_module.SESSION_DETAILS.assistant, "agent_id", 42)
     monkeypatch.setattr(offline_runner, "_build_offline_actor", _FakeOfflineActor)
     monkeypatch.setattr(
-        "unity.task_scheduler.active_task.create_or_adopt_live_task_run",
+        "droid.task_scheduler.active_task.create_or_adopt_live_task_run",
         lambda provenance: TaskRunReference(
             assistant_id=provenance.assistant_id,
             run_key=(
@@ -639,7 +639,7 @@ async def test_offline_scheduled_execution_reconciles_stale_active_blocker(
         ),
     )
     monkeypatch.setattr(
-        "unity.task_scheduler.active_task.update_task_run_record",
+        "droid.task_scheduler.active_task.update_task_run_record",
         lambda run_reference, updates: None,
     )
     reconciled_run_updates = []
@@ -736,7 +736,7 @@ async def test_offline_scheduled_execution_reconciles_stale_active_blocker(
 async def test_triggered_execution_offline_delegate_consumes_trigger_provenance(
     monkeypatch,
 ):
-    from unity.task_scheduler import offline_runner
+    from droid.task_scheduler import offline_runner
 
     scheduler = TaskScheduler()
     task_id = scheduler._create_task(
@@ -779,11 +779,11 @@ async def test_triggered_execution_offline_delegate_consumes_trigger_provenance(
         _FakeOfflineActor,
     )
     monkeypatch.setattr(
-        "unity.task_scheduler.active_task.create_or_adopt_live_task_run",
+        "droid.task_scheduler.active_task.create_or_adopt_live_task_run",
         _fake_create_or_adopt,
     )
     monkeypatch.setattr(
-        "unity.task_scheduler.active_task.update_task_run_record",
+        "droid.task_scheduler.active_task.update_task_run_record",
         lambda run_reference, updates: run_updates.append(
             (run_reference, dict(updates)),
         ),

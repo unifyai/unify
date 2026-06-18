@@ -15,9 +15,9 @@ import pytest
 
 from tests.actor.code_act.conftest import make_fm_mock
 
-from unity.actor.code_act_actor import _build_storage_tools, CodeActActor
-from unity.function_manager.function_manager import FunctionManager
-from unity.common.context_registry import ContextRegistry
+from droid.actor.code_act_actor import _build_storage_tools, CodeActActor
+from droid.function_manager.function_manager import FunctionManager
+from droid.common.context_registry import ContextRegistry
 from tests.helpers import _handle_project
 
 

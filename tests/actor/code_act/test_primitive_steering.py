@@ -17,10 +17,10 @@ import pytest
 
 from tests.actor.state_managers.utils import extract_code_act_execute_code_snippets
 from tests.async_helpers import _wait_for_condition
-from unity.actor.code_act_actor import CodeActActor
-from unity.actor.environments import StateManagerEnvironment
-from unity.function_manager.primitives import Primitives, PrimitiveScope
-from unity.manager_registry import ManagerRegistry
+from droid.actor.code_act_actor import CodeActActor
+from droid.actor.environments import StateManagerEnvironment
+from droid.function_manager.primitives import Primitives, PrimitiveScope
+from droid.manager_registry import ManagerRegistry
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
@@ -32,7 +32,7 @@ pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
 def _force_simulated(monkeypatch: pytest.MonkeyPatch) -> None:
     """Switch all managers to simulated impl for this test."""
-    from unity.settings import SETTINGS
+    from droid.settings import SETTINGS
 
     for name in (
         "CONTACT",
@@ -45,7 +45,7 @@ def _force_simulated(monkeypatch: pytest.MonkeyPatch) -> None:
         "FILE",
         "DATA",
     ):
-        monkeypatch.setenv(f"UNITY_{name}_IMPL", "simulated")
+        monkeypatch.setenv(f"DROID_{name}_IMPL", "simulated")
         attr = name.lower()
         if hasattr(SETTINGS, attr):
             monkeypatch.setattr(

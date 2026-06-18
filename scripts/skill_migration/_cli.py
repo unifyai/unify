@@ -18,14 +18,14 @@ from .skill_to_guidance import SkillMigrator, discover_skills
 
 
 def default_repo_root(repo_name: str) -> Path:
-    """Best-effort default: a sibling checkout next to the unity repo.
+    """Best-effort default: a sibling checkout next to the droid repo.
 
-    ``scripts/skill_migration/_cli.py`` → unity root is ``parents[2]``; the
+    ``scripts/skill_migration/_cli.py`` → droid root is ``parents[2]``; the
     sibling repo is expected alongside it (matches the common local layout
-    where ``unity``, ``openclaw`` and ``hermes-agent`` are siblings).
+    where ``droid``, ``openclaw`` and ``hermes-agent`` are siblings).
     """
-    unity_root = Path(__file__).resolve().parents[2]
-    return unity_root.parent / repo_name
+    droid_root = Path(__file__).resolve().parents[2]
+    return droid_root.parent / repo_name
 
 
 def _print_report(report: dict, *, as_json: bool) -> None:
@@ -69,7 +69,7 @@ def run_cli(
     """Entry point shared by both source-specific migration CLIs."""
     parser = argparse.ArgumentParser(
         description=(
-            f"Import {source} skills (SKILL.md files) into Unity's "
+            f"Import {source} skills (SKILL.md files) into Droid's "
             "GuidanceManager as guidance entries."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -138,7 +138,7 @@ def run_cli(
             load_dotenv()
         except Exception:
             pass
-        from unity.guidance_manager.guidance_manager import GuidanceManager
+        from droid.guidance_manager.guidance_manager import GuidanceManager
 
         gm = GuidanceManager()
 

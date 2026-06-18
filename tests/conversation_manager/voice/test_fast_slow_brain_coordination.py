@@ -70,7 +70,7 @@ import json
 
 import pytest
 
-from unity.conversation_manager.events import (
+from droid.conversation_manager.events import (
     PhoneCallStarted,
     PhoneCallSent,
     InboundPhoneUtterance,
@@ -79,7 +79,7 @@ from unity.conversation_manager.events import (
     UnifyMeetStarted,
     FastBrainNotification,
 )
-from unity.conversation_manager.cm_types import Medium, Mode
+from droid.conversation_manager.cm_types import Medium, Mode
 
 from tests.conversation_manager.conftest import BOSS, TEST_CONTACTS
 from tests.helpers import _handle_project
@@ -272,11 +272,11 @@ class TestSlowBrainDecisionBoundaries:
         model for voice modes does NOT have a call_guidance field.
         """
         import inspect
-        from unity.conversation_manager.domains.brain import build_response_models
-        from unity.conversation_manager.domains.brain_action_tools import (
+        from droid.conversation_manager.domains.brain import build_response_models
+        from droid.conversation_manager.domains.brain_action_tools import (
             ConversationManagerBrainActionTools,
         )
-        from unity.conversation_manager.cm_types import Mode
+        from droid.conversation_manager.cm_types import Mode
 
         # guide_voice_agent should exist as a standalone method
         guide_sig = inspect.signature(
@@ -459,7 +459,7 @@ class TestRapidUtteranceHandling:
         # stale slow-brain runs — tested independently in test_speech_urgency.
         # Here we isolate the base debouncing guarantee: cancel_running=False
         # plus asyncio.shield() protect running tasks from being replaced.
-        from unity.settings import SETTINGS
+        from droid.settings import SETTINGS
 
         orig = SETTINGS.conversation.SPEECH_URGENCY_PREEMPT_ENABLED
         SETTINGS.conversation.SPEECH_URGENCY_PREEMPT_ENABLED = False
@@ -516,7 +516,7 @@ class TestRapidUtteranceHandling:
         UTTERANCE_INTERVAL = 0.1  # seconds
 
         try:
-            from unity.conversation_manager.domains.event_handlers import EventHandler
+            from droid.conversation_manager.domains.event_handlers import EventHandler
 
             for i, text in enumerate(utterances):
                 event = InboundPhoneUtterance(contact=boss_contact, content=text)
@@ -674,7 +674,7 @@ class TestFastBrainNotificationSpeakMode:
 
             # Check that guide_voice_agent exists with the expected params
             import inspect
-            from unity.conversation_manager.domains.brain_action_tools import (
+            from droid.conversation_manager.domains.brain_action_tools import (
                 ConversationManagerBrainActionTools,
             )
 
@@ -719,8 +719,8 @@ class TestSymbolicForwardingAndSpeechGating:
         """render_event_for_fast_brain should render ActorHandleResponse
         events so _render_boss_notifications forwards them to the fast brain.
         """
-        from unity.conversation_manager.events import ActorHandleResponse
-        from unity.conversation_manager.medium_scripts.common import (
+        from droid.conversation_manager.events import ActorHandleResponse
+        from droid.conversation_manager.medium_scripts.common import (
             render_event_for_fast_brain,
         )
 
@@ -807,7 +807,7 @@ class TestSlowBrainTextAcknowledgmentPrompt:
     def test_voice_output_block_instructs_verbal_acknowledgment(self):
         """The voice output block should instruct the slow brain to call
         guide_voice_agent when it sends a text message during a call."""
-        from unity.conversation_manager.prompt_builders import (
+        from droid.conversation_manager.prompt_builders import (
             build_system_prompt,
         )
 
@@ -868,7 +868,7 @@ class TestSlowBrainSuppressesTextDuringVoiceCall:
         the meet (the user had sent text messages before joining the call),
         which biased the LLM toward replying in that same text channel.
         """
-        from unity.conversation_manager.events import (
+        from droid.conversation_manager.events import (
             ActorResult,
             UnifyMessageReceived,
             UnifyMessageSent,
@@ -1010,7 +1010,7 @@ class TestSlowBrainSpeaksViaGuideVoiceAgent:
         Scenario: boss is on a Meet, a colleague texts about something
         the boss was waiting for. The slow brain should relay it.
         """
-        from unity.conversation_manager.events import SMSReceived
+        from droid.conversation_manager.events import SMSReceived
 
         cm = initialized_cm
 

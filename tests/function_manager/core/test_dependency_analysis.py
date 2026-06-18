@@ -2,7 +2,7 @@
 Tests for dependency_analysis module.
 """
 
-from unity.function_manager.dependency_analysis import (
+from droid.function_manager.dependency_analysis import (
     collect_dependencies_from_source,
     detect_third_party_imports_from_source,
 )

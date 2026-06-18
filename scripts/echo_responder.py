@@ -2,10 +2,10 @@
 """
 Echo responder for local chat testing.
 
-Subscribes to ALL ``unity-*`` topics on a Pub/Sub emulator and for every
+Subscribes to ALL ``droid-*`` topics on a Pub/Sub emulator and for every
 inbound ``unify_message``, publishes back a ``unify_message_outbound``
 echo.  This lets Console <-> Communication <-> Pub/Sub round-trip work
-end-to-end without LLM keys or a full Unity runtime.
+end-to-end without LLM keys or a full Droid runtime.
 
 The responder periodically polls the emulator for new topics so that
 assistants created after startup (e.g. via seed or hire) are picked up
@@ -56,7 +56,7 @@ def _get_emulator_base() -> str:
 
 
 def _discover_topics(project_id: str) -> list[str]:
-    """List all topics from the emulator REST API, filtering for unity-* topics."""
+    """List all topics from the emulator REST API, filtering for droid-* topics."""
     try:
         resp = requests.get(
             f"{_get_emulator_base()}/v1/projects/{project_id}/topics",
@@ -67,7 +67,7 @@ def _discover_topics(project_id: str) -> list[str]:
         return [
             t["name"].rsplit("/", 1)[-1]
             for t in topics
-            if "/topics/unity-" in t["name"] and "startup" not in t["name"]
+            if "/topics/droid-" in t["name"] and "startup" not in t["name"]
         ]
     except Exception as exc:
         print(f"[echo-responder] Topic discovery failed: {exc}", file=sys.stderr)
@@ -188,7 +188,7 @@ def main() -> None:
             _subscribe_to_topic(project_id, t)
     else:
         print(
-            "[echo-responder] No unity-* topics found yet. Will poll for new ones.",
+            "[echo-responder] No droid-* topics found yet. Will poll for new ones.",
             file=sys.stderr,
         )
 

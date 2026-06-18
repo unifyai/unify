@@ -1,4 +1,4 @@
-"""Unit tests for the inactivity-followup unity-side wiring.
+"""Unit tests for the inactivity-followup droid-side wiring.
 
 Covers:
     1. Event factories
@@ -22,18 +22,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from unity.comms.primitives import CommsPrimitives
-from unity.conversation_manager.domains.event_handlers import EventHandler
-from unity.conversation_manager.domains.inactivity import (
+from droid.comms.primitives import CommsPrimitives
+from droid.conversation_manager.domains.event_handlers import EventHandler
+from droid.conversation_manager.domains.inactivity import (
     _DEFAULT_REASON,
     _handle_inactivity_followup_event,
     _inactivity_followup_event_from_payload,
     _inactivity_followup_event_from_wake_reason,
     _inactivity_notification_text,
 )
-from unity.conversation_manager.domains.notifications import NotificationBar
-from unity.conversation_manager.events import InactivityFollowup
-from unity.transcript_manager.activity_sync import (
+from droid.conversation_manager.domains.notifications import NotificationBar
+from droid.conversation_manager.events import InactivityFollowup
+from droid.transcript_manager.activity_sync import (
     opt_in_to_inactivity_followups_via_orchestra,
     opt_out_of_inactivity_followups_via_orchestra,
     touch_assistant_activity,
@@ -167,11 +167,11 @@ class TestTouchAssistantActivity:
     def test_returns_false_when_orchestra_url_missing(self):
         with (
             patch(
-                "unity.transcript_manager.activity_sync._base_url",
+                "droid.transcript_manager.activity_sync._base_url",
                 return_value=None,
             ),
             patch(
-                "unity.transcript_manager.activity_sync._admin_key",
+                "droid.transcript_manager.activity_sync._admin_key",
                 return_value="key",
             ),
         ):
@@ -180,11 +180,11 @@ class TestTouchAssistantActivity:
     def test_returns_false_when_admin_key_missing(self):
         with (
             patch(
-                "unity.transcript_manager.activity_sync._base_url",
+                "droid.transcript_manager.activity_sync._base_url",
                 return_value="http://orchestra.test",
             ),
             patch(
-                "unity.transcript_manager.activity_sync._admin_key",
+                "droid.transcript_manager.activity_sync._admin_key",
                 return_value=None,
             ),
         ):
@@ -205,11 +205,11 @@ class TestTouchAssistantActivity:
 
         with (
             patch(
-                "unity.transcript_manager.activity_sync._base_url",
+                "droid.transcript_manager.activity_sync._base_url",
                 return_value="http://orchestra.test",
             ),
             patch(
-                "unity.transcript_manager.activity_sync._admin_key",
+                "droid.transcript_manager.activity_sync._admin_key",
                 return_value="test-admin-key",
             ),
             patch.dict("sys.modules", {"unify.utils": MagicMock(http=fake_http)}),
@@ -233,11 +233,11 @@ class TestTouchAssistantActivity:
 
         with (
             patch(
-                "unity.transcript_manager.activity_sync._base_url",
+                "droid.transcript_manager.activity_sync._base_url",
                 return_value="http://orchestra.test",
             ),
             patch(
-                "unity.transcript_manager.activity_sync._admin_key",
+                "droid.transcript_manager.activity_sync._admin_key",
                 return_value="key",
             ),
             patch.dict("sys.modules", {"unify.utils": MagicMock(http=fake_http)}),
@@ -253,11 +253,11 @@ class TestTouchAssistantActivity:
 
         with (
             patch(
-                "unity.transcript_manager.activity_sync._base_url",
+                "droid.transcript_manager.activity_sync._base_url",
                 return_value="http://orchestra.test",
             ),
             patch(
-                "unity.transcript_manager.activity_sync._admin_key",
+                "droid.transcript_manager.activity_sync._admin_key",
                 return_value="key",
             ),
             patch.dict("sys.modules", {"unify.utils": MagicMock(http=fake_http)}),
@@ -293,11 +293,11 @@ class TestFollowupOptOutHelpers:
         http_module, captured = self._make_fake_http(status=200)
         with (
             patch(
-                "unity.transcript_manager.activity_sync._base_url",
+                "droid.transcript_manager.activity_sync._base_url",
                 return_value="http://orchestra.test",
             ),
             patch(
-                "unity.transcript_manager.activity_sync._admin_key",
+                "droid.transcript_manager.activity_sync._admin_key",
                 return_value="test-admin-key",
             ),
             patch.dict("sys.modules", {"unify.utils": MagicMock(http=http_module)}),
@@ -314,11 +314,11 @@ class TestFollowupOptOutHelpers:
         http_module, captured = self._make_fake_http(status=200)
         with (
             patch(
-                "unity.transcript_manager.activity_sync._base_url",
+                "droid.transcript_manager.activity_sync._base_url",
                 return_value="http://orchestra.test",
             ),
             patch(
-                "unity.transcript_manager.activity_sync._admin_key",
+                "droid.transcript_manager.activity_sync._admin_key",
                 return_value="test-admin-key",
             ),
             patch.dict("sys.modules", {"unify.utils": MagicMock(http=http_module)}),
@@ -333,11 +333,11 @@ class TestFollowupOptOutHelpers:
     def test_opt_out_returns_false_on_missing_config(self):
         with (
             patch(
-                "unity.transcript_manager.activity_sync._base_url",
+                "droid.transcript_manager.activity_sync._base_url",
                 return_value=None,
             ),
             patch(
-                "unity.transcript_manager.activity_sync._admin_key",
+                "droid.transcript_manager.activity_sync._admin_key",
                 return_value="key",
             ),
         ):
@@ -347,11 +347,11 @@ class TestFollowupOptOutHelpers:
         http_module, _ = self._make_fake_http(status=500)
         with (
             patch(
-                "unity.transcript_manager.activity_sync._base_url",
+                "droid.transcript_manager.activity_sync._base_url",
                 return_value="http://orchestra.test",
             ),
             patch(
-                "unity.transcript_manager.activity_sync._admin_key",
+                "droid.transcript_manager.activity_sync._admin_key",
                 return_value="key",
             ),
             patch.dict("sys.modules", {"unify.utils": MagicMock(http=http_module)}),
@@ -367,11 +367,11 @@ class TestFollowupOptOutHelpers:
 
         with (
             patch(
-                "unity.transcript_manager.activity_sync._base_url",
+                "droid.transcript_manager.activity_sync._base_url",
                 return_value="http://orchestra.test",
             ),
             patch(
-                "unity.transcript_manager.activity_sync._admin_key",
+                "droid.transcript_manager.activity_sync._admin_key",
                 return_value="key",
             ),
             patch.dict("sys.modules", {"unify.utils": MagicMock(http=http_module)}),
@@ -403,9 +403,9 @@ class TestCommsFollowupOptOutPrimitives:
         fake_session.assistant.agent_id = 99
 
         with (
-            patch("unity.comms.primitives.SESSION_DETAILS", fake_session),
+            patch("droid.comms.primitives.SESSION_DETAILS", fake_session),
             patch(
-                "unity.transcript_manager.activity_sync."
+                "droid.transcript_manager.activity_sync."
                 "opt_out_of_inactivity_followups_via_orchestra",
                 return_value=True,
             ) as mock_stop,
@@ -425,9 +425,9 @@ class TestCommsFollowupOptOutPrimitives:
         fake_session.assistant.agent_id = 99
 
         with (
-            patch("unity.comms.primitives.SESSION_DETAILS", fake_session),
+            patch("droid.comms.primitives.SESSION_DETAILS", fake_session),
             patch(
-                "unity.transcript_manager.activity_sync."
+                "droid.transcript_manager.activity_sync."
                 "opt_in_to_inactivity_followups_via_orchestra",
                 return_value=True,
             ) as mock_resume,
@@ -447,9 +447,9 @@ class TestCommsFollowupOptOutPrimitives:
         fake_session.assistant.agent_id = 99
 
         with (
-            patch("unity.comms.primitives.SESSION_DETAILS", fake_session),
+            patch("droid.comms.primitives.SESSION_DETAILS", fake_session),
             patch(
-                "unity.transcript_manager.activity_sync."
+                "droid.transcript_manager.activity_sync."
                 "opt_out_of_inactivity_followups_via_orchestra",
                 return_value=False,
             ),
@@ -467,9 +467,9 @@ class TestCommsFollowupOptOutPrimitives:
         fake_session.assistant.agent_id = None
 
         with (
-            patch("unity.comms.primitives.SESSION_DETAILS", fake_session),
+            patch("droid.comms.primitives.SESSION_DETAILS", fake_session),
             patch(
-                "unity.transcript_manager.activity_sync."
+                "droid.transcript_manager.activity_sync."
                 "opt_out_of_inactivity_followups_via_orchestra",
                 return_value=False,
             ),

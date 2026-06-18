@@ -13,23 +13,23 @@ chmod 700 /tmp/runtime-unityuser
 
 bash /app/desktop/inject-ssh-public-key.sh
 
-mkdir -p /Unity/Local /Unity/.config /Unity/.local /Unity/.cache /Unity/.vnc /Unity/.dbus
+mkdir -p /Droid/Local /Droid/.config /Droid/.local /Droid/.cache /Droid/.vnc /Droid/.dbus
 for dir in Desktop Downloads Documents Music Pictures Videos Templates Public; do
-  mkdir -p "/Unity/$dir"
+  mkdir -p "/Droid/$dir"
 done
-touch /Unity/.ICEauthority
+touch /Droid/.ICEauthority
 chown -R unityuser:unityuser \
-  /Unity/Local /Unity/.config /Unity/.local /Unity/.cache /Unity/.vnc /Unity/.dbus \
-  /Unity/.ICEauthority \
-  /Unity/Desktop /Unity/Downloads /Unity/Documents /Unity/Music \
-  /Unity/Pictures /Unity/Videos /Unity/Templates /Unity/Public
-chmod 700 /Unity/.dbus /Unity/.vnc
-chmod 600 /Unity/.ICEauthority
-chmod 755 /Unity/Local
+  /Droid/Local /Droid/.config /Droid/.local /Droid/.cache /Droid/.vnc /Droid/.dbus \
+  /Droid/.ICEauthority \
+  /Droid/Desktop /Droid/Downloads /Droid/Documents /Droid/Music \
+  /Droid/Pictures /Droid/Videos /Droid/Templates /Droid/Public
+chmod 700 /Droid/.dbus /Droid/.vnc
+chmod 600 /Droid/.ICEauthority
+chmod 755 /Droid/Local
 
-if [[ -d /root/.cache/ms-playwright && ! -e /Unity/.cache/ms-playwright ]]; then
-  ln -sfn /root/.cache/ms-playwright /Unity/.cache/ms-playwright
-  chown -h unityuser:unityuser /Unity/.cache/ms-playwright
+if [[ -d /root/.cache/ms-playwright && ! -e /Droid/.cache/ms-playwright ]]; then
+  ln -sfn /root/.cache/ms-playwright /Droid/.cache/ms-playwright
+  chown -h unityuser:unityuser /Droid/.cache/ms-playwright
 fi
 
 chown unityuser:unityuser /var/log/magnitude 2>/dev/null || true

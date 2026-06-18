@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from unity.common.pipeline import (
+from droid.common.pipeline import (
     InMemoryWorkQueue,
     LocalQueueWorker,
     RetryWorkItem,

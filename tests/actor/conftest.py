@@ -11,9 +11,9 @@ from typing import Any
 
 import pytest
 
-from unity.actor.execution.capture import StreamLike
-from unity.actor.execution.session import SessionExecutor
-from unity.manager_registry import ManagerRegistry
+from droid.actor.execution.capture import StreamLike
+from droid.actor.execution.session import SessionExecutor
+from droid.manager_registry import ManagerRegistry
 
 _ADDR_RE = re.compile(r" at 0x[0-9a-fA-F]+")
 
@@ -31,9 +31,9 @@ def _normalize_execute_function_duration(result: Any) -> Any:
 @pytest.fixture(autouse=True)
 def _force_simulated_web(monkeypatch: pytest.MonkeyPatch) -> None:
     """Force WebSearcher to use the simulated implementation for actor tests."""
-    from unity.settings import SETTINGS
+    from droid.settings import SETTINGS
 
-    monkeypatch.setenv("UNITY_WEB_IMPL", "simulated")
+    monkeypatch.setenv("DROID_WEB_IMPL", "simulated")
     monkeypatch.setattr(SETTINGS.web, "IMPL", "simulated", raising=False)
 
     ManagerRegistry.clear()
@@ -72,7 +72,7 @@ def _isolate_local_root(request, monkeypatch):
     concurrently in separate processes (parallel_run.sh) or sequentially
     in the same process.
 
-    ``get_local_root()`` defaults to ``~/Unity/Local``, so changing HOME
+    ``get_local_root()`` defaults to ``~/Droid/Local``, so changing HOME
     is sufficient to isolate all filesystem paths that flow through it
     (prompts, LocalFileSystemAdapter, venv dirs, etc.).
 
@@ -81,7 +81,7 @@ def _isolate_local_root(request, monkeypatch):
     keys stable across re-runs of the same test.
     """
     suffix = hashlib.md5(request.node.nodeid.encode("utf-8")).hexdigest()[:12]
-    test_home = os.path.join(tempfile.gettempdir(), f"unity_test_home_{suffix}")
+    test_home = os.path.join(tempfile.gettempdir(), f"droid_test_home_{suffix}")
     os.makedirs(test_home, exist_ok=True)
 
     monkeypatch.setenv("HOME", test_home)

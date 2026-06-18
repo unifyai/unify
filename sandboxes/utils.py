@@ -61,12 +61,12 @@ except Exception:  # pragma: no cover - optional dependency shape
     PrerecordedOptions = object  # type: ignore
 from livekit.plugins import cartesia
 import argparse
-from unity.common.llm_client import new_llm_client, DEFAULT_MODEL
-from unity.common.async_tool_loop import SteerableToolHandle
+from droid.common.llm_client import new_llm_client, DEFAULT_MODEL
+from droid.common.async_tool_loop import SteerableToolHandle
 from pydantic import BaseModel, Field
 
 # Added for direct logging of generated messages
-from unity.transcript_manager.transcript_manager import TranscriptManager
+from droid.transcript_manager.transcript_manager import TranscriptManager
 
 from dotenv import load_dotenv
 
@@ -1189,7 +1189,7 @@ def configure_sandbox_logging(
     if _console_handler is not None:
         try:
             _console_handler.addFilter(
-                _NamePrefixFilter(exclude_prefixes=["unity.simulated_actor"]),
+                _NamePrefixFilter(exclude_prefixes=["droid.simulated_actor"]),
             )
         except Exception:
             pass
@@ -1299,27 +1299,27 @@ def configure_sandbox_logging(
             "Pass --log_in_terminal to also stream logs here.",
         )
 
-    # The unity LOGGER (unity.logger) has propagate=False and its own terminal
+    # The droid LOGGER (droid.logger) has propagate=False and its own terminal
     # StreamHandler added at import time.  Strip that handler so the sandbox
     # terminal stays clean, then mirror root's handlers onto LOGGER so that
-    # file / TCP routing works for unity.* log records.
+    # file / TCP routing works for droid.* log records.
     #
     # Lower the LOGGER level to DEBUG so the file handler captures the full
     # conversation flow (slow-brain lifecycle, event traces, etc.) that
     # production code logs at DEBUG to keep the terminal clean.
     try:
-        from unity.logger import LOGGER as _unity_logger
+        from droid.logger import LOGGER as _droid_logger
 
-        for _h in list(_unity_logger.handlers):
+        for _h in list(_droid_logger.handlers):
             if isinstance(_h, _logging.StreamHandler) and getattr(
                 _h,
-                "_unity_terminal",
+                "_droid_terminal",
                 False,
             ):
-                _unity_logger.removeHandler(_h)
+                _droid_logger.removeHandler(_h)
         for _h in root_logger.handlers:
-            _unity_logger.addHandler(_h)
-        _unity_logger.setLevel(_logging.DEBUG)
+            _droid_logger.addHandler(_h)
+        _droid_logger.setLevel(_logging.DEBUG)
     except ImportError:
         pass
 
@@ -2329,7 +2329,7 @@ class TranscriptGenerator:
 
         transcript: List[dict] = []
 
-        from unity.contact_manager.types.contact import Contact  # local import
+        from droid.contact_manager.types.contact import Contact  # local import
 
         # Cache of participant-label → Contact to ensure that two different
         # people who share the same first name (e.g. "Fred Smith" and
@@ -2647,13 +2647,13 @@ class TranscriptGenerator:
                 if self._in_cm:
                     # Emit comms messages following events.py schema
                     # Map medium to the appropriate Event class
-                    from unity.conversation_manager.events import (
+                    from droid.conversation_manager.events import (
                         SMSReceived,
                         EmailReceived,
                         InboundPhoneUtterance,
                     )
                     from pydantic import BaseModel
-                    from unity.events.event_bus import Event
+                    from droid.events.event_bus import Event
                     import unify
 
                     event_obj = None
@@ -2785,9 +2785,9 @@ class TranscriptGenerator:
 
 
 def _seed_session_details_for_sandbox() -> None:
-    """Populate SESSION_DETAILS with identity fields before unity.init() runs.
+    """Populate SESSION_DETAILS with identity fields before droid.init() runs.
 
-    unity.init() computes the Unify context path as
+    droid.init() computes the Unify context path as
     ``{SESSION_DETAILS.user_context}/{SESSION_DETAILS.assistant_context}``,
     and that path is used for every manager context for the rest of the
     session.  In production the Comms App delivers a StartupEvent that calls
@@ -2799,7 +2799,7 @@ def _seed_session_details_for_sandbox() -> None:
     ``default/{agent_id}`` path, but transcripts will not appear in the
     hosted Console.
     """
-    from unity.session_details import SESSION_DETAILS
+    from droid.session_details import SESSION_DETAILS
 
     # Agent id from env (ASSISTANT_ID) — sets assistant_context component.
     SESSION_DETAILS.populate_from_env()
@@ -2867,7 +2867,7 @@ def activate_project(project_name: str, overwrite: bool = False) -> None:
             return
 
         # Resolve orchestra repo path (default: sibling repo ../orchestra).
-        # Repo root is .../unity/ (parent of sandboxes/).
+        # Repo root is .../droid/ (parent of sandboxes/).
         repo_root = Path(__file__).resolve().parents[1]
         orchestra_repo = Path(
             os.environ.get("ORCHESTRA_REPO_PATH", str(repo_root.parent / "orchestra")),
@@ -2941,8 +2941,8 @@ def activate_project(project_name: str, overwrite: bool = False) -> None:
             os.environ["ORCHESTRA_URL"] = url2
             lg.info("Using local orchestra: %s", url2)
 
-    import unity
-    from unity.events.event_bus import EVENT_BUS
+    import droid
+    from droid.events.event_bus import EVENT_BUS
 
     # Force verbose Unify Request logging in sandbox runs
     try:
@@ -2952,14 +2952,14 @@ def activate_project(project_name: str, overwrite: bool = False) -> None:
 
     _maybe_autostart_local_orchestra()
 
-    # Seed SESSION_DETAILS with agent_id and user_id *before* unity.init() so
+    # Seed SESSION_DETAILS with agent_id and user_id *before* droid.init() so
     # the context path computed there (``{user_id}/{agent_id}``) is correct.
-    # unity.init() is idempotent-guarded by _INITIALISED, so it must use the
+    # droid.init() is idempotent-guarded by _INITIALISED, so it must use the
     # right values on its first call; any call after that returns immediately
     # without re-running ContextRegistry.setup().
     _seed_session_details_for_sandbox()
 
-    unity.init(
+    droid.init(
         project_name,
         overwrite=("contexts" if overwrite else False),
     )
@@ -3309,7 +3309,7 @@ def parse_per_task_guidance(text: str) -> dict[int, str]:
     - Extract concise guidance strings (no rephrasing of unrelated text).
     - Ignore non-guidance content.
     """
-    from unity.common.llm_client import new_llm_client
+    from droid.common.llm_client import new_llm_client
 
     if not text:
         return {}
@@ -3563,8 +3563,8 @@ def apply_per_task_simulation_patch(
     with _SANDBOX_SIM_PATCH_LOCK:  # type: ignore[arg-type]
         if not _SANDBOX_SIM_PATCH_INSTALLED:  # type: ignore[arg-type]
             # Imports kept local to avoid pulling these modules for other sandboxes
-            from unity.task_scheduler.active_task import ActiveTask  # noqa: WPS433
-            from unity.actor.simulated import SimulatedActor  # noqa: WPS433
+            from droid.task_scheduler.active_task import ActiveTask  # noqa: WPS433
+            from droid.actor.simulated import SimulatedActor  # noqa: WPS433
 
             _orig_create_cm = ActiveTask.create  # classmethod descriptor
             _SANDBOX_SIM_ORIG_CREATE = _orig_create_cm  # type: ignore[assignment]

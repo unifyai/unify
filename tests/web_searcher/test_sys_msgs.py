@@ -15,11 +15,11 @@ from tests.assertion_helpers import (
 from tests.helpers import _handle_project
 
 
-from unity.web_searcher.prompt_builders import (
+from droid.web_searcher.prompt_builders import (
     build_ask_prompt,
 )
-from unity.web_searcher.web_searcher import WebSearcher
-from unity.session_details import UNASSIGNED_USER_CONTEXT, UNASSIGNED_ASSISTANT_CONTEXT
+from droid.web_searcher.web_searcher import WebSearcher
+from droid.session_details import UNASSIGNED_USER_CONTEXT, UNASSIGNED_ASSISTANT_CONTEXT
 
 
 def _build_prompt_in_subprocess(method: str, test_context: str) -> str:
@@ -37,7 +37,7 @@ def _build_prompt_in_subprocess(method: str, test_context: str) -> str:
         sys.path.insert(0, os.getcwd())
         import unify
         # Activate the test project before setting context
-        project_name = os.environ.get("UNITY_TEST_PROJECT_NAME", "UnityTests")
+        project_name = os.environ.get("DROID_TEST_PROJECT_NAME", "UnityTests")
         unify.activate(project_name, overwrite=False)
         # Set test-specific context before creating WebSearcher to avoid races
         test_ctx = os.environ.get("_TEST_CONTEXT")
@@ -45,7 +45,7 @@ def _build_prompt_in_subprocess(method: str, test_context: str) -> str:
             unify.set_context(test_ctx, relative=False)
         # Install the same static timestamp override used by pytest's autouse fixture,
         # but inside this fresh process so the time footer is deterministic.
-        import unity.common.prompt_helpers as _ph
+        import droid.common.prompt_helpers as _ph
         from datetime import datetime, timezone
         def _static_now(time_only: bool = False):
             dt = datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc)
@@ -54,8 +54,8 @@ def _build_prompt_in_subprocess(method: str, test_context: str) -> str:
                 return dt.strftime("%I:%M %p ") + label
             return dt.strftime("%A, %B %d, %Y at %I:%M %p ") + label
         _ph.now = _static_now
-        from unity.web_searcher.web_searcher import WebSearcher
-        from unity.web_searcher.prompt_builders import build_ask_prompt
+        from droid.web_searcher.web_searcher import WebSearcher
+        from droid.web_searcher.prompt_builders import build_ask_prompt
 
         ws = WebSearcher()
         tools = dict(ws.get_tools("ask"))

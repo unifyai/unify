@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import _handle_project
-from unity.file_manager.types import (
+from droid.file_manager.types import (
     BaseIngestedFile,
     FileFormat,
     FilePipelineConfig,
@@ -15,7 +15,7 @@ from unity.file_manager.types import (
     ParseConfig,
     IngestedXlsx,
 )
-from unity.file_manager.types.ingest import IngestedFullFile
+from droid.file_manager.types.ingest import IngestedFullFile
 
 
 def _assert_non_empty(s: str, *, label: str) -> None:

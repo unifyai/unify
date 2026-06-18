@@ -49,7 +49,7 @@ class TestDebouncerCancelRunning:
         - When cancel_running=False, the currently running task must complete
         - New submissions replace the pending task, not the running one
         """
-        from unity.conversation_manager.domains.utils import Debouncer
+        from droid.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer()
 
@@ -119,7 +119,7 @@ class TestDebouncerCancelRunning:
         This is useful for text mode where we want to cancel stale work
         and start fresh with new context.
         """
-        from unity.conversation_manager.domains.utils import Debouncer
+        from droid.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer()
 
@@ -195,7 +195,7 @@ class TestDebouncerCancellationPropagation:
         Before fix: Task A would be cancelled when Task B was cancelled
         After fix: Task A completes normally, Task C runs after
         """
-        from unity.conversation_manager.domains.utils import Debouncer
+        from droid.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer()
         results = []
@@ -260,7 +260,7 @@ class TestDebouncerCancellationPropagation:
         Simulates the voice mode scenario where rapid user utterances
         trigger many submissions in quick succession.
         """
-        from unity.conversation_manager.domains.utils import Debouncer
+        from droid.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer()
         results = []
@@ -325,7 +325,7 @@ class TestDebouncerUserOriginProtection:
     @pytest.mark.asyncio
     async def test_non_user_cannot_replace_pending_user(self):
         """A non-user submission is skipped when a user utterance is pending."""
-        from unity.conversation_manager.domains.utils import Debouncer
+        from droid.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer(name="TestCM")
 
@@ -383,7 +383,7 @@ class TestDebouncerUserOriginProtection:
     @pytest.mark.asyncio
     async def test_user_can_replace_pending_non_user(self):
         """A user submission replaces a pending non-user submission normally."""
-        from unity.conversation_manager.domains.utils import Debouncer
+        from droid.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer()
 
@@ -435,7 +435,7 @@ class TestDebouncerUserOriginProtection:
     @pytest.mark.asyncio
     async def test_user_can_replace_pending_user(self):
         """A newer user submission replaces an older pending user submission."""
-        from unity.conversation_manager.domains.utils import Debouncer
+        from droid.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer()
 

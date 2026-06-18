@@ -4,8 +4,8 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from unity.function_manager.function_manager import FunctionManager
-from unity.function_manager import function_manager as function_manager_module
+from droid.function_manager.function_manager import FunctionManager
+from droid.function_manager import function_manager as function_manager_module
 
 
 @dataclass
@@ -37,7 +37,7 @@ async def test_shell_runtime_oauth_token_helper_uses_parent_rpc(monkeypatch):
     result = await fm.execute_shell_script(
         implementation=(
             "#!/bin/sh\n"
-            "token=$(unity-primitive runtime get_oauth_access_token "
+            "token=$(droid-primitive runtime get_oauth_access_token "
             "--provider google --min_ttl_seconds 42)\n"
             'if [ "$token" = \'"google-token"\' ]; then echo "TOKEN_OK"; fi\n'
         ),
@@ -51,7 +51,7 @@ async def test_shell_runtime_oauth_token_helper_uses_parent_rpc(monkeypatch):
 
 
 def test_runtime_oauth_env_overlay_routes_through_runtime_helper(monkeypatch):
-    from unity.common import runtime_oauth
+    from droid.common import runtime_oauth
 
     monkeypatch.setattr(
         runtime_oauth,
@@ -67,7 +67,7 @@ def test_runtime_oauth_env_overlay_routes_through_runtime_helper(monkeypatch):
 
 
 def test_venv_runtime_oauth_helper_uses_parent_rpc(monkeypatch):
-    from unity.function_manager import venv_runner
+    from droid.function_manager import venv_runner
 
     calls = []
 

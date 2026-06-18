@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import pytest
 
-from unity.task_scheduler.simulated import (
+from droid.task_scheduler.simulated import (
     SimulatedTaskScheduler,
 )
 
@@ -24,8 +24,8 @@ def test_docstrings_match_base():
     Public methods in SimulatedTaskScheduler should copy the real
     BaseTaskScheduler doc-strings one-for-one (via functools.wraps).
     """
-    from unity.task_scheduler.base import BaseTaskScheduler
-    from unity.task_scheduler.simulated import SimulatedTaskScheduler
+    from droid.task_scheduler.base import BaseTaskScheduler
+    from droid.task_scheduler.simulated import SimulatedTaskScheduler
 
     assert (
         BaseTaskScheduler.ask.__doc__.strip()

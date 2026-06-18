@@ -32,7 +32,7 @@ import pytest
 import pytest_asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from unity.conversation_manager.events import (
+from droid.conversation_manager.events import (
     Event,
     PhoneCallReceived,
     PhoneCallAnswered,
@@ -51,7 +51,7 @@ from unity.conversation_manager.events import (
 )
 
 from tests.conversation_manager.conftest import TEST_CONTACTS
-from unity.conversation_manager.cm_types import Medium
+from droid.conversation_manager.cm_types import Medium
 
 # =============================================================================
 # Unit Tests: CallManager Configuration
@@ -63,7 +63,7 @@ class TestCallManagerConfiguration:
 
     def test_call_config_fields(self):
         """CallConfig has all required fields."""
-        from unity.conversation_manager.domains.call_manager import CallConfig
+        from droid.conversation_manager.domains.call_manager import CallConfig
 
         config = CallConfig(
             assistant_id="test_assistant",
@@ -82,11 +82,11 @@ class TestCallManagerConfiguration:
 
     def test_call_manager_initial_state(self):
         """LivekitCallManager initializes with correct default state."""
-        from unity.conversation_manager.domains.call_manager import (
+        from droid.conversation_manager.domains.call_manager import (
             CallConfig,
             LivekitCallManager,
         )
-        from unity.contact_manager.types.contact import UNASSIGNED
+        from droid.contact_manager.types.contact import UNASSIGNED
 
         config = CallConfig(
             assistant_id="test",
@@ -110,7 +110,7 @@ class TestCallManagerConfiguration:
 
     def test_call_manager_set_config(self):
         """LivekitCallManager.set_config() updates configuration."""
-        from unity.conversation_manager.domains.call_manager import (
+        from droid.conversation_manager.domains.call_manager import (
             CallConfig,
             LivekitCallManager,
         )
@@ -269,7 +269,7 @@ class TestCallSubprocessLifecycle:
 
     @pytest.fixture
     def call_manager(self):
-        from unity.conversation_manager.domains.call_manager import (
+        from droid.conversation_manager.domains.call_manager import (
             CallConfig,
             LivekitCallManager,
         )
@@ -311,7 +311,7 @@ class TestCallSubprocessLifecycle:
     ):
         """start_call() creates a subprocess for the voice agent."""
         with patch(
-            "unity.conversation_manager.domains.call_manager.run_script",
+            "droid.conversation_manager.domains.call_manager.run_script",
         ) as mock_run_script:
             mock_proc = MagicMock()
             mock_run_script.return_value = mock_proc
@@ -332,7 +332,7 @@ class TestCallSubprocessLifecycle:
     ):
         """start_call() passes outbound flag correctly."""
         with patch(
-            "unity.conversation_manager.domains.call_manager.run_script",
+            "droid.conversation_manager.domains.call_manager.run_script",
         ) as mock_run_script:
             mock_proc = MagicMock()
             mock_run_script.return_value = mock_proc
@@ -352,7 +352,7 @@ class TestCallSubprocessLifecycle:
     ):
         """start_unify_meet() creates a subprocess for the voice agent."""
         with patch(
-            "unity.conversation_manager.domains.call_manager.run_script",
+            "droid.conversation_manager.domains.call_manager.run_script",
         ) as mock_run_script:
             mock_proc = MagicMock()
             mock_run_script.return_value = mock_proc
@@ -360,13 +360,13 @@ class TestCallSubprocessLifecycle:
             await call_manager.start_unify_meet(
                 sample_contact,
                 boss_contact,
-                room_name="unity_25_meet",
+                room_name="droid_25_meet",
             )
 
             mock_run_script.assert_called_once()
             call_args = mock_run_script.call_args
             assert "call.py" in str(call_args[0][0])  # script path
-            assert any("unity_25_meet" in str(arg) for arg in call_args[0])
+            assert any("droid_25_meet" in str(arg) for arg in call_args[0])
 
     @pytest.mark.asyncio
     async def test_start_unify_meet_default_names(
@@ -379,7 +379,7 @@ class TestCallSubprocessLifecycle:
         call_manager.assistant_id = "my_assistant"
 
         with patch(
-            "unity.conversation_manager.domains.call_manager.run_script",
+            "droid.conversation_manager.domains.call_manager.run_script",
         ) as mock_run_script:
             mock_proc = MagicMock()
             mock_run_script.return_value = mock_proc
@@ -392,7 +392,7 @@ class TestCallSubprocessLifecycle:
 
             call_args = mock_run_script.call_args
             # Default names should use make_room_name(assistant_id, "meet")
-            assert any("unity_my_assistant_meet" in str(arg) for arg in call_args[0])
+            assert any("droid_my_assistant_meet" in str(arg) for arg in call_args[0])
 
     @pytest.mark.asyncio
     async def test_cleanup_call_proc_no_process(self, call_manager):
@@ -412,7 +412,7 @@ class TestCallSubprocessLifecycle:
         call_manager._call_proc = mock_proc
 
         with patch(
-            "unity.conversation_manager.domains.call_manager.terminate_process",
+            "droid.conversation_manager.domains.call_manager.terminate_process",
         ) as mock_terminate:
             await call_manager.cleanup_call_proc()
 
@@ -1156,7 +1156,7 @@ class TestCallErrorHandling:
         alice_contact,
     ):
         """cleanup_call_proc handles timeout gracefully."""
-        from unity.conversation_manager.domains.call_manager import (
+        from droid.conversation_manager.domains.call_manager import (
             CallConfig,
             LivekitCallManager,
         )
@@ -1179,7 +1179,7 @@ class TestCallErrorHandling:
         manager._call_proc = mock_proc
 
         with patch(
-            "unity.conversation_manager.domains.call_manager.terminate_process",
+            "droid.conversation_manager.domains.call_manager.terminate_process",
         ) as mock_terminate:
             await asyncio.wait_for(
                 manager.cleanup_call_proc(),
@@ -1213,7 +1213,7 @@ class TestConversationManagerInactivityCleanup:
         cm.call_manager._call_proc = mock_proc
 
         with patch(
-            "unity.conversation_manager.domains.call_manager.terminate_process",
+            "droid.conversation_manager.domains.call_manager.terminate_process",
         ) as mock_terminate:
             await cm.call_manager.cleanup_call_proc()
 
@@ -1232,7 +1232,7 @@ class TestCallEventBrokerChannels:
     @pytest_asyncio.fixture
     async def event_broker(self):
         """Create a fresh in-memory event broker for channel tests."""
-        from unity.conversation_manager.event_broker import create_event_broker
+        from droid.conversation_manager.event_broker import create_event_broker
 
         broker = create_event_broker()
         yield broker
@@ -1340,8 +1340,8 @@ class TestChannelForwardingTiers:
 
     @pytest_asyncio.fixture
     async def call_manager_with_broker(self):
-        from unity.conversation_manager.event_broker import create_event_broker
-        from unity.conversation_manager.domains.call_manager import (
+        from droid.conversation_manager.event_broker import create_event_broker
+        from droid.conversation_manager.domains.call_manager import (
             CallConfig,
             LivekitCallManager,
         )
@@ -1381,7 +1381,7 @@ class TestChannelForwardingTiers:
         """Boss calls forward base channels and start boss notification rendering."""
         mgr = call_manager_with_broker
         with patch(
-            "unity.conversation_manager.domains.call_manager.run_script",
+            "droid.conversation_manager.domains.call_manager.run_script",
         ) as mock_run:
             mock_run.return_value = MagicMock()
             await mgr.start_call(boss_contact, boss_contact)
@@ -1402,7 +1402,7 @@ class TestChannelForwardingTiers:
         """Non-system calls forward base channels only, no notification rendering."""
         mgr = call_manager_with_broker
         with patch(
-            "unity.conversation_manager.domains.call_manager.run_script",
+            "droid.conversation_manager.domains.call_manager.run_script",
         ) as mock_run:
             mock_run.return_value = MagicMock()
             await mgr.start_call(non_boss_contact, boss_contact)
@@ -1422,7 +1422,7 @@ class TestChannelForwardingTiers:
         """System contact Unify Meet should start notification rendering."""
         mgr = call_manager_with_broker
         with patch(
-            "unity.conversation_manager.domains.call_manager.run_script",
+            "droid.conversation_manager.domains.call_manager.run_script",
         ) as mock_run:
             mock_run.return_value = MagicMock()
             await mgr.start_unify_meet(

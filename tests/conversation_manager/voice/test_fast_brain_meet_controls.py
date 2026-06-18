@@ -24,8 +24,8 @@ import re
 import pytest
 
 from tests.helpers import _handle_project
-from unity.conversation_manager.prompt_builders import build_voice_agent_prompt
-from unity.settings import SETTINGS
+from droid.conversation_manager.prompt_builders import build_voice_agent_prompt
+from droid.settings import SETTINGS
 
 from tests.conversation_manager.voice.test_fast_brain_deferral import (
     get_fast_brain_response,

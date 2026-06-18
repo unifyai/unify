@@ -1,4 +1,4 @@
-# CODEOWNERS for unifyai/unity
+# CODEOWNERS for unifyai/droid
 #
 # GitHub uses LAST-MATCH-WINS semantics. The per-path overrides below
 # flag security-sensitive paths in PR descriptions; the reviewer set
@@ -20,4 +20,4 @@
 /ARCHITECTURE.md                   @YushaArif99 @hmahmood24
 
 # Secret manager is the highest-blast-radius surface in the codebase.
-/unity/secret_manager/             @YushaArif99 @hmahmood24
+/droid/secret_manager/             @YushaArif99 @hmahmood24

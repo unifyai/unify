@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import OpenClaw skills into Unity's GuidanceManager.
+"""Import OpenClaw skills into Droid's GuidanceManager.
 
 OpenClaw ships skills as ``SKILL.md`` folders in three places: the bundled
 ``skills/`` tree, plugin-shipped ``extensions/*/skills/`` trees, and the

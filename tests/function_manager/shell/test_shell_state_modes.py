@@ -10,9 +10,9 @@ from __future__ import annotations
 import pytest
 
 from tests.helpers import _handle_project
-from unity.function_manager.function_manager import FunctionManager
-from unity.function_manager.shell_pool import ShellPool
-from unity.common.context_registry import ContextRegistry
+from droid.function_manager.function_manager import FunctionManager
+from droid.function_manager.shell_pool import ShellPool
+from droid.common.context_registry import ContextRegistry
 
 # ────────────────────────────────────────────────────────────────────────────
 # Sample Shell Functions

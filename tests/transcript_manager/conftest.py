@@ -13,11 +13,11 @@ import pytest_asyncio
 import os
 import unify
 
-from unity.contact_manager.contact_manager import ContactManager
-from unity.transcript_manager.transcript_manager import TranscriptManager
-from unity.transcript_manager.types.message import Message
-from unity.manager_registry import ManagerRegistry
-from unity.common.context_registry import ContextRegistry
+from droid.contact_manager.contact_manager import ContactManager
+from droid.transcript_manager.transcript_manager import TranscriptManager
+from droid.transcript_manager.types.message import Message
+from droid.manager_registry import ManagerRegistry
+from droid.common.context_registry import ContextRegistry
 from tests.helpers import (
     get_or_create_contact,
     rebuild_id_mapping,
@@ -25,7 +25,7 @@ from tests.helpers import (
     scenario_file_lock,
     mutation_test_lock,
 )
-from unity.common.embed_utils import ensure_vector_column
+from droid.common.embed_utils import ensure_vector_column
 
 SCENARIO_COMMIT_HASHES: Dict[str, Any] = {}
 

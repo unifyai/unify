@@ -9,14 +9,14 @@ import pytest
 from pydantic import BaseModel, Field
 
 from tests.helpers import _handle_project
-from unity.common.single_shot import (
+from droid.common.single_shot import (
     single_shot_tool_decision,
     SingleShotResult,
     ToolExecution,
 )
-from unity.common.llm_client import new_llm_client
-from unity.logger import LOGGER
-from unity.settings import SETTINGS
+from droid.common.llm_client import new_llm_client
+from droid.logger import LOGGER
+from droid.settings import SETTINGS
 
 # --------------------------------------------------------------------------- #
 #  Test fixtures: response format models                                       #
@@ -248,7 +248,7 @@ async def test_staging_logs_single_shot_response_shape(monkeypatch, caplog):
 
     client = SimpleNamespace(messages=[], generate=fake_generate)
     LOGGER.addHandler(caplog.handler)
-    caplog.set_level(logging.INFO, logger="unity")
+    caplog.set_level(logging.INFO, logger="droid")
 
     try:
         result = await single_shot_tool_decision(client, "hello", {})

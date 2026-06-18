@@ -1,4 +1,4 @@
-"""Tests for the in-process LocalActivationScheduler (local Unity installs).
+"""Tests for the in-process LocalActivationScheduler (local Droid installs).
 
 These are symbolic infrastructure tests — no LLM involvement, no Orchestra
 network calls. Activation storage is monkeypatched so each test runs in
@@ -12,17 +12,17 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from unity.task_scheduler.local_scheduler import (
+from droid.task_scheduler.local_scheduler import (
     ActivationMaterializer,
     LocalActivationScheduler,
     NoopMaterializer,
     build_materializer,
 )
-from unity.task_scheduler.local_scheduler import scheduler as scheduler_module
-from unity.task_scheduler.local_scheduler.scheduler import (
+from droid.task_scheduler.local_scheduler import scheduler as scheduler_module
+from droid.task_scheduler.local_scheduler.scheduler import (
     LocalActivationScheduler as _LAS,
 )
-from unity.task_scheduler.machine_state import TaskActivationSnapshot
+from droid.task_scheduler.machine_state import TaskActivationSnapshot
 
 
 def _make_snapshot(
@@ -68,10 +68,10 @@ class TestLocalSchedulerSettings:
 
         # Clear all signal env vars first, then apply overrides.
         for name in (
-            "UNITY_LOCAL_SCHEDULER",
-            "UNITY_COMMS_URL",
-            "UNITY_CONVERSATION_LOCAL_COMMS_MODE",
-            "UNITY_CONVERSATION_LOCAL_COMMS_ENABLED",
+            "DROID_LOCAL_SCHEDULER",
+            "DROID_COMMS_URL",
+            "DROID_CONVERSATION_LOCAL_COMMS_MODE",
+            "DROID_CONVERSATION_LOCAL_COMMS_ENABLED",
         ):
             monkeypatch.delenv(name, raising=False)
         for name, value in env_overrides.items():
@@ -79,7 +79,7 @@ class TestLocalSchedulerSettings:
                 continue
             monkeypatch.setenv(name, value)
 
-        from unity.task_scheduler.settings import _derive_local_scheduler_default
+        from droid.task_scheduler.settings import _derive_local_scheduler_default
 
         return _derive_local_scheduler_default()
 
@@ -87,9 +87,9 @@ class TestLocalSchedulerSettings:
         assert (
             self._derive(
                 monkeypatch,
-                UNITY_LOCAL_SCHEDULER="true",
-                UNITY_COMMS_URL="https://comms.example.com",
-                UNITY_CONVERSATION_LOCAL_COMMS_MODE="hosted",
+                DROID_LOCAL_SCHEDULER="true",
+                DROID_COMMS_URL="https://comms.example.com",
+                DROID_CONVERSATION_LOCAL_COMMS_MODE="hosted",
             )
             is True
         )
@@ -98,30 +98,30 @@ class TestLocalSchedulerSettings:
         assert (
             self._derive(
                 monkeypatch,
-                UNITY_LOCAL_SCHEDULER="false",
-                UNITY_COMMS_URL="",
-                UNITY_CONVERSATION_LOCAL_COMMS_MODE="local",
+                DROID_LOCAL_SCHEDULER="false",
+                DROID_COMMS_URL="",
+                DROID_CONVERSATION_LOCAL_COMMS_MODE="local",
             )
             is False
         )
 
     @pytest.mark.parametrize("truthy", ["1", "true", "TRUE", "yes", "on"])
     def test_explicit_truthy_variants_recognised(self, monkeypatch, truthy):
-        assert self._derive(monkeypatch, UNITY_LOCAL_SCHEDULER=truthy) is True
+        assert self._derive(monkeypatch, DROID_LOCAL_SCHEDULER=truthy) is True
 
     def test_empty_comms_url_implies_local(self, monkeypatch):
-        assert self._derive(monkeypatch, UNITY_COMMS_URL="") is True
+        assert self._derive(monkeypatch, DROID_COMMS_URL="") is True
 
     def test_missing_comms_url_implies_local(self, monkeypatch):
-        # No UNITY_COMMS_URL set at all.
+        # No DROID_COMMS_URL set at all.
         assert self._derive(monkeypatch) is True
 
     def test_comms_url_set_with_hosted_comms_implies_hosted(self, monkeypatch):
         assert (
             self._derive(
                 monkeypatch,
-                UNITY_COMMS_URL="https://comms.example.com",
-                UNITY_CONVERSATION_LOCAL_COMMS_MODE="hosted",
+                DROID_COMMS_URL="https://comms.example.com",
+                DROID_CONVERSATION_LOCAL_COMMS_MODE="hosted",
             )
             is False
         )
@@ -130,8 +130,8 @@ class TestLocalSchedulerSettings:
         assert (
             self._derive(
                 monkeypatch,
-                UNITY_COMMS_URL="https://comms.example.com",
-                UNITY_CONVERSATION_LOCAL_COMMS_MODE="local",
+                DROID_COMMS_URL="https://comms.example.com",
+                DROID_CONVERSATION_LOCAL_COMMS_MODE="local",
             )
             is True
         )
@@ -140,8 +140,8 @@ class TestLocalSchedulerSettings:
         assert (
             self._derive(
                 monkeypatch,
-                UNITY_COMMS_URL="https://comms.example.com",
-                UNITY_CONVERSATION_LOCAL_COMMS_ENABLED="true",
+                DROID_COMMS_URL="https://comms.example.com",
+                DROID_CONVERSATION_LOCAL_COMMS_ENABLED="true",
             )
             is True
         )
@@ -173,7 +173,7 @@ class TestBuildMaterializer:
     """build_materializer routes by SETTINGS.task.LOCAL_SCHEDULER_ENABLED."""
 
     def test_local_returns_local_scheduler(self, monkeypatch):
-        from unity.settings import SETTINGS
+        from droid.settings import SETTINGS
 
         monkeypatch.setattr(SETTINGS.task, "LOCAL_SCHEDULER_ENABLED", True)
         monkeypatch.setattr(
@@ -190,7 +190,7 @@ class TestBuildMaterializer:
         assert materializer._broker is cm.event_broker
 
     def test_hosted_returns_noop(self, monkeypatch):
-        from unity.settings import SETTINGS
+        from droid.settings import SETTINGS
 
         monkeypatch.setattr(SETTINGS.task, "LOCAL_SCHEDULER_ENABLED", False)
 
@@ -337,7 +337,7 @@ def _patch_list_scheduled(
         calls.append(assistant_id)
         return list(activations)
 
-    from unity.task_scheduler import machine_state
+    from droid.task_scheduler import machine_state
 
     monkeypatch.setattr(
         machine_state,
@@ -489,7 +489,7 @@ class TestReconcile:
             "42",
         )
 
-        from unity.task_scheduler import machine_state
+        from droid.task_scheduler import machine_state
 
         def _boom(*, assistant_id):
             raise RuntimeError("simulated Unify outage")
@@ -535,7 +535,7 @@ class TestTaskDueFromSnapshot:
     """`_task_due_from_snapshot` matches the field contract Communication uses."""
 
     def test_returns_none_when_required_fields_missing(self):
-        from unity.task_scheduler.local_scheduler.scheduler import (
+        from droid.task_scheduler.local_scheduler.scheduler import (
             _task_due_from_snapshot,
         )
 
@@ -553,7 +553,7 @@ class TestTaskDueFromSnapshot:
         assert _task_due_from_snapshot(bad) is None
 
     def test_returns_none_when_revision_missing(self):
-        from unity.task_scheduler.local_scheduler.scheduler import (
+        from droid.task_scheduler.local_scheduler.scheduler import (
             _task_due_from_snapshot,
         )
 
@@ -570,7 +570,7 @@ class TestTaskDueFromSnapshot:
         assert _task_due_from_snapshot(bad) is None
 
     def test_returns_none_when_due_missing(self):
-        from unity.task_scheduler.local_scheduler.scheduler import (
+        from droid.task_scheduler.local_scheduler.scheduler import (
             _task_due_from_snapshot,
         )
 
@@ -587,7 +587,7 @@ class TestTaskDueFromSnapshot:
         assert _task_due_from_snapshot(bad) is None
 
     def test_returns_taskdue_with_expected_fields(self):
-        from unity.task_scheduler.local_scheduler.scheduler import (
+        from droid.task_scheduler.local_scheduler.scheduler import (
             _task_due_from_snapshot,
         )
 
@@ -624,7 +624,7 @@ class TestTaskDueFromSnapshot:
         assert "Weekly Status" in event.reason
 
     def test_recurring_hint_set_when_repeat_present(self):
-        from unity.task_scheduler.local_scheduler.scheduler import (
+        from droid.task_scheduler.local_scheduler.scheduler import (
             _task_due_from_snapshot,
         )
 
@@ -849,7 +849,7 @@ class TestPollLoop:
         # Mutable list the patched list_scheduled_activations reads from.
         live: list[TaskActivationSnapshot] = []
 
-        from unity.task_scheduler import machine_state
+        from droid.task_scheduler import machine_state
 
         def _fake(*, assistant_id):
             return list(live)

@@ -12,7 +12,7 @@ from datetime import timedelta
 
 import pytest
 
-from unity.conversation_manager.task_actions import (
+from droid.conversation_manager.task_actions import (
     OPERATION_MAP,
     STEERING_OPERATIONS,
     ParsedActionName,
@@ -25,18 +25,18 @@ from unity.conversation_manager.task_actions import (
     parse_action_name,
     safe_call_id_suffix,
 )
-from unity.conversation_manager.domains.notifications import (
+from droid.conversation_manager.domains.notifications import (
     Notification,
     NotificationBar,
 )
-from unity.conversation_manager.domains.renderer import Renderer
-from unity.conversation_manager.domains.contact_index import (
+from droid.conversation_manager.domains.renderer import Renderer
+from droid.conversation_manager.domains.contact_index import (
     ConversationState,
     ContactIndex,
     Message,
     EmailMessage,
 )
-from unity.conversation_manager.cm_types import Medium
+from droid.conversation_manager.cm_types import Medium
 
 # Alias for backward compatibility with tests
 Contact = ConversationState
@@ -696,7 +696,7 @@ class TestRenderer:
         static_now,
     ):
         """Global thread appears before per-medium threads in rendered output."""
-        from unity.conversation_manager.domains.contact_index import GlobalThreadEntry
+        from droid.conversation_manager.domains.contact_index import GlobalThreadEntry
 
         contact_info = {
             "contact_id": 1,
@@ -740,7 +740,7 @@ class TestRenderer:
         static_now,
     ):
         """Global thread renders all messages while per-medium caps at max_contact_medium_messages."""
-        from unity.conversation_manager.domains.contact_index import GlobalThreadEntry
+        from droid.conversation_manager.domains.contact_index import GlobalThreadEntry
 
         contact_info = {
             "contact_id": 1,
@@ -1271,7 +1271,7 @@ class TestDispatchLivekitAgentCodeQuality:
         cause multiple retry attempts with backoff delays, defeating the purpose.
         """
         import inspect
-        from unity.conversation_manager.utils import dispatch_livekit_agent
+        from droid.conversation_manager.utils import dispatch_livekit_agent
 
         source = inspect.getsource(dispatch_livekit_agent)
 

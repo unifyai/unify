@@ -10,9 +10,9 @@ import asyncio
 
 import pytest
 
-from unity.task_scheduler.local_scheduler import LocalOfflineDispatcher
-from unity.task_scheduler.local_scheduler import offline_dispatcher as od
-from unity.task_scheduler.machine_state import TaskActivationSnapshot
+from droid.task_scheduler.local_scheduler import LocalOfflineDispatcher
+from droid.task_scheduler.local_scheduler import offline_dispatcher as od
+from droid.task_scheduler.machine_state import TaskActivationSnapshot
 
 _DEFAULT_DUE = "2030-04-10T09:00:00+00:00"
 
@@ -77,13 +77,13 @@ class TestBuildLocalOfflineRunnerEnv:
         env = od._build_local_offline_runner_env(snap, source_type="scheduled")
 
         required = {
-            "UNITY_OFFLINE_TASK_MODE",
-            "UNITY_OFFLINE_TASK_RUN_KEY",
-            "UNITY_OFFLINE_TASK_ID",
-            "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID",
-            "UNITY_OFFLINE_TASK_ACTIVATION_REVISION",
-            "UNITY_OFFLINE_TASK_REQUEST",
-            "UNITY_OFFLINE_TASK_SOURCE_TYPE",
+            "DROID_OFFLINE_TASK_MODE",
+            "DROID_OFFLINE_TASK_RUN_KEY",
+            "DROID_OFFLINE_TASK_ID",
+            "DROID_OFFLINE_TASK_SOURCE_TASK_LOG_ID",
+            "DROID_OFFLINE_TASK_ACTIVATION_REVISION",
+            "DROID_OFFLINE_TASK_REQUEST",
+            "DROID_OFFLINE_TASK_SOURCE_TYPE",
             "ASSISTANT_ID",
         }
         missing = required - set(env.keys())
@@ -96,38 +96,38 @@ class TestBuildLocalOfflineRunnerEnv:
             task_description="The Description",
         )
         env = od._build_local_offline_runner_env(snap, source_type="scheduled")
-        assert env["UNITY_OFFLINE_TASK_REQUEST"] == "The Description"
+        assert env["DROID_OFFLINE_TASK_REQUEST"] == "The Description"
 
         # name when description is empty.
         snap = _make_snapshot(task_name="The Name", task_description="")
         env = od._build_local_offline_runner_env(snap, source_type="scheduled")
-        assert env["UNITY_OFFLINE_TASK_REQUEST"] == "The Name"
+        assert env["DROID_OFFLINE_TASK_REQUEST"] == "The Name"
 
         # synthetic fallback when both are empty.
         snap = _make_snapshot(task_name="", task_description="")
         env = od._build_local_offline_runner_env(snap, source_type="scheduled")
-        assert env["UNITY_OFFLINE_TASK_REQUEST"] == f"Execute task {snap.task_id}"
+        assert env["DROID_OFFLINE_TASK_REQUEST"] == f"Execute task {snap.task_id}"
 
     def test_mode_is_actor(self):
         env = od._build_local_offline_runner_env(
             _make_snapshot(),
             source_type="scheduled",
         )
-        assert env["UNITY_OFFLINE_TASK_MODE"] == "actor"
+        assert env["DROID_OFFLINE_TASK_MODE"] == "actor"
 
     def test_function_id_omitted_when_no_entrypoint(self):
         env = od._build_local_offline_runner_env(
             _make_snapshot(entrypoint=None),
             source_type="scheduled",
         )
-        assert env["UNITY_OFFLINE_TASK_FUNCTION_ID"] == ""
+        assert env["DROID_OFFLINE_TASK_FUNCTION_ID"] == ""
 
     def test_function_id_serialised_when_entrypoint(self):
         env = od._build_local_offline_runner_env(
             _make_snapshot(entrypoint=42),
             source_type="scheduled",
         )
-        assert env["UNITY_OFFLINE_TASK_FUNCTION_ID"] == "42"
+        assert env["DROID_OFFLINE_TASK_FUNCTION_ID"] == "42"
 
     def test_eventbus_disabled_to_avoid_clobbering_live_session(self):
         env = od._build_local_offline_runner_env(
@@ -140,7 +140,7 @@ class TestBuildLocalOfflineRunnerEnv:
     def test_trigger_medium_propagates_for_triggered_dispatch(self):
         snap = _make_snapshot(trigger_medium="email", execution_mode="offline")
         env = od._build_local_offline_runner_env(snap, source_type="triggered")
-        assert env["UNITY_OFFLINE_TASK_SOURCE_MEDIUM"] == "email"
+        assert env["DROID_OFFLINE_TASK_SOURCE_MEDIUM"] == "email"
 
     def test_explicit_trigger_override_wins_over_snapshot_medium(self):
         snap = _make_snapshot(trigger_medium="email")
@@ -149,7 +149,7 @@ class TestBuildLocalOfflineRunnerEnv:
             source_type="triggered",
             source_medium="sms",
         )
-        assert env["UNITY_OFFLINE_TASK_SOURCE_MEDIUM"] == "sms"
+        assert env["DROID_OFFLINE_TASK_SOURCE_MEDIUM"] == "sms"
 
     def test_explicit_contact_id_set(self):
         env = od._build_local_offline_runner_env(
@@ -157,7 +157,7 @@ class TestBuildLocalOfflineRunnerEnv:
             source_type="triggered",
             source_contact_id=123,
         )
-        assert env["UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID"] == "123"
+        assert env["DROID_OFFLINE_TASK_SOURCE_CONTACT_ID"] == "123"
 
     def test_explicit_display_name_emitted(self):
         env = od._build_local_offline_runner_env(
@@ -165,17 +165,17 @@ class TestBuildLocalOfflineRunnerEnv:
             source_type="triggered",
             source_contact_display_name="Alice Example",
         )
-        assert env["UNITY_OFFLINE_TASK_SOURCE_CONTACT_DISPLAY_NAME"] == "Alice Example"
+        assert env["DROID_OFFLINE_TASK_SOURCE_CONTACT_DISPLAY_NAME"] == "Alice Example"
 
     def test_scheduled_for_normalised_to_utc(self):
         snap = _make_snapshot(next_due_at="2030-04-10T11:00:00+02:00")
         env = od._build_local_offline_runner_env(snap, source_type="scheduled")
-        assert env["UNITY_OFFLINE_TASK_SCHEDULED_FOR"] == "2030-04-10T09:00:00+00:00"
+        assert env["DROID_OFFLINE_TASK_SCHEDULED_FOR"] == "2030-04-10T09:00:00+00:00"
 
     def test_scheduled_for_z_suffix_normalised(self):
         snap = _make_snapshot(next_due_at="2030-04-10T09:00:00Z")
         env = od._build_local_offline_runner_env(snap, source_type="scheduled")
-        assert env["UNITY_OFFLINE_TASK_SCHEDULED_FOR"] == "2030-04-10T09:00:00+00:00"
+        assert env["DROID_OFFLINE_TASK_SCHEDULED_FOR"] == "2030-04-10T09:00:00+00:00"
 
 
 class TestBuildLocalOfflineRunKey:
@@ -234,10 +234,10 @@ class TestDispatch:
 
             assert captured["args"][-2:] == (
                 "-m",
-                "unity.task_scheduler.offline_runner",
+                "droid.task_scheduler.offline_runner",
             )
-            assert captured["env"]["UNITY_OFFLINE_TASK_MODE"] == "actor"
-            assert captured["env"]["UNITY_OFFLINE_TASK_SOURCE_TYPE"] == "scheduled"
+            assert captured["env"]["DROID_OFFLINE_TASK_MODE"] == "actor"
+            assert captured["env"]["DROID_OFFLINE_TASK_SOURCE_TYPE"] == "scheduled"
             # Inherits PATH from os.environ.
 
             assert "PATH" in captured["env"]
@@ -296,7 +296,7 @@ class TestDispatch:
                 _make_snapshot(trigger_medium="sms"),
                 source_type="triggered",
             )
-            assert captured["env"]["UNITY_OFFLINE_TASK_SOURCE_TYPE"] == "triggered"
+            assert captured["env"]["DROID_OFFLINE_TASK_SOURCE_TYPE"] == "triggered"
         finally:
             await dispatcher.stop()
 

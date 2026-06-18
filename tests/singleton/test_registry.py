@@ -1,6 +1,6 @@
 import pytest
 
-from unity.manager_registry import ManagerRegistry, SingletonABCMeta
+from droid.manager_registry import ManagerRegistry, SingletonABCMeta
 
 
 class _DummySingleton(metaclass=SingletonABCMeta):

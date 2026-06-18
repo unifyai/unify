@@ -49,10 +49,10 @@ def _patch_context(*, org_id=None):
 
             stack = contextlib.ExitStack()
             stack.enter_context(
-                patch("unity.spending_limits._get_api_key", return_value="test-key"),
+                patch("droid.spending_limits._get_api_key", return_value="test-key"),
             )
             mock_session = stack.enter_context(
-                patch("unity.session_details.SESSION_DETAILS"),
+                patch("droid.session_details.SESSION_DETAILS"),
             )
             mock_session.assistant.agent_id = 1
             mock_session.user_id = "user_1"
@@ -112,7 +112,7 @@ def _patch_spend_client(spend_data):
 
             stack.enter_context(
                 patch(
-                    "unity.spending_limits._get_spend_client",
+                    "droid.spending_limits._get_spend_client",
                     return_value=mock_instance,
                 ),
             )
@@ -136,7 +136,7 @@ class TestCreditBalanceBlocking:
     @pytest.mark.asyncio
     async def test_zero_balance_blocks(self):
         """A zero credit balance should deny the request."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _make_spend_response(credit_balance=0.0)
         with _patch_context():
@@ -151,7 +151,7 @@ class TestCreditBalanceBlocking:
     @pytest.mark.asyncio
     async def test_negative_balance_blocks(self):
         """A negative credit balance should deny the request."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _make_spend_response(credit_balance=-42.50)
         with _patch_context():
@@ -166,7 +166,7 @@ class TestCreditBalanceBlocking:
     @pytest.mark.asyncio
     async def test_tiny_positive_balance_allows(self):
         """Even $0.01 remaining should let the call through."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _make_spend_response(credit_balance=0.01)
         with _patch_context():
@@ -180,7 +180,7 @@ class TestCreditBalanceBlocking:
     @pytest.mark.asyncio
     async def test_large_positive_balance_allows(self):
         """A healthy balance should let the call through."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _make_spend_response(credit_balance=1000.0)
         with _patch_context():
@@ -195,7 +195,7 @@ class TestCreditBalanceBlocking:
     @pytest.mark.parametrize("balance", [0, -0.01, -100, -1e6])
     async def test_various_non_positive_balances_all_block(self, balance):
         """Any non-positive balance should block."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _make_spend_response(credit_balance=balance)
         with _patch_context():
@@ -218,7 +218,7 @@ class TestCreditBalanceVsSpendingCap:
     @pytest.mark.asyncio
     async def test_under_cap_but_no_credits_blocks(self):
         """Spending under cap but zero credits -> blocked by credit check."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _make_spend_response(
             cumulative_spend=10.0,
@@ -237,7 +237,7 @@ class TestCreditBalanceVsSpendingCap:
     @pytest.mark.asyncio
     async def test_over_cap_with_credits_blocks_on_cap(self):
         """Spending over cap with remaining credits -> blocked by spending cap."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _make_spend_response(
             cumulative_spend=150.0,
@@ -256,7 +256,7 @@ class TestCreditBalanceVsSpendingCap:
     @pytest.mark.asyncio
     async def test_over_cap_and_no_credits_blocks_on_cap_first(self):
         """Both cap exceeded and zero credits -> cap takes precedence (checked first)."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _make_spend_response(
             cumulative_spend=200.0,
@@ -275,7 +275,7 @@ class TestCreditBalanceVsSpendingCap:
     @pytest.mark.asyncio
     async def test_no_cap_set_but_no_credits_blocks(self):
         """No spending cap set (unlimited) but zero credits -> blocked."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _make_spend_response(
             cumulative_spend=999.0,
@@ -294,7 +294,7 @@ class TestCreditBalanceVsSpendingCap:
     @pytest.mark.asyncio
     async def test_no_cap_set_with_credits_allows(self):
         """No spending cap set and positive credits -> allowed."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _make_spend_response(
             cumulative_spend=999.0,
@@ -321,7 +321,7 @@ class TestOrgCreditBalance:
     @pytest.mark.asyncio
     async def test_org_zero_balance_blocks(self):
         """Zero credits in org billing account blocks all members."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _make_spend_response(
             cumulative_spend=5.0,
@@ -340,7 +340,7 @@ class TestOrgCreditBalance:
     @pytest.mark.asyncio
     async def test_org_positive_balance_allows(self):
         """Positive credits in org billing account allows all members."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _make_spend_response(
             cumulative_spend=5.0,
@@ -358,7 +358,7 @@ class TestOrgCreditBalance:
     @pytest.mark.asyncio
     async def test_org_member_limit_exceeded_but_credits_remain(self):
         """Member cap exceeded blocks even if org has credits."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         exceeded_data = _make_spend_response(
             cumulative_spend=300.0,
@@ -397,7 +397,7 @@ class TestMissingCreditBalance:
     @pytest.mark.asyncio
     async def test_no_credit_balance_in_response_allows(self):
         """Old Orchestra without credit_balance -> allowed (fail-open)."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _make_spend_response(credit_balance=None)
         with _patch_context():
@@ -411,7 +411,7 @@ class TestMissingCreditBalance:
     @pytest.mark.asyncio
     async def test_all_endpoints_fail_still_allows(self):
         """If every endpoint errors out, fail-open: no credit_balance to check."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         async def failing(*args, **kwargs):
             raise Exception("Timeout")
@@ -440,7 +440,7 @@ class TestPartialEndpointFailures:
     @pytest.mark.asyncio
     async def test_assistant_endpoint_fails_user_provides_balance(self):
         """Assistant endpoint fails, but user endpoint returns zero balance -> blocked."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         async def failing(*args, **kwargs):
             raise Exception("Timeout")
@@ -466,7 +466,7 @@ class TestPartialEndpointFailures:
     @pytest.mark.asyncio
     async def test_user_endpoint_fails_assistant_provides_balance(self):
         """User endpoint fails, but assistant endpoint returns positive balance -> allowed."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         async def failing(*args, **kwargs):
             raise Exception("Timeout")
@@ -505,7 +505,7 @@ class TestNonLlmSpendingDrainsCredits:
         The spending cap is well under limit, but the billing account is empty.
         This is the scenario that a client-side flag (Option 3) could never catch.
         """
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _make_spend_response(
             cumulative_spend=2.0,
@@ -524,7 +524,7 @@ class TestNonLlmSpendingDrainsCredits:
     @pytest.mark.asyncio
     async def test_credits_refilled_after_drain_allows(self):
         """Credits refilled (auto-recharge) after drain -> LLM call allowed."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _make_spend_response(
             cumulative_spend=2.0,
@@ -551,7 +551,7 @@ class TestReasonMessage:
     @pytest.mark.asyncio
     async def test_reason_includes_balance_amount(self):
         """Reason should show the actual balance."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _make_spend_response(credit_balance=-12.34)
         with _patch_context():
@@ -566,7 +566,7 @@ class TestReasonMessage:
     @pytest.mark.asyncio
     async def test_reason_includes_zero_balance(self):
         """Reason should show $0.00 for zero balance."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _make_spend_response(credit_balance=0.0)
         with _patch_context():
@@ -590,7 +590,7 @@ class TestConcurrentCreditChecks:
     @pytest.mark.asyncio
     async def test_many_concurrent_calls_all_blocked_when_empty(self):
         """20 concurrent limit checks with zero balance -> all denied."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         data = _make_spend_response(credit_balance=0.0)
 
@@ -618,7 +618,7 @@ class TestConcurrentCreditChecks:
     @pytest.mark.asyncio
     async def test_many_concurrent_calls_all_allowed_when_positive(self):
         """20 concurrent limit checks with positive balance -> all allowed."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         data = _make_spend_response(credit_balance=100.0)
 
@@ -645,7 +645,7 @@ class TestConcurrentCreditChecks:
     @pytest.mark.asyncio
     async def test_concurrent_calls_see_balance_change(self):
         """Simulate balance dropping to zero mid-burst: later calls see the change."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         call_counter = 0
 
@@ -688,7 +688,7 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_balance_exactly_zero_blocks(self):
         """Balance of exactly $0.00 should block."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _make_spend_response(credit_balance=0.0)
         with _patch_context():
@@ -702,7 +702,7 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_balance_epsilon_above_zero_allows(self):
         """A very small positive balance (1e-10) should still allow."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _make_spend_response(credit_balance=1e-10)
         with _patch_context():
@@ -716,7 +716,7 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_balance_very_large_negative_blocks(self):
         """Even a hugely negative balance should block."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _make_spend_response(credit_balance=-1_000_000.0)
         with _patch_context():
@@ -730,7 +730,7 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_credit_balance_none_vs_zero(self):
         """None credit_balance (missing) should allow; 0.0 should block."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp_none = _make_spend_response(credit_balance=None)
         with _patch_context():
@@ -752,9 +752,9 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_no_api_key_skips_all_checks(self):
         """When no API key is set, all checks are skipped -> allowed."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
-        with patch("unity.spending_limits._get_api_key", return_value=None):
+        with patch("droid.spending_limits._get_api_key", return_value=None):
             result = await check_spending_limits_callback(
                 LimitCheckRequest(model="gpt-4", endpoint="test"),
             )
@@ -764,10 +764,10 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_missing_session_context_skips_all_checks(self):
         """When SESSION_DETAILS has no assistant/user, checks are skipped -> allowed."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
-        with patch("unity.spending_limits._get_api_key", return_value="key"):
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+        with patch("droid.spending_limits._get_api_key", return_value="key"):
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.agent_id = None
                 mock_session.user_id = None
                 mock_session.org_id = None
@@ -790,7 +790,7 @@ class TestZeroLatencyOverhead:
     @pytest.mark.asyncio
     async def test_personal_context_makes_exactly_two_calls(self):
         """Personal context: assistant + user = 2 endpoint calls. Credit check is free."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         data = _make_spend_response(credit_balance=0.0)
         with _patch_context(org_id=None):
@@ -805,7 +805,7 @@ class TestZeroLatencyOverhead:
     @pytest.mark.asyncio
     async def test_org_context_makes_exactly_three_calls(self):
         """Org context: assistant + member + org = 3 endpoint calls. Credit check is free."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         data = _make_spend_response(credit_balance=0.0)
         with _patch_context(org_id=789):
@@ -838,7 +838,7 @@ class TestSubPennyBalanceDeadlock:
     @pytest.mark.asyncio
     async def test_sub_penny_balance_allows(self):
         """A sub-penny positive balance (e.g. $0.0008) is still > 0 and must allow."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _make_spend_response(credit_balance=0.0007923)
         with _patch_context():
@@ -852,7 +852,7 @@ class TestSubPennyBalanceDeadlock:
     @pytest.mark.asyncio
     async def test_exact_zero_blocks(self):
         """A balance of exactly 0.0 must be caught by the <= 0 gate."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _make_spend_response(credit_balance=0.0)
         with _patch_context():
@@ -867,7 +867,7 @@ class TestSubPennyBalanceDeadlock:
     @pytest.mark.asyncio
     async def test_negative_from_overdraft_blocks(self):
         """After a successful overdraft deduction the balance is negative and must block."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _make_spend_response(credit_balance=-0.0492077)
         with _patch_context():
@@ -916,7 +916,7 @@ class TestMeteredBypassesCreditGate:
     @pytest.mark.asyncio
     async def test_metered_zero_balance_allows(self):
         """METERED + balance=$0 must allow (the canonical case)."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _metered_response(credit_balance=0.0)
         with _patch_context():
@@ -930,7 +930,7 @@ class TestMeteredBypassesCreditGate:
     @pytest.mark.asyncio
     async def test_metered_negative_balance_allows(self):
         """METERED + small negative balance (rounding/in-flight) must allow."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _metered_response(credit_balance=-0.42)
         with _patch_context():
@@ -944,7 +944,7 @@ class TestMeteredBypassesCreditGate:
     @pytest.mark.asyncio
     async def test_metered_org_zero_balance_allows(self):
         """Same in org context: METERED org account isn't gated on balance."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _metered_response(credit_balance=0.0)
         with _patch_context(org_id=789):
@@ -958,7 +958,7 @@ class TestMeteredBypassesCreditGate:
     @pytest.mark.asyncio
     async def test_metered_still_enforces_spending_cap(self):
         """METERED accounts are still subject to spending caps."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         resp = _metered_response(
             cumulative_spend=200.0,
@@ -977,7 +977,7 @@ class TestMeteredBypassesCreditGate:
     @pytest.mark.asyncio
     async def test_credits_mode_explicit_still_gates(self):
         """billing_mode=CREDITS keeps the legacy gate active."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         data = {
             "cumulative_spend": 0.0,
@@ -1002,7 +1002,7 @@ class TestMeteredBypassesCreditGate:
         the gate. ``billing_mode`` only bypasses the check when the
         endpoint explicitly says ``"METERED"``.
         """
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         # No "billing_mode" key at all → should still gate at $0
         resp = _make_spend_response(credit_balance=0.0)
@@ -1023,7 +1023,7 @@ class TestMeteredBypassesCreditGate:
         post-rollout) shouldn't gate the call: the first non-None
         billing_mode wins, matching how credit_balance is resolved.
         """
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         legacy = {"cumulative_spend": 0.0, "limit": None, "credit_balance": 0.0}
         modern = _metered_response(credit_balance=0.0)

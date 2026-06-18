@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from unity.common.pipeline import (
+from droid.common.pipeline import (
     ResilientRequestPolicy,
     is_retryable_exception,
 )

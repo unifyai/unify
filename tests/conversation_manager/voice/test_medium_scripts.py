@@ -52,7 +52,7 @@ import pytest_asyncio
 @pytest_asyncio.fixture
 async def event_broker():
     """Local in-memory broker for testing."""
-    from unity.conversation_manager.event_broker import create_event_broker
+    from droid.conversation_manager.event_broker import create_event_broker
 
     broker = create_event_broker()
     yield broker
@@ -93,7 +93,7 @@ class TestTTSAssistantClass:
 
     def test_assistant_initialization_phone_channel(self, boss_contact):
         """Assistant initializes correctly for phone channel."""
-        from unity.conversation_manager.medium_scripts.call import Assistant
+        from droid.conversation_manager.medium_scripts.call import Assistant
 
         assistant = Assistant(
             contact=boss_contact,
@@ -110,7 +110,7 @@ class TestTTSAssistantClass:
 
     def test_assistant_initialization_unify_meet_channel(self, boss_contact):
         """Assistant initializes correctly for unify_meet channel."""
-        from unity.conversation_manager.medium_scripts.call import Assistant
+        from droid.conversation_manager.medium_scripts.call import Assistant
 
         assistant = Assistant(
             contact=boss_contact,
@@ -125,7 +125,7 @@ class TestTTSAssistantClass:
 
     def test_assistant_outbound_call_not_received_initially(self, boss_contact):
         """Outbound calls start with call_received=False."""
-        from unity.conversation_manager.medium_scripts.call import Assistant
+        from droid.conversation_manager.medium_scripts.call import Assistant
 
         assistant = Assistant(
             contact=boss_contact,
@@ -139,7 +139,7 @@ class TestTTSAssistantClass:
 
     def test_assistant_set_call_received(self, boss_contact):
         """set_call_received() updates state correctly."""
-        from unity.conversation_manager.medium_scripts.call import Assistant
+        from droid.conversation_manager.medium_scripts.call import Assistant
 
         assistant = Assistant(
             contact=boss_contact,
@@ -155,8 +155,8 @@ class TestTTSAssistantClass:
 
     def test_assistant_utterance_event_type_phone(self, boss_contact):
         """Phone channel uses InboundPhoneUtterance."""
-        from unity.conversation_manager.events import InboundPhoneUtterance
-        from unity.conversation_manager.medium_scripts.call import Assistant
+        from droid.conversation_manager.events import InboundPhoneUtterance
+        from droid.conversation_manager.medium_scripts.call import Assistant
 
         assistant = Assistant(
             contact=boss_contact,
@@ -169,8 +169,8 @@ class TestTTSAssistantClass:
 
     def test_assistant_utterance_event_type_meet(self, boss_contact):
         """Meet channel uses InboundUnifyMeetUtterance."""
-        from unity.conversation_manager.events import InboundUnifyMeetUtterance
-        from unity.conversation_manager.medium_scripts.call import Assistant
+        from droid.conversation_manager.events import InboundUnifyMeetUtterance
+        from droid.conversation_manager.medium_scripts.call import Assistant
 
         assistant = Assistant(
             contact=boss_contact,
@@ -183,8 +183,8 @@ class TestTTSAssistantClass:
 
     def test_assistant_outbound_utterance_event_type_phone(self, boss_contact):
         """Phone channel uses OutboundPhoneUtterance for assistant."""
-        from unity.conversation_manager.events import OutboundPhoneUtterance
-        from unity.conversation_manager.medium_scripts.call import Assistant
+        from droid.conversation_manager.events import OutboundPhoneUtterance
+        from droid.conversation_manager.medium_scripts.call import Assistant
 
         assistant = Assistant(
             contact=boss_contact,
@@ -197,8 +197,8 @@ class TestTTSAssistantClass:
 
     def test_assistant_outbound_utterance_event_type_meet(self, boss_contact):
         """Meet channel uses OutboundUnifyMeetUtterance for assistant."""
-        from unity.conversation_manager.events import OutboundUnifyMeetUtterance
-        from unity.conversation_manager.medium_scripts.call import Assistant
+        from droid.conversation_manager.events import OutboundUnifyMeetUtterance
+        from droid.conversation_manager.medium_scripts.call import Assistant
 
         assistant = Assistant(
             contact=boss_contact,
@@ -220,7 +220,7 @@ class TestCommonHelpers:
 
     def test_should_dispatch_livekit_agent_with_dev_command(self, monkeypatch):
         """should_dispatch_livekit_agent returns True for 'dev' command."""
-        from unity.conversation_manager.medium_scripts import common
+        from droid.conversation_manager.medium_scripts import common
 
         # Patch sys.argv in the common module's namespace
         monkeypatch.setattr(common.sys, "argv", ["call.py", "dev"])
@@ -228,21 +228,21 @@ class TestCommonHelpers:
 
     def test_should_dispatch_livekit_agent_with_connect_command(self, monkeypatch):
         """should_dispatch_livekit_agent returns True for 'connect' command."""
-        from unity.conversation_manager.medium_scripts import common
+        from droid.conversation_manager.medium_scripts import common
 
         monkeypatch.setattr(common.sys, "argv", ["call.py", "connect"])
         assert common.should_dispatch_livekit_agent() is True
 
     def test_should_not_dispatch_livekit_agent_for_download_files(self, monkeypatch):
         """should_dispatch_livekit_agent returns False for 'download-files' command."""
-        from unity.conversation_manager.medium_scripts import common
+        from droid.conversation_manager.medium_scripts import common
 
         monkeypatch.setattr(common.sys, "argv", ["call.py", "download-files"])
         assert common.should_dispatch_livekit_agent() is False
 
     def test_should_not_dispatch_livekit_agent_with_no_args(self, monkeypatch):
         """should_dispatch_livekit_agent returns False when no args provided."""
-        from unity.conversation_manager.medium_scripts import common
+        from droid.conversation_manager.medium_scripts import common
 
         monkeypatch.setattr(common.sys, "argv", ["call.py"])
         assert common.should_dispatch_livekit_agent() is False
@@ -268,8 +268,8 @@ class TestEventPublishingHelpers:
         monkeypatch,
     ):
         """publish_call_started publishes PhoneCallStarted for phone channel."""
-        from unity.conversation_manager.events import Event, PhoneCallStarted
-        from unity.conversation_manager.medium_scripts import common
+        from droid.conversation_manager.events import Event, PhoneCallStarted
+        from droid.conversation_manager.medium_scripts import common
 
         # Patch the event_broker in common module to use our test fixture
         monkeypatch.setattr(common, "event_broker", event_broker)
@@ -295,8 +295,8 @@ class TestEventPublishingHelpers:
         monkeypatch,
     ):
         """publish_call_started publishes UnifyMeetStarted for meet channel."""
-        from unity.conversation_manager.events import Event, UnifyMeetStarted
-        from unity.conversation_manager.medium_scripts import common
+        from droid.conversation_manager.events import Event, UnifyMeetStarted
+        from droid.conversation_manager.medium_scripts import common
 
         monkeypatch.setattr(common, "event_broker", event_broker)
 
@@ -321,8 +321,8 @@ class TestEventPublishingHelpers:
         monkeypatch,
     ):
         """publish_call_ended publishes PhoneCallEnded for phone channel."""
-        from unity.conversation_manager.events import Event, PhoneCallEnded
-        from unity.conversation_manager.medium_scripts import common
+        from droid.conversation_manager.events import Event, PhoneCallEnded
+        from droid.conversation_manager.medium_scripts import common
 
         monkeypatch.setattr(common, "event_broker", event_broker)
 
@@ -347,8 +347,8 @@ class TestEventPublishingHelpers:
         monkeypatch,
     ):
         """publish_call_ended publishes UnifyMeetEnded for meet channel."""
-        from unity.conversation_manager.events import Event, UnifyMeetEnded
-        from unity.conversation_manager.medium_scripts import common
+        from droid.conversation_manager.events import Event, UnifyMeetEnded
+        from droid.conversation_manager.medium_scripts import common
 
         monkeypatch.setattr(common, "event_broker", event_broker)
 
@@ -387,8 +387,8 @@ class TestEndCallHelper:
         monkeypatch,
     ):
         """create_end_call returns function that publishes ended event."""
-        from unity.conversation_manager.events import Event, PhoneCallEnded
-        from unity.conversation_manager.medium_scripts import common
+        from droid.conversation_manager.events import Event, PhoneCallEnded
+        from droid.conversation_manager.medium_scripts import common
 
         # Patch the event_broker in common module to use our test fixture
         monkeypatch.setattr(common, "event_broker", event_broker)
@@ -415,7 +415,7 @@ class TestEndCallHelper:
         monkeypatch,
     ):
         """create_end_call runs pre_shutdown_callback before shutdown."""
-        from unity.conversation_manager.medium_scripts import common
+        from droid.conversation_manager.medium_scripts import common
 
         monkeypatch.setattr(common, "event_broker", event_broker)
 
@@ -444,7 +444,7 @@ class TestEndCallHelper:
         """create_end_call continues even if callback raises."""
         import logging
 
-        from unity.conversation_manager.medium_scripts import common
+        from droid.conversation_manager.medium_scripts import common
 
         monkeypatch.setattr(common, "event_broker", event_broker)
 
@@ -457,13 +457,13 @@ class TestEndCallHelper:
             pre_shutdown_callback=failing_callback,
         )
 
-        unity_logger = logging.getLogger("unity")
-        unity_logger.addHandler(caplog.handler)
+        droid_logger = logging.getLogger("droid")
+        droid_logger.addHandler(caplog.handler)
         caplog.handler.setLevel(logging.DEBUG)
         try:
             await end_call()
         finally:
-            unity_logger.removeHandler(caplog.handler)
+            droid_logger.removeHandler(caplog.handler)
 
         assert "Error in pre-shutdown callback" in caplog.text
 
@@ -482,8 +482,8 @@ class TestCLIArgumentParsing:
 
     def test_configure_from_cli_with_full_args(self, monkeypatch):
         """configure_from_cli parses all arguments correctly."""
-        from unity.conversation_manager.medium_scripts import common
-        from unity.session_details import SESSION_DETAILS
+        from droid.conversation_manager.medium_scripts import common
+        from droid.session_details import SESSION_DETAILS
 
         # Reset SESSION_DETAILS before test
         SESSION_DETAILS.reset()
@@ -510,7 +510,7 @@ class TestCLIArgumentParsing:
             [
                 "call.py",
                 "dev",
-                "unity_test_assistant_id_phone",
+                "droid_test_assistant_id_phone",
                 "elevenlabs",
                 "voice123",
                 "True",
@@ -533,7 +533,7 @@ class TestCLIArgumentParsing:
             ],
         )
 
-        assert room_name == "unity_test_assistant_id_phone"
+        assert room_name == "droid_test_assistant_id_phone"
         assert SESSION_DETAILS.voice.provider == "elevenlabs"
         assert SESSION_DETAILS.voice.id == "voice123"
         assert SESSION_DETAILS.voice_call.outbound is True
@@ -541,8 +541,8 @@ class TestCLIArgumentParsing:
 
     def test_configure_from_cli_meet_room_name(self, monkeypatch):
         """configure_from_cli returns the canonical room name for UnifyMeet calls."""
-        from unity.conversation_manager.medium_scripts import common
-        from unity.session_details import SESSION_DETAILS
+        from droid.conversation_manager.medium_scripts import common
+        from droid.session_details import SESSION_DETAILS
 
         SESSION_DETAILS.reset()
 
@@ -557,7 +557,7 @@ class TestCLIArgumentParsing:
             [
                 "call.py",
                 "dev",
-                "unity_25_meet",
+                "droid_25_meet",
                 "cartesia",
                 "voice456",
                 "False",
@@ -580,12 +580,12 @@ class TestCLIArgumentParsing:
             ],
         )
 
-        assert room_name == "unity_25_meet"
+        assert room_name == "droid_25_meet"
 
     def test_configure_from_cli_defaults_none_voice_provider(self, monkeypatch):
         """configure_from_cli defaults 'None' voice provider to cartesia."""
-        from unity.conversation_manager.medium_scripts import common
-        from unity.session_details import SESSION_DETAILS
+        from droid.conversation_manager.medium_scripts import common
+        from droid.session_details import SESSION_DETAILS
 
         SESSION_DETAILS.reset()
 
@@ -636,7 +636,7 @@ class TestGuidanceChannelSubscription:
 
     async def test_guidance_channel_receives_call_guidance(self, event_broker):
         """Guidance channel receives FastBrainNotification events."""
-        from unity.conversation_manager.events import FastBrainNotification, Event
+        from droid.conversation_manager.events import FastBrainNotification, Event
 
         contact = {"contact_id": 1, "first_name": "Test"}
 
@@ -707,7 +707,7 @@ class TestUtteranceEventPublishing:
         boss_contact,
     ):
         """Phone utterances are published to app:comms:phone_utterance."""
-        from unity.conversation_manager.events import (
+        from droid.conversation_manager.events import (
             Event,
             InboundPhoneUtterance,
         )
@@ -733,7 +733,7 @@ class TestUtteranceEventPublishing:
         boss_contact,
     ):
         """Meet utterances are published to app:comms:meet_utterance."""
-        from unity.conversation_manager.events import (
+        from droid.conversation_manager.events import (
             Event,
             InboundUnifyMeetUtterance,
         )
@@ -762,7 +762,7 @@ class TestUtteranceEventPublishing:
 @pytest.mark.asyncio
 async def test_simulated_opening_publishes_ready_before_utterance(monkeypatch):
     from livekit.agents import llm
-    from unity.conversation_manager.medium_scripts import call as call_script
+    from droid.conversation_manager.medium_scripts import call as call_script
 
     sequence = []
     contact = {"contact_id": 1, "first_name": "User", "surname": "Example"}
@@ -964,7 +964,7 @@ class TestFastBrainGuidanceFlow:
         decision asynchronously — that path is covered by
         test_structured_notification_reply.py."""
         from livekit.agents import llm
-        from unity.conversation_manager.medium_scripts import call as call_script
+        from droid.conversation_manager.medium_scripts import call as call_script
 
         contact = {
             "contact_id": 2,
@@ -1131,7 +1131,7 @@ class TestFastBrainGuidanceFlow:
         monkeypatch.setattr(call_script, "STT", object())
         monkeypatch.setattr(call_script, "VAD", object())
 
-        import unity.common.llm_client as _llm_mod
+        import droid.common.llm_client as _llm_mod
 
         class _FakeGreetingClient:
             async def generate(self, **kwargs):
@@ -1183,7 +1183,7 @@ class TestFastBrainGuidanceFlow:
 
         if not hasattr(llm, "Tool"):
             llm.Tool = object  # type: ignore[attr-defined]
-        from unity.conversation_manager.medium_scripts import call as call_script
+        from droid.conversation_manager.medium_scripts import call as call_script
 
         contact = {
             "contact_id": 2,
@@ -1356,7 +1356,7 @@ class TestFastBrainGuidanceFlow:
 
         captured = {}
 
-        import unity.common.llm_client as _llm_mod
+        import droid.common.llm_client as _llm_mod
 
         class _FakeGreetingClient:
             async def generate(self, **kwargs):
@@ -1389,7 +1389,7 @@ class TestFastBrainGuidanceFlow:
         speaking.
         """
         from livekit.agents import llm
-        from unity.conversation_manager.medium_scripts import call as call_script
+        from droid.conversation_manager.medium_scripts import call as call_script
 
         contact = {
             "contact_id": 1,
@@ -1544,7 +1544,7 @@ class TestFastBrainGuidanceFlow:
         monkeypatch.setattr(call_script, "STT", object())
         monkeypatch.setattr(call_script, "VAD", object())
 
-        import unity.common.llm_client as _llm_mod
+        import droid.common.llm_client as _llm_mod
 
         class _FakeGreetingClient:
             async def generate(self, **kwargs):
@@ -1561,7 +1561,7 @@ class TestFastBrainGuidanceFlow:
         session = fake_session_holder["session"]
         baseline_replies = session.generate_reply_calls
 
-        from unity.conversation_manager.events import UnifyMessageSent
+        from droid.conversation_manager.events import UnifyMessageSent
 
         comms_cb = fake_broker.callbacks["app:comms:*"]
         event = UnifyMessageSent(
@@ -1607,7 +1607,7 @@ class TestFastBrainGuidanceFlow:
         the dedup gate suppresses when the fast brain already covers the info.
         """
         from livekit.agents import llm
-        from unity.conversation_manager.medium_scripts import call as call_script
+        from droid.conversation_manager.medium_scripts import call as call_script
 
         contact = {
             "contact_id": 2,
@@ -1768,7 +1768,7 @@ class TestFastBrainGuidanceFlow:
         monkeypatch.setattr(call_script, "STT", object())
         monkeypatch.setattr(call_script, "VAD", object())
 
-        import unity.common.llm_client as _llm_mod
+        import droid.common.llm_client as _llm_mod
 
         class _FakeGreetingClient:
             async def generate(self, **kwargs):
@@ -1820,7 +1820,7 @@ class TestFastBrainGuidanceFlow:
         ), "Queued speech must not fire while user is speaking."
 
         # Disable dedup so _dedup_and_speak goes straight to _speak_now.
-        from unity.settings import SETTINGS
+        from droid.settings import SETTINGS
 
         orig_dedup = SETTINGS.conversation.SPEECH_DEDUP_ENABLED
         SETTINGS.conversation.SPEECH_DEDUP_ENABLED = False
@@ -1861,7 +1861,7 @@ class TestFastBrainGuidanceFlow:
     ):
         """System instructions and notifications should both survive conversion."""
         from livekit.agents import llm
-        from unity.conversation_manager import livekit_unify_adapter as adapter_module
+        from droid.conversation_manager import livekit_unify_adapter as adapter_module
 
         captured = {}
 
@@ -1897,7 +1897,7 @@ class TestFastBrainGuidanceFlow:
         )
         chat_ctx.add_message(role="assistant", content="Let me check on that.")
 
-        from unity.settings import SETTINGS
+        from droid.settings import SETTINGS
 
         stream = adapter_module.UnifyLLM(
             model=SETTINGS.conversation.FAST_BRAIN_MODEL,
@@ -1918,7 +1918,7 @@ class TestFastBrainGuidanceFlow:
     ):
         """Guidance arriving mid-speech should be surfaced once speech ends."""
         from livekit.agents import llm
-        from unity.conversation_manager.medium_scripts import call as call_script
+        from droid.conversation_manager.medium_scripts import call as call_script
 
         contact = {
             "contact_id": 2,
@@ -2079,7 +2079,7 @@ class TestFastBrainGuidanceFlow:
         monkeypatch.setattr(call_script, "STT", object())
         monkeypatch.setattr(call_script, "VAD", object())
 
-        import unity.common.llm_client as _llm_mod
+        import droid.common.llm_client as _llm_mod
 
         class _FakeGreetingClient:
             async def generate(self, **kwargs):
@@ -2120,7 +2120,7 @@ class TestFastBrainGuidanceFlow:
         ), "Queued speech must not fire from user_state_changed (race condition)."
 
         # Disable dedup so _dedup_and_speak goes straight to _speak_now.
-        from unity.settings import SETTINGS
+        from droid.settings import SETTINGS
 
         orig_dedup = SETTINGS.conversation.SPEECH_DEDUP_ENABLED
         SETTINGS.conversation.SPEECH_DEDUP_ENABLED = False
@@ -2146,7 +2146,7 @@ class TestFastBrainGuidanceFlow:
         """Guidance arriving while the agent is thinking/speaking should wait
         for the full cycle to complete before session.say() fires."""
         from livekit.agents import llm
-        from unity.conversation_manager.medium_scripts import call as call_script
+        from droid.conversation_manager.medium_scripts import call as call_script
 
         contact = {
             "contact_id": 2,
@@ -2307,7 +2307,7 @@ class TestFastBrainGuidanceFlow:
         monkeypatch.setattr(call_script, "STT", object())
         monkeypatch.setattr(call_script, "VAD", object())
 
-        import unity.common.llm_client as _llm_mod
+        import droid.common.llm_client as _llm_mod
 
         class _FakeGreetingClient:
             async def generate(self, **kwargs):
@@ -2350,7 +2350,7 @@ class TestFastBrainGuidanceFlow:
         ), "Queued speech must not fire while agent is speaking."
 
         # Disable dedup so _dedup_and_speak goes straight to _speak_now.
-        from unity.settings import SETTINGS
+        from droid.settings import SETTINGS
 
         orig_dedup = SETTINGS.conversation.SPEECH_DEDUP_ENABLED
         SETTINGS.conversation.SPEECH_DEDUP_ENABLED = False
@@ -2387,7 +2387,7 @@ class TestFastBrainSpeechDedup:
         agent_state_cb, say_calls.
         """
         from livekit.agents import llm
-        from unity.conversation_manager.medium_scripts import call as call_script
+        from droid.conversation_manager.medium_scripts import call as call_script
 
         contact = {
             "contact_id": 2,
@@ -2547,7 +2547,7 @@ class TestFastBrainSpeechDedup:
         monkeypatch.setattr(call_script, "STT", object())
         monkeypatch.setattr(call_script, "VAD", object())
 
-        import unity.common.llm_client as _llm_mod
+        import droid.common.llm_client as _llm_mod
 
         class _FakeGreetingClient:
             async def generate(self, **kwargs):
@@ -2595,8 +2595,8 @@ class TestFastBrainSpeechDedup:
         """When assistant has already said the same info, queued speech is
         suppressed and downgraded to a silent notification."""
         env = fast_brain_env
-        from unity.settings import SETTINGS
-        import unity.conversation_manager.domains.speech_dedup as _dedup_mod
+        from droid.settings import SETTINGS
+        import droid.conversation_manager.domains.speech_dedup as _dedup_mod
 
         env["assistant"]._chat_ctx.add_message(
             role="assistant",
@@ -2650,8 +2650,8 @@ class TestFastBrainSpeechDedup:
     async def test_dedup_allows_novel_speech(self, fast_brain_env):
         """When the proposed speech is genuinely new, it should be spoken."""
         env = fast_brain_env
-        from unity.settings import SETTINGS
-        import unity.conversation_manager.domains.speech_dedup as _dedup_mod
+        from droid.settings import SETTINGS
+        import droid.conversation_manager.domains.speech_dedup as _dedup_mod
 
         env["assistant"]._chat_ctx.add_message(
             role="assistant",
@@ -2687,7 +2687,7 @@ class TestFastBrainSpeechDedup:
     async def test_dedup_skipped_when_disabled(self, fast_brain_env):
         """When SPEECH_DEDUP_ENABLED is False, speech plays without a dedup check."""
         env = fast_brain_env
-        from unity.settings import SETTINGS
+        from droid.settings import SETTINGS
 
         env["assistant"]._chat_ctx.add_message(
             role="assistant",
@@ -2716,8 +2716,8 @@ class TestFastBrainSpeechDedup:
     async def test_dedup_skipped_when_no_recent_utterances(self, fast_brain_env):
         """With no assistant messages in chat context, dedup is skipped."""
         env = fast_brain_env
-        from unity.settings import SETTINGS
-        import unity.conversation_manager.domains.speech_dedup as _dedup_mod
+        from droid.settings import SETTINGS
+        import droid.conversation_manager.domains.speech_dedup as _dedup_mod
 
         dedup_called = False
 
@@ -2758,8 +2758,8 @@ class TestFastBrainSpeechDedup:
         the latest survives — the slow brain always has full context, so newer
         guidance supersedes older guidance (single-slot queue)."""
         env = fast_brain_env
-        from unity.settings import SETTINGS
-        import unity.conversation_manager.domains.speech_dedup as _dedup_mod
+        from droid.settings import SETTINGS
+        import droid.conversation_manager.domains.speech_dedup as _dedup_mod
 
         env["assistant"]._chat_ctx.add_message(
             role="assistant",
@@ -2815,11 +2815,11 @@ class TestFastBrainOpeningGreeting:
 
         Uses reasoning_effort='low' to match the production voice pipeline
         (call.py UnifyLLM configuration)."""
-        from unity.common.llm_client import new_llm_client
-        from unity.conversation_manager.prompt_builders import (
+        from droid.common.llm_client import new_llm_client
+        from droid.conversation_manager.prompt_builders import (
             build_voice_agent_prompt,
         )
-        from unity.settings import SETTINGS
+        from droid.settings import SETTINGS
 
         prompt = build_voice_agent_prompt(
             bio="A helpful AI assistant.",
@@ -2896,13 +2896,13 @@ class TestSayMetaTextMatching:
 
     def test_match_say_meta_exists(self):
         """The match_say_meta helper must exist in common.py."""
-        from unity.conversation_manager.medium_scripts.common import match_say_meta
+        from droid.conversation_manager.medium_scripts.common import match_say_meta
 
         assert callable(match_say_meta)
 
     def test_matching_text_consumes_meta(self):
         """When utterance text matches the session.say text, return the meta."""
-        from unity.conversation_manager.medium_scripts.common import match_say_meta
+        from droid.conversation_manager.medium_scripts.common import match_say_meta
 
         meta = {
             "guidance_id": "guid-abc",
@@ -2920,7 +2920,7 @@ class TestSayMetaTextMatching:
         'One moment - I am pulling that up.' should NOT consume meta
         set by session.say('Sure, go ahead - what is the task?').
         """
-        from unity.conversation_manager.medium_scripts.common import match_say_meta
+        from droid.conversation_manager.medium_scripts.common import match_say_meta
 
         meta = {
             "guidance_id": "guid-abc",
@@ -2932,14 +2932,14 @@ class TestSayMetaTextMatching:
 
     def test_none_meta_returns_none(self):
         """When no meta is set, return None regardless of text."""
-        from unity.conversation_manager.medium_scripts.common import match_say_meta
+        from droid.conversation_manager.medium_scripts.common import match_say_meta
 
         assert match_say_meta(None, "anything") is None
 
     def test_meta_without_text_key_always_matches(self):
         """Legacy meta dicts without a text key match any utterance
         (backward compatible with pre-fix code)."""
-        from unity.conversation_manager.medium_scripts.common import match_say_meta
+        from droid.conversation_manager.medium_scripts.common import match_say_meta
 
         meta = {"guidance_id": "guid-abc", "source": "slow_brain"}
         result = match_say_meta(meta, "Some text")
@@ -2968,8 +2968,8 @@ class TestParticipantCommsRendering:
         live voice conversation with no verbal indication from the
         assistant that anything was sent.
         """
-        from unity.conversation_manager.events import UnifyMessageSent
-        from unity.conversation_manager.medium_scripts.common import (
+        from droid.conversation_manager.events import UnifyMessageSent
+        from droid.conversation_manager.medium_scripts.common import (
             render_participant_comms,
         )
 
@@ -2988,8 +2988,8 @@ class TestParticipantCommsRendering:
     def test_outbound_sms_to_participant_rendered(self):
         """Outbound SMS to a call participant should be visible to the fast
         brain for verbal acknowledgement."""
-        from unity.conversation_manager.events import SMSSent
-        from unity.conversation_manager.medium_scripts.common import (
+        from droid.conversation_manager.events import SMSSent
+        from droid.conversation_manager.medium_scripts.common import (
             render_participant_comms,
         )
 
@@ -3009,8 +3009,8 @@ class TestParticipantCommsRendering:
         """Outbound messages to contacts NOT on the call should still be
         invisible to the fast brain — only participant-targeted messages
         matter."""
-        from unity.conversation_manager.events import UnifyMessageSent
-        from unity.conversation_manager.medium_scripts.common import (
+        from droid.conversation_manager.events import UnifyMessageSent
+        from droid.conversation_manager.medium_scripts.common import (
             render_participant_comms,
         )
 
@@ -3024,10 +3024,10 @@ class TestParticipantCommsRendering:
     # ── Inbound (participant → assistant) ───────────────────────────────
 
     def test_sms_from_participant_rendered_with_tag(self):
-        from unity.conversation_manager.medium_scripts.common import (
+        from droid.conversation_manager.medium_scripts.common import (
             render_participant_comms,
         )
-        from unity.conversation_manager.events import SMSReceived
+        from droid.conversation_manager.events import SMSReceived
 
         event = SMSReceived(
             contact={"contact_id": 5, "first_name": "Marcus", "surname": "Rivera"},
@@ -3039,10 +3039,10 @@ class TestParticipantCommsRendering:
         assert "Running late" in result
 
     def test_email_from_participant_rendered_with_tag(self):
-        from unity.conversation_manager.medium_scripts.common import (
+        from droid.conversation_manager.medium_scripts.common import (
             render_participant_comms,
         )
-        from unity.conversation_manager.events import EmailReceived
+        from droid.conversation_manager.events import EmailReceived
 
         event = EmailReceived(
             contact={"contact_id": 3, "first_name": "Sarah", "surname": "Chen"},
@@ -3055,10 +3055,10 @@ class TestParticipantCommsRendering:
         assert "Updated agenda" in result
 
     def test_unify_message_from_participant_rendered_with_tag(self):
-        from unity.conversation_manager.medium_scripts.common import (
+        from droid.conversation_manager.medium_scripts.common import (
             render_participant_comms,
         )
-        from unity.conversation_manager.events import UnifyMessageReceived
+        from droid.conversation_manager.events import UnifyMessageReceived
 
         event = UnifyMessageReceived(
             contact={"contact_id": 7, "first_name": "Priya", "surname": "Sharma"},
@@ -3070,10 +3070,10 @@ class TestParticipantCommsRendering:
         assert "shared doc" in result
 
     def test_sms_from_non_participant_returns_none(self):
-        from unity.conversation_manager.medium_scripts.common import (
+        from droid.conversation_manager.medium_scripts.common import (
             render_participant_comms,
         )
-        from unity.conversation_manager.events import SMSReceived
+        from droid.conversation_manager.events import SMSReceived
 
         event = SMSReceived(
             contact={"contact_id": 99, "first_name": "Stranger", "surname": "Person"},
@@ -3083,20 +3083,20 @@ class TestParticipantCommsRendering:
         assert result is None
 
     def test_non_comms_event_returns_none(self):
-        from unity.conversation_manager.medium_scripts.common import (
+        from droid.conversation_manager.medium_scripts.common import (
             render_participant_comms,
         )
-        from unity.conversation_manager.events import ActorNotification
+        from droid.conversation_manager.events import ActorNotification
 
         event = ActorNotification(handle_id=1, response="Searching...")
         result = render_participant_comms(event.to_json(), {1, 5})
         assert result is None
 
     def test_multiple_participants_matched(self):
-        from unity.conversation_manager.medium_scripts.common import (
+        from droid.conversation_manager.medium_scripts.common import (
             render_participant_comms,
         )
-        from unity.conversation_manager.events import SMSReceived
+        from droid.conversation_manager.events import SMSReceived
 
         event = SMSReceived(
             contact={"contact_id": 3, "first_name": "Sarah", "surname": "Chen"},
@@ -3117,7 +3117,7 @@ class TestChildProcessLogging:
     forkserver child processes.
 
     LiveKit agents (v1.2.x) routes child-process logs through a
-    LogQueueHandler on the **root** logger.  Unity's LOGGER defaults to
+    LogQueueHandler on the **root** logger.  Droid's LOGGER defaults to
     propagate=False, which silently drops every record in the child.
     _configure_child_logging must flip propagation on and strip stale
     direct handlers so records reach the root relay.
@@ -3126,9 +3126,9 @@ class TestChildProcessLogging:
     def test_propagation_enabled_and_handlers_cleared(self):
         import logging
 
-        from unity.logger import LOGGER
+        from droid.logger import LOGGER
 
-        from unity.conversation_manager.medium_scripts.call import (
+        from droid.conversation_manager.medium_scripts.call import (
             _configure_child_logging,
         )
 
@@ -3155,9 +3155,9 @@ class TestChildProcessLogging:
     def test_records_reach_root_logger_after_configure(self):
         import logging
 
-        from unity.logger import LOGGER
+        from droid.logger import LOGGER
 
-        from unity.conversation_manager.medium_scripts.call import (
+        from droid.conversation_manager.medium_scripts.call import (
             _configure_child_logging,
         )
 

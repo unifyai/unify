@@ -27,7 +27,7 @@ import os
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CRITICAL: environment-variable setup MUST happen at module top, *before*
-# any `tests.helpers` import (which transitively imports unity modules that
+# any `tests.helpers` import (which transitively imports droid modules that
 # instantiate `SETTINGS = ProductionSettings()` at import time).
 # Pydantic's BaseSettings reads env vars once at instantiation; if SETTINGS
 # is already constructed when pytest_configure() later sets these vars, the
@@ -38,12 +38,12 @@ import os
 #
 # pytest_configure() below still reassigns these defensively in case a
 # downstream test reimports SETTINGS, but the authoritative point of
-# truth is *here*, before any unity import in this conftest.
+# truth is *here*, before any droid import in this conftest.
 # ─────────────────────────────────────────────────────────────────────────────
 os.environ.setdefault("ASSISTANT_EMAIL", "assistant@test.example.com")
 os.environ.setdefault("ASSISTANT_NUMBER", "+15550001000")
 os.environ.setdefault("ASSISTANT_WHATSAPP_NUMBER", "+15550001000")
-os.environ.setdefault("UNITY_CONVERSATION_JOB_NAME", "test_job")
+os.environ.setdefault("DROID_CONVERSATION_JOB_NAME", "test_job")
 
 from unittest.mock import patch
 
@@ -134,7 +134,7 @@ TEST_CONTACTS = [
 # Universal comms isolation
 # =============================================================================
 
-_COMMS_MODULE = "unity.conversation_manager.domains.comms_utils"
+_COMMS_MODULE = "droid.conversation_manager.domains.comms_utils"
 
 
 @pytest.fixture(autouse=True)
@@ -176,30 +176,30 @@ def pytest_configure(config):
     # The brain tools route to these managers directly (ask_about_contacts,
     # update_contacts, query_past_transcripts), so they must be simulated
     # to avoid real LLM calls.
-    os.environ["UNITY_ACTOR_IMPL"] = "simulated"
-    os.environ["UNITY_ACTOR_SIMULATED_STEPS"] = "0"  # Allows pause+resume interactions
-    os.environ.setdefault("UNITY_CONTACT_IMPL", "simulated")
-    os.environ.setdefault("UNITY_TRANSCRIPT_IMPL", "simulated")
+    os.environ["DROID_ACTOR_IMPL"] = "simulated"
+    os.environ["DROID_ACTOR_SIMULATED_STEPS"] = "0"  # Allows pause+resume interactions
+    os.environ.setdefault("DROID_CONTACT_IMPL", "simulated")
+    os.environ.setdefault("DROID_TRANSCRIPT_IMPL", "simulated")
 
     # Disable optional managers not needed for conversation manager tests
-    os.environ["UNITY_MEMORY_ENABLED"] = "false"
-    os.environ["UNITY_KNOWLEDGE_ENABLED"] = "false"
-    os.environ["UNITY_GUIDANCE_ENABLED"] = "false"
-    os.environ["UNITY_SECRET_ENABLED"] = "false"
-    os.environ["UNITY_SKILL_ENABLED"] = "false"
-    os.environ["UNITY_WEB_ENABLED"] = "false"
-    os.environ["UNITY_FILE_ENABLED"] = "false"
+    os.environ["DROID_MEMORY_ENABLED"] = "false"
+    os.environ["DROID_KNOWLEDGE_ENABLED"] = "false"
+    os.environ["DROID_GUIDANCE_ENABLED"] = "false"
+    os.environ["DROID_SECRET_ENABLED"] = "false"
+    os.environ["DROID_SKILL_ENABLED"] = "false"
+    os.environ["DROID_WEB_ENABLED"] = "false"
+    os.environ["DROID_FILE_ENABLED"] = "false"
 
     # Enable incrementing timestamps for **NEW** marker comparisons
-    os.environ["UNITY_INCREMENTING_TIMESTAMPS"] = "true"
+    os.environ["DROID_INCREMENTING_TIMESTAMPS"] = "true"
 
     # Mark as test mode
     os.environ["TEST"] = "true"
-    os.environ["UNITY_CONVERSATION_JOB_NAME"] = "test_job"
+    os.environ["DROID_CONVERSATION_JOB_NAME"] = "test_job"
 
     # Configure the assistant identity for flows tests.
     #
-    # unity/conversation_manager/prompt_builders.py:_build_comms_tool_listing
+    # droid/conversation_manager/prompt_builders.py:_build_comms_tool_listing
     # exposes `send_email` / `send_sms` / `send_whatsapp` to the LLM
     # ONLY when the corresponding assistant.{email,number,whatsapp_number}
     # is non-empty (gating added 2026-03-03 in d71f8dc9d0). With
@@ -245,10 +245,10 @@ async def conversation_manager(request) -> CMStepDriver:
     Returns a CMStepDriver that wraps the CM and provides step() and
     step_until_wait() methods for deterministic testing.
     """
-    from unity.actor.simulated import SimulatedActor
-    from unity.conversation_manager.event_broker import reset_event_broker
-    from unity.conversation_manager import start_async, stop_async
-    from unity.conversation_manager.domains import managers_utils
+    from droid.actor.simulated import SimulatedActor
+    from droid.conversation_manager.event_broker import reset_event_broker
+    from droid.conversation_manager import start_async, stop_async
+    from droid.conversation_manager.domains import managers_utils
 
     # Reset any existing event broker state
     reset_event_broker()
@@ -387,7 +387,7 @@ def initialized_cm(
     # Reset handle_id counter to ensure deterministic tool names for caching.
     # Without this, handle_ids increment across tests, causing tool names like
     # pause_search_...__0 vs pause_search_...__1, which breaks LLM cache hits.
-    import unity.conversation_manager.domains.brain_action_tools as bat
+    import droid.conversation_manager.domains.brain_action_tools as bat
 
     bat._next_handle_id = 0
 
@@ -404,7 +404,7 @@ def initialized_cm(
     # message timestamps use the patched fixed time (June 2025).
     # This breaks the **NEW** marker comparison (last_snapshot < message.timestamp).
     # Re-initializing here ensures last_snapshot uses the patched timestamp.
-    from unity.common.prompt_helpers import now as prompt_now
+    from droid.common.prompt_helpers import now as prompt_now
 
     conversation_manager.cm.last_snapshot = prompt_now(as_string=False)
 

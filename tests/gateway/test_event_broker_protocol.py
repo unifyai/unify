@@ -1,8 +1,8 @@
 """Verify the in-memory broker satisfies the gateway ``EventBroker`` protocol.
 
-This test pins the Phase A invariant that the seam in ``unity.gateway``
+This test pins the Phase A invariant that the seam in ``droid.gateway``
 matches the existing implementation in
-``unity.conversation_manager.in_memory_event_broker`` exactly. A future
+``droid.conversation_manager.in_memory_event_broker`` exactly. A future
 ``PubSubEventBroker`` will reuse the same test to assert structural
 parity.
 """
@@ -13,11 +13,11 @@ import asyncio
 
 import pytest
 
-from unity.conversation_manager.in_memory_event_broker import (
+from droid.conversation_manager.in_memory_event_broker import (
     InMemoryEventBroker,
     create_in_memory_event_broker,
 )
-from unity.gateway.event_broker import (
+from droid.gateway.event_broker import (
     EventBroker,
     PubSubConnection,
 )

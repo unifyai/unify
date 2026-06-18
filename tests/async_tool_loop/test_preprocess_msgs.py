@@ -4,9 +4,9 @@ from typing import List
 
 import pytest
 
-from unity.common.async_tool_loop import start_async_tool_loop
+from droid.common.async_tool_loop import start_async_tool_loop
 from tests.helpers import _handle_project
-from unity.common.llm_client import new_llm_client
+from droid.common.llm_client import new_llm_client
 
 pytestmark = pytest.mark.llm_call
 
@@ -37,7 +37,7 @@ async def test_preprocess_msgs_dynamic_placeholder(llm_config, monkeypatch):
         return new_msgs
 
     # Spy the preprocess application at the exact callsite while still hitting the real LLM.
-    from unity.common._async_tool import loop as _loop
+    from droid.common._async_tool import loop as _loop
 
     seen_contexts: List[str] = []
 

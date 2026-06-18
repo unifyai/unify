@@ -1,7 +1,7 @@
 File Manager Sandbox
 ====================
 
-This folder contains an interactive playground for the `FileManager` component that lives in `unity/file_manager/`. The goal of the sandbox is to let you experiment with the manager in isolation – register/import files, parse them with token‑lean returns, ask natural‑language questions about specific files, and organize your filesystem – all through its public tool‑loop APIs.
+This folder contains an interactive playground for the `FileManager` component that lives in `droid/file_manager/`. The goal of the sandbox is to let you experiment with the manager in isolation – register/import files, parse them with token‑lean returns, ask natural‑language questions about specific files, and organize your filesystem – all through its public tool‑loop APIs.
 
 ### Video walkthroughs
 

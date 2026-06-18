@@ -29,8 +29,8 @@ from urllib.parse import quote
 
 ProgressCallback = Callable[[str], None]
 
-DESKTOP_IMAGE_TAG = "unity-desktop"
-DESKTOP_CONTAINER_NAME = "unity-desktop-sandbox"
+DESKTOP_IMAGE_TAG = "droid-desktop"
+DESKTOP_CONTAINER_NAME = "droid-desktop-sandbox"
 
 
 def _desktop_novnc_url() -> str:
@@ -88,7 +88,7 @@ def _check_magnitude_packages(repo_root: Path) -> Optional[str]:
     magnitude_dir = repo_root / "magnitude"
     if not magnitude_dir.exists():
         return (
-            "Missing `magnitude/` directory. This is Unity's Magnitude fork, required "
+            "Missing `magnitude/` directory. This is Droid's Magnitude fork, required "
             "because agent-service depends on local magnitude-core and magnitude-extract.\n\n"
             "Clone it into the repo root:\n"
             "  git clone <magnitude-repo-url> magnitude"

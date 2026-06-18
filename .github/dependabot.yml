@@ -1,8 +1,8 @@
-# Dependabot configuration for unifyai/unity.
+# Dependabot configuration for unifyai/droid.
 #
 # Scoped to GitHub Actions and the agent-service npm workspace.
 #
-# We deliberately do NOT enable scheduled pip updates: Unity sits on top of
+# We deliberately do NOT enable scheduled pip updates: Droid sits on top of
 # three sibling repos (unify, unillm, orchestra) wired in via editable
 # uv installs, and we move source-dep pins deliberately rather than on a
 # cadence. CVE-driven security PRs against currently-pinned deps are still

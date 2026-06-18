@@ -7,9 +7,9 @@ import pytest
 import unify
 
 from tests.helpers import _handle_project
-from unity.common.colleague_cache import ColleagueNameCache
-from unity.session_details import SESSION_DETAILS
-from unity.transcript_manager.transcript_manager import TranscriptManager
+from droid.common.colleague_cache import ColleagueNameCache
+from droid.session_details import SESSION_DETAILS
+from droid.transcript_manager.transcript_manager import TranscriptManager
 
 
 def _team_id() -> int:
@@ -96,7 +96,7 @@ def test_shared_authoring_attribution_enriches_messages_and_reuses_cache(monkeyp
             ]
 
         monkeypatch.setattr(
-            "unity.common.colleague_cache.unify.list_assistants",
+            "droid.common.colleague_cache.unify.list_assistants",
             fake_list_assistants,
         )
 
@@ -150,7 +150,7 @@ def test_colleague_name_cache_invalidates_when_org_scope_changes(monkeypatch):
         return [{"agent_id": 999, "first_name": "Rafi", "surname": "Ops"}]
 
     monkeypatch.setattr(
-        "unity.common.colleague_cache.unify.list_assistants",
+        "droid.common.colleague_cache.unify.list_assistants",
         fake_list_assistants,
     )
 
@@ -173,7 +173,7 @@ def test_colleague_name_cache_caches_error_fallback(monkeypatch):
         raise RuntimeError("temporary transport error")
 
     monkeypatch.setattr(
-        "unity.common.colleague_cache.unify.list_assistants",
+        "droid.common.colleague_cache.unify.list_assistants",
         failing_list_assistants,
     )
 
@@ -202,7 +202,7 @@ def test_shared_authoring_attribution_uses_former_colleague_fallback(monkeypatch
         SESSION_DETAILS.assistant.agent_id = 321
 
         monkeypatch.setattr(
-            "unity.common.colleague_cache.unify.list_assistants",
+            "droid.common.colleague_cache.unify.list_assistants",
             lambda **_: [],
         )
 

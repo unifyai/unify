@@ -21,12 +21,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from tests.helpers import _handle_project
-from unity.conversation_manager.domains.event_handlers import (
+from droid.conversation_manager.domains.event_handlers import (
     EventHandler,
     _event_type_to_log_key,
 )
-from unity.conversation_manager.cm_types import ScreenshotEntry
-from unity.conversation_manager.events import (
+from droid.conversation_manager.cm_types import ScreenshotEntry
+from droid.conversation_manager.events import (
     Event,
     Ping,
     SMSReceived,
@@ -69,11 +69,11 @@ from unity.conversation_manager.events import (
     UserWebcamStarted,
     UserWebcamStopped,
 )
-from unity.contact_manager.simulated import SimulatedContactManager
-from unity.conversation_manager.domains.contact_index import ContactIndex
-from unity.conversation_manager.domains.notifications import NotificationBar
-from unity.conversation_manager.cm_types import Medium, Mode
-from unity.task_scheduler.machine_state import TaskActivationSnapshot
+from droid.contact_manager.simulated import SimulatedContactManager
+from droid.conversation_manager.domains.contact_index import ContactIndex
+from droid.conversation_manager.domains.notifications import NotificationBar
+from droid.conversation_manager.cm_types import Medium, Mode
+from droid.task_scheduler.machine_state import TaskActivationSnapshot
 
 # =============================================================================
 # Test Fixtures
@@ -240,7 +240,7 @@ class TestEventHandlerRegistry:
     def test_unregistered_event_returns_sleep(self):
         """Verify that unregistered events return a no-op coroutine."""
         # VoiceInterrupt is a real event class that has no registered handler
-        from unity.conversation_manager.events import VoiceInterrupt
+        from droid.conversation_manager.events import VoiceInterrupt
 
         # VoiceInterrupt should not have a handler registered
         result = EventHandler._registry.get(VoiceInterrupt)
@@ -357,7 +357,7 @@ class TestHandleEventCore:
         )
 
         with patch(
-            "unity.conversation_manager.domains.event_handlers.managers_utils",
+            "droid.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
@@ -372,7 +372,7 @@ class TestHandleEventCore:
         assert event.loggable is False
 
         with patch(
-            "unity.conversation_manager.domains.event_handlers.asyncio.create_task",
+            "droid.conversation_manager.domains.event_handlers.asyncio.create_task",
         ) as mock_create_task:
             await EventHandler.handle_event(event, mock_cm)
             # asyncio.create_task should not be called for non-loggable events
@@ -416,7 +416,7 @@ class TestTextMessageHandlers:
         )
 
         with patch(
-            "unity.conversation_manager.domains.event_handlers.managers_utils",
+            "droid.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
@@ -434,7 +434,7 @@ class TestTextMessageHandlers:
         )
 
         with patch(
-            "unity.conversation_manager.domains.event_handlers.managers_utils",
+            "droid.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
@@ -454,7 +454,7 @@ class TestTextMessageHandlers:
         )
 
         with patch(
-            "unity.conversation_manager.domains.event_handlers.managers_utils",
+            "droid.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
@@ -470,7 +470,7 @@ class TestTextMessageHandlers:
         )
 
         with patch(
-            "unity.conversation_manager.domains.event_handlers.managers_utils",
+            "droid.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
@@ -488,7 +488,7 @@ class TestTextMessageHandlers:
         )
 
         with patch(
-            "unity.conversation_manager.domains.event_handlers.managers_utils",
+            "droid.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
@@ -508,7 +508,7 @@ class TestTextMessageHandlers:
         )
 
         with patch(
-            "unity.conversation_manager.domains.event_handlers.managers_utils",
+            "droid.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
@@ -527,7 +527,7 @@ class TestTextMessageHandlers:
         )
 
         with patch(
-            "unity.conversation_manager.domains.event_handlers.managers_utils",
+            "droid.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
@@ -544,7 +544,7 @@ class TestTextMessageHandlers:
         )
 
         with patch(
-            "unity.conversation_manager.domains.event_handlers.managers_utils",
+            "droid.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
@@ -800,12 +800,12 @@ class TestPhoneCallHandlers:
 
         with (
             patch(
-                "unity.conversation_manager.domains.comms_utils.start_whatsapp_call",
+                "droid.conversation_manager.domains.comms_utils.start_whatsapp_call",
                 new_callable=AsyncMock,
                 return_value={"success": True},
             ) as mock_start_whatsapp_call,
             patch(
-                "unity.conversation_manager.domains.event_handlers.SESSION_DETAILS",
+                "droid.conversation_manager.domains.event_handlers.SESSION_DETAILS",
             ) as mock_session_details,
         ):
             mock_session_details.assistant.agent_id = None
@@ -814,7 +814,7 @@ class TestPhoneCallHandlers:
             await EventHandler.handle_event(event, mock_cm)
 
         assert mock_start_whatsapp_call.await_args.kwargs["room_name"] == (
-            "unity_None_whatsapp_call"
+            "droid_None_whatsapp_call"
         )
         mock_cm.request_llm_run.assert_not_called()
 
@@ -900,7 +900,7 @@ class TestVoiceUtteranceHandlers:
         )
 
         with patch(
-            "unity.conversation_manager.domains.event_handlers.managers_utils",
+            "droid.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
@@ -918,7 +918,7 @@ class TestVoiceUtteranceHandlers:
         )
 
         with patch(
-            "unity.conversation_manager.domains.event_handlers.managers_utils",
+            "droid.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
@@ -934,7 +934,7 @@ class TestVoiceUtteranceHandlers:
         )
 
         with patch(
-            "unity.conversation_manager.domains.event_handlers.managers_utils",
+            "droid.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
@@ -953,7 +953,7 @@ class TestVoiceUtteranceHandlers:
         )
 
         with patch(
-            "unity.conversation_manager.domains.event_handlers.managers_utils",
+            "droid.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
@@ -1457,7 +1457,7 @@ class TestMeetInteractionEventHandlers:
         import json
         from datetime import datetime
 
-        from unity.conversation_manager.conversation_manager import ConversationManager
+        from droid.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm._screenshot_buffer = []
         mock_cm._session_logger = MagicMock()
@@ -1494,7 +1494,7 @@ class TestMeetInteractionEventHandlers:
         """
         from datetime import datetime, timezone
 
-        from unity.conversation_manager.conversation_manager import ConversationManager
+        from droid.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm._screenshot_buffer = []
         peek = ConversationManager.peek_screenshot_buffer.__get__(mock_cm)
@@ -1528,7 +1528,7 @@ class TestMeetInteractionEventHandlers:
         """
         from datetime import datetime, timezone
 
-        from unity.conversation_manager.conversation_manager import ConversationManager
+        from droid.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm._screenshot_buffer = []
         peek = ConversationManager.peek_screenshot_buffer.__get__(mock_cm)
@@ -1612,7 +1612,7 @@ class TestMeetInteractionEventHandlers:
     @pytest.mark.asyncio
     async def test_all_meet_events_have_fast_brain_guidance(self, mock_cm):
         """Each meet interaction event has corresponding fast brain guidance text."""
-        from unity.conversation_manager.domains.event_handlers import (
+        from droid.conversation_manager.domains.event_handlers import (
             _MEET_FAST_BRAIN_GUIDANCE,
         )
 
@@ -1716,7 +1716,7 @@ class TestMeetInteractionEventHandlers:
 
     def test_render_meet_state_empty_when_all_off(self):
         """render_meet_interaction_state returns empty when nothing is active."""
-        from unity.conversation_manager.domains.renderer import Renderer
+        from droid.conversation_manager.domains.renderer import Renderer
 
         result = Renderer.render_meet_interaction_state(
             assistant_screen_share_active=False,
@@ -1727,7 +1727,7 @@ class TestMeetInteractionEventHandlers:
 
     def test_render_meet_state_assistant_screen_share_only(self):
         """Only assistant screen share active produces a single section."""
-        from unity.conversation_manager.domains.renderer import Renderer
+        from droid.conversation_manager.domains.renderer import Renderer
 
         result = Renderer.render_meet_interaction_state(
             assistant_screen_share_active=True,
@@ -1743,7 +1743,7 @@ class TestMeetInteractionEventHandlers:
 
     def test_render_meet_state_user_screen_share_only(self):
         """Only user screen share active produces a single section."""
-        from unity.conversation_manager.domains.renderer import Renderer
+        from droid.conversation_manager.domains.renderer import Renderer
 
         result = Renderer.render_meet_interaction_state(
             assistant_screen_share_active=False,
@@ -1758,7 +1758,7 @@ class TestMeetInteractionEventHandlers:
 
     def test_render_meet_state_user_remote_control_only(self):
         """Only user remote control active produces a single section."""
-        from unity.conversation_manager.domains.renderer import Renderer
+        from droid.conversation_manager.domains.renderer import Renderer
 
         result = Renderer.render_meet_interaction_state(
             assistant_screen_share_active=False,
@@ -1773,7 +1773,7 @@ class TestMeetInteractionEventHandlers:
 
     def test_render_meet_state_user_webcam_only(self):
         """Only user webcam active produces a single webcam section."""
-        from unity.conversation_manager.domains.renderer import Renderer
+        from droid.conversation_manager.domains.renderer import Renderer
 
         result = Renderer.render_meet_interaction_state(
             user_webcam_active=True,
@@ -1787,7 +1787,7 @@ class TestMeetInteractionEventHandlers:
 
     def test_render_meet_state_all_four_active(self):
         """All four active produces four independent sections."""
-        from unity.conversation_manager.domains.renderer import Renderer
+        from droid.conversation_manager.domains.renderer import Renderer
 
         result = Renderer.render_meet_interaction_state(
             assistant_screen_share_active=True,
@@ -1802,8 +1802,8 @@ class TestMeetInteractionEventHandlers:
 
     def test_render_meet_state_appears_at_top_of_full_render(self):
         """Active meet sections appear before notifications in the full render."""
-        from unity.conversation_manager.domains.renderer import Renderer
-        from unity.conversation_manager.domains.notifications import NotificationBar
+        from droid.conversation_manager.domains.renderer import Renderer
+        from droid.conversation_manager.domains.notifications import NotificationBar
 
         renderer = Renderer()
         result = renderer.render_state(
@@ -1914,7 +1914,7 @@ class TestTaskDueEventHandlers:
 
         with (
             patch(
-                "unity.conversation_manager.domains.task_activation.validate_task_due_activation",
+                "droid.conversation_manager.domains.task_activation.validate_task_due_activation",
                 return_value=(
                     TaskActivationSnapshot(
                         assistant_id="42",
@@ -1927,10 +1927,10 @@ class TestTaskDueEventHandlers:
                 ),
             ),
             patch(
-                "unity.conversation_manager.domains.task_activation.remember_live_task_run_provenance",
+                "droid.conversation_manager.domains.task_activation.remember_live_task_run_provenance",
             ) as mock_remember_provenance,
             patch(
-                "unity.conversation_manager.domains.task_activation._start_live_task_due_execution",
+                "droid.conversation_manager.domains.task_activation._start_live_task_due_execution",
                 new=AsyncMock(return_value=7),
             ) as mock_start_execution,
         ):
@@ -1956,11 +1956,11 @@ class TestTaskDueEventHandlers:
     ):
         """Direct due-task start should preserve scheduled activation provenance."""
 
-        from unity.common.task_execution_context import current_task_execution_delegate
-        from unity.conversation_manager.domains.task_activation import (
+        from droid.common.task_execution_context import current_task_execution_delegate
+        from droid.conversation_manager.domains.task_activation import (
             _start_live_task_due_execution,
         )
-        from unity.task_scheduler.types.activated_by import ActivatedBy
+        from droid.task_scheduler.types.activated_by import ActivatedBy
 
         event = TaskDue(
             task_id=101,
@@ -1994,19 +1994,19 @@ class TestTaskDueEventHandlers:
 
         with (
             patch(
-                "unity.conversation_manager.domains.task_activation.ManagerRegistry.get_task_scheduler",
+                "droid.conversation_manager.domains.task_activation.ManagerRegistry.get_task_scheduler",
                 return_value=fake_scheduler,
             ),
             patch(
-                "unity.conversation_manager.domains.task_activation.managers_utils.actor_watch_result",
+                "droid.conversation_manager.domains.task_activation.managers_utils.actor_watch_result",
                 new=_noop,
             ),
             patch(
-                "unity.conversation_manager.domains.task_activation.managers_utils.actor_watch_notifications",
+                "droid.conversation_manager.domains.task_activation.managers_utils.actor_watch_notifications",
                 new=_noop,
             ),
             patch(
-                "unity.conversation_manager.domains.task_activation.managers_utils.actor_watch_clarifications",
+                "droid.conversation_manager.domains.task_activation.managers_utils.actor_watch_clarifications",
                 new=_noop,
             ),
         ):
@@ -2026,21 +2026,21 @@ class TestTaskDueEventHandlers:
     ):
         """Due-task startup should exercise the real scheduler/delegate boundary."""
 
-        from unity.actor.simulated import SimulatedActor
-        from unity.conversation_manager.domains.task_activation import (
+        from droid.actor.simulated import SimulatedActor
+        from droid.conversation_manager.domains.task_activation import (
             _start_live_task_due_execution,
         )
-        from unity.task_scheduler import task_scheduler as task_scheduler_module
-        from unity.task_scheduler.machine_state import (
+        from droid.task_scheduler import task_scheduler as task_scheduler_module
+        from droid.task_scheduler.machine_state import (
             TaskRunProvenance,
             TaskRunReference,
             remember_live_task_run_provenance,
         )
-        from unity.task_scheduler.task_scheduler import TaskScheduler
-        from unity.task_scheduler.types.activated_by import ActivatedBy
-        from unity.task_scheduler.types.repetition import Frequency, RepeatPattern
-        from unity.task_scheduler.types.schedule import Schedule
-        from unity.task_scheduler.types.status import Status
+        from droid.task_scheduler.task_scheduler import TaskScheduler
+        from droid.task_scheduler.types.activated_by import ActivatedBy
+        from droid.task_scheduler.types.repetition import Frequency, RepeatPattern
+        from droid.task_scheduler.types.schedule import Schedule
+        from droid.task_scheduler.types.status import Status
 
         calls: list[dict] = []
         actor = SimulatedActor(steps=0)
@@ -2095,14 +2095,14 @@ class TestTaskDueEventHandlers:
             ),
         )
         monkeypatch.setattr(
-            "unity.task_scheduler.active_task.create_or_adopt_live_task_run",
+            "droid.task_scheduler.active_task.create_or_adopt_live_task_run",
             lambda provenance: TaskRunReference(
                 assistant_id=provenance.assistant_id,
                 run_key="live:scheduled:42:0:rev-1:2026-04-10T09:00:00+00:00",
             ),
         )
         monkeypatch.setattr(
-            "unity.task_scheduler.active_task.update_task_run_record",
+            "droid.task_scheduler.active_task.update_task_run_record",
             lambda *args, **kwargs: None,
         )
 
@@ -2111,19 +2111,19 @@ class TestTaskDueEventHandlers:
 
         with (
             patch(
-                "unity.conversation_manager.domains.task_activation.ManagerRegistry.get_task_scheduler",
+                "droid.conversation_manager.domains.task_activation.ManagerRegistry.get_task_scheduler",
                 return_value=scheduler,
             ),
             patch(
-                "unity.conversation_manager.domains.task_activation.managers_utils.actor_watch_result",
+                "droid.conversation_manager.domains.task_activation.managers_utils.actor_watch_result",
                 new=_noop,
             ),
             patch(
-                "unity.conversation_manager.domains.task_activation.managers_utils.actor_watch_notifications",
+                "droid.conversation_manager.domains.task_activation.managers_utils.actor_watch_notifications",
                 new=_noop,
             ),
             patch(
-                "unity.conversation_manager.domains.task_activation.managers_utils.actor_watch_clarifications",
+                "droid.conversation_manager.domains.task_activation.managers_utils.actor_watch_clarifications",
                 new=_noop,
             ),
         ):
@@ -2148,7 +2148,7 @@ class TestTaskDueEventHandlers:
         self,
         mock_cm,
     ):
-        from unity.conversation_manager.domains.task_activation import (
+        from droid.conversation_manager.domains.task_activation import (
             _handle_task_due_event,
         )
 
@@ -2162,7 +2162,7 @@ class TestTaskDueEventHandlers:
 
         with (
             patch(
-                "unity.conversation_manager.domains.task_activation.validate_task_due_activation",
+                "droid.conversation_manager.domains.task_activation.validate_task_due_activation",
                 return_value=(
                     TaskActivationSnapshot(
                         assistant_id="42",
@@ -2176,11 +2176,11 @@ class TestTaskDueEventHandlers:
                 ),
             ),
             patch(
-                "unity.conversation_manager.domains.task_activation._start_live_task_due_execution",
+                "droid.conversation_manager.domains.task_activation._start_live_task_due_execution",
                 new=AsyncMock(side_effect=RuntimeError("delegate mismatch")),
             ),
             patch(
-                "unity.conversation_manager.domains.task_activation.publish_system_error",
+                "droid.conversation_manager.domains.task_activation.publish_system_error",
             ) as mock_publish_system_error,
         ):
             should_request_llm = await _handle_task_due_event(event, mock_cm)
@@ -2215,7 +2215,7 @@ class TestTaskDueEventHandlers:
 
         with (
             patch(
-                "unity.conversation_manager.domains.task_activation.validate_task_due_activation",
+                "droid.conversation_manager.domains.task_activation.validate_task_due_activation",
                 return_value=(
                     TaskActivationSnapshot(
                         assistant_id="42",
@@ -2228,7 +2228,7 @@ class TestTaskDueEventHandlers:
                 ),
             ),
             patch(
-                "unity.conversation_manager.domains.task_activation._start_live_task_due_execution",
+                "droid.conversation_manager.domains.task_activation._start_live_task_due_execution",
                 new=AsyncMock(return_value=7),
             ),
         ):
@@ -2257,7 +2257,7 @@ class TestTaskDueEventHandlers:
         )
 
         with patch(
-            "unity.conversation_manager.domains.task_activation.validate_task_due_activation",
+            "droid.conversation_manager.domains.task_activation.validate_task_due_activation",
             return_value=(None, "activation_revision_mismatch"),
         ):
             await EventHandler.handle_event(event, mock_cm)
@@ -2289,11 +2289,11 @@ class TestTaskDueEventHandlers:
 
         with (
             patch(
-                "unity.conversation_manager.domains.task_activation.validate_task_due_activation",
+                "droid.conversation_manager.domains.task_activation.validate_task_due_activation",
                 return_value=(MagicMock(activation_revision="rev-1"), None),
             ),
             patch(
-                "unity.conversation_manager.domains.task_activation._start_live_task_due_execution",
+                "droid.conversation_manager.domains.task_activation._start_live_task_due_execution",
                 new=AsyncMock(return_value=7),
             ),
         ):
@@ -2356,7 +2356,7 @@ class TestInitializationCompleteHandler:
         wrong/incomplete due to missing context) but explicitly forbid
         rephrase/restate/confirm-style duplicates.
         """
-        from unity.conversation_manager.domains.event_handlers import (
+        from droid.conversation_manager.domains.event_handlers import (
             INITIALIZATION_COMPLETE_NOTIFICATION,
         )
 
@@ -2490,18 +2490,18 @@ class TestTriggeredTaskNotifications:
 
         with (
             patch(
-                "unity.conversation_manager.domains.task_activation.list_trigger_activations",
+                "droid.conversation_manager.domains.task_activation.list_trigger_activations",
                 return_value=candidates,
             ),
             patch(
-                "unity.conversation_manager.domains.task_activation.remember_live_task_run_provenance",
+                "droid.conversation_manager.domains.task_activation.remember_live_task_run_provenance",
             ) as mock_remember_provenance,
             patch(
-                "unity.conversation_manager.domains.task_activation._dispatch_offline_trigger_candidate",
+                "droid.conversation_manager.domains.task_activation._dispatch_offline_trigger_candidate",
                 return_value={"status": "launched"},
             ) as mock_offline_dispatch,
             patch(
-                "unity.settings.SETTINGS.task.LOCAL_SCHEDULER_ENABLED",
+                "droid.settings.SETTINGS.task.LOCAL_SCHEDULER_ENABLED",
                 False,
             ),
         ):
@@ -2555,15 +2555,15 @@ class TestTriggeredTaskNotifications:
 
         with (
             patch(
-                "unity.conversation_manager.domains.task_activation.list_trigger_activations",
+                "droid.conversation_manager.domains.task_activation.list_trigger_activations",
                 return_value=candidates,
             ),
             patch(
-                "unity.conversation_manager.domains.task_activation._dispatch_offline_trigger_candidate",
+                "droid.conversation_manager.domains.task_activation._dispatch_offline_trigger_candidate",
                 return_value={"status": "launched"},
             ) as mock_offline_dispatch,
             patch(
-                "unity.settings.SETTINGS.task.LOCAL_SCHEDULER_ENABLED",
+                "droid.settings.SETTINGS.task.LOCAL_SCHEDULER_ENABLED",
                 False,
             ),
         ):
@@ -2605,7 +2605,7 @@ class TestTriggeredTaskNotifications:
         ]
 
         with patch(
-            "unity.conversation_manager.domains.task_activation.list_trigger_activations",
+            "droid.conversation_manager.domains.task_activation.list_trigger_activations",
             return_value=candidates,
         ):
             await EventHandler.handle_event(event, mock_cm)
@@ -2656,7 +2656,7 @@ class TestTriggeredTaskNotifications:
         ]
 
         with patch(
-            "unity.conversation_manager.domains.task_activation.list_trigger_activations",
+            "droid.conversation_manager.domains.task_activation.list_trigger_activations",
             return_value=candidates,
         ):
             await EventHandler.handle_event(event, mock_cm)
@@ -2686,7 +2686,7 @@ class TestSyncContactsHandler:
         event = SyncContacts(reason="Manual refresh")
 
         with patch(
-            "unity.conversation_manager.domains.event_handlers.managers_utils",
+            "droid.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
@@ -2709,7 +2709,7 @@ class TestLogMessageResponseHandler:
     @pytest.mark.asyncio
     async def test_log_message_response_sets_call_exchange_id(self, mock_cm):
         """LogMessageResponse sets call exchange ID when appropriate."""
-        from unity.contact_manager.types.contact import UNASSIGNED
+        from droid.contact_manager.types.contact import UNASSIGNED
 
         mock_cm.call_manager.call_exchange_id = UNASSIGNED
         event = LogMessageResponse(
@@ -2724,7 +2724,7 @@ class TestLogMessageResponseHandler:
     @pytest.mark.asyncio
     async def test_log_message_response_sets_unify_meet_exchange_id(self, mock_cm):
         """LogMessageResponse sets UnifyMeet exchange ID when appropriate."""
-        from unity.contact_manager.types.contact import UNASSIGNED
+        from droid.contact_manager.types.contact import UNASSIGNED
 
         mock_cm.call_manager.unify_meet_exchange_id = UNASSIGNED
         event = LogMessageResponse(
@@ -2834,7 +2834,7 @@ class TestAssistantUpdateEventHandler:
         )
 
         with patch(
-            "unity.conversation_manager.domains.event_handlers.managers_utils",
+            "droid.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
@@ -2872,7 +2872,7 @@ class TestAssistantUpdateEventHandler:
         )
 
         with patch(
-            "unity.conversation_manager.domains.event_handlers.managers_utils",
+            "droid.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
@@ -2907,7 +2907,7 @@ class TestAssistantUpdateEventHandler:
         )
 
         with patch(
-            "unity.conversation_manager.domains.event_handlers.managers_utils",
+            "droid.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
@@ -2941,7 +2941,7 @@ class TestAssistantUpdateEventHandler:
         )
 
         with patch(
-            "unity.conversation_manager.domains.event_handlers.managers_utils",
+            "droid.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
@@ -2996,7 +2996,7 @@ class TestAssistantUpdateEventHandler:
         )
 
         with patch(
-            "unity.conversation_manager.domains.event_handlers.managers_utils",
+            "droid.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
             # Should not raise
@@ -3012,12 +3012,12 @@ class TestAssistantUpdateEventHandler:
         monkeypatch,
     ):
         """Membership updates refresh reachable roots without running config side effects."""
-        from unity.common.context_registry import (
+        from droid.common.context_registry import (
             PERSONAL_ROOT_IDENTITY,
             TEAM_CONTEXT_PREFIX,
             ContextRegistry,
         )
-        from unity.session_details import SESSION_DETAILS
+        from droid.session_details import SESSION_DETAILS
 
         SESSION_DETAILS.team_ids = [3, 7]
         SESSION_DETAILS.self_contact_id = 0
@@ -3070,7 +3070,7 @@ class TestAssistantUpdateEventHandler:
         )
 
         with patch(
-            "unity.conversation_manager.domains.event_handlers.managers_utils",
+            "droid.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
             try:
@@ -3124,7 +3124,7 @@ class TestAssistantUpdateEventHandler:
     @pytest.mark.asyncio
     async def test_update_session_contacts_updates_both_contacts(self, mock_cm):
         """update_session_contacts updates both assistant (0) and boss (1) contacts."""
-        from unity.conversation_manager.domains.managers_utils import (
+        from droid.conversation_manager.domains.managers_utils import (
             update_session_contacts,
         )
 
@@ -3165,7 +3165,7 @@ class TestAssistantUpdateEventHandler:
         """update_session_contacts logs errors when update_contact fails."""
         import logging
 
-        from unity.conversation_manager.domains.managers_utils import (
+        from droid.conversation_manager.domains.managers_utils import (
             update_session_contacts,
         )
 
@@ -3173,8 +3173,8 @@ class TestAssistantUpdateEventHandler:
             side_effect=Exception("Update failed"),
         )
 
-        unity_logger = logging.getLogger("unity")
-        unity_logger.addHandler(caplog.handler)
+        droid_logger = logging.getLogger("droid")
+        droid_logger.addHandler(caplog.handler)
         caplog.handler.setLevel(logging.DEBUG)
         try:
             await update_session_contacts(
@@ -3189,7 +3189,7 @@ class TestAssistantUpdateEventHandler:
                 user_email="boss@updated.com",
             )
         finally:
-            unity_logger.removeHandler(caplog.handler)
+            droid_logger.removeHandler(caplog.handler)
 
         assert "Failed to update contact 0" in caplog.text
         assert "Failed to update contact 1" in caplog.text
@@ -3203,14 +3203,14 @@ class TestAssistantUpdateEventHandler:
         """update_session_contacts handles None contact_manager gracefully."""
         import logging
 
-        from unity.conversation_manager.domains.managers_utils import (
+        from droid.conversation_manager.domains.managers_utils import (
             update_session_contacts,
         )
 
         mock_cm.contact_manager = None
 
-        unity_logger = logging.getLogger("unity")
-        unity_logger.addHandler(caplog.handler)
+        droid_logger = logging.getLogger("droid")
+        droid_logger.addHandler(caplog.handler)
         caplog.handler.setLevel(logging.DEBUG)
         try:
             await update_session_contacts(
@@ -3225,7 +3225,7 @@ class TestAssistantUpdateEventHandler:
                 user_email="boss@test.com",
             )
         finally:
-            unity_logger.removeHandler(caplog.handler)
+            droid_logger.removeHandler(caplog.handler)
 
         assert "contact_manager is None" in caplog.text
 
@@ -3239,7 +3239,7 @@ class TestRecentConversationSnippet:
     """Tests for the _recent_conversation_snippet helper used in remote-control broadcasts."""
 
     def _get_snippet(self):
-        from unity.conversation_manager.domains.event_handlers import (
+        from droid.conversation_manager.domains.event_handlers import (
             _recent_conversation_snippet,
         )
 
@@ -3335,7 +3335,7 @@ class TestRemoteControlComputerPrimitivesIntegration:
 
         mock_cp = MagicMock()
         with patch(
-            "unity.manager_registry.ManagerRegistry.get_instance",
+            "droid.manager_registry.ManagerRegistry.get_instance",
             return_value=mock_cp,
         ):
             event = UserRemoteControlStarted(reason="User took control")
@@ -3355,7 +3355,7 @@ class TestRemoteControlComputerPrimitivesIntegration:
 
         mock_cp = MagicMock()
         with patch(
-            "unity.manager_registry.ManagerRegistry.get_instance",
+            "droid.manager_registry.ManagerRegistry.get_instance",
             return_value=mock_cp,
         ):
             event = UserRemoteControlStopped(reason="User released control")
@@ -3373,7 +3373,7 @@ class TestRemoteControlComputerPrimitivesIntegration:
         mock_cm.user_remote_control_active = False
 
         with patch(
-            "unity.manager_registry.ManagerRegistry.get_instance",
+            "droid.manager_registry.ManagerRegistry.get_instance",
             return_value=None,
         ):
             event = UserRemoteControlStarted(reason="User took control")
@@ -3392,7 +3392,7 @@ class TestRemoteControlComputerPrimitivesIntegration:
 
         mock_cp = MagicMock()
         with patch(
-            "unity.manager_registry.ManagerRegistry.get_instance",
+            "droid.manager_registry.ManagerRegistry.get_instance",
             return_value=mock_cp,
         ):
             event = AssistantScreenShareStarted(reason="Screen share started")
@@ -3411,14 +3411,14 @@ class TestFileSyncCompleteEvent:
 
     def test_file_sync_complete_is_registered(self):
         """FileSyncComplete should have a handler in the registry."""
-        from unity.conversation_manager.events import FileSyncComplete
+        from droid.conversation_manager.events import FileSyncComplete
 
         assert FileSyncComplete in EventHandler._registry
 
     @pytest.mark.asyncio
     async def test_file_sync_complete_sets_flag(self, mock_cm):
         """FileSyncComplete handler should set cm.file_sync_complete to True."""
-        from unity.conversation_manager.events import FileSyncComplete
+        from droid.conversation_manager.events import FileSyncComplete
 
         mock_cm.file_sync_complete = False
         event = FileSyncComplete()
@@ -3429,7 +3429,7 @@ class TestFileSyncCompleteEvent:
     @pytest.mark.asyncio
     async def test_file_sync_complete_triggers_llm_run(self, mock_cm):
         """FileSyncComplete handler should trigger an LLM run."""
-        from unity.conversation_manager.events import FileSyncComplete
+        from droid.conversation_manager.events import FileSyncComplete
 
         mock_cm.file_sync_complete = False
         event = FileSyncComplete()
@@ -3440,7 +3440,7 @@ class TestFileSyncCompleteEvent:
     @pytest.mark.asyncio
     async def test_file_sync_complete_handler_logs(self, mock_cm):
         """FileSyncComplete handler should log the sync completion."""
-        from unity.conversation_manager.events import FileSyncComplete
+        from droid.conversation_manager.events import FileSyncComplete
 
         mock_cm.file_sync_complete = False
         event = FileSyncComplete()
@@ -3459,44 +3459,44 @@ class TestAssistantDesktopReadyEvent:
 
     def test_assistant_desktop_ready_is_registered(self):
         """AssistantDesktopReady should have a handler in the registry."""
-        from unity.conversation_manager.events import AssistantDesktopReady
+        from droid.conversation_manager.events import AssistantDesktopReady
 
         assert AssistantDesktopReady in EventHandler._registry
 
     @pytest.mark.asyncio
     async def test_assistant_desktop_ready_sets_vm_ready_flag(self, mock_cm):
         """AssistantDesktopReady should set cm.vm_ready to True."""
-        from unity.conversation_manager.events import AssistantDesktopReady
+        from droid.conversation_manager.events import AssistantDesktopReady
 
         mock_cm.vm_ready = False
         mock_cm.assistant_id = "84"
         mock_cm.user_id = "test_user"
         event = AssistantDesktopReady(
             binding_id="binding-84",
-            desktop_url="https://unity-pool-ubuntu-1.vm.unify.ai",
+            desktop_url="https://droid-pool-ubuntu-1.vm.unify.ai",
             vm_type="ubuntu",
         )
 
         with (
             patch(
-                "unity.conversation_manager.assistant_jobs.update_liveview_url",
+                "droid.conversation_manager.assistant_jobs.update_liveview_url",
             ),
             patch(
-                "unity.conversation_manager.domains.managers_utils._start_file_sync",
+                "droid.conversation_manager.domains.managers_utils._start_file_sync",
                 new_callable=AsyncMock,
             ),
             patch(
-                "unity.session_details.SESSION_DETAILS",
+                "droid.session_details.SESSION_DETAILS",
             ) as mock_sd,
             patch(
-                "unity.function_manager.primitives.runtime._vm_ready",
+                "droid.function_manager.primitives.runtime._vm_ready",
             ),
             patch(
-                "unity.conversation_manager.domains.event_handlers._ensure_desktop_session",
+                "droid.conversation_manager.domains.event_handlers._ensure_desktop_session",
                 return_value=AsyncMock()(),
             ),
             patch(
-                "unity.conversation_manager.domains.comms_utils.publish_assistant_desktop_ready",
+                "droid.conversation_manager.domains.comms_utils.publish_assistant_desktop_ready",
                 new_callable=AsyncMock,
             ),
         ):
@@ -3509,37 +3509,37 @@ class TestAssistantDesktopReadyEvent:
     @pytest.mark.asyncio
     async def test_assistant_desktop_ready_triggers_llm_run(self, mock_cm):
         """AssistantDesktopReady should trigger an LLM run."""
-        from unity.conversation_manager.events import AssistantDesktopReady
+        from droid.conversation_manager.events import AssistantDesktopReady
 
         mock_cm.vm_ready = False
         mock_cm.assistant_id = "84"
         mock_cm.user_id = "test_user"
         event = AssistantDesktopReady(
             binding_id="binding-84",
-            desktop_url="https://unity-pool-ubuntu-1.vm.unify.ai",
+            desktop_url="https://droid-pool-ubuntu-1.vm.unify.ai",
             vm_type="ubuntu",
         )
 
         with (
             patch(
-                "unity.conversation_manager.assistant_jobs.update_liveview_url",
+                "droid.conversation_manager.assistant_jobs.update_liveview_url",
             ),
             patch(
-                "unity.conversation_manager.domains.managers_utils._start_file_sync",
+                "droid.conversation_manager.domains.managers_utils._start_file_sync",
                 new_callable=AsyncMock,
             ),
             patch(
-                "unity.session_details.SESSION_DETAILS",
+                "droid.session_details.SESSION_DETAILS",
             ) as mock_sd,
             patch(
-                "unity.function_manager.primitives.runtime._vm_ready",
+                "droid.function_manager.primitives.runtime._vm_ready",
             ),
             patch(
-                "unity.conversation_manager.domains.event_handlers._ensure_desktop_session",
+                "droid.conversation_manager.domains.event_handlers._ensure_desktop_session",
                 return_value=AsyncMock()(),
             ),
             patch(
-                "unity.conversation_manager.domains.comms_utils.publish_assistant_desktop_ready",
+                "droid.conversation_manager.domains.comms_utils.publish_assistant_desktop_ready",
                 new_callable=AsyncMock,
             ),
         ):
@@ -3555,37 +3555,37 @@ class TestAssistantDesktopReadyEvent:
         mock_cm,
     ):
         """AssistantDesktopReady should fail closed on missing binding_id."""
-        from unity.conversation_manager.events import AssistantDesktopReady
+        from droid.conversation_manager.events import AssistantDesktopReady
 
         mock_cm.vm_ready = False
         mock_cm.assistant_id = "84"
         mock_cm.user_id = "test_user"
         event = AssistantDesktopReady(
             binding_id="",
-            desktop_url="https://unity-pool-ubuntu-1.vm.unify.ai",
+            desktop_url="https://droid-pool-ubuntu-1.vm.unify.ai",
             vm_type="ubuntu",
         )
 
         with (
             patch(
-                "unity.conversation_manager.assistant_jobs.update_liveview_url",
+                "droid.conversation_manager.assistant_jobs.update_liveview_url",
             ) as mock_update_liveview_url,
             patch(
-                "unity.conversation_manager.domains.managers_utils._start_file_sync",
+                "droid.conversation_manager.domains.managers_utils._start_file_sync",
                 new_callable=AsyncMock,
             ) as mock_start_file_sync,
             patch(
-                "unity.session_details.SESSION_DETAILS",
+                "droid.session_details.SESSION_DETAILS",
             ) as mock_sd,
             patch(
-                "unity.function_manager.primitives.runtime._vm_ready",
+                "droid.function_manager.primitives.runtime._vm_ready",
             ) as mock_vm_ready,
             patch(
-                "unity.conversation_manager.domains.event_handlers._ensure_desktop_session",
+                "droid.conversation_manager.domains.event_handlers._ensure_desktop_session",
                 return_value=AsyncMock()(),
             ) as mock_ensure_desktop_session,
             patch(
-                "unity.conversation_manager.domains.comms_utils.publish_assistant_desktop_ready",
+                "droid.conversation_manager.domains.comms_utils.publish_assistant_desktop_ready",
                 new_callable=AsyncMock,
             ) as mock_publish_desktop_ready,
         ):
@@ -3616,7 +3616,7 @@ class TestRenderInfrastructureState:
 
     def test_both_pending_with_desktop(self):
         """Both VM and sync pending should produce two sections."""
-        from unity.conversation_manager.domains.renderer import Renderer
+        from droid.conversation_manager.domains.renderer import Renderer
 
         result = Renderer.render_infrastructure_state(
             vm_ready=False,
@@ -3628,7 +3628,7 @@ class TestRenderInfrastructureState:
 
     def test_vm_ready_sync_pending(self):
         """Only sync pending should produce one section."""
-        from unity.conversation_manager.domains.renderer import Renderer
+        from droid.conversation_manager.domains.renderer import Renderer
 
         result = Renderer.render_infrastructure_state(
             vm_ready=True,
@@ -3640,7 +3640,7 @@ class TestRenderInfrastructureState:
 
     def test_all_ready(self):
         """Both ready should return empty string."""
-        from unity.conversation_manager.domains.renderer import Renderer
+        from droid.conversation_manager.domains.renderer import Renderer
 
         result = Renderer.render_infrastructure_state(
             vm_ready=True,
@@ -3651,7 +3651,7 @@ class TestRenderInfrastructureState:
 
     def test_no_desktop(self):
         """No desktop configured should return empty string regardless of flags."""
-        from unity.conversation_manager.domains.renderer import Renderer
+        from droid.conversation_manager.domains.renderer import Renderer
 
         result = Renderer.render_infrastructure_state(
             vm_ready=False,
@@ -3662,7 +3662,7 @@ class TestRenderInfrastructureState:
 
     def test_vm_pending_mentions_computer_actions(self):
         """The VM pending section should mention computer actions are unavailable."""
-        from unity.conversation_manager.domains.renderer import Renderer
+        from droid.conversation_manager.domains.renderer import Renderer
 
         result = Renderer.render_infrastructure_state(
             vm_ready=False,
@@ -3675,7 +3675,7 @@ class TestRenderInfrastructureState:
 
     def test_sync_pending_mentions_files(self):
         """The sync pending section should mention historical files."""
-        from unity.conversation_manager.domains.renderer import Renderer
+        from droid.conversation_manager.domains.renderer import Renderer
 
         result = Renderer.render_infrastructure_state(
             vm_ready=True,

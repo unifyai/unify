@@ -15,9 +15,9 @@ from typing import Any, Callable, Optional
 
 from sandboxes.conversation_manager.actor_factory import ActorFactory
 from sandboxes.conversation_manager.config_manager import ActorConfig
-from unity.conversation_manager.event_broker import get_event_broker, reset_event_broker
-from unity.conversation_manager.main import run_conversation_manager
-from unity.conversation_manager.domains.managers_utils import init_conv_manager
+from droid.conversation_manager.event_broker import get_event_broker, reset_event_broker
+from droid.conversation_manager.main import run_conversation_manager
+from droid.conversation_manager.domains.managers_utils import init_conv_manager
 from sandboxes.conversation_manager.real_comms_safety import (
     SafetyConfig,
     apply_real_comms_safety,
@@ -56,7 +56,7 @@ async def initialize_cm(
     # repoint those caches to the freshly reset instance to keep all event
     # publications visible to the sandbox subscriber.
     try:  # sandbox-only best-effort patching
-        from unity.conversation_manager.domains import managers_utils as _managers_utils
+        from droid.conversation_manager.domains import managers_utils as _managers_utils
 
         _managers_utils.event_broker = event_broker  # type: ignore[attr-defined]
     except Exception:

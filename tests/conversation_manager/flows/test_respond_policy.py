@@ -19,7 +19,7 @@ from tests.conversation_manager.cm_helpers import (
     filter_events_by_type,
     assert_has_one,
 )
-from unity.conversation_manager.events import (
+from droid.conversation_manager.events import (
     SMSReceived,
     SMSSent,
     EmailReceived,

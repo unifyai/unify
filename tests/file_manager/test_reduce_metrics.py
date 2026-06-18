@@ -4,17 +4,17 @@ from __future__ import annotations
 import pytest
 
 from tests.helpers import _handle_project
-from unity.common.pipeline.instrumentation import PipelineInstrumentation
-from unity.file_manager.managers.local import LocalFileManager
-from unity.file_manager.file_parsers.types.contracts import FileParseResult
-from unity.file_manager.file_parsers.types.enums import NodeKind
-from unity.file_manager.file_parsers.types.graph import (
+from droid.common.pipeline.instrumentation import PipelineInstrumentation
+from droid.file_manager.managers.local import LocalFileManager
+from droid.file_manager.file_parsers.types.contracts import FileParseResult
+from droid.file_manager.file_parsers.types.enums import NodeKind
+from droid.file_manager.file_parsers.types.graph import (
     ContentGraph,
     ContentNode,
     DocumentPayload,
     ParagraphPayload,
 )
-from unity.file_manager.types.config import FilePipelineConfig
+from droid.file_manager.types.config import FilePipelineConfig
 
 
 @pytest.mark.unit
@@ -25,7 +25,7 @@ def test_file_manager_reduce_param_shapes(file_manager: LocalFileManager, tmp_pa
     file_manager.clear()
 
     # Seed the index using process_single_file from the executor
-    from unity.file_manager.managers.utils.executor import process_single_file
+    from droid.file_manager.managers.utils.executor import process_single_file
 
     cfg = FilePipelineConfig()
 

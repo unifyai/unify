@@ -5,9 +5,9 @@ import pytest
 
 from tests.helpers import _handle_project
 
-from unity.memory_manager.memory_manager import MemoryManager
-from unity.memory_manager.simulated import SimulatedMemoryManager
-from unity.knowledge_manager.simulated import SimulatedKnowledgeManager
+from droid.memory_manager.memory_manager import MemoryManager
+from droid.memory_manager.simulated import SimulatedMemoryManager
+from droid.knowledge_manager.simulated import SimulatedKnowledgeManager
 
 pytestmark = pytest.mark.llm_call
 

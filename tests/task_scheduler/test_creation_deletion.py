@@ -4,14 +4,14 @@ from tests.helpers import _handle_project
 import pytest
 import unify
 
-from unity.common.context_registry import ContextRegistry
-from unity.common.tool_outcome import ToolErrorException
-from unity.session_details import SESSION_DETAILS
-from unity.task_scheduler.task_scheduler import TaskScheduler
-from unity.task_scheduler.types.priority import Priority
-from unity.task_scheduler.types.repetition import Frequency, RepeatPattern
-from unity.task_scheduler.types.schedule import Schedule
-from unity.task_scheduler.types.status import Status
+from droid.common.context_registry import ContextRegistry
+from droid.common.tool_outcome import ToolErrorException
+from droid.session_details import SESSION_DETAILS
+from droid.task_scheduler.task_scheduler import TaskScheduler
+from droid.task_scheduler.types.priority import Priority
+from droid.task_scheduler.types.repetition import Frequency, RepeatPattern
+from droid.task_scheduler.types.schedule import Schedule
+from droid.task_scheduler.types.status import Status
 
 
 @_handle_project

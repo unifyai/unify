@@ -3,8 +3,8 @@ import time
 import pytest
 
 from tests.helpers import _handle_project
-from unity.events.event_bus import EventBus, Event
-from unity.events.types.comms import CommsPayload
+from droid.events.event_bus import EventBus, Event
+from droid.events.types.comms import CommsPayload
 
 
 @pytest.mark.asyncio

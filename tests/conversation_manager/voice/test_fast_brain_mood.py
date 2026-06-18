@@ -4,14 +4,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import ValidationError
 
-from unity.conversation_manager.medium_scripts.call import has_video_avatar_channel
-from unity.conversation_manager.domains.fast_brain_mood import (
+from droid.conversation_manager.medium_scripts.call import has_video_avatar_channel
+from droid.conversation_manager.domains.fast_brain_mood import (
     FastBrainMood,
     FastBrainMoodClassification,
     FastBrainMoodClassifier,
 )
-from unity.conversation_manager.events import FastBrainMoodClassified
-from unity.settings import SETTINGS
+from droid.conversation_manager.events import FastBrainMoodClassified
+from droid.settings import SETTINGS
 
 
 def test_mood_schema_accepts_requested_labels():
@@ -61,7 +61,7 @@ async def test_classifier_uses_structured_output_and_user_message(monkeypatch):
         return mock_client
 
     monkeypatch.setattr(
-        "unity.conversation_manager.domains.fast_brain_mood.new_llm_client",
+        "droid.conversation_manager.domains.fast_brain_mood.new_llm_client",
         fake_new_llm_client,
     )
 
