@@ -9,7 +9,7 @@ import unify
 from droid.knowledge_manager.knowledge_manager import KnowledgeManager
 from droid.manager_registry import ManagerRegistry
 from droid.common.context_registry import ContextRegistry
-from tests.helpers import mutation_test_lock
+from tests.helpers import mutation_test_lock, restore_scenario_context
 
 SCENARIO_COMMIT_HASHES: Dict[str, Any] = {}
 
@@ -280,8 +280,10 @@ def knowledge_manager_scenario(knowledge_scenario):
         )
 
     with mutation_test_lock("km_scenario"):
+        restore_scenario_context("tests/knowledge/Scenario")
         ctx_names = list(SCENARIO_COMMIT_HASHES.keys())
         if ctx_names:
             unify.map(rollback_context, ctx_names, mode="asyncio")
 
+        restore_scenario_context("tests/knowledge/Scenario")
         yield km, knowledge_map

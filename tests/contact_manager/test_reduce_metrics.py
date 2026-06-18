@@ -81,7 +81,7 @@ def test_contact_reduce_param_shapes():
 @pytest.mark.requires_real_unify
 @_handle_project
 def test_contact_reduce_reads_personal_and_accessible_space_roots():
-    team_id = time.time_ns()
+    team_id = int(time.time_ns() % 1_000_000_000)
     SESSION_DETAILS.team_ids = [team_id]
 
     try:

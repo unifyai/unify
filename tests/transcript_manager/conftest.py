@@ -24,6 +24,7 @@ from tests.helpers import (
     is_scenario_seeded,
     scenario_file_lock,
     mutation_test_lock,
+    restore_scenario_context,
 )
 from droid.common.embed_utils import ensure_vector_column
 
@@ -567,13 +568,12 @@ def tm_manager_scenario(tm_scenario):
     # Use mutation_test_lock to prevent parallel rollbacks from orphaning
     # derived column data (embeddings) created by concurrent search operations
     with mutation_test_lock("tm_read"):
+        restore_scenario_context("tests/transcript_manager/Scenario")
         # Rollback INSIDE the lock to prevent other tests
         # from rolling back while this test is running
         scenario_names = list(SCENARIO_COMMIT_HASHES.keys())
         if scenario_names:
             unify.map(rollback_context, scenario_names, mode="asyncio")
 
-        # Re-set the scenario context to ensure nested operations work
-        unify.set_context("tests/transcript_manager/Scenario", relative=False)
-
+        restore_scenario_context("tests/transcript_manager/Scenario")
         yield tm, _ID_BY_NAME

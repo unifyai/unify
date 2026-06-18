@@ -18,6 +18,7 @@ from tests.helpers import (
     rebuild_task_id_mapping,
     scenario_file_lock,
     mutation_test_lock,
+    restore_scenario_context,
 )
 
 # Separate commit hash storage for read vs mutation contexts
@@ -180,10 +181,12 @@ def task_scheduler_read_scenario(task_read_scenario):
         )
 
     # Rollback to clean state before test
+    restore_scenario_context("tests/task_scheduler/ReadScenario")
     ctx_names = list(_READ_SCENARIO_COMMIT_HASHES.keys())
     if ctx_names:
         unify.map(rollback_context, ctx_names, mode="asyncio")
 
+    restore_scenario_context("tests/task_scheduler/ReadScenario")
     yield ts, task_ids
 
 
@@ -233,10 +236,12 @@ def task_scheduler_mutation_scenario(task_mutation_scenario):
         )
 
     with mutation_test_lock("ts_mutation"):
+        restore_scenario_context("tests/task_scheduler/MutationScenario")
         # Rollback INSIDE the lock to prevent other mutation tests
         # from rolling back while this test is running
         ctx_names = list(_MUTATION_SCENARIO_COMMIT_HASHES.keys())
         if ctx_names:
             unify.map(rollback_context, ctx_names, mode="asyncio")
 
+        restore_scenario_context("tests/task_scheduler/MutationScenario")
         yield ts, task_ids

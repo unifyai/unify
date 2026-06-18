@@ -242,7 +242,7 @@ def test_get_info_cache_fallback():
 
 @_handle_project
 def test_get_info_cache_fallback_reads_accessible_space_roots():
-    team_id = time.time_ns()
+    team_id = int(time.time_ns() % 1_000_000_000)
     SESSION_DETAILS.team_ids = [team_id]
 
     try:
