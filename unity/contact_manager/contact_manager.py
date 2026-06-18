@@ -1,8 +1,11 @@
+import logging
 from typing import List, Dict, Optional, Callable, Any, Tuple, Type, Union
 from pydantic import BaseModel
 import asyncio
 import functools
 import re
+
+_log = logging.getLogger(__name__)
 from .prompt_builders import build_ask_prompt, build_update_prompt
 from ..knowledge_manager.types import ColumnType
 from ..common.embed_utils import ensure_vector_column
@@ -254,11 +257,12 @@ class ContactManager(BaseContactManager):
         ):
             return
 
-        admin_key = SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()
-        if not admin_key:
-            raise RuntimeError(
-                "ORCHESTRA_ADMIN_KEY is required to delete contact memberships.",
+        api_key = SESSION_DETAILS.unify_key
+        if not api_key:
+            _log.warning(
+                "UNIFY_KEY is not set; skipping contact membership deletion.",
             )
+            return
 
         from unify.utils import http
 
@@ -268,11 +272,11 @@ class ContactManager(BaseContactManager):
         assistant_id = int(SESSION_DETAILS.assistant.agent_id)
         url = (
             f"{SETTINGS.ORCHESTRA_URL.rstrip('/')}"
-            f"/admin/assistant/{assistant_id}/contact-memberships/{int(contact_id)}"
+            f"/assistant/{assistant_id}/contact-memberships/{int(contact_id)}"
         )
         response = http.delete(
             url,
-            headers={"Authorization": f"Bearer {admin_key}"},
+            headers={"Authorization": f"Bearer {api_key}"},
             params={
                 "target_scope": target_scope,
                 "target_team_id": target_team_id,
