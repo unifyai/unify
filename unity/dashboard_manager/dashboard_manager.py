@@ -144,7 +144,6 @@ class DashboardManager(BaseDashboardManager):
 
     def __init__(self) -> None:
         super().__init__()
-        self.include_in_multi_assistant_table = True
         logger.debug("DashboardManager initialized")
 
     def _get_dm(self):

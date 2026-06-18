@@ -85,7 +85,6 @@ class GuidanceManager(BaseGuidanceManager):
         exclude_ids: Optional[FrozenSet[int]] = None,
     ) -> None:
         super().__init__()
-        self.include_in_multi_assistant_table = True
         self._ctx = ContextRegistry.get_context(self, GUIDANCE_TABLE)
 
         self._filter_scope = filter_scope
@@ -696,7 +695,6 @@ class GuidanceManager(BaseGuidanceManager):
             new=True,
             mutable=True,
             stamp_authoring=True,
-            add_to_all_context=self.include_in_multi_assistant_table,
         )
         return {
             "outcome": "guidance created successfully",

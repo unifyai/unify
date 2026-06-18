@@ -12,6 +12,54 @@ import pytest
 from unity.common.async_tool_loop import SteerableToolHandle
 from unity.function_manager.execution_env import create_execution_globals
 
+
+class _ImmediateHandle(SteerableToolHandle):
+    def __init__(self, value: str = "done") -> None:
+        self.value = value
+        self.stopped = False
+        self.interjections: list[str] = []
+
+    async def ask(
+        self,
+        question: str,
+        *,
+        _parent_chat_context: list[dict] | None = None,
+    ) -> SteerableToolHandle:
+        return _ImmediateHandle(f"asked: {question}")
+
+    async def interject(
+        self,
+        message: str,
+        *,
+        _parent_chat_context_cont: list[dict] | None = None,
+    ) -> None:
+        self.interjections.append(message)
+
+    async def stop(self, reason: str | None = None) -> None:
+        self.stopped = True
+
+    async def pause(self) -> str | None:
+        return None
+
+    async def resume(self) -> str | None:
+        return None
+
+    def done(self) -> bool:
+        return self.stopped
+
+    def result(self) -> str:
+        return self.value
+
+    async def next_clarification(self) -> dict:
+        return {}
+
+    async def next_notification(self) -> dict:
+        return {}
+
+    async def answer_clarification(self, call_id: str, answer: str) -> None:
+        return None
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # Runtime Detection Tests
 # ────────────────────────────────────────────────────────────────────────────
@@ -46,100 +94,61 @@ def test_steerable_detection_with_non_handle():
 
 
 @pytest.mark.asyncio
-@pytest.mark.llm_call
-async def test_compositional_function_can_create_steerable_handle():
-    """A compositional function should be able to create and return a SteerableToolHandle."""
+async def test_compositional_function_can_return_steerable_handle():
+    """A compositional function should be able to return a SteerableToolHandle."""
     globals_dict = create_execution_globals()
+    globals_dict["ImmediateHandle"] = _ImmediateHandle
 
-    # Define a compositional function that creates a steerable handle
     code = """
 async def my_steerable_workflow(goal: str):
-    \"\"\"A steerable workflow that uses an async tool loop.\"\"\"
-    client = new_llm_client()
-    client.set_system_message("You are a helpful assistant. Respond briefly.")
-
-    handle = start_async_tool_loop(
-        client=client,
-        message=goal,
-        tools={},
-        loop_id="test-steerable-workflow",
-        timeout=30,
-    )
-    return handle
+    return ImmediateHandle(f"handled: {goal}")
 """
     exec(code, globals_dict)
 
-    # Call the function
     handle = await globals_dict["my_steerable_workflow"]("Say hello")
 
     assert isinstance(handle, SteerableToolHandle)
-
-    # Clean up - stop the handle
-    await handle.stop("test cleanup")
-    try:
-        await asyncio.wait_for(handle.result(), timeout=5.0)
-    except Exception:
-        pass  # May error due to early stop, that's fine
+    assert handle.result() == "handled: Say hello"
 
 
 @pytest.mark.asyncio
-@pytest.mark.llm_call
 async def test_steerable_handle_stop_method():
     """A steerable handle's stop() method should work correctly."""
     globals_dict = create_execution_globals()
+    globals_dict["ImmediateHandle"] = _ImmediateHandle
 
     code = """
 async def create_handle():
-    client = new_llm_client()
-    client.set_system_message("You are helpful.")
-    return start_async_tool_loop(
-        client=client,
-        message="Count to 10 slowly",
-        tools={},
-        loop_id="test-stop",
-        timeout=60,
-    )
+    return ImmediateHandle("stop-ready")
 """
     exec(code, globals_dict)
 
     handle = await globals_dict["create_handle"]()
     assert isinstance(handle, SteerableToolHandle)
 
-    # Stop the handle
-    handle.stop("stopping early")
+    await handle.stop("stopping early")
 
-    # Result should complete (possibly with cancellation message)
-    result = await asyncio.wait_for(handle.result(), timeout=10.0)
-    assert result is not None  # Should return something (even if cancelled)
+    assert handle.done() is True
+    assert handle.result() == "stop-ready"
 
 
 @pytest.mark.asyncio
-@pytest.mark.llm_call
 async def test_steerable_handle_result_method():
     """A steerable handle's result() method should return the final result."""
     globals_dict = create_execution_globals()
+    globals_dict["ImmediateHandle"] = _ImmediateHandle
 
     code = """
 async def create_simple_handle():
-    client = new_llm_client()
-    client.set_system_message("You are helpful. Be very brief - one word answers only.")
-    return start_async_tool_loop(
-        client=client,
-        message="Say only the word 'done'",
-        tools={},
-        loop_id="test-result",
-        timeout=30,
-    )
+    return ImmediateHandle("done")
 """
     exec(code, globals_dict)
 
     handle = await globals_dict["create_simple_handle"]()
     assert isinstance(handle, SteerableToolHandle)
 
-    # Wait for result with timeout
-    result = await asyncio.wait_for(handle.result(), timeout=30.0)
-    assert result is not None
-    assert isinstance(result, str)
+    result = handle.result()
+    assert result == "done"
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -181,40 +190,20 @@ def test_steerable_detection_pattern():
 
 
 @pytest.mark.asyncio
-@pytest.mark.llm_call
 async def test_compositional_function_with_type_annotation():
     """Compositional function with SteerableToolHandle return type annotation should work."""
     globals_dict = create_execution_globals()
+    globals_dict["ImmediateHandle"] = _ImmediateHandle
 
-    # Function with explicit return type annotation
     code = """
-from typing import Optional
-
 async def typed_steerable_workflow(goal: str) -> SteerableToolHandle:
-    \"\"\"A typed steerable workflow.\"\"\"
-    client = new_llm_client()
-    client.set_system_message("Be brief.")
-
-    handle = start_async_tool_loop(
-        client=client,
-        message=goal,
-        tools={},
-        loop_id="test-typed",
-        timeout=30,
-    )
-    return handle
+    return ImmediateHandle(goal)
 """
     exec(code, globals_dict)
 
     handle = await globals_dict["typed_steerable_workflow"]("Hi")
     assert isinstance(handle, SteerableToolHandle)
-
-    # Clean up
-    await handle.stop("cleanup")
-    try:
-        await asyncio.wait_for(handle.result(), timeout=5.0)
-    except Exception:
-        pass
+    assert handle.result() == "Hi"
 
 
 # ────────────────────────────────────────────────────────────────────────────

@@ -210,7 +210,6 @@ def ingest_content_batch(
     embed_strategy: str = "off",
     chunk_size: int = 1000,
     infer_untyped_fields: bool = False,
-    add_to_all_context: bool = False,
     execution: Optional[IngestExecutionConfig] = None,
     on_task_complete=None,
     skip_rows: int = 0,
@@ -242,8 +241,6 @@ def ingest_content_batch(
         Maximum rows per internal DM chunk.
     infer_untyped_fields : bool
         Instruct backend to infer types for undeclared fields.
-    add_to_all_context : bool
-        Whether to add rows to cross-assistant aggregation contexts.
     execution : IngestExecutionConfig | None
         Pipeline execution settings.
     skip_rows : int
@@ -283,7 +280,6 @@ def ingest_content_batch(
             embed_strategy=embed_strategy,
             chunk_size=chunk_size,
             infer_untyped_fields=infer_untyped_fields,
-            add_to_all_context=add_to_all_context,
             execution=execution,
             on_task_complete=on_task_complete,
             skip_rows=skip_rows,
@@ -312,7 +308,6 @@ def ingest_table_batch(
     embed_strategy: str = "off",
     chunk_size: int = 100,
     infer_untyped_fields: bool = False,
-    add_to_all_context: bool = False,
     execution: Optional[IngestExecutionConfig] = None,
     skip_rows: int = 0,
     expected_total_rows: Optional[int] = None,
@@ -347,7 +342,6 @@ def ingest_table_batch(
             embed_strategy=embed_strategy,
             chunk_size=chunk_size,
             infer_untyped_fields=infer_untyped_fields,
-            add_to_all_context=add_to_all_context,
             execution=execution,
             skip_rows=skip_rows,
             expected_total_rows=expected_total_rows,

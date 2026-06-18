@@ -41,6 +41,7 @@ from fastapi import FastAPI
 from fastapi.params import Depends
 
 from unity.gateway.channels.discord import router as discord_router
+from unity.gateway.channels.drive import router as drive_router
 from unity.gateway.channels.email import router as email_router
 from unity.gateway.channels.gmail import router as gmail_router
 from unity.gateway.channels.outlook import router as outlook_router
@@ -257,6 +258,11 @@ def create_app(
     app.include_router(
         sharepoint_router,
         prefix="/sharepoint",
+        dependencies=admin_auth_dependency,
+    )
+    app.include_router(
+        drive_router,
+        prefix="/drive",
         dependencies=admin_auth_dependency,
     )
     app.include_router(

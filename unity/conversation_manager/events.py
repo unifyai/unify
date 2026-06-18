@@ -1437,6 +1437,24 @@ class InactivityFollowup(Event):
 
 
 @dataclass
+class AssistantPresenceObserved(Event):
+    """Console observed the user viewing or interacting with this assistant.
+
+    The adapters wake the runtime before publishing this event. Unity treats it
+    as presence-only context: no LLM run is requested and no user-visible reply
+    is composed.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:assistant_presence_observed"
+    loggable: ClassVar[bool] = False
+
+    reason: str = ""
+    source: str = ""
+    page_visibility: str = ""
+    occurred_at: str = ""
+
+
+@dataclass
 class CoordinatorDelegate(Event):
     """A Coordinator assigned asynchronous work to this colleague.
 

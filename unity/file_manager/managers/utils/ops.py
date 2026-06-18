@@ -84,16 +84,13 @@ def add_or_replace_file_row(
     log_ids = dm.insert_rows(
         context=file_manager._ctx,
         rows=[entry],
-        add_to_all_context=file_manager.include_in_multi_assistant_table,
     )
     file_id_after = getattr(entry, "file_id", None)
     logger.info(
-        "[ops] insert_rows for %s: file_id before=%s after=%s, "
-        "add_to_all=%s, log_ids=%s",
+        "[ops] insert_rows for %s: file_id before=%s after=%s, log_ids=%s",
         fp,
         file_id_before,
         file_id_after,
-        file_manager.include_in_multi_assistant_table,
         log_ids,
     )
     return {
@@ -294,7 +291,6 @@ def batch_insert_file_table_rows(
     return dm.insert_rows(
         context=ctx,
         rows=rows,
-        add_to_all_context=file_manager.include_in_multi_assistant_table,
     )
 
 
@@ -365,7 +361,6 @@ def create_file_content(
     return dm.insert_rows(
         context=ctx,
         rows=entries,
-        add_to_all_context=file_manager.include_in_multi_assistant_table,
     )
 
 

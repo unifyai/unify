@@ -383,11 +383,11 @@ _EXECUTION_RULES = textwrap.dedent("""
 _SEMANTIC_REASONING_SELECTION = textwrap.dedent("""
     ### Deterministic Code With LLM-Native Semantic Processing
 
-    The execution sandbox includes a `reason(...)` helper for focused,
+    The execution sandbox includes a `query_llm(...)` helper for focused,
     billable UniLLM calls inside generated Python. Do not treat it as a
     separate execution mode that competes with primitives or stored functions.
     A good `execute_code` block may fetch data through several
-    primitives/functions, reshape it deterministically, call `reason(...)` for
+    primitives/functions, reshape it deterministically, call `query_llm(...)` for
     fuzzy unstructured-data work, and then continue with normal Python control
     flow.
 
@@ -395,10 +395,10 @@ _SEMANTIC_REASONING_SELECTION = textwrap.dedent("""
     calls, API calls, deterministic filters, arithmetic, date comparisons,
     dedupe, schema reshaping, and format conversion do not need semantic
     reasoning. Keep those parts as ordinary Python or direct primitive/function
-    calls, even inside a larger workflow that uses `reason(...)` elsewhere.
+    calls, even inside a larger workflow that uses `query_llm(...)` elsewhere.
 
-    **LLMs are the fuzzy operator for unstructured data:** Use UniLLM /
-    `reason(...)` liberally when the task processes meaning, intent, nuance, or
+    **LLMs are the fuzzy operator for unstructured data:** Use
+    `query_llm(...)` liberally when the task processes meaning, intent, nuance, or
     natural language rather than exact values. This includes both
     unstructured -> structured work (classify, extract, score, route, decide,
     summarize into fields, choose an action) and unstructured -> unstructured
@@ -407,7 +407,7 @@ _SEMANTIC_REASONING_SELECTION = textwrap.dedent("""
     Ask yourself at each decision point: is this substep exact data
     manipulation, or fuzzy processing over unstructured input/output? If exact
     manipulation is enough, keep it deterministic. If interpreting or producing
-    meaning is central, preserve that as an actual `reason(...)` / UniLLM call
+    meaning is central, preserve that as an actual `query_llm(...)` call
     with a compact prompt, deliberate model, and `response_format` when
     downstream Python branches on the result.
 
@@ -421,7 +421,7 @@ _SEMANTIC_REASONING_SELECTION = textwrap.dedent("""
     A comment that says "using reasoning" above keyword conditions is not
     semantic reasoning. When generated code reaches a meaning-based
     classification, extraction, routing, drafting, rewriting, or synthesis
-    substep, it should actually call `reason(...)` for that substep and then
+    substep, it should actually call `query_llm(...)` for that substep and then
     branch, validate, or persist from the returned result.
 """).strip()
 
@@ -567,8 +567,9 @@ _EXTERNAL_APP_INTEGRATION = textwrap.dedent("""
 
     1. **Check for credentials**: Use `primitives.secrets.ask(...)` to check
        if API credentials, tokens, or keys for the service are already stored.
-       If not, inform the caller and explain they can add them via the
-       console's Secrets page (hover over the assistant's name in the list → ⋮ → Secrets).
+       If not, inform the caller and explain they can connect the service from
+       the **Integrations** tab in the console (the plug icon on the assistant's
+       right-hand pane), where they pick the app from the gallery and authorize it.
 
     2. **Install the SDK**: Use `install_python_packages` to install the
        service's official Python SDK (e.g., `google-cloud-storage` for Google
@@ -590,6 +591,18 @@ _EXTERNAL_APP_INTEGRATION = textwrap.dedent("""
        microsoft_token = get_oauth_access_token("microsoft")
        google_token = get_oauth_access_token("google")
        ```
+
+       **Connected-account files are off-limits to raw API calls.** Reading,
+       listing, or searching files and folders in the connected Google Drive /
+       Shared Drives or OneDrive / SharePoint libraries MUST go through
+       `primitives.workspace_files.*` (`list_roots`, `list_children`,
+       `search`, `get_item`, `read_file`). That manager enforces the
+       per-assistant file-access allowlist and masks anything the user has not
+       permitted, so disallowed items simply appear not to exist. Do NOT call
+       the Google Drive or Microsoft Graph file/drive/site endpoints directly
+       with `get_oauth_access_token(...)` — that bypasses the allowlist and is
+       not permitted. `get_oauth_access_token(...)` remains appropriate for
+       non-file provider APIs (e.g. calendar, contacts, tasks).
 
     4. **Store for reuse**: After a successful integration, store reusable
        functions via `store_skills` and document the setup via
@@ -643,8 +656,8 @@ _EXTERNAL_APP_INTEGRATION = textwrap.dedent("""
     - Secret present, required scope present → proceed.
     - Secret present, required scope absent → do not attempt the
       call.  Tell the user that access to that service is not
-      currently enabled and they can add it by editing their connected
-      account in the console.
+      currently enabled and they can add it by reconnecting the service
+      from the **Integrations** tab in the console.
 """).strip()
 
 
@@ -942,10 +955,10 @@ def build_code_act_prompt(
 
         parts.append(_EXECUTION_RULES)
         parts.append(_SEMANTIC_REASONING_SELECTION)
-        from unity.common.reasoning import get_reasoning_prompt_context
+        from unity.common.reasoning import get_llm_query_prompt_context
         from unity.common.runtime_oauth import get_oauth_prompt_context
 
-        parts.append(get_reasoning_prompt_context())
+        parts.append(get_llm_query_prompt_context())
         parts.append(get_oauth_prompt_context())
         parts.append(_INCREMENTAL_EXECUTION)
         parts.append(_EXTERNAL_APP_INTEGRATION)

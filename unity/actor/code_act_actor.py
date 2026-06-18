@@ -49,6 +49,10 @@ from unity.common.task_execution_context import (
 )
 from unity.events.event_bus import EVENT_BUS, Event
 from unity.common.llm_client import new_llm_client
+from unity.common.act_llm_profiles import (
+    CURRENT_ACT_LLM_PROFILE,
+    resolve_act_llm_profile,
+)
 from unity.common.llm_helpers import methods_to_tool_dict
 from unity.common.tool_spec import ToolSpec
 from unity.function_manager.base import BaseFunctionManager
@@ -473,7 +477,7 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "planning or bounded semantic judgment inside an otherwise stable "
     "control flow. If it was bounded, distill the trajectory into one "
     "function: deterministic Python for control flow, managed primitives "
-    "for side effects, and focused `reason(...)` / UniLLM calls with "
+    "for side effects, and focused `query_llm(...)` calls with "
     "structured outputs, low temperature, and an explicit model for "
     "classification, summarization, drafting, ranking, or source "
     "selection. Leave it live-agent or guidance-driven when the reasoning "
@@ -483,7 +487,7 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "produced unstructured data — classification, extraction, routing, "
     "summarization, drafting, rewriting, personalization, or other "
     "human-facing synthesis — the stored function should preserve that "
-    "fuzzy step as `reason(...)` / UniLLM with a stable contract. Do not "
+    "fuzzy step as `query_llm(...)` with a stable contract. Do not "
     "replace it with keyword ladders, regex classifiers, label-specific "
     "canned prose, or templates inferred from observed examples unless "
     "the user explicitly requested fixed deterministic rules/templates. "
@@ -514,7 +518,7 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "primitives, helper calls, validation gates, side-effect ordering, "
     "retries, cleanup, result shape, and failure semantics unless the "
     "candidate declares and validates an equivalent replacement. A live "
-    "thinking step may become `reason(...)` only when it has a stable "
+    "thinking step may become `query_llm(...)` only when it has a stable "
     "input/output contract and validation; if it required agentic "
     "exploration, preserve that substep or leave the task "
     "description-driven.\n\n"
@@ -1255,7 +1259,7 @@ def _start_storage_check_loop(
             "No-op is valid: keep the task description-driven if future runs "
             "need broad planning, changing tool discovery, or open-ended "
             "judgment. If the workflow can be stabilized as code, it may still "
-            "use focused `reason(...)` calls for bounded semantic substeps "
+            "use focused `query_llm(...)` calls for bounded semantic substeps "
             "such as summarization, classification, ranking, drafting, or "
             "source selection.\n\n"
             "If you store a FunctionManager function and decide it is a stable "
@@ -4214,6 +4218,7 @@ class CodeActActor(BaseCodeActActor):
         persist: Optional[bool] = None,
         can_compose: Optional[bool] = None,
         can_store: Optional[bool] = None,
+        llm_profile: Optional[str] = None,
         **kwargs,
     ) -> SteerableToolHandle:
         if not self._main_event_loop:
@@ -4237,6 +4242,7 @@ class CodeActActor(BaseCodeActActor):
             self.can_compose if can_compose is None else bool(can_compose)
         )
         effective_can_store = self.can_store if can_store is None else bool(can_store)
+        act_llm_profile = resolve_act_llm_profile(llm_profile)
 
         # can_compose=False requires a FunctionManager so the LLM has execute_function
         # and the discovery tools available. Without it there are no usable tools.
@@ -4355,6 +4361,7 @@ class CodeActActor(BaseCodeActActor):
 
         token = _CURRENT_SANDBOX.set(sandbox)
         env_token = _CURRENT_ENVIRONMENTS.set(sandbox_envs)
+        llm_profile_token = CURRENT_ACT_LLM_PROFILE.set(act_llm_profile)
 
         # Set agent context for depth tracking and handle access
         parent_ctx = _CURRENT_AGENT_CONTEXT.get()
@@ -4404,6 +4411,10 @@ class CodeActActor(BaseCodeActActor):
                 pass
             try:
                 _CURRENT_ENVIRONMENTS.reset(env_token)
+            except Exception:
+                pass
+            try:
+                CURRENT_ACT_LLM_PROFILE.reset(llm_profile_token)
             except Exception:
                 pass
             try:
@@ -4652,8 +4663,10 @@ class CodeActActor(BaseCodeActActor):
 
             tool_policy = _wrapped_policy
 
-        # Build an LLM client for this act() call
-        client = new_llm_client(self._model)
+        # Build an LLM client for this act() call. The profile is per-call so
+        # concurrent runs on the same actor can use different models safely.
+        client_model = act_llm_profile.model or self._model
+        client = new_llm_client(client_model, **act_llm_profile.client_kwargs)
         if system_prompt:
             client.set_system_message(system_prompt)
 

@@ -12,7 +12,9 @@
 
 # Unity
 
-**Unity is your personal fully local AI agent that actually just talks to you. No prompting, no CLI, no configuration or setup. Just hop on a call, share your screen, share their screen, introduce yourself, explain how they can help, or just start thinking out loud. Unity will fill in the gaps 👾**
+**Unity is your personal AI agent that actually just talks to you. No prompting, no CLI, no configuration or setup. Just hop on a call, share your screen, share their screen, introduce yourself, explain how they can help, or just start thinking out loud. Unity will fill in the gaps 👾**
+
+The agent runtime runs locally on your machine; persistence and your assistant live in the hosted backend at [console.unify.ai](https://console.unify.ai).
 
 <p align="center">
   <img src="assets/hero-architecture.png" alt="Unity's three-layer architecture: a Fast Brain on a real-time voice/video call with the user, a Slow Brain (ConversationManager) that always stays present, and an Actor (background reasoner) that does the deep work — extending the interaction-model / background-model pattern with a third supervisory tier." width="820">
@@ -40,32 +42,19 @@ Full architectural comparison with diagrams is [further down](#where-unity-sits-
 
 ## Install
 
-**Prerequisites:** Docker, and an LLM provider key (OpenAI, Anthropic, or DeepSeek). macOS, Linux, or WSL2.
+**Prerequisites:** Python 3.12+, and an LLM provider key (OpenAI, Anthropic, or DeepSeek). macOS, Linux, or WSL2. Get a Unify API key and create your assistant at [console.unify.ai](https://console.unify.ai).
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/unifyai/unity/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/unifyai/unity/staging/scripts/install.sh | bash
 ```
 
-This pulls prebuilt images via Docker Compose, runs a BYOK wizard, and opens Console at http://127.0.0.1:3000. Register there, then chat with Marty — your assistant. See [`deploy/selfhost/README.md`](deploy/selfhost/README.md) for compose commands and the developer source install (`--source-install`).
-
-<details>
-<summary>Developer source install (clone repos + uv)</summary>
-
-Requires Python 3.12+ in addition to Docker:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/unifyai/unity/main/scripts/install.sh | bash -s -- --source-install
-```
-
-The source installer clones `unity`, `unify`, `unillm`, `console`, and `orchestra` under `~/.unity/`, syncs Python deps with `uv`, and bootstraps a local Orchestra. **Open a new terminal**, then start the stack:
+The installer clones `unity`, syncs Python deps with `uv` (which resolves `unify` and `unillm`), runs a key wizard, and installs a `unity` CLI shim in `~/.local/bin/`. **Open a new terminal**, then start chatting:
 
 ```bash
 unity
 ```
 
-Console opens at http://127.0.0.1:3000 — register and chat with Marty there. Tail logs in another terminal with `unity logs`.
-
-</details>
+`unity` opens an interactive local chat with the full assistant runtime, talking to the hosted Orchestra backend. Run headless (ConversationManager + gateway) with `unity serve`.
 
 ```text
 > What did I leave half-finished on the indexer rewrite last week?
@@ -76,21 +65,9 @@ Console opens at http://127.0.0.1:3000 — register and chat with Marty there. T
 <details>
 <summary>What the installer does</summary>
 
-Writes `docker-compose.yml`, `.env`, and helper config into `~/.unity/`. Generates the local secrets the stack needs (Postgres password, session and JWT secrets, a local Orchestra admin key). Runs a BYOK wizard that writes your LLM provider key — and optionally voice and integration keys — into `~/.unity/.env`. Pulls the prebuilt images, starts the stack, and creates a `unity` CLI shim in `~/.local/bin/` with a clearly-marked PATH block appended to your shell rc. No Unify account or signup is required — you register the first user in Console.
+Clones `unity` under `~/.unity/`, runs `uv sync --all-groups`, and writes `~/.unity/unity/.env` with your `UNIFY_KEY`, `ASSISTANT_ID`, `ORCHESTRA_URL` (the hosted backend), and an LLM provider key — plus optional voice and research keys via the BYOK wizard. It installs a `unity` CLI shim in `~/.local/bin/` with a clearly-marked PATH block appended to your shell rc.
 
-If you skip a key at install time (or pipe through a non-interactive shell), add it to `~/.unity/.env` and run `unity restart`.
-
-</details>
-
-<details>
-<summary>Persistence across reboots</summary>
-
-All long-lived state — transcripts, contacts, knowledge, tasks, functions, guidance — lives in Orchestra Postgres, stored in a Docker named volume. Every service runs with `restart: unless-stopped`, so the moment the Docker daemon comes back after a reboot the stack restarts against the existing data. No state is lost and there is nothing to re-run.
-
-The only piece outside Unity's install scope is whether Docker itself auto-starts at boot:
-
-- **macOS** — Docker Desktop ships with *Start Docker Desktop when you log in* enabled by default (Settings → General). Nothing to do.
-- **Linux** — enable the systemd unit once: `sudo systemctl enable docker`.
+Get your `UNIFY_KEY` and `ASSISTANT_ID` from [console.unify.ai](https://console.unify.ai). If you skip a key at install time (or pipe through a non-interactive shell), add it to `~/.unity/unity/.env` and run `unity setup`.
 
 </details>
 
@@ -98,54 +75,51 @@ The only piece outside Unity's install scope is whether Docker itself auto-start
 
 ## Voice — talking to your assistant in the browser
 
-Real voice calls work locally out of the box: the production fast-brain (interruption-handling, telephony-aware) running against your local stack, sub-second latency, no LiveKit Cloud account. LiveKit runs as a service inside the compose stack, so there is nothing extra to install — you only bring your own speech keys.
+Real voice calls run the production fast-brain (interruption-handling, telephony-aware) locally with sub-second latency. `unity voice setup` boots a local LiveKit dev server — nothing extra to install — and you bring your own speech keys.
 
-Add a speech-to-text and a text-to-speech key (both have free tiers; pick **one** TTS provider). The install wizard prompts for these; to add them later, edit `~/.unity/.env` and run `unity restart`.
+Add a speech-to-text and a text-to-speech key (both have free tiers; pick **one** TTS provider). The install wizard prompts for these; to add them later, edit `~/.unity/unity/.env` and run `unity setup`.
 
 | Variable | Purpose | Where to get it |
 |---|---|---|
 | `DEEPGRAM_API_KEY` | Speech-to-text | [console.deepgram.com](https://console.deepgram.com) — free tier |
 | `CARTESIA_API_KEY` *or* `ELEVEN_API_KEY` | Text-to-speech (pick one) | [play.cartesia.ai](https://play.cartesia.ai) or [elevenlabs.io](https://elevenlabs.io) — free credits |
 
-Then start a call from the Console chat — speak through your mic, share your screen, and end the call from the same place.
-
 ---
 
 ## Your assistant
 
-The local install runs **one assistant — Marty, your Coordinator** — the natural shape for a single user on their own laptop. The multi-assistant experience (multiple named teammates, organisations, real telephony, inbound channel integrations, billing) maps more cleanly onto professional teams and lives in the hosted product at **[console.unify.ai](https://console.unify.ai)**.
+The local runtime drives **one hosted assistant** — the one whose `ASSISTANT_ID` you set, provisioned at [console.unify.ai](https://console.unify.ai). The multi-assistant experience (multiple named teammates, organisations, real telephony, inbound channel integrations, third-party app integrations, screen-share, billing, and the onboarding flow) is part of the hosted product.
 
 ---
 
 ## What works locally
 
-Everything below runs on your laptop after install:
+Everything below runs on your machine after install, against the hosted backend:
 
-- **Chat** with Marty in Console — an LLM key (OpenAI, Anthropic, or DeepSeek) is what lets Marty think and reply.
-- **Browser voice calls** — a Deepgram (speech-to-text) key lets Marty hear you, and a Cartesia or ElevenLabs (text-to-speech) key lets Marty speak back.
-- **Web search** — a free [Tavily](https://tavily.com) key lets Marty look things up on the web while researching.
-- **Computer use** — Marty drives a real browser and desktop; an optional [AntiCaptcha](https://anti-captcha.com) key lets Marty get past CAPTCHAs instead of stalling.
-- **Third-party app tools** — a [Composio](https://composio.dev) key lets Marty act in apps like Notion, GitHub, and HubSpot on your behalf.
+- **Chat** with your assistant — an LLM key (OpenAI, Anthropic, or DeepSeek) is what lets it think and reply.
+- **Browser voice calls** — a Deepgram (speech-to-text) key lets it hear you, and a Cartesia or ElevenLabs (text-to-speech) key lets it speak back.
+- **Web search** — a free [Tavily](https://tavily.com) key lets it look things up on the web while researching.
+- **Computer use** — it drives a real browser and desktop; an optional [AntiCaptcha](https://anti-captcha.com) key lets it get past CAPTCHAs instead of stalling.
 
-Inbound messaging channels (SMS / WhatsApp / phone, Slack, Gmail, Outlook, Teams, Discord) and Google / Microsoft workspace connect are part of the hosted product and are not wired into the self-host stack.
+The onboarding flow, inbound messaging channels (SMS / WhatsApp / phone, Slack, Gmail, Outlook, Teams, Discord), Google / Microsoft workspace connect, third-party app integrations, and screen-share are part of the hosted product at [console.unify.ai](https://console.unify.ai).
 
 ---
 
 ## Day-to-day commands
 
 ```text
-unity                    Start the stack (alias: unity up, unity stack up)
-unity down               Stop the Console UI; runtime keeps running
-unity down --full        Stop every service
-unity restart            Recreate containers after editing ~/.unity/.env
-unity status             Show container status
-unity logs [service...]  Follow logs (optionally for specific services)
-unity pull               Pull the latest images
-unity doctor             Check Docker, keys, and service health
-unity help               Command reference
+unity                    Interactive local chat (alias: unity chat)
+unity serve              Run headless: ConversationManager + gateway
+unity stop               Stop the local runtime
+unity status             Show runtime status
+unity logs               Follow the runtime log
+unity doctor             Gateway/config checks
+unity voice [...]        Local LiveKit setup for --live-voice
+unity setup              Re-run the key/credential wizard
+unity update             Update the checkout and re-sync deps
 ```
 
-Bring-your-own-keys (LLM, voice, integrations) live in `~/.unity/.env` — edit them and run `unity restart`. For the developer source install and its commands, see [`deploy/selfhost/README.md`](deploy/selfhost/README.md).
+Bring-your-own-keys (LLM, voice, research) live in `~/.unity/unity/.env` — edit them and run `unity setup`.
 
 ---
 
@@ -461,14 +435,14 @@ When an inner manager hits genuine ambiguity, its clarification **bubbles up thr
 
 ## The runtime stack
 
-Unity is one of four MIT-licensed repos that make up the runtime. The installer wires them together for the local install; you can also use any of them independently.
+Unity is one of three MIT-licensed repos that make up the open agent runtime. They talk to the hosted Orchestra backend; you can also use any of them independently.
 
 | Repo | Role |
 |------|------|
 | **unity** (this) | Agent runtime — managers, tool loops, CodeAct, voice, orchestration |
-| **[orchestra](https://github.com/unifyai/orchestra)** | Persistence backend — FastAPI + Postgres + pgvector; spun up locally in Docker by the installer |
 | **[unify](https://github.com/unifyai/unify)** | Python SDK — how Unity talks to Orchestra |
 | **[unillm](https://github.com/unifyai/unillm)** | LLM access layer — OpenAI, Anthropic, or any compatible endpoint |
+| **orchestra** | Persistence backend — FastAPI + Postgres + pgvector; hosted at [console.unify.ai](https://console.unify.ai) |
 
 ---
 

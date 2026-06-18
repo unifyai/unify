@@ -45,11 +45,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 UNITY_REPO_PATH="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 
-if [[ -f "$UNITY_REPO_PATH/scripts/self_host_env.sh" ]]; then
-  # shellcheck disable=SC1090
-  source "$UNITY_REPO_PATH/scripts/self_host_env.sh"
-fi
-
 PUBSUB_EMULATOR_HOST_EXPLICIT="${PUBSUB_EMULATOR_HOST+x}"
 PUBSUB_EMULATOR_HOST="${PUBSUB_EMULATOR_HOST:-localhost:8085}"
 GCP_PROJECT_ID="${GCP_PROJECT_ID:-local-test-project}"
@@ -75,13 +70,6 @@ elif [[ "$LOCAL_COMMS_MODE" == "local" ]]; then
   LOCAL_COMMS_ENABLED="true"
 else
   LOCAL_COMMS_ENABLED="false"
-fi
-
-# Self-host routes adapter traffic through unity.gateway, which delivers
-# envelopes to the CM local ingress HTTP surface (8787 by default).
-if [[ "${SELF_HOST:-0}" == "1" ]]; then
-  LOCAL_COMMS_MODE="local"
-  LOCAL_COMMS_ENABLED="true"
 fi
 
 LOCAL_COMMS_HOST="${UNITY_CONVERSATION_LOCAL_COMMS_HOST:-127.0.0.1}"
@@ -211,12 +199,6 @@ is_gateway_running() {
 start_gateway() {
   if is_gateway_running; then
     log_success "Unity gateway already running (PID $(cat "$GATEWAY_PIDFILE"))"
-    if [[ -n "${UNITY_RUNTIME_GATEWAY_OWNER:-}" ]] \
-      && declare -F self_host_write_gateway_state &>/dev/null; then
-      self_host_write_gateway_state \
-        "$UNITY_RUNTIME_GATEWAY_OWNER" \
-        "$(cat "$GATEWAY_PIDFILE")"
-    fi
     return 0
   fi
 
@@ -263,10 +245,6 @@ start_gateway() {
       return 1
     fi
   fi
-  if [[ -n "${UNITY_RUNTIME_GATEWAY_OWNER:-}" ]] \
-    && declare -F self_host_write_gateway_state &>/dev/null; then
-    self_host_write_gateway_state "$UNITY_RUNTIME_GATEWAY_OWNER" "$pid"
-  fi
   log_success "Unity gateway running (PID $pid)"
   log_info "Gateway URL: $(gateway_base_url)"
   log_info "Local ingress URL: $(local_comms_base_url)"
@@ -278,13 +256,6 @@ start_gateway() {
 }
 
 stop_gateway() {
-  if [[ "${UNITY_ALLOW_RUNTIME_STOP:-0}" != "1" ]] \
-    && declare -F self_host_should_preserve_gateway_on_interactive_stop &>/dev/null \
-    && self_host_should_preserve_gateway_on_interactive_stop; then
-    log_info "Unity gateway is managed by unity service — not stopping"
-    return 0
-  fi
-
   if [[ -f "$GATEWAY_PIDFILE" ]]; then
     local gateway_pid
     gateway_pid=$(cat "$GATEWAY_PIDFILE")
@@ -295,11 +266,6 @@ stop_gateway() {
       kill -9 "$gateway_pid" 2>/dev/null || true
     fi
     rm -f "$GATEWAY_PIDFILE"
-  fi
-  if declare -F self_host_patch_runtime_state &>/dev/null; then
-    self_host_patch_runtime_state \
-      "gateway_owner=" \
-      "gateway_pid="
   fi
 }
 
@@ -341,19 +307,6 @@ start_echo() {
 # =============================================================================
 
 start_full_cm() {
-  if [[ "${UNITY_RUNTIME_START_LOCK_HELD:-0}" == "1" ]]; then
-    __start_full_cm_locked
-    return $?
-  fi
-  if declare -F with_unity_runtime_start_lock &>/dev/null \
-    && { [[ "${SELF_HOST:-0}" == "1" ]] || [[ -n "${UNITY_RUNTIME_OWNER:-}" ]]; }; then
-    UNITY_RUNTIME_START_LOCK_HELD=1 with_unity_runtime_start_lock 30 bash "$0" __start_full_cm_locked
-    return $?
-  fi
-  __start_full_cm_locked
-}
-
-__start_full_cm_locked() {
   if is_running; then
     local mode
     mode="$(get_mode)"
@@ -375,19 +328,8 @@ __start_full_cm_impl() {
     env_suffix="-$DEPLOY_ENV"
   fi
 
-  local eventbus_publish="${EVENTBUS_PUBLISHING_ENABLED:-}"
-  local eventbus_stream="${EVENTBUS_PUBSUB_STREAMING:-}"
-  if [[ -z "$eventbus_publish" ]]; then
-    if [[ "${SELF_HOST:-0}" == "1" ]]; then
-      eventbus_publish="true"
-      eventbus_stream="true"
-    else
-      eventbus_publish="false"
-      eventbus_stream="false"
-    fi
-  elif [[ -z "$eventbus_stream" ]]; then
-    eventbus_stream="$eventbus_publish"
-  fi
+  local eventbus_publish="${EVENTBUS_PUBLISHING_ENABLED:-false}"
+  local eventbus_stream="${EVENTBUS_PUBSUB_STREAMING:-$eventbus_publish}"
 
   # Build env vars for the CM process.
   local env_vars=(
@@ -407,6 +349,7 @@ __start_full_cm_impl() {
     "EVENTBUS_PUBSUB_STREAMING=$eventbus_stream"
     "TEST=false"
     "UNITY_INACTIVITY_TIMEOUT_SECONDS=${UNITY_INACTIVITY_TIMEOUT_SECONDS:-0}"
+    "UNITY_CONSOLE_UI=${UNITY_CONSOLE_UI:-false}"
   )
   [[ -n "${UNITY_LOCAL_ROOT:-}" ]] && env_vars+=("UNITY_LOCAL_ROOT=$UNITY_LOCAL_ROOT")
   [[ -n "${UNITY_LOCAL_SCHEDULER:-}" ]] && env_vars+=("UNITY_LOCAL_SCHEDULER=$UNITY_LOCAL_SCHEDULER")
@@ -444,11 +387,6 @@ __start_full_cm_impl() {
   log_success "ConversationManager running (PID $pid)"
   log_info "Full LLM-powered responses enabled."
   log_info "Comms backend: $(describe_comms_backend)"
-
-  if [[ -n "${UNITY_RUNTIME_OWNER:-}" ]] \
-    && declare -F self_host_write_runtime_state &>/dev/null; then
-    self_host_write_runtime_state "$UNITY_RUNTIME_OWNER" "$pid" "$ASSISTANT_ID"
-  fi
 }
 
 # =============================================================================
@@ -530,13 +468,6 @@ cmd_start() {
 }
 
 cmd_stop() {
-  if [[ "${UNITY_ALLOW_RUNTIME_STOP:-0}" != "1" ]] \
-    && declare -F self_host_should_preserve_runtime_on_interactive_stop &>/dev/null \
-    && self_host_should_preserve_runtime_on_interactive_stop; then
-    log_info "Coordinator runtime is managed by unity service — not stopping"
-    return 0
-  fi
-
   if [[ -f "$PIDFILE" ]]; then
     local pid
     pid=$(cat "$PIDFILE")
@@ -549,9 +480,6 @@ cmd_stop() {
       kill -9 "$pid" 2>/dev/null || true
     fi
     rm -f "$PIDFILE" "$MODEFILE"
-  fi
-  if declare -F self_host_clear_runtime_state &>/dev/null; then
-    self_host_clear_runtime_state
   fi
   stop_gateway
   log_success "Unity stopped"
@@ -681,7 +609,6 @@ main() {
     stop-gateway) cmd_stop_gateway ;;
     gateway-url) cmd_gateway_url ;;
     check)   cmd_check ;;
-    __start_full_cm_locked) __start_full_cm_locked ;;
     help|--help|-h) cmd_help ;;
     *)
       log_error "Unknown command: $cmd"

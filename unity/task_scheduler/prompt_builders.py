@@ -442,7 +442,7 @@ def build_update_prompt(
             "• A scheduled/triggered live task may have `entrypoint=None`. This is the normal default for newly described natural-language workflows: execution will wake a contained actor run that interprets the description.",
             "• Do not create an entrypoint function merely because a recurring task is being created. Entrypoint creation should follow an explicit user request or a successful run that has been reviewed as stable enough to store.",
             "• Offline is a delivery lane, not an execution style. An offline task may be agentic (`entrypoint=None`) or symbolic (`entrypoint=<function_id>`).",
-            "• A stored entrypoint can still call `reason(...)` for bounded semantic judgment such as summarization, classification, ranking, drafting, or source selection. Keep broad planning and changing tool discovery actor-driven unless a certified symbolic executor preserves the workflow contract.",
+            "• A stored entrypoint can still call `query_llm(...)` for bounded semantic judgment such as summarization, classification, ranking, drafting, or source selection. Keep broad planning and changing tool discovery actor-driven unless a certified symbolic executor preserves the workflow contract.",
             "",
             "Repeat field examples",
             "---------------------",

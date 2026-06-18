@@ -8,7 +8,7 @@ and the sandbox helper exposed to actor-written Python.
 
 The split is deliberate.  ``get_oauth_access_token(...)`` is not a
 ``primitives.secrets`` tool and does not expose arbitrary secrets; it behaves
-like ``reason(...)``/``notify(...)`` as a Python runtime helper for code paths
+like ``query_llm(...)``/``notify(...)`` as a Python runtime helper for code paths
 that must pass an explicit OAuth access token to an SDK/client/request.  Code
 that can rely on provider SDK/default environment credential behavior should
 continue to do so; env overlays below keep rotating OAuth env vars fresh for

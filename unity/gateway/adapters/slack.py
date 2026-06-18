@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import time
 from typing import Any
 
@@ -13,8 +14,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from unity.gateway.adapters.common import default_contacts, get_assistant
 from unity.gateway.adapters.common import publish_runtime_event
+from unity.gateway.channels.slack.views import fetch_slack_user_profile
 from unity.gateway.context import GatewayContext, get_gateway_context
 from unity.settings import SETTINGS
+
+logger = logging.getLogger("unity.gateway.adapters.slack")
 
 router = APIRouter()
 
@@ -67,23 +71,8 @@ def slack_message_already_seen(message_key: str) -> bool:
     return False
 
 
-async def resolve_slack_inbound(payload: dict[str, Any]) -> dict[str, Any] | None:
-    """Route a Slack Events API event via Orchestra."""
-
-    event = payload.get("event") or {}
-    channel_id = event.get("channel", "") or ""
-    channel_type = event.get("channel_type") or (
-        "im" if channel_id.startswith("D") else "channel"
-    )
-    dispatch_body = {
-        "slack_team_id": payload.get("team_id", "") or event.get("team", ""),
-        "channel_id": channel_id,
-        "channel_type": channel_type,
-        "sender_slack_user_id": event.get("user", "") or "",
-        "text": event.get("text", "") or "",
-        "event_ts": event.get("event_ts", "") or event.get("ts", ""),
-        "thread_ts": event.get("thread_ts"),
-    }
+async def _post_dispatch(dispatch_body: dict[str, Any]) -> dict[str, Any] | None:
+    """POST to Orchestra's dispatch endpoint; ``None`` on a missing install."""
     async with httpx.AsyncClient(timeout=10.0) as client:
         response = await client.post(
             f"{SETTINGS.ORCHESTRA_URL}/admin/slack/dispatch",
@@ -97,7 +86,66 @@ async def resolve_slack_inbound(payload: dict[str, Any]) -> dict[str, Any] | Non
     if response.status_code == 404:
         return None
     response.raise_for_status()
-    data = response.json()
+    return response.json()
+
+
+async def resolve_slack_inbound(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Route a Slack Events API event via Orchestra.
+
+    Coordinator routing in an org workspace is *personal to the sender*:
+    each member owns their own workspace Coordinator. The first dispatch
+    pass returns a provisional coordinator route plus
+    ``needs_sender_identity`` when it needs the sender's email/name to pick
+    the right one. We then resolve the sender's profile (``users.info``)
+    and re-dispatch so the message is pinned to the sender's own
+    Coordinator. The resolution from pass one is already valid, so any
+    failure resolving identity degrades to that provisional route.
+    """
+
+    event = payload.get("event") or {}
+    channel_id = event.get("channel", "") or ""
+    channel_type = event.get("channel_type") or (
+        "im" if channel_id.startswith("D") else "channel"
+    )
+    team_id = payload.get("team_id", "") or event.get("team", "")
+    sender_slack_user_id = event.get("user", "") or ""
+    dispatch_body = {
+        "slack_team_id": team_id,
+        "channel_id": channel_id,
+        "channel_type": channel_type,
+        "sender_slack_user_id": sender_slack_user_id,
+        "text": event.get("text", "") or "",
+        "event_ts": event.get("event_ts", "") or event.get("ts", ""),
+        "thread_ts": event.get("thread_ts"),
+    }
+    data = await _post_dispatch(dispatch_body)
+    if data is None:
+        return None
+
+    if data.get("needs_sender_identity") and team_id and sender_slack_user_id:
+        profile: dict[str, Any] = {}
+        try:
+            profile = await fetch_slack_user_profile(team_id, sender_slack_user_id)
+        except Exception:  # noqa: BLE001 - identity is best-effort
+            logger.warning(
+                "slack sender profile lookup failed; using provisional "
+                "coordinator route",
+                exc_info=True,
+            )
+        # Re-dispatch with whatever identity we resolved. ``provided=True``
+        # is sent regardless so Orchestra does not ask again (loop-safe).
+        second = await _post_dispatch(
+            {
+                **dispatch_body,
+                "sender_email": profile.get("email"),
+                "sender_real_name": profile.get("real_name"),
+                "sender_display_name": profile.get("display_name"),
+                "sender_identity_provided": True,
+            },
+        )
+        if second is not None:
+            data = second
+
     if not data.get("handled"):
         return {"drop": True}
     return {

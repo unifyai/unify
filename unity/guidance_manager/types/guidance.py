@@ -51,6 +51,13 @@ class Guidance(AuthoredRow):
 
     # Images are a list-based AnnotatedImageRefs container (persisted as a plain list in the backend).
 
+    @field_validator("is_builtin", mode="before")
+    @classmethod
+    def _validate_is_builtin(cls, v):
+        if v is None:
+            return False
+        return v
+
     @field_validator("function_ids", mode="before")
     @classmethod
     def _validate_function_ids(cls, v):

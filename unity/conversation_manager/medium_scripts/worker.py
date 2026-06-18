@@ -142,6 +142,7 @@ def main() -> None:
     opts = agents.WorkerOptions(
         entrypoint_fnc=entrypoint,
         agent_name=agent_name,
+        worker_type=agents.WorkerType.PUBLISHER,
         prewarm_fnc=_prewarm_and_signal,
         num_idle_processes=1,
         initialize_process_timeout=60,

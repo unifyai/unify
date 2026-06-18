@@ -23,7 +23,7 @@ import pytest
 from pydantic import BaseModel, Field
 
 from unity.common.llm_client import new_llm_client
-from unity.common.reasoning import reason
+from unity.common.reasoning import query_llm
 from unity.conversation_manager.prompt_builders import build_voice_agent_prompt
 
 # =============================================================================
@@ -855,7 +855,7 @@ async def _verify_coordinator_voice_scenario(
         "rubric": scenario.rubric,
         "candidate_response": response,
     }
-    return await reason(
+    return await query_llm(
         (
             "Evaluate the candidate fast-brain voice response below against the "
             "scenario rubric. The response is spoken live on a phone/video call "

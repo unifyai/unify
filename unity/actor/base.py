@@ -279,6 +279,23 @@ class BaseCodeActActor(BaseActor, BaseStateManager, ABC):
         entrypoint_args: Optional[list[Any]] = None,
         entrypoint_kwargs: Optional[dict[str, Any]] = None,
         persist: bool = True,
+        llm_profile: Optional[str] = None,
     ) -> SteerableToolHandle:
-        """Perform work from a natural-language request and return a steerable handle."""
+        """Perform work from a natural-language request and return a steerable handle.
+
+        Args:
+            request: Natural-language or structured request describing the work.
+            llm_profile: Optional curated model profile for this actor run.
+                Leave unset for the default profile, which uses the actor's
+                configured model (normally ``deepseek-v4-max@deepseek``).
+                Available premium profiles are ``gpt_5_5_low``,
+                ``gpt_5_5_medium``, and ``gpt_5_5_high``. Use
+                ``gpt_5_5_high`` when the user explicitly asks for maximum
+                thinking effort or the task is highly ambiguous/high-stakes
+                enough to justify premium cost and latency. GPT-5.5 profiles
+                use ``gpt-5.5@openai`` and are substantially more expensive
+                than the DeepSeek default: about 11.5x the input-token rate and
+                34.5x the output-token rate before accounting for any extra
+                reasoning/output tokens from higher effort.
+        """
         raise NotImplementedError

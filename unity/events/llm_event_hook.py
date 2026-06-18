@@ -98,7 +98,6 @@ async def _update_cumulative_spend(billed_cost: float) -> None:
                     "month": month,
                 },
                 data_overrides={"_user_id": uid},
-                add_to_all_context=True,
                 project="Assistants",
             )
         except Exception as e:

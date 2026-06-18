@@ -13,7 +13,40 @@ Unity implements an AI assistant's brain as a **distributed back office**. A cen
 Sibling repos consumed via editable installs (see `[tool.uv.sources]` in `pyproject.toml`):
 - **`unify`** — Python SDK wrapping the Orchestra REST API
 - **`unillm`** — LLM client with caching, provider normalization, observability
-- **`orchestra`** — backend API + Postgres (started locally via Docker)
+
+The open agent runtime (`unity`, `unify`, `unillm`) talks to the **hosted Orchestra backend** (`ORCHESTRA_URL`, default `https://api.unify.ai/v0`). `orchestra` and `console` are private/hosted and are not part of the open-source repo set.
+
+---
+
+## Run the agent locally (public path)
+
+The open-source runtime runs on your machine against the **hosted** Orchestra
+backend. Provision a `UNIFY_KEY` and an assistant (`ASSISTANT_ID`) at
+[console.unify.ai](https://console.unify.ai), then:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/unifyai/unity/staging/scripts/install.sh | bash
+unity            # interactive local chat (alias: unity chat)
+unity serve      # headless: ConversationManager + gateway
+unity setup      # re-run the key/credential wizard
+```
+
+- `unity` is the CLI shim the installer drops in `~/.local/bin/`. From a
+  checkout, the equivalents are `.venv/bin/python -m
+  sandboxes.conversation_manager.sandbox` (chat) and `bash scripts/local.sh
+  start --full` (headless).
+- Configuration lives in `unity/.env`: `UNIFY_KEY`, `ASSISTANT_ID`,
+  `ORCHESTRA_URL` (hosted), one LLM provider key, and optional voice/research
+  keys (`scripts/prompt_byok_keys.sh`).
+- No Docker, local Orchestra, or Console is involved in the public path. The
+  onboarding flow, inbound channels, workspace connect, third-party app
+  integrations, and screen-share are part of the hosted product.
+
+**Internal full-local self-host stack.** The "all-repo fully local" stack
+(local Orchestra + Console + Coordinator + gateway, via Docker Compose) is an
+internal-only path and lives in the private **`unity-deploy`** repo under
+`selfhost/` (`stack.sh`, `setup.sh`, `service.sh`, compose bundle). It drives
+sibling `unity`/`console`/`orchestra` checkouts under `UNIFY_STACK_ROOT`.
 
 ---
 

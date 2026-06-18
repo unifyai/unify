@@ -328,7 +328,7 @@ These are always available (from `create_execution_globals()`):
 | **Typing** | `typing`, `Any`, `Callable`, `Dict`, `List`, `Optional`, `Tuple`, `Set`, `Union`, `Literal` |
 | **Pydantic** | `pydantic`, `BaseModel`, `Field` |
 | **Primitives** | `primitives` – lazy access to all state managers |
-| **Steerable** | `SteerableToolHandle`, `start_async_tool_loop`, `new_llm_client` |
+| **Steerable** | `SteerableToolHandle` |
 
 #### Injected by Actor at Runtime
 
@@ -405,29 +405,16 @@ else:
 
 ### Writing a Steerable Function
 
-Use the steerable infrastructure available in the execution globals:
+Return a handle from an existing primitive or actor workflow:
 
 ```python
-async def my_steerable_workflow(goal: str) -> SteerableToolHandle:
+async def contact_lookup(text: str) -> SteerableToolHandle:
     """
-    A steerable workflow that uses an async tool loop.
+    Start a contact lookup and return its handle.
 
-    The caller can interject, pause, or stop this workflow while it runs.
+    The caller can interject, pause, or stop the lookup while it runs.
     """
-    # Create an LLM client
-    client = new_llm_client()
-    client.set_system_message("You are a helpful assistant.")
-
-    # Start an async tool loop - returns a handle immediately
-    handle = start_async_tool_loop(
-        client=client,
-        message=goal,
-        tools={},  # Add tools as needed
-        loop_id="my-workflow",
-    )
-
-    # Return the handle - the loop continues running in the background
-    return handle
+    return await primitives.contacts.ask(text=text)
 ```
 
 ### Available Infrastructure
@@ -437,8 +424,6 @@ These are injected into the execution globals by `create_execution_globals()`:
 | Name | Purpose |
 |------|---------|
 | `SteerableToolHandle` | Base ABC for steerable handles and runtime `isinstance` checks |
-| `start_async_tool_loop` | Factory function to create async tool loop handles |
-| `new_llm_client` | Factory to create LLM clients for async tool loops |
 
 ### Handle Methods
 
@@ -453,34 +438,21 @@ Steerable handles provide these methods:
 | `handle.stop(reason)` | Cancel the task immediately |
 | `await handle.ask(question)` | Query the task's status without modifying it |
 
-### Example: Steerable Research Workflow
+### Example: Delegated Actor Workflow
 
 ```python
-async def steerable_research(topic: str) -> SteerableToolHandle:
+async def delegated_research(topic: str) -> SteerableToolHandle:
     """
-    Research a topic with the ability to steer mid-flight.
+    Delegate research to an actor and return the running handle.
 
     The caller can interject to refine the search, or stop early
     if enough information has been gathered.
     """
-    client = new_llm_client()
-    client.set_system_message(
-        "You are a research assistant. Search the web and compile findings. "
-        "Be thorough but respond to any user interjections to refine your approach."
-    )
-
-    # Define tools the LLM can use
-    tools = {
-        "web_search": primitives.web.ask,
-        "save_finding": primitives.knowledge.update,
-    }
-
-    return start_async_tool_loop(
-        client=client,
-        message=f"Research the following topic thoroughly: {topic}",
-        tools=tools,
-        loop_id=f"research-{topic[:20]}",
-        timeout=300,  # 5 minute timeout
+    return await primitives.actor.act(
+        request=f"Research the following topic thoroughly: {topic}",
+        prompt_functions=["primitives.web.ask", "primitives.knowledge.update"],
+        can_store=False,
+        timeout=300,
     )
 ```
 

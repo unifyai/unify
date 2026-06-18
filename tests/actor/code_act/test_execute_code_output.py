@@ -198,20 +198,20 @@ print("TOKEN_OK")
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(30)
-async def test_execute_code_can_branch_on_reason_structured_output(
+async def test_execute_code_can_branch_on_query_llm_structured_output(
     execute_code_tool,
     monkeypatch: pytest.MonkeyPatch,
 ):
     """execute_code can use typed semantic judgments in symbolic control flow."""
     execute_code, _primitives = execute_code_tool
 
-    async def fake_reason(prompt: str, *, response_format=None, **kwargs):
+    async def fake_query_llm(prompt: str, *, response_format=None, **kwargs):
         assert "Classify" in prompt
         return response_format(category="billing", needs_reply=True)
 
     import unity.common.reasoning as reasoning_module
 
-    monkeypatch.setattr(reasoning_module, "reason", fake_reason)
+    monkeypatch.setattr(reasoning_module, "query_llm", fake_query_llm)
 
     code = """
 from pydantic import BaseModel
@@ -222,7 +222,7 @@ class Decision(BaseModel):
 
 Decision.model_rebuild()
 
-decision = await reason(
+decision = await query_llm(
     "Classify this email: Please approve the renewal quote.",
     response_format=Decision,
 )
@@ -230,7 +230,7 @@ decision = await reason(
 """
 
     out = await execute_code(
-        "test reason structured output",
+        "test query_llm structured output",
         code,
         language="python",
         state_mode="stateless",

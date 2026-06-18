@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from ..common.authorship import stamp_authoring_assistant_id
 from ..common.colleague_cache import ColleagueNameCache
 from ..common.embed_utils import ensure_vector_column
-from ..common.log_utils import log as unity_log, _inject_private_fields, _add_to_all
+from ..common.log_utils import log as unity_log, _inject_private_fields
 from ..contact_manager.base import BaseContactManager
 from ..manager_registry import ManagerRegistry
 from .types.message import Message, UNASSIGNED
@@ -141,7 +141,6 @@ class TranscriptManager(BaseTranscriptManager):
         Responsible for *searching through* the full transcripts across all communcation channels exposed to the assistant.
         """
         super().__init__()
-        self.include_in_multi_assistant_table = True
 
         if contact_manager is not None:
             self._contact_manager = contact_manager
@@ -262,13 +261,6 @@ class TranscriptManager(BaseTranscriptManager):
             destination = f"team:{from_root.split('/')[1]}"
             return ContextRegistry.write_root(self, table_name, destination=destination)
         return from_root.rstrip("/")
-
-    def _should_add_to_all_context(self, context: str) -> bool:
-        """Return whether writes to this context should mirror into All/* contexts."""
-
-        return self.include_in_multi_assistant_table and not context.startswith(
-            TEAM_CONTEXT_PREFIX,
-        )
 
     # ──────────────────────────────────────────────────────────────────────
     #  Public API (English-only entrypoints for the LLM)
@@ -622,9 +614,6 @@ class TranscriptManager(BaseTranscriptManager):
                     new=True,
                     mutable=True,
                     stamp_authoring=True,
-                    add_to_all_context=self._should_add_to_all_context(
-                        transcripts_context,
-                    ),
                 )
 
                 # Build a Message directly from the POST response
@@ -658,13 +647,11 @@ class TranscriptManager(BaseTranscriptManager):
                 # and to preserve the write if the async worker fails after enqueue.
                 if future is not None:
                     ctx = transcripts_context
-                    should_add_to_all = self._should_add_to_all_context(ctx)
                     fallback_entries = dict(entries)
                     fallback_state: dict[str, Any] = {
                         "future": future,
                         "context": ctx,
                         "entries": fallback_entries,
-                        "add_to_all": should_add_to_all,
                         "handled": False,
                         "fallback_lock": threading.Lock(),
                     }
@@ -677,8 +664,6 @@ class TranscriptManager(BaseTranscriptManager):
                         try:
                             log_id = fut.result()
                             if log_id:
-                                if state["add_to_all"]:
-                                    _add_to_all([log_id], state["context"])
                                 state["handled"] = True
                         except Exception:
                             self._fallback_async_log_create(state)
@@ -822,11 +807,6 @@ class TranscriptManager(BaseTranscriptManager):
             if existing_log_id is not None:
                 break
         if existing_log_id is not None:
-            if state["add_to_all"]:
-                try:
-                    _add_to_all([existing_log_id], state["context"])
-                except Exception:
-                    pass
             state["handled"] = True
             return
         try:
@@ -836,7 +816,6 @@ class TranscriptManager(BaseTranscriptManager):
                 new=True,
                 mutable=True,
                 stamp_authoring=True,
-                add_to_all_context=state["add_to_all"],
             )
             state["handled"] = True
         except Exception:
@@ -1451,7 +1430,6 @@ class TranscriptManager(BaseTranscriptManager):
                 new=True,
                 mutable=True,
                 stamp_authoring=True,
-                add_to_all_context=self._should_add_to_all_context(context),
             )
 
         # Read back and return canonical shape
@@ -1568,7 +1546,6 @@ class TranscriptManager(BaseTranscriptManager):
             new=True,
             mutable=True,
             stamp_authoring=True,
-            add_to_all_context=self._should_add_to_all_context(exchanges_context),
         )
 
         # Extract the assigned exchange_id
@@ -1593,7 +1570,6 @@ class TranscriptManager(BaseTranscriptManager):
             new=True,
             mutable=True,
             stamp_authoring=True,
-            add_to_all_context=self._should_add_to_all_context(transcripts_context),
         )
 
         tm_message_id = int(log.entries.get("message_id", -1))
@@ -1684,7 +1660,6 @@ class TranscriptManager(BaseTranscriptManager):
                 **payload,
                 new=True,
                 mutable=True,
-                add_to_all_context=self._should_add_to_all_context(target_context),
             )
 
         unify.delete_logs(context=source_context, logs=rows[0].id)
