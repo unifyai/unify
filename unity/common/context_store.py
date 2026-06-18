@@ -41,6 +41,8 @@ def _create_context_with_retry(
     auto_counting: Optional[Dict[str, Optional[str]]] = None,
     description: Optional[str] = None,
     foreign_keys: Optional[list[Dict[str, Any]]] = None,
+    owner_scope: Optional[str] = None,
+    owner_id: Optional[int] = None,
     project: Optional[str] = None,
 ) -> None:
     """Call ``unify.create_context`` with retry on transient failures.
@@ -49,6 +51,10 @@ def _create_context_with_retry(
     backoff for transient HTTP errors (5xx, 429, network).  Non-transient
     errors (4xx) are raised immediately (except "already exists" which the
     SDK handles via ``exist_ok=True``).
+
+    ``owner_scope`` / ``owner_id`` make the context's ownership explicit (the
+    unit of O(owner) bulk deletion); when omitted the backend infers it from
+    the context name.
     """
     last_exc: Optional[Exception] = None
     for attempt in range(_CREATE_CONTEXT_MAX_ATTEMPTS):
@@ -59,6 +65,8 @@ def _create_context_with_retry(
                 auto_counting=auto_counting,
                 description=description,
                 foreign_keys=foreign_keys,
+                owner_scope=owner_scope,
+                owner_id=owner_id,
                 project=project,
             )
             return

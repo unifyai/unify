@@ -59,6 +59,22 @@ class ContextRegistry:
     def _team_root_identity(team_id: int) -> str:
         return f"{TEAM_CONTEXT_PREFIX}{team_id}"
 
+    @staticmethod
+    def _owner_for_root(root_identity: str) -> tuple[Optional[str], Optional[int]]:
+        """Map a root identity to the explicit ownership of contexts under it.
+
+        ``Teams/{team_id}`` roots are team-owned; the personal root is owned by
+        the active assistant. Returns ``(None, None)`` when the owner cannot be
+        stated confidently (e.g. an unassigned container with no agent_id), so
+        the backend falls back to inferring it from the context name.
+        """
+        if root_identity.startswith(TEAM_CONTEXT_PREFIX):
+            return "team", int(root_identity[len(TEAM_CONTEXT_PREFIX) :])
+        agent_id = SESSION_DETAILS.assistant.agent_id
+        if agent_id is None:
+            return None, None
+        return "assistant", int(agent_id)
+
     @classmethod
     def _is_shared_scoped(cls, table_name: str) -> bool:
         """Return whether a table participates in shared-team routing."""
@@ -290,12 +306,15 @@ class ContextRegistry:
         # Use resolved_foreign_keys (with prefixed references) instead of
         # table.foreign_keys to avoid using mutated class-level config.
         resolved_foreign_keys = entry.get("resolved_foreign_keys")
+        owner_scope, owner_id = cls._owner_for_root(entry["root_identity"])
         _create_context_with_retry(
             target_name,
             unique_keys=table.unique_keys,
             auto_counting=table.auto_counting,
             description=table.description,
             foreign_keys=resolved_foreign_keys,
+            owner_scope=owner_scope,
+            owner_id=owner_id,
         )
         # Idempotent field creation
         if table.fields:

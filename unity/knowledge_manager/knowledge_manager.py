@@ -986,10 +986,9 @@ class KnowledgeManager(BaseKnowledgeManager):
         - Then re-provisions optional linked storage (e.g., Contacts) so future
           calls see a consistent schema.
         """
-        km_prefix = f"{self._ctx}/"
-        ctxs = unify.get_contexts(prefix=km_prefix)
-        for full_ctx in list(ctxs.keys()):
-            unify.delete_context(full_ctx)
+        # One server-side subtree delete (root + every descendant) instead of
+        # enumerating each child and deleting it individually.
+        unify.delete_context(self._ctx, delete_children=True)
 
         # Re-provision any required/linked storage
 

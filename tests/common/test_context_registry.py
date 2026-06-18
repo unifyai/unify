@@ -88,6 +88,38 @@ def test_write_root_resolves_personal_and_space_destinations():
         )
 
 
+def test_owner_for_root_maps_personal_and_team_roots():
+    SESSION_DETAILS.assistant.agent_id = 99
+    assert ContextRegistry._owner_for_root("Teams/7") == ("team", 7)
+    assert ContextRegistry._owner_for_root("Personal") == ("assistant", 99)
+    # No assigned assistant -> defer to backend name-inference.
+    SESSION_DETAILS.assistant.agent_id = None
+    assert ContextRegistry._owner_for_root("Personal") == (None, None)
+
+
+def test_provisioning_passes_explicit_owner_scope():
+    """Context provisioning forwards explicit owner scope per root type."""
+    SESSION_DETAILS.team_ids = [7]
+    SESSION_DETAILS.assistant.agent_id = 42
+
+    with patch(
+        "unity.common.context_registry._create_context_with_retry",
+    ) as mock_create:
+        ContextRegistry.write_root(RegistryExampleManager, "Tasks", destination=None)
+        ContextRegistry.write_root(
+            RegistryExampleManager,
+            "Contacts",
+            destination="team:7",
+        )
+
+    owners = {
+        (call.kwargs.get("owner_scope"), call.kwargs.get("owner_id"))
+        for call in mock_create.call_args_list
+    }
+    assert ("assistant", 42) in owners
+    assert ("team", 7) in owners
+
+
 def test_write_root_resolves_all_manager_destination_tables_to_shared_teams():
     class DestinationAwareManager:
         class Config:
