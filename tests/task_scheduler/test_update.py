@@ -27,8 +27,7 @@ async def test_update_create_task_via_text():
     assert task.name == "Promote Jeff Smith"
     assert task.description.startswith("Send an email to Jeff Smith")
     assert task.status in (
-        Status.primed,
-        Status.queued,
+        Status.scheduled,
         Status.triggerable,
         Status.active,
     )

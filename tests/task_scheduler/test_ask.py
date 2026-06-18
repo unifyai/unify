@@ -30,19 +30,18 @@ def _answer_semantic(ts: TaskScheduler, question: str) -> str:
     q = question.lower()
     tasks = ts._filter_tasks()
 
-    if "currently primed" in q:
-        primed = [t for t in tasks if t.status == Status.primed]
-        return primed[0].name if primed else "N/A"
+    if "how many scheduled" in q:
+        return str(sum(1 for t in tasks if t.status == Status.scheduled))
 
-    if "tasks are queued" in q:
-        return str(sum(1 for t in tasks if t.status == Status.queued))
+    if "cancelled" in q and "how many" in q:
+        return str(sum(1 for t in tasks if t.status == Status.cancelled))
 
     return "N/A"
 
 
 QUESTIONS = [
-    "Which task is currently primed?",
-    "How many tasks are queued at the moment?",
+    "How many scheduled tasks are there?",
+    "How many cancelled tasks are there?",
 ]
 
 
@@ -117,32 +116,32 @@ async def test_ask_with_interjection(
     """Ask a question, interject with a follow-up, and ensure the final answer covers both."""
     ts, _ = task_scheduler_read_scenario
     try:
-        # 1) Initial question ⇢ primed task name
+        # 1) Initial question ⇢ scheduled task count
         handle = await ts.ask(
-            text="Which task is currently primed?",
+            text="How many scheduled tasks are there?",
             _return_reasoning_steps=True,
         )
 
-        # 2) Mid-conversation interjection ⇢ queued-task count
-        await handle.interject("Also, how many tasks are queued?")
+        # 2) Mid-conversation interjection ⇢ cancelled task count
+        await handle.interject("Also, how many cancelled tasks are there?")
 
         # 3) Await combined answer
         answer, steps = await handle.result()
-        primed_task = _answer_semantic(ts, QUESTIONS[0])  # "Write quarterly report"
-        queued_cnt = _answer_semantic(ts, QUESTIONS[1])  # e.g. "2" or "3"
+        scheduled_cnt = _answer_semantic(ts, QUESTIONS[0])
+        cancelled_cnt = _answer_semantic(ts, QUESTIONS[1])
 
         # 4) Assert presence of both pieces of information
-        assert primed_task.lower() in answer.lower(), assertion_failed(
-            f"Answer containing primed task '{primed_task}'",
+        assert scheduled_cnt in answer, assertion_failed(
+            f"Answer containing scheduled count '{scheduled_cnt}'",
             answer,
             steps,
-            "Active task not mentioned in combined answer",
+            "Scheduled count not mentioned in combined answer",
         )
-        assert queued_cnt in answer, assertion_failed(
-            f"Answer containing queued count '{queued_cnt}'",
+        assert cancelled_cnt in answer, assertion_failed(
+            f"Answer containing cancelled count '{cancelled_cnt}'",
             answer,
             steps,
-            "Queued count not mentioned in combined answer",
+            "Cancelled count not mentioned in combined answer",
         )
     except Exception as exc:
         raise exc

@@ -247,8 +247,6 @@ async def test_codeact_task_primitive_delegates_execution_without_fallback_actor
         assert current_task_execution_delegate.get() is None
         assert scheduler.__dict__.get("_TaskScheduler__actor") is None
         assert "_actor" not in scheduler.__dict__
-        assert scheduler._active_task is None
-
         task = scheduler._get_task_or_raise(task_id)
         assert task.status == Status.completed
     finally:

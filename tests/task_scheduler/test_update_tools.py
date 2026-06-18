@@ -81,15 +81,13 @@ def test_update_task_status():
 
 
 @_handle_project
-def test_head_of_queue_scheduled_cannot_be_queued():
-    """A task at the queue head with an explicit start_at must stay 'scheduled'."""
+def test_scheduled_task_cannot_be_forced_active():
+    """A scheduled task cannot be directly moved to 'active' via update."""
 
     ts = TaskScheduler()
 
-    # Create a task that sits at the head of the queue with a fixed start time
     future_start = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
-
-    sched = Schedule(start_at=future_start, prev_task=None, next_task=None)
+    sched = Schedule(start_at=future_start)
 
     tid = ts._create_task(
         name="Launch campaign",
@@ -97,13 +95,11 @@ def test_head_of_queue_scheduled_cannot_be_queued():
         schedule=sched,
     )["details"]["task_id"]
 
-    # Sanity: the task should have been stored as 'scheduled'
     task_row = ts._filter_tasks(filter=f"task_id == {tid}", limit=1)[0]
     assert task_row.status == Status.scheduled
 
-    # Attempting to mark it as 'queued' must fail
     with pytest.raises(ValueError):
-        ts._update_task(task_id=tid, status="queued")
+        ts._update_task(task_id=tid, status="active")
 
 
 @_handle_project
