@@ -175,7 +175,7 @@ def _mark_source_task_failed(config: OfflineTaskConfig, error_text: str) -> None
         SESSION_DETAILS.populate_from_env()
         unity.ensure_initialised(project_name=TASK_MACHINE_STATE_PROJECT)
         scheduler = TaskScheduler()
-        rows = scheduler._view.get_rows_by_log_ids(  # type: ignore[attr-defined]
+        rows = scheduler._store.get_rows_by_log_ids(  # type: ignore[attr-defined]
             log_ids=[config.source_task_log_id],
         )
         if not rows:
@@ -448,7 +448,6 @@ async def _execute_scheduler_managed_task(config: OfflineTaskConfig) -> Any:
             task_id=config.task_id,
             trigger_attempt_token=_trigger_attempt_token(config),
             _activated_by=_activated_by_for_source_type(config.source_type),
-            isolated=True,
         )
         return await handle.result()
     finally:
