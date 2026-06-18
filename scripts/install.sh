@@ -119,6 +119,53 @@ uv_sync() {
     log_success "Dependencies synced"
 }
 
+# ----------------------------------------------------------------------------
+# Clone (or update) the magnitude repo, which agent-service depends on via
+# local file references in agent-service/package.json.
+# ----------------------------------------------------------------------------
+clone_or_update_magnitude() {
+    local magnitude_dir="$UNITY_HOME/magnitude"
+    if [ -d "$magnitude_dir/.git" ]; then
+        log_info "Updating magnitude checkout at $magnitude_dir..."
+        git -C "$magnitude_dir" fetch --depth 1 origin staging 2>/dev/null || true
+        git -C "$magnitude_dir" checkout staging 2>/dev/null || true
+        git -C "$magnitude_dir" pull --rebase 2>/dev/null || true
+    else
+        log_info "Cloning magnitude into $magnitude_dir..."
+        git clone --depth 1 --branch staging \
+            "$REPO_BASE/magnitude.git" "$magnitude_dir" 2>/dev/null || {
+            log_warn "Could not clone magnitude (continuing without it — agent-service / computer use will be unavailable until it is present)"
+            return 0
+        }
+    fi
+    log_success "magnitude checkout ready"
+}
+
+# ----------------------------------------------------------------------------
+# Install agent-service Node dependencies (requires magnitude to be present).
+# ----------------------------------------------------------------------------
+install_agent_service() {
+    local agent_service_dir="$UNITY_REPO/agent-service"
+    if [ ! -d "$agent_service_dir" ]; then
+        log_warn "agent-service directory not found — skipping npm install"
+        return 0
+    fi
+    if ! command -v npm >/dev/null 2>&1; then
+        log_warn "npm not found — skipping agent-service install (install Node.js to enable computer use)"
+        return 0
+    fi
+    if [ ! -d "$UNITY_HOME/magnitude" ]; then
+        log_warn "magnitude not cloned — skipping agent-service install"
+        return 0
+    fi
+    log_info "Installing agent-service dependencies (npm ci)..."
+    (cd "$agent_service_dir" && npm ci --silent) || {
+        log_warn "npm ci failed — agent-service may not start (run 'cd $agent_service_dir && npm ci' to retry)"
+        return 0
+    }
+    log_success "agent-service dependencies installed"
+}
+
 scaffold_env() {
     if [ ! -f "$UNITY_REPO/.env" ] && [ -f "$UNITY_REPO/.env.example" ]; then
         cp "$UNITY_REPO/.env.example" "$UNITY_REPO/.env"
@@ -257,6 +304,15 @@ case "\${1:-}" in
         echo "Updating unity checkout..."
         git -C "\$UNITY_REPO" pull --rebase || true
         (cd "\$UNITY_REPO" && uv sync --all-groups)
+        MAGNITUDE_DIR="\$UNITY_HOME/magnitude"
+        if [ -d "\$MAGNITUDE_DIR/.git" ]; then
+            echo "Updating magnitude checkout..."
+            git -C "\$MAGNITUDE_DIR" pull --rebase || true
+        fi
+        if command -v npm >/dev/null 2>&1 && [ -d "\$UNITY_REPO/agent-service" ] && [ -d "\$MAGNITUDE_DIR" ]; then
+            echo "Refreshing agent-service dependencies..."
+            (cd "\$UNITY_REPO/agent-service" && npm ci --silent) || true
+        fi
         ;;
     help|--help|-h)
         cat <<USAGE
@@ -325,7 +381,9 @@ main() {
     echo -e "${BOLD}Unity installer${NC} (branch: $BRANCH)"
     ensure_prereqs
     clone_or_update_unity
+    clone_or_update_magnitude
     uv_sync
+    install_agent_service
     configure_env
     create_cli
     inject_path
