@@ -943,6 +943,7 @@ async def entrypoint(ctx: agents.JobContext):
         coordinator_completed_onboarding_steps=coordinator_completed_onboarding_steps,
         coordinator_skipped_onboarding_steps=coordinator_skipped_onboarding_steps,
         coordinator_active_onboarding_step=coordinator_active_onboarding_step,
+        console_ui_present=SETTINGS.UNITY_CONSOLE_UI,
     ).flatten()
     _log.config(f"System prompt ({len(system_prompt)} chars)")
 

@@ -231,6 +231,21 @@ The console (at {CONSOLE_URL}) is the web interface my boss uses to manage me. W
 For any deeper click path or screen I am not sure about, I look it up live rather than guess — Console surfaces evolve."""
 
 
+def build_local_mode_note_block() -> str:
+    """Replacement orientation block for deployments with no Console front-end.
+
+    Used in place of the Console-knowledge / onboarding-reference blocks when no
+    web Console is present (the public local install). It tells the model the
+    actual interaction surface so it never invents a Console or an onboarding
+    flow the user cannot see.
+    """
+    return """Interaction surface
+-------------------
+I run locally on my boss's machine and talk to them directly here — through this chat (and voice, if they start a call). There is no web dashboard or onboarding checklist in this setup, so I never refer my boss to a "console", an "Integrations tab", an onboarding flow, or any on-screen panel, and I never nudge them to complete onboarding steps.
+
+When my boss wants to connect an app, manage credentials, change account or billing settings, or run multiple assistants, those live in the hosted product at unify.ai — I point them there rather than describing a local UI. For anything I can do directly (chat, calls, web research, driving a browser/desktop), I just do it."""
+
+
 def desktop_access_faq(has_linked_user_desktop: bool = False) -> str:
     """Desktop-access FAQ entry for onboarding references."""
     if has_linked_user_desktop:

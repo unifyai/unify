@@ -1,496 +1,197 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Unity Installer
+# Unity Installer (public, hosted-backend path)
 # ============================================================================
-# Installs Unity (https://github.com/unifyai/unity) locally on macOS / Linux /
-# WSL2. Clones unify, unillm, unity, console, and orchestra as siblings under
-# $UNITY_HOME and editable-installs the Python repos with uv.
+# Installs the Unity agent runtime locally on macOS / Linux / WSL2 and points
+# it at the hosted Orchestra backend (https://api.unify.ai). Unity runs on your
+# machine; persistence, accounts, and your assistant live in the hosted product
+# at https://console.unify.ai.
 #
 # Quick install:
 #   curl -fsSL https://raw.githubusercontent.com/unifyai/unity/staging/scripts/install.sh | bash
 #
 # Options:
 #   --dir PATH        Installation directory (default: ~/.unity)
-#   --branch NAME     Git branch to install (default: main)
+#   --branch NAME     Git branch to install (default: staging)
 #   --no-cli          Skip creating the `unity` command shim
-#   --skip-deps       Skip system-dependency checks (PortAudio, etc.)
-#   --skip-setup      Skip the local orchestra spin-up at the end
-#                     (just install the code; run `unity setup` later)
-#   --source-install  Clone repos and install from source (developer path)
-#   --compose         Docker Compose install with prebuilt images (default)
+#   --skip-deps       Skip system-dependency checks
+#   --reconfigure     Re-run the key/credential wizard only (no clone/sync)
 #   -h, --help        Show this help
+#
+# The full local self-host stack (local Orchestra + Console + Coordinator) is
+# an internal-only path and lives in the private unity-deploy repo.
 # ============================================================================
 
 set -e
 
-# Resolve script directory when invoked as a file (empty for curl | bash).
 INSTALL_SCRIPT_DIR=""
 if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
     INSTALL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
 
-# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
-MAGENTA='\033[0;35m'
 CYAN='\033[0;36m'
-NC='\033[0m'
 BOLD='\033[1m'
+NC='\033[0m'
 
-# Configuration
-UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
-UNITY_REPO="${UNITY_HOME}/unity"
-UNIFY_REPO="${UNITY_HOME}/unify"
-UNILLM_REPO="${UNITY_HOME}/unillm"
-CONSOLE_REPO="${UNITY_HOME}/console"
-ORCHESTRA_REPO="${UNITY_HOME}/orchestra"
-BRANCH="main"
-SHALLOW_CLONE_DEPTH="${SHALLOW_CLONE_DEPTH:-1}"
-PYTHON_VERSION="3.12"
-CREATE_CLI=true
-CHECK_DEPS=true
-RUN_SETUP=true
-SOURCE_INSTALL=false
-CLI_DIR="${CLI_DIR:-$HOME/.local/bin}"
-REPO_BASE="https://github.com/unifyai"
-
-# ----------------------------------------------------------------------------
-# Parse options
-# ----------------------------------------------------------------------------
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --dir) UNITY_HOME="$2"; UNITY_REPO="$UNITY_HOME/unity"; UNIFY_REPO="$UNITY_HOME/unify"; UNILLM_REPO="$UNITY_HOME/unillm"; CONSOLE_REPO="$UNITY_HOME/console"; ORCHESTRA_REPO="$UNITY_HOME/orchestra"; shift 2 ;;
-        --branch) BRANCH="$2"; shift 2 ;;
-        --no-cli) CREATE_CLI=false; shift ;;
-        --skip-deps) CHECK_DEPS=false; shift ;;
-        --skip-setup) RUN_SETUP=false; shift ;;
-        --source-install) SOURCE_INSTALL=true; shift ;;
-        --compose) SOURCE_INSTALL=false; shift ;;
-        -h|--help)
-            sed -n '2,20p' "$0" | sed 's|^# ||;s|^#$||'
-            exit 0 ;;
-        *) echo "Unknown option: $1"; exit 1 ;;
-    esac
-done
-
-# ----------------------------------------------------------------------------
-# Logging
-# ----------------------------------------------------------------------------
 log_info()    { echo -e "${CYAN}→${NC} $1"; }
 log_success() { echo -e "${GREEN}✓${NC} $1"; }
 log_warn()    { echo -e "${YELLOW}⚠${NC} $1"; }
-log_error()   { echo -e "${RED}✗${NC} $1"; }
+log_error()   { echo -e "${RED}✗${NC} $1" >&2; }
 
-log_stage() {
-    echo ""
-    echo -e "${BOLD}$1${NC}"
-}
+UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
+UNITY_REPO="${UNITY_REPO:-$UNITY_HOME/unity}"
+BRANCH="${BRANCH:-staging}"
+SHALLOW_CLONE_DEPTH="${SHALLOW_CLONE_DEPTH:-1}"
+CREATE_CLI=true
+CHECK_DEPS=true
+RECONFIGURE_ONLY=false
+NON_INTERACTIVE="${NON_INTERACTIVE:-false}"
+CLI_DIR="${CLI_DIR:-$HOME/.local/bin}"
+REPO_BASE="https://github.com/unifyai"
+HOSTED_ORCHESTRA_URL="${HOSTED_ORCHESTRA_URL:-https://api.unify.ai/v0}"
 
-_load_install_progress() {
-    if [[ -f "${INSTALL_SCRIPT_DIR}/install_progress.sh" ]]; then
-        # shellcheck disable=SC1091
-        source "${INSTALL_SCRIPT_DIR}/install_progress.sh"
-        return 0
-    fi
-    progress_step_begin() { log_info "$2"; }
-    progress_step_update() { :; }
-    progress_step_end_success() { log_success "Done: $2"; }
-    progress_step_end_fail() { log_error "Failed: $2"; return 1; }
-    progress_step_run() { local _s="$1" _l="$2"; shift 2; log_info "$_l"; "$@"; }
-    progress_repo_line() { log_success "[$1] $2"; }
-    progress_repo_fail() { log_error "[$1] $2"; }
-}
-
-print_banner() {
-    echo ""
-    echo -e "${MAGENTA}${BOLD}"
-    echo "┌─────────────────────────────────────────────────────────┐"
-    echo "│                  Unity Installer                         │"
-    echo "├─────────────────────────────────────────────────────────┤"
-    echo "│  Steerable AI agent orchestration, open-sourced by      │"
-    echo "│  Unify. https://github.com/unifyai/unity                │"
-    echo "└─────────────────────────────────────────────────────────┘"
-    echo -e "${NC}"
-}
-
-# ----------------------------------------------------------------------------
-# OS detection
-# ----------------------------------------------------------------------------
-detect_os() {
-    case "$(uname -s)" in
-        Linux*)
-            OS="linux"
-            if [ -f /etc/os-release ]; then
-                . /etc/os-release
-                DISTRO="$ID"
-            else
-                DISTRO="unknown"
-            fi
-            ;;
-        Darwin*)
-            OS="macos"
-            DISTRO="macos"
-            ;;
-        CYGWIN*|MINGW*|MSYS*)
-            log_error "Native Windows is not supported."
-            log_info "Please install Unity inside WSL2:"
-            log_info "  https://learn.microsoft.com/en-us/windows/wsl/install"
-            exit 1
-            ;;
-        *)
-            OS="unknown"
-            DISTRO="unknown"
-            log_warn "Unknown operating system: $(uname -s). Proceeding at your own risk."
-            ;;
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --dir) UNITY_HOME="$2"; UNITY_REPO="$UNITY_HOME/unity"; shift 2 ;;
+        --branch) BRANCH="$2"; shift 2 ;;
+        --no-cli) CREATE_CLI=false; shift ;;
+        --skip-deps) CHECK_DEPS=false; shift ;;
+        --reconfigure) RECONFIGURE_ONLY=true; shift ;;
+        --non-interactive) NON_INTERACTIVE=true; shift ;;
+        -h|--help) sed -n '2,23p' "${BASH_SOURCE[0]:-/dev/null}" | sed 's/^# \?//'; exit 0 ;;
+        *) log_error "Unknown option: $1"; exit 1 ;;
     esac
-    log_success "Detected: $OS ($DISTRO)"
-}
+done
+
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
 # ----------------------------------------------------------------------------
-# uv
+# Prerequisites: git, python3.12+, uv
 # ----------------------------------------------------------------------------
-ensure_uv() {
-    log_info "Checking for uv..."
-    if command -v uv &> /dev/null; then
-        UV_CMD="uv"
-    elif [ -x "$HOME/.local/bin/uv" ]; then
-        UV_CMD="$HOME/.local/bin/uv"
-    elif [ -x "$HOME/.cargo/bin/uv" ]; then
-        UV_CMD="$HOME/.cargo/bin/uv"
-    else
-        log_info "Installing uv (fast Python package manager)..."
-        curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1 || {
-            log_error "Failed to install uv. See https://docs.astral.sh/uv/getting-started/installation/"
-            exit 1
-        }
-        if [ -x "$HOME/.local/bin/uv" ]; then
-            UV_CMD="$HOME/.local/bin/uv"
-        elif [ -x "$HOME/.cargo/bin/uv" ]; then
-            UV_CMD="$HOME/.cargo/bin/uv"
-        elif command -v uv &> /dev/null; then
-            UV_CMD="uv"
-        else
-            log_error "uv installed but not found on PATH. Add ~/.local/bin to your PATH and re-run."
-            exit 1
-        fi
-    fi
-    log_success "uv: $($UV_CMD --version 2>/dev/null)"
-}
-
-# ----------------------------------------------------------------------------
-# Python
-# ----------------------------------------------------------------------------
-ensure_python() {
-    log_info "Ensuring Python $PYTHON_VERSION is available..."
-    if ! $UV_CMD python find "$PYTHON_VERSION" &> /dev/null; then
-        log_info "Python $PYTHON_VERSION not found locally — uv will download it during sync."
-    else
-        log_success "Python $PYTHON_VERSION: $($UV_CMD python find "$PYTHON_VERSION")"
-    fi
-}
-
-_resolve_prereqs_script() {
-    local install_dir=""
-    if [[ -n "${BASH_SOURCE[0]:-}" && "${BASH_SOURCE[0]}" == /* && -f "${BASH_SOURCE[0]}" ]]; then
-        install_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-        if [[ -f "$install_dir/ensure_prereqs.sh" ]]; then
-            printf '%s' "$install_dir/ensure_prereqs.sh"
-            return 0
-        fi
-    fi
-    if [[ -f "$UNITY_REPO/scripts/ensure_prereqs.sh" ]]; then
-        printf '%s' "$UNITY_REPO/scripts/ensure_prereqs.sh"
-        return 0
-    fi
-    return 1
-}
-
-check_self_host_stack_prereqs() {
-    local prereqs_script=""
-    prereqs_script="$(_resolve_prereqs_script)" || {
-        log_warn "ensure_prereqs.sh not found yet — stack prerequisites checked later by unity stack doctor"
-        return 0
-    }
-    # shellcheck disable=SC1090
-    source "$prereqs_script"
-    log_info "Checking self-host stack prerequisites (Node, Java, Pub/Sub emulator)..."
-    if declare -F ensure_self_host_stack_prereqs &>/dev/null; then
-        ensure_self_host_stack_prereqs || exit 1
-    else
-        if declare -F ensure_node &>/dev/null; then
-            ensure_node || exit 1
-        elif ! command -v node &>/dev/null || ! command -v npm &>/dev/null; then
-            log_error "Node.js 20+ and npm are required for Console"
-            exit 1
-        fi
-        ensure_java || exit 1
-        ensure_pubsub_emulator || exit 1
-    fi
-    log_success "Self-host stack prerequisites OK"
-}
-
-# ----------------------------------------------------------------------------
-# System deps
-# ----------------------------------------------------------------------------
-check_system_deps() {
+ensure_prereqs() {
     [ "$CHECK_DEPS" = "false" ] && return 0
-    log_info "Checking system dependencies..."
 
-    local hard_missing=() warn_missing=()
-
-    case "$OS" in
-        macos)
-            # Xcode CLI tools — required for any package building from sdist (pyaudio etc.)
-            xcode-select -p >/dev/null 2>&1 || hard_missing+=("Xcode Command Line Tools  (install: xcode-select --install)")
-            pkg-config --exists portaudio-2.0 2>/dev/null || warn_missing+=("portaudio  (install: brew install portaudio)")
-            ;;
-        linux)
-            # pyaudio has no manylinux wheel for Py3.12; it builds from sdist and needs gcc + Python headers.
-            command -v gcc >/dev/null 2>&1 || hard_missing+=("gcc / build-essential  (install: sudo apt-get install -y build-essential python3-dev)")
-            pkg-config --exists portaudio-2.0 2>/dev/null || hard_missing+=("portaudio development headers  (install: sudo apt-get install -y portaudio19-dev)")
-            ;;
-    esac
-
-    # Docker — required to run the local Orchestra backend on the
-    # install-and-live path. Skip the check entirely when --skip-setup is on,
-    # because in that mode the user explicitly opts out of local Orchestra.
-    if [ "$RUN_SETUP" != "false" ]; then
-        if ! command -v docker >/dev/null 2>&1; then
-            case "$OS" in
-                macos)
-                    hard_missing+=("Docker Desktop  (install: https://www.docker.com/products/docker-desktop/)")
-                    ;;
-                linux)
-                    hard_missing+=("Docker engine  (install: https://docs.docker.com/engine/install/)")
-                    ;;
-                *)
-                    hard_missing+=("Docker  (install: https://docs.docker.com/get-docker/)")
-                    ;;
-            esac
-        elif ! docker info >/dev/null 2>&1; then
-            # Docker installed but daemon not running. Hard fail with a
-            # specific message, because the user already has what they need
-            # and just needs to start it.
-            log_error "Docker is installed but the daemon isn't running."
-            case "$OS" in
-                macos) echo "    Start Docker Desktop, then re-run install.sh." ;;
-                linux) echo "    Start the Docker daemon, then re-run install.sh. (e.g. \`sudo systemctl start docker\`)" ;;
-                *)     echo "    Start Docker, then re-run install.sh." ;;
-            esac
-            echo "    (Bypass with --skip-setup to install the code without starting local Orchestra.)"
-            exit 1
-        fi
-    fi
-
-    if [ ${#hard_missing[@]} -gt 0 ]; then
-        log_error "Required system packages are missing:"
-        for m in "${hard_missing[@]}"; do echo "    - $m"; done
-        echo ""
-        case "$OS" in
-            linux)
-                echo "    Quick fix:"
-                echo "      sudo apt-get update && sudo apt-get install -y build-essential python3-dev portaudio19-dev"
-                echo "    Then re-run: curl -fsSL https://raw.githubusercontent.com/unifyai/unity/staging/scripts/install.sh | bash"
-                ;;
-            macos)
-                echo "    Quick fix:"
-                echo "      xcode-select --install   # if not already installed"
-                echo "      brew install portaudio"
-                echo "    Then re-run install.sh."
-                ;;
-        esac
-        echo ""
-        echo "    (Bypass with --skip-deps at your own risk; uv sync will fail on native extensions."
-        echo "     Bypass Docker requirement with --skip-setup to install the code only.)"
+    if ! command -v git >/dev/null 2>&1; then
+        log_error "git is required. Install it and re-run."
         exit 1
     fi
 
-    if [ ${#warn_missing[@]} -gt 0 ]; then
-        log_warn "Optional system packages missing (voice features will be limited):"
-        for m in "${warn_missing[@]}"; do echo "    - $m"; done
-    else
-        log_success "System dependencies OK"
+    if ! command -v python3 >/dev/null 2>&1; then
+        log_error "Python 3.12+ is required. Install it and re-run."
+        exit 1
     fi
+
+    if ! command -v uv >/dev/null 2>&1; then
+        log_info "Installing uv (Python package manager)..."
+        curl -fsSL https://astral.sh/uv/install.sh | sh
+        export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+    fi
+    command -v uv >/dev/null 2>&1 || { log_error "uv install failed"; exit 1; }
+    log_success "Prerequisites ready"
 }
 
 # ----------------------------------------------------------------------------
-# Clone a repo (idempotent — shallow fetch if already present)
+# Clone (or update) the unity checkout. unify / unillm are resolved as git
+# dependencies by uv, so they do not need separate clones.
 # ----------------------------------------------------------------------------
-_sync_existing_repo() {
-    local dest="$1"
-    local branch="$2"
-    local name="$3"
-
-    if git -C "$dest" rev-parse --is-shallow-repository 2>/dev/null | grep -q true; then
-        git -C "$dest" fetch --depth "$SHALLOW_CLONE_DEPTH" origin "$branch" || return 1
-    else
-        git -C "$dest" fetch origin "$branch" || return 1
-    fi
-    git -C "$dest" checkout "$branch" 2>/dev/null || {
-        log_warn "[$name] Couldn't checkout $branch (uncommitted changes?). Leaving as-is."
-        return 0
-    }
-    if ! git -C "$dest" reset --hard "origin/$branch" 2>/dev/null; then
-        git -C "$dest" pull --ff-only origin "$branch" || {
-            log_warn "[$name] Fast-forward pull failed; leaving as-is."
-            return 0
-        }
-    fi
-    return 0
-}
-
-clone_or_update_impl() {
-    local name="$1"
-    local dest="$2"
-    local url="$3"
-    local branch="$4"
-    local depth="$5"
-
-    if [ -d "$dest/.git" ]; then
-        _sync_existing_repo "$dest" "$branch" "$name" || return 1
-    else
-        if ! git clone --quiet --depth "$depth" --single-branch \
-            --branch "$branch" "$url" "$dest" 2>/dev/null; then
-            return 1
-        fi
-    fi
-    return 0
-}
-
-clone_or_update() {
-    local name="$1"
-    local dest="$2"
-    local url="$REPO_BASE/$name.git"
-
-    if ! clone_or_update_impl "$name" "$dest" "$url" "$BRANCH" "$SHALLOW_CLONE_DEPTH"; then
-        log_error "[$name] Clone/update failed"
-        return 1
-    fi
-    log_success "[$name] $(git -C "$dest" rev-parse --short HEAD)"
-}
-
-_clone_worker() {
-    local name="$1"
-    local dest="$2"
-    local status_file="$3"
-    local url="$REPO_BASE/$name.git"
-    local head=""
-
-    if clone_or_update_impl "$name" "$dest" "$url" "$BRANCH" "$SHALLOW_CLONE_DEPTH"; then
-        head="$(git -C "$dest" rev-parse --short HEAD 2>/dev/null || echo "?")"
-        printf 'ok %s\n' "$head" >"$status_file"
-    else
-        printf 'fail\n' >"$status_file"
-    fi
-}
-
-clone_all_repos_parallel() {
-    local -a pids=() names=(unify unillm unity console orchestra)
-    local -a dests=("$UNIFY_REPO" "$UNILLM_REPO" "$UNITY_REPO" "$CONSOLE_REPO" "$ORCHESTRA_REPO")
-    local -a status_files=() reported=()
-    local total="${#names[@]}"
-    local finished=0
-    local fail=0
-    local i name dest status_file kind detail
-
-    progress_step_begin 1 "Cloning repos ($BRANCH)"
-
-    for i in "${!names[@]}"; do
-        name="${names[$i]}"
-        dest="${dests[$i]}"
-        status_file="$(mktemp "${TMPDIR:-/tmp}/unity-clone-status.XXXXXX")"
-        status_files+=("$status_file")
-        reported+=("0")
-        _clone_worker "$name" "$dest" "$status_file" &
-        pids+=("$!")
-    done
-
-    local last_finished=-1
-    while (( finished < total )); do
-        finished=0
-        for i in "${!names[@]}"; do
-            if [[ "${reported[$i]}" == "1" ]]; then
-                finished=$((finished + 1))
-                continue
-            fi
-            status_file="${status_files[$i]}"
-            name="${names[$i]}"
-            if [[ -s "$status_file" ]]; then
-                kind=""
-                detail=""
-                read -r kind detail <"$status_file" || true
-                if [[ "$kind" == "ok" ]]; then
-                    progress_repo_line "$name" "$detail"
-                else
-                    progress_repo_fail "$name" "clone failed"
-                    fail=1
-                fi
-                reported[$i]=1
-                finished=$((finished + 1))
-                continue
-            fi
-            if ! kill -0 "${pids[$i]}" 2>/dev/null; then
-                local retry=0
-                while [[ ! -s "$status_file" && retry -lt 10 ]]; do
-                    sleep 0.05
-                    retry=$((retry + 1))
-                done
-                if [[ -s "$status_file" ]]; then
-                    continue
-                fi
-                progress_repo_fail "$name" "clone failed"
-                reported[$i]=1
-                fail=1
-                finished=$((finished + 1))
-            fi
-        done
-        if (( finished != last_finished )); then
-            progress_step_update $((finished * 100 / total))
-            last_finished=$finished
-        fi
-        if (( finished >= total )); then
-            break
-        fi
-        sleep 0.25
-    done
-
-    for i in "${!pids[@]}"; do
-        if ! wait "${pids[$i]}"; then
-            fail=1
-        fi
-        rm -f "${status_files[$i]}"
-    done
-
-    if (( fail != 0 )); then
-        progress_step_end_fail
-        log_error "One or more repo clones failed"
-        return 1
-    fi
-    progress_step_end_success
-}
-
-# ----------------------------------------------------------------------------
-# Core install
-# ----------------------------------------------------------------------------
-do_install() {
+clone_or_update_unity() {
     mkdir -p "$UNITY_HOME"
-    _load_install_progress
-
-    clone_all_repos_parallel || exit 1
-
-    if ! progress_step_run 2 "Syncing Python dependencies" \
-        bash -c "cd \"$UNITY_REPO\" && \"$UV_CMD\" sync"; then
-        log_error "uv sync failed in $UNITY_REPO"
-        exit 1
+    if [ -d "$UNITY_REPO/.git" ]; then
+        log_info "Updating unity checkout at $UNITY_REPO..."
+        git -C "$UNITY_REPO" fetch --depth "$SHALLOW_CLONE_DEPTH" origin "$BRANCH" 2>/dev/null || true
+        git -C "$UNITY_REPO" checkout "$BRANCH" 2>/dev/null || true
+        git -C "$UNITY_REPO" pull --rebase 2>/dev/null || true
+    else
+        log_info "Cloning unity ($BRANCH) into $UNITY_REPO..."
+        git clone --depth "$SHALLOW_CLONE_DEPTH" --branch "$BRANCH" \
+            "$REPO_BASE/unity.git" "$UNITY_REPO"
     fi
+    log_success "unity checkout ready"
+}
 
-    # .env scaffolding
+uv_sync() {
+    log_info "Syncing Python dependencies (uv)..."
+    (cd "$UNITY_REPO" && uv sync --all-groups)
+    log_success "Dependencies synced"
+}
+
+scaffold_env() {
     if [ ! -f "$UNITY_REPO/.env" ] && [ -f "$UNITY_REPO/.env.example" ]; then
         cp "$UNITY_REPO/.env.example" "$UNITY_REPO/.env"
-        log_success "Created $UNITY_REPO/.env from .env.example"
+        log_success "Created $UNITY_REPO/.env"
     fi
+}
+
+upsert_env() {
+    local key="$1" val="$2"
+    python3 - "$UNITY_REPO/.env" "$key" "$val" <<'PY'
+import re, sys
+from pathlib import Path
+path, key, val = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+lines = path.read_text().splitlines() if path.exists() else []
+pat = re.compile(rf"^{re.escape(key)}=")
+out, replaced = [], False
+for line in lines:
+    if pat.match(line):
+        out.append(f"{key}={val}")
+        replaced = True
+    else:
+        out.append(line)
+if not replaced:
+    out.append(f"{key}={val}")
+path.write_text("\n".join(out) + "\n")
+PY
+}
+
+env_value() {
+    local key="$1"
+    [ -f "$UNITY_REPO/.env" ] || return 0
+    grep -E "^${key}=" "$UNITY_REPO/.env" | head -1 | cut -d= -f2- | tr -d '"' || true
+}
+
+# ----------------------------------------------------------------------------
+# Configure hosted credentials + BYOK keys.
+# ----------------------------------------------------------------------------
+configure_env() {
+    scaffold_env
+
+    local orchestra_url
+    orchestra_url="$(env_value ORCHESTRA_URL)"
+    [ -n "$orchestra_url" ] || upsert_env "ORCHESTRA_URL" "$HOSTED_ORCHESTRA_URL"
+
+    # The local install has no Console front-end; suppress Console-UI knowledge
+    # and onboarding prompts in the ConversationManager.
+    upsert_env "UNITY_CONSOLE_UI" "false"
+
+    if [ "$NON_INTERACTIVE" = "true" ]; then
+        [ -n "${UNIFY_KEY:-}" ] && upsert_env "UNIFY_KEY" "$UNIFY_KEY"
+        [ -n "${ASSISTANT_ID:-}" ] && upsert_env "ASSISTANT_ID" "$ASSISTANT_ID"
+    else
+        echo ""
+        echo -e "${BOLD}Connect to your hosted assistant${NC}"
+        echo "Get your API key and assistant id at https://console.unify.ai"
+        echo ""
+        local unify_key assistant_id
+        if [ -z "$(env_value UNIFY_KEY)" ]; then
+            read -r -p "Unify API key (UNIFY_KEY): " unify_key || true
+            [ -n "$unify_key" ] && upsert_env "UNIFY_KEY" "$unify_key"
+        fi
+        if [ -z "$(env_value ASSISTANT_ID)" ]; then
+            read -r -p "Assistant id (ASSISTANT_ID): " assistant_id || true
+            [ -n "$assistant_id" ] && upsert_env "ASSISTANT_ID" "$assistant_id"
+        fi
+    fi
+
+    # LLM / voice / research BYOK keys.
+    if [ -x "$UNITY_REPO/scripts/prompt_byok_keys.sh" ]; then
+        UNITY_REPO="$UNITY_REPO" NON_INTERACTIVE="$NON_INTERACTIVE" \
+            bash "$UNITY_REPO/scripts/prompt_byok_keys.sh" || true
+    fi
+    log_success "Configuration written to $UNITY_REPO/.env"
 }
 
 # ----------------------------------------------------------------------------
@@ -503,13 +204,11 @@ create_cli() {
 
     cat > "$shim" <<EOF
 #!/usr/bin/env bash
-# Unity CLI shim — dispatches subcommands, falls through to the sandbox.
+# Unity CLI shim — runs the local agent runtime against the hosted backend.
 # Generated by install.sh; safe to edit.
 set -e
 UNITY_HOME="${UNITY_HOME}"
 UNITY_REPO="${UNITY_REPO}"
-ORCHESTRA_REPO="\$UNITY_HOME/orchestra"
-CONSOLE_REPO="${CONSOLE_REPO}"
 export UNITY_HOME
 
 if [ ! -d "\$UNITY_REPO" ]; then
@@ -517,587 +216,118 @@ if [ ! -d "\$UNITY_REPO" ]; then
     exit 1
 fi
 
+PY="\$UNITY_REPO/.venv/bin/python"
+[ -x "\$PY" ] || PY="python3"
+
 case "\${1:-}" in
-    setup)
-        shift
-        exec bash "\$UNITY_REPO/scripts/setup.sh" "\$@"
+    ""|chat|sandbox)
+        # Interactive local chat with the full ConversationManager.
+        shift || true
+        exec "\$PY" -m sandboxes.conversation_manager.sandbox "\$@"
+        ;;
+    serve|run)
+        # Headless: start the ConversationManager + gateway against hosted Orchestra.
+        shift || true
+        exec bash "\$UNITY_REPO/scripts/local.sh" start --full "\$@"
         ;;
     stop|down)
-        if [ -d "\$CONSOLE_REPO" ] && [ -x "\$UNITY_REPO/scripts/stack.sh" ]; then
-            exec bash "\$UNITY_REPO/scripts/stack.sh" down "\$@"
-        fi
-        if [ -x "\$ORCHESTRA_REPO/scripts/local.sh" ]; then
-            exec bash "\$ORCHESTRA_REPO/scripts/local.sh" stop
-        else
-            echo "orchestra not installed at \$ORCHESTRA_REPO — nothing to stop." >&2
-            exit 1
-        fi
+        exec bash "\$UNITY_REPO/scripts/local.sh" stop
         ;;
     status)
-        if [ -d "\$CONSOLE_REPO" ] && [ -x "\$UNITY_REPO/scripts/stack.sh" ]; then
-            exec bash "\$UNITY_REPO/scripts/stack.sh" status
-        fi
-        if [ -x "\$ORCHESTRA_REPO/scripts/local.sh" ]; then
-            exec bash "\$ORCHESTRA_REPO/scripts/local.sh" status
-        else
-            echo "orchestra not installed at \$ORCHESTRA_REPO." >&2
-            exit 1
-        fi
-        ;;
-    smoke)
-        if [ -d "\$CONSOLE_REPO" ] && [ -x "\$UNITY_REPO/scripts/stack.sh" ]; then
-            exec bash "\$UNITY_REPO/scripts/stack.sh" smoke
-        fi
-        echo "self-host stack not installed; smoke requires Console + Orchestra repos." >&2
-        exit 1
-        ;;
-    restart)
-        if [ -d "\$CONSOLE_REPO" ] && [ -x "\$UNITY_REPO/scripts/stack.sh" ]; then
-            bash "\$UNITY_REPO/scripts/stack.sh" down || true
-            exec bash "\$UNITY_REPO/scripts/stack.sh" up
-        fi
-        if [ -x "\$ORCHESTRA_REPO/scripts/local.sh" ]; then
-            exec bash "\$ORCHESTRA_REPO/scripts/local.sh" restart
-        else
-            echo "orchestra not installed at \$ORCHESTRA_REPO — run \\\`unity setup\\\` first." >&2
-            exit 1
-        fi
+        exec bash "\$UNITY_REPO/scripts/local.sh" status
         ;;
     logs|tail)
-        shift || true
-        # On a self-host stack install, follow the real service logs
-        # (console|orchestra|pubsub). Fall back to the sandbox dev log only
-        # when there is no stack (sandbox-only install).
-        if [ -d "\$CONSOLE_REPO" ] && [ -x "\$UNITY_REPO/scripts/stack.sh" ]; then
-            exec bash "\$UNITY_REPO/scripts/stack.sh" logs "\$@"
-        fi
-        LOG_FILE="\$UNITY_REPO/.logs_conversation_sandbox.txt"
-        # Ensure the file exists so 'tail' starts cleanly even before the first
-        # 'unity' run has written anything.
+        LOG_FILE="/tmp/unity-local.log"
         touch "\$LOG_FILE" 2>/dev/null || true
         echo "📡 Tailing \$LOG_FILE (Ctrl-C to detach)" >&2
-        # -F = follow + retry on rename/truncate (works on macOS BSD tail and GNU tail).
         exec tail -F "\$LOG_FILE"
         ;;
-    update|pull)
-        # Pull --rebase across the four sibling repos and re-sync the venv.
-        # (On a source install there are no prebuilt images to "pull"; the
-        # equivalent is updating the checkouts, so \`unity pull\` aliases this.)
-        # Per-repo failures are surfaced inline but never abort other repos;
-        # the user can always run \`unity doctor\` afterwards.
-        GREEN="\$(printf '\\033[0;32m')"; RED="\$(printf '\\033[0;31m')"
-        YELLOW="\$(printf '\\033[0;33m')"; NC="\$(printf '\\033[0m')"
-        BOLD="\$(printf '\\033[1m')"
-
-        pull_repo() {
-            local name="\$1" dir="\$2"
-            if [ ! -d "\$dir/.git" ]; then
-                printf '  %s[skip]%s %s — not a git repo at %s\\n' "\$YELLOW" "\$NC" "\$name" "\$dir"
-                return 0
-            fi
-            local branch
-            branch=\$(git -C "\$dir" symbolic-ref --short HEAD 2>/dev/null || echo "")
-            if [ -z "\$branch" ]; then
-                printf '  %s[skip]%s %s — detached HEAD, leaving as-is\\n' "\$YELLOW" "\$NC" "\$name"
-                return 0
-            fi
-            printf '  %s>%s %s (%s)\\n' "\$BOLD" "\$NC" "\$name" "\$branch"
-            local fetch_out
-            if ! fetch_out=\$(git -C "\$dir" fetch --quiet origin "\$branch" 2>&1); then
-                printf '  %s[FAIL]%s   fetch failed:\\n' "\$RED" "\$NC"
-                printf '%s\\n' "\$fetch_out" | sed 's/^/      /'
-                return 0
-            fi
-            local pull_out
-            if pull_out=\$(git -C "\$dir" pull --rebase --quiet origin "\$branch" 2>&1); then
-                local head
-                head=\$(git -C "\$dir" rev-parse --short HEAD 2>/dev/null || echo "?")
-                printf '  %s[ok]%s     now at %s\\n' "\$GREEN" "\$NC" "\$head"
-            else
-                printf '  %s[FAIL]%s   pull --rebase failed:\\n' "\$RED" "\$NC"
-                printf '%s\\n' "\$pull_out" | sed 's/^/      /'
-                return 0
-            fi
-            # Failures are reported via stdout; we always return 0 so set -e
-            # in the shim doesn't abort after the first per-repo failure.
-            return 0
-        }
-
-        printf '%sunity update%s\\n' "\$BOLD" "\$NC"
-        printf '════════════════════════════════════════════════════════════\\n'
-
-        pull_repo unity          "\$UNITY_REPO"
-        pull_repo unify          "\$UNITY_HOME/unify"
-        pull_repo unillm         "\$UNITY_HOME/unillm"
-        pull_repo orchestra      "\$ORCHESTRA_REPO"
-        pull_repo console        "\$CONSOLE_REPO"
-
-        printf '\\n  %s>%s syncing Python dependencies (uv sync)\\n' "\$BOLD" "\$NC"
-        if (cd "\$UNITY_REPO" && command -v uv >/dev/null 2>&1 && uv sync >/dev/null 2>&1); then
-            printf '  %s[ok]%s     venv synced\\n' "\$GREEN" "\$NC"
-        else
-            printf '  %s[WARN]%s   uv sync skipped or failed — run manually: cd %s && uv sync\\n' "\$YELLOW" "\$NC" "\$UNITY_REPO"
-        fi
-
-        printf '\\n%sDone.%s Run %sunity doctor%s to verify, then %sunity%s to start.\\n' "\$BOLD" "\$NC" "\$BOLD" "\$NC" "\$BOLD" "\$NC"
-        ;;
     doctor)
-        # Diagnose whether the install-and-live setup is in shape to start
-        # the runtime. Each check prints one PASS / WARN / FAIL line plus a
-        # one-liner remediation when applicable. Exit code is 0 if everything
-        # is green, 1 if any FAIL was reported (WARN does not fail).
-        FAIL=0
-        WARN=0
-        GREEN="\$(printf '\\033[0;32m')"; RED="\$(printf '\\033[0;31m')"
-        YELLOW="\$(printf '\\033[0;33m')"; NC="\$(printf '\\033[0m')"
-        BOLD="\$(printf '\\033[1m')"
-        pass() { printf '  %s[PASS]%s %s\\n' "\$GREEN" "\$NC" "\$1"; }
-        warn() { printf '  %s[WARN]%s %s\\n' "\$YELLOW" "\$NC" "\$1"; WARN=\$((WARN+1)); }
-        fail() { printf '  %s[FAIL]%s %s\\n' "\$RED" "\$NC" "\$1"; FAIL=\$((FAIL+1)); }
-        fix()  { printf '         %s→%s %s\\n' "\$YELLOW" "\$NC" "\$1"; }
-
-        printf '%sunity doctor%s\\n' "\$BOLD" "\$NC"
-        printf '════════════════════════════════════════════════════════════\\n'
-
-        printf '\\n%sFilesystem%s\\n' "\$BOLD" "\$NC"
-        [ -d "\$UNITY_REPO" ]                        && pass "unity repo at \$UNITY_REPO"                 || { fail "unity repo missing at \$UNITY_REPO"; fix "Re-run install.sh"; }
-        [ -d "\$UNITY_HOME/unify" ]                  && pass "unify repo at \$UNITY_HOME/unify"           || { warn "unify repo missing at \$UNITY_HOME/unify";   fix "Re-run install.sh"; }
-        [ -d "\$UNITY_HOME/unillm" ]                 && pass "unillm repo at \$UNITY_HOME/unillm"         || { warn "unillm repo missing at \$UNITY_HOME/unillm"; fix "Re-run install.sh"; }
-        case "\$ORCHESTRA_REPO" in
-            *orchestra-core*)
-                fail "CLI shim points at obsolete orchestra-core (use orchestra)"
-                fix "Regenerate CLI: bash \$UNITY_REPO/scripts/install.sh --skip-setup --skip-deps"
-                ;;
-        esac
-        [ -d "\$ORCHESTRA_REPO" ]                    && pass "orchestra repo at \$ORCHESTRA_REPO"         || { warn "orchestra repo missing at \$ORCHESTRA_REPO"; fix "Re-run install.sh"; }
-        [ -d "\$CONSOLE_REPO" ]                      && pass "console repo at \$CONSOLE_REPO"           || { warn "console repo missing at \$CONSOLE_REPO";       fix "Re-run install.sh"; }
-        [ -f "\$UNITY_REPO/.env" ]                   && pass ".env at \$UNITY_REPO/.env"                  || { fail ".env missing at \$UNITY_REPO/.env";          fix "Re-run install.sh"; }
-        [ -d "\$UNITY_REPO/.venv" ]                  && pass "Python venv at \$UNITY_REPO/.venv"          || { warn "Python venv missing at \$UNITY_REPO/.venv";  fix "Run: cd \$UNITY_REPO && uv sync"; }
-
-        printf '\\n%sSystem dependencies%s\\n' "\$BOLD" "\$NC"
-        if command -v docker >/dev/null 2>&1; then
-            pass "docker installed (\$(docker --version 2>/dev/null | head -1))"
-            if docker info >/dev/null 2>&1; then
-                pass "docker daemon running"
-            else
-                fail "docker daemon not running"
-                case "\$(uname -s)" in
-                    Darwin*) fix "Start Docker Desktop" ;;
-                    Linux*)  fix "Start the docker daemon (e.g. sudo systemctl start docker)" ;;
-                    *)       fix "Start Docker" ;;
-                esac
-            fi
-        else
-            fail "docker not installed"
-            case "\$(uname -s)" in
-                Darwin*) fix "Install Docker Desktop: https://www.docker.com/products/docker-desktop/" ;;
-                Linux*)  fix "Install Docker engine: https://docs.docker.com/engine/install/" ;;
-                *)       fix "Install Docker: https://docs.docker.com/get-docker/" ;;
-            esac
-        fi
-
-        printf '\\n%sReboot persistence%s\\n' "\$BOLD" "\$NC"
-        # Postgres data lives in a Docker named volume with --restart
-        # unless-stopped, so the *container* comes back when Docker does.
-        # The remaining question is whether the Docker daemon itself
-        # auto-starts at boot — that's outside Unity's install scope but
-        # determines whether reboot persistence works end-to-end.
-        case "\$(uname -s)" in
-            Darwin*)
-                # macOS: Docker Desktop ships with "Start Docker Desktop when
-                # you log in" enabled by default. Programmatic detection
-                # across Docker Desktop versions is fragile, so just point
-                # the user at the setting and let them verify.
-                pass "macOS: Docker Desktop autostart is enabled by default"
-                fix "Verify in Docker Desktop → Settings → General → \"Start Docker Desktop when you log in\""
-                ;;
-            Linux*)
-                if command -v systemctl >/dev/null 2>&1; then
-                    if systemctl is-enabled docker.service >/dev/null 2>&1; then
-                        pass "docker.service enabled — daemon auto-starts at boot"
-                    else
-                        warn "docker.service is not enabled at boot"
-                        fix "Enable it once with:  sudo systemctl enable docker"
-                        fix "(otherwise Docker won't auto-start after reboot and the Postgres container won't either)"
-                    fi
-                else
-                    warn "systemctl not found — can't verify Docker autostart"
-                    fix "Ensure your init system starts Docker at boot"
-                fi
-                ;;
-            *)
-                warn "unknown OS — can't verify Docker autostart"
-                fix "Ensure Docker is configured to auto-start at boot"
-                ;;
-        esac
-
-        printf '\\n%sLocal Orchestra%s\\n' "\$BOLD" "\$NC"
-        if [ -x "\$ORCHESTRA_REPO/scripts/local.sh" ]; then
-            if "\$ORCHESTRA_REPO/scripts/local.sh" check >/dev/null 2>&1; then
-                pass "local orchestra reachable (\$(\"\$ORCHESTRA_REPO/scripts/local.sh\" check 2>/dev/null))"
-            else
-                warn "local orchestra not running"
-                fix "Run: unity setup"
-            fi
-        else
-            warn "orchestra local.sh not found"
-            fix "Run: unity setup"
-        fi
-
-        printf '\\n%s.env keys%s\\n' "\$BOLD" "\$NC"
-        if [ -f "\$UNITY_REPO/.env" ]; then
-            ENV_FILE="\$UNITY_REPO/.env"
-            grep -Eq '^UNIFY_KEY=.+'         "\$ENV_FILE" && pass "UNIFY_KEY set"          || { fail "UNIFY_KEY not set";          fix "Run: unity setup (writes a local key)"; }
-            grep -Eq '^ORCHESTRA_URL=.+'     "\$ENV_FILE" && pass "ORCHESTRA_URL set"      || { fail "ORCHESTRA_URL not set";      fix "Run: unity setup"; }
-            if   grep -Eq '^OPENAI_API_KEY=.+'    "\$ENV_FILE"; then pass "OPENAI_API_KEY set"
-            elif grep -Eq '^ANTHROPIC_API_KEY=.+' "\$ENV_FILE"; then pass "ANTHROPIC_API_KEY set"
-            else
-                fail "no LLM provider key set"
-                fix "Add OPENAI_API_KEY=... or ANTHROPIC_API_KEY=... to \$ENV_FILE"
-            fi
-        fi
-
-        printf '\\n%sShell PATH%s\\n' "\$BOLD" "\$NC"
-        SHIM_DIR="\$(dirname "\$(command -v unity 2>/dev/null || echo /none/unity)")"
-        case ":\$PATH:" in
-            *":\$SHIM_DIR:"*)
-                pass "unity on PATH (\$SHIM_DIR)"
-                ;;
-            *)
-                warn "unity not on this shell's PATH"
-                fix "Open a new terminal or source your shell rc"
-                ;;
-        esac
-
-        printf '\\n'
-        if [ "\$FAIL" -gt 0 ]; then
-            printf '%sNot ready:%s %s failure(s), %s warning(s).\\n' "\$RED" "\$NC" "\$FAIL" "\$WARN"
-            exit 1
-        elif [ "\$WARN" -gt 0 ]; then
-            printf '%sUsable:%s 0 failures, %s warning(s).\\n' "\$YELLOW" "\$NC" "\$WARN"
-            exit 0
-        else
-            printf '%sAll green — ready to roll.%s\\n' "\$GREEN" "\$NC"
-            exit 0
-        fi
-        ;;
-    stack)
-        shift
-        if [ -x "\$UNITY_REPO/scripts/stack.sh" ]; then
-            exec bash "\$UNITY_REPO/scripts/stack.sh" "\$@"
-        else
-            echo "stack.sh not found at \$UNITY_REPO/scripts/stack.sh" >&2
-            exit 1
-        fi
-        ;;
-    service)
-        shift
-        if [ -x "\$UNITY_REPO/scripts/service.sh" ]; then
-            exec bash "\$UNITY_REPO/scripts/service.sh" "\$@"
-        else
-            echo "service.sh not found at \$UNITY_REPO/scripts/service.sh" >&2
-            exit 1
-        fi
+        exec bash "\$UNITY_REPO/scripts/local.sh" gateway-doctor
         ;;
     voice)
-        shift
-        if [ -x "\$UNITY_REPO/scripts/voice.sh" ]; then
-            exec bash "\$UNITY_REPO/scripts/voice.sh" "\$@"
-        else
-            echo "voice.sh not found at \$UNITY_REPO/scripts/voice.sh — run \\\`unity setup\\\` first." >&2
-            exit 1
-        fi
+        shift || true
+        exec bash "\$UNITY_REPO/scripts/voice.sh" "\$@"
+        ;;
+    setup|reconfigure)
+        exec bash "\$UNITY_REPO/scripts/install.sh" --reconfigure
+        ;;
+    update|pull)
+        echo "Updating unity checkout..."
+        git -C "\$UNITY_REPO" pull --rebase || true
+        (cd "\$UNITY_REPO" && uv sync --all-groups)
         ;;
     help|--help|-h)
-        cat <<'HELP'
-Unity CLI
-
-Two-terminal layout (self-host install with Console):
-
-  Terminal 1:     unity              Start stack + open Console (Coordinator auto-starts after login)
-  Terminal 2:     unity logs         Tail stack service logs
-
-Usage:
-  unity                              Start self-host stack (Console + infra + Coordinator if registered)
-  unity up | start                   Same as bare \`unity\`
-  unity down [--full]                Stop the stack (default keeps scheduled tasks; --full stops everything)
-  unity stop                         Alias for \`unity down\`
-  unity restart                      Restart the self-host stack
-  unity status                       Show self-host stack status
-  unity smoke                        Verify the running self-host stack end-to-end
-  unity logs [service...]            Follow stack logs (console|orchestra|pubsub)
-  unity sandbox                      Dev/eval REPL (see sandboxes/conversation_manager/README.md)
-  unity --live-voice                 Sandbox with live voice in the browser
-
-  unity setup [--boot-runtime]       Bootstrap orchestra + enable background scheduling
-  unity stack up|down|status|logs|smoke
-                                     Console + ingress (down keeps scheduled tasks running)
-  unity stack down --full            Stop everything (or: unity service disable)
-  unity service status|stop|disable  Background runtime control (advanced)
-  unity doctor                       Diagnose missing deps, keys, and PATH
-  unity update | pull                git pull --rebase the repos + uv sync
-
-  unity voice setup                  Install + start local LiveKit for --live-voice
-  unity voice stop                   Stop local LiveKit server
-  unity voice status                 Report local LiveKit status
-
-  unity help                         Show this message
-
-For live voice calls (unity --live-voice ...):
-  unity voice setup    one-time + per-boot LiveKit bring-up
-  README "Live voice" section for BYOK voice-provider keys
-
-Dev / eval mode (different workspace, simulated managers, real-comms, etc.):
-  see sandboxes/conversation_manager/README.md. Any unrecognized first
-  argument is forwarded to that sandbox, so flags like --project_name,
-  --overwrite, --real-comms still work.
-HELP
-        ;;
-    sandbox)
-        shift
-        cd "\$UNITY_REPO"
-        # shellcheck disable=SC1091
-        source .venv/bin/activate
-        exec python -m sandboxes.conversation_manager.sandbox "\$@"
-        ;;
-    ""|start|up)
-        if [ -d "\$CONSOLE_REPO" ] && [ -x "\$UNITY_REPO/scripts/stack.sh" ]; then
-            [ -n "\${1:-}" ] && shift
-            exec bash "\$UNITY_REPO/scripts/stack.sh" up "\$@"
-        fi
-        cd "\$UNITY_REPO"
-        # shellcheck disable=SC1091
-        source .venv/bin/activate
-        exec python -m sandboxes.conversation_manager.sandbox "\$@"
+        cat <<USAGE
+unity                  Interactive local chat (alias: unity chat)
+unity serve            Start CM + gateway headless against hosted Orchestra
+unity stop             Stop the local runtime
+unity status           Show runtime status
+unity logs             Follow the runtime log
+unity doctor           Gateway/config checks
+unity voice [...]      Local LiveKit setup for --live-voice
+unity setup            Re-run the key/credential wizard
+unity update           Update the checkout and re-sync deps
+USAGE
         ;;
     *)
-        cd "\$UNITY_REPO"
-        # shellcheck disable=SC1091
-        source .venv/bin/activate
-        exec python -m sandboxes.conversation_manager.sandbox "\$@"
+        # Forward unknown args to the sandbox.
+        exec "\$PY" -m sandboxes.conversation_manager.sandbox "\$@"
         ;;
 esac
 EOF
     chmod +x "$shim"
-    log_success "Installed \`unity\` command at $shim"
+    log_success "Installed unity CLI at $shim"
+}
 
-    # Check PATH and, if needed, append a clearly-marked Unity block to the
-    # user's shell rc so `unity` works in new shells without any manual edit.
+inject_path() {
+    [ "$CREATE_CLI" = "false" ] && return 0
     case ":$PATH:" in
-        *":$CLI_DIR:"*)
-            PATH_STATUS=already_on_path
-            ;;
-        *)
-            ensure_cli_on_path
-            ;;
+        *":$CLI_DIR:"*) return 0 ;;
     esac
-}
-
-# ----------------------------------------------------------------------------
-# Append `export PATH=...` to the user's shell rc (idempotent)
-# ----------------------------------------------------------------------------
-ensure_cli_on_path() {
-    # Pick the rc file appropriate for the user's current shell. Bash + zsh
-    # cover ~all macOS / Linux / WSL2 setups; other shells we leave alone
-    # with a warning so we don't silently scribble into something exotic.
-    local current_shell shell_rc=""
-    current_shell="$(basename "${SHELL:-bash}")"
-    case "$current_shell" in
-        zsh)  shell_rc="$HOME/.zshrc" ;;
-        bash)
-            # macOS: ~/.bash_profile is the login shell rc; Linux: ~/.bashrc.
-            if [ "$OS" = "macos" ] && [ -f "$HOME/.bash_profile" ]; then
-                shell_rc="$HOME/.bash_profile"
-            else
-                shell_rc="$HOME/.bashrc"
-            fi
-            ;;
-        *)
-            log_warn "$CLI_DIR is not on your PATH and your shell ($current_shell) isn't bash/zsh."
-            log_info "Add this line to your shell profile so \`unity\` is on PATH:"
-            echo "    export PATH=\"$CLI_DIR:\$PATH\""
-            PATH_STATUS=needs_manual
-            return 0
-            ;;
+    local rc=""
+    case "$(basename "${SHELL:-}")" in
+        zsh) rc="$HOME/.zshrc" ;;
+        bash) rc="$HOME/.bashrc" ;;
+        *) rc="$HOME/.profile" ;;
     esac
-
-    # Already injected? Bail out.
-    if [ -f "$shell_rc" ] && grep -Fq "# >>> unity CLI PATH >>>" "$shell_rc" 2>/dev/null; then
-        PATH_STATUS=block_already_present
-        log_info "$CLI_DIR is not on your current PATH, but $shell_rc already has the Unity PATH block."
-        log_info "Open a new terminal or run:  source $shell_rc"
-        return 0
-    fi
-
-    # Append a clearly-marked block so future installs / `unity update` can
-    # detect and update it without touching the rest of the user's rc.
-    {
-        printf '\n# >>> unity CLI PATH >>>\n'
-        printf '# Added by unity installer on %s\n' "$(date +%Y-%m-%d)"
-        printf 'case ":$PATH:" in *":%s:"*) ;; *) export PATH="%s:$PATH" ;; esac\n' "$CLI_DIR" "$CLI_DIR"
-        printf '# <<< unity CLI PATH <<<\n'
-    } >> "$shell_rc"
-
-    PATH_STATUS=appended
-    PATH_RC_FILE="$shell_rc"
-    log_success "Added $CLI_DIR to PATH in $shell_rc"
-    log_info "Open a new terminal or run:  source $shell_rc"
-}
-
-# ----------------------------------------------------------------------------
-# Run setup.sh at the end (starts local backend, writes .env; repos already cloned)
-# ----------------------------------------------------------------------------
-run_setup() {
-    [ "$RUN_SETUP" = "false" ] && {
-        log_info "Skipping local orchestra spin-up (--skip-setup). Run \`unity setup\` later."
-        SETUP_OK=skipped
-        return 0
-    }
-
-    if [ ! -x "$UNITY_REPO/scripts/setup.sh" ]; then
-        log_warn "setup.sh not found at $UNITY_REPO/scripts/setup.sh — skipping orchestra spin-up."
-        SETUP_OK=failed
-        return 0
-    fi
-
-    # Export UNITY_HOME so setup.sh uses the same layout. Export PATH
-    # additions so setup.sh finds uv (which install.sh just installed
-    # to ~/.local/bin but didn't add to PATH globally yet).
-    UNITY_HOME="$UNITY_HOME" \
-        UNITY_BRANCH="$BRANCH" \
-        PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH" \
-        bash "$UNITY_REPO/scripts/setup.sh"
-    local setup_exit=$?
-
-    if (( setup_exit == 0 )); then
-        SETUP_OK=ok
-    else
-        SETUP_OK=failed
-        log_warn "Local orchestra setup didn't complete (exit=$setup_exit)."
-        log_info "Re-run after fixing the issue:  unity setup"
+    if [ -n "$rc" ] && ! grep -q "# >>> unity PATH >>>" "$rc" 2>/dev/null; then
+        {
+            echo ""
+            echo "# >>> unity PATH >>>"
+            echo "export PATH=\"$CLI_DIR:\$PATH\""
+            echo "# <<< unity PATH <<<"
+        } >> "$rc"
+        log_info "Added $CLI_DIR to PATH in $rc (open a new terminal)"
     fi
 }
 
-# ----------------------------------------------------------------------------
-# Post-install hints
-# ----------------------------------------------------------------------------
-print_next_steps() {
-    local step=1
+print_done() {
     echo ""
-    if [ "${SETUP_OK:-}" = "failed" ]; then
-        echo -e "${YELLOW}${BOLD}Installation partially complete.${NC}"
-        echo "  Code is installed; local orchestra didn't start. See warnings above."
-    else
-        echo -e "${GREEN}${BOLD}Installation complete.${NC}"
-    fi
+    echo -e "${BOLD}Unity installed.${NC}"
     echo ""
-    echo -e "${BOLD}Next steps:${NC}"
+    echo "  unity            Start an interactive local chat"
+    echo "  unity serve      Run headless (CM + gateway)"
+    echo "  unity help       Command reference"
     echo ""
-
-    # ---- Step: finish orchestra bootstrap if it didn't complete ----
-    if [ "${SETUP_OK:-}" != "ok" ]; then
-        echo "  $step. Bootstrap local orchestra:"
-        echo -e "     ${CYAN}\$ unity setup${NC}"
-        echo ""
-        step=$((step + 1))
-    fi
-
-    # ---- Step: LLM key, only if still missing from .env ----
-    if [ ! -f "$UNITY_REPO/.env" ] \
-        || ! grep -Eq '^(OPENAI_API_KEY|ANTHROPIC_API_KEY)=.+' "$UNITY_REPO/.env"; then
-        echo "  $step. Add an LLM provider key to $UNITY_REPO/.env"
-        echo "     OPENAI_API_KEY=... or ANTHROPIC_API_KEY=..."
-        echo "     (or re-run: ${CYAN}bash $UNITY_REPO/scripts/prompt_byok_keys.sh${NC})"
-        if [ "${SETUP_OK:-}" = "ok" ]; then
-            echo "     (ORCHESTRA_URL and UNIFY_KEY are already wired to local orchestra.)"
-        fi
-        echo ""
-        step=$((step + 1))
-    fi
-
-    # ---- Step: the two-terminal flow ----
-    if [ "$CREATE_CLI" = "true" ]; then
-        echo "  $step. Start Unity (opens Console in your browser after stack is ready):"
-        echo ""
-        echo -e "     ${CYAN}\$ unity${NC}"
-        echo ""
-        case "${PATH_STATUS:-}" in
-            appended)
-                echo -e "     ${YELLOW}First time only:${NC} the installer added $CLI_DIR to your PATH in"
-                echo "     ${PATH_RC_FILE:-your shell rc}. Open a new terminal (or"
-                echo -e "     run ${CYAN}source ${PATH_RC_FILE:-<rc>}${NC}) so \`unity\` is on PATH."
-                echo ""
-                ;;
-            block_already_present)
-                echo -e "     ${YELLOW}First time only:${NC} \`unity\` isn't on this terminal's PATH yet —"
-                echo "     open a new terminal so the existing shell-rc block takes effect."
-                echo ""
-                ;;
-            needs_manual)
-                echo -e "     ${YELLOW}First time only:${NC} add this to your shell profile so \`unity\` is on PATH:"
-                echo "         export PATH=\"$CLI_DIR:\$PATH\""
-                echo ""
-                ;;
-        esac
-        echo "     First visit: register on /login — your Coordinator starts automatically."
-        echo "     Next time: run \`unity\` again; chat resumes without extra steps."
-        echo ""
-        echo "  Also available:"
-        echo -e "     ${CYAN}\$ unity stack doctor${NC}     Check self-host prerequisites"
-        echo -e "     ${CYAN}\$ unity sandbox${NC}          Dev REPL (no Console)"
-        echo -e "     ${CYAN}\$ unity --live-voice${NC}     Sandbox with browser voice calls"
-        echo -e "     ${CYAN}\$ unity stop${NC}             Stop the self-host stack"
-        echo -e "     ${CYAN}\$ unity help${NC}             Subcommand reference"
-    else
-        echo "  $step. Activate the venv and start the runtime:"
-        echo "     \$ cd $UNITY_REPO"
-        echo -e "     ${CYAN}\$ source .venv/bin/activate${NC}"
-        echo -e "     ${CYAN}\$ python -m sandboxes.conversation_manager.sandbox${NC}"
-    fi
-    echo ""
-    echo "  Documentation: $UNITY_REPO/README.md"
-    echo "  Architecture:  $UNITY_REPO/ARCHITECTURE.md"
+    echo "Keys live in $UNITY_REPO/.env — edit and re-run 'unity setup' any time."
+    echo "Manage your assistant and account at https://console.unify.ai"
     echo ""
 }
 
-# ----------------------------------------------------------------------------
-# Main
-# ----------------------------------------------------------------------------
 main() {
-    if [[ "$SOURCE_INSTALL" != "true" ]]; then
-        local compose_install=""
-        if [[ -n "$INSTALL_SCRIPT_DIR" && -f "$INSTALL_SCRIPT_DIR/install-compose.sh" ]]; then
-            compose_install="$INSTALL_SCRIPT_DIR/install-compose.sh"
-        elif [[ -f "${HOME}/Unify/unity/scripts/install-compose.sh" ]]; then
-            compose_install="${HOME}/Unify/unity/scripts/install-compose.sh"
-        else
-            local tmp_install
-            tmp_install="$(mktemp -t unity-install-compose.XXXXXX.sh)"
-            if curl -fsSL "https://raw.githubusercontent.com/unifyai/unity/${BRANCH:-staging}/scripts/install-compose.sh" -o "$tmp_install"; then
-                compose_install="$tmp_install"
-            fi
-        fi
-        if [[ -n "$compose_install" ]]; then
-            exec bash "$compose_install" "$@"
-        fi
-        log_warn "install-compose.sh not found — falling back to source install"
+    if [ "$RECONFIGURE_ONLY" = "true" ]; then
+        configure_env
+        exit 0
     fi
-
-    print_banner
-    detect_os
-    ensure_uv
-    ensure_python
-    check_system_deps
-    do_install
-    check_self_host_stack_prereqs
+    echo -e "${BOLD}Unity installer${NC} (branch: $BRANCH)"
+    ensure_prereqs
+    clone_or_update_unity
+    uv_sync
+    configure_env
     create_cli
-    run_setup
-    if [ "${SETUP_OK:-}" != "ok" ] \
-        && [ -r /dev/tty ] && [ -w /dev/tty ] \
-        && [ -x "$UNITY_REPO/scripts/prompt_byok_keys.sh" ]; then
-        UNITY_REPO="$UNITY_REPO" bash "$UNITY_REPO/scripts/prompt_byok_keys.sh" || true
-    fi
-    print_next_steps
+    inject_path
+    print_done
 }
 
-main "$@"
+main

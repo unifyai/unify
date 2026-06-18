@@ -183,6 +183,11 @@ class ProductionSettings(BaseSettings):
     DEPLOY_ENV: Literal["production", "staging"] = "production"
     DEMO_MODE: bool = False
     DEMO_ID: int | None = None  # Demo assistant metadata ID (if DEMO_MODE is True)
+    # Whether a Console web UI / onboarding front-end is present for this
+    # deployment. Hosted and self-host run with a Console (default True); the
+    # public local install runs against hosted Orchestra with no Console and
+    # sets this False to suppress Console-UI knowledge and onboarding prompts.
+    UNITY_CONSOLE_UI: bool = True
 
     # ─────────────────────────────────────────────────────────────────────────
     # Manager Configuration

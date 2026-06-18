@@ -333,6 +333,14 @@ async def _handle_coordinator_onboarding_event(
     user just opened a session in case it matters for a later turn —
     but suppress the immediate run.
     """
+    from unity.settings import SETTINGS
+
+    # No Console front-end (public local install): the onboarding flow these
+    # events narrate is not visible to the user, so we drop them entirely —
+    # no notification, no LLM run — rather than nudge them toward UI steps
+    # they cannot see.
+    if not SETTINGS.UNITY_CONSOLE_UI:
+        return False
     cm.notifications_bar.push_notif(
         _NOTIFICATION_TYPE,
         _coordinator_onboarding_notification_text(event),

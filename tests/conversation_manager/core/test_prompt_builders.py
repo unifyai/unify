@@ -787,3 +787,43 @@ class TestDemoModeAdapts:
             assistant_has_email=False,
         )
         assert "emails" not in prompt.split("CAN do")[1].split("CANNOT do")[0]
+
+
+# ---------------------------------------------------------------------------
+# Tests – Console-UI / onboarding gate (local mode)
+# ---------------------------------------------------------------------------
+
+
+class TestConsoleUIGate:
+    """Console-UI knowledge and onboarding prompts are gated on
+    ``console_ui_present`` so the public local install (no Console) gets a
+    trimmed prompt with a local-mode note instead."""
+
+    def test_regular_console_knowledge_present_by_default(self):
+        prompt = _build(is_coordinator=False)
+        assert "Console knowledge" in prompt
+        assert "Interaction surface" not in prompt
+
+    def test_regular_console_knowledge_absent_in_local_mode(self):
+        prompt = _build(is_coordinator=False, console_ui_present=False)
+        assert "Console knowledge" not in prompt
+        assert "Interaction surface" in prompt
+
+    def test_coordinator_console_blocks_present_by_default(self):
+        prompt = _build(is_coordinator=True)
+        assert "Console literacy" in prompt
+        assert "onboarding flow (UI reference)" in prompt
+
+    def test_coordinator_console_blocks_absent_in_local_mode(self):
+        prompt = _build(is_coordinator=True, console_ui_present=False)
+        assert "Console literacy" not in prompt
+        assert "onboarding flow (UI reference)" not in prompt
+        assert "Interaction surface" in prompt
+
+    def test_voice_platform_knowledge_present_by_default(self):
+        prompt = _build_voice(is_coordinator=False)
+        assert "Platform knowledge" in prompt
+
+    def test_voice_platform_knowledge_absent_in_local_mode(self):
+        prompt = _build_voice(is_coordinator=False, console_ui_present=False)
+        assert "Platform knowledge" not in prompt

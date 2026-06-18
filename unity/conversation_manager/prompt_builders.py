@@ -1526,6 +1526,7 @@ def build_system_prompt(
     team_summaries: list[TeamSummary] | None = None,
     authorized_humans: list[dict[str, Any]] | None = None,
     is_org_workspace: bool = True,
+    console_ui_present: bool = True,
 ) -> PromptParts:
     """Build the system prompt for the ConversationManager LLM.
 
@@ -1659,32 +1660,36 @@ def build_system_prompt(
         coordinator_act_query_guidance_block = (
             _build_coordinator_act_query_guidance_block()
         )
-        # Reactive-narration rules for the gradual onboarding flow.
-        # Cheap to build unconditionally for coordinators — orchestra
-        # gates emission on ``Coordinator/State.mode == 'onboarding'``
-        # so the block is harmless when the user is past onboarding;
-        # they simply never see the notification it describes.
-        coordinator_onboarding_narration_block = (
-            _build_coordinator_onboarding_narration_block()
-        )
-        # UI reference for the gradual-onboarding view: layout,
-        # step contents, and the user-facing affordances behind
-        # each step. Built unconditionally so I can answer "what do I
-        # click on next?" / "how do I connect my workspace?" coherently
-        # whether the user is mid-onboarding, has skipped it, or is
-        # resuming it later from Assistant info → Onboarding.
-        coordinator_onboarding_flow_reference_block = (
-            console_ui.build_coordinator_onboarding_flow_reference_block(
-                COORDINATOR_NAME,
-                self_reference=True,
+        # Console-UI / onboarding-flow guidance is only meaningful when a
+        # Console front-end exists. The public local install has no Console,
+        # so these blocks are omitted there (see ``console_ui_present``).
+        if console_ui_present:
+            # Reactive-narration rules for the gradual onboarding flow.
+            # Cheap to build unconditionally for coordinators — orchestra
+            # gates emission on ``Coordinator/State.mode == 'onboarding'``
+            # so the block is harmless when the user is past onboarding;
+            # they simply never see the notification it describes.
+            coordinator_onboarding_narration_block = (
+                _build_coordinator_onboarding_narration_block()
             )
-        )
-        coordinator_console_literacy_block = (
-            console_ui.build_coordinator_console_literacy_block(
-                COORDINATOR_NAME,
-                self_reference=True,
+            # UI reference for the gradual-onboarding view: layout,
+            # step contents, and the user-facing affordances behind
+            # each step. Built unconditionally so I can answer "what do I
+            # click on next?" / "how do I connect my workspace?" coherently
+            # whether the user is mid-onboarding, has skipped it, or is
+            # resuming it later from Assistant info → Onboarding.
+            coordinator_onboarding_flow_reference_block = (
+                console_ui.build_coordinator_onboarding_flow_reference_block(
+                    COORDINATOR_NAME,
+                    self_reference=True,
+                )
             )
-        )
+            coordinator_console_literacy_block = (
+                console_ui.build_coordinator_console_literacy_block(
+                    COORDINATOR_NAME,
+                    self_reference=True,
+                )
+            )
     action_steering_tool_listing = _build_action_steering_tool_listing()
 
     # Voice call note for role section
@@ -2055,29 +2060,38 @@ When contacts communicate in a non-English language, I match their language in m
         parts.add(_build_base_proactive_meeting_offers_block())
 
     # 13. Console knowledge (non-demo only; Coordinator uses literacy block).
-    if not demo_mode and not is_coordinator:
+    #     Omitted with no Console front-end (public local install).
+    if not demo_mode and not is_coordinator and console_ui_present:
         parts.add(console_ui.build_base_console_knowledge_block())
 
     # 14. Onboarding reference (regular assistants only — the Coordinator bio
     #     carries this surface and explicitly disclaims pre-baked Console click
-    #     paths in favor of live look-up).
+    #     paths in favor of live look-up). The Console/onboarding FAQ is omitted
+    #     when no Console front-end exists.
     if not is_coordinator:
-        desktop_access_faq = console_ui.desktop_access_faq(
-            has_linked_user_desktop=has_linked_user_desktop,
-        )
-        app_management_faq = console_ui.app_management_faq(COORDINATOR_NAME)
-        parts.add(
-            _build_base_onboarding_reference(
-                desktop_access_faq=desktop_access_faq,
-                app_management_faq=app_management_faq,
-            ),
-        )
+        if console_ui_present:
+            desktop_access_faq = console_ui.desktop_access_faq(
+                has_linked_user_desktop=has_linked_user_desktop,
+            )
+            app_management_faq = console_ui.app_management_faq(COORDINATOR_NAME)
+            parts.add(
+                _build_base_onboarding_reference(
+                    desktop_access_faq=desktop_access_faq,
+                    app_management_faq=app_management_faq,
+                ),
+            )
         coordinator_reference = _build_marty_deferral_block(
             first_name=first_name,
             surname=surname,
             is_org_workspace=is_org_workspace,
         )
         parts.add(coordinator_reference)
+
+    # 14b. Local-mode note: with no Console front-end, tell the model the
+    #      interaction surface explicitly so it never references a Console or
+    #      an onboarding flow the user cannot see.
+    if not console_ui_present:
+        parts.add(console_ui.build_local_mode_note_block())
 
     # 15. Voice calls guide (when on a voice call).
     if is_voice_call:
@@ -2330,6 +2344,7 @@ def build_voice_agent_prompt(
     coordinator_completed_onboarding_steps: list[str] | None = None,
     coordinator_skipped_onboarding_steps: list[str] | None = None,
     coordinator_active_onboarding_step: str | None = None,
+    console_ui_present: bool = True,
 ) -> PromptParts:
     """Build the system prompt for the Voice Agent (fast brain).
 
@@ -2517,7 +2532,10 @@ I let the results speak for themselves rather than narrating steps or repeating 
     # intro, history non-empty → orient). The completed-steps
     # snapshot (when the caller fetched one) keeps the intro from
     # pitching a step the user already finished.
-    if is_coordinator and not demo_mode:
+    # The opening pitch and Console-UI references describe an onboarding
+    # flow and a Console screen, so they are omitted with no Console
+    # front-end (public local install).
+    if is_coordinator and not demo_mode and console_ui_present:
         parts.add(
             _build_coordinator_voice_opening_block(
                 coordinator_completed_onboarding_steps,
@@ -2689,8 +2707,9 @@ A `[notification]` that says "Background context: this call may relate to <topic
 
     # Platform knowledge. The Coordinator's bio already carries the live
     # look-up posture for Console questions, so this block applies only to
-    # regular assistants.
-    if not is_coordinator:
+    # regular assistants. Omitted with no Console front-end (public local
+    # install), where there is no Integrations tab / profile menu to describe.
+    if not is_coordinator and console_ui_present:
         parts.add(
             """Platform knowledge
 ------------------
@@ -2809,7 +2828,9 @@ This is a summary of my past conversations with the person on this call:
 I use this context to personalize the conversation, but I don't explicitly reference "my records" or "our past conversations" unless natural to do so.""",
         )
 
-    if channel == "unify_meet":
+    # Unify Meet is a Console-driven medium; its controls describe the Console
+    # overlay, so they are omitted with no Console front-end.
+    if channel == "unify_meet" and console_ui_present:
         meet_bottom_bar = (
             '- **Bottom bar**: "Share your screen" (shares the user\'s own screen with me), '
             '"Show assistant screen" (shows my desktop to the user; once visible, '

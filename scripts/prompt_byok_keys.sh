@@ -317,27 +317,6 @@ prompt_research_and_computer() {
   echo ""
 }
 
-prompt_app_integrations() {
-  echo ""
-  echo -e "${BOLD}App integrations (optional)${NC}"
-  echo "  Lets Marty act in third-party apps (HubSpot, Notion, GitHub, ...) on your"
-  echo "  behalf, using your own Composio account."
-  echo ""
-
-  prompt_secret \
-    "App integrations — Composio API key" \
-    "COMPOSIO_API_KEY" \
-    "Lets Marty act in apps like Notion, GitHub, and HubSpot. Free tier: https://composio.dev"
-
-  echo ""
-  if has_env_value COMPOSIO_API_KEY; then
-    log_success "Composio app integrations configured"
-  else
-    log_warn "Composio skipped — third-party app integrations stay disabled"
-  fi
-  echo ""
-}
-
 ensure_voice_provider_from_keys() {
   if has_env_value VOICE_PROVIDER; then
     return 0
@@ -387,7 +366,7 @@ import_shell_env_keys() {
   local key val
   for key in OPENAI_API_KEY ANTHROPIC_API_KEY DEEPSEEK_API_KEY DEEPGRAM_API_KEY \
     CARTESIA_API_KEY ELEVEN_API_KEY VOICE_PROVIDER UNIFY_MODEL \
-    UNITY_WEB_TAVILY_API_KEY ANTICAPTCHA_KEY COMPOSIO_API_KEY; do
+    UNITY_WEB_TAVILY_API_KEY ANTICAPTCHA_KEY; do
     val="${!key:-}"
     [[ -z "$val" ]] && continue
     if ! has_env_value "$key"; then
@@ -471,7 +450,6 @@ main() {
   fi
 
   prompt_research_and_computer
-  prompt_app_integrations
   mark_byok_configured
 }
 
