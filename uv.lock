@@ -9302,7 +9302,7 @@ wheels = [
 [[package]]
 name = "unify"
 version = "0.0.0"
-source = { git = "https://github.com/unifyai/unify.git?branch=staging#e96c71d526208efa20024e80b608fe30c8ce6a45" }
+source = { git = "https://github.com/unifyai/unify.git?branch=staging#6f95f21c6aa0675b8a03d08aa58e50d1c92d2ca3" }
 dependencies = [
     { name = "aiohttp" },
     { name = "requests" },
