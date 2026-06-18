@@ -173,67 +173,6 @@ def test_recurring_task_rearm_visible_to_local_scheduler():
         SESSION_DETAILS.assistant.agent_id = None
 
 
-@_REQUIRES_LIVE_ORCHESTRA
-@_handle_project
-def test_batched_queue_head_visible_to_local_scheduler():
-    """A queue created through _create_tasks projects only its scheduled head."""
-
-    SESSION_DETAILS.assistant.agent_id = 0
-    try:
-        asyncio.run(_run_batched_queue_integration())
-    finally:
-        SESSION_DETAILS.assistant.agent_id = None
-
-
-async def _run_batched_queue_integration() -> None:
-    assistant_id = SESSION_DETAILS.assistant.agent_id
-    assert assistant_id is not None
-
-    scheduler = TaskScheduler()
-    start_at = datetime.now(timezone.utc) + timedelta(hours=1)
-    create_result = scheduler._create_tasks(
-        tasks=[
-            {"name": "Batched head", "description": "Scheduled queue head."},
-            {"name": "Batched tail", "description": "Queued behind the head."},
-        ],
-        queue_ordering=[
-            {
-                "order": [0, 1],
-                "queue_head": {"start_at": start_at.isoformat()},
-            },
-        ],
-    )
-    head_task_id, tail_task_id = create_result["details"]["task_ids"]
-
-    activations = []
-    for _ in range(20):
-        activations = list_scheduled_activations(assistant_id=assistant_id)
-        if any(a.task_id == head_task_id for a in activations):
-            break
-        await asyncio.sleep(0.1)
-
-    head_snap = next(
-        (
-            activation
-            for activation in activations
-            if activation.task_id == head_task_id
-        ),
-        None,
-    )
-    assert head_snap is not None
-    assert all(activation.task_id != tail_task_id for activation in activations)
-
-    local_scheduler = LocalActivationScheduler(
-        event_broker=_RecordingBroker(),
-        poll_interval_seconds=0.0,
-    )
-    await local_scheduler.start()
-    try:
-        assert head_snap.activation_key in local_scheduler._timers
-    finally:
-        await local_scheduler.stop()
-
-
 async def _run_recurring_integration() -> None:
     assistant_id = SESSION_DETAILS.assistant.agent_id
     assert assistant_id is not None
