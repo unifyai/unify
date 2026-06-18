@@ -1518,15 +1518,12 @@ class EventBus:
         # 2. Flush all buffered writes before cleanup
         self.flush()
 
-        # 3. Delete all Unify contexts owned by this EventBus instance
+        # 3. Delete all Unify contexts owned by this EventBus instance: one
+        #    server-side subtree delete (the global Events context + every
+        #    …/Events/<TYPE>, …/Events/_callbacks child) instead of enumerating
+        #    and deleting each individually.
         if delete_contexts:
-            # First remove children (…/Events/<TYPE>, …/Events/_callbacks, …)
-            upstream_ctxs = list(unify.get_contexts(prefix=self._global_ctx) or [])
-            for ctx in upstream_ctxs:
-                unify.delete_context(ctx)
-
-            # Finally remove the global Events context itself
-            unify.delete_context(self._global_ctx)
+            unify.delete_context(self._global_ctx, delete_children=True)
 
         # 4. Re-initialise this *same* instance
         self._get_logger().clear_queue()
