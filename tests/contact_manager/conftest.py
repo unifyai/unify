@@ -16,6 +16,7 @@ from tests.helpers import (
     is_scenario_seeded,
     scenario_file_lock,
     mutation_test_lock,
+    restore_scenario_context,
 )
 
 # Pure columns that should have embeddings pre-computed during seeding.
@@ -286,12 +287,14 @@ def contact_manager_scenario(contact_read_scenario):
         )
 
     with mutation_test_lock("cm_read"):
+        restore_scenario_context("tests/contact/ReadScenario")
         # Rollback INSIDE the lock to prevent other tests
         # from rolling back while this test is running
         ctx_names = list(_READ_SCENARIO_COMMIT_HASHES.keys())
         if ctx_names:
             unify.map(rollback_context, ctx_names, mode="asyncio")
 
+        restore_scenario_context("tests/contact/ReadScenario")
         yield cm, id_map
 
 
@@ -345,12 +348,14 @@ def contact_manager_mutation_scenario(contact_mutation_scenario):
         )
 
     with mutation_test_lock("cm_mutation"):
+        restore_scenario_context("tests/contact/MutationScenario")
         # Rollback INSIDE the lock to prevent other mutation tests
         # from rolling back while this test is running
         ctx_names = list(_MUTATION_SCENARIO_COMMIT_HASHES.keys())
         if ctx_names:
             unify.map(rollback_context, ctx_names, mode="asyncio")
 
+        restore_scenario_context("tests/contact/MutationScenario")
         yield cm, id_map
 
 

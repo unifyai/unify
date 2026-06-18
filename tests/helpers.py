@@ -40,6 +40,15 @@ def get_session_tags() -> List[str]:
 from droid.common.debug import CURSOR_DEBUG_LOG  # noqa: E402,F401
 
 
+def restore_scenario_context(ctx: str) -> None:
+    """Restore both Unify and ContextRegistry to a session scenario root."""
+    from droid.common.context_registry import ContextRegistry
+
+    unify.create_context(ctx)
+    unify.set_context(ctx, relative=False)
+    ContextRegistry.set_base_context(ctx)
+
+
 # ---------- helper -------------------------------------------------
 def _ctx_name(fn: Callable, fn_name: str) -> str:
     file_path = fn.__code__.co_filename

@@ -93,7 +93,7 @@ def _reset_contact_routing_space(team_id: int) -> None:
 @_handle_project
 @pytest.mark.asyncio
 async def test_update_routes_explicit_team_contact_to_shared_team():
-    team_id = time.time_ns()
+    team_id = int(time.time_ns() % 1_000_000_000)
     _configure_contact_routing_space(team_id)
     email = f"nora.shared.{team_id}@example.com"
 
@@ -119,7 +119,7 @@ async def test_update_routes_explicit_team_contact_to_shared_team():
 @_handle_project
 @pytest.mark.asyncio
 async def test_update_routes_private_contact_to_personal_memory():
-    team_id = time.time_ns()
+    team_id = int(time.time_ns() % 1_000_000_000)
     _configure_contact_routing_space(team_id)
     email = f"pia.private.{team_id}@example.com"
 
@@ -144,7 +144,7 @@ async def test_update_routes_private_contact_to_personal_memory():
 @_handle_project
 @pytest.mark.asyncio
 async def test_update_defaults_ambiguous_contact_to_personal_memory():
-    team_id = time.time_ns()
+    team_id = int(time.time_ns() % 1_000_000_000)
     _configure_contact_routing_space(team_id)
     email = f"owen.neighbor.{team_id}@example.com"
 
