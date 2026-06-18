@@ -648,6 +648,67 @@ class UserDesktopHandle:
         return self._label
 
 
+class _UserDesktopFilesNamespace:
+    """On-demand access to a user's own home filesystem.
+
+    Accessed as ``primitives.computer.user_desktop.files``.  Unlike the live
+    remote-control methods on a desktop session, this reads and writes
+    individual paths in the user's home directory over SFTP, pulled only when
+    asked.  Writebacks never overwrite the user's originals — edited content is
+    saved as a timestamped copy the user can review.  Requires the user to have
+    enabled filesystem access for this assistant in the Console.
+    """
+
+    def __init__(self, owner: "ComputerPrimitives"):
+        self._owner = owner
+
+    async def _client(self, user_id: str | None):
+        link = self._owner._resolve_user_desktop_link(user_id)
+        target_uid = link.owner_user_id
+        self._owner._assert_user_desktop_allowed(target_uid)
+        if not getattr(link, "filesys_available", False):
+            raise ValueError(
+                f"Filesystem access is not enabled for user {target_uid!r}. "
+                "Ask them to turn on filesystem access for this assistant in "
+                "the Console.",
+            )
+        _publish_desktop_invoked("user_desktop.files")
+        return await self._owner._get_user_home_sftp(target_uid, link)
+
+    async def list(self, path: str = "", user_id: str | None = None) -> list[str]:
+        """List entries under a home-relative directory on the user's machine.
+
+        ``path`` is relative to the user's home (``""`` lists the home root).
+        Returns names (directories carry a trailing ``/``).
+        """
+        client = await self._client(user_id)
+        return await client.list_dir(path)
+
+    async def pull(self, path: str, user_id: str | None = None) -> str:
+        """Fetch a file from the user's home into the local workspace.
+
+        ``path`` is relative to the user's home.  Returns the local path of the
+        staged copy, which can then be read or parsed like any local file.
+        """
+        client = await self._client(user_id)
+        return await client.pull(path)
+
+    async def push(
+        self,
+        local_path: str,
+        dest_path: str,
+        user_id: str | None = None,
+    ) -> str:
+        """Write a local file back to the user's home as a timestamped copy.
+
+        ``dest_path`` is the home-relative path the content corresponds to.  The
+        user's original is never overwritten; the new content is saved alongside
+        it under a review folder.  Returns the remote path of the saved copy.
+        """
+        client = await self._client(user_id)
+        return await client.push(local_path, dest_path)
+
+
 class _UserDesktopFactory:
     """Namespace for controlling users' own linked local desktops.
 
@@ -663,15 +724,25 @@ class _UserDesktopFactory:
 
     def __init__(self, owner: "ComputerPrimitives"):
         self._owner = owner
+        self._files: Optional[_UserDesktopFilesNamespace] = None
+
+    @property
+    def files(self) -> "_UserDesktopFilesNamespace":
+        """On-demand access to the user's home filesystem (pull/push/list)."""
+        if self._files is None:
+            self._files = _UserDesktopFilesNamespace(self._owner)
+        return self._files
 
     def list_linked(self) -> list[dict]:
         """List the user desktops linked to this assistant.
 
         Returns one dict per linked machine with keys ``user_id``, ``os``,
-        and ``filesys_sync``.  Use this to discover whose machines are
-        available before calling ``session()``.  An empty list means no user
-        has linked a desktop and only the assistant's own desktop is
-        controllable.
+        ``filesys_sync`` (whether the user enabled home filesystem access), and
+        ``filesys_available`` (whether that access is actually usable right now,
+        i.e. the device has registered its SFTP tunnel).  Use this to discover
+        whose machines are available before calling ``session()`` or
+        ``files.pull()``.  An empty list means no user has linked a desktop and
+        only the assistant's own desktop is controllable.
         """
         from unity.session_details import SESSION_DETAILS
 
@@ -680,6 +751,7 @@ class _UserDesktopFactory:
                 "user_id": uid,
                 "os": link.os,
                 "filesys_sync": link.filesys_sync,
+                "filesys_available": link.filesys_available,
             }
             for uid, link in SESSION_DETAILS.assistant.user_desktops.items()
         ]
@@ -827,6 +899,8 @@ class ComputerPrimitives(metaclass=SingletonABCMeta):
         # Dedicated agent-service backends per linked user desktop, keyed by
         # the resolved ``scheme://netloc/api`` URL.
         self._user_desktop_backends: dict[str, Any] = {}
+        # On-demand SFTP clients for users' home filesystems, keyed by user_id.
+        self._user_home_sftp: dict[str, Any] = {}
         # Users who have revoked live remote-control of their own desktop.
         self._user_desktop_revoked: set[str] = set()
         self._pending_url_mappings: dict[str, str] | None = None
@@ -1004,6 +1078,27 @@ class ComputerPrimitives(metaclass=SingletonABCMeta):
             self._user_desktop_backends[api_url] = backend
         return backend
 
+    async def _get_user_home_sftp(self, user_id: str, link: Any) -> Any:
+        """Lazily create and cache an on-demand SFTP client for a user's home.
+
+        Gated on the link's standing ``filesys_sync`` flag and registered tunnel
+        coordinates; the per-link private key is fetched on demand inside the
+        client so it never reaches the pod env via ``user_desktops``.
+        """
+        from unity.file_manager.sync.user_sftp import UserHomeSFTP
+
+        client = self._user_home_sftp.get(user_id)
+        if client is None:
+            client = UserHomeSFTP(user_id, link)
+            if not await client.setup():
+                raise RuntimeError(
+                    f"Could not open the home filesystem for user {user_id!r}. "
+                    "Ensure their device is online and filesystem access is "
+                    "enabled in the Console.",
+                )
+            self._user_home_sftp[user_id] = client
+        return client
+
     def _assert_user_desktop_allowed(self, user_id: str) -> None:
         """Raise if the user has revoked live remote-control of their desktop."""
         if user_id in self._user_desktop_revoked:
@@ -1022,6 +1117,9 @@ class ComputerPrimitives(metaclass=SingletonABCMeta):
         """
         if _is_dead_session_error(e):
             self._user_desktop_backends.clear()
+            for client in self._user_home_sftp.values():
+                client.cleanup()
+            self._user_home_sftp.clear()
 
     def revoke_user_desktop_control(
         self,
