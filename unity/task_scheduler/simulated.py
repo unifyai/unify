@@ -638,9 +638,8 @@ class SimulatedTaskScheduler(BaseTaskScheduler):
         # No EventBus publishing for simulated managers
 
         # Wrap the actor handle to expose TaskScheduler-style stop(cancel=..., reason=...) while
-        # delegating all behaviour to the underlying actor. Named to mirror ActiveQueue's surface
-        # (single-task, direct-delegation style).
-        class SimulatedActiveQueue(SteerableToolHandle, SimulatedHandleMixin):  # type: ignore[abstract-method]
+        # delegating all behaviour to the underlying actor.
+        class SimulatedActiveHandle(SteerableToolHandle, SimulatedHandleMixin):
             def __init__(self, inner: SteerableToolHandle, log_label: str) -> None:
                 self._inner = inner
                 # Provide a stable, scheduler-aligned log label for status lines
@@ -679,19 +678,11 @@ class SimulatedTaskScheduler(BaseTaskScheduler):
                     fallback_positional_keys=("reason",),
                 )
 
-            async def pause(self) -> Optional[str]:  # type: ignore[override]
-                self._log_pause()
-                try:
-                    return await self._inner.pause()
-                except Exception:
-                    return "Already completed."
+            async def pause(self) -> Optional[str]:
+                return await self._inner.pause()
 
-            async def resume(self) -> Optional[str]:  # type: ignore[override]
-                self._log_resume()
-                try:
-                    return await self._inner.resume()
-                except Exception:
-                    return "Already completed."
+            async def resume(self) -> Optional[str]:
+                return await self._inner.resume()
 
             def done(self) -> bool:  # type: ignore[override]
                 try:
@@ -734,4 +725,4 @@ class SimulatedTaskScheduler(BaseTaskScheduler):
             ) -> "SteerableToolHandle":
                 return await self._inner.ask(question)  # type: ignore[attr-defined]
 
-        return SimulatedActiveQueue(handle, _exec_label)
+        return SimulatedActiveHandle(handle, _exec_label)
