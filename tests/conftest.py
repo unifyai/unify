@@ -255,9 +255,9 @@ def stub_external_deps(monkeypatch):
     # generates start_at values relative to 2025-06-13 — e.g. "next Monday"
     # → 2025-06-16. But production then compares those LLM-generated
     # timestamps against the real wall-clock, which is now ~12 months in
-    # the future. Result: tasks the LLM intends as future-scheduled get
-    # status=primed instead of status=scheduled. Patch
-    # task_scheduler.datetime so the two time sources agree under test.
+    # the future. Result: tasks the LLM intends as future-scheduled may get
+    # an incorrect resolved status. Patch task_scheduler.datetime so the
+    # two time sources agree under test.
     #
     # NOTE: the production class is `from datetime import datetime`, so we
     # patch the imported name on the module. A subclass-with-overridden-

@@ -10,8 +10,8 @@ Coverage
   - Write with None
   - Clone after SET NULL
 
-Note: schedule.next_task and schedule.prev_task FKs are not yet implemented,
-      so related tests are commented out.
+Note: schedule previously had next_task/prev_task fields for queue chaining,
+      which have since been removed.
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ import unify
 from tests.helpers import _handle_project
 from unity.function_manager.function_manager import FunctionManager
 from unity.task_scheduler.task_scheduler import TaskScheduler
-from unity.task_scheduler.types.status import Status
 
 # --------------------------------------------------------------------------- #
 #  Unit Tests: entrypoint → Functions.function_id                            #
@@ -284,7 +283,6 @@ def test_offline_task_can_be_agentic_on_update():
     result = ts._create_task(
         name="Normal task",
         description="Starts in the live lane",
-        status=Status.queued,
     )
     task_id = result["details"]["task_id"]
 

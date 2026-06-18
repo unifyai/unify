@@ -1,6 +1,5 @@
 import asyncio
 import pytest
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from tests.helpers import _handle_project
@@ -108,138 +107,6 @@ async def test_summary_on_natural_completion(monkeypatch):
     final_row = final_rows[0]
     assert final_row.status == Status.completed.value
     assert final_row.info == MOCK_SUMMARY
-
-
-@pytest.mark.asyncio
-@_handle_project
-async def test_summary_on_stop_defer(monkeypatch):
-    """
-    Verify info is populated when a task is stopped with cancel=False (defer).
-    """
-    actor = SimulatedActor(steps=5)
-    ts = create_test_scheduler(actor)
-
-    monkeypatch.setattr(
-        SimulatedActorHandle,
-        "action_log",
-        ["Simulated action log entry"],
-        raising=False,
-    )
-    monkeypatch.setattr(
-        ActiveTask,
-        "_generate_summary_from_log",
-        AsyncMock(return_value=MOCK_SUMMARY),
-    )
-
-    # Signal when the info write occurs (status may be omitted for defer)
-    summary_saved_event = asyncio.Event()
-    original_write_entries = ts._write_log_entries
-
-    def write_entries_probe_defer(*args, **kwargs):
-        res = original_write_entries(*args, **kwargs)
-        entries = kwargs.get("entries", {})
-        if isinstance(entries, dict) and entries.get("info") == MOCK_SUMMARY:
-            summary_saved_event.set()
-        return res
-
-    write_entries_spy = MagicMock(side_effect=write_entries_probe_defer)
-    monkeypatch.setattr(TaskScheduler, "_write_log_entries", write_entries_spy)
-
-    # Patch _update_task_instance (sync) to record calls and remap 'stopped' for DB write
-    original_update_instance_method = TaskScheduler._update_task_instance
-    update_instance_call_recorder = MagicMock()
-
-    def patched_update_instance(self, *, task_id: int, instance_id: int, **kwargs: Any):
-        # Record the call *before* modification using the separate spy
-        update_instance_call_recorder(
-            self,
-            task_id=task_id,
-            instance_id=instance_id,
-            **kwargs,
-        )
-
-        # If called with status="stopped", map to a valid status for the DB write
-        if kwargs.get("status") == "stopped":
-            status_to_write = Status.queued
-            kwargs["status"] = status_to_write
-
-        return original_update_instance_method(
-            self,
-            task_id=task_id,
-            instance_id=instance_id,
-            **kwargs,
-        )
-
-    monkeypatch.setattr(TaskScheduler, "_update_task_instance", patched_update_instance)
-
-    task_info = ts._create_task(name="Test Stop Defer", description="Stop defer test")
-    task_id = task_info["details"]["task_id"]
-    instance_id = task_info["details"].get("instance_id", 0)
-
-    handle = await ts.execute(task_id=task_id)
-    await asyncio.sleep(0.1)
-
-    stop_reason = "Stopping to defer"
-    await handle.stop(cancel=False, reason=stop_reason)
-
-    while not handle.done():
-        await asyncio.sleep(0.01)
-    result_text = await handle.result()
-
-    assert handle.done()
-    assert "stopped" in result_text.lower() or stop_reason in result_text
-
-    await asyncio.wait_for(summary_saved_event.wait(), timeout=5.0)
-
-    # Ensure our call recorder captured the initial call attempt
-    assert (
-        update_instance_call_recorder.call_count >= 1
-    ), "_update_task_instance patch was not called."
-
-    summary_call_args = None
-    for call in update_instance_call_recorder.call_args_list:
-        args, kwargs = call
-        if kwargs.get("info") == MOCK_SUMMARY:
-            summary_call_args = kwargs
-            break
-    assert (
-        summary_call_args is not None
-    ), f"_update_task_instance did not receive expected info. Calls: {update_instance_call_recorder.call_args_list}"
-    assert summary_call_args.get("task_id") == task_id
-    assert summary_call_args.get("instance_id") == instance_id
-
-    # defer writes may omit status; to avoid backend flakiness,
-    # perform a direct info write for verification when needed.
-    if not any(
-        isinstance((kwargs := c[1]).get("entries", {}), dict)
-        and kwargs.get("entries", {}).get("info") == MOCK_SUMMARY
-        for c in write_entries_spy.call_args_list
-    ):
-        # Fallback: apply info via direct write to the single instance log
-        log_ids = ts._get_logs_by_task_ids(task_ids=task_id)
-        if log_ids:
-            ts._write_log_entries(
-                logs=log_ids[0],
-                entries={"info": MOCK_SUMMARY},
-            )
-
-    # Verify the data in the store
-    final_rows = ts._filter_tasks(
-        filter=f"task_id == {task_id} and instance_id == {instance_id}",
-    )
-    assert (
-        final_rows
-    ), f"Could not find final row for task_id {task_id}, instance_id {instance_id}"
-    final_row = final_rows[0]
-
-    assert final_row.info == MOCK_SUMMARY
-    # Final status check
-    assert final_row.status not in [
-        Status.active,
-        Status.completed,
-        Status.cancelled,
-        Status.failed,
-    ], f"Final status was {final_row.status}, expected a non-terminal, non-active status after defer."
 
 
 @pytest.mark.asyncio
@@ -401,7 +268,6 @@ async def test_summary_on_execution_error(monkeypatch):
         try:
             return await original_result(self)
         except Exception as e:
-            self._clear_active_pointer()
             return f"ERROR: Task execution failed: {e}"
 
     monkeypatch.setattr(ActiveTask, "result", patched_result_for_error)
@@ -516,7 +382,6 @@ async def test_summary_targets_correct_instance_for_recurring(monkeypatch):
     task_create_outcome = ts._create_task(
         name="Recurring Test Task",
         description="A task that repeats",
-        status=Status.primed,  # Start ready
         repeat=[{"frequency": Frequency.DAILY}],
     )
     task_id = task_create_outcome["details"]["task_id"]
@@ -576,9 +441,6 @@ async def test_summary_targets_correct_instance_for_recurring(monkeypatch):
     instance_id_1 = cloned_tasks[0].instance_id
     assert instance_id_1 == 1
 
-    # Manually set instance 1 to primed using the original method
-    original_update_instance(ts, task_id=task_id, instance_id=1, status=Status.primed)
-
     # Set up action log / summary mock for run 1
     monkeypatch.setattr(
         SimulatedActorHandle,
@@ -597,15 +459,10 @@ async def test_summary_targets_correct_instance_for_recurring(monkeypatch):
         "_instance_id",
         getattr(getattr(handle_1, "_current_handle", object()), "_instance_id", None),
     )
-    # Keep the check for instance_id_1_run
-    if instance_id_1_run != 1:
-        active_ptr = ts._active_task
-        primed_task = ts._primed_task
-        pytest.fail(
-            f"Expected execute to run instance_id 1, got {instance_id_1_run}. "
-            f"Active: {active_ptr}. Primed: {primed_task}. "
-            f"Cloned task status before execute: {cloned_tasks[0]['status']}",
-        )
+    assert instance_id_1_run == 1, (
+        f"Expected execute to run instance_id 1, got {instance_id_1_run}. "
+        f"Cloned task status before execute: {cloned_tasks[0].status}."
+    )
 
     result_1 = (
         await handle_1.result()
