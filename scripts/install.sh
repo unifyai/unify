@@ -223,6 +223,7 @@ case "\${1:-}" in
     ""|chat|sandbox)
         # Interactive local chat with the full ConversationManager.
         shift || true
+        cd "\$UNITY_REPO"
         exec "\$PY" -m sandboxes.conversation_manager.sandbox "\$@"
         ;;
     serve|run)
@@ -272,6 +273,7 @@ USAGE
         ;;
     *)
         # Forward unknown args to the sandbox.
+        cd "\$UNITY_REPO"
         exec "\$PY" -m sandboxes.conversation_manager.sandbox "\$@"
         ;;
 esac
