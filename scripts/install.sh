@@ -125,14 +125,15 @@ uv_sync() {
 # ----------------------------------------------------------------------------
 clone_or_update_magnitude() {
     local magnitude_dir="$UNITY_HOME/magnitude"
+    local magnitude_branch="unity-modifications"
     if [ -d "$magnitude_dir/.git" ]; then
         log_info "Updating magnitude checkout at $magnitude_dir..."
-        git -C "$magnitude_dir" fetch --depth 1 origin staging 2>/dev/null || true
-        git -C "$magnitude_dir" checkout staging 2>/dev/null || true
+        git -C "$magnitude_dir" fetch --depth 1 origin "$magnitude_branch" 2>/dev/null || true
+        git -C "$magnitude_dir" checkout "$magnitude_branch" 2>/dev/null || true
         git -C "$magnitude_dir" pull --rebase 2>/dev/null || true
     else
         log_info "Cloning magnitude into $magnitude_dir..."
-        git clone --depth 1 --branch staging \
+        git clone --depth 1 --branch "$magnitude_branch" \
             "$REPO_BASE/magnitude.git" "$magnitude_dir" 2>/dev/null || {
             log_warn "Could not clone magnitude (continuing without it — agent-service / computer use will be unavailable until it is present)"
             return 0
@@ -306,7 +307,9 @@ case "\${1:-}" in
         (cd "\$UNITY_REPO" && uv sync --all-groups)
         MAGNITUDE_DIR="\$UNITY_HOME/magnitude"
         if [ -d "\$MAGNITUDE_DIR/.git" ]; then
-            echo "Updating magnitude checkout..."
+            echo "Updating magnitude checkout (unity-modifications)..."
+            git -C "\$MAGNITUDE_DIR" fetch --depth 1 origin unity-modifications 2>/dev/null || true
+            git -C "\$MAGNITUDE_DIR" checkout unity-modifications 2>/dev/null || true
             git -C "\$MAGNITUDE_DIR" pull --rebase || true
         fi
         if command -v npm >/dev/null 2>&1 && [ -d "\$UNITY_REPO/agent-service" ] && [ -d "\$MAGNITUDE_DIR" ]; then
