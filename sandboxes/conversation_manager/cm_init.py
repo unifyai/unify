@@ -73,9 +73,21 @@ def _sync_coordinator_flag(cm) -> None:
                         "Coordinator flag applied from Orchestra (assistant_id=%s)",
                         agent_id,
                     )
+                # Populate user identity fields from the assistant record.  In
+                # the hosted stack these come from the CommsManager startup
+                # event; in sandbox mode we pull them here instead so the
+                # voice agent prompt and contact dict have the real user name.
+                first_name = a.get("user_first_name") or ""
+                last_name = a.get("user_last_name") or ""
+                if first_name and not getattr(cm, "user_first_name", None):
+                    cm.user_first_name = first_name
+                    LG.debug("user_first_name set from Orchestra: %s", first_name)
+                if last_name and not getattr(cm, "user_surname", None):
+                    cm.user_surname = last_name
+                    LG.debug("user_surname set from Orchestra: %s", last_name)
                 break
     except Exception as exc:
-        LG.debug("Could not fetch coordinator flag from Orchestra: %s", exc)
+        LG.debug("Could not fetch assistant info from Orchestra: %s", exc)
 
 
 async def initialize_cm(

@@ -18,6 +18,8 @@ import asyncio
 import logging
 import os
 import signal
+import subprocess
+import sys
 import time
 from contextlib import suppress
 from multiprocessing import get_context
@@ -48,6 +50,7 @@ from sandboxes.conversation_manager.livekit_bootstrap import (
     stop_livekit,
     try_start_livekit_direct,
 )
+from sandboxes.conversation_manager.live_voice import _voice_agent_log_path
 from sandboxes.conversation_manager.desktop_bootstrap import (
     try_start_desktop_direct,
     try_auto_bootstrap_desktop,
@@ -65,6 +68,46 @@ from sandboxes.utils import (
 )
 
 LG = logging.getLogger("conversation_manager_sandbox")
+
+
+def _redirect_voice_worker_output(log_path: Path) -> None:
+    """Redirect voice-agent subprocess output to *log_path* for the sandbox lifetime.
+
+    The persistent LiveKit worker is started inside ``initialize_cm()`` via
+    ``run_script``.  Without this patch the worker subprocess inherits the
+    terminal's stdout/stderr, causing all ``🧠 LLM thinking``, ``🔊 Reply``,
+    and ``⬥ Suppressed speech`` lines to spill into the terminal.
+
+    We patch both module-level bindings of ``run_script`` that
+    ``call_manager`` and ``droid.helpers`` each hold before ``initialize_cm``
+    is called so the worker is spawned with the log file as its fd 1/2.
+    The patch stays in place for the lifetime of the sandbox; subsequent
+    ``_spawn_quiet`` calls in ``live_voice.py`` will temporarily override it
+    during session spawning and then restore it.
+    """
+    import droid.conversation_manager.domains.call_manager as _cm_mod
+    import droid.helpers as _helpers
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_fh = log_path.open("a")
+
+    def _sandboxed_run_script(script, *args, terminal: bool = False):
+        py_cmd = [sys.executable, str(Path(script).expanduser().resolve()), *args]
+        child_env = {
+            **os.environ,
+            "UNIFY_TERMINAL_LOG": "false",
+            "UNILLM_TERMINAL_LOG": "false",
+        }
+        return subprocess.Popen(
+            py_cmd,
+            stdout=log_fh,
+            stderr=log_fh,
+            start_new_session=True,
+            env=child_env,
+        )
+
+    _helpers.run_script = _sandboxed_run_script  # type: ignore[assignment]
+    _cm_mod.run_script = _sandboxed_run_script  # type: ignore[assignment]
 
 
 def _enable_unillm_boundary_logging() -> Path:
@@ -684,6 +727,11 @@ async def _main_async() -> None:
                 setattr(args, "_livekit_process", None)
                 if _lk.summary and "non-local URL" not in _lk.summary:
                     print(f"[livekit] {_lk.summary}")
+
+        # Redirect voice-agent worker stdout/stderr to a log file so the
+        # terminal stays clean. Must happen before initialize_cm() so the
+        # persistent LiveKit worker subprocess inherits the redirected fds.
+        _redirect_voice_worker_output(_voice_agent_log_path())
 
         cm = await initialize_cm(args=args)
         setattr(args, "_cm", cm)
