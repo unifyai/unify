@@ -9,7 +9,7 @@ These are the same builder functions and kwargs wiring used at runtime; only
 contact placeholders differ unless you pass real values on the CLI.
 
 Two personas are supported via ``--persona``:
-- ``coordinator`` (default) renders Marty coordinator prompts. Personality and
+- ``coordinator`` (default) renders Twin coordinator prompts. Personality and
   role intro come from ``prompt_builders``; ``--assistant-bio`` supplies optional
   user-authored about text only.
 - ``regular`` renders a regular assistant's prompts with ``is_coordinator=False``,
@@ -79,7 +79,7 @@ DEFAULT_ASSISTANT = {
     "bio": "",
     "job_title": COORDINATOR_JOB_TITLE,
     "phone": "+15557654321",
-    "email": "marty@acme.com",
+    "email": "twin@acme.com",
 }
 
 REGULAR_ASSISTANT = {
@@ -215,7 +215,7 @@ def _write_or_print(label: str, content: str, write_dir: Path | None) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Dump production Marty/coordinator voice-call prompts for slow brain and fast brain."
+            "Dump production Twin/coordinator voice-call prompts for slow brain and fast brain."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=dedent(
@@ -285,7 +285,7 @@ def main() -> int:
         default=None,
         help=(
             "Optional user-authored about text. For coordinator prompts this is "
-            "appended as an About me section; Marty intro comes from prompt_builders."
+            "appended as an About me section; Twin intro comes from prompt_builders."
         ),
     )
     parser.add_argument(

@@ -18,11 +18,11 @@ from ..common.prompt_helpers import now, PromptParts
 # Internal helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-COORDINATOR_NAME = "Marty"
+COORDINATOR_NAME = "Twin"
 COORDINATOR_JOB_TITLE = "Coordinator"
 
-_MARTY_INTRO = """\
-I'm Marty — your personal stand-in inside Unify. I'm here for you, specifically. When you connect your workspace, I act through your accounts and show up as you, not as a separate identity on the side. Other colleagues you set up later may have their own mailbox, phone, and scope. I'm a generalist who carries your context and helps with whatever is actually on your plate.
+_TWIN_INTRO = """\
+I'm Twin — your personal stand-in inside Unify. I'm here for you, specifically. When you connect your workspace, I act through your accounts and show up as you, not as a separate identity on the side. Other colleagues you set up later may have their own mailbox, phone, and scope. I'm a generalist who carries your context and helps with whatever is actually on your plate.
 
 I treat the first stretch of our working relationship as discovery. I want to understand your world — what fills your week, what's been on your list that you keep meaning to get to, the shape of your team and your stack, the things that have been quietly draining your time. I won't grill you with an intake form; that's the wrong dynamic. But as natural moments arise, I'll ask the question that would let me show up better next time. I listen for friction — when you mention something is a hassle, repetitive, or has been bugging you for a while, I treat that as a hook to remember, even if you didn't explicitly ask me to fix it.
 
@@ -38,13 +38,13 @@ For org-shaped work — shared integrations, onboarding a colleague, deciding ho
 """
 
 
-def _build_marty_intro_block() -> str:
-    """Build Marty's fixed role and personality intro for coordinator prompts."""
+def _build_twin_intro_block() -> str:
+    """Build Twin's fixed role and personality intro for coordinator prompts."""
     return f"""{COORDINATOR_NAME}
 ----
 Role / specialization: {COORDINATOR_JOB_TITLE}.
 
-{_MARTY_INTRO}"""
+{_TWIN_INTRO}"""
 
 
 def _build_user_about_block(user_about: str) -> str:
@@ -139,14 +139,14 @@ def _user_display_name(first_name: str, surname: str) -> str:
     return name or "the user"
 
 
-def _build_marty_external_identity_block(*, first_name: str, surname: str) -> str:
+def _build_twin_external_identity_block(*, first_name: str, surname: str) -> str:
     user_name = _user_display_name(first_name, surname)
-    return f"""Marty identity
+    return f"""Twin identity
 --------------
 {COORDINATOR_NAME} is {user_name}'s personal, private assistant. {COORDINATOR_NAME} has privileged access to {user_name}'s own personal workspace and may have access to {user_name}'s inbox, calendar, files, folders, and organization workspace resources when {user_name} has granted approval. {COORDINATOR_NAME} can invite team members, create teams, and hire assistants. {COORDINATOR_NAME} works directly with {user_name}; he does not communicate with other people."""
 
 
-def _build_marty_self_identity_block(*, first_name: str, surname: str) -> str:
+def _build_twin_self_identity_block(*, first_name: str, surname: str) -> str:
     user_name = _user_display_name(first_name, surname)
     return f"""My identity
 -----------
@@ -218,15 +218,15 @@ The following people are members of this organization. I work with all of them a
 Admins can authorize org-membership and shared-workspace lifecycle changes. Members can request these changes, but execution requires admin authorization."""
 
 
-def _build_marty_deferral_block(
+def _build_twin_deferral_block(
     *,
     first_name: str,
     surname: str,
     is_org_workspace: bool,
 ) -> str:
-    """Build the block that names Marty alongside the assistant.
+    """Build the block that names Twin alongside the assistant.
 
-    Marty is a unified stand-in: he can take any request the user
+    Twin is a unified stand-in: he can take any request the user
     would normally bring to me, AND it owns the org-admin / setup surfaces
     that I do not. This block helps me route shaping-the-team work to it
     when that is the natural fit, without pretending I cannot help with the
@@ -242,7 +242,7 @@ def _build_marty_deferral_block(
             "- organization-wide configuration (members, billing handoffs, spending limits)",
         )
     coordinator_surface_block = "\n".join(coordinator_surface)
-    return f"""{_build_marty_external_identity_block(first_name=first_name, surname=surname)}
+    return f"""{_build_twin_external_identity_block(first_name=first_name, surname=surname)}
 
 {COORDINATOR_NAME} is the natural place for:
 {coordinator_surface_block}
@@ -400,7 +400,7 @@ def _build_slack_guidelines(assistant_has_slack: bool) -> str:
 
 
 def _build_coordinator_guidelines(is_coordinator: bool) -> str:
-    """Extra guidance for Marty in org routing fallback cases."""
+    """Extra guidance for Twin in org routing fallback cases."""
     if not is_coordinator:
         return ""
     return (
@@ -609,7 +609,7 @@ def _build_comms_tool_listing(
 
 
 def _build_coordinator_admin_tool_listing(*, is_org_workspace: bool) -> str:
-    """Build Marty's admin tools block for the output format section."""
+    """Build Twin's admin tools block for the output format section."""
     lines = [
         f"- `act` is the execution path for privileged {COORDINATOR_NAME} lifecycle operations.",
         "- Inside `act`, use `primitives.coordinator.*` for assistant/team/membership reads and mutations.",
@@ -628,7 +628,7 @@ def _build_coordinator_admin_tool_listing(*, is_org_workspace: bool) -> str:
 
 
 def _build_coordinator_act_query_guidance_block() -> str:
-    """Build Marty-specific guidance for composing ``act`` queries."""
+    """Build Twin-specific guidance for composing ``act`` queries."""
     return f"""{COORDINATOR_NAME} act query guidance
 -----------------------
 When composing ``act`` queries for colleague lifecycle, workspace setup, or
@@ -670,7 +670,7 @@ delegated follow-up work:
 
 
 def _build_coordinator_knowledge_tool_listing() -> str:
-    """Build Marty's supporting knowledge/action tools block."""
+    """Build Twin's supporting knowledge/action tools block."""
     return "\n".join(
         [
             f"- `act`: Use for discovery, execution, and validation across domains. {COORDINATOR_NAME} lifecycle operations are executed through `act` using `primitives.coordinator.*`.",
@@ -683,12 +683,12 @@ def _build_coordinator_knowledge_tool_listing() -> str:
 
 
 def _build_coordinator_onboarding_narration_block() -> str:
-    """Reactive-narration guidance for Marty's onboarding flow.
+    """Reactive-narration guidance for Twin's onboarding flow.
 
     Orchestra publishes a ``coordinator_onboarding_event`` system event
     every time a real onboarding milestone lands (workspace OAuth,
     integration connect, task create, action start, specialist hire)
-    *while Marty is still in onboarding mode*. The
+    *while Twin is still in onboarding mode*. The
     notifications bar surfaces each event tagged with subtype + a
     short human summary; this block tells the brain how to react.
 
@@ -1534,8 +1534,8 @@ def build_system_prompt(
     ----------
     bio : str
         For regular assistants, the full bio/about text rendered under ``Bio``.
-        For Marty sessions, optional user-authored about text rendered under
-        ``About me`` when non-empty; fixed Marty intro comes from prompt scaffolding.
+        For Twin sessions, optional user-authored about text rendered under
+        ``About me`` when non-empty; fixed Twin intro comes from prompt scaffolding.
     contact_id : int
         The boss contact's ID.
     first_name : str
@@ -1731,11 +1731,11 @@ def build_system_prompt(
 {runtime_setup_note}""",
         )
 
-    # 2. Role + identity. Marty sessions carry a fixed intro; user about is optional.
+    # 2. Role + identity. Twin sessions carry a fixed intro; user about is optional.
     if is_coordinator:
-        parts.add(_build_marty_intro_block())
+        parts.add(_build_twin_intro_block())
         parts.add(
-            _build_marty_self_identity_block(
+            _build_twin_self_identity_block(
                 first_name=first_name,
                 surname=surname,
             ),
@@ -2080,7 +2080,7 @@ When contacts communicate in a non-English language, I match their language in m
                     app_management_faq=app_management_faq,
                 ),
             )
-        coordinator_reference = _build_marty_deferral_block(
+        coordinator_reference = _build_twin_deferral_block(
             first_name=first_name,
             surname=surname,
             is_org_workspace=is_org_workspace,
@@ -2233,7 +2233,7 @@ def _build_coordinator_voice_opening_block(
     skipped_onboarding_steps: list[str] | None = None,
     active_onboarding_step: str | None = None,
 ) -> str:
-    """Voice-only session-opening guidance for Marty.
+    """Voice-only session-opening guidance for Twin.
 
     The slow-brain ``coordinator_onboarding_event`` reactive block
     cannot help during a voice call's *opening* turn: the call agent
@@ -2243,7 +2243,7 @@ def _build_coordinator_voice_opening_block(
     line is shaped correctly.
 
     Gated only on ``is_coordinator`` — the rule is benign for both
-    onboarding and working-mode Marty calls (fresh history ⇒
+    onboarding and working-mode Twin calls (fresh history ⇒
     intro is appropriate either way; resumed history ⇒ skipping the
     intro is appropriate either way).
 
@@ -2355,8 +2355,8 @@ def build_voice_agent_prompt(
     ----------
     bio : str
         For regular assistants, the full bio/about text rendered under ``Bio``.
-        For Marty sessions, optional user-authored about text rendered under
-        ``About me`` when non-empty; fixed Marty intro comes from prompt scaffolding.
+        For Twin sessions, optional user-authored about text rendered under
+        ``About me`` when non-empty; fixed Twin intro comes from prompt scaffolding.
     assistant_name : str | None
         The assistant's own name (so it can introduce itself).
     boss_first_name : str
@@ -2486,12 +2486,12 @@ I never reference internal systems, backends, or notifications.
 I match the caller's language.""",
     )
 
-    # Role. Marty sessions carry a fixed intro; the generic remote-employee role
+    # Role. Twin sessions carry a fixed intro; the generic remote-employee role
     # block applies only to regular assistants.
     if is_coordinator:
-        parts.add(_build_marty_intro_block())
+        parts.add(_build_twin_intro_block())
         parts.add(
-            _build_marty_self_identity_block(
+            _build_twin_self_identity_block(
                 first_name=boss_first_name,
                 surname=boss_surname,
             ),
@@ -2525,7 +2525,7 @@ I let the results speak for themselves rather than narrating steps or repeating 
 
     parts.add(_build_visible_presence_block())
 
-    # Marty opening turn — shapes the very first spoken line
+    # Twin opening turn — shapes the very first spoken line
     # so a fresh call gets a proper introduction and a resumed call
     # skips the intro. Gated on ``is_coordinator`` only: the rule is
     # neutral across onboarding vs working mode (history empty →
