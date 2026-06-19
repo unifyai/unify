@@ -240,6 +240,16 @@ def _task_due_event_from_payload(
     return TaskDue.from_dict(payload, reason=reason)
 
 
+def _task_trigger_event_from_payload(
+    payload: dict[str, Any],
+    *,
+    reason: str = "",
+) -> TaskTriggerRequested | None:
+    """Build a REST task-trigger event from a comms Pub/Sub payload."""
+
+    return TaskTriggerRequested.from_dict(payload, reason=reason)
+
+
 # Map subscription IDs to their corresponding event types
 events_map: dict[str, Event] = {
     "msg": SMSReceived,
@@ -797,6 +807,10 @@ class CommsManager:
                         reason=r or "Contact sync requested via system event.",
                     ),
                     "task_due": lambda r: _task_due_event_from_payload(
+                        event,
+                        reason=r,
+                    ),
+                    "task_trigger": lambda r: _task_trigger_event_from_payload(
                         event,
                         reason=r,
                     ),

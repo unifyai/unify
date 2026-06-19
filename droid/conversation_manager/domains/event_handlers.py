@@ -39,6 +39,7 @@ from droid.conversation_manager.domains.self_host_desktop import (
 from droid.conversation_manager.domains.task_activation import (
     _consume_startup_wake_reasons,
     _handle_task_due_event,
+    _handle_task_trigger_requested_event,
     _surface_trigger_task_candidates,
 )
 from droid.memory_manager import broader_context
@@ -2322,6 +2323,17 @@ async def _(
     **kwargs,
 ):
     if await _handle_task_due_event(event, cm):
+        await cm.request_llm_run(delay=0)
+
+
+@EventHandler.register(TaskTriggerRequested)
+async def _(
+    event: TaskTriggerRequested,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    if await _handle_task_trigger_requested_event(event, cm):
         await cm.request_llm_run(delay=0)
 
 

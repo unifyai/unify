@@ -17,6 +17,7 @@ from droid.conversation_manager.events import (
     ActorHandleStarted,
     FastBrainNotification,
     TaskDue,
+    TaskTriggerRequested,
 )
 from droid.common.prompt_helpers import now as prompt_now
 from droid.logger import LOGGER
@@ -147,6 +148,35 @@ async def _start_live_task_due_execution(
     return await _register_live_task_handle(cm, handle=handle, query=query)
 
 
+async def _start_live_task_trigger_execution(
+    event: TaskTriggerRequested,
+    cm: "ConversationManager",
+) -> int:
+    """Start a REST-triggered task through the scheduler execution path."""
+
+    if cm.actor is None:
+        raise RuntimeError(
+            "Cannot execute triggered task before the live actor is initialized.",
+        )
+
+    scheduler = ManagerRegistry.get_task_scheduler()
+    delegate = _ConversationTaskExecutionDelegate(cm.actor)
+    delegate_token = current_task_execution_delegate.set(delegate)
+    try:
+        handle = await scheduler.execute(
+            task_id=event.task_id,
+            _activated_by=ActivatedBy.explicit,
+        )
+    finally:
+        current_task_execution_delegate.reset(delegate_token)
+
+    query = (
+        f"Task triggered via REST API: '{_task_trigger_label(event)}' "
+        f"(task_id={event.task_id})."
+    )
+    return await _register_live_task_handle(cm, handle=handle, query=query)
+
+
 def _current_task_assistant_id() -> str | None:
     """Return the current assistant id in the string form task state expects."""
 
@@ -239,6 +269,43 @@ def _task_due_notification_text(
             "Default behavior: work silently unless you genuinely need the user.",
         )
     parts.append("The task run has been started automatically.")
+    return " ".join(parts)
+
+
+def _task_trigger_label(event: TaskTriggerRequested) -> str:
+    """Return the human-facing label for one REST-triggered task."""
+
+    return event.task_label or f"task {event.task_id}"
+
+
+def _task_trigger_summary(event: TaskTriggerRequested) -> str:
+    """Return one compact summary for one REST-triggered task."""
+
+    label = _task_trigger_label(event)
+    return _compact_task_text(event.task_summary, fallback=label)
+
+
+def _task_trigger_notification_text(event: TaskTriggerRequested) -> str:
+    """Return the slow-brain instruction for an accepted REST task trigger."""
+
+    label = _task_trigger_label(event)
+    summary = _task_trigger_summary(event)
+    parts = [f"Task triggered via REST API: '{label}'."]
+    if summary and summary != label:
+        parts.append(f"Summary: {summary}.")
+    parts.append("The task run has been started automatically.")
+    return " ".join(parts)
+
+
+def _task_trigger_fast_brain_context(event: TaskTriggerRequested) -> str:
+    """Return silent fast-brain context for one REST-triggered task."""
+
+    label = _task_trigger_label(event)
+    summary = _task_trigger_summary(event)
+    parts = [f"Background context: the task '{label}' was triggered via REST API."]
+    if summary and summary != label:
+        parts.append(f"Summary: {summary}.")
+    parts.append("The slow brain is handling the triggered task.")
     return " ".join(parts)
 
 
@@ -391,6 +458,14 @@ def _task_due_event_from_wake_reason(reason: Any) -> TaskDue | None:
     return TaskDue.from_dict(reason)
 
 
+def _task_trigger_event_from_wake_reason(reason: Any) -> TaskTriggerRequested | None:
+    """Convert one startup wake-reason payload into a REST task-trigger event."""
+
+    if not isinstance(reason, dict) or reason.get("type") != "task_trigger":
+        return None
+    return TaskTriggerRequested.from_dict(reason)
+
+
 async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> bool:
     """Validate and surface one due-task event to the notification bar."""
 
@@ -466,6 +541,59 @@ async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> b
     return False
 
 
+async def _handle_task_trigger_requested_event(
+    event: TaskTriggerRequested,
+    cm: "ConversationManager",
+) -> bool:
+    """Start one REST-triggered task and surface execution status."""
+
+    assistant_id = _current_task_assistant_id()
+    if assistant_id:
+        remember_live_task_run_provenance(
+            TaskRunProvenance(
+                assistant_id=assistant_id,
+                task_id=event.task_id,
+                source_type="explicit",
+                execution_mode="live",
+                source_task_log_id=event.source_task_log_id,
+                destination=event.destination,
+                source_ref=event.source_ref,
+                task_name=event.task_label or None,
+                task_description=event.task_summary or None,
+            ),
+        )
+    try:
+        handle_id = await _start_live_task_trigger_execution(event, cm)
+    except Exception as exc:
+        error_message = (
+            f"REST-triggered task '{_task_trigger_label(event)}' failed to start "
+            f"through TaskScheduler.execute: {type(exc).__name__}: {exc}"
+        )
+        cm._session_logger.error("task_trigger", error_message)
+        cm.notifications_bar.push_notif("Tasks", error_message, event.timestamp)
+        publish_system_error(
+            error_message,
+            error_type="rest_task_trigger_start_failed",
+        )
+        return False
+
+    cm.notifications_bar.push_notif(
+        "Tasks",
+        _task_trigger_notification_text(event),
+        event.timestamp,
+    )
+    cm._session_logger.info(
+        "task_trigger",
+        f"Accepted REST task trigger for task {event.task_id} (handle_id={handle_id})",
+    )
+    await _queue_fast_brain_task_context(
+        cm,
+        content=_task_trigger_fast_brain_context(event),
+        source="task_trigger",
+    )
+    return False
+
+
 async def _consume_startup_wake_reasons(cm: "ConversationManager") -> None:
     """Replay startup wake reasons once managers are initialized."""
 
@@ -490,6 +618,11 @@ async def _consume_startup_wake_reasons(cm: "ConversationManager") -> None:
         task_due_event = _task_due_event_from_wake_reason(wake_reason)
         if task_due_event is not None:
             await _handle_task_due_event(task_due_event, cm)
+            continue
+
+        task_trigger_event = _task_trigger_event_from_wake_reason(wake_reason)
+        if task_trigger_event is not None:
+            await _handle_task_trigger_requested_event(task_trigger_event, cm)
             continue
 
         inactivity_event = _inactivity_followup_event_from_wake_reason(wake_reason)
