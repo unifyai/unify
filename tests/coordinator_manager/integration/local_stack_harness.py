@@ -83,10 +83,10 @@ def resolve_sibling_repo(name: str) -> Path:
 
 
 def _resolve_stack_script() -> tuple[Path, Path]:
-    # The self-host stack orchestration lives in the private unity-deploy repo
+    # The self-host stack orchestration lives in the private droid-deploy repo
     # (selfhost/stack.sh), which drives the sibling droid/console/orchestra
     # checkouts. Returns (cwd, stack.sh path).
-    deploy_repo = resolve_sibling_repo("unity-deploy")
+    deploy_repo = resolve_sibling_repo("droid-deploy")
     stack_script = deploy_repo / "selfhost" / "stack.sh"
     if not stack_script.is_file():
         raise FileNotFoundError(f"stack.sh not found at {stack_script}")

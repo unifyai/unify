@@ -44,7 +44,7 @@ droid setup      # re-run the key/credential wizard
 
 **Internal full-local self-host stack.** The "all-repo fully local" stack
 (local Orchestra + Console + Coordinator + gateway, via Docker Compose) is an
-internal-only path and lives in the private **`unity-deploy`** repo under
+internal-only path and lives in the private **`droid-deploy`** repo under
 `selfhost/` (`stack.sh`, `setup.sh`, `service.sh`, compose bundle). It drives
 sibling `droid`/`console`/`orchestra` checkouts under `UNIFY_STACK_ROOT`.
 

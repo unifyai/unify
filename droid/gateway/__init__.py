@@ -37,7 +37,7 @@ This package provides the seam — protocols, in-process default
 implementations, and Pydantic envelope schemas — plus the channel routers
 (Twilio, Microsoft Graph, Discord, etc.) under ``droid.gateway.channels``.
 The hosted infrastructure that wraps these routers (VM pools, tunnels,
-schedulers, Kubernetes activation) lives in the ``unity-deploy`` repository.
+schedulers, Kubernetes activation) lives in the ``droid-deploy`` repository.
 See ``droid/gateway/PHASES.md`` for the migration history.
 """
 

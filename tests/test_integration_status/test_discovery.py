@@ -1,6 +1,6 @@
 """Integration-style tests for ``droid.integration_status.discovery``.
 
-These run against the real unity-deploy package roots so they verify the
+These run against the real droid-deploy package roots so they verify the
 import path, manifest parsing, and slug-to-directory contract end to end.
 Lightweight (~20ms; no network, no DataManager).
 """
@@ -13,13 +13,13 @@ import pytest
 
 from droid.integration_status import discovery as D
 
-# This test module exercises real package discovery, which needs unity_deploy
+# This test module exercises real package discovery, which needs droid_deploy
 # importable.  In droid's standalone venv that's not the case; skip cleanly
 # rather than emit confusing failures.
-_DROID_DEPLOY_AVAILABLE = importlib.util.find_spec("unity_deploy") is not None
+_DROID_DEPLOY_AVAILABLE = importlib.util.find_spec("droid_deploy") is not None
 pytestmark = pytest.mark.skipif(
     not _DROID_DEPLOY_AVAILABLE,
-    reason="unity_deploy not installed in this venv; run from unity-deploy/.venv",
+    reason="droid_deploy not installed in this venv; run from droid-deploy/.venv",
 )
 
 

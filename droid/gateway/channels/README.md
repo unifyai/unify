@@ -141,6 +141,6 @@ Self-hosted users still need provider accounts, provider credentials, a public
 HTTPS callback URL, and any provider-side app/webhook/OAuth configuration. Droid
 does not run a tunnel service or mutate provider consoles.
 
-Hosted SaaS runs the private [`unity-deploy`](https://github.com/unifyai/unity-deploy)
+Hosted SaaS runs the private [`droid-deploy`](https://github.com/unifyai/droid-deploy)
 repository for GCP, Kubernetes, DNS, scheduler, tunnel, and runtime-activation
 infrastructure. Self-hosted users do not need that repository.

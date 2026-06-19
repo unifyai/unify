@@ -91,17 +91,17 @@ steps:
       deploy/scripts/job-watcher/deployment_staging.yaml | kubectl apply -f -
   waitFor: ['push-job-watcher']
 
-  # Trigger enterprise overlay build in unity-deploy.
-  # Passes the just-pushed base image as a substitution so unity-deploy
+  # Trigger enterprise overlay build in droid-deploy.
+  # Passes the just-pushed base image as a substitution so droid-deploy
   # builds FROM this exact image (not a stale :latest).
-  # unity-deploy handles GCS upload and idle job refresh.
+  # droid-deploy handles GCS upload and idle job refresh.
 - name: 'gcr.io/cloud-builders/gcloud'
   id: 'trigger-deploy-build'
   args:
   - 'builds'
   - 'triggers'
   - 'run'
-  - 'unity-deploy-staging'
+  - 'droid-deploy-staging'
   - '--project=${PROJECT_ID}'
   - '--region=${_REGION}'
   - '--branch=staging'
