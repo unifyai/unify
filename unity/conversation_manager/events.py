@@ -1777,6 +1777,35 @@ class UserRemoteControlStopped(Event):
 
 
 @dataclass
+class UserFilesysAccessStarted(Event):
+    """User (re-)enabled this assistant's access to their home filesystem.
+
+    Carries ``user_id`` (the desktop owner) because one assistant may have
+    several users' desktops linked; the live grant targets that user's link.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:user_filesys_access_started"
+
+    user_id: str = ""
+    reason: str = ""
+
+
+@dataclass
+class UserFilesysAccessStopped(Event):
+    """User revoked this assistant's access to their home filesystem.
+
+    In-flight actors must stop reading from / writing back to that machine.
+    Carries ``user_id`` (the desktop owner) so the revoke targets the right
+    link when multiple users' desktops are linked.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:user_filesys_access_stopped"
+
+    user_id: str = ""
+    reason: str = ""
+
+
+@dataclass
 class SyncContacts(Event):
     """Signal to re-sync system contacts from the API (assistant, user, org members)."""
 

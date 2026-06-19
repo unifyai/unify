@@ -3138,6 +3138,49 @@ async def _(
             await cm.capture_assistant_screenshot("", cached=False)
 
 
+@EventHandler.register((UserFilesysAccessStarted, UserFilesysAccessStopped))
+async def _(
+    event: UserFilesysAccessStarted | UserFilesysAccessStopped,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    """Apply a live filesystem-access consent change to in-flight actors.
+
+    The standing Console link already mutated server-side; this propagates the
+    change to a running session so reads/writebacks stop (or resume) at once
+    instead of waiting for the next session load. Targets the desktop owner's
+    link via ``user_id``; broadcasting is handled inside the primitive.
+    """
+    user_id = (event.user_id or "").strip()
+    if not user_id:
+        cm._session_logger.info(
+            "user_filesys_access",
+            f"Event: {event.__class__.__name__} with no user_id; ignoring",
+        )
+        return
+
+    started = isinstance(event, UserFilesysAccessStarted)
+    cm._session_logger.info(
+        "user_filesys_access",
+        f"Event: {event.__class__.__name__} user_id={user_id}",
+    )
+
+    from droid.function_manager.primitives.runtime import ComputerPrimitives
+    from droid.manager_registry import ManagerRegistry
+
+    cp = ManagerRegistry.get_instance(ComputerPrimitives)
+    if cp is None:
+        return
+    if started:
+        cp.grant_user_filesys_access(user_id)
+    else:
+        cp.revoke_user_filesys_access(
+            user_id,
+            conversation_context=_recent_conversation_snippet(cm),
+        )
+
+
 @EventHandler.register(LogMessageResponse)
 async def _(event: LogMessageResponse, cm: "ConversationManager", *args, **kwargs):
     if (
