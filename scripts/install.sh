@@ -19,7 +19,7 @@
 #   -h, --help        Show this help
 #
 # The full local self-host stack (local Orchestra + Console + Coordinator) is
-# an internal-only path and lives in the private unity-deploy repo.
+# an internal-only path and lives in the private droid-deploy repo.
 # ============================================================================
 
 set -e

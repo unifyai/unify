@@ -85,11 +85,11 @@ compatibility tests rather than configured in provider dashboards.
 
 ## Hosted Usage
 
-The hosted deployment in [`unity-deploy`](https://github.com/unifyai/unity-deploy)
+The hosted deployment in [`droid-deploy`](https://github.com/unifyai/droid-deploy)
 composes this gateway app and injects hosted infrastructure backends: Pub/Sub
 envelope delivery and the hosted AssistantSession activation infrastructure.
 Hosted-only VM pools, tunnels, Cloud Scheduler/Tasks, DNS, and Kubernetes
-controllers live in `unity-deploy` as well.
+controllers live in `droid-deploy` as well.
 
 ## Relationship to `droid.conversation_manager`
 
@@ -99,9 +99,9 @@ flows through `HttpEnvelopeSink` into the runtime-side local ingress endpoint;
 hosted inbound delivery flows through Pub/Sub topics consumed by Droid runtime
 workers.
 
-## Relationship to `unity-deploy`
+## Relationship to `droid-deploy`
 
-[`unity-deploy`](https://github.com/unifyai/unity-deploy) is the hosted
+[`droid-deploy`](https://github.com/unifyai/droid-deploy) is the hosted
 infrastructure wrapper around `droid.gateway`. The hosted-only pieces that live
 there are:
 
@@ -114,7 +114,7 @@ there are:
   `droid.gateway`.
 
 (These previously lived in a separate `communication` repository, now archived;
-the hosted runtime, adapters, and infrastructure moved into `unity-deploy`.)
+the hosted runtime, adapters, and infrastructure moved into `droid-deploy`.)
 
 Self-hosted users never touch the private repo. They install Droid, provide
 provider credentials and a public callback URL, and run the Droid gateway

@@ -128,7 +128,7 @@ For real channels, the operator still provides:
 
 ## Relationship to Hosted Communication
 
-The private [`unity-deploy`](https://github.com/unifyai/unity-deploy) repository
+The private [`droid-deploy`](https://github.com/unifyai/droid-deploy) repository
 is not required for self-hosted users. It wraps `droid.gateway` for hosted SaaS
 and owns GCP, Kubernetes, DNS, scheduler, tunnel, and hosted runtime-activation
 infrastructure.

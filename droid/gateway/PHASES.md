@@ -3,7 +3,7 @@
 > **Status / provenance.** This is the historical rollout plan for moving
 > Droid's external-comms transport layer into `droid.gateway`. The `communication`
 > repository referenced throughout is **archived** — the hosted runtime, adapters,
-> and infrastructure now live in [`unity-deploy`](https://github.com/unifyai/unity-deploy).
+> and infrastructure now live in [`droid-deploy`](https://github.com/unifyai/droid-deploy).
 > Treat the `communication/...` paths below as historical context, not current
 > locations.
 

@@ -5,7 +5,7 @@ Two orthogonal mechanisms, deliberately decoupled from secret transport
 
 1. **Registration (startup, mechanism 1).**
    :func:`register_available_integrations` registers functions + guidance for
-   configured package manifests under unity-deploy's package roots.
+   configured package manifests under droid-deploy's package roots.
    Synchronous, main-thread, idempotent.  Called once from :mod:`droid.__init__`
    after :meth:`ContextRegistry.setup`.
 
@@ -370,7 +370,7 @@ def _register_guidance(pkg: dict) -> int:
         return 0
 
     try:
-        from unity_deploy.assistant_deployments.integrations.loader import (
+        from droid_deploy.assistant_deployments.integrations.loader import (
             _load_guidance,
         )
     except Exception:
