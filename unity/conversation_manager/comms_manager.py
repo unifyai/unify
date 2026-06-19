@@ -954,6 +954,14 @@ class CommsManager:
                         reason=r
                         or "User released remote control of assistant desktop.",
                     ),
+                    "user_filesys_access_started": lambda r: UserFilesysAccessStarted(
+                        user_id=str(event.get("user_id") or ""),
+                        reason=r or "User enabled filesystem access.",
+                    ),
+                    "user_filesys_access_stopped": lambda r: UserFilesysAccessStopped(
+                        user_id=str(event.get("user_id") or ""),
+                        reason=r or "User disabled filesystem access.",
+                    ),
                     "assistant_desktop_ready": lambda r: AssistantDesktopReady(
                         binding_id=event.get("binding_id") or "",
                         desktop_url=event.get("desktop_url")
