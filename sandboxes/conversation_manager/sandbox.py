@@ -38,10 +38,6 @@ from sandboxes.conversation_manager.config_manager import (
     ActorConfig,
     ConfigurationManager,
 )
-from sandboxes.conversation_manager.agent_service_bootstrap import (
-    free_agent_service_port,
-    try_start_agent_service_direct,
-)
 from sandboxes.conversation_manager.gateway_bootstrap import (
     stop_gateway,
     try_start_gateway_direct,
@@ -52,11 +48,9 @@ from sandboxes.conversation_manager.livekit_bootstrap import (
 )
 from sandboxes.conversation_manager.live_voice import _voice_agent_log_path
 from sandboxes.conversation_manager.desktop_bootstrap import (
-    try_start_desktop_direct,
-    try_auto_bootstrap_desktop,
+    bootstrap_desktop_container,
     stop_desktop_container,
     _docker_available,
-    _desktop_image_exists,
 )
 from sandboxes.conversation_manager.event_subscriber import subscribe_to_responses
 from sandboxes.conversation_manager.event_tree_display import EventTreeDisplay
@@ -325,15 +319,6 @@ async def _run_gui_mode_multiprocess(*, args: Any, config: dict) -> bool:
             )
         except Exception:
             pass
-        try:
-            await asyncio.to_thread(
-                free_agent_service_port,
-                repo_root=Path(__file__).resolve().parents[2],
-                agent_server_url=config.get("agent_server_url"),
-                progress=(lambda _m: None),
-            )
-        except Exception:
-            pass
 
     # Restart detection: UI exits with a special code when it wants sandbox restart.
     try:
@@ -489,93 +474,31 @@ async def _main_async() -> None:
                 )
 
             async def _attempt_agent_service_recovery() -> None:
-                """Start both the Docker container (desktop + web-vm) and
-                a local agent-service (web mode).  Either may silently
-                fail without blocking the other.
-                """
+                """Start the Docker desktop container (the only computer-use path)."""
                 container_url = getattr(
                     args,
                     "agent_server_url",
                     "http://localhost:3000",
                 )
-                local_url = getattr(args, "local_url", "http://localhost:3001")
-
-                # 1) Container (desktop + web-vm)
                 existing_container = getattr(args, "_desktop_container_id", None)
-                if existing_container is None:
-                    try:
-                        print("\n[container] Attempting to start (direct)...\n")
-                        res = await asyncio.to_thread(
-                            try_start_desktop_direct,
-                            repo_root=project_root,
-                            agent_server_url=container_url,
-                            progress=(lambda m: print(m)),
-                        )
-                        if res.ok:
-                            setattr(args, "_desktop_container_id", res.container_id)
-                            setattr(args, "container_url", container_url)
-                            print(f"[container] {res.summary}\n")
-                        else:
-                            print(f"[container] {res.summary}\n")
-                            try:
-                                print("[container] Falling back to auto-bootstrap...\n")
-                                res2 = await asyncio.to_thread(
-                                    try_auto_bootstrap_desktop,
-                                    repo_root=project_root,
-                                    agent_server_url=container_url,
-                                    progress=(lambda m: print(m)),
-                                )
-                                if res2.ok:
-                                    setattr(
-                                        args,
-                                        "_desktop_container_id",
-                                        res2.container_id,
-                                    )
-                                    setattr(args, "container_url", container_url)
-                                    print(f"[container] {res2.summary}\n")
-                                else:
-                                    print(f"[container] {res2.summary}\n")
-                            except Exception as exc:
-                                print(f"[container] Auto-bootstrap failed: {exc}\n")
-                    except Exception as exc:
-                        print(f"[container] Direct start failed: {exc}\n")
+                if existing_container is not None:
+                    return
+                print("\n[desktop] Attempting to start container...\n")
+                res = await asyncio.to_thread(
+                    bootstrap_desktop_container,
+                    repo_root=project_root,
+                    agent_server_url=container_url,
+                    progress=(lambda m: print(m)),
+                )
+                if res.ok and res.container_id:
+                    setattr(args, "_desktop_container_id", res.container_id)
+                    setattr(args, "container_url", container_url)
+                    print(f"[desktop] {res.summary}\n")
+                    return
+                print(f"[desktop] {res.summary}\n")
+                raise SystemExit(1)
 
-                # 2) Local agent-service (web mode) -- best-effort
-                existing_proc = getattr(args, "_agent_service_process", None)
-                if existing_proc is None or not (
-                    hasattr(existing_proc, "poll") and existing_proc.poll() is None
-                ):
-                    try:
-                        await asyncio.to_thread(
-                            free_agent_service_port,
-                            repo_root=project_root,
-                            agent_server_url=local_url,
-                            progress=(lambda m: print(m)),
-                        )
-                        print("\n[local-web] Attempting to start agent-service...\n")
-                        res = await asyncio.to_thread(
-                            try_start_agent_service_direct,
-                            repo_root=project_root,
-                            agent_server_url=local_url,
-                            progress=(lambda m: print(m)),
-                        )
-                        if res.ok and res.process is not None:
-                            setattr(args, "_agent_service_process", res.process)
-                            setattr(args, "local_url", local_url)
-                            print(f"[local-web] {res.summary}\n")
-                        else:
-                            if res.process is not None:
-                                try:
-                                    res.process.terminate()
-                                except Exception:
-                                    pass
-                            print(f"[local-web] {res.summary} (web mode unavailable)\n")
-                    except Exception as exc:
-                        print(
-                            f"[local-web] Start failed: {exc} (web mode unavailable)\n",
-                        )
-
-            # In REPL mode, we can optionally attempt agent-service recovery before
+            # In REPL mode, we can optionally attempt desktop recovery before
             # validation. In multi-process GUI mode, the worker owns this lifecycle.
             if not bool(getattr(args, "gui", False)):
                 if (
@@ -584,22 +507,12 @@ async def _main_async() -> None:
                 ):
                     await _attempt_agent_service_recovery()
 
-            # If a local agent-service process is running (started on local_url /
-            # port 3001), validate against that URL rather than the container URL
-            # (agent_server_url / port 3000) which may not be running.
-            _local_proc = getattr(args, "_agent_service_process", None)
-            _local_proc_alive = (
-                _local_proc is not None
-                and hasattr(_local_proc, "poll")
-                and _local_proc.poll() is None
-            )
-            _effective_agent_url = (
-                getattr(args, "local_url", "http://localhost:3001")
-                if _local_proc_alive
-                else getattr(args, "agent_server_url", "http://localhost:3000")
-            )
             _validate_kwargs = dict(
-                agent_server_url=_effective_agent_url,
+                agent_server_url=getattr(
+                    args,
+                    "agent_server_url",
+                    "http://localhost:3000",
+                ),
                 require_agent_service_running=(not bool(getattr(args, "gui", False))),
             )
             vr = await asyncio.to_thread(
@@ -614,24 +527,14 @@ async def _main_async() -> None:
             # falling through to the interactive error prompt.
             if not bool(getattr(args, "gui", False)) and _should_offer_agent_help():
                 await _attempt_agent_service_recovery()
-                # Recompute the effective URL — recovery may have started a local
-                # agent-service process that sets args._agent_service_process and
-                # args.local_url, which _validate_kwargs above could not see yet.
-                _post_recovery_proc = getattr(args, "_agent_service_process", None)
-                _post_recovery_alive = (
-                    _post_recovery_proc is not None
-                    and hasattr(_post_recovery_proc, "poll")
-                    and _post_recovery_proc.poll() is None
-                )
-                _post_recovery_url = (
-                    getattr(args, "local_url", "http://localhost:3001")
-                    if _post_recovery_alive
-                    else getattr(args, "agent_server_url", "http://localhost:3000")
-                )
                 vr = await asyncio.to_thread(
                     cfg_mgr.validate_config,
                     selected,
-                    agent_server_url=_post_recovery_url,
+                    agent_server_url=getattr(
+                        args,
+                        "agent_server_url",
+                        "http://localhost:3000",
+                    ),
                     require_agent_service_running=(
                         not bool(getattr(args, "gui", False))
                     ),
@@ -730,29 +633,31 @@ async def _main_async() -> None:
                 if _lk.summary and "non-local URL" not in _lk.summary:
                     print(f"[livekit] {_lk.summary}")
 
-        # Auto-start the desktop container (Docker) before initialize_cm() so
-        # the computer backend is configured with a live agent-service URL.
-        # This must happen before init because ActorFactory reads
-        # args.agent_server_url when creating the backend; late starts in the
-        # post-init validation loop are fine for recovery but cannot fix the
-        # initial wiring.
+        # Auto-start the desktop container before initialize_cm() so the computer
+        # backend is configured with a live agent-service URL on port 3000.
         _container_url = getattr(args, "agent_server_url", "http://localhost:3000")
         if (
-            getattr(args, "agent_service_bootstrap", "guide") == "auto"
+            getattr(selected, "actor_type", None) == "codeact_real"
+            and getattr(args, "agent_service_bootstrap", "guide") == "auto"
             and not getattr(args, "_desktop_container_id", None)
-            and _docker_available()
-            and _desktop_image_exists()
         ):
+            if not _docker_available():
+                print(
+                    "[desktop] Docker is required for computer use but is not available.",
+                )
+                raise SystemExit(1)
             _desktop = await asyncio.to_thread(
-                try_start_desktop_direct,
+                bootstrap_desktop_container,
                 repo_root=project_root,
                 agent_server_url=_container_url,
                 progress=(lambda m: print(m)),
             )
-            if _desktop.ok and _desktop.container_id:
-                setattr(args, "_desktop_container_id", _desktop.container_id)
-            elif _desktop.summary:
+            if not _desktop.ok or not _desktop.container_id:
                 print(f"[desktop] {_desktop.summary}")
+                raise SystemExit(1)
+            setattr(args, "_desktop_container_id", _desktop.container_id)
+            setattr(args, "container_url", _container_url)
+            print(f"[desktop] {_desktop.summary}")
 
         # Redirect voice-agent worker stdout/stderr to a log file so the
         # terminal stays clean. Must happen before initialize_cm() so the
@@ -936,20 +841,6 @@ async def _main_async() -> None:
                     )
             except Exception:
                 pass
-            # If we auto-started a local agent-service, stop it on exit.
-            try:
-                proc = getattr(args, "_agent_service_process", None)
-                if proc is not None and hasattr(proc, "terminate"):
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=2.0)
-                    except Exception:
-                        try:
-                            proc.kill()
-                        except Exception:
-                            pass
-            except Exception:
-                pass
             # If we auto-started a local gateway, stop it on exit.
             try:
                 gw_proc = getattr(args, "_gateway_process", None)
@@ -965,22 +856,6 @@ async def _main_async() -> None:
                 if lk_proc is not None:
                     await asyncio.to_thread(stop_livekit, lk_proc)
                     setattr(args, "_livekit_process", None)
-            except Exception:
-                pass
-            # Best-effort: ensure the configured port isn't left bound by a sandbox-started
-            # agent-service instance (only for web mode, not desktop).
-            try:
-                if getattr(args, "_desktop_container_id", None) is None:
-                    await asyncio.to_thread(
-                        free_agent_service_port,
-                        repo_root=project_root,
-                        agent_server_url=getattr(
-                            args,
-                            "agent_server_url",
-                            "http://localhost:3000",
-                        ),
-                        progress=(lambda _m: None),
-                    )
             except Exception:
                 pass
 
