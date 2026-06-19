@@ -151,3 +151,40 @@ def test_api_message_publishes_gateway_envelope(
         "assistant_id": "123",
         "tags": ["local-e2e"],
     }
+
+
+def test_task_trigger_system_event_publishes_gateway_envelope(
+    app: FastAPI,
+    gateway_context: GatewayContext,
+) -> None:
+    with TestClient(app) as client:
+        response = client.post(
+            "/droid/system-event",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={
+                "assistant_id": "123",
+                "event_type": "task_trigger",
+                "message": "Task 17 triggered via REST API.",
+                "extra_event_fields": {
+                    "type": "task_trigger",
+                    "task_id": 17,
+                    "source_task_log_id": 2001,
+                    "source_ref": "req-abc",
+                    "task_label": "Review report",
+                    "task_summary": "Review the weekly report.",
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    sink = gateway_context.envelope_sink
+    assert isinstance(sink, FakeEnvelopeSink)
+    assistant_id, envelope, thread = sink.published[-1]
+    assert assistant_id == "123"
+    assert thread == "inbound"
+    assert envelope["thread"] == "droid_system_event"
+    assert envelope["event"]["event_type"] == "task_trigger"
+    assert envelope["event"]["task_id"] == 17
+    assert envelope["event"]["source_task_log_id"] == 2001
+    assert envelope["event"]["source_ref"] == "req-abc"
+    assert envelope["event"]["task_label"] == "Review report"

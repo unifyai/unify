@@ -1418,6 +1418,57 @@ class TaskDue(Event):
 
 
 @dataclass
+class TaskTriggerRequested(Event):
+    """A public REST API request asked Droid to start a task immediately."""
+
+    topic: ClassVar[str | None] = "app:comms:task_trigger"
+
+    task_id: int
+    source_task_log_id: int | None = None
+    destination: str | None = None
+    source_ref: str = ""
+    task_label: str = ""
+    task_summary: str = ""
+    reason: str = ""
+
+    @classmethod
+    def from_dict(
+        cls,
+        payload: Any,
+        *,
+        reason: str = "",
+    ) -> "TaskTriggerRequested | None":
+        """Build a REST task-trigger event from a dict-shaped payload."""
+
+        if not isinstance(payload, _Mapping):
+            return None
+        task_id = _coerce_int(payload.get("task_id"))
+        if task_id is None:
+            return None
+        try:
+            destination = ContextRegistry.canonical_destination(
+                payload.get("destination"),
+            )
+        except ValueError:
+            return None
+        task_label = str(payload.get("task_label") or "")
+        resolved_reason = reason or (
+            f"Task '{task_label}' was triggered via REST API."
+            if task_label
+            else f"Task {task_id} was triggered via REST API."
+        )
+        return cls(
+            task_id=task_id,
+            source_task_log_id=_coerce_int(payload.get("source_task_log_id")),
+            destination=destination,
+            source_ref=str(payload.get("source_ref") or ""),
+            task_label=task_label,
+            task_summary=str(payload.get("task_summary") or ""),
+            reason=resolved_reason,
+        )
+
+
+@dataclass
 class InactivityFollowup(Event):
     """Orchestra signalled that the user has been silent across all of
     their assistants for ``settings.inactivity_followup_days`` (orchestra
