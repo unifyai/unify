@@ -659,7 +659,7 @@ jobs:
         repository: unifyai/orchestra
         ref: ${{ needs.discover.outputs.orchestra_branch }}
         path: orchestra
-        token: ${{ secrets.CLONE_TOKEN }}
+        token: ${{ secrets.CLONE_TOKEN || github.token }}
         fetch-depth: 1
 
     - name: Clone unify repo
