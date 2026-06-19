@@ -4,9 +4,8 @@ ConversationManager initialization helper for the sandbox.
 Starts a ConversationManager in-process with:
 - No CommsManager (inbound events are injected via the REPL event publisher)
 - send_email always stripped (OAuth token complexity makes it unsupported for OSS)
-- SMS and outbound call tools kept when a local gateway is running (i.e., when
-  ORCHESTRA_ADMIN_KEY + Twilio credentials are configured and the gateway started
-  successfully); stripped otherwise
+- SMS and outbound call tools kept only when Twilio outbound credentials are
+  configured; stripped otherwise even if the local gateway is running
 - send_unify_message kept and backed by an in-memory outbound transport so the
   tool succeeds without needing GCP credentials or a live Pub/Sub topic
 - is_coordinator synced from the Orchestra API at startup so voice prompts and
@@ -166,12 +165,14 @@ async def initialize_cm(
     # Strip outbound channel tools based on what the gateway supports.
     #
     # send_email: always stripped — OAuth token lifecycle is too complex for OSS.
-    # send_sms / make_call: stripped unless the sandbox auto-started a local
-    #   gateway (args._gateway_url is set), meaning Twilio credentials and
-    #   ORCHESTRA_ADMIN_KEY are configured and the gateway is running.
-    gateway_url = getattr(args, "_gateway_url", None)
+    # send_sms / make_call: stripped unless Twilio outbound credentials are
+    #   configured, even though the local gateway always runs for UniLLM proxying.
     try:
-        if not gateway_url:
+        from sandboxes.conversation_manager.gateway_bootstrap import (
+            outbound_comms_configured,
+        )
+
+        if not outbound_comms_configured():
             cm.assistant_number = ""
         cm.assistant_email = ""
     except Exception:
