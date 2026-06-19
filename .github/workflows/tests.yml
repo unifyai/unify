@@ -645,6 +645,7 @@ jobs:
       TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
       # Unify API key for _prepare_shared_project.py and tests
       UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
+      CLONE_TOKEN_AVAILABLE: ${{ secrets.CLONE_TOKEN != '' }}
       # Ensure local unillm/unify packages are found correctly
       # The repos are cloned to ./unillm/ and ./unify/, with packages inside
       PYTHONPATH: ${{ github.workspace }}/unillm:${{ github.workspace }}/unify
@@ -654,6 +655,7 @@ jobs:
         fetch-depth: 1
 
     - name: Clone orchestra repo for local deployment
+      if: env.ORCHESTRA_URL == '' && env.CLONE_TOKEN_AVAILABLE == 'true'
       uses: actions/checkout@v4
       with:
         repository: unifyai/orchestra
@@ -668,7 +670,7 @@ jobs:
         repository: unifyai/unify
         ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
         path: unify
-        token: ${{ secrets.CLONE_TOKEN }}
+        token: ${{ secrets.CLONE_TOKEN || github.token }}
         fetch-depth: 1
 
     - name: Clone unillm repo
@@ -677,7 +679,7 @@ jobs:
         repository: unifyai/unillm
         ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
         path: unillm
-        token: ${{ secrets.CLONE_TOKEN }}
+        token: ${{ secrets.CLONE_TOKEN || github.token }}
         fetch-depth: 1
 
     - name: Authenticate to Google Cloud
@@ -686,6 +688,7 @@ jobs:
         credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
 
     - name: Get orchestra commit SHA
+      if: env.ORCHESTRA_URL == '' && env.CLONE_TOKEN_AVAILABLE == 'true'
       id: orchestra-sha
       run: echo "sha=$(git -C orchestra rev-parse HEAD)" >> $GITHUB_OUTPUT
 
@@ -960,7 +963,7 @@ jobs:
         repository: unifyai/magnitude
         ref: unity-modifications
         path: magnitude
-        token: ${{ secrets.CLONE_TOKEN }}
+        token: ${{ secrets.CLONE_TOKEN || github.token }}
         fetch-depth: 1
 
     - name: Install bun (agent-service tests, magnitude packageManager dep)
@@ -1030,6 +1033,7 @@ jobs:
 
     # Cache orchestra's poetry dependencies keyed on orchestra's commit SHA
     - name: Cache orchestra poetry dependencies
+      if: env.ORCHESTRA_URL == '' && env.CLONE_TOKEN_AVAILABLE == 'true'
       uses: actions/cache@v4
       with:
         path: ~/.cache/pypoetry
@@ -1038,6 +1042,7 @@ jobs:
           poetry-orchestra-${{ runner.os }}-
 
     - name: Install orchestra dependencies
+      if: env.ORCHESTRA_URL == '' && env.CLONE_TOKEN_AVAILABLE == 'true'
       run: |
         # Install orchestra dependencies so parallel_run.sh can start it
         # (parallel_run.sh handles the full orchestra lifecycle)
