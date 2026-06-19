@@ -317,6 +317,8 @@ prompt_research_and_computer() {
   echo ""
 }
 
+_ELEVENLABS_DEFAULT_VOICE_ID="iP95p4xoKVk53GoZ742B"
+
 ensure_voice_provider_from_keys() {
   if has_env_value VOICE_PROVIDER; then
     return 0
@@ -324,9 +326,22 @@ ensure_voice_provider_from_keys() {
   if has_env_value ELEVEN_API_KEY; then
     upsert_env "VOICE_PROVIDER" "elevenlabs"
     log_success "Set VOICE_PROVIDER=elevenlabs"
+    if ! has_env_value VOICE_ID; then
+      upsert_env "VOICE_ID" "$_ELEVENLABS_DEFAULT_VOICE_ID"
+      log_success "Set VOICE_ID=$_ELEVENLABS_DEFAULT_VOICE_ID (default ElevenLabs voice)"
+    fi
   elif has_env_value CARTESIA_API_KEY; then
     upsert_env "VOICE_PROVIDER" "cartesia"
     log_success "Set VOICE_PROVIDER=cartesia"
+  fi
+}
+
+ensure_default_voice_id() {
+  local provider=""
+  provider="$(read_env_value VOICE_PROVIDER || true)"
+  if [[ "$provider" == "elevenlabs" ]] && ! has_env_value VOICE_ID; then
+    upsert_env "VOICE_ID" "$_ELEVENLABS_DEFAULT_VOICE_ID"
+    log_success "Set VOICE_ID=$_ELEVENLABS_DEFAULT_VOICE_ID (default ElevenLabs voice)"
   fi
 }
 
@@ -360,12 +375,13 @@ prompt_tts_provider() {
   esac
 
   ensure_voice_provider_from_keys
+  ensure_default_voice_id
 }
 
 import_shell_env_keys() {
   local key val
   for key in OPENAI_API_KEY ANTHROPIC_API_KEY DEEPSEEK_API_KEY DEEPGRAM_API_KEY \
-    CARTESIA_API_KEY ELEVEN_API_KEY VOICE_PROVIDER UNIFY_MODEL \
+    CARTESIA_API_KEY ELEVEN_API_KEY VOICE_PROVIDER VOICE_ID UNIFY_MODEL \
     DROID_WEB_TAVILY_API_KEY ANTICAPTCHA_KEY \
     TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN ASSISTANT_NUMBER ORCHESTRA_ADMIN_KEY; do
     val="${!key:-}"
