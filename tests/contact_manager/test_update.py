@@ -7,13 +7,13 @@ import unify
 from typing import Dict, Any
 from unify.utils.http import RequestError
 
-from unity.contact_manager.contact_manager import ContactManager
-from unity.contact_manager.types.contact import Contact
-from unity.blacklist_manager.blacklist_manager import BlackListManager
-from unity.conversation_manager.cm_types import Medium
-from unity.common.context_registry import ContextRegistry
-from unity.memory_manager import broader_context
-from unity.session_details import SESSION_DETAILS, TeamSummary
+from droid.contact_manager.contact_manager import ContactManager
+from droid.contact_manager.types.contact import Contact
+from droid.blacklist_manager.blacklist_manager import BlackListManager
+from droid.conversation_manager.cm_types import Medium
+from droid.common.context_registry import ContextRegistry
+from droid.memory_manager import broader_context
+from droid.session_details import SESSION_DETAILS, TeamSummary
 from tests.helpers import _handle_project
 from tests.async_helpers import _wait_for_next_assistant_response_event
 
@@ -93,7 +93,7 @@ def _reset_contact_routing_space(team_id: int) -> None:
 @_handle_project
 @pytest.mark.asyncio
 async def test_update_routes_explicit_team_contact_to_shared_team():
-    team_id = time.time_ns()
+    team_id = int(time.time_ns() % 1_000_000_000)
     _configure_contact_routing_space(team_id)
     email = f"nora.shared.{team_id}@example.com"
 
@@ -119,7 +119,7 @@ async def test_update_routes_explicit_team_contact_to_shared_team():
 @_handle_project
 @pytest.mark.asyncio
 async def test_update_routes_private_contact_to_personal_memory():
-    team_id = time.time_ns()
+    team_id = int(time.time_ns() % 1_000_000_000)
     _configure_contact_routing_space(team_id)
     email = f"pia.private.{team_id}@example.com"
 
@@ -144,7 +144,7 @@ async def test_update_routes_private_contact_to_personal_memory():
 @_handle_project
 @pytest.mark.asyncio
 async def test_update_defaults_ambiguous_contact_to_personal_memory():
-    team_id = time.time_ns()
+    team_id = int(time.time_ns() % 1_000_000_000)
     _configure_contact_routing_space(team_id)
     email = f"owen.neighbor.{team_id}@example.com"
 

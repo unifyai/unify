@@ -20,7 +20,7 @@ import pytest
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
-from unity.knowledge_manager.knowledge_manager import KnowledgeManager
+from droid.knowledge_manager.knowledge_manager import KnowledgeManager
 from tests.helpers import _handle_project
 from tests.assertion_helpers import assertion_failed
 from tests.async_helpers import _wait_for_next_assistant_response_event

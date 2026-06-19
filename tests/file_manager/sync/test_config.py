@@ -1,7 +1,7 @@
 """Tests for SyncConfig."""
 
 import pytest
-from unity.file_manager.sync.config import SyncConfig
+from droid.file_manager.sync.config import SyncConfig
 
 
 class TestSyncConfig:
@@ -15,7 +15,7 @@ class TestSyncConfig:
         assert config.ssh_host == ""
         assert config.ssh_port == 2222
         assert config.ssh_user == ""
-        assert config.remote_root == "/Unity/Local"
+        assert config.remote_root == "/Droid/Local"
         assert config.sync_on_write is True
         assert config.conflict_resolution == "latest"
         assert config.max_retries == 3
@@ -23,7 +23,7 @@ class TestSyncConfig:
 
     def test_local_root_default(self):
         """Test local_root defaults to get_local_root()."""
-        from unity.file_manager.settings import get_local_root
+        from droid.file_manager.settings import get_local_root
 
         config = SyncConfig()
         assert config.local_root == get_local_root()

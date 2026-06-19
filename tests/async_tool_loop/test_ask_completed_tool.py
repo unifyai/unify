@@ -12,11 +12,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from unity.common.async_tool_loop import (
+from droid.common.async_tool_loop import (
     start_async_tool_loop,
     AsyncToolLoopHandle,
 )
-from unity.common.llm_client import new_llm_client
+from droid.common.llm_client import new_llm_client
 
 
 @pytest.mark.asyncio
@@ -305,8 +305,8 @@ async def test_pop_task_retains_handle_in_completed_askable_tools():
     to inspect the handle's lifecycle state without reaching into
     closure internals.
     """
-    from unity.common._async_tool.tools_data import ToolsData
-    from unity.common._async_tool.tools_utils import ToolCallMetadata
+    from droid.common._async_tool.tools_data import ToolsData
+    from droid.common._async_tool.tools_utils import ToolCallMetadata
 
     sentinel_handle = MagicMock()
     sentinel_handle.done.return_value = False

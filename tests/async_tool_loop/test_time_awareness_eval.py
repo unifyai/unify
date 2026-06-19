@@ -7,9 +7,9 @@ from pydantic import BaseModel, Field
 
 from tests.async_helpers import _wait_for_tool_result
 from tests.helpers import _handle_project
-from unity.common.llm_client import new_llm_client
-from unity.common.async_tool_loop import start_async_tool_loop
-from unity.common._async_tool.time_context import TimeContext
+from droid.common.llm_client import new_llm_client
+from droid.common.async_tool_loop import start_async_tool_loop
+from droid.common._async_tool.time_context import TimeContext
 
 # Module-level marker: all tests in this file are eval tests
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]

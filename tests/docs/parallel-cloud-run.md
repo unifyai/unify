@@ -92,7 +92,7 @@ When local changes exist, the script creates a **unique staging branch** named `
 git branch -r | grep 'ci-staging-' | sed 's|origin/||' | xargs -I{} git push origin --delete {}
 
 # Or delete branches older than 7 days (requires gh CLI)
-gh api repos/unifyai/unity/branches --paginate -q '.[].name' | \
+gh api repos/unifyai/droid/branches --paginate -q '.[].name' | \
   grep 'ci-staging-' | xargs -I{} git push origin --delete {}
 ```
 
@@ -195,7 +195,7 @@ After triggering, the script polls GitHub (up to 30 seconds) until the workflow 
 Waiting for run to appear....
 
 ✓ Workflow triggered!
-  https://github.com/unifyai/unity/actions/runs/12345678
+  https://github.com/unifyai/droid/actions/runs/12345678
 ```
 
 Click the link to go directly to your run—no need to search through the Actions list. CI also generates `pytest-logs-*` artifacts containing full test output, which can be shared with Cursor agents to help debug any failures.
@@ -206,14 +206,14 @@ Click the link to go directly to your run—no need to search through the Action
 
 ```bash
 # 1. Make some changes locally
-vim unity/contact_manager/manager.py
+vim droid/contact_manager/manager.py
 
 # 2. Test them on CI without committing
 parallel_cloud_run.sh tests/contact_manager
 # Output includes direct link to the run
 
 # 3. Click the link or watch via CLI
-gh run watch --repo unifyai/unity <run-id>
+gh run watch --repo unifyai/droid <run-id>
 
 # 4. If tests pass, commit your changes
 git add -A && git commit -m "Fix contact manager bug"

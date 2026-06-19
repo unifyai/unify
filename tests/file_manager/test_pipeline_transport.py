@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from unity.common.pipeline.transport import _can_materialize, build_table_handles
-from unity.common.pipeline.types import (
+from droid.common.pipeline.transport import _can_materialize, build_table_handles
+from droid.common.pipeline.types import (
     CsvFileHandle,
     InlineRowsHandle,
     ObjectStoreArtifactHandle,

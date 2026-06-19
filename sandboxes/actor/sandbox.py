@@ -42,8 +42,8 @@ from sandboxes.utils import (
     speak,
     steering_controls_hint,
 )
-from unity.actor.base import BaseActor
-from unity.actor.code_act_actor import CodeActActor
+from droid.actor.base import BaseActor
+from droid.actor.code_act_actor import CodeActActor
 
 LG = logging.getLogger("actor_sandbox")
 
@@ -78,9 +78,9 @@ def _create_actor(args) -> BaseActor:
     if actor_choice == "code_act":
         if args.no_computer:
             # No computer tools - just state managers via Primitives
-            from unity.actor.environments import StateManagerEnvironment
-            from unity.function_manager.primitives import Primitives
-            from unity.manager_registry import ManagerRegistry
+            from droid.actor.environments import StateManagerEnvironment
+            from droid.function_manager.primitives import Primitives
+            from droid.manager_registry import ManagerRegistry
 
             primitives = Primitives()
             environments = [StateManagerEnvironment(primitives)]
@@ -98,11 +98,11 @@ def _create_actor(args) -> BaseActor:
             )
         else:
             # Full computer mode (web/desktop)
-            from unity.actor.environments import (
+            from droid.actor.environments import (
                 ComputerEnvironment,
                 StateManagerEnvironment,
             )
-            from unity.function_manager.primitives import (
+            from droid.function_manager.primitives import (
                 ComputerPrimitives,
                 Primitives,
             )

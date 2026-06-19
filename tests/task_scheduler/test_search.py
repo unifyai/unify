@@ -1,7 +1,7 @@
 import pytest
 import unify
 
-from unity.task_scheduler.task_scheduler import TaskScheduler
+from droid.task_scheduler.task_scheduler import TaskScheduler
 from tests.helpers import _handle_project
 
 

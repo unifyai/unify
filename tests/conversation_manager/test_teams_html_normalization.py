@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from unity.conversation_manager.comms_manager import _teams_html_to_text
+from droid.conversation_manager.comms_manager import _teams_html_to_text
 
 
 @pytest.mark.parametrize(

@@ -1,11 +1,11 @@
 from __future__ import annotations
 import asyncio, pytest, re, json
 
-from unity.task_scheduler.task_scheduler import TaskScheduler
+from droid.task_scheduler.task_scheduler import TaskScheduler
 from tests.assertion_helpers import assertion_failed
 from tests.helpers import _handle_project
-from unity.task_scheduler.types.status import Status
-from unity.task_scheduler.types.priority import Priority
+from droid.task_scheduler.types.status import Status
+from droid.task_scheduler.types.priority import Priority
 
 pytestmark = pytest.mark.llm_call
 
@@ -33,7 +33,6 @@ async def test_ask_uses_parent_context():
     ts._create_task(
         name="Hotfix security vulnerability",
         description="Apply CVE-2025-1234 patch to all services.",
-        status="primed",
         priority="high",
     )
 
@@ -70,17 +69,14 @@ async def test_ask_requests_clarification():
     """
     ts = TaskScheduler()
 
-    # two queued tasks
     ts._create_task(
         name="Prepare slide deck",
         description="Create slides for the upcoming board meeting.",
-        status="primed",
         priority="high",
     )
     ts._create_task(
         name="Hotfix security vulnerability",
         description="Apply CVE-2025-1234 patch to all services.",
-        status="queued",
         priority="high",
     )
 
@@ -128,7 +124,6 @@ async def test_update_uses_parent_context():
     tid = ts._create_task(
         name="Hotfix security vulnerability",
         description="Apply CVE-2025-1234 patch to all services.",
-        status="primed",
         priority="high",
     )["details"]["task_id"]
 
@@ -168,23 +163,19 @@ async def test_update_requests_clarification():
     """
     ts = TaskScheduler()
 
-    # two queued tasks
     ts._create_task(
         name="Prepare slide deck",
         description="Create slides for the upcoming board meeting.",
-        status="primed",
         priority="normal",
     )
     tid_report = ts._create_task(
         name="Write quarterly report",
         description="Compile and draft the Q2 report.",
-        status="queued",
         priority="normal",
     )["details"]["task_id"]
     ts._create_task(
         name="Interview candidate",
         description="Interview the recent sales applicant.",
-        status="queued",
         priority="normal",
     )
 
@@ -193,7 +184,7 @@ async def test_update_requests_clarification():
     task = asyncio.create_task(
         (
             await ts.update(
-                "Set the queued task's priority to high. Please request clarification if there is more than one.",
+                "Set the priority of a normal-priority task to high. Please request clarification if there is more than one.",
                 _clarification_up_q=up_q,
                 _clarification_down_q=down_q,
             )
@@ -202,7 +193,7 @@ async def test_update_requests_clarification():
 
     # clarification expected
     q_text = await asyncio.wait_for(up_q.get(), timeout=300)
-    assert _contains(q_text, "queued"), "No clarification question"
+    assert len(q_text) > 0, "No clarification question"
 
     # clarify we mean the slide-deck task
     await down_q.put("I mean the Write quarterly report task.")

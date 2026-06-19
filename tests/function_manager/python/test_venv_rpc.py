@@ -10,8 +10,8 @@ import pytest
 import shutil
 from unittest.mock import AsyncMock, MagicMock
 
-from unity.function_manager.function_manager import FunctionManager
-from unity.common.context_registry import ContextRegistry
+from droid.function_manager.function_manager import FunctionManager
+from droid.common.context_registry import ContextRegistry
 from tests.helpers import _handle_project
 
 # Sample pyproject.toml with minimal dependencies

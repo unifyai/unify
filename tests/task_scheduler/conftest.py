@@ -10,15 +10,15 @@ import pytest
 import pytest_asyncio
 import unify
 
-from unity.task_scheduler.task_scheduler import TaskScheduler
-from unity.task_scheduler.types.status import Status
-from unity.manager_registry import ManagerRegistry
-from unity.common.context_registry import ContextRegistry
+from droid.task_scheduler.task_scheduler import TaskScheduler
+from droid.manager_registry import ManagerRegistry
+from droid.common.context_registry import ContextRegistry
 from tests.helpers import (
     is_task_scenario_seeded,
     rebuild_task_id_mapping,
     scenario_file_lock,
     mutation_test_lock,
+    restore_scenario_context,
 )
 
 # Separate commit hash storage for read vs mutation contexts
@@ -31,17 +31,17 @@ _TASKS_DATA: List[Dict[str, str]] = [
     {
         "name": "Write quarterly report",
         "description": "Draft the Q2 report (send email to finance).",
-        "status": "primed",
+        "status": "scheduled",
     },
     {
         "name": "Prepare slide deck",
         "description": "Create slides for the board meeting. Email once done.",
-        "status": "queued",
+        "status": "scheduled",
     },
     {
         "name": "Client follow-up email",
         "description": "Send email to prospective client about proposal.",
-        "status": "queued",
+        "status": "cancelled",
     },
 ]
 
@@ -51,13 +51,10 @@ def _seed_tasks(ts: TaskScheduler) -> List[int]:
     task_ids: List[int] = []
     for task_data in _TASKS_DATA:
         name = task_data["name"]
-        # Check if task already exists
         try:
             existing = ts._filter_tasks(filter=f"name == {name!r}", limit=1)
             if existing:
                 task_id = existing[0].task_id
-                if existing[0].status == Status.primed:
-                    ts._primed_task = existing[0]
             else:
                 result = ts._create_task(**task_data)
                 task_id = result["details"]["task_id"]
@@ -184,10 +181,12 @@ def task_scheduler_read_scenario(task_read_scenario):
         )
 
     # Rollback to clean state before test
+    restore_scenario_context("tests/task_scheduler/ReadScenario")
     ctx_names = list(_READ_SCENARIO_COMMIT_HASHES.keys())
     if ctx_names:
         unify.map(rollback_context, ctx_names, mode="asyncio")
 
+    restore_scenario_context("tests/task_scheduler/ReadScenario")
     yield ts, task_ids
 
 
@@ -237,44 +236,12 @@ def task_scheduler_mutation_scenario(task_mutation_scenario):
         )
 
     with mutation_test_lock("ts_mutation"):
+        restore_scenario_context("tests/task_scheduler/MutationScenario")
         # Rollback INSIDE the lock to prevent other mutation tests
         # from rolling back while this test is running
         ctx_names = list(_MUTATION_SCENARIO_COMMIT_HASHES.keys())
         if ctx_names:
             unify.map(rollback_context, ctx_names, mode="asyncio")
 
+        restore_scenario_context("tests/task_scheduler/MutationScenario")
         yield ts, task_ids
-
-
-# ---------------------------------------------------------------------------
-# BACKWARDS COMPATIBILITY
-# ---------------------------------------------------------------------------
-# Keep the old fixture names as aliases
-
-
-@pytest_asyncio.fixture(scope="session")
-async def task_scenario(
-    request: pytest.FixtureRequest,
-) -> Tuple[TaskScheduler, List[int]]:
-    """
-    DEPRECATED: Use task_read_scenario or task_mutation_scenario instead.
-
-    This alias exists for backwards compatibility.
-    """
-    return _setup_scenario(
-        request,
-        ctx="tests/task_scheduler/ReadScenario",
-        lock_name="ts_read_scenario",
-        commit_hashes=_READ_SCENARIO_COMMIT_HASHES,
-    )
-
-
-@pytest.fixture(scope="function")
-def basic_task_scenario(task_scheduler_mutation_scenario):
-    """
-    DEPRECATED: Use task_scheduler_read_scenario or task_scheduler_mutation_scenario.
-
-    Maps to mutation scenario for backwards compatibility since most uses
-    of basic_task_scenario were in mutation tests (test_update_complex.py).
-    """
-    yield task_scheduler_mutation_scenario

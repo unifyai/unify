@@ -1,9 +1,9 @@
 """Round-trip tests for canonical gateway envelope schemas.
 
 These tests pin the wire format defined in
-``unity/gateway/envelopes.py`` against representative payloads taken from
+``droid/gateway/envelopes.py`` against representative payloads taken from
 the existing ingress paths
-(``unity/conversation_manager/local_ingress.py``). Channel migrations in
+(``droid/conversation_manager/local_ingress.py``). Channel migrations in
 Phase B will extend the catalogue but the shapes covered here must remain
 backward-compatible.
 """
@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from unity.gateway.envelopes import (
+from droid.gateway.envelopes import (
     BaseEnvelope,
     EmailEnvelope,
     EmailReceivedEvent,
@@ -38,7 +38,7 @@ def test_known_threads_includes_every_thread_used_in_local_ingress() -> None:
         "unify_message",
         "api_message",
         "unify_meet",
-        "unity_system_event",
+        "droid_system_event",
         "log_pre_hire_chats",
         "call",
         "call_answered",
@@ -127,7 +127,7 @@ def test_unify_message_envelope_requires_contact_id() -> None:
 
 def test_system_event_envelope_requires_event_type() -> None:
     raw = {
-        "thread": "unity_system_event",
+        "thread": "droid_system_event",
         "publish_timestamp": 1700000000.0,
         "event": {
             "assistant_id": "42",

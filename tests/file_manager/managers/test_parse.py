@@ -17,8 +17,8 @@ async def test_parse_single(file_manager, supported_file_examples: dict):
     filename, example_data = next(iter(supported_file_examples.items()))
     display_name = str(example_data["path"])  # absolute path
 
-    from unity.file_manager.types import FilePipelineConfig
-    from unity.file_manager.types.ingest import IngestedFullFile
+    from droid.file_manager.types import FilePipelineConfig
+    from droid.file_manager.types.ingest import IngestedFullFile
 
     # Request full mode to assert parse artifacts + FileManager lowering invariants
     result = file_manager.ingest_files(
@@ -66,7 +66,7 @@ async def test_parse_with_options(file_manager, supported_file_examples: dict):
     display_name = str(example_data["path"])  # absolute path
 
     # Parse with options via config (forwarded to parser)
-    from unity.file_manager.types import FilePipelineConfig, ParseConfig
+    from droid.file_manager.types import FilePipelineConfig, ParseConfig
 
     cfg = FilePipelineConfig(
         parse=ParseConfig(max_concurrent_parses=1),
@@ -85,7 +85,7 @@ async def test_parse_can_emit_run_ledger(file_manager, tmp_path: Path):
     txt.write_text("Alpha paragraph.\n\nBeta paragraph.", encoding="utf-8")
     ledger_path = tmp_path / "run_ledger.jsonl"
 
-    from unity.file_manager.types import FilePipelineConfig
+    from droid.file_manager.types import FilePipelineConfig
 
     result = file_manager.ingest_files(
         str(txt),
@@ -132,7 +132,7 @@ async def test_parse_can_emit_correlated_progress_events(file_manager, tmp_path:
     csv.write_text("Name,Age,City\nJohn,30,NYC\nJane,25,LDN\n", encoding="utf-8")
     progress_path = tmp_path / "progress.jsonl"
 
-    from unity.file_manager.types import FilePipelineConfig
+    from droid.file_manager.types import FilePipelineConfig
 
     cfg = FilePipelineConfig(
         diagnostics={
@@ -144,7 +144,7 @@ async def test_parse_can_emit_correlated_progress_events(file_manager, tmp_path:
     )
 
     with patch(
-        "unity.file_manager.parse_adapter.lowering.content_rows.summarize_table_profile",
+        "droid.file_manager.parse_adapter.lowering.content_rows.summarize_table_profile",
         return_value="stub table summary",
     ):
         result = file_manager.ingest_files(str(csv), config=cfg)
@@ -197,7 +197,7 @@ async def test_parse_can_emit_estimated_cost_ledger(file_manager, tmp_path: Path
     cost_ledger_path = tmp_path / "cost_ledger.jsonl"
     artifact_root = tmp_path / "artifacts"
 
-    from unity.file_manager.types import FilePipelineConfig
+    from droid.file_manager.types import FilePipelineConfig
 
     cfg = FilePipelineConfig(
         transport={
@@ -213,7 +213,7 @@ async def test_parse_can_emit_estimated_cost_ledger(file_manager, tmp_path: Path
     )
 
     with patch(
-        "unity.file_manager.parse_adapter.lowering.content_rows.summarize_table_profile",
+        "droid.file_manager.parse_adapter.lowering.content_rows.summarize_table_profile",
         return_value="stub table summary",
     ):
         result = file_manager.ingest_files(str(csv), config=cfg)
@@ -251,8 +251,8 @@ async def test_parse_can_emit_estimated_cost_ledger(file_manager, tmp_path: Path
 
 
 def test_executor_retry_policy_retries_transient_errors_and_stops_on_non_retryable():
-    from unity.common.pipeline import run_with_retry as _run_with_retry
-    from unity.file_manager.types import RetryConfig
+    from droid.common.pipeline import run_with_retry as _run_with_retry
+    from droid.file_manager.types import RetryConfig
 
     retry_cfg = RetryConfig(
         max_retries=3,
@@ -294,8 +294,8 @@ async def test_parse_empty(file_manager, sample_files: Path):
     empty_file = sample_files / "empty.txt"
     display_name = str(empty_file)
 
-    from unity.file_manager.types import FilePipelineConfig
-    from unity.file_manager.types.ingest import IngestedFullFile
+    from droid.file_manager.types import FilePipelineConfig
+    from droid.file_manager.types.ingest import IngestedFullFile
 
     # Request full mode to test lowering semantics on empty file
     result = file_manager.ingest_files(
@@ -324,8 +324,8 @@ async def test_parse_supported(file_manager, supported_file_examples: dict):
         display_names.append(display_name)
 
     # Test parsing each file individually
-    from unity.file_manager.types import FilePipelineConfig
-    from unity.file_manager.types.ingest import IngestedFullFile
+    from droid.file_manager.types import FilePipelineConfig
+    from droid.file_manager.types.ingest import IngestedFullFile
 
     for display_name in display_names:
         result = file_manager.ingest_files(
@@ -349,7 +349,7 @@ async def test_parse_supported(file_manager, supported_file_examples: dict):
         assert item.trace.parsed_local_path is not None
         assert isinstance(item.trace.conversion_chain, list)
 
-        from unity.file_manager.file_parsers.types.enums import ContentType
+        from droid.file_manager.file_parsers.types.enums import ContentType
 
         # If this is a spreadsheet (csv or xlsx), ensure we emitted sheet/table catalog rows
         # and extracted at least one concrete table batch.
@@ -396,8 +396,8 @@ async def test_parse_multiple_supported(
         display_names.append(display_name)
 
     # Parse all files at once
-    from unity.file_manager.types import FilePipelineConfig
-    from unity.file_manager.types.ingest import IngestedFullFile
+    from droid.file_manager.types import FilePipelineConfig
+    from droid.file_manager.types.ingest import IngestedFullFile
 
     result = file_manager.ingest_files(
         display_names,
@@ -420,9 +420,9 @@ async def test_parse_trace_backend_routing(file_manager, tmp_path: Path):
     """Smoke-test backend routing via FileParseResult.trace.backend + basic lowering invariants."""
     from unittest.mock import patch
 
-    from unity.file_manager.file_parsers.types.formats import FileFormat
-    from unity.file_manager.file_parsers.types.enums import ContentType
-    from unity.file_manager.types import (
+    from droid.file_manager.file_parsers.types.formats import FileFormat
+    from droid.file_manager.file_parsers.types.enums import ContentType
+    from droid.file_manager.types import (
         BusinessContextsConfig,
         FileBusinessContextSpec,
         FilePipelineConfig,
@@ -478,7 +478,7 @@ async def test_parse_trace_backend_routing(file_manager, tmp_path: Path):
         },
     )
     with patch(
-        "unity.file_manager.parse_adapter.lowering.content_rows.summarize_table_profile",
+        "droid.file_manager.parse_adapter.lowering.content_rows.summarize_table_profile",
         return_value="stub table summary",
     ):
         csv_res = file_manager.ingest_files(csv_path, config=cfg)

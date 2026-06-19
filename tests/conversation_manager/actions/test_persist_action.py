@@ -19,18 +19,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from unity.conversation_manager.domains.brain_action_tools import (
+from droid.conversation_manager.domains.brain_action_tools import (
     ConversationManagerBrainActionTools,
 )
-from unity.conversation_manager.domains.contact_index import ContactIndex
-from unity.conversation_manager.domains.event_handlers import EventHandler
-from unity.conversation_manager.domains.notifications import NotificationBar
-from unity.conversation_manager.domains.renderer import Renderer
-from unity.conversation_manager.events import (
+from droid.conversation_manager.domains.contact_index import ContactIndex
+from droid.conversation_manager.domains.event_handlers import EventHandler
+from droid.conversation_manager.domains.notifications import NotificationBar
+from droid.conversation_manager.domains.renderer import Renderer
+from droid.conversation_manager.events import (
     ActorNotification,
     ActorSessionResponse,
 )
-from unity.conversation_manager.cm_types.mode import Mode
+from droid.conversation_manager.cm_types.mode import Mode
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixtures
@@ -65,7 +65,7 @@ def mock_cm():
 def brain_action_tools(mock_cm):
     """ConversationManagerBrainActionTools wired to the mock CM."""
     with patch(
-        "unity.conversation_manager.domains.brain_action_tools.get_event_broker",
+        "droid.conversation_manager.domains.brain_action_tools.get_event_broker",
     ) as mock_broker:
         mock_broker.return_value = MagicMock()
         mock_broker.return_value.publish = AsyncMock()
@@ -182,7 +182,7 @@ class TestActLLMProfileParameter:
         assert sig.parameters["llm_profile"].default is None
 
     def test_llm_profile_in_tool_schema(self, brain_action_tools):
-        from unity.common.llm_helpers import method_to_schema
+        from droid.common.llm_helpers import method_to_schema
 
         schema = method_to_schema(brain_action_tools.act, include_class_name=False)
         params = schema["function"]["parameters"]
@@ -436,10 +436,10 @@ class TestNotificationRouting:
     @pytest.mark.asyncio
     async def test_response_type_publishes_actor_session_response(self):
         """Notifications with type='response' are published as ActorSessionResponse."""
-        from unity.conversation_manager.domains.managers_utils import (
+        from droid.conversation_manager.domains.managers_utils import (
             actor_watch_notifications,
         )
-        from unity.conversation_manager.events import Event
+        from droid.conversation_manager.events import Event
 
         handle = MagicMock()
         call_count = 0
@@ -455,7 +455,7 @@ class TestNotificationRouting:
         handle.done = MagicMock(side_effect=[False, True])
 
         with patch(
-            "unity.conversation_manager.domains.managers_utils.event_broker",
+            "droid.conversation_manager.domains.managers_utils.event_broker",
         ) as mock_broker:
             mock_broker.publish = AsyncMock()
 
@@ -474,10 +474,10 @@ class TestNotificationRouting:
     @pytest.mark.asyncio
     async def test_notification_type_publishes_actor_notification(self):
         """Regular notifications are published as ActorNotification."""
-        from unity.conversation_manager.domains.managers_utils import (
+        from droid.conversation_manager.domains.managers_utils import (
             actor_watch_notifications,
         )
-        from unity.conversation_manager.events import Event
+        from droid.conversation_manager.events import Event
 
         handle = MagicMock()
         call_count = 0
@@ -493,7 +493,7 @@ class TestNotificationRouting:
         handle.done = MagicMock(side_effect=[False, True])
 
         with patch(
-            "unity.conversation_manager.domains.managers_utils.event_broker",
+            "droid.conversation_manager.domains.managers_utils.event_broker",
         ) as mock_broker:
             mock_broker.publish = AsyncMock()
 

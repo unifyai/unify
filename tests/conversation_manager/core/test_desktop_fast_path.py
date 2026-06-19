@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from tests.helpers import _handle_project
-from unity.function_manager.computer_backends import ActResult
+from droid.function_manager.computer_backends import ActResult
 
 DESKTOP_TOOL_NAMES = {"desktop_act"}
 
@@ -34,7 +34,7 @@ DESKTOP_TOOL_NAMES = {"desktop_act"}
 @_handle_project
 async def test_desktop_tools_absent_when_screen_share_inactive(initialized_cm):
     """Desktop fast path must NOT appear when screen share is off."""
-    from unity.conversation_manager.domains.brain_action_tools import (
+    from droid.conversation_manager.domains.brain_action_tools import (
         ConversationManagerBrainActionTools,
     )
 
@@ -66,8 +66,8 @@ async def test_desktop_tools_present_when_screen_share_active_no_act(initialized
 async def test_desktop_tools_remain_after_act_completion(initialized_cm):
     """Desktop fast path remains available after the act session completes,
     as long as screen share is still active."""
-    from unity.conversation_manager.domains.event_handlers import EventHandler
-    from unity.conversation_manager.events import ActorResult
+    from droid.conversation_manager.domains.event_handlers import EventHandler
+    from droid.conversation_manager.events import ActorResult
 
     cm = initialized_cm.cm
     cm.assistant_screen_share_active = True
@@ -95,8 +95,8 @@ async def test_desktop_tools_remain_after_act_completion(initialized_cm):
 @_handle_project
 async def test_desktop_tools_disappear_on_screen_share_stop(initialized_cm):
     """Desktop fast path disappears when assistant screen share stops."""
-    from unity.conversation_manager.domains.event_handlers import EventHandler
-    from unity.conversation_manager.events import AssistantScreenShareStopped
+    from droid.conversation_manager.domains.event_handlers import EventHandler
+    from droid.conversation_manager.events import AssistantScreenShareStopped
 
     cm = initialized_cm.cm
     cm.assistant_screen_share_active = True
@@ -129,8 +129,8 @@ async def test_desktop_tools_disappear_on_screen_share_stop(initialized_cm):
 @_handle_project
 async def test_desktop_primitive_event_type_registered(initialized_cm):
     """DesktopPrimitiveInvoked is a valid, constructable EventBus event type."""
-    from unity.events.event_bus import Event
-    from unity.events.types import PAYLOAD_REGISTRY
+    from droid.events.event_bus import Event
+    from droid.events.types import PAYLOAD_REGISTRY
 
     assert (
         "DesktopPrimitiveInvoked" in PAYLOAD_REGISTRY
@@ -152,7 +152,7 @@ async def test_desktop_act_returns_acting_and_interjects_on_completion(initializ
     """desktop_act should return immediately with 'acting' status and silently
     interject in-flight act sessions twice: once when the request is made, and
     again when the background task completes with the result."""
-    from unity.conversation_manager.domains.brain_action_tools import (
+    from droid.conversation_manager.domains.brain_action_tools import (
         ConversationManagerBrainActionTools,
     )
 
@@ -247,7 +247,7 @@ async def test_fast_path_interjects_act_session_without_prior_desktop_usage(
     done non-desktop work like loading guidance), the interjections had zero
     recipients — leaving the act session deaf to all fast-path activity.
     """
-    from unity.conversation_manager.domains.brain_action_tools import (
+    from droid.conversation_manager.domains.brain_action_tools import (
         ConversationManagerBrainActionTools,
     )
 
@@ -317,7 +317,7 @@ async def test_fast_path_interjects_act_session_without_prior_desktop_usage(
 async def test_desktop_act_without_act_session_no_interjection_errors(initialized_cm):
     """desktop_act works cleanly when no act session is in-flight (the
     interjection calls are no-ops, not errors)."""
-    from unity.conversation_manager.domains.brain_action_tools import (
+    from droid.conversation_manager.domains.brain_action_tools import (
         ConversationManagerBrainActionTools,
     )
 
@@ -364,8 +364,8 @@ async def test_desktop_act_without_act_session_no_interjection_errors(initialize
 @_handle_project
 async def test_computer_act_completed_event_type_registered(initialized_cm):
     """ComputerActCompleted is a valid, constructable EventBus event type."""
-    from unity.events.event_bus import Event
-    from unity.events.types import PAYLOAD_REGISTRY
+    from droid.events.event_bus import Event
+    from droid.events.types import PAYLOAD_REGISTRY
 
     assert (
         "ComputerActCompleted" in PAYLOAD_REGISTRY
@@ -416,7 +416,7 @@ async def test_computer_act_completed_bridge_publishes_when_screen_share_active(
         }
 
         # Directly invoke the bridge callback logic
-        from unity.conversation_manager.events import ComputerActCompleted
+        from droid.conversation_manager.events import ComputerActCompleted
 
         cm_event = ComputerActCompleted(
             instruction=fake_evt.payload["instruction"],
@@ -466,7 +466,7 @@ async def test_computer_act_completed_bridge_skipped_when_screen_share_inactive(
         # Simulate what the bridge callback does: check the gate
         # If screen share is inactive, it should NOT publish
         if cm.assistant_screen_share_active:
-            from unity.conversation_manager.events import ComputerActCompleted
+            from droid.conversation_manager.events import ComputerActCompleted
 
             cm_event = ComputerActCompleted(
                 instruction="Click Submit",
@@ -492,8 +492,8 @@ async def test_computer_act_completed_bridge_skipped_when_screen_share_inactive(
 @_handle_project
 async def test_computer_act_completed_event_handler_wakes_slow_brain(initialized_cm):
     """EventHandler for ComputerActCompleted should request an LLM run."""
-    from unity.conversation_manager.domains.event_handlers import EventHandler
-    from unity.conversation_manager.events import ComputerActCompleted
+    from droid.conversation_manager.domains.event_handlers import EventHandler
+    from droid.conversation_manager.events import ComputerActCompleted
 
     cm = initialized_cm.cm
 
@@ -519,8 +519,8 @@ async def test_computer_act_completed_event_handler_wakes_slow_brain(initialized
 
 def test_render_event_for_fast_brain_computer_act_completed():
     """render_event_for_fast_brain should render ComputerActCompleted events."""
-    from unity.conversation_manager.events import ComputerActCompleted
-    from unity.conversation_manager.medium_scripts.common import (
+    from droid.conversation_manager.events import ComputerActCompleted
+    from droid.conversation_manager.medium_scripts.common import (
         render_event_for_fast_brain,
     )
 
@@ -540,8 +540,8 @@ def test_render_actor_result_empty_success_not_misleading():
     'completed successfully' — it must clearly indicate no results were
     returned so the fast brain doesn't fabricate a positive outcome.
     """
-    from unity.conversation_manager.events import ActorResult
-    from unity.conversation_manager.medium_scripts.common import (
+    from droid.conversation_manager.events import ActorResult
+    from droid.conversation_manager.medium_scripts.common import (
         render_event_for_fast_brain,
     )
 
@@ -555,8 +555,8 @@ def test_render_actor_result_empty_success_not_misleading():
 
 def test_render_actor_result_with_data():
     """An ActorResult with actual data should include the full result text."""
-    from unity.conversation_manager.events import ActorResult
-    from unity.conversation_manager.medium_scripts.common import (
+    from droid.conversation_manager.events import ActorResult
+    from droid.conversation_manager.medium_scripts.common import (
         render_event_for_fast_brain,
     )
 
@@ -577,8 +577,8 @@ def test_render_actor_result_with_data():
 
 def test_render_actor_result_failure():
     """A failed ActorResult should clearly say 'failed'."""
-    from unity.conversation_manager.events import ActorResult
-    from unity.conversation_manager.medium_scripts.common import (
+    from droid.conversation_manager.events import ActorResult
+    from droid.conversation_manager.medium_scripts.common import (
         render_event_for_fast_brain,
     )
 

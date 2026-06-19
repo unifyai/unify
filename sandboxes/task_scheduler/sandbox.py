@@ -26,7 +26,7 @@ load_dotenv()
 import unify
 from pydantic import BaseModel, Field
 from sandboxes.scenario_builder import ScenarioBuilder
-from unity.common.llm_client import new_llm_client
+from droid.common.llm_client import new_llm_client
 
 # Ensure repository root resolves for local execution
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,10 +34,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-# ────────────────────────────────  unity imports  ───────────────────────────
-from unity.task_scheduler.task_scheduler import TaskScheduler
-from unity.common.async_tool_loop import SteerableToolHandle
-from unity.actor.simulated import SimulatedActor
+# ────────────────────────────────  droid imports  ───────────────────────────
+from droid.task_scheduler.task_scheduler import TaskScheduler
+from droid.common.async_tool_loop import SteerableToolHandle
+from droid.actor.simulated import SimulatedActor
 from sandboxes.utils import (
     record_until_enter as _record_until_enter,
     transcribe_deepgram as _transcribe_deepgram,

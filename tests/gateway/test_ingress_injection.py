@@ -26,11 +26,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from unity.conversation_manager.comms_manager import CommsManager
-from unity.conversation_manager.in_memory_event_broker import (
+from droid.conversation_manager.comms_manager import CommsManager
+from droid.conversation_manager.in_memory_event_broker import (
     create_in_memory_event_broker,
 )
-from unity.gateway.ingress_inmemory import InMemoryIngressTransport
+from droid.gateway.ingress_inmemory import InMemoryIngressTransport
 
 # ---------------------------------------------------------------------------
 # Default construction (backward compat)
@@ -104,7 +104,7 @@ async def test_start_inbound_subscription_routes_through_injected_transport() ->
             "body": "hello via injected transport",
         },
     }
-    await transport.deliver(envelope, source_topic="unity-1-test")
+    await transport.deliver(envelope, source_topic="droid-1-test")
     await consumer
     await cm._stop_inbound_subscription()
 
@@ -168,7 +168,7 @@ async def test_start_inbound_subscription_falls_back_to_subscribe_to_topic() -> 
         args, kwargs = mock_subscribe.call_args
         assert kwargs == {"max_messages": 10}
         assert isinstance(args[0], str)
-        assert args[0].startswith("unity-")
+        assert args[0].startswith("droid-")
         assert args[0].endswith("-sub")
 
 

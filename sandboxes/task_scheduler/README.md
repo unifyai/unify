@@ -1,7 +1,7 @@
 Task Scheduler Sandbox
 ======================
 
-This folder contains an **interactive playground** for the `TaskScheduler` component that lives in `unity/task_scheduler/`.  The goal of the sandbox is to let you experiment with the scheduler in isolation – seed imaginary backlogs, query them in natural-language, and observe how the underlying tool-loop behaves before you integrate the manager into a larger system.
+This folder contains an **interactive playground** for the `TaskScheduler` component that lives in `droid/task_scheduler/`.  The goal of the sandbox is to let you experiment with the scheduler in isolation – seed imaginary backlogs, query them in natural-language, and observe how the underlying tool-loop behaves before you integrate the manager into a larger system.
 
 Prefer a quick demo? Watch this [video walkthrough](https://www.loom.com/share/45334c26c7c448a485dc17bd6590ce09?sid=912ca961-21b1-4698-b6ac-8fb58a1357c3)
 

@@ -8,16 +8,16 @@ import json
 import pytest
 from unittest.mock import MagicMock
 
-import unity.common._async_tool.loop as _loop_mod
-import unity.common._async_tool.context_compression as _cc_mod
-import unity.common.async_tool_loop as _atl_mod
-from unity.common._async_tool.context_compression import (
+import droid.common._async_tool.loop as _loop_mod
+import droid.common._async_tool.context_compression as _cc_mod
+import droid.common.async_tool_loop as _atl_mod
+from droid.common._async_tool.context_compression import (
     CompressedMessage,
     CompressedMessages,
 )
-from unity.common.async_tool_loop import start_async_tool_loop
-from unity.common.llm_client import new_llm_client
-from unity.common.tool_spec import ToolSpec
+from droid.common.async_tool_loop import start_async_tool_loop
+from droid.common.llm_client import new_llm_client
+from droid.common.tool_spec import ToolSpec
 from tests.helpers import _handle_project
 from tests.async_helpers import (
     _wait_for_condition,
@@ -864,8 +864,8 @@ async def test_compression_failure_returns_gracefully(llm_config, monkeypatch):
 async def test_compression_restart_omits_parent_chat_context(monkeypatch):
     """Compression restarts must not re-inject the original parent context blob."""
 
-    from unity.common._async_tool.context_compression import RebuildResult
-    from unity.common.async_tool_loop import AsyncToolLoopHandle
+    from droid.common._async_tool.context_compression import RebuildResult
+    from droid.common.async_tool_loop import AsyncToolLoopHandle
 
     captured: dict[str, object] = {}
 

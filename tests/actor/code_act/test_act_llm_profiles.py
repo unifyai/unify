@@ -5,9 +5,9 @@ from typing import Any
 
 import pytest
 
-from unity.common.act_llm_profiles import CURRENT_ACT_LLM_PROFILE
-from unity.common.async_tool_loop import SteerableToolHandle
-from unity.actor.code_act_actor import CodeActActor
+from droid.common.act_llm_profiles import CURRENT_ACT_LLM_PROFILE
+from droid.common.async_tool_loop import SteerableToolHandle
+from droid.actor.code_act_actor import CodeActActor
 
 
 class _FakeClient:
@@ -126,11 +126,11 @@ async def test_act_llm_profile_overrides_main_actor_client(monkeypatch):
         return _ImmediateHandle()
 
     monkeypatch.setattr(
-        "unity.actor.code_act_actor.new_llm_client",
+        "droid.actor.code_act_actor.new_llm_client",
         fake_new_llm_client,
     )
     monkeypatch.setattr(
-        "unity.actor.code_act_actor.start_async_tool_loop",
+        "droid.actor.code_act_actor.start_async_tool_loop",
         fake_start_async_tool_loop,
     )
 

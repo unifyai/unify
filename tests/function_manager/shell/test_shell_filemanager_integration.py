@@ -22,8 +22,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from tests.helpers import _handle_project
-from unity.function_manager.function_manager import FunctionManager
-from unity.common.context_registry import ContextRegistry
+from droid.function_manager.function_manager import FunctionManager
+from droid.common.context_registry import ContextRegistry
 
 # ────────────────────────────────────────────────────────────────────────────
 # Sample Files for Realistic Test
@@ -219,19 +219,19 @@ echo ""
 
 # Search for documents related to "budget" concepts
 echo "Documents semantically related to 'budget planning':"
-budget_results=$(unity-primitive files search_files --references '{"query": "budget planning and financial allocation"}' --k 3)
+budget_results=$(droid-primitive files search_files --references '{"query": "budget planning and financial allocation"}' --k 3)
 echo "$budget_results" | head -20
 
 # Search for documents about customer relationships
 echo ""
 echo "Documents about 'customer relationship management':"
-crm_results=$(unity-primitive files search_files --references '{"query": "customer contacts and enterprise accounts"}' --k 3)
+crm_results=$(droid-primitive files search_files --references '{"query": "customer contacts and enterprise accounts"}' --k 3)
 echo "$crm_results" | head -20
 
 # Use filter to find high-value entries
 echo ""
 echo "High-value transactions (using filter):"
-filter_results=$(unity-primitive files filter_files --filter "total > 1000" --limit 5 --tables '["sales_data"]')
+filter_results=$(droid-primitive files filter_files --filter "total > 1000" --limit 5 --tables '["sales_data"]')
 echo "$filter_results" | head -20
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -254,7 +254,7 @@ if [ -n "$priority_files" ]; then
     # Then use semantic search to find related documents
     echo ""
     echo "Related documents via semantic search:"
-    related=$(unity-primitive files search_files --references '{"query": "urgent priority high importance"}' --k 2)
+    related=$(droid-primitive files search_files --references '{"query": "urgent priority high importance"}' --k 2)
     echo "$related" | head -10
 fi
 
@@ -532,17 +532,17 @@ echo "=== Semantic Search Only ==="
 
 # Search for budget-related documents
 echo "Budget-related documents:"
-unity-primitive files search_files --references '{"query": "budget financial planning"}' --k 5
+droid-primitive files search_files --references '{"query": "budget financial planning"}' --k 5
 
 # Search for customer information
 echo ""
 echo "Customer-related documents:"
-unity-primitive files search_files --references '{"query": "customer enterprise accounts"}' --k 3
+droid-primitive files search_files --references '{"query": "customer enterprise accounts"}' --k 3
 
 # Filter for high-value transactions
 echo ""
 echo "High-value transactions:"
-unity-primitive files filter_files --filter "total > 1000" --limit 10 --tables '["sales_data"]'
+droid-primitive files filter_files --filter "total > 1000" --limit 10 --tables '["sales_data"]'
 """
 
     result = await fm.execute_shell_script(
@@ -605,7 +605,7 @@ fi
 # Step 3: Semantic search for context (semantic)
 echo ""
 echo "Step 3: Semantic context for top expenses"
-unity-primitive files search_files --references '{"query": "software licensing costs and engineering budget"}' --k 2
+droid-primitive files search_files --references '{"query": "software licensing costs and engineering budget"}' --k 2
 
 # Step 4: Combine results
 echo ""
@@ -667,7 +667,7 @@ echo "  Files found: $file_count"
 # Semantic search may fail
 echo ""
 echo "Semantic search (may fail):"
-semantic_result=$(unity-primitive files search_files --references '{"query": "test"}' --k 1 2>&1)
+semantic_result=$(droid-primitive files search_files --references '{"query": "test"}' --k 1 2>&1)
 if [ $? -eq 0 ]; then
     echo "  Success: $semantic_result"
 else

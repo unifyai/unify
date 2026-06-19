@@ -1,6 +1,6 @@
 import pytest
 
-from unity.contact_manager.contact_manager import ContactManager
+from droid.contact_manager.contact_manager import ContactManager
 from tests.helpers import _handle_project
 
 

@@ -4,10 +4,10 @@ import pytest
 import time
 import unify
 
-from unity.contact_manager.contact_manager import ContactManager
-from unity.common.context_registry import ContextRegistry
-from unity.common.data_store import DataStore
-from unity.session_details import SESSION_DETAILS
+from droid.contact_manager.contact_manager import ContactManager
+from droid.common.context_registry import ContextRegistry
+from droid.common.data_store import DataStore
+from droid.session_details import SESSION_DETAILS
 from tests.helpers import _handle_project
 
 
@@ -242,7 +242,7 @@ def test_get_info_cache_fallback():
 
 @_handle_project
 def test_get_info_cache_fallback_reads_accessible_space_roots():
-    team_id = time.time_ns()
+    team_id = int(time.time_ns() % 1_000_000_000)
     SESSION_DETAILS.team_ids = [team_id]
 
     try:

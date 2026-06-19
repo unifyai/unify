@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import pytest
 
-from unity.common.pipeline.types import InlineRowsHandle
-from unity.data_manager.simulated import SimulatedDataManager
-from unity.data_manager.types import IngestResult
+from droid.common.pipeline.types import InlineRowsHandle
+from droid.data_manager.simulated import SimulatedDataManager
+from droid.data_manager.types import IngestResult
 
 
 @pytest.fixture
@@ -133,15 +133,15 @@ class TestStreamingIngestViaInlineRows:
         result = dm.ingest(
             "test/private_keys",
             table_input_handle=handle,
-            fields={"x": "str", "_unity_ingest_key": "str"},
+            fields={"x": "str", "_droid_ingest_key": "str"},
             expected_total_rows=2,
-            private_ingest_key_column="_unity_ingest_key",
+            private_ingest_key_column="_droid_ingest_key",
             private_ingest_key_prefix="dispatch:job:table",
         )
 
         assert result.rows_inserted == 2
         stored = dm.filter("test/private_keys")
-        assert [row["_unity_ingest_key"] for row in stored] == [
+        assert [row["_droid_ingest_key"] for row in stored] == [
             "dispatch:job:table:0",
             "dispatch:job:table:1",
         ]

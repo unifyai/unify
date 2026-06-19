@@ -18,12 +18,12 @@ import unify
 from pydantic import BaseModel, Field
 
 from tests.helpers import _handle_project
-from unity.common.context_store import TableStore
-from unity.common.model_to_fields import model_to_fields
-from unity.transcript_manager.types.message import Message
+from droid.common.context_store import TableStore
+from droid.common.model_to_fields import model_to_fields
+from droid.transcript_manager.types.message import Message
 
-import unity.common.llm_helpers as llmh
-from unity.common.tool_spec import ToolSpec
+import droid.common.llm_helpers as llmh
+from droid.common.tool_spec import ToolSpec
 
 # --------------------------------------------------------------------------- #
 #  UNIT TESTS: model_to_fields                                                #
@@ -352,7 +352,7 @@ def test_schema_hides_private_optionals() -> None:
     49abe0cd70) asserted that *required* private params should stay
     visible, on the grounds that "otherwise the tool would become
     impossible to call". But the production schema generator in
-    unity/common/llm_helpers.py:method_to_schema (50812d1661,
+    droid/common/llm_helpers.py:method_to_schema (50812d1661,
     2025-06-03) has consistently stripped all underscored params
     without any required/optional split, and no real tool in the
     codebase declares a required underscored param — the convention
@@ -964,8 +964,8 @@ def test_wrapped_methods_resolve_type_hints() -> None:
     """
     from typing import get_type_hints
 
-    from unity.manager_registry import ManagerRegistry
-    from unity.common.state_managers import BaseStateManager
+    from droid.manager_registry import ManagerRegistry
+    from droid.common.state_managers import BaseStateManager
 
     ManagerRegistry._ensure_populated()
 

@@ -5,8 +5,8 @@ import shutil
 import pytest
 
 from tests.helpers import _handle_project
-from unity.function_manager.execution_env import create_base_globals
-from unity.function_manager.function_manager import FunctionManager
+from droid.function_manager.execution_env import create_base_globals
+from droid.function_manager.function_manager import FunctionManager
 
 # Keep this minimal to make venv prep fast (no third-party deps).
 MINIMAL_VENV_CONTENT = """
@@ -199,7 +199,7 @@ async def test_similarity_search_return_callable_monkeypatched(monkeypatch):
         return [dict(fake_record)]
 
     monkeypatch.setattr(
-        "unity.function_manager.function_manager.federated_ranked_search",
+        "droid.function_manager.function_manager.federated_ranked_search",
         _fake_ranked_search,
     )
 
@@ -242,7 +242,7 @@ async def test_dependency_injection_handles_custom_decorators_and_annotations(
     mod_path.write_text(
         (
             "import typing\n"
-            "from unity.function_manager.custom import custom_function\n"
+            "from droid.function_manager.custom import custom_function\n"
             "\n"
             "@custom_function()\n"
             "def my_decorator(fn):\n"
@@ -281,7 +281,7 @@ async def test_dependency_injection_handles_custom_decorators_and_annotations(
         encoding="utf-8",
     )
 
-    from unity.function_manager.custom_functions import collect_custom_functions
+    from droid.function_manager.custom_functions import collect_custom_functions
 
     source_fns = collect_custom_functions(directory=custom_dir)
 
@@ -435,7 +435,7 @@ async def test_similarity_search_return_callable_forward_ref_annotations_just_wo
         return [dict(fake_record)]
 
     monkeypatch.setattr(
-        "unity.function_manager.function_manager.federated_ranked_search",
+        "droid.function_manager.function_manager.federated_ranked_search",
         _fake_ranked_search,
     )
 

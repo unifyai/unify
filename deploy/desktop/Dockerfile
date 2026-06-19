@@ -87,21 +87,21 @@ RUN mkdir -p /usr/share/xfce4/helpers && \
 # disabled in xfconf, which blanks the VNC framebuffer after idle and leaves a
 # black liveview until real input arrives.
 RUN rm -f /etc/xdg/autostart/xfce4-screensaver.desktop /etc/xdg/autostart/xscreensaver.desktop && \
-    mkdir -p /Unity/.config/xfce4/xfconf/xfce-perchannel-xml && \
+    mkdir -p /Droid/.config/xfce4/xfconf/xfce-perchannel-xml && \
     printf '<?xml version="1.0" encoding="UTF-8"?>\n<channel name="xfce4-power-manager" version="1.0">\n  <property name="xfce4-power-manager" type="empty">\n    <property name="dpms-enabled" type="bool" value="false"/>\n    <property name="blank-on-ac" type="int" value="0"/>\n    <property name="dpms-on-ac-sleep" type="uint" value="0"/>\n    <property name="dpms-on-ac-off" type="uint" value="0"/>\n  </property>\n</channel>\n' \
-        > /Unity/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-power-manager.xml && \
+        > /Droid/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-power-manager.xml && \
     printf '<?xml version="1.0" encoding="UTF-8"?>\n<channel name="xfce4-screensaver" version="1.0">\n  <property name="saver" type="empty">\n    <property name="enabled" type="bool" value="false"/>\n  </property>\n  <property name="lock" type="empty">\n    <property name="enabled" type="bool" value="false"/>\n  </property>\n</channel>\n' \
-        > /Unity/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-screensaver.xml && \
+        > /Droid/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-screensaver.xml && \
     printf 'WebBrowser=chromium-browser\nTerminalEmulator=xfce4-terminal\n' \
-        > /Unity/.config/xfce4/helpers.rc && \
-    chown -R unityuser:unityuser /Unity/.config
+        > /Droid/.config/xfce4/helpers.rc && \
+    chown -R unityuser:unityuser /Droid/.config
 
 WORKDIR /app
 
 # Prepare supervisor and magnitude log directories
 RUN mkdir -p /var/log/supervisor /var/log/magnitude && \
-    ln -sfn /root/.cache/ms-playwright /Unity/.cache/ms-playwright && \
-    chown -h unityuser:unityuser /Unity/.cache/ms-playwright
+    ln -sfn /root/.cache/ms-playwright /Droid/.cache/ms-playwright && \
+    chown -h unityuser:unityuser /Droid/.cache/ms-playwright
 
 # Install helper tools
 COPY scripts/sandbox-dpkg .

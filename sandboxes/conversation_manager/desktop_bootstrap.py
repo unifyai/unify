@@ -29,8 +29,8 @@ from urllib.parse import quote
 
 ProgressCallback = Callable[[str], None]
 
-DESKTOP_IMAGE_TAG = "unity-desktop"
-DESKTOP_CONTAINER_NAME = "unity-desktop-sandbox"
+DESKTOP_IMAGE_TAG = "droid-desktop"
+DESKTOP_CONTAINER_NAME = "droid-desktop-sandbox"
 
 
 def _desktop_novnc_url() -> str:
@@ -88,7 +88,7 @@ def _check_magnitude_packages(repo_root: Path) -> Optional[str]:
     magnitude_dir = repo_root / "magnitude"
     if not magnitude_dir.exists():
         return (
-            "Missing `magnitude/` directory. This is Unity's Magnitude fork, required "
+            "Missing `magnitude/` directory. This is Droid's Magnitude fork, required "
             "because agent-service depends on local magnitude-core and magnitude-extract.\n\n"
             "Clone it into the repo root:\n"
             "  git clone <magnitude-repo-url> magnitude"
@@ -216,6 +216,67 @@ def stop_desktop_container(
         pass
 
 
+def _free_desktop_ports(
+    ports: tuple[int, ...] = (5901, 6080, 3000),
+    *,
+    progress: Optional[ProgressCallback] = None,
+) -> None:
+    """Stop any Docker container (any name) that holds the given ports, then kill
+    non-Docker processes that are still listening, so ``docker run`` does not fail
+    with "address already in use".
+    """
+    progress = progress or (lambda _m: None)
+    for port in ports:
+        # Find containers (running or stopped) that bind this port.
+        try:
+            result = subprocess.run(
+                [
+                    "docker",
+                    "ps",
+                    "-a",
+                    "--filter",
+                    f"publish={port}",
+                    "--format",
+                    "{{.Names}}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            for cname in (result.stdout or "").splitlines():
+                cname = cname.strip()
+                if not cname:
+                    continue
+                progress(
+                    f"[desktop] Removing container '{cname}' holding port {port}...",
+                )
+                subprocess.run(
+                    ["docker", "rm", "-f", cname],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                )
+        except Exception:
+            pass
+        # Kill any non-Docker process still listening on the port.
+        try:
+            import signal
+
+            lsof = subprocess.run(
+                ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            for pid_s in (lsof.stdout or "").splitlines():
+                try:
+                    os.kill(int(pid_s.strip()), signal.SIGTERM)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+
 def _validate_agent_service(
     *,
     agent_server_url: str,
@@ -338,7 +399,7 @@ def _start_container(
         "-p",
         "6080:6080",
         "-p",
-        "5900:5900",
+        "5901:5900",
         "-p",
         "3000:3000",
         # Allow the container to reach host-side services (e.g. Orchestra).
@@ -431,6 +492,10 @@ def try_start_desktop_direct(
             ),
         )
 
+    # Free any port conflicts before starting — another container or process may
+    # already hold ports 5900/6080/3000 from a previous session.
+    _free_desktop_ports(progress=progress)
+
     container_id = _start_container(
         repo_root=repo_root,
         progress=progress,
@@ -509,6 +574,10 @@ def try_auto_bootstrap_desktop(
                 summary="Failed to build desktop Docker image",
             )
 
+    # Free any port conflicts before starting — another container or process may
+    # already hold ports 5900/6080/3000 from a previous session.
+    _free_desktop_ports(progress=progress)
+
     container_id = _start_container(
         repo_root=repo_root,
         progress=progress,
@@ -575,7 +644,7 @@ def diagnose_desktop_setup(
         lines.append("  Start it with:")
         lines.append(
             f"    docker run --rm -d --name {DESKTOP_CONTAINER_NAME} "
-            f"-p 6080:6080 -p 5900:5900 -p 3000:3000 --env-file .env {DESKTOP_IMAGE_TAG}",
+            f"-p 6080:6080 -p 5901:5900 -p 3000:3000 --env-file .env {DESKTOP_IMAGE_TAG}",
         )
     lines.append("")
 

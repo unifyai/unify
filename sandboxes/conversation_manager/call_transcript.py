@@ -18,12 +18,12 @@ Supports three input modes:
     .venv/bin/python sandboxes/conversation_manager/call_transcript.py \\
         --staging-log staging_assistant_log_dump.txt
 
-3. **Chat session** — a unity.log from a text-medium session (no voice
+3. **Chat session** — a droid.log from a text-medium session (no voice
    agent). Produces a rich transcript with messages, full actor code,
    execution output, and slow brain decisions::
 
     .venv/bin/python sandboxes/conversation_manager/call_transcript.py \\
-        --chat-log path/to/unity.log
+        --chat-log path/to/droid.log
 
 Every assistant utterance (voice) is traced to its source path:
   - Path 1: fast_brain (reply)
@@ -399,7 +399,7 @@ def _extract_log_date(lines: list[str]) -> str:
 
     Handles both local sandbox format (``2026-02-26 11:24:34,275 ...``)
     and staging/GKE format where the date appears in the job header
-    (``Found job: unity-2026-03-09-...`` or ``Started : 2026-03-09T...``).
+    (``Found job: droid-2026-03-09-...`` or ``Started : 2026-03-09T...``).
     """
     for raw in lines[:100]:
         m = _TS_FULL_RE.match(raw)
@@ -408,7 +408,7 @@ def _extract_log_date(lines: list[str]) -> str:
         dm = re.search(r"Started\s*:\s*(\d{4}-\d{2}-\d{2})T", raw)
         if dm:
             return dm.group(1)
-        dm = re.search(r"unity-(\d{4}-\d{2}-\d{2})-", raw)
+        dm = re.search(r"droid-(\d{4}-\d{2}-\d{2})-", raw)
         if dm:
             return dm.group(1)
     return "2026-01-01"
@@ -1636,7 +1636,7 @@ def _extract_search_args_from_robot_json(json_str: str) -> list[tuple[str, str, 
 
 
 def parse_chat_log(path: Path) -> ChatLogData:
-    """Parse a chat session unity.log into structured data."""
+    """Parse a chat session droid.log into structured data."""
     text = path.read_text(encoding="utf-8", errors="replace")
     lines = text.splitlines()
     data = ChatLogData()
@@ -1649,18 +1649,18 @@ def parse_chat_log(path: Path) -> ChatLogData:
     # Extract session name from the log (job name in the path or log content)
     for raw in lines[:200]:
         if "Marked job as" in raw:
-            m = re.search(r"job as \w+: (unity-[\w-]+)", raw)
+            m = re.search(r"job as \w+: (droid-[\w-]+)", raw)
             if m:
                 data.session_name = m.group(1)
                 break
         if "Updated record with job_name=" in raw:
-            m = re.search(r"job_name=(unity-[\w-]+)", raw)
+            m = re.search(r"job_name=(droid-[\w-]+)", raw)
             if m:
                 data.session_name = m.group(1)
                 break
     if not data.session_name:
         data.session_name = (
-            path.parent.parent.name if "unity" in str(path) else path.stem
+            path.parent.parent.name if "droid" in str(path) else path.stem
         )
 
     # Extract assistant info from Pub/Sub contact data
@@ -1719,16 +1719,16 @@ def parse_chat_log(path: Path) -> ChatLogData:
             )
             i += 1
             continue
-        if "⚙️ [ManagersWorker] Unity initialized" in line:
+        if "⚙️ [ManagersWorker] Droid initialized" in line:
             m = re.search(r"initialized in ([0-9.]+) seconds", line)
             data.system_events.append(
                 SystemEvent(
                     ts_utc=ts,
                     category="init",
                     detail=(
-                        f"Unity initialized in {m.group(1)}s"
+                        f"Droid initialized in {m.group(1)}s"
                         if m
-                        else "Unity initialized"
+                        else "Droid initialized"
                     ),
                 ),
             )
@@ -3305,7 +3305,7 @@ def _format_interleaved_transcript(
 
 
 def collect_magnitude_traces_from_docker(
-    container_name: str = "unity-desktop-sandbox",
+    container_name: str = "droid-desktop-sandbox",
     remote_dir: str = "/var/log/magnitude",
 ) -> tuple[dict[str, MagnitudeTrace], Path | None, Path | None]:
     """Copy magnitude traces and agent-service log from a running Docker container.
@@ -3421,7 +3421,7 @@ def main() -> None:
         type=Path,
         default=None,
         help=(
-            "Path to a chat session unity.log file (text medium, no voice). "
+            "Path to a chat session droid.log file (text medium, no voice). "
             "Produces a rich transcript with messages, actor code, and execution output."
         ),
     )

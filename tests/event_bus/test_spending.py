@@ -1,4 +1,4 @@
-"""Tests for spending functionality in Unity.
+"""Tests for spending functionality in Droid.
 
 This module covers:
 1. Cumulative spend tracking via LLM event hook (atomic_upsert)
@@ -19,8 +19,8 @@ from unillm.limit_hooks import LimitCheckRequest, LimitType
 
 from unify.async_admin import SpendRequestError
 
-from unity.common.log_utils import AtomicUpsertResult, atomic_upsert
-from unity.events.llm_event_hook import (
+from droid.common.log_utils import AtomicUpsertResult, atomic_upsert
+from droid.events.llm_event_hook import (
     _llm_event_to_eventbus,
     _update_cumulative_spend,
 )
@@ -72,24 +72,24 @@ class TestAtomicUpsert:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch("unity.common.log_utils.httpx.AsyncClient") as mock_client_cls:
+        with patch("droid.common.log_utils.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post = AsyncMock(return_value=mock_response)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
-            with patch("unity.common.log_utils.SESSION_DETAILS") as mock_session:
+            with patch("droid.common.log_utils.SESSION_DETAILS") as mock_session:
                 mock_session.unify_key = "test-api-key"
                 mock_session.user_context = "user123"
                 mock_session.assistant_context = "456"
                 mock_session.user.id = "user123"
                 mock_session.assistant.agent_id = 456
 
-                with patch("unity.common.log_utils.SETTINGS") as mock_settings:
+                with patch("droid.common.log_utils.SETTINGS") as mock_settings:
                     mock_settings.ORCHESTRA_URL = "https://api.test.com/v0"
 
-                    with patch("unity.common.log_utils.unify") as mock_unify:
+                    with patch("droid.common.log_utils.unify") as mock_unify:
                         mock_unify.active_project.return_value = "Assistants"
 
                         result = await atomic_upsert(
@@ -131,24 +131,24 @@ class TestAtomicUpsert:
             captured_payload.update(json)
             return mock_response
 
-        with patch("unity.common.log_utils.httpx.AsyncClient") as mock_client_cls:
+        with patch("droid.common.log_utils.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post = AsyncMock(side_effect=capture_post)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
-            with patch("unity.common.log_utils.SESSION_DETAILS") as mock_session:
+            with patch("droid.common.log_utils.SESSION_DETAILS") as mock_session:
                 mock_session.unify_key = "test-key"
                 mock_session.user_context = "user_abc123"
                 mock_session.assistant_context = "asst_789"
                 mock_session.user.id = "user_abc123"
                 mock_session.assistant.agent_id = 789
 
-                with patch("unity.common.log_utils.SETTINGS") as mock_settings:
+                with patch("droid.common.log_utils.SETTINGS") as mock_settings:
                     mock_settings.ORCHESTRA_URL = "https://api.test.com/v0"
 
-                    with patch("unity.common.log_utils.unify") as mock_unify:
+                    with patch("droid.common.log_utils.unify") as mock_unify:
                         mock_unify.active_project.return_value = "Assistants"
 
                         await atomic_upsert(
@@ -187,14 +187,14 @@ class TestAtomicUpsert:
             captured_payload.update(json)
             return mock_response
 
-        with patch("unity.common.log_utils.httpx.AsyncClient") as mock_client_cls:
+        with patch("droid.common.log_utils.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post = AsyncMock(side_effect=capture_post)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
-            with patch("unity.common.log_utils.SESSION_DETAILS") as mock_session:
+            with patch("droid.common.log_utils.SESSION_DETAILS") as mock_session:
                 mock_session.unify_key = "test-key"
                 mock_session.user_context = "user123"
                 mock_session.assistant_context = "456"
@@ -203,10 +203,10 @@ class TestAtomicUpsert:
                 mock_session.org_id = 789  # Set org context
                 mock_session.org_name = "TestOrg"  # Set org name
 
-                with patch("unity.common.log_utils.SETTINGS") as mock_settings:
+                with patch("droid.common.log_utils.SETTINGS") as mock_settings:
                     mock_settings.ORCHESTRA_URL = "https://api.test.com/v0"
 
-                    with patch("unity.common.log_utils.unify") as mock_unify:
+                    with patch("droid.common.log_utils.unify") as mock_unify:
                         mock_unify.active_project.return_value = "Assistants"
 
                         await atomic_upsert(
@@ -236,24 +236,24 @@ class TestAtomicUpsert:
             response=mock_response,
         )
 
-        with patch("unity.common.log_utils.httpx.AsyncClient") as mock_client_cls:
+        with patch("droid.common.log_utils.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post = AsyncMock(return_value=mock_response)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
-            with patch("unity.common.log_utils.SESSION_DETAILS") as mock_session:
+            with patch("droid.common.log_utils.SESSION_DETAILS") as mock_session:
                 mock_session.unify_key = "test-key"
                 mock_session.user_context = "user123"
                 mock_session.assistant_context = "456"
                 mock_session.user.id = "user123"
                 mock_session.assistant.agent_id = 456
 
-                with patch("unity.common.log_utils.SETTINGS") as mock_settings:
+                with patch("droid.common.log_utils.SETTINGS") as mock_settings:
                     mock_settings.ORCHESTRA_URL = "https://api.test.com/v0"
 
-                    with patch("unity.common.log_utils.unify") as mock_unify:
+                    with patch("droid.common.log_utils.unify") as mock_unify:
                         mock_unify.active_project.return_value = "Assistants"
 
                         with pytest.raises(httpx.HTTPStatusError):
@@ -276,7 +276,7 @@ class TestUpdateCumulativeSpend:
     async def test_update_spend_calls_atomic_upsert(self):
         """_update_cumulative_spend should call atomic_upsert with correct params."""
         with patch(
-            "unity.common.log_utils.atomic_upsert",
+            "droid.common.log_utils.atomic_upsert",
             new_callable=AsyncMock,
         ) as mock_upsert:
             mock_upsert.return_value = AtomicUpsertResult(
@@ -286,7 +286,7 @@ class TestUpdateCumulativeSpend:
                 mirrored_contexts=["All/Spending/Monthly"],
             )
 
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.timezone = "UTC"
                 mock_session.user_context = "user123"
                 mock_session.assistant_context = "456"
@@ -305,7 +305,7 @@ class TestUpdateCumulativeSpend:
     async def test_update_spend_skips_zero_cost(self):
         """_update_cumulative_spend should skip if billed_cost is zero."""
         with patch(
-            "unity.common.log_utils.atomic_upsert",
+            "droid.common.log_utils.atomic_upsert",
             new_callable=AsyncMock,
         ) as mock_upsert:
             await _update_cumulative_spend(0.0)
@@ -316,7 +316,7 @@ class TestUpdateCumulativeSpend:
     async def test_update_spend_skips_negative_cost(self):
         """_update_cumulative_spend should skip if billed_cost is negative."""
         with patch(
-            "unity.common.log_utils.atomic_upsert",
+            "droid.common.log_utils.atomic_upsert",
             new_callable=AsyncMock,
         ) as mock_upsert:
             await _update_cumulative_spend(-1.0)
@@ -327,12 +327,12 @@ class TestUpdateCumulativeSpend:
     async def test_update_spend_handles_errors_gracefully(self):
         """_update_cumulative_spend should not raise on errors."""
         with patch(
-            "unity.common.log_utils.atomic_upsert",
+            "droid.common.log_utils.atomic_upsert",
             new_callable=AsyncMock,
         ) as mock_upsert:
             mock_upsert.side_effect = Exception("Network error")
 
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.timezone = "UTC"
                 mock_session.user_context = "user123"
                 mock_session.assistant_context = "456"
@@ -356,11 +356,11 @@ class TestUpdateCumulativeSpend:
             )
 
         with patch(
-            "unity.common.log_utils.atomic_upsert",
+            "droid.common.log_utils.atomic_upsert",
             new_callable=AsyncMock,
             side_effect=capture_upsert,
         ):
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.timezone = "America/New_York"
                 mock_session.user_context = "user123"
                 mock_session.assistant_context = "456"
@@ -379,10 +379,10 @@ class TestUpdateCumulativeSpend:
     async def test_update_spend_skips_missing_user_context(self):
         """_update_cumulative_spend should skip if user_context is missing."""
         with patch(
-            "unity.common.log_utils.atomic_upsert",
+            "droid.common.log_utils.atomic_upsert",
             new_callable=AsyncMock,
         ) as mock_upsert:
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.timezone = "UTC"
                 mock_session.user_context = None  # Missing
                 mock_session.assistant_context = "456"
@@ -396,10 +396,10 @@ class TestUpdateCumulativeSpend:
     async def test_update_spend_skips_missing_assistant_context(self):
         """_update_cumulative_spend should skip if assistant_context is missing."""
         with patch(
-            "unity.common.log_utils.atomic_upsert",
+            "droid.common.log_utils.atomic_upsert",
             new_callable=AsyncMock,
         ) as mock_upsert:
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.timezone = "UTC"
                 mock_session.user_context = "user123"
                 mock_session.assistant_context = None  # Missing
@@ -413,10 +413,10 @@ class TestUpdateCumulativeSpend:
     async def test_update_spend_skips_missing_assistant_id(self):
         """_update_cumulative_spend should skip if assistant_id is missing."""
         with patch(
-            "unity.common.log_utils.atomic_upsert",
+            "droid.common.log_utils.atomic_upsert",
             new_callable=AsyncMock,
         ) as mock_upsert:
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.timezone = "UTC"
                 mock_session.user_context = "user123"
                 mock_session.assistant_context = "456"
@@ -441,11 +441,11 @@ class TestUpdateCumulativeSpend:
             )
 
         with patch(
-            "unity.common.log_utils.atomic_upsert",
+            "droid.common.log_utils.atomic_upsert",
             new_callable=AsyncMock,
             side_effect=capture_upsert,
         ):
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.timezone = "Invalid/Timezone"
                 mock_session.user_context = "user123"
                 mock_session.assistant_context = "456"
@@ -472,11 +472,11 @@ class TestUpdateCumulativeSpend:
             )
 
         with patch(
-            "unity.common.log_utils.atomic_upsert",
+            "droid.common.log_utils.atomic_upsert",
             new_callable=AsyncMock,
             side_effect=capture_upsert,
         ):
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.timezone = "UTC"
                 mock_session.user_context = "user123"
                 mock_session.assistant_context = "456"
@@ -513,24 +513,24 @@ class TestConcurrentSpendUpdates:
             }
             return mock_response
 
-        with patch("unity.common.log_utils.httpx.AsyncClient") as mock_client_cls:
+        with patch("droid.common.log_utils.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post = AsyncMock(side_effect=mock_post)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
-            with patch("unity.common.log_utils.SESSION_DETAILS") as mock_session:
+            with patch("droid.common.log_utils.SESSION_DETAILS") as mock_session:
                 mock_session.unify_key = "test-key"
                 mock_session.user_context = "user123"
                 mock_session.assistant_context = "456"
                 mock_session.user.id = "user123"
                 mock_session.assistant.agent_id = 456
 
-                with patch("unity.common.log_utils.SETTINGS") as mock_settings:
+                with patch("droid.common.log_utils.SETTINGS") as mock_settings:
                     mock_settings.ORCHESTRA_URL = "https://api.test.com/v0"
 
-                    with patch("unity.common.log_utils.unify") as mock_unify:
+                    with patch("droid.common.log_utils.unify") as mock_unify:
                         mock_unify.active_project.return_value = "Assistants"
 
                         # Launch 5 concurrent upserts
@@ -584,11 +584,11 @@ class TestLLMEventHookSpendLogging:
             billed_cost=0.005,
         )
 
-        with patch("unity.events.event_bus.EVENT_BUS") as mock_bus:
+        with patch("droid.events.event_bus.EVENT_BUS") as mock_bus:
             mock_bus.publish = AsyncMock()
 
             with patch(
-                "unity.common.log_utils.atomic_upsert",
+                "droid.common.log_utils.atomic_upsert",
                 new_callable=AsyncMock,
             ):
                 _llm_event_to_eventbus(llm_event)
@@ -602,7 +602,7 @@ class TestLLMEventHookSpendLogging:
             billed_cost=0.0,
         )
 
-        with patch("unity.events.event_bus.EVENT_BUS") as mock_bus:
+        with patch("droid.events.event_bus.EVENT_BUS") as mock_bus:
             mock_bus.publish = AsyncMock()
             _llm_event_to_eventbus(llm_event)
             await asyncio.sleep(0.01)
@@ -619,10 +619,10 @@ class TestCheckSpendingLimitsCallback:
     @pytest.mark.asyncio
     async def test_allowed_when_no_api_key(self):
         """Callback should allow request if no API key is configured."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         with patch.dict("os.environ", {}, clear=True):
-            with patch("unity.spending_limits._get_api_key", return_value=None):
+            with patch("droid.spending_limits._get_api_key", return_value=None):
                 request = LimitCheckRequest(model="gpt-4", endpoint="test")
                 response = await check_spending_limits_callback(request)
 
@@ -631,10 +631,10 @@ class TestCheckSpendingLimitsCallback:
     @pytest.mark.asyncio
     async def test_allowed_when_missing_context(self):
         """Callback should allow request if SESSION_DETAILS is incomplete."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
-        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+        with patch("droid.spending_limits._get_api_key", return_value="test-key"):
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.agent_id = None  # No assistant
                 mock_session.user_id = "user123"
 
@@ -646,19 +646,19 @@ class TestCheckSpendingLimitsCallback:
     @pytest.mark.asyncio
     async def test_checks_assistant_limit(self):
         """Callback should check assistant limit."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         spend_data = {"cumulative_spend": 50.0, "limit": 100.0}
 
-        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+        with patch("droid.spending_limits._get_api_key", return_value="test-key"):
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.agent_id = 123
                 mock_session.user_id = "user_456"
                 mock_session.org_id = None
                 mock_session.assistant.timezone = "UTC"
 
                 with patch(
-                    "unity.spending_limits._get_spend_client",
+                    "droid.spending_limits._get_spend_client",
                 ) as mock_get_client:
                     mock_instance = MagicMock()
                     mock_instance.closed = False
@@ -679,19 +679,19 @@ class TestCheckSpendingLimitsCallback:
     @pytest.mark.asyncio
     async def test_denies_when_limit_exceeded(self):
         """Callback should deny request when limit is exceeded."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         spend_data = {"cumulative_spend": 150.0, "limit": 100.0}
 
-        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+        with patch("droid.spending_limits._get_api_key", return_value="test-key"):
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.agent_id = 123
                 mock_session.user_id = "user_456"
                 mock_session.org_id = None
                 mock_session.assistant.timezone = "UTC"
 
                 with patch(
-                    "unity.spending_limits._get_spend_client",
+                    "droid.spending_limits._get_spend_client",
                 ) as mock_get_client:
                     mock_instance = MagicMock()
                     mock_instance.closed = False
@@ -717,7 +717,7 @@ class TestCreditGateState:
 
     @pytest.mark.asyncio
     async def test_personal_zero_credits_blocks(self):
-        from unity.spending_limits import check_credit_gate_state
+        from droid.spending_limits import check_credit_gate_state
 
         spend_data = {
             "cumulative_spend": 0.0,
@@ -726,14 +726,14 @@ class TestCreditGateState:
             "billing_mode": "CREDITS",
         }
 
-        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+        with patch("droid.spending_limits._get_api_key", return_value="test-key"):
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.user_id = "user_456"
                 mock_session.org_id = None
                 mock_session.assistant.timezone = "UTC"
 
                 with patch(
-                    "unity.spending_limits._get_spend_client",
+                    "droid.spending_limits._get_spend_client",
                 ) as mock_get_client:
                     mock_instance = MagicMock()
                     mock_instance.closed = False
@@ -750,7 +750,7 @@ class TestCreditGateState:
 
     @pytest.mark.asyncio
     async def test_metered_zero_credits_allowed(self):
-        from unity.spending_limits import check_credit_gate_state
+        from droid.spending_limits import check_credit_gate_state
 
         spend_data = {
             "cumulative_spend": 0.0,
@@ -759,14 +759,14 @@ class TestCreditGateState:
             "billing_mode": "METERED",
         }
 
-        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+        with patch("droid.spending_limits._get_api_key", return_value="test-key"):
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.user_id = "user_456"
                 mock_session.org_id = None
                 mock_session.assistant.timezone = "UTC"
 
                 with patch(
-                    "unity.spending_limits._get_spend_client",
+                    "droid.spending_limits._get_spend_client",
                 ) as mock_get_client:
                     mock_instance = MagicMock()
                     mock_instance.closed = False
@@ -781,7 +781,7 @@ class TestCreditGateState:
 
     @pytest.mark.asyncio
     async def test_org_context_checks_org_balance(self):
-        from unity.spending_limits import check_credit_gate_state
+        from droid.spending_limits import check_credit_gate_state
 
         spend_data = {
             "cumulative_spend": 0.0,
@@ -790,14 +790,14 @@ class TestCreditGateState:
             "billing_mode": "CREDITS",
         }
 
-        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+        with patch("droid.spending_limits._get_api_key", return_value="test-key"):
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.user_id = "user_456"
                 mock_session.org_id = 789
                 mock_session.assistant.timezone = "UTC"
 
                 with patch(
-                    "unity.spending_limits._get_spend_client",
+                    "droid.spending_limits._get_spend_client",
                 ) as mock_get_client:
                     mock_instance = MagicMock()
                     mock_instance.closed = False
@@ -813,16 +813,16 @@ class TestCreditGateState:
 
     @pytest.mark.asyncio
     async def test_credit_gate_failures_fail_open(self):
-        from unity.spending_limits import check_credit_gate_state
+        from droid.spending_limits import check_credit_gate_state
 
-        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+        with patch("droid.spending_limits._get_api_key", return_value="test-key"):
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.user_id = "user_456"
                 mock_session.org_id = None
                 mock_session.assistant.timezone = "UTC"
 
                 with patch(
-                    "unity.spending_limits._get_spend_client",
+                    "droid.spending_limits._get_spend_client",
                 ) as mock_get_client:
                     mock_instance = MagicMock()
                     mock_instance.closed = False
@@ -843,19 +843,19 @@ class TestPersonalContextLimitChecks:
     @pytest.mark.asyncio
     async def test_checks_user_limit(self):
         """Personal context should check user limit."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         spend_data = {"cumulative_spend": 50.0, "limit": 100.0}
 
-        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+        with patch("droid.spending_limits._get_api_key", return_value="test-key"):
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.agent_id = 123
                 mock_session.user_id = "user_456"
                 mock_session.org_id = None  # Personal context
                 mock_session.assistant.timezone = "UTC"
 
                 with patch(
-                    "unity.spending_limits._get_spend_client",
+                    "droid.spending_limits._get_spend_client",
                 ) as mock_get_client:
                     mock_instance = MagicMock()
                     mock_instance.closed = False
@@ -884,19 +884,19 @@ class TestOrgContextLimitChecks:
     @pytest.mark.asyncio
     async def test_checks_org_and_member_limits(self):
         """Org context should check assistant, member, and org limits."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         spend_data = {"cumulative_spend": 50.0, "limit": 100.0}
 
-        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+        with patch("droid.spending_limits._get_api_key", return_value="test-key"):
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.agent_id = 123
                 mock_session.user_id = "user_456"
                 mock_session.org_id = 789  # Org context
                 mock_session.assistant.timezone = "UTC"
 
                 with patch(
-                    "unity.spending_limits._get_spend_client",
+                    "droid.spending_limits._get_spend_client",
                 ) as mock_get_client:
                     mock_instance = MagicMock()
                     mock_instance.closed = False
@@ -922,20 +922,20 @@ class TestOrgContextLimitChecks:
     @pytest.mark.asyncio
     async def test_member_limit_exceeded(self):
         """Member limit exceeded should deny request."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         ok_data = {"cumulative_spend": 50.0, "limit": 1000.0}
         exceeded_data = {"cumulative_spend": 300.0, "limit": 200.0}
 
-        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+        with patch("droid.spending_limits._get_api_key", return_value="test-key"):
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.agent_id = 123
                 mock_session.user_id = "user_456"
                 mock_session.org_id = 789
                 mock_session.assistant.timezone = "UTC"
 
                 with patch(
-                    "unity.spending_limits._get_spend_client",
+                    "droid.spending_limits._get_spend_client",
                 ) as mock_get_client:
                     mock_instance = MagicMock()
                     mock_instance.closed = False
@@ -963,17 +963,17 @@ class TestLimitCheckErrorHandling:
     @pytest.mark.asyncio
     async def test_timeout_fails_open(self):
         """Timeout should fail open (allow request)."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
-        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+        with patch("droid.spending_limits._get_api_key", return_value="test-key"):
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.agent_id = 123
                 mock_session.user_id = "user_456"
                 mock_session.org_id = None
                 mock_session.assistant.timezone = "UTC"
 
                 with patch(
-                    "unity.spending_limits._get_spend_client",
+                    "droid.spending_limits._get_spend_client",
                 ) as mock_get_client:
                     mock_instance = MagicMock()
                     mock_instance.closed = False
@@ -996,7 +996,7 @@ class TestLimitCheckErrorHandling:
     @pytest.mark.asyncio
     async def test_404_fails_open(self):
         """404 (entity not found) should fail open."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         error = SpendRequestError(
             url="http://test/v0/assistant/123/spend",
@@ -1005,15 +1005,15 @@ class TestLimitCheckErrorHandling:
             body="Not found",
         )
 
-        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+        with patch("droid.spending_limits._get_api_key", return_value="test-key"):
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.agent_id = 123
                 mock_session.user_id = "user_456"
                 mock_session.org_id = None
                 mock_session.assistant.timezone = "UTC"
 
                 with patch(
-                    "unity.spending_limits._get_spend_client",
+                    "droid.spending_limits._get_spend_client",
                 ) as mock_get_client:
                     mock_instance = MagicMock()
                     mock_instance.closed = False
@@ -1032,7 +1032,7 @@ class TestLimitCheckErrorHandling:
     @pytest.mark.asyncio
     async def test_500_error_fails_open(self):
         """500 server error should fail open."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         error = SpendRequestError(
             url="http://test/v0/assistant/123/spend",
@@ -1041,15 +1041,15 @@ class TestLimitCheckErrorHandling:
             body="Internal server error",
         )
 
-        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+        with patch("droid.spending_limits._get_api_key", return_value="test-key"):
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.agent_id = 123
                 mock_session.user_id = "user_456"
                 mock_session.org_id = None
                 mock_session.assistant.timezone = "UTC"
 
                 with patch(
-                    "unity.spending_limits._get_spend_client",
+                    "droid.spending_limits._get_spend_client",
                 ) as mock_get_client:
                     mock_instance = MagicMock()
                     mock_instance.closed = False
@@ -1072,7 +1072,7 @@ class TestParallelLimitChecks:
     @pytest.mark.asyncio
     async def test_checks_run_in_parallel(self):
         """Limit checks should run in parallel."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         check_times = []
         spend_data = {"cumulative_spend": 50.0, "limit": 100.0}
@@ -1082,15 +1082,15 @@ class TestParallelLimitChecks:
             await asyncio.sleep(0.05)
             return spend_data
 
-        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+        with patch("droid.spending_limits._get_api_key", return_value="test-key"):
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.agent_id = 123
                 mock_session.user_id = "user_456"
                 mock_session.org_id = 789  # Org context (3 checks)
                 mock_session.assistant.timezone = "UTC"
 
                 with patch(
-                    "unity.spending_limits._get_spend_client",
+                    "droid.spending_limits._get_spend_client",
                 ) as mock_get_client:
                     mock_instance = MagicMock()
                     mock_instance.closed = False
@@ -1128,22 +1128,22 @@ class TestNoLimitSet:
     @pytest.mark.asyncio
     async def test_no_limit_allows_request(self):
         """No limit set should allow request."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         spend_data = {
             "cumulative_spend": 1000000.0,  # Large spend
             "limit": None,  # No limit
         }
 
-        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+        with patch("droid.spending_limits._get_api_key", return_value="test-key"):
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.agent_id = 123
                 mock_session.user_id = "user_456"
                 mock_session.org_id = None
                 mock_session.assistant.timezone = "UTC"
 
                 with patch(
-                    "unity.spending_limits._get_spend_client",
+                    "droid.spending_limits._get_spend_client",
                 ) as mock_get_client:
                     mock_instance = MagicMock()
                     mock_instance.closed = False
@@ -1167,9 +1167,9 @@ class TestHookInstallation:
 
     def test_install_hook_without_api_key(self):
         """install_limit_check_hook should skip if no API key."""
-        from unity.spending_limits import install_limit_check_hook
+        from droid.spending_limits import install_limit_check_hook
 
-        with patch("unity.spending_limits._get_api_key", return_value=None):
+        with patch("droid.spending_limits._get_api_key", return_value=None):
             with patch("unillm.set_limit_check_hook") as mock_set_hook:
                 install_limit_check_hook()
 
@@ -1177,9 +1177,9 @@ class TestHookInstallation:
 
     def test_install_hook_with_api_key(self):
         """install_limit_check_hook should register hook with API key."""
-        from unity.spending_limits import install_limit_check_hook
+        from droid.spending_limits import install_limit_check_hook
 
-        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
+        with patch("droid.spending_limits._get_api_key", return_value="test-key"):
             with patch("unillm.set_limit_check_hook") as mock_set_hook:
                 install_limit_check_hook()
 
@@ -1187,7 +1187,7 @@ class TestHookInstallation:
 
     def test_uninstall_hook(self):
         """uninstall_limit_check_hook should clear the hook."""
-        from unity.spending_limits import uninstall_limit_check_hook
+        from droid.spending_limits import uninstall_limit_check_hook
 
         with patch("unillm.clear_limit_check_hook") as mock_clear:
             uninstall_limit_check_hook()
@@ -1201,22 +1201,22 @@ class TestLimitBoundary:
     @pytest.mark.asyncio
     async def test_exactly_at_limit_is_denied(self):
         """Spend exactly at limit should be denied."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         spend_data = {
             "cumulative_spend": 100.0,  # Exactly at limit
             "limit": 100.0,
         }
 
-        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+        with patch("droid.spending_limits._get_api_key", return_value="test-key"):
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.agent_id = 123
                 mock_session.user_id = "user_456"
                 mock_session.org_id = None
                 mock_session.assistant.timezone = "UTC"
 
                 with patch(
-                    "unity.spending_limits._get_spend_client",
+                    "droid.spending_limits._get_spend_client",
                 ) as mock_get_client:
                     mock_instance = MagicMock()
                     mock_instance.closed = False
@@ -1237,22 +1237,22 @@ class TestLimitBoundary:
     @pytest.mark.asyncio
     async def test_just_under_limit_is_allowed(self):
         """Spend just under limit should be allowed."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         spend_data = {
             "cumulative_spend": 99.99,
             "limit": 100.0,
         }
 
-        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+        with patch("droid.spending_limits._get_api_key", return_value="test-key"):
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.agent_id = 123
                 mock_session.user_id = "user_456"
                 mock_session.org_id = None
                 mock_session.assistant.timezone = "UTC"
 
                 with patch(
-                    "unity.spending_limits._get_spend_client",
+                    "droid.spending_limits._get_spend_client",
                 ) as mock_get_client:
                     mock_instance = MagicMock()
                     mock_instance.closed = False
@@ -1293,7 +1293,7 @@ class TestCreditBalanceGating:
     ):
         """Helper: invoke the callback with a mocked spend response that
         includes the given credit_balance."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         spend_data = {
             "cumulative_spend": cumulative_spend,
@@ -1301,15 +1301,15 @@ class TestCreditBalanceGating:
             "credit_balance": credit_balance,
         }
 
-        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+        with patch("droid.spending_limits._get_api_key", return_value="test-key"):
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.agent_id = 123
                 mock_session.user_id = "user_456"
                 mock_session.org_id = None
                 mock_session.assistant.timezone = "UTC"
 
                 with patch(
-                    "unity.spending_limits._get_spend_client",
+                    "droid.spending_limits._get_spend_client",
                 ) as mock_get_client:
                     mock_instance = MagicMock()
                     mock_instance.closed = False
@@ -1367,7 +1367,7 @@ class TestCreditBalanceGating:
 #
 # To run these tests:
 #   1. Start Orchestra: cd /workspaces/orchestra && ./scripts/local.sh start
-#   2. Make sure the following keys are present in Unity's .ev
+#   2. Make sure the following keys are present in Droid's .ev
 #   UNIFY_KEY=<orchestra-key>
 #   OPENAI_API_KEY=<openai-key>
 #   ANTHROPIC_API_KEY=<anthropic-key>
@@ -1567,7 +1567,7 @@ async def e2e_config(request):
         )
 
     # Populate SESSION_DETAILS
-    from unity.session_details import SESSION_DETAILS
+    from droid.session_details import SESSION_DETAILS
 
     SESSION_DETAILS.populate(
         user_id=config.test_user_id,
@@ -1628,23 +1628,23 @@ class TestE2ESpendingLimits:
 
     @pytest.mark.asyncio
     async def test_hook_is_installed(self, e2e_config):
-        """Verify that Unity initializes and installs the limit check hook."""
-        import unity
+        """Verify that Droid initializes and installs the limit check hook."""
+        import droid
         from unillm import is_limit_check_enabled
 
-        unity.init()
+        droid.init()
         assert (
             is_limit_check_enabled()
-        ), "Limit check hook should be installed after unity.init()"
+        ), "Limit check hook should be installed after droid.init()"
 
     @pytest.mark.asyncio
     async def test_limit_check_callback_allows_under_limit(self, e2e_config):
         """Test that limit check callback allows requests when under limit."""
-        import unity
+        import droid
         from unillm.limit_hooks import LimitCheckRequest
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
-        unity.init()
+        droid.init()
 
         request = LimitCheckRequest(
             model="gpt-4o-mini",
@@ -1660,10 +1660,10 @@ class TestE2ESpendingLimits:
     @pytest.mark.llm_call
     async def test_llm_call_succeeds_under_limit(self, e2e_config):
         """Test that an LLM call succeeds when under spending limit."""
-        import unity
+        import droid
         import unillm
 
-        unity.init()
+        droid.init()
 
         client = unillm.AsyncUnify(e2e_config.model)
 
@@ -1680,10 +1680,10 @@ class TestE2ESpendingLimits:
     @pytest.mark.llm_call
     async def test_cumulative_spend_increases_after_llm_call(self, e2e_config):
         """Test that cumulative spend increases after an LLM call."""
-        import unity
+        import droid
         import unillm
 
-        unity.init()
+        droid.init()
 
         headers = {"Authorization": f"Bearer {e2e_config.admin_key}"}
 
@@ -1734,10 +1734,10 @@ class TestE2ESpendingLimits:
     @pytest.mark.llm_call
     async def test_limit_exceeded_blocks_llm_call(self, e2e_config):
         """Test that LLM calls are blocked when limit is exceeded."""
-        import unity
+        import droid
         import unillm
 
-        unity.init()
+        droid.init()
 
         headers = {"Authorization": f"Bearer {e2e_config.api_key}"}
 
@@ -1781,7 +1781,7 @@ class TestE2ESpendingLimits:
     @pytest.mark.llm_call
     async def test_fail_open_on_hook_exception(self, e2e_config):
         """Test that LLM calls succeed when limit check hook raises exception."""
-        import unity
+        import droid
         import unillm
         from unillm.limit_hooks import (
             set_limit_check_hook,
@@ -1790,7 +1790,7 @@ class TestE2ESpendingLimits:
             LimitCheckResponse as _LimitCheckResponse,
         )
 
-        unity.init()
+        droid.init()
 
         # Save original hook
         original_hook = get_limit_check_hook()
@@ -1820,7 +1820,7 @@ class TestE2ESpendingLimits:
     async def test_parallel_limit_check_no_overhead(self, e2e_config):
         """Test that limit check runs in parallel with LLM call (zero overhead)."""
         import time
-        import unity
+        import droid
         import unillm
         from unillm.limit_hooks import (
             set_limit_check_hook,
@@ -1829,7 +1829,7 @@ class TestE2ESpendingLimits:
             LimitCheckResponse as _LimitCheckResponse,
         )
 
-        unity.init()
+        droid.init()
 
         original_hook = get_limit_check_hook()
 
@@ -1870,7 +1870,7 @@ class TestE2ESpendingLimits:
     async def test_inflight_cancellation_on_limit_exceeded(self, e2e_config):
         """Test that LLM call is cancelled when limit check returns denied."""
         import time
-        import unity
+        import droid
         import unillm
         from unillm.limit_hooks import (
             set_limit_check_hook,
@@ -1880,7 +1880,7 @@ class TestE2ESpendingLimits:
             LimitType,
         )
 
-        unity.init()
+        droid.init()
 
         original_hook = get_limit_check_hook()
 
@@ -1920,10 +1920,10 @@ class TestE2ESpendingLimits:
     @pytest.mark.llm_call
     async def test_concurrent_llm_calls(self, e2e_config):
         """Test that concurrent LLM calls correctly update spend atomically."""
-        import unity
+        import droid
         import unillm
 
-        unity.init()
+        droid.init()
 
         headers = {"Authorization": f"Bearer {e2e_config.admin_key}"}
 
@@ -1990,10 +1990,10 @@ class TestE2ESpendingLimits:
     @pytest.mark.llm_call
     async def test_user_limit_check(self, e2e_config):
         """Test that user-level spending limits are enforced."""
-        import unity
+        import droid
         import unillm
 
-        unity.init()
+        droid.init()
 
         headers = {"Authorization": f"Bearer {e2e_config.api_key}"}
 
@@ -2038,9 +2038,9 @@ class TestE2ESpendingLimits:
     @pytest.mark.asyncio
     async def test_user_cumulative_spend(self, e2e_config):
         """Test that user cumulative spend endpoint works correctly."""
-        import unity
+        import droid
 
-        unity.init()
+        droid.init()
 
         headers = {"Authorization": f"Bearer {e2e_config.admin_key}"}
         current_month = datetime.now().strftime("%Y-%m")
@@ -2069,10 +2069,10 @@ class TestE2ESpendingLimits:
     @pytest.mark.llm_call
     async def test_assistant_limit_check(self, e2e_config):
         """Test that assistant-specific spending limits are enforced."""
-        import unity
+        import droid
         import unillm
 
-        unity.init()
+        droid.init()
 
         headers = {"Authorization": f"Bearer {e2e_config.api_key}"}
 
@@ -2114,9 +2114,9 @@ class TestE2ESpendingLimits:
     @pytest.mark.asyncio
     async def test_org_cumulative_spend(self, e2e_config):
         """Test organization cumulative spend retrieval."""
-        import unity
+        import droid
 
-        unity.init()
+        droid.init()
 
         headers = {"Authorization": f"Bearer {e2e_config.api_key}"}
 
@@ -2168,10 +2168,10 @@ class TestE2ESpendingLimits:
     @pytest.mark.llm_call
     async def test_org_limit_check(self, e2e_config):
         """Test organization-level spending limits are enforced."""
-        import unity
+        import droid
         import unillm
 
-        unity.init()
+        droid.init()
 
         headers = {"Authorization": f"Bearer {e2e_config.api_key}"}
 
@@ -2230,7 +2230,7 @@ class TestE2ESpendingLimits:
                     pytest.skip("Cannot set org spending limit")
 
             # Update SESSION_DETAILS with org context
-            from unity.session_details import SESSION_DETAILS
+            from droid.session_details import SESSION_DETAILS
 
             SESSION_DETAILS.populate(
                 user_id=e2e_config.test_user_id,
@@ -2259,7 +2259,7 @@ class TestE2ESpendingLimits:
                 )
 
             # Reset session to personal context
-            from unity.session_details import SESSION_DETAILS
+            from droid.session_details import SESSION_DETAILS
 
             SESSION_DETAILS.populate(
                 user_id=e2e_config.test_user_id,
@@ -2280,9 +2280,9 @@ class TestNotifyLimitReached:
     @pytest.mark.asyncio
     async def test_notification_sent_on_exceeded_limit(self):
         """Notification should be sent when limit is exceeded."""
-        from unity.spending_limits import _notify_limit_reached, _LimitCheckResult
+        from droid.spending_limits import _notify_limit_reached, _LimitCheckResult
 
-        with patch("unity.spending_limits._get_spend_client") as mock_get_client:
+        with patch("droid.spending_limits._get_spend_client") as mock_get_client:
             mock_instance = MagicMock()
             mock_instance.closed = False
             mock_instance.notify_limit_reached = AsyncMock(
@@ -2313,9 +2313,9 @@ class TestNotifyLimitReached:
     @pytest.mark.asyncio
     async def test_notification_includes_org_id_for_member_limit(self):
         """Member limit notification should include organization_id."""
-        from unity.spending_limits import _notify_limit_reached, _LimitCheckResult
+        from droid.spending_limits import _notify_limit_reached, _LimitCheckResult
 
-        with patch("unity.spending_limits._get_spend_client") as mock_get_client:
+        with patch("droid.spending_limits._get_spend_client") as mock_get_client:
             mock_instance = MagicMock()
             mock_instance.closed = False
             mock_instance.notify_limit_reached = AsyncMock(
@@ -2340,9 +2340,9 @@ class TestNotifyLimitReached:
     @pytest.mark.asyncio
     async def test_notification_handles_errors_gracefully(self):
         """Notification should not raise on errors (fire-and-forget)."""
-        from unity.spending_limits import _notify_limit_reached, _LimitCheckResult
+        from droid.spending_limits import _notify_limit_reached, _LimitCheckResult
 
-        with patch("unity.spending_limits._get_spend_client") as mock_get_client:
+        with patch("droid.spending_limits._get_spend_client") as mock_get_client:
             mock_instance = MagicMock()
             mock_instance.closed = False
             mock_instance.notify_limit_reached = AsyncMock(
@@ -2364,9 +2364,9 @@ class TestNotifyLimitReached:
     @pytest.mark.asyncio
     async def test_notification_handles_http_errors_gracefully(self):
         """Notification should not raise on HTTP errors."""
-        from unity.spending_limits import _notify_limit_reached, _LimitCheckResult
+        from droid.spending_limits import _notify_limit_reached, _LimitCheckResult
 
-        with patch("unity.spending_limits._get_spend_client") as mock_get_client:
+        with patch("droid.spending_limits._get_spend_client") as mock_get_client:
             mock_instance = MagicMock()
             mock_instance.closed = False
             mock_instance.notify_limit_reached = AsyncMock(
@@ -2397,7 +2397,7 @@ class TestNotificationStress:
     @pytest.mark.asyncio
     async def test_concurrent_notifications_all_sent(self):
         """Multiple concurrent notifications should all be sent."""
-        from unity.spending_limits import _notify_limit_reached, _LimitCheckResult
+        from droid.spending_limits import _notify_limit_reached, _LimitCheckResult
 
         notification_count = 0
         lock = asyncio.Lock()
@@ -2409,7 +2409,7 @@ class TestNotificationStress:
                 notification_count += 1
             return {"notified": True, "recipient_count": 1}
 
-        with patch("unity.spending_limits._get_spend_client") as mock_get_client:
+        with patch("droid.spending_limits._get_spend_client") as mock_get_client:
             mock_instance = MagicMock()
             mock_instance.closed = False
             mock_instance.notify_limit_reached = AsyncMock(side_effect=counting_notify)
@@ -2436,7 +2436,7 @@ class TestNotificationStress:
     @pytest.mark.asyncio
     async def test_notification_does_not_block_limit_check(self):
         """Notification should be fire-and-forget, not blocking the response."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         notification_started = asyncio.Event()
 
@@ -2451,15 +2451,15 @@ class TestNotificationStress:
             await asyncio.sleep(0.5)  # Slow notification
             return {"notified": True}
 
-        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+        with patch("droid.spending_limits._get_api_key", return_value="test-key"):
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.agent_id = 123
                 mock_session.user_id = "user_456"
                 mock_session.org_id = None
                 mock_session.assistant.timezone = "UTC"
 
                 with patch(
-                    "unity.spending_limits._get_spend_client",
+                    "droid.spending_limits._get_spend_client",
                 ) as mock_get_client:
                     mock_instance = MagicMock()
                     mock_instance.closed = False
@@ -2488,7 +2488,7 @@ class TestNotificationStress:
     @pytest.mark.asyncio
     async def test_rapid_limit_checks_with_notifications(self):
         """Rapid limit checks should each trigger notifications independently."""
-        from unity.spending_limits import check_spending_limits_callback
+        from droid.spending_limits import check_spending_limits_callback
 
         notification_calls = []
 
@@ -2498,15 +2498,15 @@ class TestNotificationStress:
             notification_calls.append(payload)
             return {"notified": False, "reason": "already_notified"}
 
-        with patch("unity.spending_limits._get_api_key", return_value="test-key"):
-            with patch("unity.session_details.SESSION_DETAILS") as mock_session:
+        with patch("droid.spending_limits._get_api_key", return_value="test-key"):
+            with patch("droid.session_details.SESSION_DETAILS") as mock_session:
                 mock_session.assistant.agent_id = 123
                 mock_session.user_id = "user_456"
                 mock_session.org_id = None
                 mock_session.assistant.timezone = "UTC"
 
                 with patch(
-                    "unity.spending_limits._get_spend_client",
+                    "droid.spending_limits._get_spend_client",
                 ) as mock_get_client:
                     mock_instance = MagicMock()
                     mock_instance.closed = False
@@ -2534,13 +2534,13 @@ class TestNotificationStress:
         assert all(not r.allowed for r in responses)
 
         # All 5 should have triggered notification attempts
-        # (deduplication is handled by Orchestra, not Unity)
+        # (deduplication is handled by Orchestra, not Droid)
         assert len(notification_calls) == 5
 
     @pytest.mark.asyncio
     async def test_mixed_limit_types_concurrent_notifications(self):
         """Different limit types should send independent notifications."""
-        from unity.spending_limits import _notify_limit_reached, _LimitCheckResult
+        from droid.spending_limits import _notify_limit_reached, _LimitCheckResult
 
         captured_payloads = []
 
@@ -2548,7 +2548,7 @@ class TestNotificationStress:
             captured_payloads.append(payload)
             return {"notified": True}
 
-        with patch("unity.spending_limits._get_spend_client") as mock_get_client:
+        with patch("droid.spending_limits._get_spend_client") as mock_get_client:
             mock_instance = MagicMock()
             mock_instance.closed = False
             mock_instance.notify_limit_reached = AsyncMock(side_effect=capture_notify)
@@ -2597,7 +2597,7 @@ class TestNotificationStress:
     @pytest.mark.asyncio
     async def test_notification_with_missing_optional_fields(self):
         """Notification should work with minimal required fields."""
-        from unity.spending_limits import _notify_limit_reached, _LimitCheckResult
+        from droid.spending_limits import _notify_limit_reached, _LimitCheckResult
 
         captured_payload = {}
 
@@ -2605,7 +2605,7 @@ class TestNotificationStress:
             captured_payload.update(payload)
             return {"notified": True}
 
-        with patch("unity.spending_limits._get_spend_client") as mock_get_client:
+        with patch("droid.spending_limits._get_spend_client") as mock_get_client:
             mock_instance = MagicMock()
             mock_instance.closed = False
             mock_instance.notify_limit_reached = AsyncMock(side_effect=capture_notify)

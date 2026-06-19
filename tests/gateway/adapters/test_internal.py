@@ -8,11 +8,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from unity.gateway.app import create_app
-from unity.gateway.context import GatewayContext
-from unity.gateway.public_url import StaticPublicUrlProvider
-from unity.gateway.runtime import LocalRuntimeActivator
-from unity.gateway.scheduler import LocalScheduler
+from droid.gateway.app import create_app
+from droid.gateway.context import GatewayContext
+from droid.gateway.public_url import StaticPublicUrlProvider
+from droid.gateway.runtime import LocalRuntimeActivator
+from droid.gateway.scheduler import LocalScheduler
 
 
 class FakeCredentials:
@@ -78,8 +78,8 @@ def gateway_context() -> GatewayContext:
 
 @pytest.fixture
 def app(gateway_context: GatewayContext, monkeypatch: pytest.MonkeyPatch) -> FastAPI:
-    from unity.gateway.adapters import common
-    from unity.gateway.common import auth
+    from droid.gateway.adapters import common
+    from droid.gateway.common import auth
 
     monkeypatch.setattr(
         auth,
@@ -98,9 +98,9 @@ def app(gateway_context: GatewayContext, monkeypatch: pytest.MonkeyPatch) -> Fas
             "assistant_id": 123,
             "boss_contact_id": 456,
             "self_contact_id": 789,
-            "assistant_first_name": "Unity",
+            "assistant_first_name": "Droid",
             "assistant_surname": "Assistant",
-            "assistant_email": "unity@example.com",
+            "assistant_email": "droid@example.com",
             "assistant_number": "+15555550123",
             "assistant_whatsapp_number": "",
             "assistant_discord_bot_id": "",

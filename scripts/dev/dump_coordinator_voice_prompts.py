@@ -37,16 +37,16 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from unity.conversation_manager.domains.contact_index import ContactIndex
-from unity.conversation_manager.domains.renderer import Renderer
-from unity.conversation_manager.prompt_builders import (
+from droid.conversation_manager.domains.contact_index import ContactIndex
+from droid.conversation_manager.domains.renderer import Renderer
+from droid.conversation_manager.prompt_builders import (
     COORDINATOR_JOB_TITLE,
     COORDINATOR_NAME,
     build_system_prompt,
     build_voice_agent_prompt,
 )
-from unity.session_details import SESSION_DETAILS, TeamSummary
-from unity.settings import SETTINGS
+from droid.session_details import SESSION_DETAILS, TeamSummary
+from droid.settings import SETTINGS
 
 # Sample boss/roster stand-ins — production fills these from contacts and
 # CoordinatorManager.get_org_members().
@@ -109,7 +109,7 @@ def _build_slow_brain_system_prompt(
     authorized_humans: list[dict] | None,
     team_summaries: list[TeamSummary],
 ) -> str:
-    """Mirror ``unity/conversation_manager/domains/brain.py::build_brain_spec``."""
+    """Mirror ``droid/conversation_manager/domains/brain.py::build_brain_spec``."""
     is_coordinator = persona == "coordinator"
     bio_parts: list[str] = []
     if not is_coordinator:
@@ -155,7 +155,7 @@ def _build_fast_brain_system_prompt(
     demo_mode: bool,
     channel: str,
 ) -> str:
-    """Mirror ``unity/conversation_manager/medium_scripts/call.py`` entrypoint."""
+    """Mirror ``droid/conversation_manager/medium_scripts/call.py`` entrypoint."""
     is_coordinator = persona == "coordinator"
     return build_voice_agent_prompt(
         bio=assistant_bio,

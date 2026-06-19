@@ -5,13 +5,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from unity.conversation_manager.domains.call_manager import (
+from droid.conversation_manager.domains.call_manager import (
     CallConfig,
     LivekitCallManager,
 )
-from unity.conversation_manager.domains.event_handlers import EventHandler
-from unity.conversation_manager.events import RecordingReady
-from unity.gateway.common.livekit import make_call_scoped_sip_uri
+from droid.conversation_manager.domains.event_handlers import EventHandler
+from droid.conversation_manager.events import RecordingReady
+from droid.gateway.common.livekit import make_call_scoped_sip_uri
 
 
 @pytest.mark.asyncio
@@ -36,12 +36,12 @@ async def test_start_call_uses_provided_room_name(monkeypatch):
         contact,
         boss,
         channel="whatsapp_call",
-        room_name="unity_wa_room_123_CA111",
+        room_name="droid_wa_room_123_CA111",
     )
 
-    assert manager.room_name == "unity_wa_room_123_CA111"
+    assert manager.room_name == "droid_wa_room_123_CA111"
     start_subprocess.assert_awaited_once()
-    assert start_subprocess.await_args.args[0] == "unity_wa_room_123_CA111"
+    assert start_subprocess.await_args.args[0] == "droid_wa_room_123_CA111"
 
 
 @pytest.mark.asyncio
@@ -75,7 +75,7 @@ async def test_start_unify_meet_passes_opening_config_to_worker(monkeypatch):
     await manager.start_unify_meet(
         contact,
         boss,
-        "unity_123_meet",
+        "droid_123_meet",
         opening_config=opening_config,
     )
 
@@ -89,7 +89,7 @@ async def test_start_unify_meet_passes_opening_config_to_worker(monkeypatch):
     await manager.start_unify_meet(
         contact,
         boss,
-        "unity_123_meet",
+        "droid_123_meet",
         opening_config=opening_config,
     )
 
@@ -112,22 +112,22 @@ def test_local_call_scoped_sip_uri_uses_unique_target_and_headers():
         "CA:111",
         _FakeCredentials(),
         headers={
-            "Unity-Call-Session": "CA-111",
-            "X-Unity-Room": "unity_wa_room_123_CA-111",
+            "Droid-Call-Session": "CA-111",
+            "X-Droid-Room": "droid_wa_room_123_CA-111",
         },
     )
 
     assert sip_target == "15550800000-CA-111"
     assert uri.startswith("sip:15550800000-CA-111@tenant.sip.livekit.cloud?")
-    assert "X-Unity-Call-Session=CA-111" in uri
-    assert "X-Unity-Room=unity_wa_room_123_CA-111" in uri
+    assert "X-Droid-Call-Session=CA-111" in uri
+    assert "X-Droid-Room=droid_wa_room_123_CA-111" in uri
 
 
 @pytest.mark.parametrize(
     ("recording_keys", "expected_exchange_id"),
     [
-        ({"CA111": 10, "unity_wa_room_123_CA111": 20, "legacy_conf": 30}, 10),
-        ({"unity_wa_room_123_CA111": 20, "legacy_conf": 30}, 20),
+        ({"CA111": 10, "droid_wa_room_123_CA111": 20, "legacy_conf": 30}, 10),
+        ({"droid_wa_room_123_CA111": 20, "legacy_conf": 30}, 20),
         ({"legacy_conf": 30}, 30),
     ],
 )
@@ -148,7 +148,7 @@ async def test_recording_ready_prefers_call_session_then_room_then_conference(
             recording_url="https://storage.googleapis.com/bucket/call.mp3",
             call_session_id="CA111",
             provider_call_sid="CA111",
-            room_name="unity_wa_room_123_CA111",
+            room_name="droid_wa_room_123_CA111",
         ),
         cm,
     )
@@ -158,4 +158,4 @@ async def test_recording_ready_prefers_call_session_then_room_then_conference(
     assert exchange_id == expected_exchange_id
     assert metadata["recording_url"].endswith("/call.mp3")
     assert metadata["recording_call_session_id"] == "CA111"
-    assert metadata["recording_room_name"] == "unity_wa_room_123_CA111"
+    assert metadata["recording_room_name"] == "droid_wa_room_123_CA111"

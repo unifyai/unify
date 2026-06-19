@@ -23,8 +23,8 @@ from tests.conversation_manager.actions.integration.helpers import (
     wait_for_actor_completion,
     wait_for_condition,
 )
-from unity.conversation_manager.events import SMSReceived
-from unity.conversation_manager.domains.brain_action_tools import (
+from droid.conversation_manager.events import SMSReceived
+from droid.conversation_manager.domains.brain_action_tools import (
     get_handle_paused_state,
 )
 

@@ -59,8 +59,8 @@ from sandboxes.conversation_manager.ipc_protocol import (
     create_message,
     parse_message,
 )
-from unity.common.tool_spec import ToolSpec
-from unity.events.types.manager_method import ManagerMethodPayload
+from droid.common.tool_spec import ToolSpec
+from droid.events.types.manager_method import ManagerMethodPayload
 
 LG = logging.getLogger("conversation_manager_sandbox")
 
@@ -458,7 +458,7 @@ def _coerce_actor_config(config: dict) -> ActorConfig:
         return ActorConfig.from_json_obj(raw if isinstance(raw, dict) else {})
     except Exception:
         # Safe default.
-        return ActorConfig(actor_type="simulated")
+        return ActorConfig(actor_type="codeact_real")
 
 
 def _build_args_namespace(*, config: dict, sender: _Sender) -> Any:
@@ -470,21 +470,13 @@ def _build_args_namespace(*, config: dict, sender: _Sender) -> Any:
     args = SimpleNamespace(**cfg)
     # Ensure required defaults.
     if not hasattr(args, "project_name"):
-        setattr(args, "project_name", "unity")
+        setattr(args, "project_name", "droid")
     if not hasattr(args, "agent_server_url"):
         setattr(args, "agent_server_url", None)
     if not hasattr(args, "headless"):
         setattr(args, "headless", False)
     if not hasattr(args, "agent_mode"):
         setattr(args, "agent_mode", "web-vm")
-    if not hasattr(args, "real_comms"):
-        setattr(args, "real_comms", False)
-    if not hasattr(args, "auto_confirm"):
-        setattr(args, "auto_confirm", False)
-    # GUI has no stdin for confirmation prompts — auto-confirm outbound actions.
-    if getattr(args, "real_comms", False):
-        setattr(args, "auto_confirm", True)
-
     # ActorConfig is expected under `_actor_config` by existing sandbox code.
     actor_cfg = _coerce_actor_config(cfg)
     setattr(args, "_actor_config", actor_cfg)
@@ -630,27 +622,7 @@ async def _ipc_loop(
                 state.awaiting_config_choice = False
                 sender.send_lines(["(config switch cancelled)"], id=cmd_id)
                 continue
-            actor_type = {
-                "1": "simulated",
-                "2": "codeact_simulated",
-                "3": "codeact_real",
-            }.get(
-                choice,
-            )
-            if actor_type is None and choice in {
-                "simulated",
-                "codeact_simulated",
-                "codeact_real",
-            }:
-                actor_type = choice
-            if actor_type is None:
-                sender.send_lines(
-                    [
-                        "⚠️ Please choose 1, 2, or 3 (or type 'cancel').",
-                    ],
-                    id=cmd_id,
-                )
-                continue
+            actor_type = "codeact_real"
 
             new_cfg = ActorConfig(actor_type=actor_type)  # type: ignore[arg-type]
             try:
@@ -708,12 +680,9 @@ async def _ipc_loop(
             state.awaiting_config_choice = True
             sender.send_lines(
                 [
-                    "Select actor configuration:",
-                    "1. Simulated (no computer interface)",
-                    "2. CodeAct + simulated managers (mock computer backend)",
-                    "3. CodeAct + real managers + real computer interface",
+                    "Restart with CodeAct + real managers + real computer interface?",
                     "",
-                    "Reply with 1, 2, or 3 (or type 'cancel').",
+                    "Reply 'yes' to confirm or 'cancel' to abort.",
                 ],
                 id=cmd_id,
             )
@@ -822,7 +791,7 @@ async def _run_worker(*, ui_to_worker, worker_to_ui, config: dict) -> None:
     args = _build_args_namespace(config=config, sender=sender)
     actor_cfg: ActorConfig = getattr(args, "_actor_config", ActorConfig())
     try:
-        project_name = str(getattr(args, "project_name", "unity"))
+        project_name = str(getattr(args, "project_name", "droid"))
         overwrite = bool(getattr(args, "overwrite", False))
         activate_project(project_name, overwrite)
     except Exception as exc:
@@ -836,7 +805,7 @@ async def _run_worker(*, ui_to_worker, worker_to_ui, config: dict) -> None:
         sender.send_worker_exit(restart=False, config=None)
         return
     cfg_mgr = ConfigurationManager(
-        project_name=str(getattr(args, "project_name", "unity")),
+        project_name=str(getattr(args, "project_name", "droid")),
         project_root=Path(__file__).resolve().parents[2],
     )
 
@@ -846,7 +815,7 @@ async def _run_worker(*, ui_to_worker, worker_to_ui, config: dict) -> None:
     desktop_container_id: Optional[str] = None
     try:
         if actor_cfg.actor_type == "codeact_real":
-            from unity.function_manager.primitives import DEFAULT_AGENT_SERVER_URL
+            from droid.function_manager.primitives import DEFAULT_AGENT_SERVER_URL
 
             container_url = (
                 getattr(args, "agent_server_url", None) or DEFAULT_AGENT_SERVER_URL
@@ -1025,7 +994,6 @@ async def _run_worker(*, ui_to_worker, worker_to_ui, config: dict) -> None:
         state=state,
         publisher=publisher,
         chat_history=state.chat_history,
-        allow_voice=False,
         allow_save_project=False,
         config_manager=None,
         trace_display=trace_display,
@@ -1158,7 +1126,7 @@ async def _run_worker(*, ui_to_worker, worker_to_ui, config: dict) -> None:
         # Best-effort: free port after shutdown (only for web mode local agent-service).
         try:
             if actor_cfg.actor_type == "codeact_real" and desktop_container_id is None:
-                from unity.function_manager.primitives import DEFAULT_AGENT_SERVER_URL
+                from droid.function_manager.primitives import DEFAULT_AGENT_SERVER_URL
 
                 free_agent_service_port(
                     repo_root=repo_root,

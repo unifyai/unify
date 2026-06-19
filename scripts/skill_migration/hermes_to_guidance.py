@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import HermesAgent skills into Unity's GuidanceManager.
+"""Import HermesAgent skills into Droid's GuidanceManager.
 
 HermesAgent ships skills as ``SKILL.md`` folders under ``skills/`` (bundled)
 and ``optional-skills/`` (opt-in), plus the occasional plugin-shipped skill

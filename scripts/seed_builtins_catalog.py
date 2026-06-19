@@ -21,7 +21,7 @@ exactly one executor; the script never falls back to another executor after
 failure:
 
     UNIFY_KEY=<admin-key> ORCHESTRA_ADMIN_KEY=<admin-key> ORCHESTRA_URL=<api-url> \
-        UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR=direct_worker \
+        DROID_INTEGRATION_BOOTSTRAP_EXECUTOR=direct_worker \
         .venv/bin/python scripts/seed_builtins_catalog.py \
         --integration-bootstrap-manifest <path-to-integration-bootstrap.toml>
 """
@@ -85,7 +85,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--integration-bootstrap-manifest",
-        default=os.environ.get("UNITY_INTEGRATION_BOOTSTRAP_MANIFEST", ""),
+        default=os.environ.get("DROID_INTEGRATION_BOOTSTRAP_MANIFEST", ""),
         help=(
             "Optional provider bootstrap manifest. When provided, this script "
             "fetches provider catalog artifacts and seeds the returned "
@@ -100,7 +100,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--skip-integrations",
         action="store_true",
-        default=os.environ.get("UNITY_SKIP_BUILTINS_INTEGRATIONS", "").lower()
+        default=os.environ.get("DROID_SKIP_BUILTINS_INTEGRATIONS", "").lower()
         in {"1", "true", "yes"},
         help="Seed only primitives and guidance; integration bootstrap is handled elsewhere.",
     )
@@ -108,16 +108,16 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def _integration_bootstrap_executor(environment: str) -> str:
-    executor = os.environ.get("UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR", "").strip()
+    executor = os.environ.get("DROID_INTEGRATION_BOOTSTRAP_EXECUTOR", "").strip()
     if not executor:
         raise ValueError(
-            "UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR is required when an integration "
+            "DROID_INTEGRATION_BOOTSTRAP_EXECUTOR is required when an integration "
             "bootstrap manifest is provided. Select exactly one of: "
             f"{', '.join(sorted(INTEGRATION_BOOTSTRAP_EXECUTORS))}",
         )
     if executor not in INTEGRATION_BOOTSTRAP_EXECUTORS:
         raise ValueError(
-            f"Invalid UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR={executor!r}; expected one "
+            f"Invalid DROID_INTEGRATION_BOOTSTRAP_EXECUTOR={executor!r}; expected one "
             f"of {', '.join(sorted(INTEGRATION_BOOTSTRAP_EXECUTORS))}",
         )
     return executor
@@ -413,7 +413,7 @@ def _seed_sync_result(
     result: dict[str, Any],
     sync_payload: dict[str, Any],
 ) -> bool:
-    from unity.integrations.builtins_catalog import seed_builtin_integrations
+    from droid.integrations.builtins_catalog import seed_builtin_integrations
 
     if result.get("status") == "failed":
         raise RuntimeError(
@@ -537,11 +537,11 @@ def _builtins_sync_request_payload(
         "sync_payload": sync_payload,
         "batch_size": int(
             os.environ.get(
-                "UNITY_INTEGRATION_BOOTSTRAP_BATCH_SIZE",
+                "DROID_INTEGRATION_BOOTSTRAP_BATCH_SIZE",
                 DEFAULT_COMPOSIO_BATCH_SIZE,
             ),
         ),
-        "workers": int(os.environ.get("UNITY_INTEGRATION_BOOTSTRAP_WORKERS", "4")),
+        "workers": int(os.environ.get("DROID_INTEGRATION_BOOTSTRAP_WORKERS", "4")),
     }
 
 
@@ -593,7 +593,7 @@ def _run_json_command(
 
 def _run_direct_worker_executor(payload: dict[str, Any]) -> dict[str, Any]:
     command = os.environ.get(
-        "UNITY_INTEGRATION_BOOTSTRAP_DIRECT_WORKER_CMD",
+        "DROID_INTEGRATION_BOOTSTRAP_DIRECT_WORKER_CMD",
         f"{sys.executable} -m orchestra.workers.builtins_artifacts_seed_job",
     )
     return _run_json_command(shlex.split(command), request_payload=payload)
@@ -611,7 +611,7 @@ def _run_api_executor(
         method="POST",
         path="/admin/integrations/builtins-sync/start",
         payload=payload,
-        timeout=float(os.environ.get("UNITY_INTEGRATION_BOOTSTRAP_TIMEOUT", "3600")),
+        timeout=float(os.environ.get("DROID_INTEGRATION_BOOTSTRAP_TIMEOUT", "3600")),
     )
     return result
 
@@ -786,10 +786,10 @@ def _sync_integration_bootstrap_manifest(
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv or sys.argv[1:])
-    from unity.common.builtins import builtins_project
-    from unity.function_manager.builtins_catalog import seed_builtin_primitives
-    from unity.guidance_manager.builtins_catalog import seed_builtin_guidance
-    from unity.integrations.builtins_catalog import seed_builtin_integrations
+    from droid.common.builtins import builtins_project
+    from droid.function_manager.builtins_catalog import seed_builtin_primitives
+    from droid.guidance_manager.builtins_catalog import seed_builtin_guidance
+    from droid.integrations.builtins_catalog import seed_builtin_integrations
 
     project = builtins_project()
     logging.info(

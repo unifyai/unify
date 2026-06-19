@@ -7,5 +7,5 @@ logs/**
 .cache_write.ndjson
 .pytest_cache/
 .ruff_cache/
-.unity_plans/
+.droid_plans/
 __pycache__/

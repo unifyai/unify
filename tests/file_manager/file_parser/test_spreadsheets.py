@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import _handle_project
-from unity.file_manager.file_parsers import FileParseRequest, FileParser, FileFormat
-from unity.file_manager.file_parsers.settings import FILE_PARSER_SETTINGS
+from droid.file_manager.file_parsers import FileParseRequest, FileParser, FileFormat
+from droid.file_manager.file_parsers.settings import FILE_PARSER_SETTINGS
 
 
 def _assert_non_empty(s: str, *, label: str) -> None:
@@ -163,7 +163,7 @@ def test_spreadsheet_full_text_is_bounded_for_embedding_budget(sample_file):
     assert res.file_format == FileFormat.XLSX
 
     # Bounded profile text should fit within the embedding input budget.
-    from unity.common.token_utils import conservative_token_estimate
+    from droid.common.token_utils import conservative_token_estimate
 
     est = conservative_token_estimate(
         res.full_text,

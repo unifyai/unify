@@ -34,9 +34,9 @@ set -euo pipefail
 #
 # Exit:
 #   Press Ctrl-C in any pane, or close the terminal
-#   Or run: tmux kill-session -t unity-monitor
+#   Or run: tmux kill-session -t droid-monitor
 
-SESSION_NAME="unity-monitor"
+SESSION_NAME="droid-monitor"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 # ---- Increase file descriptor limit ----
@@ -182,10 +182,10 @@ KEYBOARD SHORTCUTS (inside tmux):
 CLEANUP:
 
   Kill the dashboard session:
-    tmux kill-session -t unity-monitor
+    tmux kill-session -t droid-monitor
 
   Re-attach to running dashboard:
-    tmux attach -t unity-monitor
+    tmux attach -t droid-monitor
 
 INSTALLATION:
 

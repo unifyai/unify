@@ -9,11 +9,11 @@ from contextlib import contextmanager
 import pytest
 
 from tests.actor.state_managers.utils import make_code_act_actor
-from unity.common.accessible_teams_block import build_accessible_teams_block
-from unity.common.context_registry import ContextRegistry
-from unity.manager_registry import ManagerRegistry
-from unity.memory_manager import broader_context
-from unity.session_details import SESSION_DETAILS, TeamSummary
+from droid.common.accessible_teams_block import build_accessible_teams_block
+from droid.common.context_registry import ContextRegistry
+from droid.manager_registry import ManagerRegistry
+from droid.memory_manager import broader_context
+from droid.session_details import SESSION_DETAILS, TeamSummary
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 

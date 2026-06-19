@@ -29,7 +29,7 @@ from sandboxes.utils import (
     build_cli_parser,
     configure_sandbox_logging,
 )
-from unity.function_manager.function_manager import FunctionManager
+from droid.function_manager.function_manager import FunctionManager
 
 # Logger setup for the sandbox
 LG = logging.getLogger("function_manager_sandbox")

@@ -20,7 +20,7 @@ from datetime import datetime
 from dataclasses import dataclass
 
 from tests.conversation_manager.conftest import TEST_CONTACTS
-from unity.conversation_manager.events import (
+from droid.conversation_manager.events import (
     Event,
     SMSReceived,
     EmailReceived,
@@ -31,7 +31,7 @@ from unity.conversation_manager.events import (
     Ping,
     ActorResult,
 )
-from unity.conversation_manager.cm_types import Medium
+from droid.conversation_manager.cm_types import Medium
 
 pytestmark = pytest.mark.symbolic
 
@@ -157,7 +157,7 @@ class TestEventHandlerEdgeCases:
         might try to reply, which could fail for unrelated reasons.
         """
         cm = initialized_cm
-        from unity.conversation_manager.domains.event_handlers import EventHandler
+        from droid.conversation_manager.domains.event_handlers import EventHandler
 
         unknown_contact = {
             "contact_id": 9999,  # Not in TEST_CONTACTS or ContactManager

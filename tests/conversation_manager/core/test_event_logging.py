@@ -25,7 +25,7 @@ import pytest
 import pytest_asyncio
 
 from tests.helpers import _handle_project, capture_events, get_or_create_contact
-from unity.conversation_manager.events import (
+from droid.conversation_manager.events import (
     SMSReceived,
     EmailReceived,
     EmailSent,
@@ -48,7 +48,7 @@ async def wait_for_operations_queue(timeout: float = 5.0) -> None:
     The CM uses an async queue for operations like publishing to EventBus.
     This helper waits for that queue to be empty.
     """
-    from unity.conversation_manager.domains import managers_utils
+    from droid.conversation_manager.domains import managers_utils
 
     # Yield to the event loop so the fire-and-forget create_task() in the
     # event handler can execute its Queue.put() (non-blocking on an unbounded
@@ -76,8 +76,8 @@ def _apply_comms_only_mocks(cm) -> None:
     This allows testing EventBus event logging while still mocking external services
     (SMS, email, etc.) that we don't want to actually call during tests.
     """
-    from unity.conversation_manager.domains import comms_utils
-    from unity.conversation_manager import assistant_jobs
+    from droid.conversation_manager.domains import comms_utils
+    from droid.conversation_manager import assistant_jobs
 
     def _sync_mock_success(*args, **kwargs):
         return {"success": True}
@@ -127,27 +127,27 @@ async def cm_with_eventbus():
 
     This is a function-scoped fixture for isolation.
     """
-    from unity.actor.simulated import SimulatedActor
-    from unity.conversation_manager.event_broker import reset_event_broker
-    from unity.conversation_manager import start_async, stop_async
-    from unity.conversation_manager.domains import managers_utils
+    from droid.actor.simulated import SimulatedActor
+    from droid.conversation_manager.event_broker import reset_event_broker
+    from droid.conversation_manager import start_async, stop_async
+    from droid.conversation_manager.domains import managers_utils
 
     # Actor is simulated to avoid computer environment dependencies.
     # Contact/Transcript must be real for direct transcript context assertions.
-    os.environ["UNITY_ACTOR_IMPL"] = "simulated"
-    os.environ["UNITY_ACTOR_SIMULATED_STEPS"] = "3"
-    os.environ["UNITY_CONTACT_IMPL"] = "real"
-    os.environ["UNITY_TRANSCRIPT_IMPL"] = "real"
-    os.environ["UNITY_MEMORY_ENABLED"] = "false"
-    os.environ["UNITY_KNOWLEDGE_ENABLED"] = "false"
-    os.environ["UNITY_GUIDANCE_ENABLED"] = "false"
-    os.environ["UNITY_SECRET_ENABLED"] = "false"
-    os.environ["UNITY_SKILL_ENABLED"] = "false"
-    os.environ["UNITY_WEB_ENABLED"] = "false"
-    os.environ["UNITY_FILE_ENABLED"] = "false"
-    os.environ["UNITY_INCREMENTING_TIMESTAMPS"] = "true"
+    os.environ["DROID_ACTOR_IMPL"] = "simulated"
+    os.environ["DROID_ACTOR_SIMULATED_STEPS"] = "3"
+    os.environ["DROID_CONTACT_IMPL"] = "real"
+    os.environ["DROID_TRANSCRIPT_IMPL"] = "real"
+    os.environ["DROID_MEMORY_ENABLED"] = "false"
+    os.environ["DROID_KNOWLEDGE_ENABLED"] = "false"
+    os.environ["DROID_GUIDANCE_ENABLED"] = "false"
+    os.environ["DROID_SECRET_ENABLED"] = "false"
+    os.environ["DROID_SKILL_ENABLED"] = "false"
+    os.environ["DROID_WEB_ENABLED"] = "false"
+    os.environ["DROID_FILE_ENABLED"] = "false"
+    os.environ["DROID_INCREMENTING_TIMESTAMPS"] = "true"
     os.environ["TEST"] = "true"
-    os.environ["UNITY_CONVERSATION_JOB_NAME"] = "test_event_logging_job"
+    os.environ["DROID_CONVERSATION_JOB_NAME"] = "test_event_logging_job"
 
     reset_event_broker()
 
@@ -203,7 +203,7 @@ async def test_sms_events_logged_to_eventbus(cm_with_eventbus):
     1. SMSReceived event should be logged with contact and content
     2. SMSSent event should be logged with the assistant's response
     """
-    from unity.conversation_manager.domains.event_handlers import EventHandler
+    from droid.conversation_manager.domains.event_handlers import EventHandler
 
     cm = cm_with_eventbus
     contact = TEST_CONTACTS[1]
@@ -255,7 +255,7 @@ async def test_email_events_logged_to_eventbus(cm_with_eventbus):
     When an email is received and processed:
     1. EmailReceived event should be logged with contact, subject, and body
     """
-    from unity.conversation_manager.domains.event_handlers import EventHandler
+    from droid.conversation_manager.domains.event_handlers import EventHandler
 
     cm = cm_with_eventbus
     contact = TEST_CONTACTS[1]
@@ -313,7 +313,7 @@ async def test_unify_message_events_logged_to_eventbus(cm_with_eventbus):
     When a Unify message is received and processed:
     1. UnifyMessageReceived event should be logged
     """
-    from unity.conversation_manager.domains.event_handlers import EventHandler
+    from droid.conversation_manager.domains.event_handlers import EventHandler
 
     cm = cm_with_eventbus
     contact = TEST_CONTACTS[1]
@@ -365,7 +365,7 @@ async def test_event_bus_event_has_correct_type(cm_with_eventbus):
     This is important for filtering and observability - all CM events
     should be identifiable as Comms events.
     """
-    from unity.conversation_manager.domains.event_handlers import EventHandler
+    from droid.conversation_manager.domains.event_handlers import EventHandler
 
     cm = cm_with_eventbus
     contact = TEST_CONTACTS[1]
@@ -399,7 +399,7 @@ async def test_event_bus_event_excludes_sensitive_data(cm_with_eventbus):
     The publish_bus_events function should remove sensitive fields before
     publishing to ensure they don't end up in logs/observability systems.
     """
-    from unity.conversation_manager.domains.event_handlers import EventHandler
+    from droid.conversation_manager.domains.event_handlers import EventHandler
 
     cm = cm_with_eventbus
     contact = TEST_CONTACTS[1]
@@ -442,7 +442,7 @@ async def test_inbound_email_transcript_includes_all_recipients(cm_with_eventbus
     entry's receiver_ids should include all resolved recipient contact IDs,
     not just [0] (the assistant).
     """
-    from unity.conversation_manager.domains.event_handlers import EventHandler
+    from droid.conversation_manager.domains.event_handlers import EventHandler
     import unify
 
     cm = cm_with_eventbus
@@ -541,7 +541,7 @@ async def test_outbound_email_transcript_includes_all_recipients(cm_with_eventbu
     transcript entry's receiver_ids should include all recipient contact IDs,
     not just the single contact from event.contact.
     """
-    from unity.conversation_manager.domains.event_handlers import EventHandler
+    from droid.conversation_manager.domains.event_handlers import EventHandler
     import unify
 
     cm = cm_with_eventbus

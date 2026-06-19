@@ -8,7 +8,7 @@ parallel pytest sessions race-free.
 
 The script is idempotent: calling it multiple times has no adverse effects.
 If Orchestra is unreachable (e.g. CI runner failed to start it, or local dev
-without `unity setup`), the script exits 0 with a clear note — pytest will
+without `droid setup`), the script exits 0 with a clear note — pytest will
 then run, and individual tests handle the missing backend via their own
 `requires_orchestra` marker / `_check_orchestra_available` skip logic in
 `tests/conftest.py`. Crashing here would kill the pytest session before
@@ -27,7 +27,7 @@ import os
 import sys
 from pathlib import Path
 
-# Ensure repo root is in sys.path so we can import unity.
+# Ensure repo root is in sys.path so we can import droid.
 # This script is invoked directly by parallel_run.sh, not via pytest
 # which handles path setup automatically.
 _repo_root = Path(__file__).resolve().parent.parent
@@ -117,23 +117,23 @@ def prepare_shared_project() -> None:
         # Tolerate field creation errors (may already exist)
         pass
 
-    # Pre-create assistant-derived contexts via unity.init() to avoid races
-    # when parallel pytest sessions (xdist, tmux, CI) all call unity.init()
+    # Pre-create assistant-derived contexts via droid.init() to avoid races
+    # when parallel pytest sessions (xdist, tmux, CI) all call droid.init()
     try:
-        import unity
+        import droid
 
-        unity.init(PROJECT)
+        droid.init(PROJECT)
     except Exception as e:
         # Tolerate if contexts already exist (another process created them)
         if "already exists" not in str(e).lower():
-            print(f"Note: unity.init() returned: {e}", file=sys.stderr)
+            print(f"Note: droid.init() returned: {e}", file=sys.stderr)
 
     # Seed the global builtins catalogues (public-read project shared by
     # primitives, guidance, and integration catalogues). Hash-guarded, so
     # this is a no-op in all but the first run after a catalogue change.
-    from unity.function_manager.builtins_catalog import seed_builtin_primitives
-    from unity.guidance_manager.builtins_catalog import seed_builtin_guidance
-    from unity.integrations.builtins_catalog import seed_builtin_integrations
+    from droid.function_manager.builtins_catalog import seed_builtin_primitives
+    from droid.guidance_manager.builtins_catalog import seed_builtin_guidance
+    from droid.integrations.builtins_catalog import seed_builtin_integrations
 
     seed_builtin_primitives()
     seed_builtin_guidance()

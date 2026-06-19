@@ -4,12 +4,12 @@ import pytest
 import requests
 from unify.utils.http import RequestError
 
-from unity.coordinator_manager.coordinator_manager import (
+from droid.coordinator_manager.coordinator_manager import (
     COORDINATOR_TOOL_METHOD_NAMES,
     CoordinatorManager,
     _CoordinatorToolCall,
 )
-from unity.session_details import SESSION_DETAILS
+from droid.session_details import SESSION_DETAILS
 
 
 class TestCoordinatorManager:
@@ -22,7 +22,7 @@ class TestCoordinatorManager:
     @pytest.fixture(autouse=True)
     def _mock_default_org_role(self, monkeypatch):
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_organizations",
+            "droid.coordinator_manager.coordinator_manager.unify.list_organizations",
             lambda **_: [{"id": 7, "name": "Acme", "role_name": "Owner"}],
         )
 
@@ -68,7 +68,7 @@ class TestCoordinatorManager:
             return [{"agent_id": 42, "first_name": "Ops", "organization_id": 7}]
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+            "droid.coordinator_manager.coordinator_manager.unify.list_assistants",
             fake_list_assistants,
         )
 
@@ -97,7 +97,7 @@ class TestCoordinatorManager:
             return [{"agent_id": 41, "organization_id": 13}]
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+            "droid.coordinator_manager.coordinator_manager.unify.list_assistants",
             fake_list_assistants,
         )
 
@@ -124,11 +124,11 @@ class TestCoordinatorManager:
             return [{"agent_id": 42}]
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+            "droid.coordinator_manager.coordinator_manager.unify.list_assistants",
             fake_list_assistants,
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.delete_assistant",
+            "droid.coordinator_manager.coordinator_manager.unify.delete_assistant",
             lambda *args, **kwargs: delete_calls.append((args, kwargs)),
         )
 
@@ -152,7 +152,7 @@ class TestCoordinatorManager:
             lambda self, agent_id: captured.update({"agent_id": agent_id}) or True,
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.delete_assistant",
+            "droid.coordinator_manager.coordinator_manager.unify.delete_assistant",
             lambda *args, **kwargs: delete_calls.append((args, kwargs))
             or {"status": "deleted"},
         )
@@ -178,11 +178,11 @@ class TestCoordinatorManager:
 
         delete_calls = []
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+            "droid.coordinator_manager.coordinator_manager.unify.list_assistants",
             fake_list_assistants,
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.delete_assistant",
+            "droid.coordinator_manager.coordinator_manager.unify.delete_assistant",
             lambda *args, **kwargs: delete_calls.append((args, kwargs)) or {},
         )
 
@@ -207,7 +207,7 @@ class TestCoordinatorManager:
             raise RequestError("https://api.unify.ai", "POST", response)
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.create_assistant",
+            "droid.coordinator_manager.coordinator_manager.unify.create_assistant",
             failing_create_assistant,
         )
 
@@ -228,7 +228,7 @@ class TestCoordinatorManager:
         calls = []
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.create_assistant",
+            "droid.coordinator_manager.coordinator_manager.unify.create_assistant",
             lambda **kwargs: calls.append(kwargs) or {"agent_id": 42},
         )
 
@@ -259,7 +259,7 @@ class TestCoordinatorManager:
     def test_create_assistant_requires_explicit_about(self, monkeypatch):
         create_calls = []
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.create_assistant",
+            "droid.coordinator_manager.coordinator_manager.unify.create_assistant",
             lambda **kwargs: create_calls.append(kwargs) or {"agent_id": 42},
         )
 
@@ -281,7 +281,7 @@ class TestCoordinatorManager:
         create_calls = []
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.create_assistant",
+            "droid.coordinator_manager.coordinator_manager.unify.create_assistant",
             lambda **kwargs: create_calls.append(kwargs) or {"agent_id": 42},
         )
 
@@ -302,7 +302,7 @@ class TestCoordinatorManager:
         SESSION_DETAILS.assistant.timezone = "Asia/Karachi"
         SESSION_DETAILS.assistant.nationality = "United States"
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.create_assistant",
+            "droid.coordinator_manager.coordinator_manager.unify.create_assistant",
             lambda **kwargs: calls.append(kwargs) or {"agent_id": 42},
         )
 
@@ -342,7 +342,7 @@ class TestCoordinatorManager:
             lambda self, agent_id: captured.update({"agent_id": agent_id}) or True,
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.update_assistant_config",
+            "droid.coordinator_manager.coordinator_manager.unify.update_assistant_config",
             lambda *args, **kwargs: update_calls.append((args, kwargs))
             or {"agent_id": 42, "about": "updated"},
         )
@@ -370,7 +370,7 @@ class TestCoordinatorManager:
         calls = []
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.create_assistant",
+            "droid.coordinator_manager.coordinator_manager.unify.create_assistant",
             lambda **kwargs: calls.append(kwargs) or {"agent_id": 42},
         )
 
@@ -402,7 +402,7 @@ class TestCoordinatorManager:
             raise RequestError("https://api.unify.ai", "POST", response)
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.create_assistant",
+            "droid.coordinator_manager.coordinator_manager.unify.create_assistant",
             failing_create_assistant,
         )
 
@@ -427,11 +427,11 @@ class TestCoordinatorManager:
         calls = []
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+            "droid.coordinator_manager.coordinator_manager.unify.list_assistants",
             lambda **_: [{"agent_id": 42, "organization_id": 7}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.delegate_to_colleague",
+            "droid.coordinator_manager.coordinator_manager.unify.delegate_to_colleague",
             lambda *args, **kwargs: calls.append((args, kwargs))
             or {"target_assistant_id": 42},
         )
@@ -464,11 +464,11 @@ class TestCoordinatorManager:
         calls = []
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+            "droid.coordinator_manager.coordinator_manager.unify.list_assistants",
             lambda **_: [{"agent_id": 42, "organization_id": 7}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.delegate_to_colleague",
+            "droid.coordinator_manager.coordinator_manager.unify.delegate_to_colleague",
             lambda *args, **kwargs: calls.append((args, kwargs)),
         )
 
@@ -485,7 +485,7 @@ class TestCoordinatorManager:
     def test_delegate_to_colleague_rejects_blank_instruction(self, monkeypatch):
         calls = []
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.delegate_to_colleague",
+            "droid.coordinator_manager.coordinator_manager.unify.delegate_to_colleague",
             lambda *args, **kwargs: calls.append((args, kwargs)),
         )
 
@@ -511,7 +511,7 @@ class TestCoordinatorManager:
             lambda self, agent_id: captured.update({"agent_id": agent_id}) or True,
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.delegate_to_colleague",
+            "droid.coordinator_manager.coordinator_manager.unify.delegate_to_colleague",
             lambda *args, **kwargs: delegate_calls.append((args, kwargs))
             or {"status": "attached_to_startup"},
         )
@@ -545,7 +545,7 @@ class TestCoordinatorManager:
             return [{"user_id": "member-1"}]
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_org_members",
+            "droid.coordinator_manager.coordinator_manager.unify.list_org_members",
             fake_list_org_members,
         )
 
@@ -560,7 +560,7 @@ class TestCoordinatorManager:
         SESSION_DETAILS.org_id = None
         calls = []
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_org_members",
+            "droid.coordinator_manager.coordinator_manager.unify.list_org_members",
             lambda *args, **kwargs: calls.append((args, kwargs)),
         )
 
@@ -582,7 +582,7 @@ class TestCoordinatorManager:
             }
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.invite_org_member",
+            "droid.coordinator_manager.coordinator_manager.unify.invite_org_member",
             fake_invite_org_member,
         )
 
@@ -610,7 +610,7 @@ class TestCoordinatorManager:
         SESSION_DETAILS.org_id = None
         calls = []
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.invite_org_member",
+            "droid.coordinator_manager.coordinator_manager.unify.invite_org_member",
             lambda *args, **kwargs: calls.append((args, kwargs)),
         )
 
@@ -625,7 +625,7 @@ class TestCoordinatorManager:
     def test_invite_org_member_rejects_unknown_role_name(self, monkeypatch):
         calls = []
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.invite_org_member",
+            "droid.coordinator_manager.coordinator_manager.unify.invite_org_member",
             lambda *args, **kwargs: calls.append((args, kwargs)),
         )
 
@@ -648,7 +648,7 @@ class TestCoordinatorManager:
             raise RequestError("https://api.unify.ai", "POST", response)
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.invite_org_member",
+            "droid.coordinator_manager.coordinator_manager.unify.invite_org_member",
             failing_invite_org_member,
         )
 
@@ -666,60 +666,60 @@ class TestCoordinatorManager:
         mutation_calls = []
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.invite_org_member",
+            "droid.coordinator_manager.coordinator_manager.unify.invite_org_member",
             lambda *args, **kwargs: mutation_calls.append(
                 ("invite_org_member", args, kwargs),
             )
             or {"ok": True},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.create_team",
+            "droid.coordinator_manager.coordinator_manager.unify.create_team",
             lambda *args, **kwargs: mutation_calls.append(("create_team", args, kwargs))
             or {"team_id": 11},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.delete_team",
+            "droid.coordinator_manager.coordinator_manager.unify.delete_team",
             lambda *args, **kwargs: mutation_calls.append(
                 ("delete_team", args, kwargs),
             )
             or {"ok": True},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.update_team",
+            "droid.coordinator_manager.coordinator_manager.unify.update_team",
             lambda *args, **kwargs: mutation_calls.append(
                 ("update_team", args, kwargs),
             )
             or {"team_id": 11},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.add_team_member",
+            "droid.coordinator_manager.coordinator_manager.unify.add_team_member",
             lambda *args, **kwargs: mutation_calls.append(
                 ("add_team_member", args, kwargs),
             )
             or {"membership_status": "active"},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.remove_team_member",
+            "droid.coordinator_manager.coordinator_manager.unify.remove_team_member",
             lambda *args, **kwargs: mutation_calls.append(
                 ("remove_team_member", args, kwargs),
             )
             or {"ok": True},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.create_assistant",
+            "droid.coordinator_manager.coordinator_manager.unify.create_assistant",
             lambda **kwargs: mutation_calls.append(("create_assistant", kwargs))
             or {"agent_id": 42},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_teams",
+            "droid.coordinator_manager.coordinator_manager.unify.list_teams",
             lambda *_, **__: [{"team_id": 11, "name": "Ops"}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+            "droid.coordinator_manager.coordinator_manager.unify.list_assistants",
             lambda **_: [{"agent_id": 42, "organization_id": 7}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_team_members",
+            "droid.coordinator_manager.coordinator_manager.unify.list_team_members",
             lambda *args, **kwargs: [],
         )
 
@@ -763,7 +763,7 @@ class TestCoordinatorManager:
         calls = []
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.create_team",
+            "droid.coordinator_manager.coordinator_manager.unify.create_team",
             lambda *args, **kwargs: calls.append((args, kwargs))
             or {"team_id": 11, "name": "Ops"},
         )
@@ -792,15 +792,15 @@ class TestCoordinatorManager:
         member_calls = []
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_teams",
+            "droid.coordinator_manager.coordinator_manager.unify.list_teams",
             lambda *_, **__: [{"team_id": 11}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+            "droid.coordinator_manager.coordinator_manager.unify.list_assistants",
             lambda **_: [{"agent_id": 42, "organization_id": 7}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.add_team_member",
+            "droid.coordinator_manager.coordinator_manager.unify.add_team_member",
             lambda *args, **kwargs: member_calls.append((args, kwargs))
             or {"membership_status": "active"},
         )
@@ -826,15 +826,15 @@ class TestCoordinatorManager:
         member_calls = []
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_teams",
+            "droid.coordinator_manager.coordinator_manager.unify.list_teams",
             lambda *_, **__: [{"team_id": 11}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_org_members",
+            "droid.coordinator_manager.coordinator_manager.unify.list_org_members",
             lambda *_, **__: [{"user_id": "member-1"}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.add_team_member",
+            "droid.coordinator_manager.coordinator_manager.unify.add_team_member",
             lambda *args, **kwargs: member_calls.append((args, kwargs))
             or {"membership_status": "active", "assistant_id": 91},
         )
@@ -882,29 +882,29 @@ class TestCoordinatorManager:
         calls = []
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_teams",
+            "droid.coordinator_manager.coordinator_manager.unify.list_teams",
             lambda *_, **__: [{"team_id": 11, "name": "Ops"}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+            "droid.coordinator_manager.coordinator_manager.unify.list_assistants",
             lambda **_: [{"agent_id": 42, "organization_id": 7}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.update_team",
+            "droid.coordinator_manager.coordinator_manager.unify.update_team",
             lambda *args, **kwargs: calls.append(("update", args, kwargs))
             or {"team_id": 11, "name": "Ops Team"},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.remove_team_member",
+            "droid.coordinator_manager.coordinator_manager.unify.remove_team_member",
             lambda *args, **kwargs: calls.append(("remove", args, kwargs)) or {},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_team_members",
+            "droid.coordinator_manager.coordinator_manager.unify.list_team_members",
             lambda *args, **kwargs: calls.append(("members", args, kwargs))
             or [{"assistant_id": 42}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_teams_for_assistant",
+            "droid.coordinator_manager.coordinator_manager.unify.list_teams_for_assistant",
             lambda *args, **kwargs: calls.append(("assistant_teams", args, kwargs))
             or [{"team_id": 11}],
         )
@@ -951,7 +951,7 @@ class TestCoordinatorManager:
             lambda self, agent_id: captured.update({"agent_id": agent_id}) or True,
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_teams_for_assistant",
+            "droid.coordinator_manager.coordinator_manager.unify.list_teams_for_assistant",
             lambda *args, **kwargs: list_calls.append((args, kwargs))
             or [{"team_id": 11}],
         )
@@ -971,15 +971,15 @@ class TestCoordinatorManager:
         member_calls = []
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_teams",
+            "droid.coordinator_manager.coordinator_manager.unify.list_teams",
             lambda *_, **__: [{"team_id": 11}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+            "droid.coordinator_manager.coordinator_manager.unify.list_assistants",
             lambda **_: [{"agent_id": 42, "organization_id": 7}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.add_team_member",
+            "droid.coordinator_manager.coordinator_manager.unify.add_team_member",
             lambda *args, **kwargs: member_calls.append((args, kwargs)),
         )
 
@@ -1000,11 +1000,11 @@ class TestCoordinatorManager:
             raise RequestError("https://api.unify.ai", "DELETE", response)
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_teams",
+            "droid.coordinator_manager.coordinator_manager.unify.list_teams",
             lambda *_, **__: [{"team_id": 11}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.delete_team",
+            "droid.coordinator_manager.coordinator_manager.unify.delete_team",
             failing_delete_team,
         )
 
@@ -1020,16 +1020,16 @@ class TestCoordinatorManager:
         calls = []
 
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+            "droid.coordinator_manager.coordinator_manager.unify.list_assistants",
             lambda **kwargs: calls.append(("list_assistants", kwargs)) or [],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.create_assistant",
+            "droid.coordinator_manager.coordinator_manager.unify.create_assistant",
             lambda **kwargs: calls.append(("create_assistant", kwargs))
             or {"agent_id": 42, "first_name": "Ops", "surname": "Bot"},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_teams",
+            "droid.coordinator_manager.coordinator_manager.unify.list_teams",
             lambda *args, **kwargs: calls.append(("list_teams", args, kwargs))
             or (
                 [{"team_id": 11, "name": "Ops HQ"}]
@@ -1038,17 +1038,17 @@ class TestCoordinatorManager:
             ),
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.create_team",
+            "droid.coordinator_manager.coordinator_manager.unify.create_team",
             lambda *args, **kwargs: calls.append(("create_team", args, kwargs))
             or {"team_id": 11, "name": "Ops HQ"},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_team_members",
+            "droid.coordinator_manager.coordinator_manager.unify.list_team_members",
             lambda *args, **kwargs: calls.append(("list_team_members", args, kwargs))
             or [],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.add_team_member",
+            "droid.coordinator_manager.coordinator_manager.unify.add_team_member",
             lambda *args, **kwargs: calls.append(("add_team_member", args, kwargs))
             or {"membership_status": "active"},
         )
@@ -1141,11 +1141,11 @@ class TestCoordinatorManager:
     ):
         create_calls = []
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+            "droid.coordinator_manager.coordinator_manager.unify.list_assistants",
             lambda **_: [],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.create_assistant",
+            "droid.coordinator_manager.coordinator_manager.unify.create_assistant",
             lambda **kwargs: create_calls.append(kwargs) or {"agent_id": 42},
         )
 
@@ -1168,20 +1168,20 @@ class TestCoordinatorManager:
         SESSION_DETAILS.assistant.timezone = "Asia/Karachi"
         SESSION_DETAILS.assistant.nationality = "United States"
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+            "droid.coordinator_manager.coordinator_manager.unify.list_assistants",
             lambda **_: [],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.create_assistant",
+            "droid.coordinator_manager.coordinator_manager.unify.create_assistant",
             lambda **kwargs: create_calls.append(kwargs)
             or {"agent_id": 42, "first_name": "Ops", "surname": "Bot"},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_teams",
+            "droid.coordinator_manager.coordinator_manager.unify.list_teams",
             lambda *_, **__: [{"team_id": 11, "name": "Ops HQ"}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_team_members",
+            "droid.coordinator_manager.coordinator_manager.unify.list_team_members",
             lambda *_, **__: [{"assistant_id": 42}],
         )
 
@@ -1215,7 +1215,7 @@ class TestCoordinatorManager:
     ):
         add_calls = []
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+            "droid.coordinator_manager.coordinator_manager.unify.list_assistants",
             lambda **_: [
                 {
                     "agent_id": 42,
@@ -1226,15 +1226,15 @@ class TestCoordinatorManager:
             ],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_teams",
+            "droid.coordinator_manager.coordinator_manager.unify.list_teams",
             lambda *_, **__: [{"team_id": 11, "name": "Ops HQ"}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_team_members",
+            "droid.coordinator_manager.coordinator_manager.unify.list_team_members",
             lambda *_, **__: [{"assistant_id": 42}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.add_team_member",
+            "droid.coordinator_manager.coordinator_manager.unify.add_team_member",
             lambda *args, **kwargs: add_calls.append((args, kwargs)) or {},
         )
 
@@ -1256,7 +1256,7 @@ class TestCoordinatorManager:
     ):
         create_calls = []
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+            "droid.coordinator_manager.coordinator_manager.unify.list_assistants",
             lambda **kwargs: (
                 [
                     {
@@ -1271,23 +1271,23 @@ class TestCoordinatorManager:
             ),
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_teams",
+            "droid.coordinator_manager.coordinator_manager.unify.list_teams",
             lambda *_, **__: [{"team_id": 11, "name": "Ops HQ"}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_team_members",
+            "droid.coordinator_manager.coordinator_manager.unify.list_team_members",
             lambda *_, **__: [],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.add_team_member",
+            "droid.coordinator_manager.coordinator_manager.unify.add_team_member",
             lambda *args, **kwargs: {"membership_status": "active"},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.create_assistant",
+            "droid.coordinator_manager.coordinator_manager.unify.create_assistant",
             lambda **kwargs: create_calls.append(("assistant", kwargs)),
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.create_team",
+            "droid.coordinator_manager.coordinator_manager.unify.create_team",
             lambda **kwargs: create_calls.append(("team", kwargs)),
         )
 
@@ -1310,7 +1310,7 @@ class TestCoordinatorManager:
         monkeypatch,
     ):
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+            "droid.coordinator_manager.coordinator_manager.unify.list_assistants",
             lambda **_: [
                 {
                     "agent_id": 42,
@@ -1345,20 +1345,20 @@ class TestCoordinatorManager:
         SESSION_DETAILS.assistant.nationality = "United States"
         create_calls = []
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+            "droid.coordinator_manager.coordinator_manager.unify.list_assistants",
             lambda **_: [],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.create_assistant",
+            "droid.coordinator_manager.coordinator_manager.unify.create_assistant",
             lambda **kwargs: create_calls.append(kwargs)
             or {"agent_id": 42, "first_name": "Sarah Chen", "surname": "Recruiter"},
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_teams",
+            "droid.coordinator_manager.coordinator_manager.unify.list_teams",
             lambda *_, **__: [{"team_id": 11, "name": "Hiring Desk"}],
         )
         monkeypatch.setattr(
-            "unity.coordinator_manager.coordinator_manager.unify.list_team_members",
+            "droid.coordinator_manager.coordinator_manager.unify.list_team_members",
             lambda *_, **__: [{"assistant_id": 42}],
         )
 

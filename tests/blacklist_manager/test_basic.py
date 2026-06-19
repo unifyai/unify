@@ -1,7 +1,7 @@
 import pytest
 
-from unity.blacklist_manager.blacklist_manager import BlackListManager
-from unity.conversation_manager.cm_types import Medium
+from droid.blacklist_manager.blacklist_manager import BlackListManager
+from droid.conversation_manager.cm_types import Medium
 from tests.helpers import _handle_project
 
 

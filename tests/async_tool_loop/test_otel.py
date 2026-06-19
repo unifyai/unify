@@ -1,9 +1,9 @@
 """
-Tests for OpenTelemetry tracing functionality in Unity.
+Tests for OpenTelemetry tracing functionality in Droid.
 
 These tests verify that:
-1. Unity's OTel setup works correctly
-2. Trace context propagates through unity -> unillm -> unify hierarchy
+1. Droid's OTel setup works correctly
+2. Trace context propagates through droid -> unillm -> unify hierarchy
 3. All packages create spans in the same trace when properly configured
 """
 
@@ -44,23 +44,23 @@ def reset_otel():
 
 
 # ---------------------------------------------------------------------------
-#  Unity OTel Setup Tests
+#  Droid OTel Setup Tests
 # ---------------------------------------------------------------------------
 
 
 class TestOtelEnabled:
-    """Tests for UNITY_OTEL master switch."""
+    """Tests for DROID_OTEL master switch."""
 
     def test_otel_disabled_by_default(self, monkeypatch):
-        """UNITY_OTEL defaults to false."""
-        from unity import logger
+        """DROID_OTEL defaults to false."""
+        from droid import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", False)
         assert logger.is_otel_enabled() is False
 
     def test_otel_enabled_via_setting(self, monkeypatch):
-        """UNITY_OTEL=true enables OTel."""
-        from unity import logger
+        """DROID_OTEL=true enables OTel."""
+        from droid import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         assert logger.is_otel_enabled() is True
@@ -71,7 +71,7 @@ class TestGetTracer:
 
     def test_returns_none_when_disabled(self, monkeypatch):
         """get_tracer returns None when OTel is disabled."""
-        from unity import logger
+        from droid import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", False)
         monkeypatch.setattr(logger, "_TRACER", None)
@@ -80,7 +80,7 @@ class TestGetTracer:
 
     def test_returns_tracer_when_enabled(self, reset_otel, monkeypatch):
         """get_tracer returns a tracer when OTel is enabled."""
-        from unity import logger
+        from droid import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
@@ -91,7 +91,7 @@ class TestGetTracer:
 
     def test_uses_existing_provider(self, reset_otel, monkeypatch):
         """get_tracer uses existing TracerProvider if available."""
-        from unity import logger
+        from droid import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
@@ -108,17 +108,17 @@ class TestGetTracer:
         """_setup_otel replaces ProxyTracerProvider with real provider.
 
         When OTel is auto-instrumented or imported before explicit setup,
-        a ProxyTracerProvider may be in place. Unity should replace it with
+        a ProxyTracerProvider may be in place. Droid should replace it with
         a real TracerProvider to enable span export.
         """
-        from unity import logger
+        from droid import logger
         from opentelemetry.sdk.trace import TracerProvider
 
         # Reset OTel global state to get fresh ProxyTracerProvider
         trace._TRACER_PROVIDER_SET_ONCE._done = False
         trace._TRACER_PROVIDER = None
 
-        # Configure Unity OTEL with a log directory
+        # Configure Droid OTEL with a log directory
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
         monkeypatch.setattr(logger, "_OTEL_LOG_DIR", str(tmp_path))
@@ -137,18 +137,18 @@ class TestGetTracer:
         assert not isinstance(final_provider, trace.ProxyTracerProvider)
 
         # Verify spans are created with the real provider
-        with logger.unity_span("test_operation") as span:
+        with logger.droid_span("test_operation") as span:
             assert span is not None
             # Real spans have non-zero trace_id
             assert span.context.trace_id != 0
 
 
 class TestUnitySpan:
-    """Tests for unity_span context manager."""
+    """Tests for droid_span context manager."""
 
     def test_span_created_when_otel_enabled(self, reset_otel, monkeypatch):
-        """unity_span creates a span when OTel is enabled."""
-        from unity import logger
+        """droid_span creates a span when OTel is enabled."""
+        from droid import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
@@ -156,28 +156,28 @@ class TestUnitySpan:
 
         exporter = reset_otel["exporter"]
 
-        with logger.unity_span("ContactManager.ask", query="find john") as span:
+        with logger.droid_span("ContactManager.ask", query="find john") as span:
             assert span is not None
             span.set_attribute("test", "value")
 
         spans = exporter.get_finished_spans()
         assert len(spans) == 1
         assert spans[0].name == "ContactManager.ask"
-        assert spans[0].attributes.get("unity.query") == "find john"
+        assert spans[0].attributes.get("droid.query") == "find john"
 
     def test_span_none_when_otel_disabled(self, monkeypatch):
-        """unity_span yields None when OTel is disabled."""
-        from unity import logger
+        """droid_span yields None when OTel is disabled."""
+        from droid import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", False)
         monkeypatch.setattr(logger, "_TRACER", None)
 
-        with logger.unity_span("ContactManager.ask") as span:
+        with logger.droid_span("ContactManager.ask") as span:
             assert span is None
 
     def test_span_records_error_on_exception(self, reset_otel, monkeypatch):
-        """unity_span records errors when exceptions occur."""
-        from unity import logger
+        """droid_span records errors when exceptions occur."""
+        from droid import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
@@ -186,7 +186,7 @@ class TestUnitySpan:
         exporter = reset_otel["exporter"]
 
         with pytest.raises(ValueError, match="test error"):
-            with logger.unity_span("ContactManager.ask") as span:
+            with logger.droid_span("ContactManager.ask") as span:
                 raise ValueError("test error")
 
         spans = exporter.get_finished_spans()
@@ -200,14 +200,14 @@ class TestGetCurrentTraceId:
 
     def test_returns_none_when_disabled(self, monkeypatch):
         """get_current_trace_id returns None when OTel is disabled."""
-        from unity import logger
+        from droid import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", False)
         assert logger.get_current_trace_id() is None
 
     def test_returns_trace_id_when_span_active(self, reset_otel, monkeypatch):
         """get_current_trace_id returns trace ID when span is active."""
-        from unity import logger
+        from droid import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
 
@@ -221,16 +221,16 @@ class TestGetCurrentTraceId:
 
 
 # ---------------------------------------------------------------------------
-#  Trace Hierarchy Tests: Unity-only
+#  Trace Hierarchy Tests: Droid-only
 # ---------------------------------------------------------------------------
 
 
 class TestUnityOnlyHierarchy:
-    """Tests for Unity-only span hierarchy (nested unity_spans)."""
+    """Tests for Droid-only span hierarchy (nested droid_spans)."""
 
-    def test_nested_unity_spans_same_trace(self, reset_otel, monkeypatch):
-        """Nested unity_spans share the same trace ID."""
-        from unity import logger
+    def test_nested_droid_spans_same_trace(self, reset_otel, monkeypatch):
+        """Nested droid_spans share the same trace ID."""
+        from droid import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
@@ -238,9 +238,9 @@ class TestUnityOnlyHierarchy:
 
         exporter = reset_otel["exporter"]
 
-        with logger.unity_span("Actor.act") as outer:
+        with logger.droid_span("Actor.act") as outer:
             outer_ctx = outer.get_span_context()
-            with logger.unity_span("ContactManager.update") as inner:
+            with logger.droid_span("ContactManager.update") as inner:
                 inner_ctx = inner.get_span_context()
                 # Same trace
                 assert inner_ctx.trace_id == outer_ctx.trace_id
@@ -258,16 +258,16 @@ class TestUnityOnlyHierarchy:
 
 
 # ---------------------------------------------------------------------------
-#  Trace Hierarchy Tests: Unity -> Unillm
+#  Trace Hierarchy Tests: Droid -> Unillm
 # ---------------------------------------------------------------------------
 
 
 class TestUnityToUnillmHierarchy:
-    """Tests for Unity -> Unillm trace hierarchy."""
+    """Tests for Droid -> Unillm trace hierarchy."""
 
-    def test_unillm_span_child_of_unity(self, reset_otel, monkeypatch):
-        """Unillm spans become children of Unity spans."""
-        from unity import logger
+    def test_unillm_span_child_of_droid(self, reset_otel, monkeypatch):
+        """Unillm spans become children of Droid spans."""
+        from droid import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
@@ -278,39 +278,39 @@ class TestUnityToUnillmHierarchy:
         # Simulate unillm's llm_span context manager
         unillm_tracer = trace.get_tracer("unillm")
 
-        with logger.unity_span("ContactManager.ask") as unity_span:
-            unity_ctx = unity_span.get_span_context()
+        with logger.droid_span("ContactManager.ask") as droid_span:
+            droid_ctx = droid_span.get_span_context()
 
             # Simulate what unillm.logger.llm_span does
             with unillm_tracer.start_as_current_span("LLM gpt-4@openai") as llm_span:
                 llm_ctx = llm_span.get_span_context()
 
                 # Same trace
-                assert llm_ctx.trace_id == unity_ctx.trace_id
+                assert llm_ctx.trace_id == droid_ctx.trace_id
                 # Different span
-                assert llm_ctx.span_id != unity_ctx.span_id
+                assert llm_ctx.span_id != droid_ctx.span_id
 
         spans = exporter.get_finished_spans()
         assert len(spans) == 2
 
-        unity_s = next(s for s in spans if "ContactManager" in s.name)
+        droid_s = next(s for s in spans if "ContactManager" in s.name)
         llm_s = next(s for s in spans if "LLM" in s.name)
 
-        # LLM span is child of Unity span
-        assert llm_s.parent.span_id == unity_s.context.span_id
+        # LLM span is child of Droid span
+        assert llm_s.parent.span_id == droid_s.context.span_id
 
 
 # ---------------------------------------------------------------------------
-#  Trace Hierarchy Tests: Unity -> Unify
+#  Trace Hierarchy Tests: Droid -> Unify
 # ---------------------------------------------------------------------------
 
 
 class TestUnityToUnifyHierarchy:
-    """Tests for Unity -> Unify trace hierarchy."""
+    """Tests for Droid -> Unify trace hierarchy."""
 
-    def test_unify_span_child_of_unity(self, reset_otel, monkeypatch):
-        """Unify HTTP spans become children of Unity spans."""
-        from unity import logger
+    def test_unify_span_child_of_droid(self, reset_otel, monkeypatch):
+        """Unify HTTP spans become children of Droid spans."""
+        from droid import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
@@ -321,37 +321,37 @@ class TestUnityToUnifyHierarchy:
         # Simulate unify's HTTP span
         unify_tracer = trace.get_tracer("unify")
 
-        with logger.unity_span("ContactManager.update") as unity_span:
-            unity_ctx = unity_span.get_span_context()
+        with logger.droid_span("ContactManager.update") as droid_span:
+            droid_ctx = droid_span.get_span_context()
 
             # Simulate what unify/utils/http.py does
             with unify_tracer.start_as_current_span("POST contacts") as http_span:
                 http_ctx = http_span.get_span_context()
 
                 # Same trace
-                assert http_ctx.trace_id == unity_ctx.trace_id
+                assert http_ctx.trace_id == droid_ctx.trace_id
 
         spans = exporter.get_finished_spans()
         assert len(spans) == 2
 
-        unity_s = next(s for s in spans if "ContactManager" in s.name)
+        droid_s = next(s for s in spans if "ContactManager" in s.name)
         http_s = next(s for s in spans if "POST" in s.name)
 
-        # HTTP span is child of Unity span
-        assert http_s.parent.span_id == unity_s.context.span_id
+        # HTTP span is child of Droid span
+        assert http_s.parent.span_id == droid_s.context.span_id
 
 
 # ---------------------------------------------------------------------------
-#  Trace Hierarchy Tests: Unity -> Unillm -> Unify
+#  Trace Hierarchy Tests: Droid -> Unillm -> Unify
 # ---------------------------------------------------------------------------
 
 
 class TestFullStackHierarchy:
-    """Tests for full hierarchy: Unity -> Unillm -> Unify."""
+    """Tests for full hierarchy: Droid -> Unillm -> Unify."""
 
     def test_full_stack_trace_hierarchy(self, reset_otel, monkeypatch):
         """Full hierarchy maintains parent-child relationships."""
-        from unity import logger
+        from droid import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
@@ -362,8 +362,8 @@ class TestFullStackHierarchy:
         unillm_tracer = trace.get_tracer("unillm")
         unify_tracer = trace.get_tracer("unify")
 
-        # Unity -> Unillm -> Unify
-        with logger.unity_span("Actor.act") as unity_span:
+        # Droid -> Unillm -> Unify
+        with logger.droid_span("Actor.act") as droid_span:
             with unillm_tracer.start_as_current_span("LLM gpt-4@openai") as llm_span:
                 with unify_tracer.start_as_current_span("GET projects") as http_span:
                     pass
@@ -371,26 +371,26 @@ class TestFullStackHierarchy:
         spans = exporter.get_finished_spans()
         assert len(spans) == 3
 
-        unity_s = next(s for s in spans if "Actor" in s.name)
+        droid_s = next(s for s in spans if "Actor" in s.name)
         llm_s = next(s for s in spans if "LLM" in s.name)
         http_s = next(s for s in spans if "GET" in s.name)
 
         # All same trace
         assert (
-            unity_s.context.trace_id
+            droid_s.context.trace_id
             == llm_s.context.trace_id
             == http_s.context.trace_id
         )
 
-        # LLM is child of Unity
-        assert llm_s.parent.span_id == unity_s.context.span_id
+        # LLM is child of Droid
+        assert llm_s.parent.span_id == droid_s.context.span_id
 
         # HTTP is child of LLM
         assert http_s.parent.span_id == llm_s.context.span_id
 
-    def test_parallel_unity_to_unify_calls(self, reset_otel, monkeypatch):
-        """Multiple direct Unity -> Unify calls create sibling spans."""
-        from unity import logger
+    def test_parallel_droid_to_unify_calls(self, reset_otel, monkeypatch):
+        """Multiple direct Droid -> Unify calls create sibling spans."""
+        from droid import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
@@ -400,7 +400,7 @@ class TestFullStackHierarchy:
 
         unify_tracer = trace.get_tracer("unify")
 
-        with logger.unity_span("ContactManager.ask") as unity_span:
+        with logger.droid_span("ContactManager.ask") as droid_span:
             # Two HTTP calls (e.g., list then get)
             with unify_tracer.start_as_current_span("GET contacts"):
                 pass
@@ -410,14 +410,14 @@ class TestFullStackHierarchy:
         spans = exporter.get_finished_spans()
         assert len(spans) == 3
 
-        unity_s = next(s for s in spans if "ContactManager" in s.name)
+        droid_s = next(s for s in spans if "ContactManager" in s.name)
         http_spans = [s for s in spans if "GET" in s.name]
 
         assert len(http_spans) == 2
 
-        # Both HTTP spans are children of Unity span (siblings)
+        # Both HTTP spans are children of Droid span (siblings)
         for http_s in http_spans:
-            assert http_s.parent.span_id == unity_s.context.span_id
+            assert http_s.parent.span_id == droid_s.context.span_id
 
 
 # ---------------------------------------------------------------------------
@@ -426,11 +426,11 @@ class TestFullStackHierarchy:
 
 
 class TestSettingsValidation:
-    """Tests for UNITY_OTEL settings validation."""
+    """Tests for DROID_OTEL settings validation."""
 
     def test_otel_setting_parses_true(self):
-        """UNITY_OTEL parses 'true' string correctly."""
-        from unity.settings import _parse_bool
+        """DROID_OTEL parses 'true' string correctly."""
+        from droid.settings import _parse_bool
 
         assert _parse_bool("true") is True
         assert _parse_bool("True") is True
@@ -439,8 +439,8 @@ class TestSettingsValidation:
         assert _parse_bool("yes") is True
 
     def test_otel_setting_parses_false(self):
-        """UNITY_OTEL parses 'false' string correctly."""
-        from unity.settings import _parse_bool
+        """DROID_OTEL parses 'false' string correctly."""
+        from droid.settings import _parse_bool
 
         assert _parse_bool("false") is False
         assert _parse_bool("False") is False
@@ -457,9 +457,9 @@ class TestSettingsValidation:
 class TestCrossPackageIntegration:
     """Integration tests for cross-package OTel propagation."""
 
-    def test_unity_provider_used_by_child_packages(self, reset_otel, monkeypatch):
-        """Child packages use Unity's TracerProvider when it exists."""
-        from unity import logger
+    def test_droid_provider_used_by_child_packages(self, reset_otel, monkeypatch):
+        """Child packages use Droid's TracerProvider when it exists."""
+        from droid import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
@@ -467,7 +467,7 @@ class TestCrossPackageIntegration:
 
         existing_provider = reset_otel["provider"]
 
-        # Unity's get_tracer should use the existing provider
+        # Droid's get_tracer should use the existing provider
         tracer = logger.get_tracer()
         assert tracer is not None
 
@@ -484,7 +484,7 @@ class TestCrossPackageIntegration:
 
     def test_span_attributes_preserved_across_packages(self, reset_otel, monkeypatch):
         """Span attributes from each package are preserved in the trace."""
-        from unity import logger
+        from droid import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
@@ -494,8 +494,8 @@ class TestCrossPackageIntegration:
         unillm_tracer = trace.get_tracer("unillm")
         unify_tracer = trace.get_tracer("unify")
 
-        with logger.unity_span("Actor.act", method="ask") as unity_span:
-            unity_span.set_attribute("unity.query", "find contacts")
+        with logger.droid_span("Actor.act", method="ask") as droid_span:
+            droid_span.set_attribute("droid.query", "find contacts")
 
             with unillm_tracer.start_as_current_span("LLM call") as llm_span:
                 llm_span.set_attribute("llm.model", "gpt-4")
@@ -508,12 +508,12 @@ class TestCrossPackageIntegration:
         spans = exporter.get_finished_spans()
 
         # Verify each package's attributes are preserved
-        unity_s = next(s for s in spans if "Actor" in s.name)
+        droid_s = next(s for s in spans if "Actor" in s.name)
         llm_s = next(s for s in spans if "LLM" in s.name)
         http_s = next(s for s in spans if "HTTP" in s.name)
 
-        assert unity_s.attributes.get("unity.method") == "ask"
-        assert unity_s.attributes.get("unity.query") == "find contacts"
+        assert droid_s.attributes.get("droid.method") == "ask"
+        assert droid_s.attributes.get("droid.query") == "find contacts"
 
         assert llm_s.attributes.get("llm.model") == "gpt-4"
         assert llm_s.attributes.get("llm.cache_status") == "miss"
@@ -528,16 +528,16 @@ class TestCrossPackageIntegration:
 
 
 class TestFileSpanExporter:
-    """Tests for file-based span export (UNITY_OTEL_LOG_DIR)."""
+    """Tests for file-based span export (DROID_OTEL_LOG_DIR)."""
 
     def test_file_exporter_writes_spans(self, reset_otel, monkeypatch, tmp_path):
         """FileSpanExporter writes spans to JSONL files."""
         import json
 
-        from unity.logger import FileSpanExporter
+        from droid.logger import FileSpanExporter
 
         exporter = reset_otel["exporter"]
-        file_exporter = FileSpanExporter(tmp_path, service_name="unity")
+        file_exporter = FileSpanExporter(tmp_path, service_name="droid")
 
         # Add file exporter to the provider
         provider = reset_otel["provider"]
@@ -566,7 +566,7 @@ class TestFileSpanExporter:
 
         assert span_data is not None
         assert span_data["name"] == "test-operation"
-        assert span_data["service"] == "unity"
+        assert span_data["service"] == "droid"
         assert span_data["attributes"]["test.key"] == "test-value"
         assert span_data["trace_id"] is not None
         assert span_data["span_id"] is not None
@@ -581,9 +581,9 @@ class TestFileSpanExporter:
         """Nested spans go to the same trace file."""
         import json
 
-        from unity.logger import FileSpanExporter
+        from droid.logger import FileSpanExporter
 
-        file_exporter = FileSpanExporter(tmp_path, service_name="unity")
+        file_exporter = FileSpanExporter(tmp_path, service_name="droid")
         provider = reset_otel["provider"]
         provider.add_span_processor(SimpleSpanProcessor(file_exporter))
 
@@ -622,9 +622,9 @@ class TestFileSpanExporter:
         """Different traces go to different files."""
         from opentelemetry import context
 
-        from unity.logger import FileSpanExporter
+        from droid.logger import FileSpanExporter
 
-        file_exporter = FileSpanExporter(tmp_path, service_name="unity")
+        file_exporter = FileSpanExporter(tmp_path, service_name="droid")
         provider = reset_otel["provider"]
         provider.add_span_processor(SimpleSpanProcessor(file_exporter))
 
@@ -654,9 +654,9 @@ class TestFileSpanExporter:
         import json
         import time
 
-        from unity.logger import FileSpanExporter
+        from droid.logger import FileSpanExporter
 
-        file_exporter = FileSpanExporter(tmp_path, service_name="unity")
+        file_exporter = FileSpanExporter(tmp_path, service_name="droid")
         provider = reset_otel["provider"]
         provider.add_span_processor(SimpleSpanProcessor(file_exporter))
 
@@ -680,9 +680,9 @@ class TestFileSpanExporter:
 
         from opentelemetry.trace import Status, StatusCode
 
-        from unity.logger import FileSpanExporter
+        from droid.logger import FileSpanExporter
 
-        file_exporter = FileSpanExporter(tmp_path, service_name="unity")
+        file_exporter = FileSpanExporter(tmp_path, service_name="droid")
         provider = reset_otel["provider"]
         provider.add_span_processor(SimpleSpanProcessor(file_exporter))
 
@@ -702,16 +702,16 @@ class TestFileSpanExporter:
         assert span_data["status"] == "ERROR"
 
     def test_get_otel_log_dir_returns_none_when_unset(self, monkeypatch):
-        """get_otel_log_dir returns None when UNITY_OTEL_LOG_DIR is not set."""
-        from unity import logger
+        """get_otel_log_dir returns None when DROID_OTEL_LOG_DIR is not set."""
+        from droid import logger
 
         monkeypatch.setattr(logger, "_OTEL_LOG_DIR", "")
         assert logger.get_otel_log_dir() is None
 
     def test_get_otel_log_dir_returns_path_when_set(self, monkeypatch, tmp_path):
-        """get_otel_log_dir returns Path when UNITY_OTEL_LOG_DIR is set."""
+        """get_otel_log_dir returns Path when DROID_OTEL_LOG_DIR is set."""
 
-        from unity import logger
+        from droid import logger
 
         monkeypatch.setattr(logger, "_OTEL_LOG_DIR", str(tmp_path))
         result = logger.get_otel_log_dir()
@@ -719,25 +719,25 @@ class TestFileSpanExporter:
 
 
 class TestFileSpanExporterIntegration:
-    """Integration tests for FileSpanExporter with unity_span."""
+    """Integration tests for FileSpanExporter with droid_span."""
 
-    def test_unity_span_writes_to_file(self, reset_otel, monkeypatch, tmp_path):
-        """unity_span writes spans to file when UNITY_OTEL_LOG_DIR is set."""
+    def test_droid_span_writes_to_file(self, reset_otel, monkeypatch, tmp_path):
+        """droid_span writes spans to file when DROID_OTEL_LOG_DIR is set."""
         import json
 
-        from unity import logger
-        from unity.logger import FileSpanExporter
+        from droid import logger
+        from droid.logger import FileSpanExporter
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
         monkeypatch.setattr(logger, "_TRACER", None)
 
         # Add file exporter to the provider from fixture
-        file_exporter = FileSpanExporter(tmp_path, service_name="unity")
+        file_exporter = FileSpanExporter(tmp_path, service_name="droid")
         provider = reset_otel["provider"]
         provider.add_span_processor(SimpleSpanProcessor(file_exporter))
 
-        with logger.unity_span("ContactManager.ask", query="find john") as span:
+        with logger.droid_span("ContactManager.ask", query="find john") as span:
             pass
 
         files = list(tmp_path.glob("*.jsonl"))
@@ -747,8 +747,8 @@ class TestFileSpanExporterIntegration:
             span_data = json.loads(f.readline())
 
         assert span_data["name"] == "ContactManager.ask"
-        assert span_data["service"] == "unity"
-        assert span_data["attributes"]["unity.query"] == "find john"
+        assert span_data["service"] == "droid"
+        assert span_data["attributes"]["droid.query"] == "find john"
 
     def test_full_hierarchy_writes_to_same_file(
         self,
@@ -756,24 +756,24 @@ class TestFileSpanExporterIntegration:
         monkeypatch,
         tmp_path,
     ):
-        """Full Unity->Unillm->Unify hierarchy writes to same trace file."""
+        """Full Droid->Unillm->Unify hierarchy writes to same trace file."""
         import json
 
-        from unity import logger
-        from unity.logger import FileSpanExporter
+        from droid import logger
+        from droid.logger import FileSpanExporter
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
         monkeypatch.setattr(logger, "_TRACER", None)
 
-        file_exporter = FileSpanExporter(tmp_path, service_name="unity")
+        file_exporter = FileSpanExporter(tmp_path, service_name="droid")
         provider = reset_otel["provider"]
         provider.add_span_processor(SimpleSpanProcessor(file_exporter))
 
         unillm_tracer = trace.get_tracer("unillm")
         unify_tracer = trace.get_tracer("unify")
 
-        with logger.unity_span("Actor.act"):
+        with logger.droid_span("Actor.act"):
             with unillm_tracer.start_as_current_span("LLM gpt-4"):
                 with unify_tracer.start_as_current_span("POST contacts"):
                     pass

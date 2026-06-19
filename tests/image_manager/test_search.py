@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 from datetime import datetime, timezone
-from unity.image_manager.utils import make_solid_png_base64
+from droid.image_manager.utils import make_solid_png_base64
 
-from unity.image_manager.image_manager import ImageManager
+from droid.image_manager.image_manager import ImageManager
 from tests.helpers import _handle_project
 
 

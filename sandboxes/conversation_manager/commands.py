@@ -29,9 +29,6 @@ CommandKind = Literal[
     "show_logs",
     "collapse_logs",
     "agent_logs",
-    # Scenario seeding
-    "scenario_seed",
-    "scenario_seed_voice",
     # Steering
     "steering",
     # File attachments
@@ -39,8 +36,6 @@ CommandKind = Literal[
     "detach",
     # Event simulation (inbound)
     "event",
-    # Freeform utterance (during a call)
-    "utterance",
     # Unknown / invalid
     "unknown",
 ]
@@ -81,11 +76,8 @@ Inbound event simulation:
   msg <content>                 Simulate incoming Unify message
   sms <content>                 Simulate incoming SMS
   email <subject> | <body>      Simulate incoming email
-  call                          Start simulated phone call
-  meet                          Start simulated Unify Meet session
-  say <content>                 Voice utterance (during a call or meet)
-  sayv                          Record voice, transcribe, and send as utterance (requires --voice)
-  sayv <content>                Send <content> as utterance (convenience; no recording)
+  call                          Start a LiveKit voice call (opens browser)
+  meet                          Start a LiveKit Unify Meet session (opens browser)
   end_call                      End active phone call
   end_meet                      End active Unify Meet session
 
@@ -93,10 +85,6 @@ File attachments:
   attach <path>                 Queue a local file for the next `msg` command
   attach                        Show currently queued attachments
   detach                        Clear all queued attachments
-
-Scenario seeding (idle-only):
-  us <description>              Generate a synthetic scenario from text
-  usv                           Generate a synthetic scenario from voice (requires --voice)
 
 Meet interaction events (requires active meet):
   assistant_screen_share_start [reason]    User enables viewing the assistant's desktop
@@ -131,10 +119,10 @@ def parse_command(*, text: str, in_call: bool, active: bool) -> ParsedCommand:
     Precedence:
     1) Meta commands
     2) File attachment commands
-    3) Scenario commands (only when idle)
-    4) Steering commands (only when active)
-    5) Event commands
-    6) Freeform text: utterance if in_call else error
+    3) Steering commands (only when active)
+    4) Event commands
+    5) Freeform text: error (plain text during a call is no longer supported;
+       use the LiveKit playground browser mic instead)
     """
     raw = (text or "").rstrip("\n")
     trimmed = raw.strip()
@@ -218,32 +206,7 @@ def parse_command(*, text: str, in_call: bool, active: bool) -> ParsedCommand:
     if lower == "detach":
         return ParsedCommand(kind="detach", raw=raw, name="detach")
 
-    # 3) Scenario commands — only when idle
-    if lower == "usv":
-        if active:
-            return ParsedCommand(
-                kind="unknown",
-                raw=raw,
-                name="usv",
-                error="(busy) Scenario seeding is only available when idle.",
-            )
-        return ParsedCommand(kind="scenario_seed_voice", raw=raw, name="usv")
-    if lower.startswith("us "):
-        if active:
-            return ParsedCommand(
-                kind="unknown",
-                raw=raw,
-                name="us",
-                error="(busy) Scenario seeding is only available when idle.",
-            )
-        return ParsedCommand(
-            kind="scenario_seed",
-            raw=raw,
-            name="us",
-            args=trimmed[3:].strip(),
-        )
-
-    # 4) Event commands
+    # 3) Event commands
     if lower.startswith("msg "):
         return ParsedCommand(
             kind="event",
@@ -269,22 +232,6 @@ def parse_command(*, text: str, in_call: bool, active: bool) -> ParsedCommand:
         return ParsedCommand(kind="event", raw=raw, name="call")
     if lower == "meet":
         return ParsedCommand(kind="event", raw=raw, name="meet")
-    if lower.startswith("say "):
-        return ParsedCommand(
-            kind="event",
-            raw=raw,
-            name="say",
-            args=trimmed[4:].strip(),
-        )
-    if lower == "sayv":
-        return ParsedCommand(kind="event", raw=raw, name="sayv", args="")
-    if lower.startswith("sayv "):
-        return ParsedCommand(
-            kind="event",
-            raw=raw,
-            name="sayv",
-            args=trimmed[5:].strip(),
-        )
     if lower == "end_call":
         return ParsedCommand(kind="event", raw=raw, name="end_call")
     if lower == "end_meet":
@@ -300,11 +247,6 @@ def parse_command(*, text: str, in_call: bool, active: bool) -> ParsedCommand:
                 name=_cmd_name,
                 args=trimmed[len(_cmd_name) + 1 :].strip(),
             )
-
-    # 6) Freeform text
-    if in_call:
-        # During a call, any non-command text is treated as a phone utterance.
-        return ParsedCommand(kind="utterance", raw=raw, name="utterance", args=trimmed)
 
     return ParsedCommand(
         kind="unknown",

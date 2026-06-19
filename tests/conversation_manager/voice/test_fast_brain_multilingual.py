@@ -16,7 +16,7 @@ import re
 
 import pytest
 
-from unity.conversation_manager.prompt_builders import build_voice_agent_prompt
+from droid.conversation_manager.prompt_builders import build_voice_agent_prompt
 
 # Re-use the LLM helpers and model parameterisation from the deferral tests.
 from tests.conversation_manager.voice.test_fast_brain_deferral import (

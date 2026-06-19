@@ -15,16 +15,16 @@ import os
 
 import pytest
 
-from unity.function_manager.primitives import (
+from droid.function_manager.primitives import (
     PrimitiveScope,
     get_registry,
     VALID_MANAGER_ALIASES,
 )
-from unity.function_manager.primitives.registry import get_primitive_sources
-from unity.function_manager.function_manager import FunctionManager
-from unity.actor.environments.state_managers import StateManagerEnvironment
-from unity.function_manager.primitives import Primitives
-from unity.common.context_registry import ContextRegistry
+from droid.function_manager.primitives.registry import get_primitive_sources
+from droid.function_manager.function_manager import FunctionManager
+from droid.actor.environments.state_managers import StateManagerEnvironment
+from droid.function_manager.primitives import Primitives
+from droid.common.context_registry import ContextRegistry
 from tests.helpers import _handle_project
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -36,9 +36,9 @@ from tests.helpers import _handle_project
 def scoped_function_manager_factory():
     """Factory that creates FunctionManager with specific scope."""
     managers = []
-    previous_impl = os.environ.get("UNITY_FUNCTION_IMPL")
+    previous_impl = os.environ.get("DROID_FUNCTION_IMPL")
     previous_base_context = getattr(ContextRegistry, "_base_context", None)
-    os.environ["UNITY_FUNCTION_IMPL"] = "simulated"
+    os.environ["DROID_FUNCTION_IMPL"] = "simulated"
     ContextRegistry.set_base_context("UnityTests/PrimitiveScope")
 
     def _create(scope: PrimitiveScope):
@@ -59,9 +59,9 @@ def scoped_function_manager_factory():
         except Exception:
             pass
     if previous_impl is None:
-        os.environ.pop("UNITY_FUNCTION_IMPL", None)
+        os.environ.pop("DROID_FUNCTION_IMPL", None)
     else:
-        os.environ["UNITY_FUNCTION_IMPL"] = previous_impl
+        os.environ["DROID_FUNCTION_IMPL"] = previous_impl
     ContextRegistry.clear()
     if previous_base_context:
         ContextRegistry.set_base_context(previous_base_context)
@@ -256,7 +256,7 @@ def test_catalog_reads_only_scoped_managers(scoped_function_manager_factory):
 
 def test_primitives_instance_respects_scope():
     """Primitives instance should only expose scoped managers."""
-    from unity.function_manager.primitives import Primitives
+    from droid.function_manager.primitives import Primitives
 
     scope = PrimitiveScope.single("files")
     primitives = Primitives(primitive_scope=scope)
