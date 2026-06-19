@@ -366,7 +366,8 @@ import_shell_env_keys() {
   local key val
   for key in OPENAI_API_KEY ANTHROPIC_API_KEY DEEPSEEK_API_KEY DEEPGRAM_API_KEY \
     CARTESIA_API_KEY ELEVEN_API_KEY VOICE_PROVIDER UNIFY_MODEL \
-    DROID_WEB_TAVILY_API_KEY ANTICAPTCHA_KEY; do
+    DROID_WEB_TAVILY_API_KEY ANTICAPTCHA_KEY \
+    TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN ASSISTANT_NUMBER ORCHESTRA_ADMIN_KEY; do
     val="${!key:-}"
     [[ -z "$val" ]] && continue
     if ! has_env_value "$key"; then
@@ -380,6 +381,78 @@ mark_byok_configured() {
   upsert_env "DROID_BYOK_CONFIGURED" "1"
 }
 
+prompt_outbound_comms() {
+  # If all three keys are already present, nothing to do.
+  if has_env_value TWILIO_ACCOUNT_SID \
+    && has_env_value TWILIO_AUTH_TOKEN \
+    && has_env_value ASSISTANT_NUMBER \
+    && has_env_value ORCHESTRA_ADMIN_KEY; then
+    log_success "Outbound SMS/calls already configured"
+    return 0
+  fi
+
+  if [[ "$NON_INTERACTIVE" == "true" ]] || [[ ! -r /dev/tty ]] || [[ ! -w /dev/tty ]]; then
+    log_warn "Outbound SMS/calls not configured — add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, ASSISTANT_NUMBER to $ENV_FILE"
+    return 0
+  fi
+
+  echo "" >/dev/tty
+  echo -e "${BOLD}Outbound SMS & phone calls (optional)${NC}" >/dev/tty
+  echo "  Lets Marty send SMS messages and make outbound phone calls via Twilio." >/dev/tty
+  echo "  Sign up at https://console.twilio.com and buy a phone number." >/dev/tty
+  echo "  You will need: Account SID, Auth Token, and your Twilio phone number." >/dev/tty
+  echo "" >/dev/tty
+  local choice=""
+  printf "Set up outbound SMS/calls? [y/N]: " >/dev/tty
+  IFS= read -r choice </dev/tty || choice=""
+
+  if [[ "$choice" != "y" && "$choice" != "Y" ]]; then
+    log_warn "Skipped outbound SMS/calls"
+    return 0
+  fi
+
+  prompt_secret \
+    "Twilio Account SID" \
+    "TWILIO_ACCOUNT_SID" \
+    "Found at https://console.twilio.com under Account Info"
+
+  prompt_secret \
+    "Twilio Auth Token" \
+    "TWILIO_AUTH_TOKEN" \
+    "Found at https://console.twilio.com under Account Info"
+
+  prompt_secret \
+    "Twilio phone number (E.164 format, e.g. +14155551234)" \
+    "ASSISTANT_NUMBER" \
+    "The Twilio number Marty uses as caller ID for SMS and calls"
+
+  # Auto-generate ORCHESTRA_ADMIN_KEY if not already set.
+  # This is a local shared secret between the sandbox CLI and the local gateway
+  # process it spawns. It never leaves the user's machine.
+  if ! has_env_value ORCHESTRA_ADMIN_KEY; then
+    local admin_key=""
+    if command -v openssl &>/dev/null; then
+      admin_key="$(openssl rand -hex 32)"
+    else
+      admin_key="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+    fi
+    if [[ -n "$admin_key" ]]; then
+      upsert_env "ORCHESTRA_ADMIN_KEY" "$admin_key"
+      log_success "Generated ORCHESTRA_ADMIN_KEY (local shared secret for gateway auth)"
+    fi
+  else
+    log_success "ORCHESTRA_ADMIN_KEY already set"
+  fi
+
+  echo "" >/dev/tty
+  if has_env_value TWILIO_ACCOUNT_SID && has_env_value TWILIO_AUTH_TOKEN && has_env_value ASSISTANT_NUMBER; then
+    log_success "Outbound SMS/calls configured — the sandbox will start the local gateway automatically"
+  else
+    log_warn "Outbound comms partially configured — set remaining keys in $ENV_FILE"
+  fi
+  echo "" >/dev/tty
+}
+
 run_non_interactive_byok() {
   import_shell_env_keys
   prompt_llm_key
@@ -391,6 +464,7 @@ run_non_interactive_byok() {
     "Lets Marty hear you on browser calls. Free tier: https://console.deepgram.com"
   prompt_tts_provider
   sync_anticaptcha_keys
+  prompt_outbound_comms
   mark_byok_configured
   log_success "BYOK keys synced (non-interactive)"
 }
@@ -429,6 +503,7 @@ main() {
   echo "  Required:  LLM key (OpenAI, Anthropic, or DeepSeek)"
   echo "  Voice:     Deepgram + Cartesia/ElevenLabs (browser calls)"
   echo "  Optional:  Tavily (web search), AntiCaptcha (computer use)"
+  echo "  Optional:  Twilio (outbound SMS + phone calls)"
   echo "  Optional:  Composio (third-party app integrations)"
   echo ""
 
@@ -450,6 +525,7 @@ main() {
   fi
 
   prompt_research_and_computer
+  prompt_outbound_comms
   mark_byok_configured
 }
 

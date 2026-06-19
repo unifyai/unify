@@ -40,6 +40,10 @@ from sandboxes.conversation_manager.agent_service_bootstrap import (
     free_agent_service_port,
     try_start_agent_service_direct,
 )
+from sandboxes.conversation_manager.gateway_bootstrap import (
+    stop_gateway,
+    try_start_gateway_direct,
+)
 from sandboxes.conversation_manager.desktop_bootstrap import (
     try_start_desktop_direct,
     try_auto_bootstrap_desktop,
@@ -640,6 +644,25 @@ async def _main_async() -> None:
                 continue
             break
 
+        # Attempt to auto-start a local gateway for outbound SMS/calls.
+        # Must happen before initialize_cm so the CM's _local_comms_base_url()
+        # fallback (port 8787) resolves to a live server at first use.
+        _gateway_already_tracked = getattr(args, "_gateway_process", None) is not None
+        if not _gateway_already_tracked:
+            _gw = await asyncio.to_thread(
+                try_start_gateway_direct,
+                repo_root=project_root,
+                progress=(lambda m: print(m)),
+            )
+            if _gw.ok:
+                setattr(args, "_gateway_process", _gw.process)
+                setattr(args, "_gateway_url", _gw.url)
+            else:
+                setattr(args, "_gateway_process", None)
+                setattr(args, "_gateway_url", None)
+                if _gw.summary and "not configured" not in _gw.summary:
+                    print(f"[gateway] {_gw.summary}")
+
         cm = await initialize_cm(args=args)
         setattr(args, "_cm", cm)
 
@@ -829,6 +852,15 @@ async def _main_async() -> None:
                             proc.kill()
                         except Exception:
                             pass
+            except Exception:
+                pass
+            # If we auto-started a local gateway, stop it on exit.
+            try:
+                gw_proc = getattr(args, "_gateway_process", None)
+                if gw_proc is not None:
+                    await asyncio.to_thread(stop_gateway, gw_proc)
+                    setattr(args, "_gateway_process", None)
+                    setattr(args, "_gateway_url", None)
             except Exception:
                 pass
             # Best-effort: ensure the configured port isn't left bound by a sandbox-started
