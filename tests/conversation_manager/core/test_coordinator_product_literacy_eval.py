@@ -1439,14 +1439,14 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
             ),
         ),
         masked_components=(
-            "Marty admin tools are not exposed to this regular assistant.",
+            "Twin admin tools are not exposed to this regular assistant.",
             "No automatic cross-chat relay channel is provided.",
         ),
         is_coordinator=False,
         rubric=(
-            "The response should explicitly name Marty for team-shaping "
+            "The response should explicitly name Twin for team-shaping "
             "work, avoid implying act can bypass Coordinator boundaries, and offer "
-            "a concise handoff summary the user can take to Marty."
+            "a concise handoff summary the user can take to Twin."
         ),
     ),
 )

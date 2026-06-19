@@ -86,7 +86,7 @@ class ProductionSettings(BaseSettings):
     # Infrastructure URLs
     # ─────────────────────────────────────────────────────────────────────────
     ORCHESTRA_URL: str = "https://api.unify.ai/v0"
-    DROID_COORDINATOR_EMAIL_ADDRESS: str = "marty@unify.ai"
+    DROID_COORDINATOR_EMAIL_ADDRESS: str = "twin@unify.ai"
 
     # ─────────────────────────────────────────────────────────────────────────
     # Builtins Catalogue

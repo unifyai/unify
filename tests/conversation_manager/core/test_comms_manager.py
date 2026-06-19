@@ -824,8 +824,8 @@ class TestUnifyMeetHandling:
                     "contacts": contacts,
                     "opening_config": {
                         "mode": "simulated",
-                        "simulated_utterance": "Hi, I'm Marty.",
-                        "source": "marty_onboarding_intro",
+                        "simulated_utterance": "Hi, I'm Twin.",
+                        "source": "twin_onboarding_intro",
                     },
                 },
             )
@@ -842,8 +842,8 @@ class TestUnifyMeetHandling:
             assert event.room_name == "room_123"
             assert event.opening_config == {
                 "mode": "simulated",
-                "simulated_utterance": "Hi, I'm Marty.",
-                "source": "marty_onboarding_intro",
+                "simulated_utterance": "Hi, I'm Twin.",
+                "source": "twin_onboarding_intro",
             }
 
     @pytest.mark.asyncio

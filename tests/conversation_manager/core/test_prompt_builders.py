@@ -179,13 +179,13 @@ class TestCoordinatorPrompt:
         assert "Authorized humans" in prompt
         assert "Dana Owner; email: dana@acme.com; role: admin" in prompt
         assert "Francis Lead; email: francis@acme.com; role: member" in prompt
-        assert "**Marty admin tools:**" in prompt
+        assert "**Twin admin tools:**" in prompt
         assert "`primitives.coordinator.list_org_members`" in prompt
         assert "always target the active workspace organization" in prompt
-        assert "Marty\n----" in prompt
+        assert "Twin\n----" in prompt
         assert "Role / specialization: Coordinator." in prompt
         assert "My identity" in prompt
-        assert "I am Marty, Alice Smith's personal, private assistant" in prompt
+        assert "I am Twin, Alice Smith's personal, private assistant" in prompt
 
     def test_personal_coordinator_uses_boss_details_and_routes_org_work_to_switch(
         self,
@@ -195,15 +195,15 @@ class TestCoordinatorPrompt:
         assert "Boss details" in prompt
         assert "Authorized humans\n-----------------" not in prompt
         assert "Organization membership actions are unavailable" in prompt
-        assert "switch to that organization's Marty" in prompt
+        assert "switch to that organization's Twin" in prompt
         assert "list_accessible_organizations" not in prompt
 
-    def test_regular_assistant_gets_marty_reference_block(self):
+    def test_regular_assistant_gets_twin_reference_block(self):
         prompt = _build()
 
-        assert "Marty identity" in prompt
-        assert "Marty is Alice Smith's personal, private assistant" in prompt
-        assert "I propose handing it to Marty explicitly" in prompt
+        assert "Twin identity" in prompt
+        assert "Twin is Alice Smith's personal, private assistant" in prompt
+        assert "I propose handing it to Twin explicitly" in prompt
         assert "inviting, removing, or changing roles for colleagues" in prompt
         assert "creating or removing teams" in prompt
         assert (
@@ -212,22 +212,21 @@ class TestCoordinatorPrompt:
         )
         assert "I cannot forward it automatically" not in prompt
 
-    def test_marty_handoff_guidance_is_absent_on_marty_sessions(self):
+    def test_twin_handoff_guidance_is_absent_on_twin_sessions(self):
         coordinator_prompt = _build(is_coordinator=True)
 
         assert "My identity" in coordinator_prompt
         assert (
-            "I am Marty, Alice Smith's personal, private assistant"
-            in coordinator_prompt
+            "I am Twin, Alice Smith's personal, private assistant" in coordinator_prompt
         )
         assert (
-            "Marty is Alice Smith's personal, private assistant"
+            "Twin is Alice Smith's personal, private assistant"
             not in coordinator_prompt
         )
         assert "My onboarding flow (UI reference)" in coordinator_prompt
         assert "Give me access to your workspace" in coordinator_prompt
-        assert "Give Marty access to your workspace" not in coordinator_prompt
-        assert "I propose handing it to Marty explicitly" not in coordinator_prompt
+        assert "Give Twin access to your workspace" not in coordinator_prompt
+        assert "I propose handing it to Twin explicitly" not in coordinator_prompt
 
     def test_base_and_coordinator_share_restraint_but_keep_role_specific_sections(self):
         base_prompt = _build()
@@ -297,7 +296,7 @@ class TestPromptSectionOwnershipMatrix:
                     "Concurrent action and acknowledgment\n------------------------------------",
                 ),
                 "absent": (
-                    "**Marty admin tools:**",
+                    "**Twin admin tools:**",
                     "Authorized humans\n-----------------",
                     "Demo mode\n---------",
                 ),
@@ -308,10 +307,10 @@ class TestPromptSectionOwnershipMatrix:
                 "present": (
                     "Act capabilities\n----------------",
                     "Concurrent action and acknowledgment\n------------------------------------",
-                    "Marty identity\n--------------",
+                    "Twin identity\n--------------",
                 ),
                 "absent": (
-                    "**Marty admin tools:**",
+                    "**Twin admin tools:**",
                     "Authorized humans\n-----------------",
                     "Demo mode\n---------",
                 ),
@@ -321,7 +320,7 @@ class TestPromptSectionOwnershipMatrix:
                 "kwargs": {"demo_mode": True},
                 "present": ("Demo mode\n---------",),
                 "absent": (
-                    "**Marty admin tools:**",
+                    "**Twin admin tools:**",
                     "Authorized humans\n-----------------",
                     "Act capabilities\n----------------",
                     "Concurrent action and acknowledgment\n------------------------------------",
@@ -334,10 +333,10 @@ class TestPromptSectionOwnershipMatrix:
                 },
                 "present": (
                     "Demo mode\n---------",
-                    "Marty identity\n--------------",
+                    "Twin identity\n--------------",
                 ),
                 "absent": (
-                    "**Marty admin tools:**",
+                    "**Twin admin tools:**",
                     "Authorized humans\n-----------------",
                     "Act capabilities\n----------------",
                     "Concurrent action and acknowledgment\n------------------------------------",
@@ -349,11 +348,11 @@ class TestPromptSectionOwnershipMatrix:
                     "is_coordinator": True,
                 },
                 "present": (
-                    "**Marty admin tools:**",
+                    "**Twin admin tools:**",
                     "Authorized humans\n-----------------",
                     "Act capabilities\n----------------",
                     "Concurrent action and acknowledgment\n------------------------------------",
-                    "Marty\n----",
+                    "Twin\n----",
                     "My identity\n-----------",
                     "My Console literacy\n----------------------",
                     "Console account & org administration",
@@ -372,13 +371,13 @@ class TestPromptSectionOwnershipMatrix:
                     "demo_mode": True,
                 },
                 "present": (
-                    "Marty\n----",
+                    "Twin\n----",
                     "My identity\n-----------",
                     "Authorized humans\n-----------------",
                     "Demo mode\n---------",
                 ),
                 "absent": (
-                    "**Marty admin tools:**",
+                    "**Twin admin tools:**",
                     "Act capabilities\n----------------",
                     "Concurrent action and acknowledgment\n------------------------------------",
                 ),
@@ -390,11 +389,11 @@ class TestPromptSectionOwnershipMatrix:
                     "is_org_workspace": False,
                 },
                 "present": (
-                    "**Marty admin tools:**",
+                    "**Twin admin tools:**",
                     "Boss details\n------------",
                     "Organization membership actions are unavailable",
-                    "switch to that organization's Marty",
-                    "Marty\n----",
+                    "switch to that organization's Twin",
+                    "Twin\n----",
                     "My identity\n-----------",
                     "My Console literacy\n----------------------",
                     "Console account & org administration",
@@ -421,7 +420,7 @@ class TestPromptSectionOwnershipMatrix:
 
 
 class TestCoordinatorVoicePrompt:
-    """Coordinator voice calls use Marty intro scaffolding plus optional user about."""
+    """Coordinator voice calls use Twin intro scaffolding plus optional user about."""
 
     def test_regular_voice_prompt_unchanged_when_flag_is_false(self):
         omitted = _build_voice()
@@ -430,26 +429,26 @@ class TestCoordinatorVoicePrompt:
         assert omitted == explicit_false
         assert "Coordinator voice role" not in omitted
 
-    def test_coordinator_voice_prompt_uses_marty_intro_and_optional_user_about(self):
+    def test_coordinator_voice_prompt_uses_twin_intro_and_optional_user_about(self):
         prompt = _build_voice(is_coordinator=True)
 
-        assert "Marty\n----" in prompt
+        assert "Twin\n----" in prompt
         assert "Role / specialization: Coordinator." in prompt
         assert "About me\n--------\nI help Acme configure its Unify team." in prompt
         assert "Bio\n---" not in prompt
         assert "Coordinator voice role" not in prompt
-        assert prompt.index("Marty\n----") < prompt.index("Brevity\n-------")
+        assert prompt.index("Twin\n----") < prompt.index("Brevity\n-------")
 
     def test_coordinator_voice_prompt_omits_user_about_when_empty(self):
         prompt = _build_voice(is_coordinator=True, bio="")
 
-        assert "Marty\n----" in prompt
+        assert "Twin\n----" in prompt
         assert "About me\n--------" not in prompt
 
     def test_coordinator_voice_prompt_excludes_slow_brain_literacy(self):
         prompt = _build_voice(is_coordinator=True)
 
-        assert "Marty admin tools" not in prompt
+        assert "Twin admin tools" not in prompt
         assert "Unify system literacy" not in prompt
         assert "Requirements discovery workflow" not in prompt
         assert "Tasks/Activations" not in prompt
@@ -462,8 +461,8 @@ class TestCoordinatorVoicePrompt:
         prompt = _build_voice(is_coordinator=True)
 
         assert "My identity" in prompt
-        assert "I am Marty, Dana Owner's personal, private assistant" in prompt
-        assert "Marty is Dana Owner's personal, private assistant" not in prompt
+        assert "I am Twin, Dana Owner's personal, private assistant" in prompt
+        assert "Twin is Dana Owner's personal, private assistant" not in prompt
         assert "My Console literacy" in prompt
         assert "Left sidebar — selection drives everything" in prompt
         assert "Shared workspaces (Teams in the left sidebar)" in prompt
@@ -474,7 +473,7 @@ class TestCoordinatorVoicePrompt:
         assert "Unify internal operator tools only" in prompt
         assert "My onboarding flow (UI reference)" in prompt
         assert "Give me access to your workspace" in prompt
-        assert "Give Marty access to your workspace" not in prompt
+        assert "Give Twin access to your workspace" not in prompt
         assert "Console knowledge\n-----------------" not in prompt
 
 
@@ -601,9 +600,9 @@ class TestExternalAppIntegration:
         assert "I can walk through app setup and day-to-day usage directly" in prompt
         assert (
             "If a credential must be shared across the team or org (rather than "
-            "scoped to just me), Marty is the right person to place it"
+            "scoped to just me), Twin is the right person to place it"
         ) in prompt
-        assert "Marty owns that setup" not in prompt
+        assert "Twin owns that setup" not in prompt
         assert "I cannot forward it automatically" not in prompt
 
     def test_act_capabilities_absent_in_demo_mode(self):
