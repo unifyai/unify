@@ -251,11 +251,13 @@ configure_env() {
         echo ""
         local unify_key assistant_id
         if [ -z "$(env_value UNIFY_KEY)" ]; then
-            read -r -p "Unify API key (UNIFY_KEY): " unify_key || true
+            printf "Unify API key (UNIFY_KEY): " >/dev/tty
+            IFS= read -r unify_key </dev/tty || unify_key=""
             [ -n "$unify_key" ] && upsert_env "UNIFY_KEY" "$unify_key"
         fi
         if [ -z "$(env_value ASSISTANT_ID)" ]; then
-            read -r -p "Assistant id (ASSISTANT_ID): " assistant_id || true
+            printf "Assistant id (ASSISTANT_ID): " >/dev/tty
+            IFS= read -r assistant_id </dev/tty || assistant_id=""
             [ -n "$assistant_id" ] && upsert_env "ASSISTANT_ID" "$assistant_id"
         fi
     fi
