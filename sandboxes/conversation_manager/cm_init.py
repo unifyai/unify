@@ -9,6 +9,8 @@ Starts a ConversationManager in-process with:
   successfully); stripped otherwise
 - send_unify_message kept and backed by an in-memory outbound transport so the
   tool succeeds without needing GCP credentials or a live Pub/Sub topic
+- is_coordinator synced from the Orchestra API at startup so voice prompts and
+  tool routing behave identically to a hosted coordinator session
 """
 
 from __future__ import annotations
@@ -24,6 +26,56 @@ from droid.conversation_manager.main import run_conversation_manager
 from droid.conversation_manager.domains.managers_utils import init_conv_manager
 
 LG = logging.getLogger("conversation_manager_sandbox")
+
+
+def _sync_coordinator_flag(cm) -> None:
+    """Fetch is_coordinator from Orchestra and apply it to the CM + SESSION_DETAILS.
+
+    The CommsManager startup event normally carries this flag, but in sandbox
+    mode CommsManager is disabled.  We call GET /v0/assistant with the user's
+    UNIFY_KEY and match by agent_id so voice prompts and tool routing behave
+    identically to a hosted coordinator session.
+
+    Errors are swallowed — the sandbox continues with is_coordinator=False if
+    the API call fails.
+    """
+    import os
+
+    import httpx
+
+    from droid.session_details import SESSION_DETAILS
+
+    agent_id = SESSION_DETAILS.assistant.agent_id
+    if agent_id is None:
+        return
+
+    orchestra_url = os.environ.get("ORCHESTRA_URL", "").rstrip("/")
+    unify_key = os.environ.get("UNIFY_KEY", "")
+    if not orchestra_url or not unify_key:
+        return
+
+    try:
+        resp = httpx.get(
+            f"{orchestra_url}/assistant",
+            headers={"Authorization": f"Bearer {unify_key}"},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return
+        assistants = (resp.json() or {}).get("info") or []
+        for a in assistants:
+            if str(a.get("id") or a.get("agent_id", "")) == str(agent_id):
+                if a.get("is_coordinator"):
+                    SESSION_DETAILS.assistant.is_coordinator = True
+                    cm.is_coordinator = True
+                    cm.call_manager.set_config(cm.get_call_config())
+                    LG.info(
+                        "Coordinator flag applied from Orchestra (assistant_id=%s)",
+                        agent_id,
+                    )
+                break
+    except Exception as exc:
+        LG.debug("Could not fetch coordinator flag from Orchestra: %s", exc)
 
 
 async def initialize_cm(
@@ -90,6 +142,13 @@ async def initialize_cm(
     ).actor
     await init_conv_manager(cm, actor=actor)
 
+    # Sync coordinator flag from Orchestra so voice prompts/tool routing match
+    # a hosted coordinator session (no CommsManager startup event in sandbox).
+    try:
+        _sync_coordinator_flag(cm)
+    except Exception:
+        pass
+
     # Strip outbound channel tools based on what the gateway supports.
     #
     # send_email: always stripped — OAuth token lifecycle is too complex for OSS.
@@ -115,10 +174,10 @@ async def initialize_cm(
     # Reads from env vars: USER_FIRST_NAME, USER_SURNAME, USER_NUMBER, USER_EMAIL.
     try:
         from sandboxes.conversation_manager.event_publisher import (
-            get_simulated_user_contact,
+            get_user_contact,
         )
 
-        u = get_simulated_user_contact()
+        u = get_user_contact(cm)
         if getattr(cm, "contact_manager", None) is not None:
             cm.contact_manager.update_contact(  # type: ignore[union-attr]
                 contact_id=1,
