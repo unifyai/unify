@@ -2866,6 +2866,44 @@ def activate_project(project_name: str, overwrite: bool = False) -> None:
         if host not in {"localhost", "127.0.0.1"} and "localhost" not in base_url:
             return
 
+        def _full_stack_source_is_active() -> bool:
+            if os.environ.get("DROID_ALLOW_ISOLATED_TEST_ORCHESTRA") == "1":
+                return False
+            state_file = Path(
+                os.environ.get(
+                    "SELF_HOST_STATE_DIR",
+                    os.environ.get("DROID_HOME", str(Path.home() / ".droid")),
+                ),
+            ) / "full-stack-state.json"
+            if state_file.exists():
+                try:
+                    import json
+
+                    state = json.loads(state_file.read_text(encoding="utf-8"))
+                except Exception:
+                    return False
+                mode = state.get("mode")
+                if mode and mode != "source":
+                    return False
+            try:
+                ports_running = []
+                for port in ("8000", "8001"):
+                    result = subprocess.run(
+                        ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN"],
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    ports_running.append(result.returncode == 0 and len(result.stdout.splitlines()) > 1)
+            except FileNotFoundError:
+                return False
+            return all(ports_running)
+
+        if _full_stack_source_is_active():
+            os.environ["ORCHESTRA_URL"] = "http://127.0.0.1:8000/v0"
+            lg.info("Using full-stack local Orchestra: %s", os.environ["ORCHESTRA_URL"])
+            return
+
         # Resolve orchestra repo path (default: sibling repo ../orchestra).
         # Repo root is .../droid/ (parent of sandboxes/).
         repo_root = Path(__file__).resolve().parents[1]
