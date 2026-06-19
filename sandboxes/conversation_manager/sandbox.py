@@ -728,6 +728,34 @@ async def _main_async() -> None:
                 if _lk.summary and "non-local URL" not in _lk.summary:
                     print(f"[livekit] {_lk.summary}")
 
+        # Auto-start agent-service before initialize_cm() so the computer
+        # backend inside ActorFactory is wired to the correct URL at creation
+        # time.  The post-init validation loop also handles recovery, but it
+        # runs too late — the backend URL is frozen once initialize_cm returns.
+        # Only attempt when the agent-service directory actually exists (normal
+        # OSS users who haven't installed the Magnitude service are skipped).
+        _as_local_url = "http://localhost:3001"
+        if (
+            getattr(args, "agent_service_bootstrap", "guide") == "auto"
+            and not getattr(args, "_agent_service_process", None)
+            and (project_root / "agent-service").exists()
+        ):
+            _as = await asyncio.to_thread(
+                try_start_agent_service_direct,
+                repo_root=project_root,
+                agent_server_url=_as_local_url,
+                progress=(lambda m: print(m)),
+            )
+            if _as.ok:
+                if _as.process is not None:
+                    setattr(args, "_agent_service_process", _as.process)
+                setattr(args, "local_url", _as_local_url)
+                # Point the computer backend at the locally-started service
+                # (port 3001) rather than the Docker container default (3000).
+                args.agent_server_url = _as_local_url
+            elif _as.summary and "Missing" not in _as.summary:
+                print(f"[agent-service] {_as.summary}")
+
         # Redirect voice-agent worker stdout/stderr to a log file so the
         # terminal stays clean. Must happen before initialize_cm() so the
         # persistent LiveKit worker subprocess inherits the redirected fds.
