@@ -27,9 +27,19 @@ chmod 700 /Droid/.dbus /Droid/.vnc
 chmod 600 /Droid/.ICEauthority
 chmod 755 /Droid/Local
 
-if [[ -d /root/.cache/ms-playwright && ! -e /Droid/.cache/ms-playwright ]]; then
-  ln -sfn /root/.cache/ms-playwright /Droid/.cache/ms-playwright
-  chown -h unityuser:unityuser /Droid/.cache/ms-playwright
+# Older images symlinked /Droid/.cache/ms-playwright -> /root/.cache/ms-playwright,
+# which unityuser cannot read. Copy browsers into the user-owned cache instead.
+if [[ -L /Droid/.cache/ms-playwright ]] || { [[ -d /root/.cache/ms-playwright ]] && [[ ! -d /Droid/.cache/ms-playwright/chromium-1228 ]]; }; then
+  rm -f /Droid/.cache/ms-playwright
+  mkdir -p /Droid/.cache/ms-playwright
+  cp -a /root/.cache/ms-playwright/. /Droid/.cache/ms-playwright/
+  chown -R unityuser:unityuser /Droid/.cache/ms-playwright
+fi
+
+CHROME_PATH=$(find /Droid/.cache/ms-playwright -name "chrome" -type f -executable 2>/dev/null | head -1)
+if [[ -n "${CHROME_PATH}" ]]; then
+  printf '#!/bin/bash\nexec "%s" --no-sandbox "$@"\n' "${CHROME_PATH}" > /usr/local/bin/chromium-browser
+  chmod +x /usr/local/bin/chromium-browser
 fi
 
 chown unityuser:unityuser /var/log/magnitude 2>/dev/null || true
