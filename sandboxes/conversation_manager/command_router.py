@@ -35,7 +35,6 @@ from droid.conversation_manager.events import (
     UserWebcamStopped,
 )
 from sandboxes.conversation_manager.io_gate import gated_input
-from sandboxes.conversation_manager.scenario_generator import ScenarioGenerator
 from sandboxes.conversation_manager.config_manager import (
     ConfigurationManager,
     ActorConfig,
@@ -88,7 +87,6 @@ class CommandRouter:
     state: Any
     publisher: EventPublisher
     chat_history: list[dict]
-    allow_voice: bool = True
     allow_save_project: bool = True
     config_manager: ConfigurationManager | None = None
     trace_display: TraceDisplay | None = None
@@ -197,20 +195,14 @@ class CommandRouter:
         if cmd.kind == "agent_logs":
             return await self._handle_agent_logs(cmd.args)
 
-        # Scenario seeding
-        if cmd.kind in {"scenario_seed", "scenario_seed_voice"}:
-            return await self._handle_scenario(cmd, prompt_text=prompt_text)
-
         # File attachments
         if cmd.kind == "attach":
             return self._handle_attach(cmd.args)
         if cmd.kind == "detach":
             return self._handle_detach()
 
-        # Event / utterance
-        if cmd.kind in {"event", "utterance"}:
+        if cmd.kind == "event":
             return await self._handle_event(cmd)
-
         return RouterResult(lines=[f"⚠️ Unhandled command kind: {cmd.kind}"])
 
     async def _handle_trace_display(self, args: str) -> RouterResult:
@@ -563,7 +555,7 @@ class CommandRouter:
         # Clean up live voice session if active.
         if getattr(st, "live_voice_active", False):
             try:
-                await self.publisher.end_live_call()
+                await self.publisher.end_live_session()
             except Exception:
                 pass
 
@@ -631,10 +623,6 @@ class CommandRouter:
         st = self.state
         st.last_event_published_at = asyncio.get_running_loop().time()
 
-        if cmd.kind == "utterance":
-            await self.publisher.publish_phone_utterance(cmd.args)
-            return RouterResult(lines=[])
-
         if cmd.name == "message":
             attachments = (
                 list(self.pending_attachments) if self.pending_attachments else None
@@ -664,116 +652,27 @@ class CommandRouter:
                 return RouterResult(
                     lines=["⚠️ Already in a voice session. End it first."],
                 )
-            if getattr(self.args, "live_voice", False):
-                try:
-                    lines = await self.publisher.start_live_call()
-                    return RouterResult(lines=lines)
-                except Exception as exc:
-                    st.in_call = False
-                    return RouterResult(
-                        lines=[f"❌ Failed to start live voice call: {exc}"],
-                    )
-            await self.publisher.publish_call_start()
-            return RouterResult(
-                lines=[
-                    "📞 Call started.",
-                    "Tip: use `say <content>` to speak, `end_call` to finish.",
-                ],
-            )
+            try:
+                lines = await self.publisher.start_live_call()
+                return RouterResult(lines=lines)
+            except Exception as exc:
+                st.in_call = False
+                return RouterResult(
+                    lines=[f"❌ Failed to start live voice call: {exc}"],
+                )
         if cmd.name == "meet":
             if getattr(st, "in_voice_session", False):
                 return RouterResult(
                     lines=["⚠️ Already in a voice session. End it first."],
                 )
-            if getattr(self.args, "live_voice", False):
-                try:
-                    lines = await self.publisher.start_live_meet()
-                    return RouterResult(lines=lines)
-                except Exception as exc:
-                    st.in_meet = False
-                    return RouterResult(
-                        lines=[f"❌ Failed to start live meet: {exc}"],
-                    )
-            await self.publisher.publish_meet_start()
-            return RouterResult(
-                lines=[
-                    "🎥 Unify Meet started.",
-                    "Tip: use `say <content>` to speak, `end_meet` to finish.",
-                ],
-            )
-        if cmd.name == "say":
-            if not getattr(st, "in_voice_session", False):
+            try:
+                lines = await self.publisher.start_live_meet()
+                return RouterResult(lines=lines)
+            except Exception as exc:
+                st.in_meet = False
                 return RouterResult(
-                    lines=["⚠️ No active voice session. Use `call` or `meet` first."],
+                    lines=[f"❌ Failed to start live meet: {exc}"],
                 )
-            if getattr(st, "live_voice_active", False):
-                return RouterResult(
-                    lines=[
-                        "🎙️  Live voice is active — speak through your browser mic.",
-                        "   The voice agent handles speech-to-text automatically.",
-                    ],
-                )
-            if getattr(st, "in_meet", False):
-                await self.publisher.publish_meet_utterance(cmd.args)
-            else:
-                await self.publisher.publish_phone_utterance(cmd.args)
-            return RouterResult(lines=[])
-        if cmd.name == "sayv":
-            if not getattr(st, "in_voice_session", False):
-                return RouterResult(
-                    lines=["⚠️ No active voice session. Use `call` or `meet` first."],
-                )
-            if getattr(st, "live_voice_active", False):
-                return RouterResult(
-                    lines=[
-                        "🎙️  Live voice is active — speak through your browser mic.",
-                        "   The voice agent handles speech-to-text automatically.",
-                    ],
-                )
-            if not self.allow_voice:
-                return RouterResult(
-                    lines=["⚠️ Voice input is not enabled in this mode."],
-                )
-            if not getattr(self.args, "voice", False):
-                return RouterResult(
-                    lines=["⚠️ Restart with `--voice` to enable recording."],
-                )
-
-            text = (cmd.args or "").strip()
-            if not text:
-                try:
-                    from sandboxes.utils import (
-                        record_for_seconds,
-                        record_until_enter,
-                        transcribe_deepgram,
-                        transcribe_deepgram_no_input,
-                    )
-                except Exception as exc:
-                    return RouterResult(lines=[f"⚠️ Voice mode unavailable ({exc})."])
-                try:
-                    if bool(getattr(self.args, "gui", False)):
-                        audio = await asyncio.to_thread(record_for_seconds, 6.0)
-                        text = (
-                            await asyncio.to_thread(transcribe_deepgram_no_input, audio)
-                            or ""
-                        ).strip()
-                    else:
-                        audio = await asyncio.to_thread(record_until_enter)
-                        text = (
-                            await asyncio.to_thread(transcribe_deepgram, audio) or ""
-                        ).strip()
-                except Exception as exc:
-                    return RouterResult(lines=[f"❌ Voice transcription failed: {exc}"])
-                if not text:
-                    return RouterResult(
-                        lines=["⚠️ Transcription was empty. Please try again."],
-                    )
-
-            if getattr(st, "in_meet", False):
-                await self.publisher.publish_meet_utterance(text)
-            else:
-                await self.publisher.publish_phone_utterance(text)
-            return RouterResult(lines=[f"▶️ {text}"])
         if cmd.name == "end_call":
             if getattr(st, "live_voice_active", False):
                 try:
@@ -818,70 +717,6 @@ class CommandRouter:
             return RouterResult(lines=[])
 
         return RouterResult(lines=[f"⚠️ Unknown event command: {cmd.name}"])
-
-    async def _handle_scenario(
-        self,
-        cmd: ParsedCommand,
-        *,
-        prompt_text: Optional[PromptFn],
-    ) -> RouterResult:
-        # Idle guard: this is also enforced in parse_command, but re-check for safety.
-        h = getattr(self.cm, "active_ask_handle", None)
-        if (h is not None and not h.done()) or getattr(self.state, "in_call", False):
-            return RouterResult(
-                lines=[
-                    "⚠️ Scenario seeding is disabled while a conversation/action is active.",
-                    "   Use /stop or wait for completion.",
-                ],
-            )
-
-        if cmd.kind == "scenario_seed_voice":
-            if not self.allow_voice or not getattr(self.args, "voice", False):
-                return RouterResult(
-                    lines=[
-                        "⚠️ Voice mode not enabled – restart with --voice or use 'us <description>' instead.",
-                    ],
-                )
-            try:
-                from sandboxes.utils import record_until_enter, transcribe_deepgram
-            except Exception as exc:
-                return RouterResult(
-                    lines=[
-                        f"⚠️ Voice mode unavailable ({exc}). Use 'us <description>' instead.",
-                    ],
-                )
-            try:
-                audio = record_until_enter()
-                description = transcribe_deepgram(audio)
-            except Exception as exc:
-                return RouterResult(lines=[f"❌ Voice transcription failed: {exc}"])
-            if not description or not description.strip():
-                return RouterResult(
-                    lines=["⚠️ Transcription was empty – please try again."],
-                )
-            desc = description.strip()
-            lines = [f"▶️ {desc}"]
-        else:
-            desc = (cmd.args or "").strip()
-            lines = []
-            if not desc:
-                if prompt_text is None:
-                    return RouterResult(lines=["⚠️ Usage: us <description>"])
-                desc = (await prompt_text("🧮 Describe scenario > ")).strip()
-                if not desc:
-                    return RouterResult(
-                        lines=["⚠️ No description provided – cancelled."],
-                    )
-
-        gen = ScenarioGenerator(publisher=self.publisher, state=self.state)
-        try:
-            await gen.generate_and_publish(desc)
-            return RouterResult(lines=lines)
-        except Exception as exc:
-            LG.error("Scenario generation failed: %s", exc, exc_info=True)
-            return RouterResult(
-                lines=lines + [f"❌ Failed to generate scenario: {exc}"],
-            )
 
 
 async def repl_prompt(prompt: str) -> str:

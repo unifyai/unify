@@ -3,7 +3,7 @@ ConversationManager sandbox entrypoint.
 
 This module wires together:
 - project activation + logging
-- in-process ConversationManager startup (simulated or real-comms)
+- in-process ConversationManager startup
 - outbound event subscription (prints CM responses)
 - either REPL mode (default) or Textual GUI mode (`--gui`)
 
@@ -141,7 +141,6 @@ def _build_worker_config(*, args: Any, actor_config: ActorConfig) -> dict:
         "agent_mode": getattr(args, "agent_mode", "web-vm"),
         "headless": bool(getattr(args, "headless", False)),
         # UX
-        "voice": bool(getattr(args, "voice", False)),
         "debug": bool(getattr(args, "debug", False)),
         # Project
         "project_name": getattr(args, "project_name", "droid"),
@@ -150,9 +149,6 @@ def _build_worker_config(*, args: Any, actor_config: ActorConfig) -> dict:
         "agent_service_bootstrap": (
             getattr(args, "agent_service_bootstrap", "guide") == "auto"
         ),
-        "real_comms": bool(getattr(args, "real_comms", False)),
-        "auto_confirm": bool(getattr(args, "auto_confirm", False)),
-        "live_voice": bool(getattr(args, "live_voice", False)),
         # Nested copy for future-proofing (UI already prefers this when present).
         "actor_config": actor_config.to_json_obj(),
     }
@@ -349,32 +345,6 @@ async def _main_async() -> None:
         action="store_true",
         default=False,
         help="(CodeAct) auto-print execution trace after each code turn (REPL only)",
-    )
-    parser.add_argument(
-        "--real-comms",
-        dest="real_comms",
-        action="store_true",
-        default=False,
-        help="Use real comms (SMS/email/calls). Requires external infrastructure. REPL prompts for confirmation; GUI auto-confirms.",
-    )
-    parser.add_argument(
-        "--auto-confirm",
-        dest="auto_confirm",
-        action="store_true",
-        default=False,
-        help="(real-comms) Auto-confirm all outbound actions (use with care).",
-    )
-    parser.add_argument(
-        "--live-voice",
-        dest="live_voice",
-        action="store_true",
-        default=False,
-        help=(
-            "Enable live voice calls via LiveKit. "
-            "The `call` command spawns the production voice agent and provides "
-            "a browser URL to join the call with your microphone. "
-            "Requires LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET env vars."
-        ),
     )
     args = parser.parse_args()
     os.environ.setdefault("DROID_SANDBOX_LAUNCH_CWD", str(Path.cwd().resolve()))
@@ -761,10 +731,8 @@ async def _main_async() -> None:
                 cm=cm,
                 sandbox_state=state,
                 display_callback=_display,
-                include_call_guidance=bool(args.debug)
-                or bool(getattr(args, "voice", False))
-                or bool(getattr(args, "live_voice", False)),
-                voice_enabled=bool(getattr(args, "voice", False)),
+                include_call_guidance=True,
+                voice_enabled=False,
                 stop_event=stop_sub,
                 trace_display=trace_display,
                 event_tree_display=event_tree_display,

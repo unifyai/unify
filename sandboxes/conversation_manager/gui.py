@@ -164,7 +164,7 @@ if _TEXTUAL_AVAILABLE:
                         )
                 with Horizontal(id="cmd_row"):
                     yield Input(
-                        placeholder="Commands: msg, sms, email, meet, say, end_meet, us",
+                        placeholder="Commands: msg, sms, email, meet, end_meet",
                         id="command_input",
                     )
                     yield Button("Send", id="submit_command")
@@ -1030,7 +1030,7 @@ if _TEXTUAL_AVAILABLE:
                                 inp.value = cur + sep + text
                             else:
                                 if bool(getattr(app.runtime.state, "in_call", False)):  # type: ignore[attr-defined]
-                                    inp.value = "sayv " + text
+                                    inp.value = "sms " + text
                                 else:
                                     inp.value = "sms " + text
                             inp.focus()
@@ -1198,24 +1198,6 @@ if _TEXTUAL_AVAILABLE:
                     pass
                 self.exit()
                 return
-
-            # Voice commands stay in UI process; translate to non-voice commands for worker.
-            if cmd.kind == "scenario_seed_voice":
-                desc = await self._record_and_transcribe_best_effort()
-                if not desc:
-                    self.post_message(AppendLine("⚠️ Voice transcription was empty."))
-                    return
-                trimmed = f"us {desc}"
-                self.post_message(AppendLine(f"▶️ {desc}"))
-            elif cmd.kind == "event" and cmd.name == "sayv":
-                text = (cmd.args or "").strip()
-                if not text:
-                    text = await self._record_and_transcribe_best_effort()
-                if not text:
-                    self.post_message(AppendLine("⚠️ Voice transcription was empty."))
-                    return
-                trimmed = f"say {text}"
-                self.post_message(AppendLine(f"▶️ {text}"))
 
             # Track attachment state locally for the indicator label.
             if cmd.kind == "attach" and cmd.args:
@@ -1820,7 +1802,7 @@ if _TEXTUAL_AVAILABLE:
             placeholder = (
                 "/ask, /i, /pause, /resume, /stop"
                 if active
-                else "Type a command: sms, email, call, us, ..."
+                else "Type a command: msg, sms, email, call, meet, ..."
             )
             try:
                 inp = self.screen.query_one("#command_input", Input)
