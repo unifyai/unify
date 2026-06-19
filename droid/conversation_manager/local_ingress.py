@@ -282,26 +282,30 @@ class LocalCommsIngress:
         event_type = payload.get("event_type", "")
         if not event_type:
             raise web.HTTPBadRequest(text="event_type is required")
+        extra_event_fields = payload.get("extra_event_fields") or {}
+        if not isinstance(extra_event_fields, dict):
+            extra_event_fields = {}
+        event = {
+            "assistant_id": self._current_assistant_id(),
+            "contacts": payload.get("contacts") or [],
+            "event_type": event_type,
+            "message": payload.get("message", "") or "",
+            "task_id": payload.get("task_id"),
+            "source_task_log_id": payload.get("source_task_log_id"),
+            "activation_revision": payload.get("activation_revision", "") or "",
+            "scheduled_for": payload.get("scheduled_for", "") or "",
+            "execution_mode": payload.get("execution_mode", "") or "",
+            "source_type": payload.get("source_type", "") or "",
+            "binding_id": payload.get("binding_id", "") or "",
+            "desktop_url": payload.get("desktop_url", "") or "",
+            "vm_type": payload.get("vm_type", "") or "",
+        }
+        event.update(extra_event_fields)
         await self._dispatch_payload(
             {
                 "thread": "droid_system_event",
                 "publish_timestamp": time.time(),
-                "event": {
-                    "assistant_id": self._current_assistant_id(),
-                    "contacts": payload.get("contacts") or [],
-                    "event_type": event_type,
-                    "message": payload.get("message", "") or "",
-                    "extra_event_fields": payload.get("extra_event_fields") or {},
-                    "task_id": payload.get("task_id"),
-                    "source_task_log_id": payload.get("source_task_log_id"),
-                    "activation_revision": payload.get("activation_revision", "") or "",
-                    "scheduled_for": payload.get("scheduled_for", "") or "",
-                    "execution_mode": payload.get("execution_mode", "") or "",
-                    "source_type": payload.get("source_type", "") or "",
-                    "binding_id": payload.get("binding_id", "") or "",
-                    "desktop_url": payload.get("desktop_url", "") or "",
-                    "vm_type": payload.get("vm_type", "") or "",
-                },
+                "event": event,
             },
         )
         return web.json_response({"success": True})
