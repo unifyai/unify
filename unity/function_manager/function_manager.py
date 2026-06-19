@@ -6506,66 +6506,71 @@ class FunctionManager(BaseFunctionManager):
 
         return SESSION_DETAILS.assistant.desktop_mode == "windows"
 
+    def _windows_exec_local_root(self) -> Path:
+        """Local sync root that FileSync bisyncs to the VM's ``C:\\Droid\\Local``."""
+        from droid.file_manager.settings import get_local_root
+
+        return Path(get_local_root()).expanduser()
+
+    def _write_venv_pyproject_local(self, venv_id: int) -> None:
+        """Stage a venv's ``pyproject.toml`` in the local sync root.
+
+        The file rides the pre-exec bisync to
+        ``C:\\Droid\\Local\\Local\\venvs\\venv_<id>\\pyproject.toml`` where
+        ``uv sync`` consumes it. Mirrors the relative path the remote VM
+        expects (the extra ``Local`` segment matches ``venv_full_path``).
+
+        Raises:
+            ValueError: If venv_id does not exist.
+        """
+        venv_data = self.get_venv(venv_id=venv_id)
+        if venv_data is None:
+            raise ValueError(f"VirtualEnv with ID {venv_id} not found")
+
+        dest = (
+            self._windows_exec_local_root()
+            / "Local"
+            / "venvs"
+            / f"venv_{venv_id}"
+            / "pyproject.toml"
+        )
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(venv_data["venv"], encoding="utf-8")
+
     async def _prepare_venv_on_remote_windows(
         self,
         desktop_url: str,
         venv_id: int,
     ) -> str:
         """
-        Prepare virtual environment on remote Windows VM.
+        Install a virtual environment on the remote Windows VM via ``uv sync``.
 
-        Uses the existing /files endpoint to write pyproject.toml,
-        then the existing /exec endpoint to run 'uv sync'.
+        Assumes the venv's ``pyproject.toml`` has already been staged locally
+        (see :meth:`_write_venv_pyproject_local`) and pushed to the VM by the
+        pre-exec bisync. Runs the install over the existing ``/exec`` endpoint.
 
         Args:
             desktop_url: Base URL for the Windows VM agent-service.
-            venv_id: The venv ID to prepare.
+            venv_id: The venv ID to install.
 
         Returns:
             Path to the Python executable in the prepared venv.
 
         Raises:
-            ValueError: If venv_id does not exist.
-            RuntimeError: If venv preparation fails.
+            RuntimeError: If venv installation fails.
         """
         import aiohttp
 
         from unity.session_details import SESSION_DETAILS
 
-        venv_data = self.get_venv(venv_id=venv_id)
-        if venv_data is None:
-            raise ValueError(f"VirtualEnv with ID {venv_id} not found")
-
-        pyproject_content = venv_data["venv"]
         venv_dir = f"Local\\venvs\\venv_{venv_id}"
+        venv_full_path = f"{self.REMOTE_WINDOWS_LOCAL_ROOT}\\{venv_dir}"
         headers = {"Authorization": f"Bearer {SESSION_DETAILS.unify_key}"}
 
         LOGGER.debug(f"{ICONS['windows_exec']} [windows exec] Preparing venv {venv_id}")
 
         async with aiohttp.ClientSession() as session:
-            # Step 1: Write pyproject.toml
-            async with session.post(
-                f"{desktop_url}/api/files",
-                json={
-                    "action": "save",
-                    "files": [
-                        {
-                            "filename": f"{venv_dir}\\pyproject.toml",
-                            "content": pyproject_content,
-                            "encoding": "text",
-                        },
-                    ],
-                },
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=60),
-            ) as resp:
-                if not resp.ok:
-                    resp_text = await resp.text()
-                    raise RuntimeError(
-                        f"Failed to write pyproject.toml to remote: {resp_text}",
-                    )
-
-            # Step 2: Install uv via pip
+            # Step 1: Install uv via pip
             LOGGER.debug(f"{ICONS['windows_exec']} [windows exec] Installing uv")
             async with session.post(
                 f"{desktop_url}/api/exec",
@@ -6580,8 +6585,7 @@ class FunctionManager(BaseFunctionManager):
             ) as resp:
                 await resp.json()  # Don't fail if uv already installed
 
-            # Step 3: Run 'uv sync'
-            venv_full_path = f"{self.REMOTE_WINDOWS_LOCAL_ROOT}\\{venv_dir}"
+            # Step 2: Run 'uv sync'
             LOGGER.debug(f"{ICONS['windows_exec']} [windows exec] Running uv sync")
             async with session.post(
                 f"{desktop_url}/api/exec",
@@ -6619,12 +6623,13 @@ class FunctionManager(BaseFunctionManager):
         - All file paths in call_kwargs must be under ~/
         - FileSync makes these paths available on the remote VM
 
-        Flow:
+        File movement runs entirely over FileSync bisync (no /api/files):
         1. Wait for VM to be ready
-        2. Sync files to remote (FileSync)
-        3. Prepare venv on remote if needed (HTTP API)
-        4. Write and execute Python script
-        5. Sync files from remote (FileSync)
+        2. Stage the wrapper script (and venv pyproject) in the local sync root
+        3. Bisync to push the staged inputs to the VM
+        4. Install the venv on the VM if needed (uv sync over /exec)
+        5. Execute the script (/exec)
+        6. Bisync from the VM to pull the result file, then read it locally
 
         Args:
             func_data: Function metadata dict.
@@ -6666,38 +6671,35 @@ class FunctionManager(BaseFunctionManager):
         desktop_url = desktop_url.rstrip("/")
         headers = {"Authorization": f"Bearer {SESSION_DETAILS.unify_key}"}
 
-        # Step 2: Sync files to remote before execution
-        await self._sync_to_remote()
-
-        # Step 3: Prepare venv on remote (if specified)
-        venv_id = func_data.get("venv_id")
-        if venv_id is not None:
-            python_path = await self._prepare_venv_on_remote_windows(
-                desktop_url,
-                venv_id,
+        # FileSync (bisync) is the sole file-movement mechanism for Windows
+        # exec: the wrapper script, venv pyproject, and result file all ride
+        # bisync between ~/Droid/Local and the VM's C:\Droid\Local. Without an
+        # active SyncManager there is no way to move files to/from the VM.
+        if self._get_sync_manager() is None:
+            raise RuntimeError(
+                "Windows function execution requires FileSync, but no active "
+                "SyncManager is available. Cannot move files to the managed VM.",
             )
+
+        # Step 2: Build the wrapper script and stage every input in the local
+        # sync root. Relative paths mirror what the VM expects after bisync.
+        exec_id = uuid.uuid4().hex[:8]
+        is_async = "async def" in implementation
+
+        try:
+            tree = ast.parse(implementation)
+            func_name = tree.body[0].name if tree.body else "main"
+        except Exception:
+            func_name = "main"
+
+        call_kwargs_json = json.dumps(call_kwargs or {})
+
+        if is_async:
+            invoke_code = f"result = asyncio.run({func_name}(**call_kwargs))"
         else:
-            python_path = "python"
+            invoke_code = f"result = {func_name}(**call_kwargs)"
 
-        async with aiohttp.ClientSession() as session:
-            # Step 4: Build wrapper script
-            exec_id = uuid.uuid4().hex[:8]
-            is_async = "async def" in implementation
-
-            try:
-                tree = ast.parse(implementation)
-                func_name = tree.body[0].name if tree.body else "main"
-            except Exception:
-                func_name = "main"
-
-            call_kwargs_json = json.dumps(call_kwargs or {})
-
-            if is_async:
-                invoke_code = f"result = asyncio.run({func_name}(**call_kwargs))"
-            else:
-                invoke_code = f"result = {func_name}(**call_kwargs)"
-
-            wrapper_script = f"""
+        wrapper_script = f"""
 import json
 import asyncio
 import sys
@@ -6725,40 +6727,38 @@ if __name__ == "__main__":
     _main()
 """
 
-            # Step 5: Write script to remote
-            script_filename = f"scripts\\_exec_{exec_id}.py"
-            async with session.post(
-                f"{desktop_url}/api/files",
-                json={
-                    "action": "save",
-                    "files": [
-                        {
-                            "filename": script_filename,
-                            "content": wrapper_script,
-                            "encoding": "text",
-                        },
-                    ],
-                },
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=60),
-            ) as resp:
-                if not resp.ok:
-                    resp_text = await resp.text()
-                    return {
-                        "result": None,
-                        "error": (f"Failed to write script to remote: {resp_text}"),
-                        "stdout": "",
-                        "stderr": "",
-                    }
+        local_root = self._windows_exec_local_root()
+        script_local = local_root / "scripts" / f"_exec_{exec_id}.py"
+        result_local = local_root / f"_result_{exec_id}.json"
+        script_local.parent.mkdir(parents=True, exist_ok=True)
+        script_local.write_text(wrapper_script, encoding="utf-8")
 
-            # Step 6: Execute script
-            cwd = self.REMOTE_WINDOWS_LOCAL_ROOT
-            exec_command = f'& "{python_path}" "{script_filename}"'
-            LOGGER.debug(
-                f"{ICONS['windows_exec']} [windows exec] Starting script: {exec_command} - CWD: {cwd} - "
-                f"Kwargs: {call_kwargs}",
+        venv_id = func_data.get("venv_id")
+        if venv_id is not None:
+            self._write_venv_pyproject_local(venv_id)
+
+        # Step 3: Push staged inputs to the VM via bisync.
+        await self._sync_to_remote()
+
+        # Step 4: Install the venv on the VM (its pyproject was just pushed).
+        if venv_id is not None:
+            python_path = await self._prepare_venv_on_remote_windows(
+                desktop_url,
+                venv_id,
             )
+        else:
+            python_path = "python"
 
+        # Step 5: Execute the script over /exec.
+        script_filename = f"scripts\\_exec_{exec_id}.py"
+        cwd = self.REMOTE_WINDOWS_LOCAL_ROOT
+        exec_command = f'& "{python_path}" "{script_filename}"'
+        LOGGER.debug(
+            f"{ICONS['windows_exec']} [windows exec] Starting script: {exec_command} - CWD: {cwd} - "
+            f"Kwargs: {call_kwargs}",
+        )
+
+        async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{desktop_url}/api/exec",
                 json={
@@ -6772,44 +6772,37 @@ if __name__ == "__main__":
             ) as resp:
                 exec_result = await resp.json()
 
-            stdout = exec_result.get("stdout", "")
-            stderr = exec_result.get("stderr", "")
-            exit_code = exec_result.get("exitCode")
-            LOGGER.info(
-                f"{ICONS['windows_exec']} [windows exec] Execution complete (exitCode={exit_code})",
-            )
+        stdout = exec_result.get("stdout", "")
+        stderr = exec_result.get("stderr", "")
+        exit_code = exec_result.get("exitCode")
+        LOGGER.info(
+            f"{ICONS['windows_exec']} [windows exec] Execution complete (exitCode={exit_code})",
+        )
 
-            # Step 7: Read result file
-            result_filename = f"_result_{exec_id}.json"
-            async with session.post(
-                f"{desktop_url}/api/files",
-                json={
-                    "action": "read",
-                    "filename": result_filename,
-                },
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=60),
-            ) as resp:
-                if resp.ok:
-                    file_data = await resp.json()
-                    content = file_data.get("content", "{}")
-                    try:
-                        result_data = json.loads(content)
-                    except json.JSONDecodeError:
-                        result_data = {
-                            "result": None,
-                            "error": "Failed to parse result JSON",
-                        }
-                else:
-                    result_data = {
-                        "result": None,
-                        "error": (
-                            f"Execution failed: {stderr}" if stderr else "Unknown error"
-                        ),
-                    }
-
-        # Step 8: Sync files from remote after execution
+        # Step 6: Pull the result file back via bisync, then read it locally.
         await self._sync_from_remote()
+
+        if result_local.exists():
+            try:
+                result_data = json.loads(result_local.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                result_data = {
+                    "result": None,
+                    "error": "Failed to parse result JSON",
+                }
+        else:
+            result_data = {
+                "result": None,
+                "error": (f"Execution failed: {stderr}" if stderr else "Unknown error"),
+            }
+
+        # Step 7: Drop the staged temp files locally; the deletions propagate
+        # to the VM on the next bisync, keeping both roots from accumulating.
+        for tmp in (script_local, result_local):
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
         return {
             "result": result_data.get("result"),
