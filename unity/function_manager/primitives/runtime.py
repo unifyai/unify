@@ -116,7 +116,7 @@ def _publish_user_file_access(
 ) -> None:
     """Fire-and-forget audit publish for user-home filesystem access."""
     try:
-        from unity.events.event_bus import EVENT_BUS, Event
+        from droid.events.event_bus import EVENT_BUS, Event
 
         asyncio.get_running_loop().create_task(
             EVENT_BUS.publish(
@@ -1122,7 +1122,7 @@ class ComputerPrimitives(metaclass=SingletonABCMeta):
         coordinates; the per-link private key is fetched on demand inside the
         client so it never reaches the pod env via ``user_desktops``.
         """
-        from unity.file_manager.sync.user_sftp import UserHomeSFTP
+        from droid.file_manager.sync.user_sftp import UserHomeSFTP
 
         client = self._user_home_sftp.get(user_id)
         if client is None:

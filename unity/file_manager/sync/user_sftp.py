@@ -1,6 +1,6 @@
 """On-demand SFTP access to a user's own home directory.
 
-Distinct from :mod:`unity.file_manager.sync.manager` (continuous bisync with the
+Distinct from :mod:`droid.file_manager.sync.manager` (continuous bisync with the
 assistant's managed VM). This module pulls/pushes individual paths from a
 *user's* machine on request over the raw-TCP tunnel the device registered:
 
@@ -24,9 +24,9 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Optional
 
-from unity.common.hierarchical_logger import ICONS
-from unity.logger import LOGGER
-from unity.session_details import UserDesktopLink
+from droid.common.hierarchical_logger import ICONS
+from droid.logger import LOGGER
+from droid.session_details import UserDesktopLink
 
 # Fixed handshake contract with the device-side ``rclone serve sftp``.
 SFTP_USER = "unity"
@@ -231,8 +231,8 @@ class UserHomeSFTP:
         """
         from unify.utils import http
 
-        from unity.session_details import SESSION_DETAILS
-        from unity.settings import SETTINGS
+        from droid.session_details import SESSION_DETAILS
+        from droid.settings import SETTINGS
 
         assistant_id = SESSION_DETAILS.assistant.agent_id
         base_url = SETTINGS.ORCHESTRA_URL
