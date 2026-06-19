@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 from collections import deque
 from dataclasses import dataclass, field
@@ -52,6 +53,13 @@ from sandboxes.conversation_manager.state_snapshot import (
 )
 
 LG = logging.getLogger("conversation_manager_sandbox")
+
+_LIVEKIT_SETUP_HINT = (
+    "⚠️  Voice calls require LiveKit credentials.\n"
+    "  • Local server: run `droid voice` in a separate terminal\n"
+    "  • LiveKit Cloud: set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET in ~/.droid/droid/.env\n"
+    "    Sign up free at https://cloud.livekit.io"
+)
 
 _MEET_INTERACTION_EVENTS: dict[str, type] = {
     "assistant_screen_share_start": AssistantScreenShareStarted,
@@ -652,6 +660,8 @@ class CommandRouter:
                 return RouterResult(
                     lines=["⚠️ Already in a voice session. End it first."],
                 )
+            if not os.environ.get("LIVEKIT_URL"):
+                return RouterResult(lines=[_LIVEKIT_SETUP_HINT])
             try:
                 lines = await self.publisher.start_live_call()
                 return RouterResult(lines=lines)
@@ -665,6 +675,8 @@ class CommandRouter:
                 return RouterResult(
                     lines=["⚠️ Already in a voice session. End it first."],
                 )
+            if not os.environ.get("LIVEKIT_URL"):
+                return RouterResult(lines=[_LIVEKIT_SETUP_HINT])
             try:
                 lines = await self.publisher.start_live_meet()
                 return RouterResult(lines=lines)

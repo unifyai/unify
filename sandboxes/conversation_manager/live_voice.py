@@ -73,7 +73,13 @@ class LiveVoiceSession:
 def _require_env(name: str) -> str:
     val = os.environ.get(name, "")
     if not val:
-        raise RuntimeError(f"{name} is required for --live-voice mode.")
+        raise RuntimeError(
+            f"{name} is not set. "
+            "Voice calls and Unify Meet require a LiveKit server. "
+            "Run `droid voice` to start a local LiveKit server, or set "
+            "LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET in your .env "
+            "to use LiveKit Cloud (https://cloud.livekit.io).",
+        )
     return val
 
 
