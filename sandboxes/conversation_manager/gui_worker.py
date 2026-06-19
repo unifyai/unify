@@ -34,10 +34,6 @@ from dotenv import load_dotenv
 
 from sandboxes.utils import activate_project, configure_sandbox_logging
 
-from sandboxes.conversation_manager.agent_service_bootstrap import (
-    try_start_agent_service_direct,
-    free_agent_service_port,
-)
 from sandboxes.conversation_manager.desktop_bootstrap import (
     try_start_desktop_direct,
     try_auto_bootstrap_desktop,
@@ -809,9 +805,8 @@ async def _run_worker(*, ui_to_worker, worker_to_ui, config: dict) -> None:
         project_root=Path(__file__).resolve().parents[2],
     )
 
-    # agent-service / desktop bootstrap (best-effort) for real computer interface.
+    # Desktop container bootstrap for real computer interface.
     repo_root = Path(__file__).resolve().parents[2]
-    agent_proc = None
     desktop_container_id: Optional[str] = None
     try:
         if actor_cfg.actor_type == "codeact_real":
@@ -820,10 +815,9 @@ async def _run_worker(*, ui_to_worker, worker_to_ui, config: dict) -> None:
             container_url = (
                 getattr(args, "agent_server_url", None) or DEFAULT_AGENT_SERVER_URL
             )
-            local_url = getattr(args, "local_url", "http://localhost:3001")
             do_bootstrap = bool(getattr(args, "agent_service_bootstrap", False))
 
-            # 1) Container (desktop + web-vm)
+            # Container (desktop + web-vm) — the only computer-use path.
             if do_bootstrap:
                 res = await asyncio.to_thread(
                     try_auto_bootstrap_desktop,
@@ -858,29 +852,6 @@ async def _run_worker(*, ui_to_worker, worker_to_ui, config: dict) -> None:
                 )
             except Exception:
                 pass
-
-            # 2) Local agent-service (web mode) -- best-effort
-            try:
-                free_agent_service_port(
-                    repo_root=repo_root,
-                    agent_server_url=local_url,
-                    progress=lambda m: sender.send_lines([str(m)]),
-                )
-                local_res = await asyncio.to_thread(
-                    try_start_agent_service_direct,
-                    repo_root=repo_root,
-                    agent_server_url=local_url,
-                    progress=lambda m: sender.send_lines([str(m)]),
-                )
-                if local_res.ok and local_res.process is not None:
-                    agent_proc = local_res.process
-                    setattr(args, "_agent_service_process", agent_proc)
-                    setattr(args, "local_url", local_url)
-                    sender.send_lines([f"[local-web] {local_res.summary}"])
-                else:
-                    sender.send_lines(["[local-web] Unavailable (web mode disabled)"])
-            except Exception:
-                sender.send_lines(["[local-web] Failed to start (web mode disabled)"])
     except Exception as exc:
         sender.send_error(
             f"agent-service bootstrap failed: {type(exc).__name__}: {exc}",
@@ -1114,26 +1085,10 @@ async def _run_worker(*, ui_to_worker, worker_to_ui, config: dict) -> None:
         except Exception:
             pass
 
-        # Terminate agent-service / desktop container if we started it.
+        # Stop the desktop container if we started it.
         try:
             if desktop_container_id is not None:
                 stop_desktop_container(progress=lambda _m: None)
-            elif agent_proc is not None:
-                _terminate_process_best_effort(agent_proc)
-        except Exception:
-            pass
-
-        # Best-effort: free port after shutdown (only for web mode local agent-service).
-        try:
-            if actor_cfg.actor_type == "codeact_real" and desktop_container_id is None:
-                from droid.function_manager.primitives import DEFAULT_AGENT_SERVER_URL
-
-                free_agent_service_port(
-                    repo_root=repo_root,
-                    agent_server_url=getattr(args, "agent_server_url", None)
-                    or DEFAULT_AGENT_SERVER_URL,
-                    progress=lambda _m: None,
-                )
         except Exception:
             pass
 
