@@ -3,8 +3,10 @@ ConversationManager initialization helper for the sandbox.
 
 Starts a ConversationManager in-process with:
 - No CommsManager (inbound events are injected via the REPL event publisher)
-- SMS, email, and outbound call tools stripped from the brain's tool set
-  (these require a local gateway and provider credentials OSS users don't have)
+- send_email always stripped (OAuth token complexity makes it unsupported for OSS)
+- SMS and outbound call tools kept when a local gateway is running (i.e., when
+  ORCHESTRA_ADMIN_KEY + Twilio credentials are configured and the gateway started
+  successfully); stripped otherwise
 - send_unify_message kept (uses Pub/Sub; no gateway admin auth required)
 """
 
@@ -72,12 +74,16 @@ async def initialize_cm(
     ).actor
     await init_conv_manager(cm, actor=actor)
 
-    # Strip outbound channel tools that require a local gateway and provider
-    # credentials (Twilio, Gmail, etc.). Clearing these fields removes send_sms,
-    # make_call, and send_email from the brain's available tools and system prompt.
-    # send_unify_message is unaffected and stays available.
+    # Strip outbound channel tools based on what the gateway supports.
+    #
+    # send_email: always stripped — OAuth token lifecycle is too complex for OSS.
+    # send_sms / make_call: stripped unless the sandbox auto-started a local
+    #   gateway (args._gateway_url is set), meaning Twilio credentials and
+    #   ORCHESTRA_ADMIN_KEY are configured and the gateway is running.
+    gateway_url = getattr(args, "_gateway_url", None)
     try:
-        cm.assistant_number = ""
+        if not gateway_url:
+            cm.assistant_number = ""
         cm.assistant_email = ""
     except Exception:
         pass
