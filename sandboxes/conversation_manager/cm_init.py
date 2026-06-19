@@ -76,15 +76,17 @@ def _sync_coordinator_flag(cm) -> None:
                 # Populate user identity fields from the assistant record.  In
                 # the hosted stack these come from the CommsManager startup
                 # event; in sandbox mode we pull them here instead so the
-                # voice agent prompt and contact dict have the real user name.
-                first_name = a.get("user_first_name") or ""
-                last_name = a.get("user_last_name") or ""
-                if first_name and not getattr(cm, "user_first_name", None):
-                    cm.user_first_name = first_name
-                    LG.debug("user_first_name set from Orchestra: %s", first_name)
-                if last_name and not getattr(cm, "user_surname", None):
-                    cm.user_surname = last_name
-                    LG.debug("user_surname set from Orchestra: %s", last_name)
+                # voice agent prompt and contact dict reflect the real user.
+                _identity = {
+                    "user_first_name": (a.get("user_first_name") or ""),
+                    "user_surname": (a.get("user_last_name") or ""),
+                    "user_number": (a.get("user_phone") or ""),
+                    "user_email": (a.get("user_email") or ""),
+                }
+                for attr, value in _identity.items():
+                    if value and not getattr(cm, attr, None):
+                        setattr(cm, attr, value)
+                        LG.debug("%s set from Orchestra: %s", attr, value)
                 break
     except Exception as exc:
         LG.debug("Could not fetch assistant info from Orchestra: %s", exc)
