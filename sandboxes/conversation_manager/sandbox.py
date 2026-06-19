@@ -596,9 +596,9 @@ async def _main_async() -> None:
                 continue
             break
 
-        # Attempt to auto-start a local gateway for outbound SMS/calls.
-        # Must happen before initialize_cm so the CM's _local_comms_base_url()
-        # fallback (port 8787) resolves to a live server at first use.
+        # Attempt to auto-start the local gateway for UniLLM proxy traffic
+        # (agent-service computer use) and optional outbound SMS/calls.
+        # Must happen before initialize_cm and the desktop container bootstrap.
         _gateway_already_tracked = getattr(args, "_gateway_process", None) is not None
         if not _gateway_already_tracked:
             _gw = await asyncio.to_thread(
@@ -612,8 +612,9 @@ async def _main_async() -> None:
             else:
                 setattr(args, "_gateway_process", None)
                 setattr(args, "_gateway_url", None)
-                if _gw.summary and "not configured" not in _gw.summary:
-                    print(f"[gateway] {_gw.summary}")
+                print(f"[gateway] {_gw.summary}")
+                if getattr(selected, "actor_type", None) == "codeact_real":
+                    raise SystemExit(1)
 
         # Auto-start a local LiveKit server when LIVEKIT_URL is unset or
         # points to localhost but nothing is listening yet.  Must happen before
