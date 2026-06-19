@@ -44,6 +44,10 @@ from sandboxes.conversation_manager.gateway_bootstrap import (
     stop_gateway,
     try_start_gateway_direct,
 )
+from sandboxes.conversation_manager.livekit_bootstrap import (
+    stop_livekit,
+    try_start_livekit_direct,
+)
 from sandboxes.conversation_manager.desktop_bootstrap import (
     try_start_desktop_direct,
     try_auto_bootstrap_desktop,
@@ -64,10 +68,9 @@ LG = logging.getLogger("conversation_manager_sandbox")
 
 
 def _enable_unillm_boundary_logging() -> Path:
-    """Enable full UniLLM request/response file logging for sandbox runs."""
+    """Configure UniLLM request/response file logging for sandbox runs."""
     log_dir = Path(__file__).resolve().parents[2] / "logs" / "unillm"
     log_dir.mkdir(parents=True, exist_ok=True)
-    os.environ["UNILLM_TERMINAL_LOG"] = "true"
     os.environ["UNILLM_LOG_DIR"] = str(log_dir)
     try:
         from unillm.logger import configure_log_dir as _configure_log_dir
@@ -335,12 +338,13 @@ async def _main_async() -> None:
     parser.add_argument(
         "--agent-service-bootstrap",
         dest="agent_service_bootstrap",
-        default="guide",
+        default="auto",
         choices=["off", "guide", "auto"],
         help=(
             "Mode 3 helper: "
-            "'guide' prints step-by-step setup instructions if agent-service is missing; "
-            "'auto' also tries to install/build/start agent-service automatically."
+            "'auto' (default) proactively installs/starts the agent-service; "
+            "'guide' prints setup instructions if it is missing; "
+            "'off' disables all agent-service management."
         ),
     )
     parser.add_argument(
@@ -663,6 +667,24 @@ async def _main_async() -> None:
                 if _gw.summary and "not configured" not in _gw.summary:
                     print(f"[gateway] {_gw.summary}")
 
+        # Auto-start a local LiveKit server when LIVEKIT_URL is unset or
+        # points to localhost but nothing is listening yet.  Must happen before
+        # initialize_cm so call_manager.start_persistent_worker() picks up the
+        # env vars set by the bootstrap when it reads os.environ at runtime.
+        _lk_already_tracked = getattr(args, "_livekit_process", None) is not None
+        if not _lk_already_tracked:
+            _lk = await asyncio.to_thread(
+                try_start_livekit_direct,
+                repo_root=project_root,
+                progress=(lambda m: print(m)),
+            )
+            if _lk.ok:
+                setattr(args, "_livekit_process", _lk.process)
+            else:
+                setattr(args, "_livekit_process", None)
+                if _lk.summary and "non-local URL" not in _lk.summary:
+                    print(f"[livekit] {_lk.summary}")
+
         cm = await initialize_cm(args=args)
         setattr(args, "_cm", cm)
 
@@ -861,6 +883,14 @@ async def _main_async() -> None:
                     await asyncio.to_thread(stop_gateway, gw_proc)
                     setattr(args, "_gateway_process", None)
                     setattr(args, "_gateway_url", None)
+            except Exception:
+                pass
+            # If we auto-started a local LiveKit server, stop it on exit.
+            try:
+                lk_proc = getattr(args, "_livekit_process", None)
+                if lk_proc is not None:
+                    await asyncio.to_thread(stop_livekit, lk_proc)
+                    setattr(args, "_livekit_process", None)
             except Exception:
                 pass
             # Best-effort: ensure the configured port isn't left bound by a sandbox-started

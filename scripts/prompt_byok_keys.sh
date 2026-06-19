@@ -378,6 +378,14 @@ prompt_tts_provider() {
   ensure_default_voice_id
 }
 
+ensure_sdk_logging_defaults() {
+  # Suppress SDK request/response terminal spam — these are frozen at Python
+  # import time from the .env file, which load_dotenv reads before SDK modules
+  # are imported. File-based traces (logs/unillm/) are still written normally.
+  upsert_env "UNIFY_TERMINAL_LOG" "false"
+  upsert_env "UNILLM_TERMINAL_LOG" "false"
+}
+
 import_shell_env_keys() {
   local key val
   for key in OPENAI_API_KEY ANTHROPIC_API_KEY DEEPSEEK_API_KEY DEEPGRAM_API_KEY \
@@ -471,6 +479,7 @@ prompt_outbound_comms() {
 
 run_non_interactive_byok() {
   import_shell_env_keys
+  ensure_sdk_logging_defaults
   prompt_llm_key
   ensure_embedding_search_key
   ensure_default_chat_model
@@ -524,6 +533,7 @@ main() {
   echo ""
 
   import_shell_env_keys
+  ensure_sdk_logging_defaults
   prompt_llm_key
   ensure_embedding_search_key
   ensure_default_chat_model
