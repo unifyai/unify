@@ -217,8 +217,7 @@ class TestCoordinatorPrompt:
 
         assert "My identity" in coordinator_prompt
         assert (
-            "I am Twin, Alice Smith's personal, private assistant"
-            in coordinator_prompt
+            "I am Twin, Alice Smith's personal, private assistant" in coordinator_prompt
         )
         assert (
             "Twin is Alice Smith's personal, private assistant"
