@@ -44,7 +44,7 @@ class BaseActiveTask(SteerableToolHandle, ABC):
         ----------
         cancel : bool
             When True, abandon the task (mark as cancelled). When False, defer and
-            reinstate it back into its prior queue/schedule position where possible.
+            reinstate it back onto its schedule where possible.
         reason : str | None
             Optional human‑readable reason for logging/auditing.
         """
@@ -56,7 +56,7 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
 
     Managers expose three user‑facing methods:
     • `ask` – answer questions about the current task list (read‑only)
-    • `update` – create, modify, delete, or reorder tasks and queues
+    • `update` – create, modify, delete, or reschedule tasks
     • `execute` – start task execution and return a live steerable handle
 
     Implementations choose their storage and execution strategy; this base
@@ -102,9 +102,9 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
         Purpose
         -------
         Use this method to locate and inspect tasks that already exist in the
-        table: find task ids, check statuses, queue positions, schedules,
-        deadlines, triggers, or summarise/compare existing entries. This call
-        must never create, modify, delete or reorder tasks.
+        table: find task ids, check statuses, schedules, deadlines, triggers,
+        or summarise/compare existing entries. This call must never create,
+        modify, or delete tasks.
 
         Clarifications
         --------------
@@ -147,7 +147,7 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
         _return_reasoning_steps : bool, default ``False``
             When *True*, :pymeth:`SteerableToolHandle.result` returns
             ``(answer, messages)`` – the first element is the assistant's
-            reply, the second the hidden queue‑of‑thought.
+            reply, the second the internal reasoning steps.
         _log_tool_steps : bool, default ``True``
             If *True* the task‑scheduler logs every tool invocation to the
             server‑side logger.
@@ -207,34 +207,16 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
         Important execution boundary
         ----------------------------
         This method is not intended to be used by `execute` to rewrite
-        schedules/ordering/start_at purely to begin execution. The `execute`
-        flow determines the correct execution scope (isolate vs queue) and
-        starts the task via an execution tool without mutating scheduling.
+        schedules or `start_at` purely to begin execution. `execute` starts
+        the task via an execution tool without mutating scheduling.
         Only use `update` within `execute` when the user explicitly asked to
         create a missing task or to change task fields before running.
 
         This method is not intended to be used to materialize transient
         conversational sessions. It should be used to create or modify durable
-        Tasks and their scheduling/ordering.
+        Tasks and their scheduling fields.
 
-        Natural-language ordering semantics
-        ----------------------------------
-        When the user expresses relative ordering constraints such as “A after B” or “A before B”,
-        interpret this as a constraint on the runnable queue ordering between those tasks.
-
-        Unless the user explicitly indicates that intermediate tasks are acceptable (e.g., “sometime
-        after”, “later”, “not necessarily immediately”), treat “after/before” as an **adjacency**
-        constraint: A should be placed immediately after/before B in the runnable queue.
-
-        When enforcing such constraints, prefer minimal change: keep the relative order of other tasks
-        stable unless moving them is required to satisfy the user’s expressed constraints.
-
-        Please always be explicit about the *ordering* of tasks.
-        If the order *doesn't* matter please say so explicitly.
-        If the order *does* matter, and the tasks are given in the correct number order,
-        please also say so. You must always be explicit.
-
-        Please also always be explicit about whether a task is *due* by a certain `deadline`,
+        Be explicit about whether a task is *due* by a certain `deadline`,
         or whether the task should `start_at` a certain date and time.
         These both represent different things.
         Tasks can have one, both, or neither of these specified.
@@ -275,7 +257,6 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
         *,
         trigger_attempt_token: Optional[str] = None,
         response_format: Optional[Type[BaseModel]] = None,
-        isolated: Optional[bool] = None,
         _parent_chat_context: Optional[List[Dict[str, Any]]] = None,
         _clarification_up_q: Optional[asyncio.Queue[str]] = None,
         _clarification_down_q: Optional[asyncio.Queue[str]] = None,
@@ -298,9 +279,6 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
         response_format : Type[BaseModel] | None, default ``None``
             Optional Pydantic model to request a structured result. When provided,
             the final result should conform to this schema.
-        isolated : bool | None, default ``None``
-            When ``True``, execute the task in isolation (detach from any queue).
-            When ``False`` or ``None``, preserve queue/chained semantics.
 
         _parent_chat_context, _clarification_up_q, _clarification_down_q
             Optional execution context and clarification channels propagated to the
@@ -319,18 +297,13 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
         Returns
         -------
         SteerableToolHandle
-            Handle for the running task or queue head that supports pause, resume,
+            Handle for the running task that supports pause, resume,
             interject, stop and result().
-
-        Implementation note
-        -------------------
-        Only one task may be active at a time. Attempting to start another task
-        while one is already running will raise ``RuntimeError``.
 
         Raises
         ------
         RuntimeError
-            If another task is already active.
+            If this task is already active with no live handle.
         ValueError
             When ``task_id`` cannot be found or is not runnable.
         """

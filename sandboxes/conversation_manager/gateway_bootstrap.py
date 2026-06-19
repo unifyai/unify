@@ -1,9 +1,9 @@
 """
 Local gateway auto-start helper for the ConversationManager sandbox.
 
-Starts a local ``droid.gateway`` process when outbound comms credentials
-(Twilio + ORCHESTRA_ADMIN_KEY) are configured, enabling the brain's
-``send_sms`` and ``make_call`` tools to reach real Twilio infrastructure.
+Starts a local ``droid.gateway`` process on port 8787 for:
+- UniLLM proxy traffic used by agent-service / Magnitude computer use
+- Outbound SMS/calls when Twilio credentials are also configured
 
 Only used by the sandbox; not part of the production gateway or CM runtime.
 """
@@ -54,6 +54,11 @@ def outbound_comms_configured() -> bool:
     return all(os.environ.get(v) for v in _OUTBOUND_REQUIRED_VARS)
 
 
+def gateway_prerequisites_met() -> bool:
+    """Return True when the local gateway can authenticate UniLLM proxy requests."""
+    return bool(os.environ.get("UNIFY_KEY"))
+
+
 def _port_is_free(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
@@ -80,24 +85,20 @@ def try_start_gateway_direct(
     timeout_s: float = _GATEWAY_STARTUP_TIMEOUT_S,
 ) -> GatewayBootstrapResult:
     """
-    Start a local droid.gateway subprocess for outbound SMS/call support.
+    Start a local droid.gateway subprocess on port 8787.
 
-    The gateway is always started on port 8787, which is the CM's default
-    ``LOCAL_COMMS_PORT`` fallback.  This means the CM resolves the gateway URL
-    automatically via ``_local_comms_base_url()`` with no extra env-var wiring.
+    The gateway exposes ``/unillm`` for agent-service computer use and, when
+    Twilio credentials are configured, outbound SMS/call routes as well.
 
     Returns ok=True with process=None if the gateway is already healthy on that
     port (e.g. from a previous sandbox run).
     """
     _log = progress or (lambda _m: None)
 
-    if not outbound_comms_configured():
+    if not gateway_prerequisites_met():
         return GatewayBootstrapResult(
             ok=False,
-            summary=(
-                "Outbound comms not configured. "
-                f"Set {', '.join(_OUTBOUND_REQUIRED_VARS)} to enable SMS/calls."
-            ),
+            summary="UNIFY_KEY is not set (required for local gateway UniLLM proxy)",
         )
 
     port = _GATEWAY_PORT
@@ -168,9 +169,12 @@ def try_start_gateway_direct(
             )
         if _health_check(url):
             _log(f"[gateway] Ready on port {port}.")
+            summary = f"Gateway started on port {port}."
+            if not outbound_comms_configured():
+                summary += " (UniLLM proxy only; SMS/calls need Twilio credentials)"
             return GatewayBootstrapResult(
                 ok=True,
-                summary=f"Gateway started on port {port}.",
+                summary=summary,
                 process=process,
                 port=port,
                 url=url,

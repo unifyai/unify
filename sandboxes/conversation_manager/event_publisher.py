@@ -38,8 +38,39 @@ if TYPE_CHECKING:
     from sandboxes.conversation_manager.live_voice import LiveVoiceSession
 
 
-def get_simulated_user_contact() -> dict:
-    """Build a simulated boss/user contact dict for sandbox events."""
+def get_user_contact(cm=None) -> dict:
+    """Build a boss/user contact dict for sandbox events.
+
+    When a ConversationManager instance is supplied the real user info loaded
+    from Orchestra is used (name, number, email).  Falls back to env-var
+    overrides and finally to neutral placeholder values so the sandbox always
+    has a valid contact dict even before Orchestra data is available.
+    """
+    if cm is not None:
+        first_name = getattr(cm, "user_first_name", None) or os.getenv(
+            "USER_FIRST_NAME",
+            "",
+        )
+        surname = getattr(cm, "user_surname", None) or os.getenv("USER_SURNAME", "")
+        phone = getattr(cm, "user_number", None) or os.getenv(
+            "USER_NUMBER",
+            "+15550001234",
+        )
+        email = getattr(cm, "user_email", None) or os.getenv(
+            "USER_EMAIL",
+            "user@example.com",
+        )
+        user_id = getattr(cm, "user_id", None)
+        boss_contact_id = getattr(cm, "boss_contact_id", None)
+        return {
+            "contact_id": boss_contact_id or 1,
+            "user_id": user_id,
+            "first_name": first_name or "User",
+            "surname": surname,
+            "phone_number": phone,
+            "email_address": email,
+            "is_system": True,
+        }
     return {
         "contact_id": 1,
         "first_name": os.getenv("USER_FIRST_NAME", "User"),
@@ -62,7 +93,7 @@ class EventPublisher:
             raise ValueError(
                 f"Event {type(event).__name__} has no topic ClassVar set",
             )
-        contact = get_simulated_user_contact()
+        contact = get_user_contact()
         try:
             self.cm.contact_index.set_fallback_contacts([contact])
         except Exception:
@@ -75,7 +106,7 @@ class EventPublisher:
         message: str,
         attachments: list[Path] | None = None,
     ) -> None:
-        contact = get_simulated_user_contact()
+        contact = get_user_contact()
         attachment_meta: list[dict] = []
         if attachments:
             downloads_dir = Path("Downloads")
@@ -104,48 +135,48 @@ class EventPublisher:
         )
 
     async def publish_sms(self, message: str) -> None:
-        contact = get_simulated_user_contact()
+        contact = get_user_contact()
         await self.publish_event(SMSReceived(contact=contact, content=message))
 
     async def publish_email(self, subject: str, body: str) -> None:
-        contact = get_simulated_user_contact()
+        contact = get_user_contact()
         await self.publish_event(
             EmailReceived(contact=contact, subject=subject, body=body),
         )
 
     async def publish_call_start(self) -> None:
         self.state.in_call = True
-        contact = get_simulated_user_contact()
+        contact = get_user_contact()
         await self.publish_event(PhoneCallStarted(contact=contact))
 
     async def publish_phone_utterance(self, text: str) -> None:
-        contact = get_simulated_user_contact()
+        contact = get_user_contact()
         await self.publish_event(
             InboundPhoneUtterance(contact=contact, content=text),
         )
 
     async def publish_call_end(self) -> None:
         self.state.in_call = False
-        contact = get_simulated_user_contact()
+        contact = get_user_contact()
         await self.publish_event(PhoneCallEnded(contact=contact))
 
     async def publish_meet_start(self) -> None:
         self.state.in_meet = True
-        contact = get_simulated_user_contact()
+        contact = get_user_contact()
         await self.publish_event(
             UnifyMeetReceived(contact=contact, room_name="sandbox-meet"),
         )
         await self.publish_event(UnifyMeetStarted(contact=contact))
 
     async def publish_meet_utterance(self, text: str) -> None:
-        contact = get_simulated_user_contact()
+        contact = get_user_contact()
         await self.publish_event(
             InboundUnifyMeetUtterance(contact=contact, content=text),
         )
 
     async def publish_meet_end(self) -> None:
         self.state.in_meet = False
-        contact = get_simulated_user_contact()
+        contact = get_user_contact()
         await self.publish_event(UnifyMeetEnded(contact=contact))
 
     async def publish_meet_interaction_event(
@@ -166,8 +197,8 @@ class EventPublisher:
         """
         from sandboxes.conversation_manager.live_voice import start_session
 
-        contact = get_simulated_user_contact()
-        boss = get_simulated_user_contact()
+        contact = get_user_contact(self.cm)
+        boss = get_user_contact(self.cm)
         try:
             self.cm.contact_index.set_fallback_contacts([contact])
         except Exception:

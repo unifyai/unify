@@ -578,7 +578,6 @@ class SimulatedTaskScheduler(BaseTaskScheduler):
         *,
         trigger_attempt_token: Optional[str] = None,
         response_format: Optional[Type[BaseModel]] = None,
-        isolated: Optional[bool] = None,
         _parent_chat_context: list[dict] | None = None,
         _requests_clarification: bool = False,
         _clarification_up_q: asyncio.Queue[str] | None = None,

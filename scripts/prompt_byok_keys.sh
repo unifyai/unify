@@ -317,6 +317,8 @@ prompt_research_and_computer() {
   echo ""
 }
 
+_ELEVENLABS_DEFAULT_VOICE_ID="iP95p4xoKVk53GoZ742B"
+
 ensure_voice_provider_from_keys() {
   if has_env_value VOICE_PROVIDER; then
     return 0
@@ -324,9 +326,22 @@ ensure_voice_provider_from_keys() {
   if has_env_value ELEVEN_API_KEY; then
     upsert_env "VOICE_PROVIDER" "elevenlabs"
     log_success "Set VOICE_PROVIDER=elevenlabs"
+    if ! has_env_value VOICE_ID; then
+      upsert_env "VOICE_ID" "$_ELEVENLABS_DEFAULT_VOICE_ID"
+      log_success "Set VOICE_ID=$_ELEVENLABS_DEFAULT_VOICE_ID (default ElevenLabs voice)"
+    fi
   elif has_env_value CARTESIA_API_KEY; then
     upsert_env "VOICE_PROVIDER" "cartesia"
     log_success "Set VOICE_PROVIDER=cartesia"
+  fi
+}
+
+ensure_default_voice_id() {
+  local provider=""
+  provider="$(read_env_value VOICE_PROVIDER || true)"
+  if [[ "$provider" == "elevenlabs" ]] && ! has_env_value VOICE_ID; then
+    upsert_env "VOICE_ID" "$_ELEVENLABS_DEFAULT_VOICE_ID"
+    log_success "Set VOICE_ID=$_ELEVENLABS_DEFAULT_VOICE_ID (default ElevenLabs voice)"
   fi
 }
 
@@ -360,12 +375,35 @@ prompt_tts_provider() {
   esac
 
   ensure_voice_provider_from_keys
+  ensure_default_voice_id
+}
+
+ensure_sdk_logging_defaults() {
+  # Suppress SDK request/response terminal spam — these are frozen at Python
+  # import time from the .env file, which load_dotenv reads before SDK modules
+  # are imported. File-based traces (logs/unillm/) are still written normally.
+  upsert_env "UNIFY_TERMINAL_LOG" "false"
+  upsert_env "UNILLM_TERMINAL_LOG" "false"
+}
+
+ensure_local_comms_defaults() {
+  # The sandbox auto-starts droid.gateway on this port when outbound Twilio
+  # credentials are present. Persist the URLs so the desktop container's
+  # agent-service (supervisord) and other tooling read a single source of truth.
+  # localhost is rewritten to host.docker.internal when passed into Docker.
+  local url="http://localhost:8787"
+  if ! has_env_value DROID_GATEWAY_URL; then
+    upsert_env "DROID_GATEWAY_URL" "$url"
+  fi
+  if ! has_env_value DROID_COMMS_URL; then
+    upsert_env "DROID_COMMS_URL" "$url"
+  fi
 }
 
 import_shell_env_keys() {
   local key val
   for key in OPENAI_API_KEY ANTHROPIC_API_KEY DEEPSEEK_API_KEY DEEPGRAM_API_KEY \
-    CARTESIA_API_KEY ELEVEN_API_KEY VOICE_PROVIDER UNIFY_MODEL \
+    CARTESIA_API_KEY ELEVEN_API_KEY VOICE_PROVIDER VOICE_ID UNIFY_MODEL \
     DROID_WEB_TAVILY_API_KEY ANTICAPTCHA_KEY \
     TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN ASSISTANT_NUMBER ORCHESTRA_ADMIN_KEY; do
     val="${!key:-}"
@@ -455,6 +493,8 @@ prompt_outbound_comms() {
 
 run_non_interactive_byok() {
   import_shell_env_keys
+  ensure_sdk_logging_defaults
+  ensure_local_comms_defaults
   prompt_llm_key
   ensure_embedding_search_key
   ensure_default_chat_model
@@ -490,6 +530,8 @@ main() {
 
   if [[ "${DROID_BYOK_FORCE:-0}" != "1" ]] && has_env_value DROID_BYOK_CONFIGURED; then
     import_shell_env_keys
+    ensure_sdk_logging_defaults
+    ensure_local_comms_defaults
     ensure_default_chat_model
     sync_anticaptcha_keys
     log_success "BYOK already configured in $ENV_FILE — skipping wizard"
@@ -508,6 +550,8 @@ main() {
   echo ""
 
   import_shell_env_keys
+  ensure_sdk_logging_defaults
+  ensure_local_comms_defaults
   prompt_llm_key
   ensure_embedding_search_key
   ensure_default_chat_model

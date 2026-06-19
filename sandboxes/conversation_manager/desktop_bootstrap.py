@@ -2,8 +2,7 @@
 ConversationManager sandbox support for the Docker-based virtual desktop.
 
 The Docker container provides the virtual desktop (TigerVNC + XFCE4 + noVNC)
-plus the Magnitude agent-service for desktop and web-vm sessions.  The
-container is always started; a separate local agent-service handles web mode.
+plus the Magnitude agent-service for desktop and web-vm sessions.
 
 This module mirrors the pattern in ``agent_service_bootstrap.py``:
 - Structured result types with progress callbacks
@@ -14,7 +13,7 @@ Design notes
 ------------
 - These helpers are intentionally conservative and UI-agnostic.
 - They return structured results; callers decide how to display progress and errors.
-- Container spawning is best-effort and should never be the only supported path.
+- The desktop container is the only supported computer-use path in the sandbox.
 """
 
 from __future__ import annotations
@@ -31,6 +30,28 @@ ProgressCallback = Callable[[str], None]
 
 DESKTOP_IMAGE_TAG = "droid-desktop"
 DESKTOP_CONTAINER_NAME = "droid-desktop-sandbox"
+
+# Env vars referenced by deploy/desktop/supervisord.conf via %(ENV_X)s interpolation.
+# These must be passed as explicit ``docker run -e KEY=VALUE`` flags — supervisord
+# reads os.environ at startup and does not reliably expand vars supplied only via
+# ``--env-file`` on all platforms.
+CONTAINER_ENV_KEYS: tuple[str, ...] = (
+    "UNIFY_KEY",
+    "ORCHESTRA_URL",
+    "DROID_GATEWAY_URL",
+    "DROID_COMMS_URL",
+    "UNIFY_MODEL",
+    "ANTHROPIC_API_KEY",
+)
+
+# Vars supervisord interpolates in deploy/desktop/supervisord.conf — all required.
+_SUPERVISORD_ENV_KEYS: tuple[str, ...] = (
+    "UNIFY_KEY",
+    "ORCHESTRA_URL",
+    "DROID_GATEWAY_URL",
+    "DROID_COMMS_URL",
+    "UNIFY_MODEL",
+)
 
 
 def _desktop_novnc_url() -> str:
@@ -318,9 +339,13 @@ def _wait_for_container_ready(
     while time.time() < deadline:
         # Check if the container is still running.
         if _find_running_container(container_name) is None:
+            logs = _container_startup_logs(container_name)
+            summary = "Desktop container exited during startup"
+            if logs:
+                summary = f"{summary}\n{logs}"
             return DesktopBootstrapResult(
                 ok=False,
-                summary="Desktop container exited during startup",
+                summary=summary,
                 container_id=None,
             )
         if _validate_agent_service(
@@ -341,16 +366,9 @@ def _wait_for_container_ready(
     )
 
 
-def _remap_localhost_env_overrides(env_file: Path) -> list[str]:
-    """
-    Parse the .env file and return ``-e KEY=VALUE`` args for any env vars whose
-    values reference ``localhost``, rewritten to use ``host.docker.internal``.
-
-    Inside Docker on macOS/Windows, ``localhost`` resolves to the container's own
-    loopback — not the host machine. Docker's ``host.docker.internal`` hostname
-    provides the correct route to host-side services (e.g. Orchestra).
-    """
-    overrides: list[str] = []
+def _parse_env_file(env_file: Path) -> dict[str, str]:
+    """Parse a dotenv-style file into a key/value mapping."""
+    values: dict[str, str] = {}
     try:
         for line in env_file.read_text().splitlines():
             line = line.strip()
@@ -360,17 +378,52 @@ def _remap_localhost_env_overrides(env_file: Path) -> list[str]:
                 continue
             key, value = line.split("=", 1)
             key, value = key.strip(), value.strip()
-            # Strip surrounding quotes that Python-style .env files may use.
             if (value.startswith('"') and value.endswith('"')) or (
                 value.startswith("'") and value.endswith("'")
             ):
                 value = value[1:-1]
-            if "localhost" in value:
-                remapped = value.replace("localhost", "host.docker.internal")
-                overrides.extend(["-e", f"{key}={remapped}"])
+            values[key] = value
     except Exception:
         pass
-    return overrides
+    return values
+
+
+def _container_env_values(*, repo_root: Path) -> dict[str, str]:
+    """Resolve container env vars from the process environment and repo ``.env``."""
+    file_values = _parse_env_file(repo_root / ".env")
+    resolved: dict[str, str] = {}
+    for key in CONTAINER_ENV_KEYS:
+        value = os.environ.get(key) or file_values.get(key) or ""
+        value = value.strip()
+        if not value:
+            continue
+        if "localhost" in value:
+            value = value.replace("localhost", "host.docker.internal")
+        resolved[key] = value
+    return resolved
+
+
+def _docker_env_args(*, repo_root: Path) -> list[str]:
+    """Return ``docker run`` ``-e KEY=VALUE`` args for the desktop container."""
+    args: list[str] = []
+    for key, value in _container_env_values(repo_root=repo_root).items():
+        args.extend(["-e", f"{key}={value}"])
+    return args
+
+
+def _container_startup_logs(container_name: str, *, tail: int = 40) -> str:
+    """Return recent container logs for startup failure diagnostics."""
+    try:
+        result = subprocess.run(
+            ["docker", "logs", "--tail", str(tail), container_name],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        output = (result.stdout or "") + (result.stderr or "")
+        return output.strip()
+    except Exception:
+        return ""
 
 
 def _start_container(
@@ -383,11 +436,16 @@ def _start_container(
     """Run the desktop container in detached mode. Returns container ID or None."""
     progress = progress or (lambda _m: None)
 
-    env_file = repo_root / ".env"
-    if not env_file.exists():
+    env_values = _container_env_values(repo_root=repo_root)
+    missing = [key for key in _SUPERVISORD_ENV_KEYS if not env_values.get(key)]
+    if missing:
         progress(
-            "[desktop] Warning: no .env file found; container may lack required keys",
+            "[desktop] Missing required env for desktop container: "
+            f"{', '.join(missing)}. "
+            "Run the install wizard or add them to .env "
+            "(DROID_GATEWAY_URL/DROID_COMMS_URL default to http://localhost:8787).",
         )
+        return None
 
     cmd = [
         "docker",
@@ -405,10 +463,7 @@ def _start_container(
         # Allow the container to reach host-side services (e.g. Orchestra).
         "--add-host=host.docker.internal:host-gateway",
     ]
-    if env_file.exists():
-        cmd.extend(["--env-file", str(env_file)])
-        # Override any env vars that reference localhost so they route to the host.
-        cmd.extend(_remap_localhost_env_overrides(env_file))
+    cmd.extend(_docker_env_args(repo_root=repo_root))
     cmd.append(tag)
 
     progress(f"[desktop] Starting container '{name}' from image '{tag}'...")
@@ -592,6 +647,37 @@ def try_auto_bootstrap_desktop(
         container_name=DESKTOP_CONTAINER_NAME,
         agent_server_url=agent_server_url,
         unify_key=unify_key,
+        timeout_s=timeout_s,
+    )
+
+
+def bootstrap_desktop_container(
+    *,
+    repo_root: Path,
+    agent_server_url: str,
+    progress: Optional[ProgressCallback] = None,
+    timeout_s: float = 90.0,
+) -> DesktopBootstrapResult:
+    """
+    Start the desktop container, building the Docker image when needed.
+
+    Tries a direct start first; on failure, runs the full auto-bootstrap path.
+    """
+    progress = progress or (lambda _m: None)
+    direct = try_start_desktop_direct(
+        repo_root=repo_root,
+        agent_server_url=agent_server_url,
+        progress=progress,
+        timeout_s=timeout_s,
+    )
+    if direct.ok:
+        return direct
+    progress(f"[desktop] {direct.summary}")
+    progress("[desktop] Attempting full bootstrap (build image if needed)...")
+    return try_auto_bootstrap_desktop(
+        repo_root=repo_root,
+        agent_server_url=agent_server_url,
+        progress=progress,
         timeout_s=timeout_s,
     )
 

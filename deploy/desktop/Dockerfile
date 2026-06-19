@@ -61,10 +61,15 @@ RUN npm ci
 
 # Install browser runtimes using magnitude-core's patchright (Playwright fork)
 # so the browser build matches what magnitude-core expects at runtime.
-RUN cd /app/magnitude/packages/magnitude-core && npx patchright install --with-deps chromium
+# Install into unityuser-accessible cache — symlinking /root/.cache breaks because
+# agent-service runs as unityuser and cannot traverse /root/.cache (mode 700).
+ENV PLAYWRIGHT_BROWSERS_PATH=/Droid/.cache/ms-playwright
+RUN mkdir -p /Droid/.cache/ms-playwright && \
+    cd /app/magnitude/packages/magnitude-core && npx patchright install --with-deps chromium && \
+    chown -R unityuser:unityuser /Droid/.cache/ms-playwright
 
 # Configure Chromium as default browser so GUI apps and XFCE can find it
-RUN CHROME_PATH=$(find /root/.cache/ms-playwright -name "chrome" -type f -executable 2>/dev/null | head -1) && \
+RUN CHROME_PATH=$(find /Droid/.cache/ms-playwright -name "chrome" -type f -executable 2>/dev/null | head -1) && \
     printf '#!/bin/bash\nexec "%s" --no-sandbox "$@"\n' "$CHROME_PATH" > /usr/local/bin/chromium-browser && \
     chmod +x /usr/local/bin/chromium-browser && \
     printf '[Desktop Entry]\nVersion=1.0\nName=Chromium Web Browser\nExec=/usr/local/bin/chromium-browser %%U\nTerminal=false\nType=Application\nIcon=web-browser\nCategories=Network;WebBrowser;\nMimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;\nStartupNotify=true\n' \
@@ -99,9 +104,7 @@ RUN rm -f /etc/xdg/autostart/xfce4-screensaver.desktop /etc/xdg/autostart/xscree
 WORKDIR /app
 
 # Prepare supervisor and magnitude log directories
-RUN mkdir -p /var/log/supervisor /var/log/magnitude && \
-    ln -sfn /root/.cache/ms-playwright /Droid/.cache/ms-playwright && \
-    chown -h unityuser:unityuser /Droid/.cache/ms-playwright
+RUN mkdir -p /var/log/supervisor /var/log/magnitude
 
 # Install helper tools
 COPY scripts/sandbox-dpkg .

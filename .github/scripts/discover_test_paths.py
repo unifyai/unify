@@ -60,24 +60,15 @@ SPLIT_DIRS: dict[str, list[list[str]]] = {
         # parametrized into many tens of LLM-eval cases). Lives
         # alone; verified PASSING after the first split landed.
         ["test_execute.py"],
-        # Group B1 — test_active_queue.py (20 funcs, also
-        # parametrized). Split out from test_active_task because the
-        # combined Group B was hitting ~90min walls; isolating
-        # test_active_queue gives each half its own 130min budget.
-        ["test_active_queue.py"],
-        # Group B2 — test_active_task.py (9 funcs).
-        ["test_active_task.py"],
-        # Group C — the remaining smaller files (~50 LLM calls
+        # Group B — the remaining smaller files (~50 LLM calls
         # combined, comfortable for one job).
         [
-            "test_all_ctx.py",
             "test_ask.py",
             "test_cancel.py",
             "test_contexts.py",
             "test_creation_deletion.py",
             "test_embedding.py",
             "test_event_logging.py",
-            "test_failure_recovery.py",
             "test_foreign_keys.py",
             "test_info.py",
             "test_integration_contacts.py",

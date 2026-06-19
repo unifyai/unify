@@ -11,6 +11,5 @@ class ActivatedBy(StrEnum):
     """
 
     schedule = "schedule"  # start_at reached (one-off or recurring)
-    queue = "queue"  # previous task completed; next in queue activated
     trigger = "trigger"  # inbound trigger event occurred
     explicit = "explicit"  # user explicitly requested immediate start

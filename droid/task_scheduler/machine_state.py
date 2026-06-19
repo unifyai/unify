@@ -59,7 +59,6 @@ _ACTIVATION_QUERY_FIELDS = [
     "trigger_medium",
     "trigger_from_contact_ids",
     "trigger_omit_contact_ids",
-    "interrupt",
     "trigger_recurring",
     "entrypoint",
     "repeat",
@@ -113,7 +112,6 @@ class TaskActivationSnapshot:
     trigger_medium: str | None = None
     trigger_from_contact_ids: list[int] = field(default_factory=list)
     trigger_omit_contact_ids: list[int] = field(default_factory=list)
-    interrupt: bool = False
     trigger_recurring: bool = False
     entrypoint: int | None = None
     repeat: list[Any] | None = None
@@ -879,7 +877,6 @@ def _row_to_activation(row: Any) -> TaskActivationSnapshot | None:
         trigger_omit_contact_ids=_coerce_int_list(
             entries.get("trigger_omit_contact_ids"),
         ),
-        interrupt=bool(entries.get("interrupt", False)),
         trigger_recurring=bool(entries.get("trigger_recurring", False)),
         entrypoint=_coerce_int(entries.get("entrypoint")),
         repeat=_coerce_list(entries.get("repeat")),

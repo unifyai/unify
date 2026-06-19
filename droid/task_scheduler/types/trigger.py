@@ -28,13 +28,6 @@ class Trigger(BaseModel):
         default=None,
         description="Explicitly ignore these contacts (overrides *from_contact_ids*)",
     )
-    interrupt: bool = Field(
-        default=False,
-        description=(
-            "If **True** an on-going task is *pre-empted* and queued behind "
-            "this one; otherwise the caller/writer is put on hold."
-        ),
-    )
     recurring: bool = Field(
         default=False,
         description=(

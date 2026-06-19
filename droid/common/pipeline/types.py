@@ -241,10 +241,28 @@ class DmBinding(IngestBinding):
     Used when the caller wants raw ``DataManager`` ingestion into a
     specific context while still authenticating as a concrete
     assistant. No ``FileRecords`` entry is created in this mode.
+
+    ``target_context`` and ``destination`` are two orthogonal axes:
+
+    * ``target_context`` is *which* context/table path the data lands in
+      (e.g. ``"HomeIQ/WirralHousing/v2_2/Purchasing/PurchaseOrderLines"``).
+    * ``destination`` is *which root/scope* that path is rooted under.
+      ``None`` (or ``"personal"``) routes to the dispatching assistant's
+      personal ``Data`` root (``{user}/{assistant}/Data/<target_context>``);
+      ``"team:<id>"`` routes to the shared team ``Data`` root
+      (``Teams/<id>/Data/<target_context>``) that every member assistant
+      can read. The ingest worker validates membership before honouring a
+      team destination.
+
+    They compose: the same ``target_context`` lands under either root
+    depending solely on ``destination``. ``destination`` matches the
+    platform-wide ``personal`` / ``team:<id>`` vocabulary used elsewhere
+    for shared-scope routing.
     """
 
     target_context: str
     create_table_prefix: str = ""
+    destination: str | None = None
 
 
 # ---------------------------------------------------------------------------
