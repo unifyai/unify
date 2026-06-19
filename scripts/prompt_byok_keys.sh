@@ -386,6 +386,20 @@ ensure_sdk_logging_defaults() {
   upsert_env "UNILLM_TERMINAL_LOG" "false"
 }
 
+ensure_local_comms_defaults() {
+  # The sandbox auto-starts droid.gateway on this port when outbound Twilio
+  # credentials are present. Persist the URLs so the desktop container's
+  # agent-service (supervisord) and other tooling read a single source of truth.
+  # localhost is rewritten to host.docker.internal when passed into Docker.
+  local url="http://localhost:8787"
+  if ! has_env_value DROID_GATEWAY_URL; then
+    upsert_env "DROID_GATEWAY_URL" "$url"
+  fi
+  if ! has_env_value DROID_COMMS_URL; then
+    upsert_env "DROID_COMMS_URL" "$url"
+  fi
+}
+
 import_shell_env_keys() {
   local key val
   for key in OPENAI_API_KEY ANTHROPIC_API_KEY DEEPSEEK_API_KEY DEEPGRAM_API_KEY \
@@ -480,6 +494,7 @@ prompt_outbound_comms() {
 run_non_interactive_byok() {
   import_shell_env_keys
   ensure_sdk_logging_defaults
+  ensure_local_comms_defaults
   prompt_llm_key
   ensure_embedding_search_key
   ensure_default_chat_model
@@ -515,6 +530,8 @@ main() {
 
   if [[ "${DROID_BYOK_FORCE:-0}" != "1" ]] && has_env_value DROID_BYOK_CONFIGURED; then
     import_shell_env_keys
+    ensure_sdk_logging_defaults
+    ensure_local_comms_defaults
     ensure_default_chat_model
     sync_anticaptcha_keys
     log_success "BYOK already configured in $ENV_FILE — skipping wizard"
@@ -534,6 +551,7 @@ main() {
 
   import_shell_env_keys
   ensure_sdk_logging_defaults
+  ensure_local_comms_defaults
   prompt_llm_key
   ensure_embedding_search_key
   ensure_default_chat_model
