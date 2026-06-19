@@ -23,11 +23,11 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-from unity.conversation_manager.domains.ipc_socket import (
+from droid.conversation_manager.domains.ipc_socket import (
     CallEventSocketServer,
     CM_EVENT_SOCKET_ENV,
 )
-from unity.conversation_manager.in_memory_event_broker import (
+from droid.conversation_manager.in_memory_event_broker import (
     create_in_memory_event_broker,
     reset_in_memory_event_broker,
 )
@@ -103,7 +103,7 @@ class TestRealSubprocessIPC:
             env = os.environ.copy()
             env[CM_EVENT_SOCKET_ENV] = socket_path
 
-            # Ensure PYTHONPATH includes workspace root so subprocess can find unity
+            # Ensure PYTHONPATH includes workspace root so subprocess can find droid
             workspace_root = str(Path(__file__).parent.parent.parent.parent)
             existing_pythonpath = env.get("PYTHONPATH", "")
             env["PYTHONPATH"] = (
@@ -135,7 +135,7 @@ class TestRealSubprocessIPC:
 
             # Clear and send guidance (using production channel name)
             received_from_child.clear()
-            from unity.conversation_manager.events import FastBrainNotification
+            from droid.conversation_manager.events import FastBrainNotification
 
             await event_broker.publish(
                 "app:call:notification",

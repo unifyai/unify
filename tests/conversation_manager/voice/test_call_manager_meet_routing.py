@@ -7,7 +7,7 @@ subprocess) and verify only the channel-dispatch logic:
 - The agent-service POST URL is derived from ``_MEET_PATHS[channel]["path"]``
   (``googlemeet`` for Google Meet, ``teamsmeet`` for Microsoft Teams).
 - The LiveKit room name is derived from ``_MEET_PATHS[channel]["room"]``
-  via ``make_room_name`` (``unity_<id>_gmeet`` vs ``unity_<id>_teams``).
+  via ``make_room_name`` (``droid_<id>_gmeet`` vs ``droid_<id>_teams``).
 - The active-channel state (``_call_channel``, ``has_active_google_meet``,
   ``has_active_teams_meet``) is set correctly and exclusively per channel.
 - The session id returned by agent-service is captured into
@@ -22,8 +22,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from unity.conversation_manager.domains import call_manager as call_manager_module
-from unity.conversation_manager.domains.call_manager import (
+from droid.conversation_manager.domains import call_manager as call_manager_module
+from droid.conversation_manager.domains.call_manager import (
     CallConfig,
     LivekitCallManager,
     make_room_name,

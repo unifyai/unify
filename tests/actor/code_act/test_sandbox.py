@@ -1,9 +1,9 @@
 import pytest
 from pydantic import TypeAdapter
 
-from unity.actor.code_act_actor import CodeActActor
-from unity.actor.environments.computer import ComputerEnvironment
-from unity.actor.execution import (
+from droid.actor.code_act_actor import CodeActActor
+from droid.actor.environments.computer import ComputerEnvironment
+from droid.actor.execution import (
     PythonExecutionSession,
     ExecutionResult,
     parts_to_text,
@@ -12,7 +12,7 @@ from unity.actor.execution import (
     ImagePart,
     OutputPart,
 )
-from unity.common._async_tool.formatting import (
+from droid.common._async_tool.formatting import (
     serialize_tool_content,
     FormattedToolResult,
 )
@@ -493,8 +493,8 @@ async def test_get_screenshot_display_produces_image_in_stdout():
     ExecutionResult should contain an image block in stdout — the standard
     rich-output pipeline — rather than relying on post-hoc injection.
     """
-    from unity.function_manager.primitives.runtime import ComputerPrimitives
-    from unity.manager_registry import ManagerRegistry
+    from droid.function_manager.primitives.runtime import ComputerPrimitives
+    from droid.manager_registry import ManagerRegistry
 
     ManagerRegistry.clear()
     cp = ComputerPrimitives(computer_mode="mock")

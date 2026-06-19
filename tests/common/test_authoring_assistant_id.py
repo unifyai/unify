@@ -5,29 +5,29 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
-from unity.blacklist_manager.types.blacklist import BlackList
-from unity.common.authorship import (
+from droid.blacklist_manager.types.blacklist import BlackList
+from droid.common.authorship import (
     AUTHORING_ASSISTANT_ID_FIELD,
     fields_with_authoring,
     is_shared_authored_context,
     stamp_authoring_assistant_id,
     strip_authoring_assistant_id,
 )
-from unity.common.model_to_fields import model_to_fields
-from unity.contact_manager.types.contact import Contact
-from unity.dashboard_manager.types.dashboard import DashboardRecordRow
-from unity.dashboard_manager.types.tile import TileRecordRow
-from unity.file_manager.types.file import Document, FileRecord
-from unity.function_manager.types.function import Function
-from unity.function_manager.types.meta import FunctionsMeta
-from unity.function_manager.types.venv import VirtualEnv
-from unity.guidance_manager.types.guidance import Guidance
-from unity.image_manager.types.image import Image
-from unity.secret_manager.types import Secret
-from unity.session_details import SESSION_DETAILS
-from unity.task_scheduler.types.task import Task
-from unity.transcript_manager.types.exchange import Exchange
-from unity.transcript_manager.types.message import Message
+from droid.common.model_to_fields import model_to_fields
+from droid.contact_manager.types.contact import Contact
+from droid.dashboard_manager.types.dashboard import DashboardRecordRow
+from droid.dashboard_manager.types.tile import TileRecordRow
+from droid.file_manager.types.file import Document, FileRecord
+from droid.function_manager.types.function import Function
+from droid.function_manager.types.meta import FunctionsMeta
+from droid.function_manager.types.venv import VirtualEnv
+from droid.guidance_manager.types.guidance import Guidance
+from droid.image_manager.types.image import Image
+from droid.secret_manager.types import Secret
+from droid.session_details import SESSION_DETAILS
+from droid.task_scheduler.types.task import Task
+from droid.transcript_manager.types.exchange import Exchange
+from droid.transcript_manager.types.message import Message
 
 
 @pytest.fixture(autouse=True)

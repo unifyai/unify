@@ -2,8 +2,7 @@
 Actor + primitives factory for the ConversationManager sandbox.
 
 This is sandbox-only wiring glue. It centralizes:
-- selecting the correct actor type for the chosen sandbox configuration
-- configuring manager implementations (simulated vs real) via env vars
+- configuring real manager implementations via env vars
 - constructing a CodeActActor with explicit environments and a computer backend
 
 Important:
@@ -23,12 +22,10 @@ from sandboxes.conversation_manager.computer_activity import (
     install_computer_activity_hooks,
 )
 from sandboxes.conversation_manager.config_manager import ActorConfig
-from sandboxes.conversation_manager.sandbox_simulated_actor import SandboxSimulatedActor
-from unity.actor.code_act_actor import CodeActActor
-from unity.actor.environments import ComputerEnvironment, StateManagerEnvironment
-from unity.function_manager.computer_backends import VALID_MOCK_SCREENSHOT_PNG
-from unity.function_manager.primitives import ComputerPrimitives, Primitives
-from unity.manager_registry import ManagerRegistry
+from droid.actor.code_act_actor import CodeActActor
+from droid.actor.environments import ComputerEnvironment, StateManagerEnvironment
+from droid.function_manager.primitives import ComputerPrimitives, Primitives
+from droid.manager_registry import ManagerRegistry
 
 LG = logging.getLogger("conversation_manager_sandbox")
 
@@ -44,14 +41,6 @@ class ActorFactoryResult:
 
 class ActorFactory:
     """Create actors for sandbox configurations."""
-
-    # Keep this guidance consistent with `cm_init._SIMULATION_GUIDANCE`.
-    _SIMULATION_GUIDANCE = (
-        "Return actionable results (found/not-found/need-identifier). "
-        "Do not claim side effects (sending SMS/email/calls) unless explicitly requested. "
-        "If key details are missing (recipient, identifier, time), ask for them succinctly. "
-        "Summarize the next step clearly."
-    )
 
     @classmethod
     def create_actor(
@@ -69,39 +58,21 @@ class ActorFactory:
         """
         progress = progress_callback or (lambda _m: None)
 
-        # Configure manager IMPL selection for all modes (including simulated).
-        # Without this, ManagerRegistry defaults to "real" implementations,
-        # which require full Orchestra connectivity for system contact sync.
         cls._apply_manager_impl_env(config.managers_mode)
-        # Ensure no stale singleton managers leak across sandbox restarts/switches.
+        # Ensure no stale singleton managers leak across sandbox restarts.
         try:
             ManagerRegistry.clear()
         except Exception:
             pass
 
-        if config.actor_type == "simulated":
-            actor = SandboxSimulatedActor(
-                steps=None,
-                duration=8.0,
-                log_mode="print",
-                simulation_guidance=cls._SIMULATION_GUIDANCE,
-            )
-            return ActorFactoryResult(
-                actor=actor,
-                primitives=None,
-                computer_primitives=None,
-            )
-
         progress("[init] Loading configuration...")
         progress(f"✓ Actor selected: {config.actor_type}")
 
         primitives = cls.build_primitives(
-            mode=config.managers_mode,
             progress_callback=progress,
         )
 
         computer_primitives = cls.create_computer_backend(
-            mode=config.computer_backend_mode,
             args=args,
             progress_callback=progress,
         )
@@ -123,58 +94,28 @@ class ActorFactory:
     @staticmethod
     def build_primitives(
         *,
-        mode: Literal["simulated", "real"],
         progress_callback: Optional[ProgressCallback] = None,
     ) -> Primitives:
         """
-        Return a Primitives instance configured for the selected manager mode.
+        Return a Primitives instance for the real-managers sandbox configuration.
 
-        Implementation approach:
-        - We configure manager IMPL selection via env vars (so CM initialization and
-          CodeAct share the same singleton instances from ManagerRegistry).
-        - We do not eagerly instantiate every manager here; CM startup will do that.
+        Manager IMPL selection is already applied via env vars before this call
+        so CM initialization and CodeAct share the same singleton instances from
+        ManagerRegistry.
         """
         progress = progress_callback or (lambda _m: None)
-        progress(f"[init] Managers mode: {mode}")
+        progress("[init] Managers mode: real")
         return Primitives()
 
     @staticmethod
     def create_computer_backend(
         *,
-        mode: Literal["none", "mock", "real"],
         args: Any,
         progress_callback: Optional[ProgressCallback] = None,
     ) -> Optional[ComputerPrimitives]:
-        """
-        Create the computer backend for the selected mode.
-
-        - none: no computer tools
-        - mock: MockComputerBackend (no external deps)
-        - real: Magnitude backend via agent-service (connect now for startup feedback)
-        """
+        """Create the Magnitude computer backend via agent-service."""
         progress = progress_callback or (lambda _m: None)
 
-        if mode == "none":
-            progress("[computer] Disabled")
-            return None
-
-        if mode == "mock":
-            progress("[computer] Using mock backend")
-            # No external dependencies; connect lazily.
-            cp = ComputerPrimitives(
-                computer_mode="mock",
-                connect_now=False,
-            )
-            activity = ComputerActivity()
-            setattr(args, "_computer_activity", activity)
-            install_computer_activity_hooks(
-                computer_primitives=cp,
-                activity=activity,
-                emit_line=getattr(args, "_computer_log_sink", None),
-            )
-            return cp
-
-        # real
         container_url = getattr(args, "container_url", None) or getattr(
             args,
             "agent_server_url",
@@ -199,38 +140,31 @@ class ActorFactory:
         return cp
 
     @staticmethod
-    def _apply_manager_impl_env(mode: Literal["simulated", "real"]) -> None:
+    def _apply_manager_impl_env(mode: Literal["real"]) -> None:
         """
         Configure manager IMPL selection for sandbox runs.
 
         This controls what `ManagerRegistry.get_*()` returns when CM initializes.
         """
-        impl = "simulated" if mode == "simulated" else "real"
+        impl = "real"
 
         # State managers
-        os.environ["UNITY_CONTACT_IMPL"] = impl
-        os.environ["UNITY_TRANSCRIPT_IMPL"] = impl
-        os.environ["UNITY_TASK_IMPL"] = impl
-        os.environ["UNITY_KNOWLEDGE_IMPL"] = impl
-        os.environ["UNITY_GUIDANCE_IMPL"] = impl
-        os.environ["UNITY_SECRET_IMPL"] = impl
-        os.environ["UNITY_WEB_IMPL"] = impl
-        os.environ["UNITY_FILE_IMPL"] = impl
+        os.environ["DROID_CONTACT_IMPL"] = impl
+        os.environ["DROID_TRANSCRIPT_IMPL"] = impl
+        os.environ["DROID_TASK_IMPL"] = impl
+        os.environ["DROID_KNOWLEDGE_IMPL"] = impl
+        os.environ["DROID_GUIDANCE_IMPL"] = impl
+        os.environ["DROID_SECRET_IMPL"] = impl
+        os.environ["DROID_WEB_IMPL"] = impl
+        os.environ["DROID_FILE_IMPL"] = impl
 
         # Support managers commonly used by CM / primitives
-        os.environ["UNITY_DATA_IMPL"] = impl
-        os.environ["UNITY_FUNCTION_IMPL"] = impl
-        os.environ["UNITY_CONVERSATION_IMPL"] = impl
+        os.environ["DROID_DATA_IMPL"] = impl
+        os.environ["DROID_FUNCTION_IMPL"] = impl
+        os.environ["DROID_CONVERSATION_IMPL"] = impl
 
         # Memory is optional; keep it aligned so behavior is predictable.
-        os.environ["UNITY_MEMORY_IMPL"] = impl
+        os.environ["DROID_MEMORY_IMPL"] = impl
 
         # Config manager for per-company actor configuration.
-        os.environ["UNITY_CONFIG_IMPL"] = impl
-
-        # If the mock computer backend is used, ensure a safe default screenshot exists.
-        # (No-op for real mode.)
-        os.environ.setdefault(
-            "UNITY_COMPUTER_DEFAULT_SCREENSHOT",
-            VALID_MOCK_SCREENSHOT_PNG,
-        )
+        os.environ["DROID_CONFIG_IMPL"] = impl

@@ -4,7 +4,7 @@ import uuid
 
 import unify
 
-from unity.common.metrics_utils import reduce_logs, SUPPORTED_REDUCTION_METRICS
+from droid.common.metrics_utils import reduce_logs, SUPPORTED_REDUCTION_METRICS
 
 
 def _create_test_context() -> str:

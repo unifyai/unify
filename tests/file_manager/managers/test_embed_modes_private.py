@@ -7,10 +7,10 @@ import pytest
 import unify
 
 from tests.helpers import _handle_project
-from unity.common.pipeline.instrumentation import PipelineInstrumentation
-from unity.file_manager.file_parsers.types.contracts import FileParseResult
-from unity.file_manager.file_parsers.types.table import ExtractedTable
-from unity.file_manager.types import (
+from droid.common.pipeline.instrumentation import PipelineInstrumentation
+from droid.file_manager.file_parsers.types.contracts import FileParseResult
+from droid.file_manager.file_parsers.types.table import ExtractedTable
+from droid.file_manager.types import (
     FilePipelineConfig,
     IngestConfig,
     EmbeddingsConfig,
@@ -77,8 +77,8 @@ def test_embed_off_no_columns(file_manager, tmp_path: Path):
     records = _make_records(3)
     parse_result = FileParseResult(logical_path=file_path, status="success")
     # Create a tiny in-memory graph so the FileManager adapter can derive `/Content/` rows.
-    from unity.file_manager.file_parsers.types.enums import NodeKind
-    from unity.file_manager.file_parsers.types.graph import (
+    from droid.file_manager.file_parsers.types.enums import NodeKind
+    from droid.file_manager.file_parsers.types.graph import (
         ContentGraph,
         ContentNode,
         DocumentPayload,
@@ -143,8 +143,8 @@ def test_embed_off_no_columns(file_manager, tmp_path: Path):
     )
 
     # Use process_single_file from executor
-    from unity.file_manager.managers.utils.executor import process_single_file
-    from unity.file_manager.managers.utils.ingest_ops import get_file_id_from_path
+    from droid.file_manager.managers.utils.executor import process_single_file
+    from droid.file_manager.managers.utils.ingest_ops import get_file_id_from_path
 
     process_single_file(
         fm,
@@ -174,8 +174,8 @@ def test_embed_after_creates_columns(file_manager, tmp_path: Path):
     file_path = "synthetic_after.txt"
     records = _make_records(4)
     parse_result = FileParseResult(logical_path=file_path, status="success")
-    from unity.file_manager.file_parsers.types.enums import NodeKind
-    from unity.file_manager.file_parsers.types.graph import (
+    from droid.file_manager.file_parsers.types.enums import NodeKind
+    from droid.file_manager.file_parsers.types.graph import (
         ContentGraph,
         ContentNode,
         DocumentPayload,
@@ -240,8 +240,8 @@ def test_embed_after_creates_columns(file_manager, tmp_path: Path):
     )
 
     # Use process_single_file from executor
-    from unity.file_manager.managers.utils.executor import process_single_file
-    from unity.file_manager.managers.utils.ingest_ops import get_file_id_from_path
+    from droid.file_manager.managers.utils.executor import process_single_file
+    from droid.file_manager.managers.utils.ingest_ops import get_file_id_from_path
 
     process_single_file(
         fm,
@@ -271,8 +271,8 @@ def test_embed_along_content(file_manager, tmp_path: Path):
     # 5 records with chunk size 2 → expect 3 chunks
     records = _make_records(5)
     parse_result = FileParseResult(logical_path=file_path, status="success")
-    from unity.file_manager.file_parsers.types.enums import NodeKind
-    from unity.file_manager.file_parsers.types.graph import (
+    from droid.file_manager.file_parsers.types.enums import NodeKind
+    from droid.file_manager.file_parsers.types.graph import (
         ContentGraph,
         ContentNode,
         DocumentPayload,
@@ -345,8 +345,8 @@ def test_embed_along_content(file_manager, tmp_path: Path):
     )
 
     # Use process_single_file from executor instead of removed _ingest_and_embed
-    from unity.file_manager.managers.utils.executor import process_single_file
-    from unity.file_manager.managers.utils.ingest_ops import get_file_id_from_path
+    from droid.file_manager.managers.utils.executor import process_single_file
+    from droid.file_manager.managers.utils.ingest_ops import get_file_id_from_path
 
     process_single_file(
         fm,
@@ -468,7 +468,7 @@ def test_table_embeddings_along_for_csv_and_xlsx(
         ),
     )
     # Run along pipeline using process_single_file from executor
-    from unity.file_manager.managers.utils.executor import process_single_file
+    from droid.file_manager.managers.utils.executor import process_single_file
 
     process_single_file(
         fm,

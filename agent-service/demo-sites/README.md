@@ -28,7 +28,7 @@ Ports are assigned dynamically starting from 4001. Agent-service uses port 3000.
    ```bash
    node server.js <port>
    ```
-3. Reference the directory name in `unity/customization/clients/<client>/__init__.py`:
+3. Reference the directory name in `droid/customization/clients/<client>/__init__.py`:
 
 ```python
 register_org(
@@ -46,7 +46,7 @@ automatically at startup.
 
 ## How It Works
 
-1. **Customization** (`unity/customization/`) -- per-org/team/user/assistant config
+1. **Customization** (`droid/customization/`) -- per-org/team/user/assistant config
    defines `url_mappings` mapping real URLs to demo site directory names
    (e.g. `{"https://connect.zoho.com": "democorp-portal"}`)
 2. **ComputerPrimitives** -- passes mappings to MagnitudeBackend

@@ -10,17 +10,16 @@ Coverage
   - Write with None
   - Clone after SET NULL
 
-Note: schedule.next_task and schedule.prev_task FKs are not yet implemented,
-      so related tests are commented out.
+Note: schedule previously had next_task/prev_task fields for queue chaining,
+      which have since been removed.
 """
 
 from __future__ import annotations
 
 import unify
 from tests.helpers import _handle_project
-from unity.function_manager.function_manager import FunctionManager
-from unity.task_scheduler.task_scheduler import TaskScheduler
-from unity.task_scheduler.types.status import Status
+from droid.function_manager.function_manager import FunctionManager
+from droid.task_scheduler.task_scheduler import TaskScheduler
 
 # --------------------------------------------------------------------------- #
 #  Unit Tests: entrypoint → Functions.function_id                            #
@@ -147,7 +146,7 @@ def test_entrypoint_null_does_not_break_scheduler_init():
     assert tasks_from_new[0].entries.get("entrypoint") is None
 
     # Verify Task model construction succeeds (critical test for Orchestra NULL omission)
-    from unity.task_scheduler.types.task import Task
+    from droid.task_scheduler.types.task import Task
 
     task_dict = tasks_from_new[0].entries
     task_obj = Task(**task_dict)
@@ -177,7 +176,7 @@ def test_entrypoint_explicit_none_on_create():
     assert tasks[0].entries.get("entrypoint") is None
 
     # Verify it can be read back successfully
-    from unity.task_scheduler.types.task import Task
+    from droid.task_scheduler.types.task import Task
 
     task_dict = tasks[0].entries
     task_obj = Task(**task_dict)
@@ -197,7 +196,7 @@ def test_entrypoint_clone_after_set_null():
     func_id = int(funcs[0].entries["function_id"])
 
     # Create recurring task with entrypoint
-    from unity.task_scheduler.types.repetition import RepeatPattern, Frequency
+    from droid.task_scheduler.types.repetition import RepeatPattern, Frequency
 
     repeat_pattern = RepeatPattern(frequency=Frequency.DAILY)
     result = ts._create_task(
@@ -231,7 +230,7 @@ def test_entrypoint_clone_after_set_null():
     assert tasks_after_delete[0].entries.get("entrypoint") is None
 
     # Trigger cloning by fetching the task and calling _clone_task_instance
-    from unity.task_scheduler.types.task import Task
+    from droid.task_scheduler.types.task import Task
 
     task_entries = unify.get_logs(
         context=ts._ctx,
@@ -284,7 +283,6 @@ def test_offline_task_can_be_agentic_on_update():
     result = ts._create_task(
         name="Normal task",
         description="Starts in the live lane",
-        status=Status.queued,
     )
     task_id = result["details"]["task_id"]
 

@@ -1,10 +1,14 @@
 """
-ConversationManager initialization helpers for the sandbox.
+ConversationManager initialization helper for the sandbox.
 
-This module is responsible for starting a ConversationManager instance in-process
-for sandbox use:
-- default: simulated comms (no CommsManager; outbound actions mocked)
-- optional: real comms (`--real-comms`) with an explicit safety confirmation layer
+Starts a ConversationManager in-process with:
+- No CommsManager (inbound events are injected via the REPL event publisher)
+- send_email always stripped (OAuth token complexity makes it unsupported for OSS)
+- SMS and outbound call tools kept when a local gateway is running (i.e., when
+  ORCHESTRA_ADMIN_KEY + Twilio credentials are configured and the gateway started
+  successfully); stripped otherwise
+- send_unify_message kept and backed by an in-memory outbound transport so the
+  tool succeeds without needing GCP credentials or a live Pub/Sub topic
 """
 
 from __future__ import annotations
@@ -15,23 +19,11 @@ from typing import Any, Callable, Optional
 
 from sandboxes.conversation_manager.actor_factory import ActorFactory
 from sandboxes.conversation_manager.config_manager import ActorConfig
-from unity.conversation_manager.event_broker import get_event_broker, reset_event_broker
-from unity.conversation_manager.main import run_conversation_manager
-from unity.conversation_manager.domains.managers_utils import init_conv_manager
-from sandboxes.conversation_manager.real_comms_safety import (
-    SafetyConfig,
-    apply_real_comms_safety,
-)
-from sandboxes.conversation_manager.simulated_comms import apply_simulated_comms
+from droid.conversation_manager.event_broker import get_event_broker, reset_event_broker
+from droid.conversation_manager.main import run_conversation_manager
+from droid.conversation_manager.domains.managers_utils import init_conv_manager
 
 LG = logging.getLogger("conversation_manager_sandbox")
-
-_SIMULATION_GUIDANCE = (
-    "Return actionable results (found/not-found/need-identifier). "
-    "Do not claim side effects (sending SMS/email/calls) unless explicitly requested. "
-    "If key details are missing (recipient, identifier, time), ask for them succinctly. "
-    "Summarize the next step clearly."
-)
 
 
 async def initialize_cm(
@@ -56,57 +48,61 @@ async def initialize_cm(
     # repoint those caches to the freshly reset instance to keep all event
     # publications visible to the sandbox subscriber.
     try:  # sandbox-only best-effort patching
-        from unity.conversation_manager.domains import managers_utils as _managers_utils
+        from droid.conversation_manager.domains import managers_utils as _managers_utils
 
         _managers_utils.event_broker = event_broker  # type: ignore[attr-defined]
     except Exception:
         pass
 
-    real_comms = bool(getattr(args, "real_comms", False))
     cfg: ActorConfig = getattr(
         args,
         "_actor_config",
-        ActorConfig(actor_type="simulated"),
+        ActorConfig(actor_type="codeact_real"),
     )
-    use_real_managers = cfg.managers_mode == "real"
 
-    # Start CM in-process.
     cm = await run_conversation_manager(
         project_name=args.project_name,
         event_broker=event_broker,
         stop_event=asyncio.Event(),
-        enable_comms_manager=True if real_comms else False,
-        # Simulated-only mode uses CM test mocks; real-managers mode must not.
-        apply_test_mocks=(False if (real_comms or use_real_managers) else True),
+        enable_comms_manager=False,
+        apply_test_mocks=False,
     )
 
-    if real_comms:
-        # Apply safety layer AFTER CM startup so comms_utils imports are initialized.
-        apply_real_comms_safety(
-            config=SafetyConfig(
-                auto_confirm=bool(getattr(args, "auto_confirm", False)),
-            ),
+    # Without CommsManager the outbound transport singleton is never set, so
+    # send_unify_message falls back to the raw GCP Pub/Sub path and fails with
+    # a 400 (empty GCP_PROJECT_ID). Inject an in-memory transport so the tool
+    # returns success. The REPL display is driven by the event broker, not
+    # Pub/Sub, so no response visibility is lost.
+    try:
+        from droid.gateway.outbound_inmemory import InMemoryOutboundTransport
+        from droid.conversation_manager.domains.comms_utils import (
+            set_outbound_transport,
         )
 
-        # In real-comms mode, CM will usually be initialized by StartupEvent. For local dev
-        # it's often desirable to have managers ready, so we eagerly init with the selected actor.
-        actor = ActorFactory.create_actor(
-            cfg,
-            args=args,
-            progress_callback=progress_callback or print,
-        ).actor
-        await init_conv_manager(cm, actor=actor)
-    else:
-        # Simulated mode should not depend on COMMS_URL, GCP Pub/Sub, or provisioned numbers.
-        apply_simulated_comms()
+        set_outbound_transport(InMemoryOutboundTransport())
+    except Exception:
+        pass
 
-        # Inject selected actor; run_conversation_manager doesn't init managers when mocks are enabled.
-        actor = ActorFactory.create_actor(
-            cfg,
-            args=args,
-            progress_callback=progress_callback or print,
-        ).actor
-        await init_conv_manager(cm, actor=actor)
+    actor = ActorFactory.create_actor(
+        cfg,
+        args=args,
+        progress_callback=progress_callback or print,
+    ).actor
+    await init_conv_manager(cm, actor=actor)
+
+    # Strip outbound channel tools based on what the gateway supports.
+    #
+    # send_email: always stripped — OAuth token lifecycle is too complex for OSS.
+    # send_sms / make_call: stripped unless the sandbox auto-started a local
+    #   gateway (args._gateway_url is set), meaning Twilio credentials and
+    #   ORCHESTRA_ADMIN_KEY are configured and the gateway is running.
+    gateway_url = getattr(args, "_gateway_url", None)
+    try:
+        if not gateway_url:
+            cm.assistant_number = ""
+        cm.assistant_email = ""
+    except Exception:
+        pass
 
     # Ensure the system user contact (contact_id=1) has basic identity details
     # populated in the Contacts table.
@@ -136,8 +132,7 @@ async def initialize_cm(
         pass
 
     LG.info(
-        "ConversationManager initialized (%s, actor=%s)",
-        "real-comms" if real_comms else "simulated-comms",
+        "ConversationManager initialized (actor=%s)",
         cfg.actor_type,
     )
     return cm

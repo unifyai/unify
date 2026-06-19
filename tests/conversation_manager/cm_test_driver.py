@@ -18,8 +18,8 @@ import contextvars
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from unity.conversation_manager.domains.event_handlers import EventHandler
-from unity.conversation_manager.events import (
+from droid.conversation_manager.domains.event_handlers import EventHandler
+from droid.conversation_manager.events import (
     Event,
     SMSSent,
     EmailSent,
@@ -30,7 +30,7 @@ from unity.conversation_manager.events import (
 )
 
 if TYPE_CHECKING:
-    from unity.conversation_manager.conversation_manager import ConversationManager
+    from droid.conversation_manager.conversation_manager import ConversationManager
 
 
 @dataclass(frozen=True)

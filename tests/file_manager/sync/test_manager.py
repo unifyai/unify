@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from unity.file_manager.sync.config import SyncConfig
-from unity.file_manager.sync.manager import SyncManager
-from unity.file_manager.sync.rclone import SyncResult
+from droid.file_manager.sync.config import SyncConfig
+from droid.file_manager.sync.manager import SyncManager
+from droid.file_manager.sync.rclone import SyncResult
 
 
 @pytest.fixture
@@ -21,8 +21,8 @@ def sync_config(tmp_path):
         ssh_port=2222,
         ssh_user="testuser",
         ssh_key_path=str(tmp_path / "test_key"),
-        local_root=str(tmp_path / "unity"),
-        remote_root="/Unity/Local",
+        local_root=str(tmp_path / "droid"),
+        remote_root="/Droid/Local",
     )
 
 
@@ -91,7 +91,7 @@ class TestSyncManagerStart:
             mock_rclone.bisync = mock_bisync
 
             with patch(
-                "unity.file_manager.sync.manager.RcloneSync",
+                "droid.file_manager.sync.manager.RcloneSync",
                 return_value=mock_rclone,
             ):
                 result = await manager.start()
@@ -115,19 +115,19 @@ class TestSyncManagerSentinel:
     def test_sentinel_created_on_start(self, sync_config, tmp_path):
         """Test that _ensure_sentinel creates assistant.txt in local_root."""
         manager = SyncManager(config=sync_config)
-        local_root = tmp_path / "unity"
+        local_root = tmp_path / "droid"
         local_root.mkdir(parents=True, exist_ok=True)
 
         manager._ensure_sentinel()
 
         sentinel = local_root / "assistant.txt"
         assert sentinel.exists()
-        assert sentinel.read_text() == "unity assistant\n"
+        assert sentinel.read_text() == "droid assistant\n"
 
     def test_sentinel_not_overwritten(self, sync_config, tmp_path):
         """Test that _ensure_sentinel preserves existing assistant.txt."""
         manager = SyncManager(config=sync_config)
-        local_root = tmp_path / "unity"
+        local_root = tmp_path / "droid"
         local_root.mkdir(parents=True, exist_ok=True)
 
         sentinel = local_root / "assistant.txt"
@@ -217,10 +217,10 @@ class TestSyncManagerSSHKeyRetrieval:
 
         with (
             patch(
-                "unity.session_details.SESSION_DETAILS",
+                "droid.session_details.SESSION_DETAILS",
             ) as mock_sd,
             patch(
-                "unity.settings.SETTINGS",
+                "droid.settings.SETTINGS",
             ) as mock_settings,
             patch(
                 "unify.utils.http.get",
@@ -257,10 +257,10 @@ class TestSyncManagerSSHKeyRetrieval:
 
         with (
             patch(
-                "unity.session_details.SESSION_DETAILS",
+                "droid.session_details.SESSION_DETAILS",
             ) as mock_sd,
             patch(
-                "unity.settings.SETTINGS",
+                "droid.settings.SETTINGS",
             ) as mock_settings,
             patch(
                 "unify.utils.http.get",

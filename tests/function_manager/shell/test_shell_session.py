@@ -12,7 +12,7 @@ import os
 import pytest
 
 from tests.helpers import _handle_project
-from unity.function_manager.shell_session import ShellSession
+from droid.function_manager.shell_session import ShellSession
 
 # ────────────────────────────────────────────────────────────────────────────
 # Phase 1.1: Basic Session Lifecycle
@@ -347,11 +347,11 @@ async def test_shell_session_custom_env_accessible():
     """Custom environment variables are accessible in commands."""
     session = ShellSession(
         language="bash",
-        env={"UNITY_TEST_VAR": "test_value_123"},
+        env={"DROID_TEST_VAR": "test_value_123"},
     )
     await session.start()
     try:
-        result = await session.execute("echo $UNITY_TEST_VAR")
+        result = await session.execute("echo $DROID_TEST_VAR")
         assert result.exit_code == 0
         assert "test_value_123" in result.stdout
     finally:
@@ -435,15 +435,15 @@ async def test_shell_session_state_persists_env_variables():
     await session.start()
     try:
         # Export an environment variable
-        await session.execute("export UNITY_PERSISTENT_VAR=persistent_value")
+        await session.execute("export DROID_PERSISTENT_VAR=persistent_value")
 
         # Read it back
-        result = await session.execute("echo $UNITY_PERSISTENT_VAR")
+        result = await session.execute("echo $DROID_PERSISTENT_VAR")
         assert result.exit_code == 0
         assert "persistent_value" in result.stdout
 
         # Verify it's actually exported (visible to subprocesses)
-        result = await session.execute("bash -c 'echo $UNITY_PERSISTENT_VAR'")
+        result = await session.execute("bash -c 'echo $DROID_PERSISTENT_VAR'")
         assert result.exit_code == 0
         assert "persistent_value" in result.stdout
     finally:
@@ -531,11 +531,11 @@ async def test_shell_session_source_script():
         # Create a temp script
         await session.execute(
             "echo 'export SOURCED_VAR=from_script\n"
-            'sourced_func() { echo "I am sourced"; }\' > /tmp/unity_test_source.sh',
+            'sourced_func() { echo "I am sourced"; }\' > /tmp/droid_test_source.sh',
         )
 
         # Source it
-        await session.execute("source /tmp/unity_test_source.sh")
+        await session.execute("source /tmp/droid_test_source.sh")
 
         # Verify variable is set
         result = await session.execute("echo $SOURCED_VAR")
@@ -548,7 +548,7 @@ async def test_shell_session_source_script():
         assert "I am sourced" in result.stdout
 
         # Cleanup
-        await session.execute("rm /tmp/unity_test_source.sh")
+        await session.execute("rm /tmp/droid_test_source.sh")
     finally:
         await session.close()
 

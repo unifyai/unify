@@ -3,7 +3,7 @@ ConversationManager sandbox entrypoint.
 
 This module wires together:
 - project activation + logging
-- in-process ConversationManager startup (simulated or real-comms)
+- in-process ConversationManager startup
 - outbound event subscription (prints CM responses)
 - either REPL mode (default) or Textual GUI mode (`--gui`)
 
@@ -39,6 +39,10 @@ from sandboxes.conversation_manager.config_manager import (
 from sandboxes.conversation_manager.agent_service_bootstrap import (
     free_agent_service_port,
     try_start_agent_service_direct,
+)
+from sandboxes.conversation_manager.gateway_bootstrap import (
+    stop_gateway,
+    try_start_gateway_direct,
 )
 from sandboxes.conversation_manager.desktop_bootstrap import (
     try_start_desktop_direct,
@@ -141,18 +145,14 @@ def _build_worker_config(*, args: Any, actor_config: ActorConfig) -> dict:
         "agent_mode": getattr(args, "agent_mode", "web-vm"),
         "headless": bool(getattr(args, "headless", False)),
         # UX
-        "voice": bool(getattr(args, "voice", False)),
         "debug": bool(getattr(args, "debug", False)),
         # Project
-        "project_name": getattr(args, "project_name", "unity"),
+        "project_name": getattr(args, "project_name", "droid"),
         "overwrite": bool(getattr(args, "overwrite", False)),
         # Worker-only flags (still part of the stable config contract)
         "agent_service_bootstrap": (
             getattr(args, "agent_service_bootstrap", "guide") == "auto"
         ),
-        "real_comms": bool(getattr(args, "real_comms", False)),
-        "auto_confirm": bool(getattr(args, "auto_confirm", False)),
-        "live_voice": bool(getattr(args, "live_voice", False)),
         # Nested copy for future-proofing (UI already prefers this when present).
         "actor_config": actor_config.to_json_obj(),
     }
@@ -300,7 +300,7 @@ async def _main_async() -> None:
     inactivity_shutdown = False
 
     parser = build_cli_parser("ConversationManager sandbox")
-    # CM-specific override: `unity` is the install-and-live entrypoint, so its
+    # CM-specific override: `droid` is the install-and-live entrypoint, so its
     # default workspace is the fixed `Assistants` project rather than the
     # generic `Sandbox` default used by the per-manager dev sandboxes. The
     # `--project_name` flag itself stays available for dev/eval use.
@@ -350,35 +350,9 @@ async def _main_async() -> None:
         default=False,
         help="(CodeAct) auto-print execution trace after each code turn (REPL only)",
     )
-    parser.add_argument(
-        "--real-comms",
-        dest="real_comms",
-        action="store_true",
-        default=False,
-        help="Use real comms (SMS/email/calls). Requires external infrastructure. REPL prompts for confirmation; GUI auto-confirms.",
-    )
-    parser.add_argument(
-        "--auto-confirm",
-        dest="auto_confirm",
-        action="store_true",
-        default=False,
-        help="(real-comms) Auto-confirm all outbound actions (use with care).",
-    )
-    parser.add_argument(
-        "--live-voice",
-        dest="live_voice",
-        action="store_true",
-        default=False,
-        help=(
-            "Enable live voice calls via LiveKit. "
-            "The `call` command spawns the production voice agent and provides "
-            "a browser URL to join the call with your microphone. "
-            "Requires LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET env vars."
-        ),
-    )
     args = parser.parse_args()
-    os.environ.setdefault("UNITY_SANDBOX_LAUNCH_CWD", str(Path.cwd().resolve()))
-    os.environ.setdefault("UNITY_TERMINAL_LOG", "false")
+    os.environ.setdefault("DROID_SANDBOX_LAUNCH_CWD", str(Path.cwd().resolve()))
+    os.environ.setdefault("DROID_TERMINAL_LOG", "false")
     os.environ.setdefault("UNILLM_TERMINAL_LOG", "false")
     unillm_log_dir = _enable_unillm_boundary_logging()
 
@@ -452,54 +426,10 @@ async def _main_async() -> None:
 
     selected: ActorConfig | None = None
 
-    def _prompt() -> ActorConfig:
-        last_used = cfg_mgr.load_config()
-        print("Unity runtime")
-        print("═══════════════════════════════════════════════════════════")
-        print("")
-        print("Select runtime mode:")
-        print("")
-        print("1. Simulated actor + simulated managers (no computer interface)")
-        print("2. Real CodeAct actor + simulated managers (mock computer backend)")
-        print(
-            "3. Real CodeAct actor + real managers + real computer interface  [install-and-live]",
-        )
-        print("")
-        print(
-            f"Last used: [{_to_choice(last_used.actor_type)}] {_label(last_used.actor_type)}",
-        )
-        print("")
-        raw = input("Enter choice (1-3) or press Enter for last used: ").strip()
-        if not raw:
-            return last_used
-        if raw in {"1", "2", "3"}:
-            return ActorConfig(actor_type=_from_choice(raw))
-        print("⚠️ Invalid choice, using last used.")
-        return last_used
-
-    def _to_choice(actor_type: str) -> str:
-        return {"simulated": "1", "codeact_simulated": "2", "codeact_real": "3"}.get(
-            actor_type,
-            "1",
-        )
-
-    def _from_choice(choice: str) -> str:
-        return {"1": "simulated", "2": "codeact_simulated", "3": "codeact_real"}[choice]
-
-    def _label(actor_type: str) -> str:
-        return {
-            "simulated": "SandboxSimulatedActor (simulated managers, no computer interface)",
-            "codeact_simulated": "CodeActActor + Simulated Managers (mock computer backend)",
-            "codeact_real": "CodeActActor + Real Managers + Real Computer Interface",
-        }.get(
-            actor_type,
-            "SandboxSimulatedActor (simulated managers, no computer interface)",
-        )
-
     # Outer loop supports runtime config switching (REPL command `config`).
     while True:
         if selected is None:
-            selected = await asyncio.to_thread(_prompt)
+            selected = ActorConfig(actor_type="codeact_real")
         # Validate infra with retry/switch/exit loop.
         while True:
 
@@ -605,12 +535,22 @@ async def _main_async() -> None:
                 ):
                     await _attempt_agent_service_recovery()
 
+            # If a local agent-service process is running (started on local_url /
+            # port 3001), validate against that URL rather than the container URL
+            # (agent_server_url / port 3000) which may not be running.
+            _local_proc = getattr(args, "_agent_service_process", None)
+            _local_proc_alive = (
+                _local_proc is not None
+                and hasattr(_local_proc, "poll")
+                and _local_proc.poll() is None
+            )
+            _effective_agent_url = (
+                getattr(args, "local_url", "http://localhost:3001")
+                if _local_proc_alive
+                else getattr(args, "agent_server_url", "http://localhost:3000")
+            )
             _validate_kwargs = dict(
-                agent_server_url=getattr(
-                    args,
-                    "agent_server_url",
-                    "http://localhost:3000",
-                ),
+                agent_server_url=_effective_agent_url,
                 require_agent_service_running=(not bool(getattr(args, "gui", False))),
             )
             vr = await asyncio.to_thread(
@@ -625,10 +565,27 @@ async def _main_async() -> None:
             # falling through to the interactive error prompt.
             if not bool(getattr(args, "gui", False)) and _should_offer_agent_help():
                 await _attempt_agent_service_recovery()
+                # Recompute the effective URL — recovery may have started a local
+                # agent-service process that sets args._agent_service_process and
+                # args.local_url, which _validate_kwargs above could not see yet.
+                _post_recovery_proc = getattr(args, "_agent_service_process", None)
+                _post_recovery_alive = (
+                    _post_recovery_proc is not None
+                    and hasattr(_post_recovery_proc, "poll")
+                    and _post_recovery_proc.poll() is None
+                )
+                _post_recovery_url = (
+                    getattr(args, "local_url", "http://localhost:3001")
+                    if _post_recovery_alive
+                    else getattr(args, "agent_server_url", "http://localhost:3000")
+                )
                 vr = await asyncio.to_thread(
                     cfg_mgr.validate_config,
                     selected,
-                    **_validate_kwargs,
+                    agent_server_url=_post_recovery_url,
+                    require_agent_service_running=(
+                        not bool(getattr(args, "gui", False))
+                    ),
                 )
                 if vr.ok:
                     break
@@ -686,6 +643,25 @@ async def _main_async() -> None:
                 selected = cfg_mgr.load_config()
                 continue
             break
+
+        # Attempt to auto-start a local gateway for outbound SMS/calls.
+        # Must happen before initialize_cm so the CM's _local_comms_base_url()
+        # fallback (port 8787) resolves to a live server at first use.
+        _gateway_already_tracked = getattr(args, "_gateway_process", None) is not None
+        if not _gateway_already_tracked:
+            _gw = await asyncio.to_thread(
+                try_start_gateway_direct,
+                repo_root=project_root,
+                progress=(lambda m: print(m)),
+            )
+            if _gw.ok:
+                setattr(args, "_gateway_process", _gw.process)
+                setattr(args, "_gateway_url", _gw.url)
+            else:
+                setattr(args, "_gateway_process", None)
+                setattr(args, "_gateway_url", None)
+                if _gw.summary and "not configured" not in _gw.summary:
+                    print(f"[gateway] {_gw.summary}")
 
         cm = await initialize_cm(args=args)
         setattr(args, "_cm", cm)
@@ -778,10 +754,8 @@ async def _main_async() -> None:
                 cm=cm,
                 sandbox_state=state,
                 display_callback=_display,
-                include_call_guidance=bool(args.debug)
-                or bool(getattr(args, "voice", False))
-                or bool(getattr(args, "live_voice", False)),
-                voice_enabled=bool(getattr(args, "voice", False)),
+                include_call_guidance=True,
+                voice_enabled=False,
                 stop_event=stop_sub,
                 trace_display=trace_display,
                 event_tree_display=event_tree_display,
@@ -878,6 +852,15 @@ async def _main_async() -> None:
                             proc.kill()
                         except Exception:
                             pass
+            except Exception:
+                pass
+            # If we auto-started a local gateway, stop it on exit.
+            try:
+                gw_proc = getattr(args, "_gateway_process", None)
+                if gw_proc is not None:
+                    await asyncio.to_thread(stop_gateway, gw_proc)
+                    setattr(args, "_gateway_process", None)
+                    setattr(args, "_gateway_url", None)
             except Exception:
                 pass
             # Best-effort: ensure the configured port isn't left bound by a sandbox-started

@@ -1,7 +1,7 @@
 ConversationManager Sandbox
 ==========================
 
-Interactive playground for the `ConversationManager` component (`unity/conversation_manager/`). Test the CM "brain" locally with simulated comms by default, or switch to **real-comms mode** with explicit safety confirmations.
+Interactive playground for the `ConversationManager` component (`droid/conversation_manager/`). Test the CM "brain" locally with simulated comms by default, or switch to **real-comms mode** with explicit safety confirmations.
 
 ## Quick start
 
@@ -217,7 +217,7 @@ These populate `SESSION_DETAILS` and the boss contact record. Without them the s
 
 The sandbox supports two comms backends:
 
-1. Unity-owned local ingress, which is the open-source-friendly default for self-hosting.
+1. Droid-owned local ingress, which is the open-source-friendly default for self-hosting.
 2. A hosted communication service, for teams that still want the managed path.
 
 #### Local comms backend
@@ -226,17 +226,17 @@ Use the gateway wizard to create or update the local env file before running
 real-comms scenarios:
 
 ```bash
-python -m unity.gateway setup --interactive --env-file .env
-python -m unity.gateway doctor --check-credentials --channels twilio google microsoft slack --env-file .env
+python -m droid.gateway setup --interactive --env-file .env
+python -m droid.gateway doctor --check-credentials --channels twilio google microsoft slack --env-file .env
 ```
 
 | Variable | Required | Description |
 |---|---|---|
-| `UNITY_CONVERSATION_LOCAL_COMMS_ENABLED` | Recommended | Set to `true` to enable Unity's local ingress |
-| `UNITY_CONVERSATION_LOCAL_COMMS_MODE` | Recommended | Set to `local` |
-| `UNITY_CONVERSATION_LOCAL_COMMS_HOST` | No | Bind host for local ingress (default: `127.0.0.1`) |
-| `UNITY_CONVERSATION_LOCAL_COMMS_PORT` | No | Bind port for local ingress (default: `8787`) |
-| `UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL` | For external webhooks | Public base URL Twilio/LiveKit/email providers can reach |
+| `DROID_CONVERSATION_LOCAL_COMMS_ENABLED` | Recommended | Set to `true` to enable Droid's local ingress |
+| `DROID_CONVERSATION_LOCAL_COMMS_MODE` | Recommended | Set to `local` |
+| `DROID_CONVERSATION_LOCAL_COMMS_HOST` | No | Bind host for local ingress (default: `127.0.0.1`) |
+| `DROID_CONVERSATION_LOCAL_COMMS_PORT` | No | Bind port for local ingress (default: `8787`) |
+| `DROID_CONVERSATION_LOCAL_COMMS_PUBLIC_URL` | For external webhooks | Public base URL Twilio/LiveKit/email providers can reach |
 | `ORCHESTRA_ADMIN_KEY` | Usually yes | Required for admin-authenticated local endpoints and some provider flows |
 | `ASSISTANT_NUMBER` | For SMS/calls | Twilio-provisioned number for outbound SMS and calls |
 | `ASSISTANT_EMAIL` | For email | Email address for outbound email |
@@ -247,7 +247,7 @@ python -m unity.gateway doctor --check-credentials --channels twilio google micr
 
 | Variable | Required | Description |
 |---|---|---|
-| `UNITY_COMMS_URL` | **Yes** | Hosted communication service URL |
+| `DROID_COMMS_URL` | **Yes** | Hosted communication service URL |
 | `ORCHESTRA_ADMIN_KEY` | **Yes** | Admin key used by the hosted comms service for auth headers |
 | `ASSISTANT_NUMBER` | **Yes** | Twilio-provisioned number for outbound SMS and calls |
 | `ASSISTANT_EMAIL` | **Yes** | Email address for outbound email |
@@ -319,11 +319,11 @@ ASSISTANT_EMAIL=sam@example.com
 ASSISTANT_ID=1
 
 # Comms
-UNITY_CONVERSATION_LOCAL_COMMS_ENABLED=true
-UNITY_CONVERSATION_LOCAL_COMMS_MODE=local
-UNITY_CONVERSATION_LOCAL_COMMS_HOST=127.0.0.1
-UNITY_CONVERSATION_LOCAL_COMMS_PORT=8787
-UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL=https://your-public-tunnel.example.com
+DROID_CONVERSATION_LOCAL_COMMS_ENABLED=true
+DROID_CONVERSATION_LOCAL_COMMS_MODE=local
+DROID_CONVERSATION_LOCAL_COMMS_HOST=127.0.0.1
+DROID_CONVERSATION_LOCAL_COMMS_PORT=8787
+DROID_CONVERSATION_LOCAL_COMMS_PUBLIC_URL=https://your-public-tunnel.example.com
 
 # Voice
 LIVEKIT_URL=wss://your-project.livekit.cloud
@@ -353,8 +353,8 @@ Scenario seeding is idle-only. Wait for the active action to complete.
 ### Real-comms mode fails to start
 Check which backend you intended to use:
 
-- Local backend: verify `UNITY_CONVERSATION_LOCAL_COMMS_MODE=local` and that your public webhook URL reaches the machine running Unity.
-- Hosted backend: verify `UNITY_COMMS_URL` and `ORCHESTRA_ADMIN_KEY` are set correctly.
+- Local backend: verify `DROID_CONVERSATION_LOCAL_COMMS_MODE=local` and that your public webhook URL reaches the machine running Droid.
+- Hosted backend: verify `DROID_COMMS_URL` and `ORCHESTRA_ADMIN_KEY` are set correctly.
 
 ### Mode 3 fails validation ("agent-service is not running or unreachable")
 Mode 3 requires:

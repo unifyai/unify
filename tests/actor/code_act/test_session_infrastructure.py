@@ -3,13 +3,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from unity.actor.execution import (
+from droid.actor.execution import (
     SessionExecutor,
     _validate_execution_params,
     parts_to_text,
 )
-from unity.function_manager.function_manager import VenvPool
-from unity.function_manager.shell_pool import ShellPool
+from droid.function_manager.function_manager import VenvPool
+from droid.function_manager.shell_pool import ShellPool
 
 
 class _FakeFunctionManager:

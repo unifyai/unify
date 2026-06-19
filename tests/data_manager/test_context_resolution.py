@@ -13,8 +13,8 @@ from unittest.mock import patch
 
 import pytest
 
-from unity.data_manager.simulated import SimulatedDataManager
-from unity.common.context_registry import ContextRegistry
+from droid.data_manager.simulated import SimulatedDataManager
+from droid.common.context_registry import ContextRegistry
 
 # ────────────────────────────────────────────────────────────────────────────
 # Context path resolution
@@ -83,7 +83,7 @@ def test_fully_qualified_foreign_path_not_double_prefixed():
     recognise it as already absolute and return it unchanged — not produce
     "org123/42/Data/org123/42/Contacts".
     """
-    from unity.data_manager.data_manager import DataManager
+    from droid.data_manager.data_manager import DataManager
 
     dm = DataManager.__new__(DataManager)
     dm._base_ctx = "org123/42/Data"
@@ -109,7 +109,7 @@ def test_fully_qualified_foreign_path_not_double_prefixed():
 
 
 def test_dashboard_short_paths_are_not_data_prefixed():
-    from unity.data_manager.data_manager import DataManager
+    from droid.data_manager.data_manager import DataManager
 
     dm = DataManager.__new__(DataManager)
     dm._base_ctx = "org123/42/Data"
@@ -120,7 +120,7 @@ def test_dashboard_short_paths_are_not_data_prefixed():
 
 def test_shared_team_path_not_double_prefixed():
     """Teams/* contexts are absolute roots, not Data/* children."""
-    from unity.data_manager.data_manager import DataManager
+    from droid.data_manager.data_manager import DataManager
 
     dm = DataManager.__new__(DataManager)
     dm._base_ctx = "org123/42/Data"
@@ -136,7 +136,7 @@ def test_simulated_shared_team_path_not_double_prefixed():
 
 
 def test_data_manager_constructor_fails_when_context_resolution_fails():
-    from unity.data_manager.data_manager import DataManager
+    from droid.data_manager.data_manager import DataManager
 
     with patch.object(
         ContextRegistry,
@@ -181,7 +181,7 @@ def test_data_context_in_known_base_contexts():
     ContextRegistry.clear()
 
     # Import to trigger registration
-    from unity.data_manager.data_manager import DataManager  # noqa
+    from droid.data_manager.data_manager import DataManager  # noqa
 
     # Check Data is registered
     base_contexts = ContextRegistry.get_known_base_contexts()
@@ -193,7 +193,7 @@ def test_context_registry_get_known_base_contexts():
     ContextRegistry.clear()
 
     # Import managers to trigger registration
-    from unity.data_manager.data_manager import DataManager  # noqa
+    from droid.data_manager.data_manager import DataManager  # noqa
 
     bases = ContextRegistry.get_known_base_contexts()
 
@@ -218,14 +218,14 @@ def test_get_context_with_empty_contextvar_raises():
     """
     from unittest.mock import patch
     from unify.logs import CONTEXT_READ, CONTEXT_WRITE
-    from unity.file_manager.managers.file_manager import FileManager
+    from droid.file_manager.managers.file_manager import FileManager
 
     ContextRegistry.clear()
     CONTEXT_READ.set("")
     CONTEXT_WRITE.set("")
 
-    with patch("unity.common.context_registry._create_context_with_retry"):
-        with patch("unity.common.context_registry.create_fields"):
+    with patch("droid.common.context_registry._create_context_with_retry"):
+        with patch("droid.common.context_registry.create_fields"):
             try:
                 ContextRegistry.get_context(FileManager, "FileRecords")
                 assert False, "Expected RuntimeError for empty context"
@@ -240,7 +240,7 @@ def test_get_context_uses_stashed_base_after_clear():
     """
     from unittest.mock import patch
     from unify.logs import CONTEXT_READ, CONTEXT_WRITE
-    from unity.file_manager.managers.file_manager import FileManager
+    from droid.file_manager.managers.file_manager import FileManager
 
     ContextRegistry.clear()
 
@@ -248,8 +248,8 @@ def test_get_context_uses_stashed_base_after_clear():
     CONTEXT_READ.set(base)
     CONTEXT_WRITE.set(base)
 
-    with patch("unity.common.context_registry._create_context_with_retry"):
-        with patch("unity.common.context_registry.create_fields"):
+    with patch("droid.common.context_registry._create_context_with_retry"):
+        with patch("droid.common.context_registry.create_fields"):
             ContextRegistry.setup()
 
     cached = ContextRegistry._registry.get(("FileManager", "FileRecords", "Personal"))
@@ -263,8 +263,8 @@ def test_get_context_uses_stashed_base_after_clear():
     # Re-setup with the same base restores everything
     CONTEXT_READ.set(base)
     CONTEXT_WRITE.set(base)
-    with patch("unity.common.context_registry._create_context_with_retry"):
-        with patch("unity.common.context_registry.create_fields"):
+    with patch("droid.common.context_registry._create_context_with_retry"):
+        with patch("droid.common.context_registry.create_fields"):
             ContextRegistry.setup()
 
     result = ContextRegistry.get_context(FileManager, "FileRecords")
@@ -283,7 +283,7 @@ def test_resolve_context_strips_leading_slash():
     somehow reaches _resolve_context, the lstrip("/") normalization
     ensures _ABSOLUTE_PREFIXES matching works correctly.
     """
-    from unity.data_manager.data_manager import DataManager
+    from droid.data_manager.data_manager import DataManager
 
     dm = DataManager.__new__(DataManager)
     dm._base_ctx = "org123/42/Data"

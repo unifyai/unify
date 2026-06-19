@@ -5,7 +5,7 @@ import asyncio
 import pytest
 from pydantic import BaseModel, Field
 
-from unity.actor.code_act_actor import CodeActActor
+from droid.actor.code_act_actor import CodeActActor
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 

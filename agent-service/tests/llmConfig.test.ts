@@ -16,9 +16,9 @@ function run(name: string, fn: () => void) {
   }
 }
 
-run("uses explicit UNITY_UNILLM_URL as the proxy base URL", () => {
+run("uses explicit DROID_UNILLM_URL as the proxy base URL", () => {
   const config = getLlmConfig({
-    UNITY_UNILLM_URL: "https://gateway.example.com/unillm/",
+    DROID_UNILLM_URL: "https://gateway.example.com/unillm/",
     UNIFY_KEY: "uk-test",
   });
 
@@ -30,21 +30,21 @@ run("uses explicit UNITY_UNILLM_URL as the proxy base URL", () => {
   });
 });
 
-run("derives the proxy URL from UNITY_COMMS_URL", () => {
+run("derives the proxy URL from DROID_COMMS_URL", () => {
   assert.strictEqual(
-    resolveUnillmBaseUrl({ UNITY_COMMS_URL: "https://comms.example.com/" }),
+    resolveUnillmBaseUrl({ DROID_COMMS_URL: "https://comms.example.com/" }),
     "https://comms.example.com/unillm",
   );
 });
 
-run("derives the proxy URL from UNITY_GATEWAY_URL", () => {
+run("derives the proxy URL from DROID_GATEWAY_URL", () => {
   assert.strictEqual(
-    resolveUnillmBaseUrl({ UNITY_GATEWAY_URL: "http://localhost:8080/" }),
+    resolveUnillmBaseUrl({ DROID_GATEWAY_URL: "http://localhost:8080/" }),
     "http://localhost:8080/unillm",
   );
 });
 
-run("prefers UNIFY_MODEL over the Unity production default", () => {
+run("prefers UNIFY_MODEL over the Droid production default", () => {
   assert.strictEqual(
     resolveAgentServiceModel({ UNIFY_MODEL: "gpt-5@openai" }),
     "gpt-5@openai",
@@ -53,8 +53,8 @@ run("prefers UNIFY_MODEL over the Unity production default", () => {
 
 run("allows the agent-service model to be overridden without changing routing", () => {
   const config = getLlmConfig({
-    UNITY_UNILLM_URL: "https://gateway.example.com/unillm",
-    UNITY_AGENT_SERVICE_LLM_MODEL: "gpt-5.5@openai",
+    DROID_UNILLM_URL: "https://gateway.example.com/unillm",
+    DROID_AGENT_SERVICE_LLM_MODEL: "gpt-5.5@openai",
     UNIFY_KEY: "uk-test",
   });
 
@@ -64,7 +64,7 @@ run("allows the agent-service model to be overridden without changing routing", 
 
 run("ignores raw provider keys when a UniLLM proxy is configured", () => {
   const config = getLlmConfig({
-    UNITY_COMMS_URL: "https://comms.example.com",
+    DROID_COMMS_URL: "https://comms.example.com",
     UNIFY_KEY: "uk-test",
     [["ANTHROPIC", "API", "KEY"].join("_")]: "unused-anthropic-provider-credential",
     [["OPENAI", "API", "KEY"].join("_")]: "unused-openai-provider-credential",
@@ -89,7 +89,7 @@ run("fails closed when only raw provider keys are configured", () => {
 
 run("requires UNIFY_KEY for proxy authentication", () => {
   assert.throws(
-    () => getLlmConfig({ UNITY_UNILLM_URL: "https://gateway.example.com/unillm" }),
+    () => getLlmConfig({ DROID_UNILLM_URL: "https://gateway.example.com/unillm" }),
     /UNIFY_KEY is required/,
   );
 });

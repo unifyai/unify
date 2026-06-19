@@ -3,9 +3,9 @@ import contextlib
 
 import pytest
 
-from unity.actor.code_act_actor import CodeActActor
-from unity.actor.execution import PythonExecutionSession
-from unity.events.active_work import ACTIVE_WORK
+from droid.actor.code_act_actor import CodeActActor
+from droid.actor.execution import PythonExecutionSession
+from droid.events.active_work import ACTIVE_WORK
 
 
 @pytest.mark.asyncio
@@ -17,7 +17,7 @@ async def test_execute_code_notifications_with_notification_queue():
     automatically).  Lifecycle notifications (execution_started/finished)
     were removed -- only user-emitted notifications should appear.
     """
-    from unity.actor.execution import _CURRENT_SANDBOX
+    from droid.actor.execution import _CURRENT_SANDBOX
 
     notification_q: asyncio.Queue[dict] = asyncio.Queue()
 
@@ -75,7 +75,7 @@ async def test_execute_code_notifications_with_notification_queue_in_named_state
     Validate that notify({...}) also surfaces from executor-managed named
     stateful Python sessions, not just the bound sandbox session 0 path.
     """
-    from unity.actor.execution import _CURRENT_SANDBOX
+    from droid.actor.execution import _CURRENT_SANDBOX
 
     notification_q: asyncio.Queue[dict] = asyncio.Queue()
 
@@ -135,8 +135,8 @@ async def test_tool_loop_handle_next_notification():
     AsyncToolLoopHandle.next_notification() should surface notifications
     emitted by tools running inside the loop.
     """
-    from unity.common.async_tool_loop import start_async_tool_loop
-    from unity.common.llm_client import new_llm_client
+    from droid.common.async_tool_loop import start_async_tool_loop
+    from droid.common.llm_client import new_llm_client
 
     # Create a simple tool that emits a notification
     async def notifying_tool(

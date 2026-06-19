@@ -35,11 +35,11 @@ from tests.conversation_manager.cm_helpers import (
     has_steering_tool_call,
 )
 from tests.conversation_manager.conftest import BOSS
-from unity.conversation_manager.events import (
+from droid.conversation_manager.events import (
     UnifyMessageReceived,
     ActorHandleStarted,
 )
-from unity.conversation_manager.cm_types import ScreenshotEntry
+from droid.conversation_manager.cm_types import ScreenshotEntry
 
 pytestmark = pytest.mark.eval
 
@@ -592,7 +592,7 @@ async def test_cross_turn_voice_demo_act_includes_all_screenshot_filepaths(
     Unify Meet screen share, where the CM needs to pass ALL accumulated
     visual context to the Actor.
     """
-    from unity.conversation_manager.events import (
+    from droid.conversation_manager.events import (
         UnifyMeetReceived,
         UnifyMeetStarted,
         UnifyMeetEnded,

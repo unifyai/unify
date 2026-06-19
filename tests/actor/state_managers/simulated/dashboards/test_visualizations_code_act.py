@@ -18,7 +18,7 @@ import pytest
 from tests.actor.state_managers.utils import (
     make_code_act_actor,
 )
-from unity.manager_registry import ManagerRegistry
+from droid.manager_registry import ManagerRegistry
 
 pytestmark = pytest.mark.eval
 

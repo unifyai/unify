@@ -13,13 +13,13 @@ import asyncio
 import pytest
 from pydantic import BaseModel, Field
 from tests.helpers import _handle_project
-from unity.common.llm_client import new_llm_client
+from droid.common.llm_client import new_llm_client
 from tests.async_helpers import (
     _wait_for_condition,
     _wait_for_tool_request,
 )
 
-from unity.common.async_tool_loop import start_async_tool_loop
+from droid.common.async_tool_loop import start_async_tool_loop
 
 pytestmark = pytest.mark.llm_call
 

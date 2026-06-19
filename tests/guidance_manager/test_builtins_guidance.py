@@ -14,15 +14,15 @@ import pytest
 import unify
 
 from tests.helpers import _handle_project
-from unity.guidance_manager.builtins_catalog import (
+from droid.guidance_manager.builtins_catalog import (
     BUILTINS_GUIDANCE_CONTEXT,
     CONTENT_EMBED_HEAD_CHARS,
     load_snapshot,
     seed_builtin_guidance,
     stable_guidance_id,
 )
-from unity.guidance_manager.guidance_manager import GuidanceManager
-from unity.settings import SETTINGS
+from droid.guidance_manager.guidance_manager import GuidanceManager
+from droid.settings import SETTINGS
 
 _ENTRIES = {
     "test/ffmpeg-frames": {
@@ -46,7 +46,7 @@ _ENTRIES = {
 def builtins_test_project(monkeypatch):
     """Point the builtins project at a unique per-test name and clean it up."""
     name = f"BuiltinsTest-{uuid.uuid4().hex[:10]}"
-    monkeypatch.setattr(SETTINGS, "UNITY_BUILTINS_PROJECT", name)
+    monkeypatch.setattr(SETTINGS, "DROID_BUILTINS_PROJECT", name)
     yield name
     try:
         unify.delete_project(name)
@@ -140,7 +140,7 @@ def test_default_library_seeds_and_surfaces_through_guidance_manager(
 
     # List-style reads return bounded previews (large skills would otherwise
     # flood the caller's context window), each pointing at get_guidance.
-    from unity.guidance_manager.guidance_manager import GUIDANCE_PREVIEW_CHARS
+    from droid.guidance_manager.guidance_manager import GUIDANCE_PREVIEW_CHARS
 
     preview_slack = 200  # truncation marker text
     for row in builtin_rows:

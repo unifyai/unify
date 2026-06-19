@@ -20,8 +20,8 @@ from tests.assertion_helpers import (
 )
 from tests.helpers import _handle_project
 
-from unity.task_scheduler.prompt_builders import build_ask_prompt, build_update_prompt
-from unity.session_details import UNASSIGNED_USER_CONTEXT, UNASSIGNED_ASSISTANT_CONTEXT
+from droid.task_scheduler.prompt_builders import build_ask_prompt, build_update_prompt
+from droid.session_details import UNASSIGNED_USER_CONTEXT, UNASSIGNED_ASSISTANT_CONTEXT
 
 
 def test_ask_system_prompt_formatting(task_scheduler_read_scenario):
@@ -149,13 +149,13 @@ def _build_prompt_in_subprocess(method: str, test_context: str) -> str:
         sys.path.insert(0, os.getcwd())
         import unify
         # Activate the test project before setting context
-        project_name = os.environ.get("UNITY_TEST_PROJECT_NAME", "UnityTests")
+        project_name = os.environ.get("DROID_TEST_PROJECT_NAME", "UnityTests")
         unify.activate(project_name, overwrite=False)
         # Set test-specific context before creating TaskScheduler to avoid races
         test_ctx = os.environ.get("_TEST_CONTEXT")
         if test_ctx:
             unify.set_context(test_ctx, relative=False)
-        import unity.common.prompt_helpers as _ph
+        import droid.common.prompt_helpers as _ph
         from datetime import datetime, timezone
         def _static_now(time_only: bool = False):
             dt = datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc)
@@ -164,8 +164,8 @@ def _build_prompt_in_subprocess(method: str, test_context: str) -> str:
                 return dt.strftime("%I:%M %p ") + label
             return dt.strftime("%A, %B %d, %Y at %I:%M %p ") + label
         _ph.now = _static_now
-        from unity.task_scheduler.task_scheduler import TaskScheduler
-        from unity.task_scheduler.prompt_builders import build_ask_prompt, build_update_prompt
+        from droid.task_scheduler.task_scheduler import TaskScheduler
+        from droid.task_scheduler.prompt_builders import build_ask_prompt, build_update_prompt
         ts = TaskScheduler()
         tools = dict(ts.get_tools("{method}"))
         prompt = build_{method}_prompt(tools=tools, num_tasks=ts._num_tasks(), columns=ts._list_columns()).flatten()

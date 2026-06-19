@@ -3,9 +3,9 @@ from unittest.mock import patch
 import pytest
 from unify.logs import CONTEXT_READ, CONTEXT_WRITE
 
-from unity.common.context_registry import ContextRegistry, TableContext
-from unity.common.tool_outcome import ToolErrorException
-from unity.session_details import SESSION_DETAILS
+from droid.common.context_registry import ContextRegistry, TableContext
+from droid.common.tool_outcome import ToolErrorException
+from droid.session_details import SESSION_DETAILS
 
 
 class RegistryExampleManager:
@@ -61,7 +61,7 @@ def reset_context_registry():
 def test_write_root_resolves_personal_and_space_destinations():
     SESSION_DETAILS.team_ids = [3, 7]
 
-    with patch("unity.common.context_registry._create_context_with_retry"):
+    with patch("droid.common.context_registry._create_context_with_retry"):
         assert (
             ContextRegistry.write_root(
                 RegistryExampleManager,
@@ -103,7 +103,7 @@ def test_provisioning_passes_explicit_owner_scope():
     SESSION_DETAILS.assistant.agent_id = 42
 
     with patch(
-        "unity.common.context_registry._create_context_with_retry",
+        "droid.common.context_registry._create_context_with_retry",
     ) as mock_create:
         ContextRegistry.write_root(RegistryExampleManager, "Tasks", destination=None)
         ContextRegistry.write_root(
@@ -152,7 +152,7 @@ def test_write_root_resolves_all_manager_destination_tables_to_shared_teams():
 
     SESSION_DETAILS.team_ids = [37]
 
-    with patch("unity.common.context_registry._create_context_with_retry"):
+    with patch("droid.common.context_registry._create_context_with_retry"):
         for table_name in (
             "Knowledge",
             "Guidance",
@@ -189,7 +189,7 @@ def test_invalid_destination_raises_structured_error():
 def test_read_roots_returns_personal_then_sorted_teams():
     SESSION_DETAILS.team_ids = [7, 3]
 
-    with patch("unity.common.context_registry._create_context_with_retry"):
+    with patch("droid.common.context_registry._create_context_with_retry"):
         task_roots = ContextRegistry.read_roots(RegistryExampleManager, "Tasks")
         contact_roots = ContextRegistry.read_roots(RegistryExampleManager, "Contacts")
 
@@ -200,7 +200,7 @@ def test_read_roots_returns_personal_then_sorted_teams():
 def test_files_data_and_blacklist_are_shared_scoped():
     SESSION_DETAILS.team_ids = [7]
 
-    with patch("unity.common.context_registry._create_context_with_retry"):
+    with patch("droid.common.context_registry._create_context_with_retry"):
         assert ContextRegistry.read_roots(RegistryExampleManager, "Secrets") == [
             "user123/42",
             "Teams/7",
@@ -227,7 +227,7 @@ def test_resolve_root_supports_dashboard_tables_without_provisioning():
     SESSION_DETAILS.team_ids = [7]
 
     with patch(
-        "unity.common.context_registry._create_context_with_retry",
+        "droid.common.context_registry._create_context_with_retry",
     ) as create_context:
         manager_name, root_identity, root_context = ContextRegistry.resolve_root(
             RegistryExampleManager,
@@ -246,7 +246,7 @@ def test_resolve_root_supports_dashboard_tables_without_provisioning():
 def test_media_tables_are_shared_scoped(table_name: str):
     SESSION_DETAILS.team_ids = [7, 3]
 
-    with patch("unity.common.context_registry._create_context_with_retry"):
+    with patch("droid.common.context_registry._create_context_with_retry"):
         assert (
             ContextRegistry.write_root(
                 RegistryExampleManager,
@@ -274,7 +274,7 @@ def test_lazy_provisioning_is_cached_per_root():
     SESSION_DETAILS.team_ids = [7]
 
     with patch(
-        "unity.common.context_registry._create_context_with_retry",
+        "droid.common.context_registry._create_context_with_retry",
     ) as create_context:
         ContextRegistry.write_root(
             RegistryExampleManager,
@@ -321,7 +321,7 @@ def test_lazy_provisioning_is_cached_per_root():
 def test_landed_shared_tables_accept_space_destinations(table_name: str):
     SESSION_DETAILS.team_ids = [7]
 
-    with patch("unity.common.context_registry._create_context_with_retry"):
+    with patch("droid.common.context_registry._create_context_with_retry"):
         assert (
             ContextRegistry.write_root(
                 RegistryExampleManager,

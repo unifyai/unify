@@ -23,7 +23,7 @@ The importer clones each source repository at the **pinned commit**,
 verifies the directory integrity hash (so what is imported provably matches
 the pin), parses each ``SKILL.md`` with the shared ``skill_to_guidance``
 helpers, and writes the committed snapshot consumed by
-``unity.guidance_manager.builtins_catalog.seed_builtin_guidance``.
+``droid.guidance_manager.builtins_catalog.seed_builtin_guidance``.
 
 Updates are always explicit: bump the pin in the manifest, re-run the
 importer, review the snapshot diff, run the guidance eval suites, land.
@@ -318,7 +318,7 @@ def check_drift(pins: List[PinnedSkill], *, workdir: Path) -> List[Dict[str, str
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    from unity.guidance_manager.builtins_catalog import SNAPSHOT_PATH
+    from droid.guidance_manager.builtins_catalog import SNAPSHOT_PATH
 
     parser = argparse.ArgumentParser(
         description=(

@@ -3,11 +3,11 @@ from __future__ import annotations
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from unity.deploy_runtime import (
+from droid.deploy_runtime import (
     BootstrapSecretRecord,
     JobAssignmentRecord,
 )
-from unity.conversation_manager.comms_manager import CommsManager
+from droid.conversation_manager.comms_manager import CommsManager
 
 
 def _session_record(
@@ -69,28 +69,28 @@ async def test_poll_for_assignment_bootstraps_from_assistant_session():
     event_broker.publish = AsyncMock()
 
     with (
-        patch("unity.conversation_manager.comms_manager.SESSION_DETAILS") as session,
+        patch("droid.conversation_manager.comms_manager.SESSION_DETAILS") as session,
         patch(
-            "unity.conversation_manager.comms_manager.wait_for_assistant_session_name",
+            "droid.conversation_manager.comms_manager.wait_for_assistant_session_name",
             return_value="assistant-session-42",
         ),
         patch(
-            "unity.conversation_manager.comms_manager.read_job_assignment_record",
+            "droid.conversation_manager.comms_manager.read_job_assignment_record",
             return_value=JobAssignmentRecord(
                 session_name="assistant-session-42",
                 binding_id="binding-42",
             ),
         ),
         patch(
-            "unity.conversation_manager.comms_manager.read_assistant_session",
+            "droid.conversation_manager.comms_manager.read_assistant_session",
             return_value=_session_record(),
         ),
         patch(
-            "unity.conversation_manager.comms_manager.read_session_bootstrap_secret_record",
+            "droid.conversation_manager.comms_manager.read_session_bootstrap_secret_record",
             return_value=_secret_record(),
         ),
         patch(
-            "unity.conversation_manager.comms_manager.mark_job_container_ready",
+            "droid.conversation_manager.comms_manager.mark_job_container_ready",
         ) as mark_ready,
     ):
         session.assistant.agent_id = None
@@ -104,20 +104,20 @@ async def test_poll_for_assignment_bootstraps_from_assistant_session():
         cm.subscribe_to_topic = MagicMock()
 
         with patch(
-            "unity.conversation_manager.comms_manager.SETTINGS",
+            "droid.conversation_manager.comms_manager.SETTINGS",
         ) as settings:
-            settings.conversation.JOB_NAME = "unity-2026-03-30-u1234"
+            settings.conversation.JOB_NAME = "droid-2026-03-30-u1234"
             settings.ENV_SUFFIX = ""
             await cm._poll_for_assignment()
 
         assert session.assistant.agent_id == 42
-        cm.subscribe_to_topic.assert_called_once_with("unity-42-sub", max_messages=10)
+        cm.subscribe_to_topic.assert_called_once_with("droid-42-sub", max_messages=10)
         event_broker.publish.assert_awaited()
         publish_channel, payload = event_broker.publish.await_args.args
         assert publish_channel == "app:comms:startup"
         assert "assistant_id" in payload
         assert "binding-42" in payload
-        mark_ready.assert_called_once_with("unity-2026-03-30-u1234")
+        mark_ready.assert_called_once_with("droid-2026-03-30-u1234")
 
 
 @pytest.mark.asyncio
@@ -126,13 +126,13 @@ async def test_poll_for_assignment_waits_for_current_binding_after_rollover():
     event_broker.publish = AsyncMock()
 
     with (
-        patch("unity.conversation_manager.comms_manager.SESSION_DETAILS") as session,
+        patch("droid.conversation_manager.comms_manager.SESSION_DETAILS") as session,
         patch(
-            "unity.conversation_manager.comms_manager.wait_for_assistant_session_name",
+            "droid.conversation_manager.comms_manager.wait_for_assistant_session_name",
             return_value="assistant-session-42",
         ),
         patch(
-            "unity.conversation_manager.comms_manager.read_job_assignment_record",
+            "droid.conversation_manager.comms_manager.read_job_assignment_record",
             side_effect=[
                 JobAssignmentRecord(
                     session_name="assistant-session-42",
@@ -145,18 +145,18 @@ async def test_poll_for_assignment_waits_for_current_binding_after_rollover():
             ],
         ),
         patch(
-            "unity.conversation_manager.comms_manager.read_assistant_session",
+            "droid.conversation_manager.comms_manager.read_assistant_session",
             return_value=_session_record(),
         ),
         patch(
-            "unity.conversation_manager.comms_manager.read_session_bootstrap_secret_record",
+            "droid.conversation_manager.comms_manager.read_session_bootstrap_secret_record",
             return_value=_secret_record(),
         ) as read_secret_record,
         patch(
-            "unity.conversation_manager.comms_manager.mark_job_container_ready",
+            "droid.conversation_manager.comms_manager.mark_job_container_ready",
         ) as mark_ready,
         patch(
-            "unity.conversation_manager.comms_manager.asyncio.sleep",
+            "droid.conversation_manager.comms_manager.asyncio.sleep",
             new_callable=AsyncMock,
         ) as sleep_mock,
     ):
@@ -166,16 +166,16 @@ async def test_poll_for_assignment_waits_for_current_binding_after_rollover():
         cm.subscribe_to_topic = MagicMock()
 
         with patch(
-            "unity.conversation_manager.comms_manager.SETTINGS",
+            "droid.conversation_manager.comms_manager.SETTINGS",
         ) as settings:
-            settings.conversation.JOB_NAME = "unity-2026-03-30-u1234"
+            settings.conversation.JOB_NAME = "droid-2026-03-30-u1234"
             settings.ENV_SUFFIX = ""
             await cm._poll_for_assignment()
 
         sleep_mock.assert_awaited_once_with(5)
         read_secret_record.assert_called_once()
-        cm.subscribe_to_topic.assert_called_once_with("unity-42-sub", max_messages=10)
-        mark_ready.assert_called_once_with("unity-2026-03-30-u1234")
+        cm.subscribe_to_topic.assert_called_once_with("droid-42-sub", max_messages=10)
+        mark_ready.assert_called_once_with("droid-2026-03-30-u1234")
 
 
 @pytest.mark.asyncio
@@ -184,34 +184,34 @@ async def test_poll_for_assignment_waits_for_secret_owned_by_current_activation(
     event_broker.publish = AsyncMock()
 
     with (
-        patch("unity.conversation_manager.comms_manager.SESSION_DETAILS") as session,
+        patch("droid.conversation_manager.comms_manager.SESSION_DETAILS") as session,
         patch(
-            "unity.conversation_manager.comms_manager.wait_for_assistant_session_name",
+            "droid.conversation_manager.comms_manager.wait_for_assistant_session_name",
             return_value="assistant-session-42",
         ),
         patch(
-            "unity.conversation_manager.comms_manager.read_job_assignment_record",
+            "droid.conversation_manager.comms_manager.read_job_assignment_record",
             return_value=JobAssignmentRecord(
                 session_name="assistant-session-42",
                 binding_id="binding-42",
             ),
         ),
         patch(
-            "unity.conversation_manager.comms_manager.read_assistant_session",
+            "droid.conversation_manager.comms_manager.read_assistant_session",
             return_value=_session_record(),
         ),
         patch(
-            "unity.conversation_manager.comms_manager.read_session_bootstrap_secret_record",
+            "droid.conversation_manager.comms_manager.read_session_bootstrap_secret_record",
             side_effect=[
                 _secret_record(owner_activation_id="activation-old"),
                 _secret_record(),
             ],
         ) as read_secret_record,
         patch(
-            "unity.conversation_manager.comms_manager.mark_job_container_ready",
+            "droid.conversation_manager.comms_manager.mark_job_container_ready",
         ) as mark_ready,
         patch(
-            "unity.conversation_manager.comms_manager.asyncio.sleep",
+            "droid.conversation_manager.comms_manager.asyncio.sleep",
             new_callable=AsyncMock,
         ) as sleep_mock,
     ):
@@ -221,13 +221,13 @@ async def test_poll_for_assignment_waits_for_secret_owned_by_current_activation(
         cm.subscribe_to_topic = MagicMock()
 
         with patch(
-            "unity.conversation_manager.comms_manager.SETTINGS",
+            "droid.conversation_manager.comms_manager.SETTINGS",
         ) as settings:
-            settings.conversation.JOB_NAME = "unity-2026-03-30-u1234"
+            settings.conversation.JOB_NAME = "droid-2026-03-30-u1234"
             settings.ENV_SUFFIX = ""
             await cm._poll_for_assignment()
 
         sleep_mock.assert_awaited_once_with(5)
         assert read_secret_record.call_count == 2
-        cm.subscribe_to_topic.assert_called_once_with("unity-42-sub", max_messages=10)
-        mark_ready.assert_called_once_with("unity-2026-03-30-u1234")
+        cm.subscribe_to_topic.assert_called_once_with("droid-42-sub", max_messages=10)
+        mark_ready.assert_called_once_with("droid-2026-03-30-u1234")

@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime, timezone, timedelta
-from unity.image_manager.utils import make_solid_png_base64
+from droid.image_manager.utils import make_solid_png_base64
 
 import pytest
 
-from unity.transcript_manager.transcript_manager import TranscriptManager
-from unity.image_manager.image_manager import ImageManager
+from droid.transcript_manager.transcript_manager import TranscriptManager
+from droid.image_manager.image_manager import ImageManager
 from tests.helpers import _handle_project
-from unity.image_manager.types import AnnotatedImageRefs, RawImageRef, AnnotatedImageRef
-from unity.contact_manager.types.contact import Contact
+from droid.image_manager.types import AnnotatedImageRefs, RawImageRef, AnnotatedImageRef
+from droid.contact_manager.types.contact import Contact
 
 PNG_BLUE_B64 = make_solid_png_base64(32, 32, (0, 0, 255))
 

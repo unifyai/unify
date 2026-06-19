@@ -9,9 +9,9 @@ body:
       Thanks for taking the time to file a bug report.
 
       Before submitting:
-      - Search [existing issues](https://github.com/unifyai/unity/issues) to avoid duplicates.
-      - Try `unity update` and confirm the bug still reproduces.
-      - If this is install-related, run `unity doctor` and include its output below.
+      - Search [existing issues](https://github.com/unifyai/droid/issues) to avoid duplicates.
+      - Try `droid update` and confirm the bug still reproduces.
+      - If this is install-related, run `droid doctor` and include its output below.
 
 - type: textarea
   id: description
@@ -29,7 +29,7 @@ body:
     label: Steps to reproduce
     description: Minimal steps to trigger the bug. The more specific, the faster we can fix it.
     placeholder: |
-      1. `unity` from a fresh terminal
+      1. `droid` from a fresh terminal
       2. Send the message "..."
       3. Observe ...
   validations:
@@ -56,9 +56,9 @@ body:
     label: Affected surface
     multiple: true
     options:
-    - CLI (`unity`)
-    - Voice (`unity --live-voice`)
-    - Installer / setup (`scripts/install.sh`, `unity setup`, `unity doctor`)
+    - CLI (`droid`)
+    - Voice (`droid --live-voice`)
+    - Installer / setup (`scripts/install.sh`, `droid setup`, `droid doctor`)
     - Local Orchestra (Docker / Postgres)
     - Tests (`tests/parallel_run.sh`)
     - A specific state manager (Contact / Knowledge / Task / Transcript / Guidance / Function / File / Image / Web / Secret / Blacklist / Data)
@@ -86,18 +86,18 @@ body:
     placeholder: "3.12.7"
 
 - type: input
-  id: unity-commit
+  id: droid-commit
   attributes:
-    label: Unity commit
-    description: Output of `git rev-parse --short HEAD` in the unity repo.
+    label: Droid commit
+    description: Output of `git rev-parse --short HEAD` in the droid repo.
     placeholder: "aaabf3d4"
 
 - type: textarea
   id: doctor
   attributes:
-    label: "`unity doctor` output (recommended)"
+    label: "`droid doctor` output (recommended)"
     description: |
-      Paste the full output of `unity doctor`. This catches the majority of install / environment bugs without back-and-forth.
+      Paste the full output of `droid doctor`. This catches the majority of install / environment bugs without back-and-forth.
     render: shell
 
 - type: textarea
@@ -105,7 +105,7 @@ body:
   attributes:
     label: Additional logs / traceback
     description: |
-      Relevant log lines from `logs/unity/`, `logs/orchestra/`, or pytest output if applicable.
+      Relevant log lines from `logs/droid/`, `logs/orchestra/`, or pytest output if applicable.
     render: shell
 
 - type: textarea

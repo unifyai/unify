@@ -27,12 +27,12 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 PYTEST_LOGS_DIR = REPO_ROOT / "logs" / "pytest"
 
 
-def get_unity_sockets() -> List[str]:
-    """Get all unity* tmux sockets for the current user."""
+def get_droid_sockets() -> List[str]:
+    """Get all droid* tmux sockets for the current user."""
     socket_dir = Path(f"/tmp/tmux-{os.getuid()}")
     if not socket_dir.exists():
         return []
-    return [s.name for s in socket_dir.glob("unity*")]
+    return [s.name for s in socket_dir.glob("droid*")]
 
 
 @dataclass
@@ -86,12 +86,12 @@ def list_tmux_sessions(socket: Optional[str] = None) -> List[TmuxSession]:
 
     Args:
         socket: If provided, list sessions from this specific socket.
-                If None, list from all unity* sockets.
+                If None, list from all droid* sockets.
     """
     if socket:
         sockets = [socket]
     else:
-        sockets = get_unity_sockets()
+        sockets = get_droid_sockets()
         if not sockets:
             return []
 
@@ -136,12 +136,12 @@ def kill_tmux_session(name: str, socket: Optional[str] = None) -> bool:
     Args:
         name: Session name to kill.
         socket: If provided, use this specific socket.
-                If None, search all unity* sockets for the session.
+                If None, search all droid* sockets for the session.
     """
     if socket:
         sockets = [socket]
     else:
-        sockets = get_unity_sockets()
+        sockets = get_droid_sockets()
 
     for sock in sockets:
         try:
@@ -321,7 +321,7 @@ class ParallelRunner:
         self._created_sessions: List[tuple[str, str]] = []  # (socket, session_name)
         # Generate a unique socket name for this runner instance so all runs
         # within the same test use the same socket (enables collision detection)
-        self._socket_name = f"unity_test_{os.getpid()}"
+        self._socket_name = f"droid_test_{os.getpid()}"
 
     def run(
         self,
@@ -351,21 +351,21 @@ class ParallelRunner:
         # Ensure UTF-8 locale for proper emoji handling in tmux session names
         run_env["LC_ALL"] = "en_US.UTF-8"
         run_env["LANG"] = "en_US.UTF-8"
-        # Clear UNITY_LOG_SUBDIR so the nested script derives its own datetime-prefixed subdir
+        # Clear DROID_LOG_SUBDIR so the nested script derives its own datetime-prefixed subdir
         # (otherwise it inherits the outer parallel_run.sh's log subdir)
-        run_env.pop("UNITY_LOG_SUBDIR", None)
+        run_env.pop("DROID_LOG_SUBDIR", None)
         # Use a consistent socket name for all runs within this runner instance
         # This enables collision detection between sequential runs in the same test
-        run_env["UNITY_TEST_SOCKET"] = self._socket_name
+        run_env["DROID_TEST_SOCKET"] = self._socket_name
         # Skip the heavyweight shared project preparation for nested parallel_run.sh calls.
         # The fixture tests don't need the real UnityTests project, and the outer test runner
         # has already prepared it. This dramatically speeds up nested invocations.
-        run_env["UNITY_SKIP_SHARED_PROJECT_PREP"] = "1"
+        run_env["DROID_SKIP_SHARED_PROJECT_PREP"] = "1"
         if env:
             run_env.update(env)
 
         # Determine the actual socket name (user override takes precedence)
-        actual_socket = run_env.get("UNITY_TEST_SOCKET", self._socket_name)
+        actual_socket = run_env.get("DROID_TEST_SOCKET", self._socket_name)
 
         # Record existing sessions (log subdir will be parsed from script output)
         existing_sessions = {(s.socket, s.name) for s in list_tmux_sessions()}

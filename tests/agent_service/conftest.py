@@ -7,7 +7,7 @@ are missing (no Node.js, no ``node_modules``, magnitude-core not built).
 
 import os
 
-os.environ["SKIP_UNITY_TEST_INIT"] = "1"
+os.environ["SKIP_DROID_TEST_INIT"] = "1"
 
 import shutil
 import socket

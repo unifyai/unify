@@ -13,19 +13,20 @@ import pytest_asyncio
 import os
 import unify
 
-from unity.contact_manager.contact_manager import ContactManager
-from unity.transcript_manager.transcript_manager import TranscriptManager
-from unity.transcript_manager.types.message import Message
-from unity.manager_registry import ManagerRegistry
-from unity.common.context_registry import ContextRegistry
+from droid.contact_manager.contact_manager import ContactManager
+from droid.transcript_manager.transcript_manager import TranscriptManager
+from droid.transcript_manager.types.message import Message
+from droid.manager_registry import ManagerRegistry
+from droid.common.context_registry import ContextRegistry
 from tests.helpers import (
     get_or_create_contact,
     rebuild_id_mapping,
     is_scenario_seeded,
     scenario_file_lock,
     mutation_test_lock,
+    restore_scenario_context,
 )
-from unity.common.embed_utils import ensure_vector_column
+from droid.common.embed_utils import ensure_vector_column
 
 SCENARIO_COMMIT_HASHES: Dict[str, Any] = {}
 
@@ -567,13 +568,12 @@ def tm_manager_scenario(tm_scenario):
     # Use mutation_test_lock to prevent parallel rollbacks from orphaning
     # derived column data (embeddings) created by concurrent search operations
     with mutation_test_lock("tm_read"):
+        restore_scenario_context("tests/transcript_manager/Scenario")
         # Rollback INSIDE the lock to prevent other tests
         # from rolling back while this test is running
         scenario_names = list(SCENARIO_COMMIT_HASHES.keys())
         if scenario_names:
             unify.map(rollback_context, scenario_names, mode="asyncio")
 
-        # Re-set the scenario context to ensure nested operations work
-        unify.set_context("tests/transcript_manager/Scenario", relative=False)
-
+        restore_scenario_context("tests/transcript_manager/Scenario")
         yield tm, _ID_BY_NAME

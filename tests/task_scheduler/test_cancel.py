@@ -1,7 +1,7 @@
 from tests.helpers import _handle_project
-from unity.task_scheduler.task_scheduler import TaskScheduler
+from droid.task_scheduler.task_scheduler import TaskScheduler
 import pytest
-from unity.task_scheduler.types.status import Status
+from droid.task_scheduler.types.status import Status
 
 
 @_handle_project
@@ -50,7 +50,7 @@ def test_cancel_multiple_tasks():
 
 @_handle_project
 def test_cancel_completed_task_raises():
-    """Attempting to cancel a task that is already completed should raise an AssertionError."""
+    """Attempting to cancel a task that is already completed should raise a ValueError."""
     ts = TaskScheduler()
 
     # Create a task that is already completed
@@ -60,6 +60,6 @@ def test_cancel_completed_task_raises():
         status="completed",
     )
 
-    # Expect an AssertionError when trying to cancel it
-    with pytest.raises(AssertionError):
+    # Expect a ValueError when trying to cancel it
+    with pytest.raises(ValueError):
         ts._cancel_tasks([0])

@@ -16,7 +16,7 @@
     "**/logs/**": true,
     "**/.pytest_cache/**": true,
     "**/.ruff_cache/**": true,
-    "**/.unity_plans/**": true,
+    "**/.droid_plans/**": true,
     "**/__pycache__/**": true,
     "**/.cache.ndjson": true,
     "**/.cache_write.ndjson": true
@@ -26,7 +26,7 @@
     "**/logs": true,
     "**/.pytest_cache": true,
     "**/.ruff_cache": true,
-    "**/.unity_plans": true,
+    "**/.droid_plans": true,
     "**/__pycache__": true,
     "**/.cache.ndjson": true,
     "**/.cache_write.ndjson": true
@@ -38,12 +38,12 @@
     "**/.ruff_cache",
     "**/__pycache__",
     "**/logs",
-    "**/.unity_plans"
+    "**/.droid_plans"
   ],
   "python.analysis.diagnosticMode": "openFilesOnly",
   "python.analysis.indexing": false,
   "cursorpyright.analysis.include": [
-    "unity",
+    "droid",
     "tests",
     "conftest.py"
   ],
@@ -54,7 +54,7 @@
     "**/.ruff_cache",
     "**/__pycache__",
     "**/logs",
-    "**/.unity_plans"
+    "**/.droid_plans"
   ],
   "cursorpyright.analysis.diagnosticMode": "openFilesOnly",
   "cursorpyright.analysis.disableWorkspaceSymbol": true,

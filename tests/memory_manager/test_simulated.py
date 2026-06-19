@@ -24,11 +24,11 @@ import functools
 import pytest
 import asyncio
 
-from unity.memory_manager.simulated import SimulatedMemoryManager
-from unity.contact_manager.simulated import SimulatedContactManager
-from unity.knowledge_manager.simulated import SimulatedKnowledgeManager
-from unity.task_scheduler.simulated import SimulatedTaskScheduler
-from unity.contact_manager.types.contact import Contact
+from droid.memory_manager.simulated import SimulatedMemoryManager
+from droid.contact_manager.simulated import SimulatedContactManager
+from droid.knowledge_manager.simulated import SimulatedKnowledgeManager
+from droid.task_scheduler.simulated import SimulatedTaskScheduler
+from droid.contact_manager.types.contact import Contact
 
 # shared helper used throughout the test-suite -- isolates each test run
 from tests.helpers import _handle_project, DEFAULT_TIMEOUT

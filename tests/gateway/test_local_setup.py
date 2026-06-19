@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from unity.gateway.app import create_app
-from unity.gateway.local_setup import (
+from droid.gateway.app import create_app
+from droid.gateway.local_setup import (
     all_channel_setups,
     callback_urls,
     channel_names,
@@ -78,4 +78,4 @@ def test_env_placeholder_lines_do_not_duplicate_shared_credentials() -> None:
     assert len(variable_lines) == len(set(variable_lines))
     assert "ORCHESTRA_ADMIN_KEY=" in variable_lines
     assert "TWILIO_AUTH_TOKEN=" in variable_lines
-    assert "UNITY_GATEWAY_PUBLIC_URL=" in variable_lines
+    assert "DROID_GATEWAY_PUBLIC_URL=" in variable_lines

@@ -6,23 +6,23 @@ This Node.js service acts as an HTTP wrapper for the Magnitude `BrowserAgent`, a
 
 1.  **Install Dependencies**: Ensure you have Node.js installed.
 
-2.  **Build local magnitude-core (Unity fork setup)**:
+2.  **Build local magnitude-core (Droid fork setup)**:
 
-    This repo uses a local checkout of Unity's modified `magnitude-core` via a file dependency (see `package.json`: `"magnitude-core": "file:../magnitude/packages/magnitude-core"`). The `magnitude/` directory contains our fork of the magnitude repository with Unity-specific enhancements.
+    This repo uses a local checkout of Droid's modified `magnitude-core` via a file dependency (see `package.json`: `"magnitude-core": "file:../magnitude/packages/magnitude-core"`). The `magnitude/` directory contains our fork of the magnitude repository with Droid-specific enhancements.
 
     ```bash
-    # First, clone the unity repository if you haven't already
-    git clone <unity-repo-url>
-    cd unity
+    # First, clone the droid repository if you haven't already
+    git clone <droid-repo-url>
+    cd droid
 
-    # Clone Unity's magnitude fork into the magnitude/ subdirectory (private repo - requires auth)
+    # Clone Droid's magnitude fork into the magnitude/ subdirectory (private repo - requires auth)
     # Option 1: Using CLONE_TOKEN environment variable
     git clone https://x-access-token:${CLONE_TOKEN}@github.com/unifyai/magnitude.git magnitude
     # Option 2: Using gh CLI (if authenticated)
     gh repo clone unifyai/magnitude magnitude
 
     cd magnitude
-    git checkout unity-modifications  # Our branch with Unity enhancements
+    git checkout unity-modifications  # Our branch with Droid enhancements
 
     # Build magnitude-core
     cd packages/magnitude-core
@@ -46,13 +46,13 @@ This Node.js service acts as an HTTP wrapper for the Magnitude `BrowserAgent`, a
     # agent-service/.env
     ORCHESTRA_URL="..."
     UNIFY_KEY="..."
-    # Hosted deploys usually provide UNITY_COMMS_URL; local gateway runs can
-    # provide UNITY_GATEWAY_URL; use UNITY_UNILLM_URL to point at a specific
+    # Hosted deploys usually provide DROID_COMMS_URL; local gateway runs can
+    # provide DROID_GATEWAY_URL; use DROID_UNILLM_URL to point at a specific
     # OpenAI-compatible UniLLM base URL directly.
-    UNITY_COMMS_URL="..."
-    # UNITY_GATEWAY_URL="http://localhost:8080"
-    # UNITY_UNILLM_URL="http://localhost:8080/unillm"
-    # UNITY_AGENT_SERVICE_LLM_MODEL="claude-4.6-sonnet@anthropic"
+    DROID_COMMS_URL="..."
+    # DROID_GATEWAY_URL="http://localhost:8080"
+    # DROID_UNILLM_URL="http://localhost:8080/unillm"
+    # DROID_AGENT_SERVICE_LLM_MODEL="claude-4.6-sonnet@anthropic"
     # Optional - enables POST /captcha/solve to delegate reCAPTCHA v2
     # challenges to the AntiCaptcha worker pool.  Sign up at
     # https://anti-captcha.com, deposit ~$5 (covers ~10k v2 solves), and
@@ -86,9 +86,9 @@ cd agent-service
 npm install --force   # ensures the local file: dependency is re-copied
 ```
 
-### Working with the Unity Fork
+### Working with the Droid Fork
 
-The `magnitude/` directory is our fork of the magnitude repository with Unity-specific modifications. Key points:
+The `magnitude/` directory is our fork of the magnitude repository with Droid-specific modifications. Key points:
 
 - **Branch**: Always work on `unity-modifications` branch
 - **Upstream sync**: Use `upstream-main` branch to pull in latest magnitude changes

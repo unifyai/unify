@@ -8,11 +8,11 @@ from datetime import datetime, timezone, timedelta
 import pytest
 
 from tests.helpers import _handle_project
-from unity.actor.simulated import SimulatedActor
-from unity.task_scheduler.task_scheduler import TaskScheduler
-from unity.task_scheduler.types.status import Status
-from unity.task_scheduler.types.schedule import Schedule
-from unity.task_scheduler.types.trigger import Trigger, Medium
+from droid.actor.simulated import SimulatedActor
+from droid.task_scheduler.task_scheduler import TaskScheduler
+from droid.task_scheduler.types.status import Status
+from droid.task_scheduler.types.schedule import Schedule
+from droid.task_scheduler.types.trigger import Trigger, Medium
 
 # --------------------------------------------------------------------------- #
 # 1.  Creation – triggerable tasks                                            #
@@ -75,7 +75,6 @@ def test_update_trigger_on_scheduled_task_raises():
     ts = TaskScheduler()
 
     future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
-    qid = ts._allocate_new_queue_id()
     tid = ts._create_task(
         name="Morning maintenance window",
         description="Auto-patch servers tomorrow.",
@@ -90,7 +89,7 @@ def test_update_trigger_on_scheduled_task_raises():
 
 
 # --------------------------------------------------------------------------- #
-# 4.  Removing the trigger ⇢ status falls back to *queued*                    #
+# 4.  Removing the trigger ⇢ status falls back to *scheduled*                 #
 # --------------------------------------------------------------------------- #
 
 
@@ -109,7 +108,7 @@ def test_clear_trigger_transitions_status():
 
     row = ts._filter_tasks(filter=f"task_id == {tid}", limit=1)[0]
     assert row.trigger is None
-    assert row.status == Status.queued
+    assert row.status == Status.scheduled
 
 
 # --------------------------------------------------------------------------- #
@@ -136,35 +135,7 @@ def test_start_at_on_trigger_task_raises():
 
 
 # --------------------------------------------------------------------------- #
-# 6.  Queue operations must reject trigger-tasks                              #
-# --------------------------------------------------------------------------- #
-
-
-@_handle_project
-def test_update_queue_rejects_trigger_tasks():
-    ts = TaskScheduler()
-
-    # Normal queued task
-    qid = ts._allocate_new_queue_id()
-    ts._create_task(
-        name="Prep deck",
-        description="Slides.",
-        schedule=Schedule(),
-    )
-
-    # Trigger-based task
-    trig_tid = ts._create_task(
-        name="Pickup support call",
-        description="Answer phone when VIP calls.",
-        trigger=Trigger(medium=Medium.PHONE_CALL),
-    )["details"]["task_id"]
-
-    with pytest.raises(ValueError):
-        ts._set_queue(queue_id=qid, order=[trig_tid, 0])
-
-
-# --------------------------------------------------------------------------- #
-# 7.  Instance cloning when a triggerable task is started                     #
+# 6.  Instance cloning when a triggerable task is started                     #
 # --------------------------------------------------------------------------- #
 
 

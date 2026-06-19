@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from tests.helpers import _handle_project
-from unity.task_scheduler.task_scheduler import TaskScheduler
+from droid.task_scheduler.task_scheduler import TaskScheduler
 
 
 @pytest.mark.requires_real_unify
@@ -54,7 +54,7 @@ def test_task_scheduler_reduce_param_shapes():
     grouped_list = ts._reduce(
         metric="sum",
         keys="task_id",
-        group_by=["status", "queue_id"],
+        group_by=["status", "priority"],
     )
     assert isinstance(grouped_list, dict)
 
@@ -62,7 +62,7 @@ def test_task_scheduler_reduce_param_shapes():
     grouped_list_multi = ts._reduce(
         metric="mean",
         keys=["task_id"],
-        group_by=["status", "queue_id"],
+        group_by=["status", "priority"],
     )
     assert isinstance(grouped_list_multi, dict)
 

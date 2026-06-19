@@ -4,14 +4,14 @@ import pytest
 import unify
 from datetime import datetime, UTC
 from pydantic import BaseModel, Field
-from unity.common.context_store import TableStore
-from unity.common.model_to_fields import model_to_fields
-from unity.image_manager.utils import make_solid_png_base64
-from unity.image_manager.types.image import Image
+from droid.common.context_store import TableStore
+from droid.common.model_to_fields import model_to_fields
+from droid.image_manager.utils import make_solid_png_base64
+from droid.image_manager.types.image import Image
 
 from tests.helpers import _handle_project
 from pydantic import ValidationError
-from unity.image_manager.types import (
+from droid.image_manager.types import (
     RawImageRef,
     AnnotatedImageRef,
     ImageRefs,

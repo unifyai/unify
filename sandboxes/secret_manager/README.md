@@ -1,7 +1,7 @@
 Secret Manager Sandbox
 ======================
 
-This folder contains an interactive playground for the `SecretManager` component in `unity/secret_manager/`. Use it to experiment with the manager in isolation – create or update secrets, resolve placeholders into real values (for trusted local use), and observe how the tool-loop behaves before integrating elsewhere.
+This folder contains an interactive playground for the `SecretManager` component in `droid/secret_manager/`. Use it to experiment with the manager in isolation – create or update secrets, resolve placeholders into real values (for trusted local use), and observe how the tool-loop behaves before integrating elsewhere.
 
 ### Video walkthroughs
 

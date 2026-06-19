@@ -5,12 +5,12 @@ import time
 import re
 import pytest
 
-from unity.common.async_tool_loop import (
+from droid.common.async_tool_loop import (
     start_async_tool_loop,
     AsyncToolLoopHandle,
 )
-from unity.events.event_bus import EVENT_BUS
-from unity.common.llm_client import new_llm_client, PendingThinkingLog
+from droid.events.event_bus import EVENT_BUS
+from droid.common.llm_client import new_llm_client, PendingThinkingLog
 
 # All tests in this file require EventBus publishing to verify event behavior
 pytestmark = pytest.mark.enable_eventbus

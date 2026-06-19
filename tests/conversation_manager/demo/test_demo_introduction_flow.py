@@ -25,7 +25,7 @@ from tests.conversation_manager.cm_helpers import (
 from tests.conversation_manager.demo.conftest import (
     DEMO_OPERATOR,
 )
-from unity.conversation_manager.events import (
+from droid.conversation_manager.events import (
     SMSReceived,
     SMSSent,
     PhoneCallSent,
@@ -177,7 +177,7 @@ async def test_boss_learns_name_via_set_boss_details(initialized_cm):
 async def test_prospect_sends_first_message(initialized_cm):
     """The prospect (contact_id=1) sends a message directly — assistant should respond warmly."""
     # First update boss with a name so the contact has some identity
-    from unity.conversation_manager.domains.brain_action_tools import (
+    from droid.conversation_manager.domains.brain_action_tools import (
         ConversationManagerBrainActionTools,
     )
 
@@ -205,7 +205,7 @@ async def test_prospect_sends_first_message(initialized_cm):
 async def test_prospect_asks_about_email(initialized_cm):
     """When the prospect shares their email, the assistant should save it."""
     # Set up boss with name
-    from unity.conversation_manager.domains.brain_action_tools import (
+    from droid.conversation_manager.domains.brain_action_tools import (
         ConversationManagerBrainActionTools,
     )
 

@@ -20,7 +20,7 @@ import json
 import pytest
 import functools
 
-from unity.knowledge_manager.knowledge_manager import KnowledgeManager
+from droid.knowledge_manager.knowledge_manager import KnowledgeManager
 from tests.helpers import _handle_project
 from tests.assertion_helpers import assertion_failed
 

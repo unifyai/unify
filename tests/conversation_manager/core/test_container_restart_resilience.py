@@ -42,16 +42,16 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 
-from unity.conversation_manager.in_memory_event_broker import (
+from droid.conversation_manager.in_memory_event_broker import (
     create_in_memory_event_broker,
     reset_in_memory_event_broker,
 )
-from unity.conversation_manager.events import (
+from droid.conversation_manager.events import (
     SMSReceived,
     PhoneCallStarted,
     BackupContactsEvent,
 )
-from unity.conversation_manager.cm_types import Mode
+from droid.conversation_manager.cm_types import Mode
 
 # =============================================================================
 # Subprocess Helpers for True Process Isolation
@@ -82,12 +82,12 @@ def _run_cm_in_subprocess(code_body: str, env_vars: dict | None = None) -> dict:
         sys.path.insert(0, os.getcwd())
 
         # Minimal imports needed for CM
-        from unity.conversation_manager.in_memory_event_broker import (
+        from droid.conversation_manager.in_memory_event_broker import (
             create_in_memory_event_broker,
             reset_in_memory_event_broker,
         )
-        from unity.conversation_manager.conversation_manager import ConversationManager
-        from unity.conversation_manager.cm_types import Mode
+        from droid.conversation_manager.conversation_manager import ConversationManager
+        from droid.conversation_manager.cm_types import Mode
         from datetime import datetime
 
         def create_cm(assistant_id="test_assistant"):
@@ -96,7 +96,7 @@ def _run_cm_in_subprocess(code_body: str, env_vars: dict | None = None) -> dict:
             stop = asyncio.Event()
             return ConversationManager(
                 event_broker=broker,
-                job_name=f"unity-test-{{datetime.now().strftime('%Y%m%d%H%M%S')}}",
+                job_name=f"droid-test-{{datetime.now().strftime('%Y%m%d%H%M%S')}}",
                 user_id="test_user",
                 assistant_id=assistant_id,
                 user_first_name="Test",
@@ -205,11 +205,11 @@ def alice_contact():
 
 def create_minimal_cm(event_broker, stop_event, assistant_id="test_assistant"):
     """Create a minimal ConversationManager for testing."""
-    from unity.conversation_manager.conversation_manager import ConversationManager
+    from droid.conversation_manager.conversation_manager import ConversationManager
 
     return ConversationManager(
         event_broker=event_broker,
-        job_name=f"unity-test-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+        job_name=f"droid-test-{datetime.now().strftime('%Y%m%d%H%M%S')}",
         user_id="test_user",
         assistant_id=assistant_id,
         user_first_name="Test",
@@ -332,13 +332,13 @@ return get_cm_state(cm)
         )
 
         # Handle the event
-        from unity.conversation_manager.domains.event_handlers import EventHandler
+        from droid.conversation_manager.domains.event_handlers import EventHandler
 
         with patch.object(cm2, "request_llm_run", new_callable=AsyncMock):
             await EventHandler.handle_event(event, cm2)
 
         # Verify the message was processed
-        from unity.conversation_manager.cm_types import Medium
+        from droid.conversation_manager.cm_types import Medium
 
         sms_thread = cm2.contact_index.get_messages_for_contact(
             alice_contact["contact_id"],
@@ -393,7 +393,7 @@ class TestMidCallCrashRecovery:
         # but test defensive behavior
         event = PhoneCallStarted(contact=boss_contact)
 
-        from unity.conversation_manager.domains.event_handlers import EventHandler
+        from droid.conversation_manager.domains.event_handlers import EventHandler
 
         with patch.object(cm, "request_llm_run", new_callable=AsyncMock):
             await EventHandler.handle_event(event, cm)
@@ -433,8 +433,8 @@ return get_cm_state(cm)
         # Container B: Receives new call from Boss (in a NEW process)
         container_b_code = """
 from unittest.mock import AsyncMock, patch
-from unity.conversation_manager.events import PhoneCallReceived
-from unity.conversation_manager.domains.event_handlers import EventHandler
+from droid.conversation_manager.events import PhoneCallReceived
+from droid.conversation_manager.domains.event_handlers import EventHandler
 
 boss_contact = {
     "contact_id": 1,
@@ -523,16 +523,16 @@ class TestStaleAssistantJobsState:
 
         cm = create_minimal_cm(event_broker, stop, assistant_id="live_assistant")
         cm.initialized = True
-        cm.job_name = "unity-test-job"
+        cm.job_name = "droid-test-job"
 
-        from unity.conversation_manager import assistant_jobs
+        from droid.conversation_manager import assistant_jobs
 
         with patch.object(assistant_jobs, "mark_job_done") as mock_mark_done:
             await cm.cleanup()
 
             # Should have called mark_job_done with job name and inactivity timeout
             mock_mark_done.assert_called_once_with(
-                "unity-test-job",
+                "droid-test-job",
                 cm.inactivity_timeout,
             )
 
@@ -546,9 +546,9 @@ class TestStaleAssistantJobsState:
 
         cm = create_minimal_cm(event_broker, stop, assistant_id=None)
         cm.initialized = True
-        cm.job_name = "unity-idle-job"
+        cm.job_name = "droid-idle-job"
 
-        from unity.conversation_manager import assistant_jobs
+        from droid.conversation_manager import assistant_jobs
 
         with patch.object(assistant_jobs, "mark_job_done") as mock_mark_done:
             await cm.cleanup()
@@ -713,7 +713,7 @@ class TestInitializationInterruption:
         Note: Since the queue is module-level, this test verifies that
         a fresh import/reset gives a clean queue.
         """
-        from unity.conversation_manager.domains.managers_utils import (
+        from droid.conversation_manager.domains.managers_utils import (
             _operations_queue,
             queue_operation,
         )
@@ -764,7 +764,7 @@ class TestEventBrokerReconnection:
             await pubsub.psubscribe("app:comms:*", "app:actor:*")
 
             # Publish a test event
-            from unity.conversation_manager.events import Ping
+            from droid.conversation_manager.events import Ping
 
             await event_broker.publish("app:comms:ping", Ping(kind="test").to_json())
 
@@ -860,7 +860,7 @@ class TestContactIndexResilience:
         # BackupContactsEvent arrives (as it would from CommsManager)
         event = BackupContactsEvent(contacts=[boss_contact, alice_contact])
 
-        from unity.conversation_manager.domains.event_handlers import EventHandler
+        from droid.conversation_manager.domains.event_handlers import EventHandler
 
         await EventHandler.handle_event(event, cm)
 
@@ -894,7 +894,7 @@ class TestCallManagerStateReset:
         assert cm.call_manager.conference_name == ""
         assert cm.call_manager._call_proc is None
 
-        from unity.contact_manager.types.contact import UNASSIGNED
+        from droid.contact_manager.types.contact import UNASSIGNED
 
         assert cm.call_manager.call_exchange_id == UNASSIGNED
         assert cm.call_manager.unify_meet_exchange_id == UNASSIGNED

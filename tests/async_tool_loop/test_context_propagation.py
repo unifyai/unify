@@ -16,10 +16,10 @@ import asyncio
 from typing import List
 
 import pytest
-from unity.common.async_tool_loop import ChatContextPropagation, start_async_tool_loop
-from unity.common._async_tool.context_tracker import LoopContextState
+from droid.common.async_tool_loop import ChatContextPropagation, start_async_tool_loop
+from droid.common._async_tool.context_tracker import LoopContextState
 from tests.helpers import _handle_project
-from unity.common.llm_client import new_llm_client
+from droid.common.llm_client import new_llm_client
 
 
 @pytest.mark.asyncio
@@ -250,7 +250,7 @@ async def test_ask_inspection_loop_context_without_parent(monkeypatch) -> None:
     """Without _parent_chat_context, the inspection loop uses LLM_DECIDES
     propagation with no parent_chat_context — the transcript already has the
     embedded parent context header from when the loop was started."""
-    from unity.common import async_tool_loop as atl
+    from droid.common import async_tool_loop as atl
 
     captured_kwargs: dict = {}
 
@@ -293,7 +293,7 @@ async def test_ask_inspection_loop_with_parent_context(monkeypatch) -> None:
     """With _parent_chat_context, the inspection loop uses LLM_DECIDES
     propagation, passes the real parent context, and replaces the stale
     runtime parent-context header in the transcript with a pointer."""
-    from unity.common import async_tool_loop as atl
+    from droid.common import async_tool_loop as atl
 
     captured: dict = {}
 
@@ -367,7 +367,7 @@ async def test_ask_inspection_loop_with_parent_context(monkeypatch) -> None:
 async def test_ask_inspection_prompt_redacts_image_payloads(monkeypatch) -> None:
     """Inspection ask should redact image blobs from both the system message
     (inspected transcript) and the parent_chat_context kwarg."""
-    from unity.common import async_tool_loop as atl
+    from droid.common import async_tool_loop as atl
 
     captured: dict = {}
 
@@ -760,7 +760,7 @@ async def test_context_state_integration_symbolic() -> None:
 
 def test_method_to_schema_exposes_context_cont_control():
     """Verify that method_to_schema exposes include_parent_chat_context_cont when requested."""
-    from unity.common.llm_helpers import method_to_schema
+    from droid.common.llm_helpers import method_to_schema
 
     def steering_method(
         question: str,
@@ -793,9 +793,9 @@ async def test_dynamic_tool_factory_marks_steering_methods():
     import asyncio
     from unittest.mock import MagicMock
 
-    from unity.common._async_tool.dynamic_tools_factory import DynamicToolFactory
-    from unity.common._async_tool.tools_data import ToolsData
-    from unity.common._async_tool.tools_utils import ToolCallMetadata
+    from droid.common._async_tool.dynamic_tools_factory import DynamicToolFactory
+    from droid.common._async_tool.tools_data import ToolsData
+    from droid.common._async_tool.tools_utils import ToolCallMetadata
 
     # Create mock tools_data
     mock_client = MagicMock()
@@ -869,9 +869,9 @@ async def test_dynamic_tool_factory_marks_opted_out():
     import asyncio
     from unittest.mock import MagicMock
 
-    from unity.common._async_tool.dynamic_tools_factory import DynamicToolFactory
-    from unity.common._async_tool.tools_data import ToolsData
-    from unity.common._async_tool.tools_utils import ToolCallMetadata
+    from droid.common._async_tool.dynamic_tools_factory import DynamicToolFactory
+    from droid.common._async_tool.tools_data import ToolsData
+    from droid.common._async_tool.tools_utils import ToolCallMetadata
 
     # Create mock tools_data
     mock_client = MagicMock()
@@ -940,11 +940,11 @@ async def test_ask_dynamic_tool_exposes_include_parent_chat_context():
     import asyncio
     from unittest.mock import MagicMock
 
-    from unity.common._async_tool.dynamic_tools_factory import DynamicToolFactory
-    from unity.common._async_tool.tools_data import ToolsData
-    from unity.common._async_tool.tools_utils import ToolCallMetadata
-    from unity.common.async_tool_loop import SteerableToolHandle
-    from unity.common.llm_helpers import method_to_schema
+    from droid.common._async_tool.dynamic_tools_factory import DynamicToolFactory
+    from droid.common._async_tool.tools_data import ToolsData
+    from droid.common._async_tool.tools_utils import ToolCallMetadata
+    from droid.common.async_tool_loop import SteerableToolHandle
+    from droid.common.llm_helpers import method_to_schema
 
     # Create a handle with an ask method that accepts _parent_chat_context
     class TestHandle(SteerableToolHandle):
@@ -1059,11 +1059,11 @@ async def test_ask_dynamic_tool_context_control_not_exposed_for_other_steering_m
     import asyncio
     from unittest.mock import MagicMock
 
-    from unity.common._async_tool.dynamic_tools_factory import DynamicToolFactory
-    from unity.common._async_tool.tools_data import ToolsData
-    from unity.common._async_tool.tools_utils import ToolCallMetadata
-    from unity.common.async_tool_loop import SteerableToolHandle
-    from unity.common.llm_helpers import method_to_schema
+    from droid.common._async_tool.dynamic_tools_factory import DynamicToolFactory
+    from droid.common._async_tool.tools_data import ToolsData
+    from droid.common._async_tool.tools_utils import ToolCallMetadata
+    from droid.common.async_tool_loop import SteerableToolHandle
+    from droid.common.llm_helpers import method_to_schema
 
     class TestHandle(SteerableToolHandle):
         def __init__(self):
@@ -1170,8 +1170,8 @@ async def test_ask_dynamic_tool_respects_include_parent_chat_context_false():
     2. But we never processed it in the dynamic tool dispatch
     3. So the LLM's choice was ignored and context was always passed
     """
-    from unity.common._async_tool.tools_data import compute_context_injection
-    from unity.common._async_tool.context_tracker import LoopContextState
+    from droid.common._async_tool.tools_data import compute_context_injection
+    from droid.common._async_tool.context_tracker import LoopContextState
 
     # Test case 1: include_parent_chat_context=False should NOT inject context
     args_opt_out = {

@@ -5,7 +5,7 @@ standard: a ``SKILL.md`` file carrying YAML frontmatter (``name``,
 ``description``, ...) followed by a markdown body of procedural
 instructions, optionally accompanied by bundled ``scripts/`` helpers.
 
-Unity's :class:`~unity.guidance_manager.guidance_manager.GuidanceManager`
+Droid's :class:`~droid.guidance_manager.guidance_manager.GuidanceManager`
 stores the same kind of procedural how-to content as guidance entries
 (``title`` + freeform ``content``).  The mapping is therefore close to
 one-to-one:

@@ -2,12 +2,12 @@ name: CodeQL
 
 # Static analysis via GitHub CodeQL. Findings are uploaded to the
 # repository Security tab. Complements OSV-Scanner (which covers
-# dependency CVEs) by scanning Unity's own source code for common
+# dependency CVEs) by scanning Droid's own source code for common
 # vulnerability patterns — SQL injection, path traversal, command
 # injection, hard-coded credentials, etc.
 #
-# Languages scoped to Unity's actual surface:
-#   - python                — the unity/ package
+# Languages scoped to Droid's actual surface:
+#   - python                — the droid/ package
 #   - javascript-typescript — the agent-service/ subproject
 #   - actions               — the .github/workflows/ pipeline itself
 #

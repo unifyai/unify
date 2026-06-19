@@ -2,8 +2,8 @@ from __future__ import annotations
 
 
 from tests.helpers import _handle_project
-from unity.function_manager.function_manager import FunctionManager
-from unity.guidance_manager.guidance_manager import GuidanceManager
+from droid.function_manager.function_manager import FunctionManager
+from droid.guidance_manager.guidance_manager import GuidanceManager
 
 
 @_handle_project

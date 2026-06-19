@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from unity.common import runtime_oauth
+from droid.common import runtime_oauth
 
 
 def _future_expiry() -> str:
