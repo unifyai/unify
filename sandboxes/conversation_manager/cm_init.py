@@ -7,7 +7,8 @@ Starts a ConversationManager in-process with:
 - SMS and outbound call tools kept when a local gateway is running (i.e., when
   ORCHESTRA_ADMIN_KEY + Twilio credentials are configured and the gateway started
   successfully); stripped otherwise
-- send_unify_message kept (uses Pub/Sub; no gateway admin auth required)
+- send_unify_message kept and backed by an in-memory outbound transport so the
+  tool succeeds without needing GCP credentials or a live Pub/Sub topic
 """
 
 from __future__ import annotations
@@ -66,6 +67,21 @@ async def initialize_cm(
         enable_comms_manager=False,
         apply_test_mocks=False,
     )
+
+    # Without CommsManager the outbound transport singleton is never set, so
+    # send_unify_message falls back to the raw GCP Pub/Sub path and fails with
+    # a 400 (empty GCP_PROJECT_ID). Inject an in-memory transport so the tool
+    # returns success. The REPL display is driven by the event broker, not
+    # Pub/Sub, so no response visibility is lost.
+    try:
+        from droid.gateway.outbound_inmemory import InMemoryOutboundTransport
+        from droid.conversation_manager.domains.comms_utils import (
+            set_outbound_transport,
+        )
+
+        set_outbound_transport(InMemoryOutboundTransport())
+    except Exception:
+        pass
 
     actor = ActorFactory.create_actor(
         cfg,
