@@ -66,7 +66,6 @@ RUN npm ci
 ENV PLAYWRIGHT_BROWSERS_PATH=/Droid/.cache/ms-playwright
 RUN mkdir -p /Droid/.cache/ms-playwright && \
     cd /app/magnitude/packages/magnitude-core && npx patchright install --with-deps chromium && \
-    cp -a /root/.cache/ms-playwright/. /Droid/.cache/ms-playwright/ && \
     chown -R unityuser:unityuser /Droid/.cache/ms-playwright
 
 # Configure Chromium as default browser so GUI apps and XFCE can find it
