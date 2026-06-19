@@ -308,6 +308,30 @@ _orchestra_repo_path="${ORCHESTRA_REPO_PATH:-$_orchestra_search_base/../orchestr
 _local_orchestra_script="$_orchestra_repo_path/scripts/local.sh"
 unset _git_common_dir _main_repo_git _orchestra_search_base
 
+_full_stack_state_file() {
+  printf '%s/full-stack-state.json' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
+}
+
+_port_is_listening() {
+  local _port="$1"
+  lsof -nP -iTCP:"$_port" -sTCP:LISTEN 2>/dev/null | sed -n '2p' | grep -q .
+}
+
+_full_stack_source_is_active() {
+  local _state_file
+  _state_file="$(_full_stack_state_file)"
+  if [[ -f "$_state_file" ]]; then
+    python3 - "$_state_file" <<'PY' >/dev/null || return 1
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as fh:
+    mode = json.load(fh).get("mode")
+raise SystemExit(0 if not mode or mode == "source" else 1)
+PY
+  fi
+  _port_is_listening 8000 && _port_is_listening 8001
+}
+
 if _is_local_url "${ORCHESTRA_URL:-}"; then
   if [[ -x "$_local_orchestra_script" ]]; then
     # Set up orchestra configuration for tests
@@ -341,7 +365,11 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
       fi
 
       if [[ "$_needs_restart" == "true" ]]; then
-        if _is_git_worktree || _is_adjacent_clone; then
+        if _full_stack_source_is_active && [[ "${DROID_ALLOW_ISOLATED_TEST_ORCHESTRA:-0}" != "1" ]]; then
+          echo "Full local stack detected: reusing existing Orchestra instead of purging/restarting it."
+          _create_orchestra_log_symlinks
+          export ORCHESTRA_URL="$_local_url"
+        elif _is_git_worktree || _is_adjacent_clone; then
           # SHARED MODE: Don't restart orchestra (would disrupt other worktrees/clones).
           # Instead, create symlinks so logs appear in expected locations.
           echo "Shared orchestra: using existing instance, creating log symlinks..."
@@ -373,56 +401,62 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
       unset _config_file _needs_restart _current_otel_dir
     else
       # Not running - need to start it
-      # Stop any stale orchestra state first
-      "$_local_orchestra_script" stop >/dev/null 2>&1 || true
+      if _full_stack_source_is_active && [[ "${DROID_ALLOW_ISOLATED_TEST_ORCHESTRA:-0}" != "1" ]]; then
+        echo "Full local stack detected: reusing stack-owned Orchestra."
+        export ORCHESTRA_URL="${ORCHESTRA_URL:-http://127.0.0.1:8000/v0}"
+        unset _local_url
+      else
+        # Stop any stale orchestra state first
+        "$_local_orchestra_script" stop >/dev/null 2>&1 || true
 
-      # Remove any existing PostgreSQL container so we get fresh one with correct max_connections
-      _db_port="${ORCHESTRA_DB_PORT:-5432}"
-      for _container in $(docker ps -a --filter "publish=${_db_port}" --format "{{.Names}}" 2>/dev/null); do
-        docker stop "$_container" >/dev/null 2>&1 || true
-        docker rm "$_container" >/dev/null 2>&1 || true
-      done
-      unset _container
-
-      # Wait for DB port to be fully released (Docker Desktop can be slow)
-      if lsof -i ":$_db_port" &>/dev/null; then
-        echo "Waiting for port $_db_port to be released..."
-        _max_wait=30
-        _waited=0
-        while lsof -i ":$_db_port" &>/dev/null && (( _waited < _max_wait )); do
-          sleep 1
-          (( ++_waited ))
+        # Remove any existing PostgreSQL container so we get fresh one with correct max_connections
+        _db_port="${ORCHESTRA_DB_PORT:-5432}"
+        for _container in $(docker ps -a --filter "publish=${_db_port}" --format "{{.Names}}" 2>/dev/null); do
+          docker stop "$_container" >/dev/null 2>&1 || true
+          docker rm "$_container" >/dev/null 2>&1 || true
         done
-        echo "Port $_db_port released."
-      fi
-      unset _db_port _max_wait _waited
+        unset _container
 
-      echo "Starting local orchestra..."
-      # Capture local.sh stdout+stderr to a log file so CI can surface the
-      # actual failure reason when start fails (orchestra's own server log
-      # at /tmp/orchestra-local-server.log only exists if start_orchestra_server
-      # reached its background-exec line; earlier failures — check_docker,
-      # start_db_container, run_migrations, etc. — leave no breadcrumb without
-      # this file). The "Dump orchestra logs on failure" step in tests.yml
-      # tails this when a job fails.
-      _orchestra_start_log="/tmp/orchestra-startup.log"
-      if "$_local_orchestra_script" start >"$_orchestra_start_log" 2>&1; then
-        if _local_url=$("$_local_orchestra_script" check 2>/dev/null); then
-          echo "Using local orchestra: $_local_url"
-          export ORCHESTRA_URL="$_local_url"
+        # Wait for DB port to be fully released (Docker Desktop can be slow)
+        if lsof -i ":$_db_port" &>/dev/null; then
+          echo "Waiting for port $_db_port to be released..."
+          _max_wait=30
+          _waited=0
+          while lsof -i ":$_db_port" &>/dev/null && (( _waited < _max_wait )); do
+            sleep 1
+            (( ++_waited ))
+          done
+          echo "Port $_db_port released."
+        fi
+        unset _db_port _max_wait _waited
+
+        echo "Starting local orchestra..."
+        # Capture local.sh stdout+stderr to a log file so CI can surface the
+        # actual failure reason when start fails (orchestra's own server log
+        # at /tmp/orchestra-local-server.log only exists if start_orchestra_server
+        # reached its background-exec line; earlier failures — check_docker,
+        # start_db_container, run_migrations, etc. — leave no breadcrumb without
+        # this file). The "Dump orchestra logs on failure" step in tests.yml
+        # tails this when a job fails.
+        _orchestra_start_log="/tmp/orchestra-startup.log"
+        if "$_local_orchestra_script" start >"$_orchestra_start_log" 2>&1; then
+          if _local_url=$("$_local_orchestra_script" check 2>/dev/null); then
+            echo "Using local orchestra: $_local_url"
+            export ORCHESTRA_URL="$_local_url"
+          else
+            echo "Warning: Local orchestra started but not responding" >&2
+            echo "----- local.sh start output -----" >&2
+            cat "$_orchestra_start_log" >&2 || true
+            echo "---------------------------------" >&2
+          fi
         else
-          echo "Warning: Local orchestra started but not responding" >&2
+          echo "Warning: Could not start local orchestra" >&2
           echo "----- local.sh start output -----" >&2
           cat "$_orchestra_start_log" >&2 || true
           echo "---------------------------------" >&2
         fi
-      else
-        echo "Warning: Could not start local orchestra" >&2
-        echo "----- local.sh start output -----" >&2
-        cat "$_orchestra_start_log" >&2 || true
-        echo "---------------------------------" >&2
+        unset _orchestra_start_log
       fi
-      unset _orchestra_start_log
     fi
   else
     echo "Warning: Orchestra script not found at $_local_orchestra_script" >&2
