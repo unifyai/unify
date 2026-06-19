@@ -55,6 +55,8 @@ from sandboxes.conversation_manager.desktop_bootstrap import (
     try_start_desktop_direct,
     try_auto_bootstrap_desktop,
     stop_desktop_container,
+    _docker_available,
+    _desktop_image_exists,
 )
 from sandboxes.conversation_manager.event_subscriber import subscribe_to_responses
 from sandboxes.conversation_manager.event_tree_display import EventTreeDisplay
@@ -728,33 +730,29 @@ async def _main_async() -> None:
                 if _lk.summary and "non-local URL" not in _lk.summary:
                     print(f"[livekit] {_lk.summary}")
 
-        # Auto-start agent-service before initialize_cm() so the computer
-        # backend inside ActorFactory is wired to the correct URL at creation
-        # time.  The post-init validation loop also handles recovery, but it
-        # runs too late — the backend URL is frozen once initialize_cm returns.
-        # Only attempt when the agent-service directory actually exists (normal
-        # OSS users who haven't installed the Magnitude service are skipped).
-        _as_local_url = "http://localhost:3001"
+        # Auto-start the desktop container (Docker) before initialize_cm() so
+        # the computer backend is configured with a live agent-service URL.
+        # This must happen before init because ActorFactory reads
+        # args.agent_server_url when creating the backend; late starts in the
+        # post-init validation loop are fine for recovery but cannot fix the
+        # initial wiring.
+        _container_url = getattr(args, "agent_server_url", "http://localhost:3000")
         if (
             getattr(args, "agent_service_bootstrap", "guide") == "auto"
-            and not getattr(args, "_agent_service_process", None)
-            and (project_root / "agent-service").exists()
+            and not getattr(args, "_desktop_container_id", None)
+            and _docker_available()
+            and _desktop_image_exists()
         ):
-            _as = await asyncio.to_thread(
-                try_start_agent_service_direct,
+            _desktop = await asyncio.to_thread(
+                try_start_desktop_direct,
                 repo_root=project_root,
-                agent_server_url=_as_local_url,
+                agent_server_url=_container_url,
                 progress=(lambda m: print(m)),
             )
-            if _as.ok:
-                if _as.process is not None:
-                    setattr(args, "_agent_service_process", _as.process)
-                setattr(args, "local_url", _as_local_url)
-                # Point the computer backend at the locally-started service
-                # (port 3001) rather than the Docker container default (3000).
-                args.agent_server_url = _as_local_url
-            elif _as.summary and "Missing" not in _as.summary:
-                print(f"[agent-service] {_as.summary}")
+            if _desktop.ok and _desktop.container_id:
+                setattr(args, "_desktop_container_id", _desktop.container_id)
+            elif _desktop.summary:
+                print(f"[desktop] {_desktop.summary}")
 
         # Redirect voice-agent worker stdout/stderr to a log file so the
         # terminal stays clean. Must happen before initialize_cm() so the
