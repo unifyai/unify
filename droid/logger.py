@@ -541,10 +541,58 @@ class _MemoryFileFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         mem = _get_memory_tag()
         base = super().format(record)
+        if record.name.startswith("livekit.plugins.elevenlabs"):
+            elevenlabs_extra = _format_elevenlabs_extra(record)
+            if elevenlabs_extra:
+                base = f"{base} {elevenlabs_extra}"
         if mem:
             # Insert memory tag after the log-level field
             return f"{base} {mem}"
         return base
+
+
+def _format_elevenlabs_extra(record: logging.LogRecord) -> str:
+    """Render ElevenLabs provider error metadata hidden in logging ``extra``."""
+
+    fields: dict[str, Any] = {}
+    for key in ("context_id", "error"):
+        value = getattr(record, key, None)
+        if value not in (None, ""):
+            fields[key] = value
+    data = getattr(record, "data", None)
+    if isinstance(data, dict):
+        safe_data = {
+            key: value
+            for key, value in data.items()
+            if key
+            not in {
+                "audio",
+                "alignment",
+                "normalizedAlignment",
+                "normalized_alignment",
+            }
+        }
+        if safe_data:
+            fields["data"] = safe_data
+    if not fields:
+        return ""
+    try:
+        return json.dumps({"elevenlabs": fields}, ensure_ascii=False, default=str)
+    except TypeError:
+        return f"elevenlabs={fields!r}"
+
+
+def _append_elevenlabs_extra(record: logging.LogRecord) -> bool:
+    """Attach ElevenLabs provider metadata before any handler formats the record."""
+
+    extra = _format_elevenlabs_extra(record)
+    if extra and extra not in str(record.msg):
+        record.msg = f"{record.getMessage()} {extra}"
+        record.args = ()
+    return True
+
+
+logging.getLogger("livekit.plugins.elevenlabs").addFilter(_append_elevenlabs_extra)
 
 
 def configure_log_dir(log_dir: Optional[str] = None) -> Optional[Path]:
