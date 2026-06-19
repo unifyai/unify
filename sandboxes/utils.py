@@ -2869,12 +2869,15 @@ def activate_project(project_name: str, overwrite: bool = False) -> None:
         def _full_stack_source_is_active() -> bool:
             if os.environ.get("DROID_ALLOW_ISOLATED_TEST_ORCHESTRA") == "1":
                 return False
-            state_file = Path(
-                os.environ.get(
-                    "SELF_HOST_STATE_DIR",
-                    os.environ.get("DROID_HOME", str(Path.home() / ".droid")),
-                ),
-            ) / "full-stack-state.json"
+            state_file = (
+                Path(
+                    os.environ.get(
+                        "SELF_HOST_STATE_DIR",
+                        os.environ.get("DROID_HOME", str(Path.home() / ".droid")),
+                    ),
+                )
+                / "full-stack-state.json"
+            )
             if state_file.exists():
                 try:
                     import json
@@ -2894,7 +2897,9 @@ def activate_project(project_name: str, overwrite: bool = False) -> None:
                         capture_output=True,
                         check=False,
                     )
-                    ports_running.append(result.returncode == 0 and len(result.stdout.splitlines()) > 1)
+                    ports_running.append(
+                        result.returncode == 0 and len(result.stdout.splitlines()) > 1
+                    )
             except FileNotFoundError:
                 return False
             return all(ports_running)
