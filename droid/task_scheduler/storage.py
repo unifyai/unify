@@ -27,8 +27,8 @@ class TasksStore:
     """
     Adapter around Unify I/O for the Tasks context.
 
-    Centralises reads, writes, field management, metrics, and checkpoint
-    helpers used by the scheduler and related utilities.
+    Centralises reads, writes, field management, and metrics used by the
+    scheduler and related utilities.
     """
 
     def __init__(
@@ -403,5 +403,3 @@ class TasksStore:
             context=self._ctx,
             logs=logs,
         )
-
-    # (removed) Checkpoint helpers – checkpoints are in-memory only in TaskScheduler

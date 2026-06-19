@@ -200,7 +200,7 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         excluded_methods=frozenset({"get_active_singleton_handle"}),
         priority=4,
         domain="Durable Work & Tracking",
-        description="Task management, work queues, assignments, deadlines, priorities",
+        description="Task management, assignments, deadlines, priorities",
         use_when="Questions about tasks/work items, 'what's due?', 'tasks assigned to X?', 'high-priority items?'",
         examples="'What tasks are due today?', 'Show Alice's open tasks', 'List high-priority items'",
     ),

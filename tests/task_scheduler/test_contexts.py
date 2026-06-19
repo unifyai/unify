@@ -63,8 +63,8 @@ async def test_ask_uses_parent_context():
 @_handle_project
 async def test_ask_requests_clarification():
     """
-    There are **two** queued tasks.  Asking “What is the description of the
-    queued task?” is ambiguous; the model must request clarification, then
+    There are **two** pending tasks.  Asking “What is the description of the
+    pending task?” is ambiguous; the model must request clarification, then
     finish with the correct description once we specify which one.
     """
     ts = TaskScheduler()
@@ -158,8 +158,8 @@ async def test_update_uses_parent_context():
 @_handle_project
 async def test_update_requests_clarification():
     """
-    Two queued tasks – user says “Set the queued task priority to high”.
-    update() should ask *which* queued task, wait for answer, then update.
+    Two pending tasks – user says “Set the pending task priority to high”.
+    update() should ask *which* pending task, wait for answer, then update.
     """
     ts = TaskScheduler()
 
