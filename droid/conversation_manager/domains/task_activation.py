@@ -279,10 +279,9 @@ def _describe_trigger_candidate(candidate: TaskActivationSnapshot) -> str:
 
     label = _activation_label(candidate)
     summary = _activation_summary(candidate)
-    urgency = "interrupting" if candidate.interrupt else "non-interrupting"
     if summary and summary != label:
-        return f"'{label}' ({urgency}): {summary}"
-    return f"'{label}' ({urgency})"
+        return f"'{label}': {summary}"
+    return f"'{label}'"
 
 
 def _trigger_candidate_fast_brain_context(

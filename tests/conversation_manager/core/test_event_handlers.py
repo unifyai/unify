@@ -2464,7 +2464,6 @@ class TestTriggeredTaskNotifications:
                 activation_kind="triggered",
                 execution_mode="live",
                 trigger_from_contact_ids=[2],
-                interrupt=True,
                 task_name="Invoice follow-up",
                 task_description="Help handle invoice-related requests from Alice.",
             ),
