@@ -10,8 +10,7 @@ Coverage
   - Write with None
   - Clone after SET NULL
 
-Note: schedule previously had next_task/prev_task fields for queue chaining,
-      which have since been removed.
+
 """
 
 from __future__ import annotations

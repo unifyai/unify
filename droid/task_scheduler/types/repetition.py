@@ -69,8 +69,8 @@ class RepeatPattern(BaseModel):
         default=None,
         description=(
             "Clock time at which the task should start on each occurrence "
-            "(e.g. 09:00).  When omitted the time is inherited from the "
-            "queue head or resolved dynamically by the scheduler."
+            "(e.g. 09:00).  When omitted the time is resolved dynamically "
+            "by the scheduler."
         ),
     )
 

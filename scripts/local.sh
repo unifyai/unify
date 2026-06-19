@@ -96,6 +96,48 @@ log_success() { echo -e "${GREEN}[OK]${NC} $*"; }
 log_warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $*"; }
 
+full_stack_state_file() {
+  printf '%s/full-stack-state.json' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
+}
+
+port_is_listening() {
+  local port="$1"
+  command -v lsof >/dev/null 2>&1 || return 1
+  lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | sed -n '2p' | grep -q .
+}
+
+full_stack_source_is_active() {
+  local state_file
+  state_file="$(full_stack_state_file)"
+  if [[ -f "$state_file" ]]; then
+    python3 - "$state_file" <<'PY' >/dev/null || return 1
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as fh:
+    mode = json.load(fh).get("mode")
+raise SystemExit(0 if not mode or mode == "source" else 1)
+PY
+  fi
+  if port_is_listening 8000 && port_is_listening 8001; then
+    return 0
+  fi
+  is_running || is_gateway_running
+}
+
+refuse_isolated_when_full_stack_active() {
+  local action="$1"
+  if [[ "${DROID_ALLOW_ISOLATED:-0}" == "1" || -n "${DROID_STACK_ORCHESTRATOR:-}" ]]; then
+    return 0
+  fi
+  if full_stack_source_is_active; then
+    log_error "Refusing isolated Droid $action while the full local stack is active."
+    log_info "Use droid-deploy/selfhost/stack.sh status or repair-console instead."
+    log_info "Override only for intentionally isolated Droid work:"
+    log_info "  DROID_ALLOW_ISOLATED=1 $0 $action"
+    return 1
+  fi
+}
+
 # =============================================================================
 # Prerequisite checks
 # =============================================================================
@@ -197,6 +239,8 @@ is_gateway_running() {
 }
 
 start_gateway() {
+  refuse_isolated_when_full_stack_active start-gateway || return 1
+
   if is_gateway_running; then
     log_success "Droid gateway already running (PID $(cat "$GATEWAY_PIDFILE"))"
     return 0
@@ -394,6 +438,8 @@ __start_full_cm_impl() {
 # =============================================================================
 
 cmd_start() {
+  refuse_isolated_when_full_stack_active start || return 1
+
   local force_mode=""
 
   while [[ $# -gt 0 ]]; do

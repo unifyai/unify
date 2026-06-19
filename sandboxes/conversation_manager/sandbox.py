@@ -18,6 +18,8 @@ import asyncio
 import logging
 import os
 import signal
+import subprocess
+import sys
 import time
 from contextlib import suppress
 from multiprocessing import get_context
@@ -36,18 +38,19 @@ from sandboxes.conversation_manager.config_manager import (
     ActorConfig,
     ConfigurationManager,
 )
-from sandboxes.conversation_manager.agent_service_bootstrap import (
-    free_agent_service_port,
-    try_start_agent_service_direct,
-)
 from sandboxes.conversation_manager.gateway_bootstrap import (
     stop_gateway,
     try_start_gateway_direct,
 )
+from sandboxes.conversation_manager.livekit_bootstrap import (
+    stop_livekit,
+    try_start_livekit_direct,
+)
+from sandboxes.conversation_manager.live_voice import _voice_agent_log_path
 from sandboxes.conversation_manager.desktop_bootstrap import (
-    try_start_desktop_direct,
-    try_auto_bootstrap_desktop,
+    bootstrap_desktop_container,
     stop_desktop_container,
+    _docker_available,
 )
 from sandboxes.conversation_manager.event_subscriber import subscribe_to_responses
 from sandboxes.conversation_manager.event_tree_display import EventTreeDisplay
@@ -63,11 +66,50 @@ from sandboxes.utils import (
 LG = logging.getLogger("conversation_manager_sandbox")
 
 
+def _redirect_voice_worker_output(log_path: Path) -> None:
+    """Redirect voice-agent subprocess output to *log_path* for the sandbox lifetime.
+
+    The persistent LiveKit worker is started inside ``initialize_cm()`` via
+    ``run_script``.  Without this patch the worker subprocess inherits the
+    terminal's stdout/stderr, causing all ``🧠 LLM thinking``, ``🔊 Reply``,
+    and ``⬥ Suppressed speech`` lines to spill into the terminal.
+
+    We patch both module-level bindings of ``run_script`` that
+    ``call_manager`` and ``droid.helpers`` each hold before ``initialize_cm``
+    is called so the worker is spawned with the log file as its fd 1/2.
+    The patch stays in place for the lifetime of the sandbox; subsequent
+    ``_spawn_quiet`` calls in ``live_voice.py`` will temporarily override it
+    during session spawning and then restore it.
+    """
+    import droid.conversation_manager.domains.call_manager as _cm_mod
+    import droid.helpers as _helpers
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_fh = log_path.open("a")
+
+    def _sandboxed_run_script(script, *args, terminal: bool = False):
+        py_cmd = [sys.executable, str(Path(script).expanduser().resolve()), *args]
+        child_env = {
+            **os.environ,
+            "UNIFY_TERMINAL_LOG": "false",
+            "UNILLM_TERMINAL_LOG": "false",
+        }
+        return subprocess.Popen(
+            py_cmd,
+            stdout=log_fh,
+            stderr=log_fh,
+            start_new_session=True,
+            env=child_env,
+        )
+
+    _helpers.run_script = _sandboxed_run_script  # type: ignore[assignment]
+    _cm_mod.run_script = _sandboxed_run_script  # type: ignore[assignment]
+
+
 def _enable_unillm_boundary_logging() -> Path:
-    """Enable full UniLLM request/response file logging for sandbox runs."""
+    """Configure UniLLM request/response file logging for sandbox runs."""
     log_dir = Path(__file__).resolve().parents[2] / "logs" / "unillm"
     log_dir.mkdir(parents=True, exist_ok=True)
-    os.environ["UNILLM_TERMINAL_LOG"] = "true"
     os.environ["UNILLM_LOG_DIR"] = str(log_dir)
     try:
         from unillm.logger import configure_log_dir as _configure_log_dir
@@ -277,15 +319,6 @@ async def _run_gui_mode_multiprocess(*, args: Any, config: dict) -> bool:
             )
         except Exception:
             pass
-        try:
-            await asyncio.to_thread(
-                free_agent_service_port,
-                repo_root=Path(__file__).resolve().parents[2],
-                agent_server_url=config.get("agent_server_url"),
-                progress=(lambda _m: None),
-            )
-        except Exception:
-            pass
 
     # Restart detection: UI exits with a special code when it wants sandbox restart.
     try:
@@ -335,12 +368,13 @@ async def _main_async() -> None:
     parser.add_argument(
         "--agent-service-bootstrap",
         dest="agent_service_bootstrap",
-        default="guide",
+        default="auto",
         choices=["off", "guide", "auto"],
         help=(
             "Mode 3 helper: "
-            "'guide' prints step-by-step setup instructions if agent-service is missing; "
-            "'auto' also tries to install/build/start agent-service automatically."
+            "'auto' (default) proactively installs/starts the agent-service; "
+            "'guide' prints setup instructions if it is missing; "
+            "'off' disables all agent-service management."
         ),
     )
     parser.add_argument(
@@ -440,93 +474,31 @@ async def _main_async() -> None:
                 )
 
             async def _attempt_agent_service_recovery() -> None:
-                """Start both the Docker container (desktop + web-vm) and
-                a local agent-service (web mode).  Either may silently
-                fail without blocking the other.
-                """
+                """Start the Docker desktop container (the only computer-use path)."""
                 container_url = getattr(
                     args,
                     "agent_server_url",
                     "http://localhost:3000",
                 )
-                local_url = getattr(args, "local_url", "http://localhost:3001")
-
-                # 1) Container (desktop + web-vm)
                 existing_container = getattr(args, "_desktop_container_id", None)
-                if existing_container is None:
-                    try:
-                        print("\n[container] Attempting to start (direct)...\n")
-                        res = await asyncio.to_thread(
-                            try_start_desktop_direct,
-                            repo_root=project_root,
-                            agent_server_url=container_url,
-                            progress=(lambda m: print(m)),
-                        )
-                        if res.ok:
-                            setattr(args, "_desktop_container_id", res.container_id)
-                            setattr(args, "container_url", container_url)
-                            print(f"[container] {res.summary}\n")
-                        else:
-                            print(f"[container] {res.summary}\n")
-                            try:
-                                print("[container] Falling back to auto-bootstrap...\n")
-                                res2 = await asyncio.to_thread(
-                                    try_auto_bootstrap_desktop,
-                                    repo_root=project_root,
-                                    agent_server_url=container_url,
-                                    progress=(lambda m: print(m)),
-                                )
-                                if res2.ok:
-                                    setattr(
-                                        args,
-                                        "_desktop_container_id",
-                                        res2.container_id,
-                                    )
-                                    setattr(args, "container_url", container_url)
-                                    print(f"[container] {res2.summary}\n")
-                                else:
-                                    print(f"[container] {res2.summary}\n")
-                            except Exception as exc:
-                                print(f"[container] Auto-bootstrap failed: {exc}\n")
-                    except Exception as exc:
-                        print(f"[container] Direct start failed: {exc}\n")
+                if existing_container is not None:
+                    return
+                print("\n[desktop] Attempting to start container...\n")
+                res = await asyncio.to_thread(
+                    bootstrap_desktop_container,
+                    repo_root=project_root,
+                    agent_server_url=container_url,
+                    progress=(lambda m: print(m)),
+                )
+                if res.ok and res.container_id:
+                    setattr(args, "_desktop_container_id", res.container_id)
+                    setattr(args, "container_url", container_url)
+                    print(f"[desktop] {res.summary}\n")
+                    return
+                print(f"[desktop] {res.summary}\n")
+                raise SystemExit(1)
 
-                # 2) Local agent-service (web mode) -- best-effort
-                existing_proc = getattr(args, "_agent_service_process", None)
-                if existing_proc is None or not (
-                    hasattr(existing_proc, "poll") and existing_proc.poll() is None
-                ):
-                    try:
-                        await asyncio.to_thread(
-                            free_agent_service_port,
-                            repo_root=project_root,
-                            agent_server_url=local_url,
-                            progress=(lambda m: print(m)),
-                        )
-                        print("\n[local-web] Attempting to start agent-service...\n")
-                        res = await asyncio.to_thread(
-                            try_start_agent_service_direct,
-                            repo_root=project_root,
-                            agent_server_url=local_url,
-                            progress=(lambda m: print(m)),
-                        )
-                        if res.ok and res.process is not None:
-                            setattr(args, "_agent_service_process", res.process)
-                            setattr(args, "local_url", local_url)
-                            print(f"[local-web] {res.summary}\n")
-                        else:
-                            if res.process is not None:
-                                try:
-                                    res.process.terminate()
-                                except Exception:
-                                    pass
-                            print(f"[local-web] {res.summary} (web mode unavailable)\n")
-                    except Exception as exc:
-                        print(
-                            f"[local-web] Start failed: {exc} (web mode unavailable)\n",
-                        )
-
-            # In REPL mode, we can optionally attempt agent-service recovery before
+            # In REPL mode, we can optionally attempt desktop recovery before
             # validation. In multi-process GUI mode, the worker owns this lifecycle.
             if not bool(getattr(args, "gui", False)):
                 if (
@@ -535,22 +507,12 @@ async def _main_async() -> None:
                 ):
                     await _attempt_agent_service_recovery()
 
-            # If a local agent-service process is running (started on local_url /
-            # port 3001), validate against that URL rather than the container URL
-            # (agent_server_url / port 3000) which may not be running.
-            _local_proc = getattr(args, "_agent_service_process", None)
-            _local_proc_alive = (
-                _local_proc is not None
-                and hasattr(_local_proc, "poll")
-                and _local_proc.poll() is None
-            )
-            _effective_agent_url = (
-                getattr(args, "local_url", "http://localhost:3001")
-                if _local_proc_alive
-                else getattr(args, "agent_server_url", "http://localhost:3000")
-            )
             _validate_kwargs = dict(
-                agent_server_url=_effective_agent_url,
+                agent_server_url=getattr(
+                    args,
+                    "agent_server_url",
+                    "http://localhost:3000",
+                ),
                 require_agent_service_running=(not bool(getattr(args, "gui", False))),
             )
             vr = await asyncio.to_thread(
@@ -565,24 +527,14 @@ async def _main_async() -> None:
             # falling through to the interactive error prompt.
             if not bool(getattr(args, "gui", False)) and _should_offer_agent_help():
                 await _attempt_agent_service_recovery()
-                # Recompute the effective URL — recovery may have started a local
-                # agent-service process that sets args._agent_service_process and
-                # args.local_url, which _validate_kwargs above could not see yet.
-                _post_recovery_proc = getattr(args, "_agent_service_process", None)
-                _post_recovery_alive = (
-                    _post_recovery_proc is not None
-                    and hasattr(_post_recovery_proc, "poll")
-                    and _post_recovery_proc.poll() is None
-                )
-                _post_recovery_url = (
-                    getattr(args, "local_url", "http://localhost:3001")
-                    if _post_recovery_alive
-                    else getattr(args, "agent_server_url", "http://localhost:3000")
-                )
                 vr = await asyncio.to_thread(
                     cfg_mgr.validate_config,
                     selected,
-                    agent_server_url=_post_recovery_url,
+                    agent_server_url=getattr(
+                        args,
+                        "agent_server_url",
+                        "http://localhost:3000",
+                    ),
                     require_agent_service_running=(
                         not bool(getattr(args, "gui", False))
                     ),
@@ -644,9 +596,9 @@ async def _main_async() -> None:
                 continue
             break
 
-        # Attempt to auto-start a local gateway for outbound SMS/calls.
-        # Must happen before initialize_cm so the CM's _local_comms_base_url()
-        # fallback (port 8787) resolves to a live server at first use.
+        # Attempt to auto-start the local gateway for UniLLM proxy traffic
+        # (agent-service computer use) and optional outbound SMS/calls.
+        # Must happen before initialize_cm and the desktop container bootstrap.
         _gateway_already_tracked = getattr(args, "_gateway_process", None) is not None
         if not _gateway_already_tracked:
             _gw = await asyncio.to_thread(
@@ -660,8 +612,58 @@ async def _main_async() -> None:
             else:
                 setattr(args, "_gateway_process", None)
                 setattr(args, "_gateway_url", None)
-                if _gw.summary and "not configured" not in _gw.summary:
-                    print(f"[gateway] {_gw.summary}")
+                print(f"[gateway] {_gw.summary}")
+                if getattr(selected, "actor_type", None) == "codeact_real":
+                    raise SystemExit(1)
+
+        # Auto-start a local LiveKit server when LIVEKIT_URL is unset or
+        # points to localhost but nothing is listening yet.  Must happen before
+        # initialize_cm so call_manager.start_persistent_worker() picks up the
+        # env vars set by the bootstrap when it reads os.environ at runtime.
+        _lk_already_tracked = getattr(args, "_livekit_process", None) is not None
+        if not _lk_already_tracked:
+            _lk = await asyncio.to_thread(
+                try_start_livekit_direct,
+                repo_root=project_root,
+                progress=(lambda m: print(m)),
+            )
+            if _lk.ok:
+                setattr(args, "_livekit_process", _lk.process)
+            else:
+                setattr(args, "_livekit_process", None)
+                if _lk.summary and "non-local URL" not in _lk.summary:
+                    print(f"[livekit] {_lk.summary}")
+
+        # Auto-start the desktop container before initialize_cm() so the computer
+        # backend is configured with a live agent-service URL on port 3000.
+        _container_url = getattr(args, "agent_server_url", "http://localhost:3000")
+        if (
+            getattr(selected, "actor_type", None) == "codeact_real"
+            and getattr(args, "agent_service_bootstrap", "guide") == "auto"
+            and not getattr(args, "_desktop_container_id", None)
+        ):
+            if not _docker_available():
+                print(
+                    "[desktop] Docker is required for computer use but is not available.",
+                )
+                raise SystemExit(1)
+            _desktop = await asyncio.to_thread(
+                bootstrap_desktop_container,
+                repo_root=project_root,
+                agent_server_url=_container_url,
+                progress=(lambda m: print(m)),
+            )
+            if not _desktop.ok or not _desktop.container_id:
+                print(f"[desktop] {_desktop.summary}")
+                raise SystemExit(1)
+            setattr(args, "_desktop_container_id", _desktop.container_id)
+            setattr(args, "container_url", _container_url)
+            print(f"[desktop] {_desktop.summary}")
+
+        # Redirect voice-agent worker stdout/stderr to a log file so the
+        # terminal stays clean. Must happen before initialize_cm() so the
+        # persistent LiveKit worker subprocess inherits the redirected fds.
+        _redirect_voice_worker_output(_voice_agent_log_path())
 
         cm = await initialize_cm(args=args)
         setattr(args, "_cm", cm)
@@ -840,20 +842,6 @@ async def _main_async() -> None:
                     )
             except Exception:
                 pass
-            # If we auto-started a local agent-service, stop it on exit.
-            try:
-                proc = getattr(args, "_agent_service_process", None)
-                if proc is not None and hasattr(proc, "terminate"):
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=2.0)
-                    except Exception:
-                        try:
-                            proc.kill()
-                        except Exception:
-                            pass
-            except Exception:
-                pass
             # If we auto-started a local gateway, stop it on exit.
             try:
                 gw_proc = getattr(args, "_gateway_process", None)
@@ -863,20 +851,12 @@ async def _main_async() -> None:
                     setattr(args, "_gateway_url", None)
             except Exception:
                 pass
-            # Best-effort: ensure the configured port isn't left bound by a sandbox-started
-            # agent-service instance (only for web mode, not desktop).
+            # If we auto-started a local LiveKit server, stop it on exit.
             try:
-                if getattr(args, "_desktop_container_id", None) is None:
-                    await asyncio.to_thread(
-                        free_agent_service_port,
-                        repo_root=project_root,
-                        agent_server_url=getattr(
-                            args,
-                            "agent_server_url",
-                            "http://localhost:3000",
-                        ),
-                        progress=(lambda _m: None),
-                    )
+                lk_proc = getattr(args, "_livekit_process", None)
+                if lk_proc is not None:
+                    await asyncio.to_thread(stop_livekit, lk_proc)
+                    setattr(args, "_livekit_process", None)
             except Exception:
                 pass
 

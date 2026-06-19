@@ -26,7 +26,6 @@ def test_create_triggerable_task():
     trig = Trigger(
         medium=Medium.EMAIL,
         from_contact_ids=[42],
-        interrupt=True,
         recurring=False,
     )
 
@@ -96,7 +95,7 @@ def test_update_trigger_on_scheduled_task_raises():
 @_handle_project
 def test_clear_trigger_transitions_status():
     ts = TaskScheduler()
-    trig = Trigger(medium=Medium.PHONE_CALL, interrupt=True)
+    trig = Trigger(medium=Medium.PHONE_CALL)
 
     tid = ts._create_task(
         name="Answer support hotline",

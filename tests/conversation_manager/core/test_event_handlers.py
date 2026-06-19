@@ -56,6 +56,7 @@ from droid.conversation_manager.events import (
     NotificationUnpinnedEvent,
     SyncContacts,
     TaskDue,
+    TaskTriggerRequested,
     LogMessageResponse,
     DirectMessageEvent,
     AssistantUpdateEvent,
@@ -231,6 +232,7 @@ class TestEventHandlerRegistry:
             NotificationUnpinnedEvent,
             AssistantUpdateEvent,
             AssistantPresenceObserved,
+            TaskTriggerRequested,
         ]
         for event_cls in expected_events:
             assert (
@@ -2449,6 +2451,57 @@ class TestTriggeredTaskNotifications:
     """Tests for mechanically matched trigger-task notifications."""
 
     @pytest.mark.asyncio
+    async def test_rest_task_trigger_starts_task_with_explicit_provenance(
+        self,
+        mock_cm,
+    ):
+        mock_cm.actor = object()
+        fake_scheduler = MagicMock()
+        fake_scheduler.execute = AsyncMock(return_value=object())
+
+        event = TaskTriggerRequested(
+            task_id=301,
+            source_task_log_id=9001,
+            source_ref="req-abc",
+            task_label="Review report",
+            task_summary="Review the weekly report.",
+        )
+
+        with (
+            patch(
+                "droid.conversation_manager.domains.task_activation.ManagerRegistry.get_task_scheduler",
+                return_value=fake_scheduler,
+            ),
+            patch(
+                "droid.conversation_manager.domains.task_activation._register_live_task_handle",
+                new_callable=AsyncMock,
+                return_value=77,
+            ) as register_handle,
+            patch(
+                "droid.conversation_manager.domains.task_activation._current_task_assistant_id",
+                return_value="42",
+            ),
+            patch(
+                "droid.conversation_manager.domains.task_activation.remember_live_task_run_provenance",
+            ) as remember_provenance,
+        ):
+            await EventHandler.handle_event(event, mock_cm)
+
+        fake_scheduler.execute.assert_awaited_once()
+        assert fake_scheduler.execute.await_args.kwargs["task_id"] == 301
+        assert (
+            str(fake_scheduler.execute.await_args.kwargs["_activated_by"]) == "explicit"
+        )
+        register_handle.assert_awaited_once()
+        provenance = remember_provenance.call_args.args[0]
+        assert provenance.assistant_id == "42"
+        assert provenance.task_id == 301
+        assert provenance.source_type == "explicit"
+        assert provenance.source_task_log_id == 9001
+        assert provenance.source_ref == "req-abc"
+        mock_cm.request_llm_run.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_inbound_message_surfaces_trigger_candidates(self, mock_cm):
         """Inbound user messages should surface only live matching trigger tasks."""
 
@@ -2464,7 +2517,6 @@ class TestTriggeredTaskNotifications:
                 activation_kind="triggered",
                 execution_mode="live",
                 trigger_from_contact_ids=[2],
-                interrupt=True,
                 task_name="Invoice follow-up",
                 task_description="Help handle invoice-related requests from Alice.",
             ),

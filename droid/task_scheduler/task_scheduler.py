@@ -774,7 +774,7 @@ class TaskScheduler(BaseTaskScheduler):
         for context_name in self._read_task_contexts():
             store = self._store_for_task_context(context_name)
             rows = store.get_rows(
-                filter="status == 'active'",
+                filter=f"task_id == {task_id} and status == 'active'",
                 return_ids_only=False,
             )
             for row in rows:
@@ -785,10 +785,6 @@ class TaskScheduler(BaseTaskScheduler):
 
         stale_rows: list[tuple[str, unify.Log]] = []
         for context_name, row in active_rows:
-            entries = dict(row.entries or {})
-            row_task_id = entries.get("task_id")
-            if row_task_id is None or int(row_task_id) != int(task_id):
-                return False
             if int(row.id) == int(provenance.source_task_log_id):
                 return False
             stale_rows.append((context_name, row))
@@ -1018,11 +1014,8 @@ class TaskScheduler(BaseTaskScheduler):
             raise ValueError(f"No runnable task found with id={task_id}")
         task = sorted(candidate_tasks, key=lambda t: t.instance_id)[0]
 
-        try:
-            any_orphan = bool(self._filter_tasks(filter="status == 'active'", limit=1))
-        except Exception:
-            any_orphan = False
-        if any_orphan:
+        this_task_orphan = any(t.status == Status.active for t in all_task_instances)
+        if this_task_orphan:
             source_type = (
                 "triggered"
                 if trigger_attempt_token
@@ -1041,7 +1034,7 @@ class TaskScheduler(BaseTaskScheduler):
                 provenance=provenance,
             ):
                 raise RuntimeError(
-                    "A task is marked as active, but no active handle is present – reconcile state before starting another task.",
+                    f"Task {task_id} is already active with no live handle – reconcile state before retrying.",
                 )
 
         if _activated_by is not None:

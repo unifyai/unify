@@ -19,14 +19,14 @@ This package manages the creation, scheduling, execution, and lifecycle of tasks
 ### Key files and responsibilities
 
 - `task_scheduler.py`
-  - The core manager. Exposes public `ask`, `update`, `execute` and a comprehensive set of private tools (create/delete/cancel tasks; list/get tasks; bulk schedule edits; checkpoints).
+  - The core manager. Exposes public `ask`, `update`, `execute` and a comprehensive set of private tools (create/delete/cancel tasks; list/get tasks; bulk schedule edits).
   - Uses `TasksStore` for I/O. Exposes `ContactManager.ask` among its tools for cross-domain flows.
 
 - `active_task.py`
   - `ActiveTask`: a per-task, steerable handle that wraps the actor's live plan. Mirrors status into the Tasks row on stop/result. Classifies interjections (cancel) using the scheduler.
 
 - `storage.py`
-  - `TasksStore`: centralized Unify I/O (reads/writes, normalization, checkpoint persistence).
+  - `TasksStore`: centralized Unify I/O (reads/writes, normalization).
 
 - `prompt_builders.py`
   - Builds dynamic system prompts for LLM loops (ask/update) from the tools the scheduler actually exposes, with examples and safety guidance.
@@ -48,7 +48,7 @@ This package manages the creation, scheduling, execution, and lifecycle of tasks
    - Builds a live toolset (filters, semantic search, contact lookup), injects a dynamic system prompt, and runs a tool-use loop. Must not mutate data.
 
 2) Update (mutations)
-   - Exposes creation, deletion, cancellation, and schedule manipulation tools. Enforces schedule/trigger invariants via a single validated write funnel. Auto-checkpoints edits for easy revert.
+   - Exposes creation, deletion, cancellation, and schedule manipulation tools. Enforces schedule/trigger invariants via a single validated write funnel.
 
 3) Execute (run now)
    - Validates the task is runnable, records activation provenance, and delegates execution to the actor substrate. Returns a `SteerableToolHandle` for the caller to await or interject.
@@ -103,9 +103,8 @@ This package manages the creation, scheduling, execution, and lifecycle of tasks
 - The scheduler also exposes `ContactManager.ask` for cross-domain context when tasks mention people/contact ids.
 
 
-### Checkpoints & safety
+### Safety
 
-- Schedule-affecting operations create checkpoints (`checkpoint_queue_state`) and expose helpers (`revert_to_checkpoint`, `get_latest_checkpoint`) so multi-step plans are reversible.
 - After any mutation (including execution start), the caller must refresh task state before further edits.
 
 
