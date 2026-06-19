@@ -83,11 +83,11 @@ def _require_env(name: str) -> str:
     return val
 
 
-def _generate_user_token(room_name: str) -> str:
+def _generate_user_token(room_name: str, display_name: str = "Developer") -> str:
     return (
         api.AccessToken()
         .with_identity("developer")
-        .with_name("Developer")
+        .with_name(display_name)
         .with_grants(api.VideoGrants(room_join=True, room=room_name))
         .to_jwt()
     )
@@ -549,7 +549,13 @@ async def start_session(
         except Exception:
             pass  # best-effort; readiness poll will detect success
 
-    user_token = _generate_user_token(room_name)
+    boss_name = (
+        " ".join(
+            filter(None, [boss.get("first_name", ""), boss.get("surname", "")]),
+        ).strip()
+        or "Developer"
+    )
+    user_token = _generate_user_token(room_name, display_name=boss_name)
     playground_base = _ensure_playground_server()
     playground_url = _build_playground_url(playground_base, livekit_url, user_token)
 
