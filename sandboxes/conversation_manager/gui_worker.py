@@ -477,14 +477,6 @@ def _build_args_namespace(*, config: dict, sender: _Sender) -> Any:
         setattr(args, "headless", False)
     if not hasattr(args, "agent_mode"):
         setattr(args, "agent_mode", "web-vm")
-    if not hasattr(args, "real_comms"):
-        setattr(args, "real_comms", False)
-    if not hasattr(args, "auto_confirm"):
-        setattr(args, "auto_confirm", False)
-    # GUI has no stdin for confirmation prompts — auto-confirm outbound actions.
-    if getattr(args, "real_comms", False):
-        setattr(args, "auto_confirm", True)
-
     # ActorConfig is expected under `_actor_config` by existing sandbox code.
     actor_cfg = _coerce_actor_config(cfg)
     setattr(args, "_actor_config", actor_cfg)
@@ -1002,7 +994,6 @@ async def _run_worker(*, ui_to_worker, worker_to_ui, config: dict) -> None:
         state=state,
         publisher=publisher,
         chat_history=state.chat_history,
-        allow_voice=False,
         allow_save_project=False,
         config_manager=None,
         trace_display=trace_display,

@@ -50,23 +50,16 @@ def get_prompt(state: SandboxState) -> str:
 
 
 def _print_welcome(*, args: Any) -> None:
-    mode = "REAL-COMMS" if getattr(args, "real_comms", False) else "SIMULATED"
     gui = "on" if getattr(args, "gui", False) else "off"
-    voice = "on" if getattr(args, "voice", False) else "off"
-    live_voice = "on" if getattr(args, "live_voice", False) else "off"
     cfg = getattr(args, "_actor_config", None)
     actor_type = getattr(cfg, "actor_type", None) if cfg is not None else None
 
     print("\n" + "═" * 72)
     print("ConversationManager Sandbox")
     print("═" * 72)
-    print(f"Mode: {mode}")
     if actor_type:
         print(f"ActorConfig: {actor_type}")
     print(f"GUI:  {gui}")
-    print(f"Voice:{voice}")
-    if live_voice == "on":
-        print(f"Live Voice: {live_voice} (calls use real LiveKit voice agent)")
     print("\n" + HELP_TEXT + "\n")
 
 
@@ -95,7 +88,6 @@ async def run_repl(*, args: Any, state: SandboxState | None = None) -> None:
             state=st,
             publisher=publisher,
             chat_history=st.chat_history,
-            allow_voice=True,
             allow_save_project=True,
             config_manager=getattr(args, "_config_manager", None),
             trace_display=getattr(args, "_trace_display", None),
