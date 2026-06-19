@@ -1179,3 +1179,216 @@ async def test_tasks_table_has_activated_by_column():
         assert "activated_by" in cols
     else:
         assert "activated_by" in cols
+
+
+# ---------------------------------------------------------------------------
+# Concurrency: multiple tasks may be active simultaneously
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.llm_call
+@_handle_project
+async def test_execute_allows_second_task_while_first_live_handle_active():
+    """A second distinct task starts freely while another task's live handle is held.
+
+    This test drives two separate tasks through the real execute() path and asserts
+    both land in Status.active with independent handles.
+    """
+    actor = SimulatedActor(steps=None, duration=None)
+    ts = TaskScheduler(actor=actor)
+
+    task_id_a = ts._create_task(name="Parallel task A", description="Parallel task A")[
+        "details"
+    ]["task_id"]
+    task_id_b = ts._create_task(name="Parallel task B", description="Parallel task B")[
+        "details"
+    ]["task_id"]
+
+    handle_a = await ts.execute(task_id=task_id_a)
+    handle_b = None
+    try:
+        # Must not raise – task A is active but is a different task.
+        handle_b = await ts.execute(task_id=task_id_b)
+
+        rows = ts._filter_tasks(filter=f"task_id in [{task_id_a}, {task_id_b}]")
+        active_ids = {r.task_id for r in rows if r.status == Status.active}
+        assert task_id_a in active_ids, "Task A should still be active"
+        assert task_id_b in active_ids, "Task B should also be active"
+    finally:
+        await handle_a.stop(cancel=False)
+        await handle_a.result()
+        if handle_b is not None:
+            await handle_b.stop(cancel=False)
+            await handle_b.result()
+
+
+@pytest.mark.asyncio
+@_handle_project
+async def test_offline_execute_allows_second_task_while_other_task_active(monkeypatch):
+    """An offline task completes normally while a different task holds an active row.
+
+    Verifies the cross-task gate is removed from the offline execution path:
+    the second task's row reaches Status.completed, and the first task's active
+    row is never reconciled to Status.failed (no cross-task reconciliation).
+    """
+    from droid.task_scheduler import offline_runner
+
+    scheduler = TaskScheduler()
+
+    # Task A: mark its instance active to simulate an in-flight concurrent run.
+    past = (
+        datetime.now(timezone.utc).replace(microsecond=0) - timedelta(days=1)
+    ).isoformat()
+    task_id_a = scheduler._create_task(
+        name="Concurrent in-flight task",
+        description="Task A (simulated in-flight).",
+        status=Status.scheduled,
+        schedule=Schedule(start_at=past),
+        repeat=[RepeatPattern(frequency=Frequency.DAILY)],
+    )["details"]["task_id"]
+    scheduler._update_task_status_instance(
+        task_id=task_id_a,
+        instance_id=0,
+        new_status=Status.active,
+        activated_by=ActivatedBy.schedule,
+    )
+
+    # Task B: offline scheduled task to execute while task A is active.
+    task_id_b = scheduler._create_task(
+        name="Offline concurrent task",
+        description="Task B (offline execution).",
+        status=Status.scheduled,
+        schedule=Schedule(start_at=past),
+        repeat=[RepeatPattern(frequency=Frequency.DAILY)],
+        offline=True,
+    )["details"]["task_id"]
+    source_log_id_b = _source_log_id(scheduler, task_id_b, 0)
+    task_b = scheduler._filter_tasks(filter=f"task_id == {task_id_b}")[0]
+
+    # Offline infrastructure boundary stubs (mirrors the existing reconcile test).
+    class _Handle:
+        async def result(self):
+            return "done"
+
+    class _FakeOfflineActor:
+        async def act(self, request, **kwargs):
+            return _Handle()
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(task_scheduler_module.SESSION_DETAILS.assistant, "agent_id", 42)
+    monkeypatch.setattr(offline_runner, "_build_offline_actor", _FakeOfflineActor)
+    monkeypatch.setattr(
+        "droid.task_scheduler.active_task.create_or_adopt_live_task_run",
+        lambda provenance: TaskRunReference(
+            assistant_id=provenance.assistant_id,
+            run_key=f"offline:scheduled:42:{provenance.task_id}:instance-0",
+        ),
+    )
+    monkeypatch.setattr(
+        "droid.task_scheduler.active_task.update_task_run_record",
+        lambda run_reference, updates: None,
+    )
+
+    config = offline_runner.OfflineTaskConfig(
+        assistant_id="42",
+        run_key=f"offline:scheduled:42:{task_id_b}:instance-0",
+        task_id=task_id_b,
+        function_id=None,
+        request=task_b.description,
+        source_type="scheduled",
+        source_task_log_id=source_log_id_b,
+        activation_revision="rev-b-concurrent",
+        task_name=task_b.name,
+        task_description=task_b.description,
+        scheduled_for=task_b.schedule_start_at.isoformat(),
+    )
+    remember_live_task_run_provenance(
+        TaskRunProvenance(
+            assistant_id="42",
+            task_id=task_id_b,
+            source_type="scheduled",
+            execution_mode="offline",
+            source_task_log_id=source_log_id_b,
+            activation_revision="rev-b-concurrent",
+            scheduled_for=task_b.schedule_start_at.isoformat(),
+            task_name=task_b.name,
+            task_description=task_b.description,
+        ),
+    )
+    delegate = offline_runner._OfflineTaskExecutionDelegate(config)
+    token = current_task_execution_delegate.set(delegate)
+    try:
+        handle = await scheduler.execute(
+            task_id=task_id_b,
+            _activated_by=ActivatedBy.schedule,
+        )
+        await handle.result()
+    finally:
+        current_task_execution_delegate.reset(token)
+        await delegate.close()
+
+    # Task B completed normally.
+    rows_b = scheduler._filter_tasks(filter=f"task_id == {task_id_b}")
+    assert any(
+        r.status == Status.completed for r in rows_b
+    ), "Task B should have completed"
+
+    # Task A's active row must be untouched – cross-task reconciliation must not occur.
+    rows_a = scheduler._filter_tasks(filter=f"task_id == {task_id_a}")
+    assert any(
+        r.status == Status.active for r in rows_a
+    ), "Task A's active row must remain; executing task B must not reconcile it"
+
+
+@pytest.mark.asyncio
+@_handle_project
+async def test_execute_same_task_orphan_without_live_handle_still_raises(monkeypatch):
+    """Starting a task that already has a stale active row (no offline provenance) raises.
+
+    The parallelization fix narrowed the orphan gate to per-task scope, but the
+    guard itself is preserved: a task whose own row is active with no live handle
+    and no offline provenance must still raise RuntimeError rather than silently
+    starting a second concurrent run of the same task.
+    """
+    monkeypatch.setattr(task_scheduler_module.SESSION_DETAILS.assistant, "agent_id", 42)
+
+    scheduler = TaskScheduler()
+    task_id = scheduler._create_task(
+        name="Orphan guard task",
+        description="Guard against double-start of the same task.",
+        status=Status.scheduled,
+        schedule=Schedule(
+            start_at=(
+                datetime.now(timezone.utc).replace(microsecond=0) - timedelta(days=1)
+            ).isoformat(),
+        ),
+        repeat=[RepeatPattern(frequency=Frequency.DAILY)],
+    )["details"]["task_id"]
+
+    # Clone so a runnable instance (instance 1) exists alongside the orphaned one.
+    first = scheduler._filter_tasks(filter=f"task_id == {task_id}")[0]
+    scheduler._clone_task_instance(first)
+
+    # Mark instance 0 active to simulate a stale/orphaned run with no live handle.
+    scheduler._update_task_status_instance(
+        task_id=task_id,
+        instance_id=0,
+        new_status=Status.active,
+        activated_by=ActivatedBy.schedule,
+    )
+
+    # No offline provenance stored → reconcile returns False → RuntimeError.
+    with pytest.raises(RuntimeError, match="already active with no live handle"):
+        await scheduler.execute(task_id=task_id)
+
+    # Instance 0 must still be active; the gate raised before any mutation.
+    rows = sorted(
+        scheduler._filter_tasks(filter=f"task_id == {task_id}"),
+        key=lambda t: t.instance_id,
+    )
+    assert (
+        rows[0].status == Status.active
+    ), "Instance 0 must remain active after the guard raised"
