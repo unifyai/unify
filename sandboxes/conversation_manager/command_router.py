@@ -55,10 +55,10 @@ from sandboxes.conversation_manager.state_snapshot import (
 LG = logging.getLogger("conversation_manager_sandbox")
 
 _LIVEKIT_SETUP_HINT = (
-    "⚠️  Voice calls require LiveKit credentials.\n"
-    "  • Local server: run `droid voice` in a separate terminal\n"
-    "  • LiveKit Cloud: set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET in ~/.droid/droid/.env\n"
-    "    Sign up free at https://cloud.livekit.io"
+    "⚠️  Voice calls require LiveKit. Run `droid voice` once to install the server,\n"
+    "    then restart the sandbox — it will start automatically on next launch.\n"
+    "  • Or use LiveKit Cloud: set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET\n"
+    "    in ~/.droid/droid/.env  (sign up free at https://cloud.livekit.io)"
 )
 
 _MEET_INTERACTION_EVENTS: dict[str, type] = {
