@@ -81,75 +81,75 @@ ONBOARDING_STEPS = {
     ),
     "email-reference": (
         "Email the first reference",
-        "Marty sends the first reference clue over email.",
+        "Twin sends the first reference clue over email.",
     ),
     "email-reply": (
         "Reply to email",
-        "Marty sends you a quick email.",
+        "Twin sends you a quick email.",
     ),
     "whatsapp-number": (
         "Add your WhatsApp number",
-        "Add the WhatsApp number Marty should use for this workspace.",
+        "Add the WhatsApp number Twin should use for this workspace.",
     ),
     "whatsapp-message-reference": (
         "WhatsApp the next reference",
-        "Marty sends the next reference clue over WhatsApp.",
+        "Twin sends the next reference clue over WhatsApp.",
     ),
     "whatsapp-message": (
         "Guess a WhatsApp clue",
-        "Marty sends you a reference clue over WhatsApp.",
+        "Twin sends you a reference clue over WhatsApp.",
     ),
     "whatsapp-call-reference": (
         "WhatsApp call for the next reference",
-        "Marty calls with the next reference clue over WhatsApp.",
+        "Twin calls with the next reference clue over WhatsApp.",
     ),
     "whatsapp-call": (
         "Guess a WhatsApp call clue",
-        "Marty gives you a reference clue over WhatsApp voice.",
+        "Twin gives you a reference clue over WhatsApp voice.",
     ),
     "phone-number": (
         "Add your phone number",
-        "Add the phone number Marty should use for calls and SMS.",
+        "Add the phone number Twin should use for calls and SMS.",
     ),
     "sms-reference": (
         "Text the next reference",
-        "Marty sends the next reference clue over SMS.",
+        "Twin sends the next reference clue over SMS.",
     ),
     "sms-message": (
         "Guess an SMS clue",
-        "Marty sends you a reference clue over SMS.",
+        "Twin sends you a reference clue over SMS.",
     ),
     "phone-call-reference": (
         "Call for the next reference",
-        "Marty calls with the next reference clue.",
+        "Twin calls with the next reference clue.",
     ),
     "phone-call": (
         "Guess a phone call clue",
-        "Marty gives you a reference clue over a phone call.",
+        "Twin gives you a reference clue over a phone call.",
     ),
     "slack-connect": (
         "Connect Slack",
-        "Connect Marty through the Unify Slack app.",
+        "Connect Twin through the Unify Slack app.",
     ),
     "slack-reference": (
         "Send the next reference via Slack",
-        "Marty sends the next reference clue in Slack.",
+        "Twin sends the next reference clue in Slack.",
     ),
     "slack-message": (
         "Guess a Slack clue",
-        "Marty sends you a reference clue in Slack.",
+        "Twin sends you a reference clue in Slack.",
     ),
     "discord-connect": (
         "Connect Discord",
-        "Connect Marty through the public Discord bot.",
+        "Connect Twin through the public Discord bot.",
     ),
     "discord-reference": (
         "Send the next reference via discord",
-        "Marty sends the next reference clue in Discord.",
+        "Twin sends the next reference clue in Discord.",
     ),
     "discord-message": (
         "Guess a Discord clue",
-        "Marty sends you a reference clue in Discord.",
+        "Twin sends you a reference clue in Discord.",
     ),
     "connect": ("Connect {name}", "Plug it into your workspace and apps."),
     "workspace": (
@@ -266,7 +266,7 @@ def build_coordinator_console_literacy_block(
     *,
     self_reference: bool = False,
 ) -> str:
-    """Console product literacy for the coordinator (Marty).
+    """Console product literacy for the coordinator (Twin).
 
     Teaches the current layout, per-surface semantics, left-sidebar selection
     scope, shared workspaces (Teams), account/org administration navigation,

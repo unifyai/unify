@@ -393,7 +393,7 @@ class TestScreenshotEntryLocalMessageId:
 class TestBuildBrainSpecCoordinatorPrompt:
     """BrainSpec prompt construction carries Coordinator awareness."""
 
-    def test_org_assistant_prompt_names_marty(self):
+    def test_org_assistant_prompt_names_twin(self):
         SESSION_DETAILS.org_id = 7
         SESSION_DETAILS.unify_key = "owner-key"
 
@@ -403,9 +403,9 @@ class TestBuildBrainSpecCoordinatorPrompt:
             spec = build_brain_spec(_make_cm(), _make_snapshot())
 
         prompt = spec.system_prompt.flatten()
-        assert "Marty identity" in prompt
-        assert "Marty is Dana Owner's personal, private assistant" in prompt
-        assert "I propose handing it to Marty explicitly" in prompt
+        assert "Twin identity" in prompt
+        assert "Twin is Dana Owner's personal, private assistant" in prompt
+        assert "I propose handing it to Twin explicitly" in prompt
         list_assistants.assert_not_called()
 
     def test_coordinator_prompt_does_not_render_reciprocal_block(self):
@@ -427,9 +427,9 @@ class TestBuildBrainSpecCoordinatorPrompt:
         prompt = spec.system_prompt.flatten()
         assert "Authorized humans" in prompt
         assert "My identity" in prompt
-        assert "I am Marty, Dana Owner's personal, private assistant" in prompt
-        assert "Marty is Dana Owner's personal, private assistant" not in prompt
-        assert "I propose handing it to Marty explicitly" not in prompt
+        assert "I am Twin, Dana Owner's personal, private assistant" in prompt
+        assert "Twin is Dana Owner's personal, private assistant" not in prompt
+        assert "I propose handing it to Twin explicitly" not in prompt
         assert "I cannot forward it automatically" not in prompt
         list_org_members.assert_called_once_with(
             7,
@@ -437,7 +437,7 @@ class TestBuildBrainSpecCoordinatorPrompt:
         )
         list_assistants.assert_not_called()
 
-    def test_personal_assistant_names_marty_without_lookup(self):
+    def test_personal_assistant_names_twin_without_lookup(self):
         SESSION_DETAILS.org_id = None
         SESSION_DETAILS.unify_key = "owner-key"
         SESSION_DETAILS.assistant.is_coordinator = False
@@ -449,9 +449,9 @@ class TestBuildBrainSpecCoordinatorPrompt:
             spec = build_brain_spec(_make_cm(), _make_snapshot())
 
         prompt = spec.system_prompt.flatten()
-        assert "Marty identity" in prompt
-        assert "I propose handing it to Marty explicitly" in prompt
-        assert "Escalate to Marty" not in prompt
+        assert "Twin identity" in prompt
+        assert "I propose handing it to Twin explicitly" in prompt
+        assert "Escalate to Twin" not in prompt
         list_assistants.assert_not_called()
 
     def test_personal_coordinator_skips_org_member_and_workspace_fetch(self):

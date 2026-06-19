@@ -336,7 +336,7 @@ class TestSendDispatch:
             resp = client.post(
                 "/email/send",
                 json={
-                    "from": "marty@unify.ai",
+                    "from": "twin@unify.ai",
                     "to": "owner@example.com",
                     "body": "hello",
                 },
@@ -486,14 +486,14 @@ class TestAttachmentDispatch:
             client.get(
                 "/email/attachment",
                 params={
-                    "receiver_email": "marty@unify.ai",
+                    "receiver_email": "twin@unify.ai",
                     "message_id": "msg-1",
                     "attachment_id": "att-1",
                     "filename": "doc.pdf",
                 },
             )
         gmail_handler.assert_awaited_once_with(
-            receiver_email="marty@unify.ai",
+            receiver_email="twin@unify.ai",
             gmail_message_id="msg-1",
             attachment_id="att-1",
             filename="doc.pdf",

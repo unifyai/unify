@@ -244,7 +244,7 @@ def build_brain_spec(
             authorized_humans = coordinator_manager.get_org_members()
 
     _active_contact_ms = _mark_step()
-    # Marty sessions carry fixed intro scaffolding in the prompt builder.
+    # Twin sessions carry fixed intro scaffolding in the prompt builder.
     # Regular assistants prepend job title into the bio block when set.
     _bio_parts: list[str] = []
     if not SESSION_DETAILS.is_coordinator:
