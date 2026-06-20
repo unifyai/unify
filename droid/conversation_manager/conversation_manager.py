@@ -325,6 +325,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.proactive_speech = ProactiveSpeech()
         self._proactive_speech_task: asyncio.Task | None = None
         self._proactive_speech_gen: int = 0
+        self._proactive_speech_enabled: bool = True
         self._voice_pipeline_quiescent = asyncio.Event()
         self._voice_pipeline_quiescent.set()
         self._proactive_logger = FastBrainLogger("ProactiveSpeech")
@@ -2429,6 +2430,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
         cancelled.  The quiescence gate in ``_proactive_speech_loop`` will
         prevent the countdown from starting until the pipeline is idle again.
         """
+        if not self._proactive_speech_enabled:
+            return
         asyncio.ensure_future(self.schedule_proactive_speech())
 
     def _on_pipeline_quiescent(self, quiescent: bool) -> None:
@@ -2451,6 +2454,9 @@ class ConversationManager(metaclass=SingletonABCMeta):
         if not self.mode.is_voice:
             return
 
+        if not self._proactive_speech_enabled:
+            return
+
         if self._proactive_speech_gen != my_gen:
             return
 
@@ -2468,6 +2474,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
             with contextlib.suppress(asyncio.CancelledError):
                 await self._proactive_speech_task
             self._proactive_speech_task = None
+
+    async def set_proactive_speech_enabled(self, enabled: bool):
+        self._proactive_speech_enabled = enabled
+        if not enabled:
+            self._proactive_speech_gen += 1
+            await self.cancel_proactive_speech()
 
     async def _proactive_speech_loop(self, gen: int = 0):
         _log = self._proactive_logger

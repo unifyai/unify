@@ -68,6 +68,8 @@ from droid.conversation_manager.events import (
     AssistantScreenShareStarted,
     AssistantScreenShareStopped,
     AssistantPresenceObserved,
+    AssistantTurnInjected,
+    ProactiveSpeechControl,
     UserScreenShareStarted,
     UserScreenShareStopped,
     UserRemoteControlStarted,
@@ -1546,6 +1548,92 @@ class TestSystemEvents:
             assert event.source == "assistant_profile"
             assert event.page_visibility == "visible"
             assert event.occurred_at == "2026-06-15T21:00:00.000Z"
+
+    @pytest.mark.asyncio
+    async def test_handle_assistant_turn_injected_event(
+        self,
+        broker,
+        mock_session_details,
+        mock_settings,
+    ):
+        """Console can inject an assistant-authored voice turn without a user turn."""
+        from droid.conversation_manager.comms_manager import CommsManager
+
+        cm = CommsManager(broker)
+        cm.loop = asyncio.get_event_loop()
+
+        async with broker.pubsub() as pubsub:
+            await pubsub.psubscribe("app:comms:*")
+
+            message = create_pubsub_message(
+                "droid_system_event",
+                {
+                    "event_type": "assistant_turn_injected",
+                    "message": "Twin gave the prerecorded intro.",
+                    "content": "Twin gave the prerecorded intro.",
+                    "contact_id": 1,
+                    "source": "twin_onboarding_intro",
+                    "schedule_proactive": True,
+                },
+            )
+
+            cm.handle_message(message)
+            await _wait_for_condition(lambda: message._acked)
+
+            msg = await get_message_on_channel(
+                pubsub,
+                "app:comms:assistant_turn_injected",
+            )
+            assert msg is not None
+
+            event = Event.from_json(msg["data"])
+            assert isinstance(event, AssistantTurnInjected)
+            assert event.contact == {"contact_id": 1}
+            assert event.content == "Twin gave the prerecorded intro."
+            assert event.source == "twin_onboarding_intro"
+            assert event.schedule_proactive is True
+
+    @pytest.mark.asyncio
+    async def test_handle_proactive_speech_control_event(
+        self,
+        broker,
+        mock_session_details,
+        mock_settings,
+    ):
+        """Console can enable or disable proactive speech via system events."""
+        from droid.conversation_manager.comms_manager import CommsManager
+
+        cm = CommsManager(broker)
+        cm.loop = asyncio.get_event_loop()
+
+        async with broker.pubsub() as pubsub:
+            await pubsub.psubscribe("app:comms:*")
+
+            message = create_pubsub_message(
+                "droid_system_event",
+                {
+                    "event_type": "proactive_speech_control",
+                    "message": "Disable proactive speech for cinematic intro.",
+                    "enabled": False,
+                    "source": "twin_onboarding_intro",
+                    "reason": "cinematic_intro",
+                },
+            )
+
+            cm.handle_message(message)
+            await _wait_for_condition(lambda: message._acked)
+
+            msg = await get_message_on_channel(
+                pubsub,
+                "app:comms:proactive_speech_control",
+            )
+            assert msg is not None
+
+            event = Event.from_json(msg["data"])
+            assert isinstance(event, ProactiveSpeechControl)
+            assert event.enabled is False
+            assert event.source == "twin_onboarding_intro"
+            assert event.reason == "cinematic_intro"
 
     @pytest.mark.asyncio
     async def test_handle_task_due_event_canonicalizes_destination(

@@ -1073,6 +1073,9 @@ class TestFastBrainGuidanceFlow:
             def set_call_received(self):
                 self.call_received = True
 
+            def set_credit_gate_state_provider(self, provider):
+                self.credit_gate_state_provider = provider
+
         async def _noop_async(*args, **kwargs):
             return None
 
@@ -1082,6 +1085,7 @@ class TestFastBrainGuidanceFlow:
         fake_broker = _FakeEventBroker()
         fake_session_details = SimpleNamespace(
             populate_from_env=lambda: None,
+            user=SimpleNamespace(id="user-123"),
             voice=SimpleNamespace(provider="cartesia", id=""),
             assistant=SimpleNamespace(
                 about="Assistant bio",
@@ -1089,6 +1093,7 @@ class TestFastBrainGuidanceFlow:
                 first_name="Assistant",
                 surname="Example",
                 agent_id=None,
+                user_desktop_for=lambda user_id: None,
             ),
             voice_call=SimpleNamespace(
                 outbound=False,
@@ -1096,6 +1101,8 @@ class TestFastBrainGuidanceFlow:
                 contact_json=json.dumps(contact),
                 boss_json=json.dumps(boss),
             ),
+            is_coordinator=False,
+            org_id=None,
             unify_key="",
         )
 
@@ -1172,6 +1179,29 @@ class TestFastBrainGuidanceFlow:
         assert (
             len(session.say_calls) == 0
         ), "Notify-only guidance must NOT trigger session.say() directly."
+
+        from droid.conversation_manager.events import AssistantTurnInjected
+
+        injected = AssistantTurnInjected(
+            contact={"contact_id": 2},
+            content="I just gave the prerecorded intro.",
+            source="test",
+        )
+        guidance_cb(json.loads(injected.to_json()))
+
+        agent_texts = [
+            item.text_content or ""
+            for item in session.current_agent._chat_ctx.items
+            if getattr(item, "type", None) == "message"
+        ]
+        assert any("I just gave the prerecorded intro." in txt for txt in agent_texts)
+        mirror_texts = [
+            item.text_content or ""
+            for item in session._chat_ctx.items
+            if getattr(item, "type", None) == "message"
+        ]
+        assert any("I just gave the prerecorded intro." in txt for txt in mirror_texts)
+        assert len(session.say_calls) == 0
 
     async def test_buffered_notification_is_applied_before_opening_greeting(
         self,

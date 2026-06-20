@@ -1725,6 +1725,12 @@ async def entrypoint(ctx: agents.JobContext):
                 )
                 maybe_speak_queued()
 
+    def apply_assistant_turn_injection(content: str) -> None:
+        if not content:
+            return
+        assistant._chat_ctx.add_message(role="assistant", content=[content])
+        session.history.add_message(role="assistant", content=[content])
+
     def _get_recent_assistant_utterances(n: int = 10) -> list[str]:
         """Return the last *n* assistant utterances from the fast brain's chat context.
 
@@ -1835,6 +1841,11 @@ async def entrypoint(ctx: agents.JobContext):
     def on_notification(data: dict) -> None:
         """Handle notifications from conversation manager."""
         nonlocal assistant_screen_share_active, _agent_service_url
+        if data.get("event_name") == "AssistantTurnInjected":
+            payload = data.get("payload") or {}
+            apply_assistant_turn_injection(str(payload.get("content") or ""))
+            return
+
         payload = data.get("payload") or data
         message = payload.get("message", "")
         # Track screen share state from meet interaction notifications.

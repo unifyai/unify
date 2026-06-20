@@ -46,6 +46,8 @@ from droid.conversation_manager.events import (
     InboundUnifyMeetUtterance,
     OutboundPhoneUtterance,
     FastBrainNotification,
+    AssistantTurnInjected,
+    ProactiveSpeechControl,
     GetChatHistory,
     ActorHandleStarted,
     ActorHandleResponse,
@@ -975,6 +977,78 @@ class TestVoiceUtteranceHandlers:
         msgs = mock_cm.contact_index.get_messages_for_contact(2, Medium.PHONE_CALL)
         assert len(msgs) == 1
         # Guidance messages have role="guidance"
+
+    @pytest.mark.asyncio
+    async def test_assistant_turn_injection_updates_history_without_user_turn(
+        self,
+        mock_cm,
+    ):
+        """Injected assistant turns update history but do not wake a user turn."""
+        mock_socket = MagicMock()
+        mock_socket.queue_for_clients = AsyncMock()
+        mock_cm.call_manager._socket_server = mock_socket
+        event = AssistantTurnInjected(
+            contact={"contact_id": 2},
+            content="I just gave the onboarding intro.",
+            source="test",
+        )
+
+        with patch(
+            "droid.conversation_manager.domains.event_handlers.managers_utils",
+        ) as mock_utils:
+            mock_utils.queue_operation = AsyncMock()
+            await EventHandler.handle_event(event, mock_cm)
+
+        msgs = mock_cm.contact_index.get_messages_for_contact(2, Medium.PHONE_CALL)
+        assert len(msgs) == 1
+        assert msgs[0].role == "assistant"
+        assert msgs[0].content == "I just gave the onboarding intro."
+        mock_cm.interject_or_run.assert_not_called()
+        mock_cm.request_llm_run.assert_not_called()
+        mock_cm.schedule_proactive_speech.assert_not_called()
+        mock_socket.queue_for_clients.assert_called_once()
+        channel, payload = mock_socket.queue_for_clients.call_args.args
+        assert channel == "app:call:notification"
+        forwarded = AssistantTurnInjected.from_json(payload)
+        assert forwarded.content == "I just gave the onboarding intro."
+
+    @pytest.mark.asyncio
+    async def test_assistant_turn_injection_can_schedule_proactive_speech(
+        self,
+        mock_cm,
+    ):
+        event = AssistantTurnInjected(
+            contact={"contact_id": 2},
+            content="I just gave the onboarding intro.",
+            source="test",
+            schedule_proactive=True,
+        )
+
+        with patch(
+            "droid.conversation_manager.domains.event_handlers.managers_utils",
+        ) as mock_utils:
+            mock_utils.queue_operation = AsyncMock()
+            await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.schedule_proactive_speech.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_proactive_speech_control_toggles_cm_gate(self, mock_cm):
+        mock_cm.set_proactive_speech_enabled = AsyncMock()
+        disable_event = ProactiveSpeechControl(enabled=False, source="test")
+        enable_event = ProactiveSpeechControl(
+            enabled=True,
+            source="test",
+            schedule_now=True,
+        )
+
+        await EventHandler.handle_event(disable_event, mock_cm)
+        mock_cm.set_proactive_speech_enabled.assert_called_once_with(False)
+        mock_cm.schedule_proactive_speech.assert_not_called()
+
+        await EventHandler.handle_event(enable_event, mock_cm)
+        assert mock_cm.set_proactive_speech_enabled.call_args_list[-1].args == (True,)
+        mock_cm.schedule_proactive_speech.assert_called_once()
 
 
 # =============================================================================

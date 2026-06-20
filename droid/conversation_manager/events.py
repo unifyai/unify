@@ -836,6 +836,30 @@ class FastBrainNotification(Event):
 
 
 @dataclass
+class AssistantTurnInjected(Event):
+    """Assistant-authored voice-call context inserted without forcing speech."""
+
+    topic: ClassVar[str | None] = "app:comms:assistant_turn_injected"
+
+    contact: dict
+    content: str
+    source: str = ""
+    schedule_proactive: bool = False
+
+
+@dataclass
+class ProactiveSpeechControl(Event):
+    """External control for whether proactive voice-call speech may schedule."""
+
+    topic: ClassVar[str | None] = "app:comms:proactive_speech_control"
+
+    enabled: bool
+    source: str = ""
+    reason: str = ""
+    schedule_now: bool = False
+
+
+@dataclass
 class FastBrainMoodClassified(Event):
     """Avatar mood classified from the current fast-brain voice transcript."""
 
