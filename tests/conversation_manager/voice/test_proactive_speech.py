@@ -326,7 +326,9 @@ class TestCancelProactiveSpeech:
         assert task.cancelled() or task.done()
         assert mock_cm._proactive_speech_task is None
 
-    async def test_set_proactive_speech_enabled_false_cancels_pending_task(self, mock_cm):
+    async def test_set_proactive_speech_enabled_false_cancels_pending_task(
+        self, mock_cm
+    ):
         """Disabling proactive speech cancels the pending proactive task."""
         from droid.conversation_manager.conversation_manager import ConversationManager
 
@@ -337,7 +339,9 @@ class TestCancelProactiveSpeech:
         assert mock_cm._proactive_speech_enabled is False
         mock_cm.cancel_proactive_speech.assert_called_once()
 
-    async def test_set_proactive_speech_enabled_true_does_not_schedule_immediately(self, mock_cm):
+    async def test_set_proactive_speech_enabled_true_does_not_schedule_immediately(
+        self, mock_cm
+    ):
         """Re-enabling only opens the gate; callers choose whether to schedule."""
         from droid.conversation_manager.conversation_manager import ConversationManager
 
