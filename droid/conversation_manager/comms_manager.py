@@ -250,6 +250,48 @@ def _task_trigger_event_from_payload(
     return TaskTriggerRequested.from_dict(payload, reason=reason)
 
 
+def _assistant_turn_injected_from_payload(
+    payload: dict[str, Any],
+    *,
+    reason: str = "",
+) -> AssistantTurnInjected | None:
+    if not isinstance(payload, dict):
+        return None
+    extra = payload.get("extra_event_fields")
+    fields = {**(extra if isinstance(extra, dict) else {}), **payload}
+    contact_id = _coerce_int(fields.get("contact_id"))
+    contact = {"contact_id": contact_id} if contact_id is not None else {}
+    content = str(fields.get("content") or fields.get("message") or reason or "")
+    if not content:
+        return None
+    return AssistantTurnInjected(
+        contact=contact,
+        content=content,
+        source=str(fields.get("source") or "console"),
+        schedule_proactive=bool(fields.get("schedule_proactive", False)),
+    )
+
+
+def _proactive_speech_control_from_payload(
+    payload: dict[str, Any],
+    *,
+    reason: str = "",
+) -> ProactiveSpeechControl | None:
+    if not isinstance(payload, dict):
+        return None
+    extra = payload.get("extra_event_fields")
+    fields = {**(extra if isinstance(extra, dict) else {}), **payload}
+    enabled = fields.get("enabled")
+    if not isinstance(enabled, bool):
+        return None
+    return ProactiveSpeechControl(
+        enabled=enabled,
+        source=str(fields.get("source") or "console"),
+        reason=str(fields.get("reason") or reason or ""),
+        schedule_now=bool(fields.get("schedule_now", False)),
+    )
+
+
 # Map subscription IDs to their corresponding event types
 events_map: dict[str, Event] = {
     "msg": SMSReceived,
@@ -845,6 +887,14 @@ class CommsManager:
                         source=str(event.get("source") or "console"),
                         page_visibility=str(event.get("page_visibility") or ""),
                         occurred_at=str(event.get("occurred_at") or ""),
+                    ),
+                    "assistant_turn_injected": lambda r: _assistant_turn_injected_from_payload(
+                        event,
+                        reason=r,
+                    ),
+                    "proactive_speech_control": lambda r: _proactive_speech_control_from_payload(
+                        event,
+                        reason=r,
                     ),
                     "assistant_screen_share_started": lambda r: AssistantScreenShareStarted(
                         reason=r or "User enabled assistant screen sharing.",

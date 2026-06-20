@@ -1142,6 +1142,50 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
         )
 
 
+@EventHandler.register(AssistantTurnInjected)
+async def _(
+    event: AssistantTurnInjected,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    contact_id = event.contact.get("contact_id") if event.contact else None
+    contact = (
+        cm.contact_index.get_contact(contact_id=contact_id) if contact_id else None
+    )
+    if contact is None:
+        contact = event.contact or cm.get_active_contact() or {}
+    contact_id = contact.get("contact_id") if contact else contact_id
+    sender_name = _get_sender_name(contact)
+
+    message_id = cm.contact_index.push_message(
+        contact_id=contact_id,
+        sender_name=sender_name,
+        thread_name=_active_voice_thread_medium(cm),
+        message_content=event.content,
+        role="assistant",
+        timestamp=event.timestamp,
+    )
+
+    await managers_utils.queue_operation(
+        managers_utils.log_message,
+        cm,
+        event,
+        local_message_id=message_id,
+    )
+
+    if cm.call_manager and cm.call_manager._socket_server:
+        await cm.call_manager._socket_server.queue_for_clients(
+            "app:call:notification",
+            event.to_json(),
+        )
+    else:
+        cm.call_manager.initial_notification = event.content
+
+    if event.schedule_proactive:
+        await cm.schedule_proactive_speech()
+
+
 @EventHandler.register(FastBrainNotification)
 async def _(
     event: FastBrainNotification,
@@ -1166,6 +1210,18 @@ async def _(
     )
 
     if event.should_speak:
+        await cm.schedule_proactive_speech()
+
+
+@EventHandler.register(ProactiveSpeechControl)
+async def _(
+    event: ProactiveSpeechControl,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    await cm.set_proactive_speech_enabled(event.enabled)
+    if event.enabled and event.schedule_now:
         await cm.schedule_proactive_speech()
 
 
