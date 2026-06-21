@@ -1709,54 +1709,59 @@ def build_system_prompt(
         coordinator_act_query_guidance_block = (
             _build_coordinator_act_query_guidance_block()
         )
-        # Console-UI / onboarding-flow guidance is only meaningful when a
-        # Console front-end exists. The public local install has no Console,
-        # so these blocks are omitted there (see ``console_ui_present``).
-        #
-        # ``coordinator_onboarding_deferred`` is the user's global "do
-        # onboarding later" switch: when set we drop every onboarding
-        # scaffolding block so the Coordinator behaves as if onboarding
-        # never existed — no reactive narration, no "what to click next"
-        # flow map, no console-literacy spiel — and never nudges toward
-        # the checklist. Orchestra independently suppresses the events
-        # these blocks would react to, so this just keeps the prompt clean.
-        if console_ui_present and not coordinator_onboarding_deferred:
-            # Reactive-narration rules for the gradual onboarding flow.
-            # Cheap to build unconditionally for coordinators — orchestra
-            # gates emission on ``Coordinator/State.mode == 'onboarding'``
-            # so the block is harmless when the user is past onboarding;
-            # they simply never see the notification it describes.
-            coordinator_onboarding_narration_block = (
-                _build_coordinator_onboarding_narration_block()
-            )
-            # UI reference for the gradual-onboarding view: layout,
-            # step contents, and the user-facing affordances behind
-            # each step. Built unconditionally so I can answer "what do I
-            # click on next?" / "how do I connect my workspace?" coherently
-            # whether the user is mid-onboarding, has skipped it, or is
-            # resuming it later from Assistant info → Onboarding.
-            coordinator_onboarding_flow_reference_block = (
-                console_ui.build_coordinator_onboarding_flow_reference_block(
-                    COORDINATOR_NAME,
-                    self_reference=True,
-                )
-            )
+        # Console-UI guidance is only meaningful when a Console front-end
+        # exists. The public local install has no Console, so these blocks
+        # are omitted there (see ``console_ui_present``).
+        if console_ui_present:
+            # General Console/product literacy — layout, surfaces, where
+            # credentials live, screen-share guidance, org/account
+            # navigation. This is *not* onboarding-specific: it stays on in
+            # every mode (onboarding, working, and deferred) so the
+            # Coordinator can always orient the user and nudge platform
+            # behaviours ("you can undock the Meet window like {this}")
+            # even when they aren't engaging with onboarding.
             coordinator_console_literacy_block = (
                 console_ui.build_coordinator_console_literacy_block(
                     COORDINATOR_NAME,
                     self_reference=True,
                 )
             )
-            # Standing, always-current onboarding progress (done steps +
-            # the valid next targets with nudge copy), precomputed by
-            # Orchestra. This is what makes "what's next" a read, not a
-            # derivation. Present only while actively onboarding (the
-            # render is None once complete / working / deferred).
-            coordinator_onboarding_progress_block = (
-                _build_coordinator_onboarding_progress_block(
-                    coordinator_onboarding_render,
+            # ``coordinator_onboarding_deferred`` is the user's global "do
+            # onboarding later" switch: when set we drop the
+            # onboarding-specific scaffolding (reactive narration, the
+            # checklist/flow map, and the live progress block) so the
+            # Coordinator behaves as if onboarding never existed and never
+            # nudges toward the checklist. General platform literacy above
+            # is intentionally kept on.
+            if not coordinator_onboarding_deferred:
+                # Reactive-narration rules for the gradual onboarding flow.
+                # Cheap to build unconditionally for coordinators — orchestra
+                # gates emission on ``Coordinator/State.mode == 'onboarding'``
+                # so the block is harmless when the user is past onboarding;
+                # they simply never see the notification it describes.
+                coordinator_onboarding_narration_block = (
+                    _build_coordinator_onboarding_narration_block()
                 )
-            )
+                # UI reference for the gradual-onboarding view: layout,
+                # step contents, and the user-facing affordances behind
+                # each step, so I can answer "what do I click on next?"
+                # while onboarding is active.
+                coordinator_onboarding_flow_reference_block = (
+                    console_ui.build_coordinator_onboarding_flow_reference_block(
+                        COORDINATOR_NAME,
+                        self_reference=True,
+                    )
+                )
+                # Standing, always-current onboarding progress (done steps +
+                # the valid next targets with nudge copy), precomputed by
+                # Orchestra. This is what makes "what's next" a read, not a
+                # derivation. Present only while actively onboarding (the
+                # render is None once complete / working / deferred).
+                coordinator_onboarding_progress_block = (
+                    _build_coordinator_onboarding_progress_block(
+                        coordinator_onboarding_render,
+                    )
+                )
     action_steering_tool_listing = _build_action_steering_tool_listing()
 
     # Voice call note for role section
@@ -2549,19 +2554,22 @@ I let the results speak for themselves rather than narrating steps or repeating 
                 coordinator_active_onboarding_step,
             ),
         )
+        # General Console/product literacy — not onboarding-specific, so it
+        # stays on in every mode (including deferred) so the Voice Agent can
+        # always orient the caller verbally and nudge platform behaviours.
+        parts.add(
+            console_ui.build_coordinator_console_literacy_block(
+                COORDINATOR_NAME,
+                self_reference=True,
+            ),
+        )
         # Onboarding UI reference so the Voice Agent can answer
-        # "what do I click on next?" style questions verbally with
-        # the same map of the screen the slow brain sees. Dropped when
-        # the user has deferred onboarding — see the opening block.
+        # "what do I click on next?" with the same map of the onboarding
+        # screen the slow brain sees. Onboarding-specific, so it's dropped
+        # when the user has deferred onboarding.
         if not coordinator_onboarding_deferred:
             parts.add(
                 console_ui.build_coordinator_onboarding_flow_reference_block(
-                    COORDINATOR_NAME,
-                    self_reference=True,
-                ),
-            )
-            parts.add(
-                console_ui.build_coordinator_console_literacy_block(
                     COORDINATOR_NAME,
                     self_reference=True,
                 ),
