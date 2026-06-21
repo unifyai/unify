@@ -49,6 +49,43 @@ import pytest_asyncio
 # =============================================================================
 
 
+@pytest.fixture(autouse=True)
+def _preserve_global_logging_state():
+    """Snapshot and restore global logging state around every test.
+
+    Several tests here drive the real voice ``entrypoint``, which calls
+    ``_configure_child_logging`` and, as a global side effect, flips
+    ``LOGGER.propagate`` on and clears handlers (the forkserver relay
+    fix). Without restoration that state leaks across tests in a
+    single-process run and breaks order-dependent expectations — notably
+    ``TestChildProcessLogging``, which asserts the default
+    ``propagate=False`` precondition. Restoring per test keeps the file
+    order-independent regardless of how it's run.
+    """
+    import logging
+
+    from droid.logger import LOGGER
+
+    _logger_names = ("livekit", "livekit.agents", "livekit.plugins")
+    saved = {
+        "droid": (LOGGER.propagate, list(LOGGER.handlers)),
+        **{
+            name: (
+                logging.getLogger(name).propagate,
+                list(logging.getLogger(name).handlers),
+            )
+            for name in _logger_names
+        },
+    }
+    try:
+        yield
+    finally:
+        LOGGER.propagate, LOGGER.handlers = saved["droid"]
+        for name in _logger_names:
+            lg = logging.getLogger(name)
+            lg.propagate, lg.handlers = saved[name]
+
+
 @pytest_asyncio.fixture
 async def event_broker():
     """Local in-memory broker for testing."""
@@ -653,7 +690,7 @@ class TestGuidanceChannelSubscription:
             assert msg is not None
             received = Event.from_json(msg["data"])
             assert isinstance(received, FastBrainNotification)
-            assert received.content == "Test guidance"
+            assert received.message == "Test guidance"
 
     async def test_status_channel_receives_stop_signal(self, event_broker):
         """Status channel receives stop signals."""
@@ -1328,6 +1365,9 @@ class TestFastBrainGuidanceFlow:
             def set_call_received(self):
                 self.call_received = True
 
+            def set_credit_gate_state_provider(self, provider):
+                self.credit_gate_state_provider = provider
+
         async def _noop_async(*args, **kwargs):
             return None
 
@@ -1344,8 +1384,11 @@ class TestFastBrainGuidanceFlow:
                 first_name="Assistant",
                 surname="Example",
                 agent_id=None,
+                user_desktop_for=lambda user_id: None,
             ),
             user=SimpleNamespace(id="default"),
+            is_coordinator=False,
+            org_id=None,
             voice_call=SimpleNamespace(
                 outbound=False,
                 channel="unify_meet",
@@ -1522,6 +1565,9 @@ class TestFastBrainGuidanceFlow:
             def set_call_received(self):
                 self.call_received = True
 
+            def set_credit_gate_state_provider(self, provider):
+                self.credit_gate_state_provider = provider
+
         async def _noop_async(*args, **kwargs):
             return None
 
@@ -1538,7 +1584,14 @@ class TestFastBrainGuidanceFlow:
                 contact_json=json.dumps(contact),
                 boss_json=json.dumps(boss),
             ),
-            assistant=SimpleNamespace(about="Assistant bio", name="David"),
+            assistant=SimpleNamespace(
+                about="Assistant bio",
+                name="David",
+                user_desktop_for=lambda user_id: None,
+            ),
+            user=SimpleNamespace(id="default"),
+            is_coordinator=False,
+            org_id=None,
             unify_key="",
         )
 
@@ -1746,6 +1799,9 @@ class TestFastBrainGuidanceFlow:
             def set_call_received(self):
                 self.call_received = True
 
+            def set_credit_gate_state_provider(self, provider):
+                self.credit_gate_state_provider = provider
+
         async def _noop_async(*args, **kwargs):
             return None
 
@@ -1762,7 +1818,14 @@ class TestFastBrainGuidanceFlow:
                 contact_json=json.dumps(contact),
                 boss_json=json.dumps(boss),
             ),
-            assistant=SimpleNamespace(about="Assistant bio", name="Ava"),
+            assistant=SimpleNamespace(
+                about="Assistant bio",
+                name="Ava",
+                user_desktop_for=lambda user_id: None,
+            ),
+            user=SimpleNamespace(id="default"),
+            is_coordinator=False,
+            org_id=None,
             unify_key="",
         )
 
@@ -1837,7 +1900,7 @@ class TestFastBrainGuidanceFlow:
             for item in session._chat_ctx.items
             if getattr(item, "type", None) == "message"
         ]
-        has_notification = any("No contact named Bob" in txt for txt in session_texts)
+        has_notification = any("no contact named Bob" in txt for txt in session_texts)
         assert has_notification, (
             f"should_speak=True guidance must inject [notification] into chat_ctx "
             f"immediately so the fast brain regenerates with current state.\n"
@@ -1872,7 +1935,7 @@ class TestFastBrainGuidanceFlow:
                 if getattr(item, "type", None) == "message"
             ]
             has_notification_after = any(
-                "No contact named Bob" in txt for txt in session_texts_after
+                "no contact named Bob" in txt for txt in session_texts_after
             )
             assert (
                 has_notification_after
@@ -2057,6 +2120,9 @@ class TestFastBrainGuidanceFlow:
             def set_call_received(self):
                 self.call_received = True
 
+            def set_credit_gate_state_provider(self, provider):
+                self.credit_gate_state_provider = provider
+
         async def _noop_async(*args, **kwargs):
             return None
 
@@ -2073,7 +2139,14 @@ class TestFastBrainGuidanceFlow:
                 contact_json=json.dumps(contact),
                 boss_json=json.dumps(boss),
             ),
-            assistant=SimpleNamespace(about="Assistant bio", name="Ava"),
+            assistant=SimpleNamespace(
+                about="Assistant bio",
+                name="Ava",
+                user_desktop_for=lambda user_id: None,
+            ),
+            user=SimpleNamespace(id="default"),
+            is_coordinator=False,
+            org_id=None,
             unify_key="",
         )
 
@@ -2285,6 +2358,9 @@ class TestFastBrainGuidanceFlow:
             def set_call_received(self):
                 self.call_received = True
 
+            def set_credit_gate_state_provider(self, provider):
+                self.credit_gate_state_provider = provider
+
         async def _noop_async(*args, **kwargs):
             return None
 
@@ -2301,7 +2377,14 @@ class TestFastBrainGuidanceFlow:
                 contact_json=json.dumps(contact),
                 boss_json=json.dumps(boss),
             ),
-            assistant=SimpleNamespace(about="Assistant bio", name="Ava"),
+            assistant=SimpleNamespace(
+                about="Assistant bio",
+                name="Ava",
+                user_desktop_for=lambda user_id: None,
+            ),
+            user=SimpleNamespace(id="default"),
+            is_coordinator=False,
+            org_id=None,
             unify_key="",
         )
 
@@ -2526,6 +2609,9 @@ class TestFastBrainSpeechDedup:
             def set_call_received(self):
                 self.call_received = True
 
+            def set_credit_gate_state_provider(self, provider):
+                self.credit_gate_state_provider = provider
+
         async def _noop_async(*args, **kwargs):
             return None
 
@@ -2542,7 +2628,14 @@ class TestFastBrainSpeechDedup:
                 contact_json=json.dumps(contact),
                 boss_json=json.dumps(boss),
             ),
-            assistant=SimpleNamespace(about="Assistant bio", name="Ava"),
+            assistant=SimpleNamespace(
+                about="Assistant bio",
+                name="Ava",
+                user_desktop_for=lambda user_id: None,
+            ),
+            user=SimpleNamespace(id="default"),
+            is_coordinator=False,
+            org_id=None,
             unify_key="",
         )
 
