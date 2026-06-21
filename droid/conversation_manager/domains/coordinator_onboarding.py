@@ -341,6 +341,11 @@ async def _handle_coordinator_onboarding_event(
     # they cannot see.
     if not SETTINGS.DROID_CONSOLE_UI:
         return False
+    # Refresh the standing onboarding progress model from the event's
+    # attached render so the slow brain's next turn reflects this change
+    # immediately, without waiting for the TTL state fetch.
+    if isinstance(event.details, dict):
+        cm.set_coordinator_onboarding_render(event.details.get("onboarding"))
     cm.notifications_bar.push_notif(
         _NOTIFICATION_TYPE,
         _coordinator_onboarding_notification_text(event),

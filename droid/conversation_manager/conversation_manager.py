@@ -231,7 +231,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # behaves as if onboarding never existed. Defaults to False until
         # the first refresh resolves.
         self.coordinator_onboarding_deferred: bool = False
-        self._coordinator_deferred_checked_at: float = 0.0
+        # Precomputed depends_on-aware onboarding picture (steps + statuses
+        # + valid next targets with nudge copy), mirrored from Orchestra so
+        # the slow brain reads a standing progress block instead of
+        # deriving "what's next". None outside active onboarding.
+        self.coordinator_onboarding_render: dict[str, Any] | None = None
+        self._coordinator_state_checked_at: float = 0.0
         self.assistant_email_provider = assistant_email_provider
         self.user_first_name = user_first_name
         self.user_surname = user_surname
@@ -1738,10 +1743,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
         )
         _render_ms = (_rl_time.perf_counter() - _t0) * 1000
 
-        # Mirror the Coordinator's global "do onboarding later" switch so
-        # the prompt builder can drop onboarding scaffolding. TTL-cached,
-        # so this is a no-op on most turns.
-        await self._refresh_coordinator_onboarding_deferred()
+        # Mirror the Coordinator's onboarding state (defer switch + the
+        # precomputed progress render) so the prompt builder reads a
+        # standing "what's done / what's next" block and can drop
+        # scaffolding when deferred. TTL-cached + event-refreshed, so this
+        # is a no-op on most turns.
+        await self._refresh_coordinator_onboarding_state()
 
         _t0 = _rl_time.perf_counter()
         brain_spec = build_brain_spec(
@@ -2360,29 +2367,38 @@ class ConversationManager(metaclass=SingletonABCMeta):
             is_coordinator=SESSION_DETAILS.is_coordinator,
         )
 
-    async def _refresh_coordinator_onboarding_deferred(self) -> None:
-        """Best-effort refresh of the cached "do onboarding later" flag.
+    async def _refresh_coordinator_onboarding_state(self) -> None:
+        """Best-effort refresh of the cached onboarding state for the brain.
 
-        The global defer switch lives on Orchestra's ``Coordinator/State``
-        and is toggled from Console. We mirror it onto the session and
-        refresh on a short TTL so ``build_brain_spec`` can drop the
-        onboarding prompt scaffolding without paying an HTTP round-trip on
-        every turn. Non-coordinator sessions and Console-less deployments
-        skip the call entirely. Failures leave the previous value in place
-        — the worst case is one extra turn of stale scaffolding, while the
-        authoritative real-time suppression of reactive nudges already
-        happens server-side in Orchestra.
+        Mirrors two things from Orchestra's ``Coordinator/State`` onto the
+        session so ``build_brain_spec`` never has to derive anything:
+          - ``coordinator_onboarding_deferred``: the global "do onboarding
+            later" switch (drops all onboarding scaffolding when set).
+          - ``coordinator_onboarding_render``: the precomputed
+            depends_on-aware picture (steps + statuses + valid next
+            targets with nudge copy) that drives the standing progress
+            block.
+
+        TTL-cached so we don't pay an HTTP round-trip every turn; the
+        render is also refreshed in real time from each onboarding event
+        (see ``set_coordinator_onboarding_render``), so this is mostly a
+        backstop. Non-coordinator sessions and Console-less deployments
+        skip it. Failures leave the previous values in place.
         """
         if not self.is_coordinator or not SETTINGS.DROID_CONSOLE_UI:
             return
         import time as _time
 
         now = _time.monotonic()
+        # Refresh more eagerly while actively onboarding (a render is
+        # present) so "what's next" stays fresh during a fast-moving
+        # setup conversation; back off once onboarding is done/deferred.
+        ttl = 10.0 if self.coordinator_onboarding_render else 30.0
         # Stamp before the await so concurrent runs don't stampede the
         # endpoint; a failed fetch still respects the TTL backoff.
-        if now - self._coordinator_deferred_checked_at < 30.0:
+        if now - self._coordinator_state_checked_at < ttl:
             return
-        self._coordinator_deferred_checked_at = now
+        self._coordinator_state_checked_at = now
         agent_id = SESSION_DETAILS.assistant.agent_id
         if agent_id is None:
             return
@@ -2397,13 +2413,25 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 resp.raise_for_status()
                 info = (resp.json() or {}).get("info") or {}
             self.coordinator_onboarding_deferred = bool(info.get("onboarding_deferred"))
+            render = info.get("onboarding")
+            self.coordinator_onboarding_render = render if isinstance(render, dict) else None
         except Exception as exc:
             LOGGER.warning(
-                "Coordinator onboarding-deferred refresh failed; "
-                "keeping previous value (%s): %s",
+                "Coordinator onboarding-state refresh failed; "
+                "keeping previous values (deferred=%s): %s",
                 self.coordinator_onboarding_deferred,
                 exc,
             )
+
+    def set_coordinator_onboarding_render(self, render: Any) -> None:
+        """Update the cached onboarding render from a fresh event payload.
+
+        Onboarding events carry the same ``onboarding`` rendering the
+        state endpoint returns, so the standing progress block stays
+        current between TTL fetches the instant an event lands.
+        """
+        if isinstance(render, dict):
+            self.coordinator_onboarding_render = render
 
     async def store_chat_history(self):
         if len(self.chat_history) >= 2:
