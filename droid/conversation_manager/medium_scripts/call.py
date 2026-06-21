@@ -883,6 +883,10 @@ async def entrypoint(ctx: agents.JobContext):
     coordinator_completed_onboarding_steps: list[str] | None = None
     coordinator_skipped_onboarding_steps: list[str] | None = None
     coordinator_active_onboarding_step: str | None = None
+    # Global "do onboarding later" switch. When set the opener drops its
+    # onboarding pitch and the Console-UI reference blocks, behaving as if
+    # onboarding never existed.
+    coordinator_onboarding_deferred: bool = False
     if (
         SESSION_DETAILS.is_coordinator
         and SESSION_DETAILS.assistant.agent_id is not None
@@ -898,7 +902,13 @@ async def entrypoint(ctx: agents.JobContext):
                 )
                 _state_resp.raise_for_status()
                 _state_info = (_state_resp.json() or {}).get("info") or {}
-            if _state_info.get("mode") == "onboarding":
+            coordinator_onboarding_deferred = bool(
+                _state_info.get("onboarding_deferred"),
+            )
+            if (
+                _state_info.get("mode") == "onboarding"
+                and not coordinator_onboarding_deferred
+            ):
                 _steps = _state_info.get("completed_step_ids")
                 coordinator_completed_onboarding_steps = (
                     [str(item) for item in _steps if item]
@@ -943,6 +953,7 @@ async def entrypoint(ctx: agents.JobContext):
         coordinator_completed_onboarding_steps=coordinator_completed_onboarding_steps,
         coordinator_skipped_onboarding_steps=coordinator_skipped_onboarding_steps,
         coordinator_active_onboarding_step=coordinator_active_onboarding_step,
+        coordinator_onboarding_deferred=coordinator_onboarding_deferred,
         console_ui_present=SETTINGS.DROID_CONSOLE_UI,
     ).flatten()
     _log.config(f"System prompt ({len(system_prompt)} chars)")

@@ -1527,6 +1527,7 @@ def build_system_prompt(
     authorized_humans: list[dict[str, Any]] | None = None,
     is_org_workspace: bool = True,
     console_ui_present: bool = True,
+    coordinator_onboarding_deferred: bool = False,
 ) -> PromptParts:
     """Build the system prompt for the ConversationManager LLM.
 
@@ -1663,7 +1664,15 @@ def build_system_prompt(
         # Console-UI / onboarding-flow guidance is only meaningful when a
         # Console front-end exists. The public local install has no Console,
         # so these blocks are omitted there (see ``console_ui_present``).
-        if console_ui_present:
+        #
+        # ``coordinator_onboarding_deferred`` is the user's global "do
+        # onboarding later" switch: when set we drop every onboarding
+        # scaffolding block so the Coordinator behaves as if onboarding
+        # never existed — no reactive narration, no "what to click next"
+        # flow map, no console-literacy spiel — and never nudges toward
+        # the checklist. Orchestra independently suppresses the events
+        # these blocks would react to, so this just keeps the prompt clean.
+        if console_ui_present and not coordinator_onboarding_deferred:
             # Reactive-narration rules for the gradual onboarding flow.
             # Cheap to build unconditionally for coordinators — orchestra
             # gates emission on ``Coordinator/State.mode == 'onboarding'``
@@ -2232,6 +2241,8 @@ def _build_coordinator_voice_opening_block(
     completed_onboarding_steps: list[str] | None = None,
     skipped_onboarding_steps: list[str] | None = None,
     active_onboarding_step: str | None = None,
+    *,
+    onboarding_deferred: bool = False,
 ) -> str:
     """Voice-only session-opening guidance for Twin.
 
@@ -2255,7 +2266,17 @@ def _build_coordinator_voice_opening_block(
     longer onboarding, in which case the copy stays generic about next
     steps.
     """
-    if completed_onboarding_steps is None:
+    if onboarding_deferred:
+        # The user chose to start using the platform and do onboarding
+        # later. The opener still greets / orients normally, but it must
+        # not pitch any onboarding step — instead it offers to help with
+        # whatever the caller is actually working on.
+        intro_step_suggestion = (
+            "offer to help with whatever they're working on right now, "
+            "without pitching any setup or onboarding steps"
+        )
+        progress_note = None
+    elif completed_onboarding_steps is None:
         intro_step_suggestion = (
             "suggest trying a quick email reply as the first concrete step "
             "after meeting"
@@ -2344,6 +2365,7 @@ def build_voice_agent_prompt(
     coordinator_completed_onboarding_steps: list[str] | None = None,
     coordinator_skipped_onboarding_steps: list[str] | None = None,
     coordinator_active_onboarding_step: str | None = None,
+    coordinator_onboarding_deferred: bool = False,
     console_ui_present: bool = True,
 ) -> PromptParts:
     """Build the system prompt for the Voice Agent (fast brain).
@@ -2541,23 +2563,26 @@ I let the results speak for themselves rather than narrating steps or repeating 
                 coordinator_completed_onboarding_steps,
                 coordinator_skipped_onboarding_steps,
                 coordinator_active_onboarding_step,
+                onboarding_deferred=coordinator_onboarding_deferred,
             ),
         )
         # Onboarding UI reference so the Voice Agent can answer
         # "what do I click on next?" style questions verbally with
-        # the same map of the screen the slow brain sees.
-        parts.add(
-            console_ui.build_coordinator_onboarding_flow_reference_block(
-                COORDINATOR_NAME,
-                self_reference=True,
-            ),
-        )
-        parts.add(
-            console_ui.build_coordinator_console_literacy_block(
-                COORDINATOR_NAME,
-                self_reference=True,
-            ),
-        )
+        # the same map of the screen the slow brain sees. Dropped when
+        # the user has deferred onboarding — see the opening block.
+        if not coordinator_onboarding_deferred:
+            parts.add(
+                console_ui.build_coordinator_onboarding_flow_reference_block(
+                    COORDINATOR_NAME,
+                    self_reference=True,
+                ),
+            )
+            parts.add(
+                console_ui.build_coordinator_console_literacy_block(
+                    COORDINATOR_NAME,
+                    self_reference=True,
+                ),
+            )
 
     # Brevity
     parts.add(
