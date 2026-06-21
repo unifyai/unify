@@ -646,6 +646,7 @@ jobs:
       # Unify API key for _prepare_shared_project.py and tests
       UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
       CLONE_TOKEN_AVAILABLE: ${{ secrets.CLONE_TOKEN != '' }}
+      GCP_SERVICE_ACCOUNT_JSON_AVAILABLE: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON != '' }}
       # Ensure local unillm/unify packages are found correctly
       # The repos are cloned to ./unillm/ and ./unify/, with packages inside
       PYTHONPATH: ${{ github.workspace }}/unillm:${{ github.workspace }}/unify
@@ -683,6 +684,7 @@ jobs:
         fetch-depth: 1
 
     - name: Authenticate to Google Cloud
+      if: env.GCP_SERVICE_ACCOUNT_JSON_AVAILABLE == 'true'
       uses: google-github-actions/auth@v2
       with:
         credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
