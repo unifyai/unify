@@ -286,6 +286,7 @@ def build_brain_spec(
         is_org_workspace=SESSION_DETAILS.org_id is not None,
         console_ui_present=SETTINGS.DROID_CONSOLE_UI,
         coordinator_onboarding_deferred=cm.coordinator_onboarding_deferred,
+        coordinator_onboarding_render=cm.coordinator_onboarding_render,
     )
     _system_prompt_ms = _mark_step()
 

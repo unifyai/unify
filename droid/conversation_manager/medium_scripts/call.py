@@ -880,12 +880,13 @@ async def entrypoint(ctx: agents.JobContext):
     # "connect your workspace" to a caller who already did. Best-effort:
     # on any failure (or outside onboarding mode) the opener falls back
     # to its generic copy.
-    coordinator_completed_onboarding_steps: list[str] | None = None
-    coordinator_skipped_onboarding_steps: list[str] | None = None
+    # Precomputed onboarding picture from Orchestra: the valid next
+    # targets (with spoken nudge copy) and the active step. The opener
+    # pitches one of these instead of computing "next" locally. Stays
+    # ``None`` when not actively onboarding (working / deferred / fetch
+    # failure), in which case the opener greets without a setup pitch.
+    coordinator_onboarding_next_targets: list[dict] | None = None
     coordinator_active_onboarding_step: str | None = None
-    # Global "do onboarding later" switch. When set the opener drops its
-    # onboarding pitch and the Console-UI reference blocks, behaving as if
-    # onboarding never existed.
     coordinator_onboarding_deferred: bool = False
     if (
         SESSION_DETAILS.is_coordinator
@@ -905,23 +906,15 @@ async def entrypoint(ctx: agents.JobContext):
             coordinator_onboarding_deferred = bool(
                 _state_info.get("onboarding_deferred"),
             )
-            if (
-                _state_info.get("mode") == "onboarding"
-                and not coordinator_onboarding_deferred
-            ):
-                _steps = _state_info.get("completed_step_ids")
-                coordinator_completed_onboarding_steps = (
-                    [str(item) for item in _steps if item]
-                    if isinstance(_steps, list)
+            _onboarding = _state_info.get("onboarding")
+            if isinstance(_onboarding, dict):
+                _targets = _onboarding.get("next_targets")
+                coordinator_onboarding_next_targets = (
+                    [t for t in _targets if isinstance(t, dict)]
+                    if isinstance(_targets, list)
                     else []
                 )
-                _skipped_steps = _state_info.get("skipped_step_ids")
-                coordinator_skipped_onboarding_steps = (
-                    [str(item) for item in _skipped_steps if item]
-                    if isinstance(_skipped_steps, list)
-                    else []
-                )
-                _active_step = _state_info.get("onboarding_step")
+                _active_step = _onboarding.get("active_step_id")
                 coordinator_active_onboarding_step = (
                     _active_step if isinstance(_active_step, str) else None
                 )
@@ -950,8 +943,7 @@ async def entrypoint(ctx: agents.JobContext):
         has_linked_user_desktop=call_has_linked_user_desktop,
         is_coordinator=SESSION_DETAILS.is_coordinator,
         is_org_workspace=SESSION_DETAILS.org_id is not None,
-        coordinator_completed_onboarding_steps=coordinator_completed_onboarding_steps,
-        coordinator_skipped_onboarding_steps=coordinator_skipped_onboarding_steps,
+        coordinator_onboarding_next_targets=coordinator_onboarding_next_targets,
         coordinator_active_onboarding_step=coordinator_active_onboarding_step,
         coordinator_onboarding_deferred=coordinator_onboarding_deferred,
         console_ui_present=SETTINGS.DROID_CONSOLE_UI,
