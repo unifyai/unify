@@ -757,29 +757,12 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  1. Acknowledge in one short sentence — name the thing that just happened, "
             "stay warm, do not re-list every onboarding step. For `step_skipped`, say "
             "we'll leave that step for now; do NOT call it done.",
-            "  2. Preview the *single* next pending onboarding step so the user has a "
-            "clear handoff. The next step ALWAYS comes from the onboarding "
-            "steps documented in the My onboarding flow (UI "
-            "reference) section below — and it must be the first step not already "
-            "done or explicitly skipped. Concretely: ",
-            "       - Before `workspace_connected`, all Comms steps sit between Meet and "
-            "Connect. If any Comms step is still pending, point at that first.",
-            '       - After `workspace_connected`: point them at "Connect '
-            'me with your apps" (the next onboarding step) — '
-            "suggest opening Integrations and picking at least one app "
-            "(Slack, Gmail, Notion, etc.). DO NOT suggest setting up phone "
-            "numbers, email addresses, or other assistant contact details "
-            "— those are not part of this onboarding flow.",
-            "       - After `integration_connected`: if Integrations is "
-            "still the active step, mention they can add more apps now or "
-            "move on; otherwise (e.g. the user has already added something "
-            'earlier) point at "Ask me to do something now" — '
-            "invite them to hand off a one-off job right now (e.g. "
-            '"summarize my unread emails"), tell them to watch **Actions** '
-            "as it runs, and offer screen share on a call if useful. Do NOT "
-            "lead with scheduling a task — that's a later, separate step.",
-            "       - If onboarding is otherwise complete, congratulate and "
-            "stand down.",
+            "  2. Preview a next step so the user has a clear handoff. I take "
+            "the valid next step(s) straight from the 'My onboarding progress "
+            "(live)' section — I never work out the ordering myself. If more "
+            "than one is listed I pick the one most natural for the current "
+            "channel and conversation, using its nudge copy; if none is listed "
+            "(onboarding complete), I congratulate the user and stand down.",
             "  3. Deliver the acknowledgement on whichever channel is live. When a "
             "voice call is active you MUST speak it by calling "
             '`guide_voice_agent(message="...", should_speak=True)` with the '
@@ -797,14 +780,11 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  6. Address the user by their first name (from Boss details / "
             'Authorized humans). Open with a warm "Hi <first name> — " or '
             "similar; don't leave it generic.",
-            "  7. Look at the transcript history *before* you respond, and read "
-            "the completed-steps and skipped-steps lists in the notification body. "
-            "The completed list is the authoritative, server-derived record of "
-            "which onboarding steps are already done (steps finished in earlier "
-            "sessions appear there even though no event fired this session). The "
-            "skipped list records steps the user chose to pass over. The step you "
-            "propose is ALWAYS the first step of the onboarding flow that is in "
-            "neither list — never suggest a step marked done or skipped.",
+            "  7. Look at the transcript history *before* you respond. The "
+            "'My onboarding progress (live)' section is the authoritative record "
+            "of what is already done/skipped and which step(s) are valid to "
+            "propose next — I propose one of those, never a step that isn't "
+            "listed as a valid next target.",
             "     - If there are no prior assistant messages, introduce yourself in one "
             "short paragraph: name your role as the user's coordinator assistant, "
             "also frame yourself as their virtual double who can take actions on their "
@@ -821,6 +801,72 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "handle the spoken greeting — stay silent on this turn (no chat reply).",
         ],
     )
+
+
+def _build_coordinator_onboarding_progress_block(
+    render: dict[str, Any] | None,
+) -> str:
+    """Standing, always-current onboarding progress for Twin.
+
+    Orchestra precomputes the depends_on-aware picture (each step's
+    status plus the set of *valid next targets* with ready-to-use nudge
+    copy) and Droid mirrors it onto every turn. The brain reads this
+    block instead of inferring "what's next" from the flat checklist and
+    the event stream — there may be more than one valid next target, and
+    they are listed explicitly here so no ordering has to be worked out.
+    """
+    if not isinstance(render, dict):
+        return ""
+    steps = render.get("steps") if isinstance(render.get("steps"), list) else []
+    next_targets = (
+        render.get("next_targets")
+        if isinstance(render.get("next_targets"), list)
+        else []
+    )
+    done = [
+        s.get("title")
+        for s in steps
+        if isinstance(s, dict) and s.get("status") == "done"
+    ]
+    skipped = [
+        s.get("title")
+        for s in steps
+        if isinstance(s, dict) and s.get("status") == "skipped"
+    ]
+
+    lines = [
+        "My onboarding progress (live)",
+        "-----------------------------",
+        "This is the authoritative, always-current picture of the user's "
+        "onboarding, computed server-side. I never re-derive what is done "
+        "or what comes next — I read it straight from here.",
+    ]
+    lines.append(f"Done: {', '.join(t for t in done if t) or 'nothing yet'}.")
+    if skipped:
+        lines.append(
+            f"Skipped (left for later, not done): {', '.join(t for t in skipped if t)}."
+        )
+
+    if next_targets:
+        lines.append(
+            "Valid next steps right now — I may steer toward any of these "
+            "(there can be more than one); I pick the most natural for the "
+            "current channel and conversation, and never push a step that "
+            "is not listed here:",
+        )
+        for target in next_targets:
+            if not isinstance(target, dict):
+                continue
+            title = target.get("title") or target.get("id") or "next step"
+            nudge = target.get("nudge_chat") or ""
+            lines.append(f"  - {title}: {nudge}".rstrip())
+    else:
+        lines.append(
+            "No onboarding steps are available right now — if everything is "
+            "done, congratulate the user and stand down; otherwise just help "
+            "with whatever they ask.",
+        )
+    return "\n".join(lines)
 
 
 def _build_action_steering_tool_listing() -> str:
@@ -1527,6 +1573,8 @@ def build_system_prompt(
     authorized_humans: list[dict[str, Any]] | None = None,
     is_org_workspace: bool = True,
     console_ui_present: bool = True,
+    coordinator_onboarding_deferred: bool = False,
+    coordinator_onboarding_render: dict[str, Any] | None = None,
 ) -> PromptParts:
     """Build the system prompt for the ConversationManager LLM.
 
@@ -1651,6 +1699,7 @@ def build_system_prompt(
     coordinator_onboarding_narration_block = ""
     coordinator_onboarding_flow_reference_block = ""
     coordinator_console_literacy_block = ""
+    coordinator_onboarding_progress_block = ""
     coordinator_act_query_guidance_block = ""
     if is_coordinator and not demo_mode:
         coordinator_admin_tool_listing = _build_coordinator_admin_tool_listing(
@@ -1660,36 +1709,59 @@ def build_system_prompt(
         coordinator_act_query_guidance_block = (
             _build_coordinator_act_query_guidance_block()
         )
-        # Console-UI / onboarding-flow guidance is only meaningful when a
-        # Console front-end exists. The public local install has no Console,
-        # so these blocks are omitted there (see ``console_ui_present``).
+        # Console-UI guidance is only meaningful when a Console front-end
+        # exists. The public local install has no Console, so these blocks
+        # are omitted there (see ``console_ui_present``).
         if console_ui_present:
-            # Reactive-narration rules for the gradual onboarding flow.
-            # Cheap to build unconditionally for coordinators — orchestra
-            # gates emission on ``Coordinator/State.mode == 'onboarding'``
-            # so the block is harmless when the user is past onboarding;
-            # they simply never see the notification it describes.
-            coordinator_onboarding_narration_block = (
-                _build_coordinator_onboarding_narration_block()
-            )
-            # UI reference for the gradual-onboarding view: layout,
-            # step contents, and the user-facing affordances behind
-            # each step. Built unconditionally so I can answer "what do I
-            # click on next?" / "how do I connect my workspace?" coherently
-            # whether the user is mid-onboarding, has skipped it, or is
-            # resuming it later from Assistant info → Onboarding.
-            coordinator_onboarding_flow_reference_block = (
-                console_ui.build_coordinator_onboarding_flow_reference_block(
-                    COORDINATOR_NAME,
-                    self_reference=True,
-                )
-            )
+            # General Console/product literacy — layout, surfaces, where
+            # credentials live, screen-share guidance, org/account
+            # navigation. This is *not* onboarding-specific: it stays on in
+            # every mode (onboarding, working, and deferred) so the
+            # Coordinator can always orient the user and nudge platform
+            # behaviours ("you can undock the Meet window like {this}")
+            # even when they aren't engaging with onboarding.
             coordinator_console_literacy_block = (
                 console_ui.build_coordinator_console_literacy_block(
                     COORDINATOR_NAME,
                     self_reference=True,
                 )
             )
+            # ``coordinator_onboarding_deferred`` is the user's global "do
+            # onboarding later" switch: when set we drop the
+            # onboarding-specific scaffolding (reactive narration, the
+            # checklist/flow map, and the live progress block) so the
+            # Coordinator behaves as if onboarding never existed and never
+            # nudges toward the checklist. General platform literacy above
+            # is intentionally kept on.
+            if not coordinator_onboarding_deferred:
+                # Reactive-narration rules for the gradual onboarding flow.
+                # Cheap to build unconditionally for coordinators — orchestra
+                # gates emission on ``Coordinator/State.mode == 'onboarding'``
+                # so the block is harmless when the user is past onboarding;
+                # they simply never see the notification it describes.
+                coordinator_onboarding_narration_block = (
+                    _build_coordinator_onboarding_narration_block()
+                )
+                # UI reference for the gradual-onboarding view: layout,
+                # step contents, and the user-facing affordances behind
+                # each step, so I can answer "what do I click on next?"
+                # while onboarding is active.
+                coordinator_onboarding_flow_reference_block = (
+                    console_ui.build_coordinator_onboarding_flow_reference_block(
+                        COORDINATOR_NAME,
+                        self_reference=True,
+                    )
+                )
+                # Standing, always-current onboarding progress (done steps +
+                # the valid next targets with nudge copy), precomputed by
+                # Orchestra. This is what makes "what's next" a read, not a
+                # derivation. Present only while actively onboarding (the
+                # render is None once complete / working / deferred).
+                coordinator_onboarding_progress_block = (
+                    _build_coordinator_onboarding_progress_block(
+                        coordinator_onboarding_render,
+                    )
+                )
     action_steering_tool_listing = _build_action_steering_tool_listing()
 
     # Voice call note for role section
@@ -1869,6 +1941,12 @@ Messages from the current turn have **NEW** tag prepended:
     # cases) so this becomes a structural no-op there.
     if coordinator_onboarding_narration_block:
         parts.add(coordinator_onboarding_narration_block)
+
+    # Standing, always-current onboarding progress (done + valid next
+    # targets with nudge copy). Authoritative for "what's next"; the
+    # narration block above only covers how to react to each event.
+    if coordinator_onboarding_progress_block:
+        parts.add(coordinator_onboarding_progress_block)
 
     # Companion UI reference describing the onboarding view layout
     # and step contents — used to answer the user's "what do I
@@ -2169,68 +2247,8 @@ def build_ask_handle_prompt(
     return parts
 
 
-# Onboarding step order paired with how the voice opener pitches each
-# step out loud. Kept in checklist order so the first pending entry is
-# the next step to suggest. Mirrors the step vocabulary Orchestra's
-# ``derive_onboarding_progress`` emits.
-_VOICE_ONBOARDING_STEP_SUGGESTIONS: tuple[tuple[str, str], ...] = (
-    ("email-reference", "clicking Email the first reference"),
-    ("email-reply", "replying with their guess for the email clue"),
-    ("whatsapp-number", "adding their WhatsApp number"),
-    ("whatsapp-message-reference", "clicking WhatsApp the next reference"),
-    ("whatsapp-message", "guessing the WhatsApp clue"),
-    ("whatsapp-call-reference", "clicking WhatsApp call for the next reference"),
-    ("whatsapp-call", "guessing the WhatsApp voice clue"),
-    ("phone-number", "adding their phone number"),
-    ("sms-reference", "clicking Text the next reference"),
-    ("sms-message", "guessing the SMS clue"),
-    ("phone-call-reference", "clicking Call for the next reference"),
-    ("phone-call", "guessing the phone-call clue"),
-    ("slack-connect", "connecting Slack through the Unify Slack app"),
-    ("slack-reference", "clicking Send the next reference via Slack"),
-    ("slack-message", "guessing the Slack clue"),
-    ("discord-connect", "connecting Discord through the public bot"),
-    ("discord-reference", "clicking Send the next reference via discord"),
-    ("discord-message", "guessing the Discord clue"),
-    ("workspace", "connecting their workspace (Google or Microsoft)"),
-    (
-        "apps",
-        "connecting one of their apps (Slack, Gmail, Notion, …) from the "
-        "Integrations panel",
-    ),
-    ("act", "handing me a one-off job right now so they can watch it run live"),
-    ("schedule", "scheduling a recurring or event-triggered task"),
-)
-
-_VOICE_ONBOARDING_TRIGGER_REPLY_STEPS: dict[str, str] = {
-    "email-reference": "email-reply",
-    "whatsapp-message-reference": "whatsapp-message",
-    "whatsapp-call-reference": "whatsapp-call",
-    "sms-reference": "sms-message",
-    "phone-call-reference": "phone-call",
-    "slack-reference": "slack-message",
-    "discord-reference": "discord-message",
-}
-
-
-def _voice_next_onboarding_suggestion(
-    completed_steps: list[str],
-    skipped_steps: list[str],
-) -> str:
-    """Spoken-friendly pitch for the first step not yet resolved."""
-    resolved = set(completed_steps) | set(skipped_steps)
-    for trigger_step, reply_step in _VOICE_ONBOARDING_TRIGGER_REPLY_STEPS.items():
-        if reply_step in resolved:
-            resolved.add(trigger_step)
-    for step_id, suggestion in _VOICE_ONBOARDING_STEP_SUGGESTIONS:
-        if step_id not in resolved:
-            return suggestion
-    return "onboarding their first specialist droid"
-
-
 def _build_coordinator_voice_opening_block(
-    completed_onboarding_steps: list[str] | None = None,
-    skipped_onboarding_steps: list[str] | None = None,
+    next_targets: list[dict[str, Any]] | None = None,
     active_onboarding_step: str | None = None,
 ) -> str:
     """Voice-only session-opening guidance for Twin.
@@ -2242,42 +2260,39 @@ def _build_coordinator_voice_opening_block(
     decision directly into the voice prompt so the very first spoken
     line is shaped correctly.
 
-    Gated only on ``is_coordinator`` — the rule is benign for both
-    onboarding and working-mode Twin calls (fresh history ⇒
-    intro is appropriate either way; resumed history ⇒ skipping the
-    intro is appropriate either way).
-
-    ``completed_onboarding_steps`` and ``skipped_onboarding_steps``
-    come from Orchestra's ``Coordinator/State`` endpoint at setup
-    (see ``call.py``). When available, the intro pitches the actual
-    next pending step — a caller whose earlier onboarding steps have
-    landed or been skipped must not be told to repeat them. ``None`` means the fetch failed or the Coordinator is no
-    longer onboarding, in which case the copy stays generic about next
-    steps.
+    Gated only on ``is_coordinator``. ``next_targets`` is Orchestra's
+    precomputed list of valid next onboarding steps (with spoken nudge
+    copy), fetched in ``call.py``. When non-empty the intro pitches one
+    of them; when empty or ``None`` (onboarding complete / working /
+    deferred / fetch failure) the opener simply greets and offers to
+    help, with no setup pitch — so a caller who is done or has deferred
+    is never told to repeat or start onboarding steps.
     """
-    if completed_onboarding_steps is None:
+    if next_targets:
+        primary = next_targets[0]
+        suggestion = (
+            primary.get("nudge_voice")
+            or primary.get("title")
+            or "their next setup step"
+        )
+        intro_step_suggestion = f"suggest {suggestion} as the next concrete step"
+        if len(next_targets) > 1:
+            intro_step_suggestion += (
+                " (or any other step they'd rather do — several are available)"
+            )
+        progress_note = (
+            "The next steps above are the only ones currently valid to "
+            "suggest; I never pitch a step that isn't one of them, and I "
+            "never describe a done or skipped step as a next step."
+        )
+    else:
+        # Onboarding complete / working / deferred / fetch failure: greet
+        # and orient without pitching any setup step.
         intro_step_suggestion = (
-            "suggest trying a quick email reply as the first concrete step "
-            "after meeting"
+            "offer to help with whatever they're working on right now, "
+            "without pitching any setup or onboarding steps"
         )
         progress_note = None
-    else:
-        intro_step_suggestion = (
-            "suggest "
-            + _voice_next_onboarding_suggestion(
-                completed_onboarding_steps,
-                skipped_onboarding_steps or [],
-            )
-            + " as the next concrete step"
-        )
-        done = ", ".join(completed_onboarding_steps)
-        skipped = ", ".join(skipped_onboarding_steps or [])
-        progress_note = (
-            "Onboarding steps already done (derived from the caller's "
-            f"account state): {done or 'none yet'}. Steps the caller chose "
-            f"to skip: {skipped or 'none'}. I never suggest a step that is "
-            "already done or skipped, and I never describe skipped steps as done."
-        )
     active_step_note = None
     if active_onboarding_step in {"whatsapp-call", "phone-call"}:
         active_step_note = (
@@ -2341,9 +2356,9 @@ def build_voice_agent_prompt(
     has_linked_user_desktop: bool = False,
     is_coordinator: bool = False,
     is_org_workspace: bool = True,
-    coordinator_completed_onboarding_steps: list[str] | None = None,
-    coordinator_skipped_onboarding_steps: list[str] | None = None,
+    coordinator_onboarding_next_targets: list[dict[str, Any]] | None = None,
     coordinator_active_onboarding_step: str | None = None,
+    coordinator_onboarding_deferred: bool = False,
     console_ui_present: bool = True,
 ) -> PromptParts:
     """Build the system prompt for the Voice Agent (fast brain).
@@ -2404,15 +2419,12 @@ def build_voice_agent_prompt(
         used by live voice calls.
     is_org_workspace : bool
         Whether the active workspace is organization-scoped (vs personal).
-    coordinator_completed_onboarding_steps : list[str] | None
-        Server-derived onboarding steps already completed, fetched from
-        Orchestra's ``Coordinator/State`` endpoint at call setup. ``None``
-        when unavailable (fetch failed or not in onboarding mode), which
-        keeps the opening-turn copy generic about next steps.
-    coordinator_skipped_onboarding_steps : list[str] | None
-        Onboarding steps the user explicitly skipped, fetched with the
-        same state snapshot. Skipped steps are treated as passed over
-        for next-step selection but never described as done.
+    coordinator_onboarding_next_targets : list[dict] | None
+        Orchestra's precomputed list of valid next onboarding steps (each
+        with spoken ``nudge_voice`` copy), fetched from the
+        ``Coordinator/State`` endpoint at call setup. Non-empty drives the
+        opening pitch; ``None`` / empty (complete, working, deferred, or
+        fetch failure) keeps the opener free of any setup pitch.
     coordinator_active_onboarding_step : str | None
         The current checklist step selected in Console, when the state endpoint
         reports one. Used to shape voice-call proof steps.
@@ -2538,26 +2550,30 @@ I let the results speak for themselves rather than narrating steps or repeating 
     if is_coordinator and not demo_mode and console_ui_present:
         parts.add(
             _build_coordinator_voice_opening_block(
-                coordinator_completed_onboarding_steps,
-                coordinator_skipped_onboarding_steps,
+                coordinator_onboarding_next_targets,
                 coordinator_active_onboarding_step,
             ),
         )
-        # Onboarding UI reference so the Voice Agent can answer
-        # "what do I click on next?" style questions verbally with
-        # the same map of the screen the slow brain sees.
-        parts.add(
-            console_ui.build_coordinator_onboarding_flow_reference_block(
-                COORDINATOR_NAME,
-                self_reference=True,
-            ),
-        )
+        # General Console/product literacy — not onboarding-specific, so it
+        # stays on in every mode (including deferred) so the Voice Agent can
+        # always orient the caller verbally and nudge platform behaviours.
         parts.add(
             console_ui.build_coordinator_console_literacy_block(
                 COORDINATOR_NAME,
                 self_reference=True,
             ),
         )
+        # Onboarding UI reference so the Voice Agent can answer
+        # "what do I click on next?" with the same map of the onboarding
+        # screen the slow brain sees. Onboarding-specific, so it's dropped
+        # when the user has deferred onboarding.
+        if not coordinator_onboarding_deferred:
+            parts.add(
+                console_ui.build_coordinator_onboarding_flow_reference_block(
+                    COORDINATOR_NAME,
+                    self_reference=True,
+                ),
+            )
 
     # Brevity
     parts.add(
