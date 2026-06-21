@@ -869,6 +869,14 @@ jobs:
         for old, new in replacements.items():
             text = text.replace(old, new)
         pyproject.write_text(text)
+
+        unillm_pyproject = Path("unillm/pyproject.toml")
+        text = unillm_pyproject.read_text()
+        text = text.replace(
+            'unify = { git = "https://github.com/unifyai/unify.git", branch = "staging" }',
+            'unify = { path = "../unify", editable = true }',
+        )
+        unillm_pyproject.write_text(text)
         PY
 
     - name: Sync dependencies with uv
