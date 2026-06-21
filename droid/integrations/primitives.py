@@ -874,6 +874,24 @@ class IntegrationPrimitives:
         multiple connected accounts, review the account the user named or ask
         which account they mean before changing permissions.
 
+        Parameters
+        ----------
+        connection_id : str
+            Identifier of the connected integration account to review, e.g.
+            ``"ic_work"``. Scopes the returned policy to that one account.
+        owner_scope : str, optional
+            Effective connection owner lane. Defaults to the current session's
+            owner scope, usually ``"assistant"``. Use ``"org"``, ``"team"``,
+            or ``"user"`` when explicitly operating at that scope.
+        org_id : int, optional
+            Organization identifier for org-scoped or inherited connections.
+        team_id : int, optional
+            Team identifier for team-scoped connections.
+        user_id : str, optional
+            User identifier for user-scoped connections.
+        assistant_id : int, optional
+            Assistant identifier for assistant-scoped connections.
+
         Examples
         --------
         - ``await primitives.integrations.review_tool_permissions(connection_id="ic_work")``
@@ -921,6 +939,37 @@ class IntegrationPrimitives:
         - ``auto`` means allow this tool for this account without asking first.
         - ``specific_approval`` means ask every time for this account.
         - ``forbidden`` means block this tool for this account.
+
+        Parameters
+        ----------
+        connection_id : str
+            Identifier of the connected integration account to change, e.g.
+            ``"ic_work"``. All changes are scoped to this one account.
+        tool_policies : dict[str, str], optional
+            Per-tool approval levels keyed by fully-qualified tool id, e.g.
+            ``{"composio:gmail:list_labels": "auto"}``. Values are ``auto``,
+            ``specific_approval``, or ``forbidden``.
+        bulk_approval_level : str, optional
+            Approval level to apply in bulk (``auto``, ``specific_approval``,
+            or ``forbidden``), typically combined with ``action_classes``.
+        action_classes : list[str], optional
+            Action classes the bulk change targets, e.g. ``["write"]`` or
+            ``["read", "write"]``.
+        reset_to_defaults : bool, default False
+            When True, discard custom policy for the account and restore the
+            backend defaults.
+        owner_scope : str, optional
+            Effective connection owner lane. Defaults to the current session's
+            owner scope, usually ``"assistant"``. Use ``"org"``, ``"team"``,
+            or ``"user"`` when explicitly operating at that scope.
+        org_id : int, optional
+            Organization identifier for org-scoped or inherited connections.
+        team_id : int, optional
+            Team identifier for team-scoped connections.
+        user_id : str, optional
+            User identifier for user-scoped connections.
+        assistant_id : int, optional
+            Assistant identifier for assistant-scoped connections.
 
         Examples
         --------
@@ -980,6 +1029,44 @@ class IntegrationPrimitives:
         After approval, retry the original tool with the same original
         arguments and the returned ``confirmation_token`` or
         ``approval_audit_id``. Do not start a fresh unrelated tool call.
+
+        Parameters
+        ----------
+        audit_id : int
+            Identifier of the pending execution audit returned alongside the
+            tool's ``pending_approval`` response.
+        decision : str
+            ``"approve"`` to allow the pending execution or ``"deny"`` to block
+            it.
+        scope : str, default "once"
+            Breadth of the decision. ``"once"`` affects only this audit;
+            ``"tool"`` applies to future calls of the same tool when combined
+            with ``persist_policy``.
+        persist_policy : bool, default False
+            When True, also update the connected account's durable policy. Set
+            only when the user explicitly asks to change future behavior.
+        approval_level : str, default "auto"
+            Durable level to persist when ``persist_policy`` is True (``auto``,
+            ``specific_approval``, or ``forbidden``). For denials, ``auto`` is
+            mapped to ``forbidden``.
+        actor_id : str, optional
+            Identifier of the principal recording the decision, for audit.
+        reason : str, optional
+            Human-readable justification, most useful when denying.
+        expires_at : str, optional
+            ISO-8601 timestamp after which a persisted approval lapses.
+        owner_scope : str, optional
+            Effective connection owner lane. Defaults to the current session's
+            owner scope, usually ``"assistant"``. Use ``"org"``, ``"team"``,
+            or ``"user"`` when explicitly operating at that scope.
+        org_id : int, optional
+            Organization identifier for org-scoped or inherited connections.
+        team_id : int, optional
+            Team identifier for team-scoped connections.
+        user_id : str, optional
+            User identifier for user-scoped connections.
+        assistant_id : int, optional
+            Assistant identifier for assistant-scoped connections.
 
         Examples
         --------
