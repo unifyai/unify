@@ -224,6 +224,14 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.assistant_discord_bot_id = assistant_discord_bot_id
         self.assistant_slack_bot_user_id = assistant_slack_bot_user_id
         self.is_coordinator = assistant_is_coordinator
+        # Global "do onboarding later" switch, mirrored from Orchestra's
+        # ``Coordinator/State`` and refreshed on a short TTL (see
+        # ``_refresh_coordinator_onboarding_deferred``). When True the
+        # slow-brain drops all onboarding scaffolding so the Coordinator
+        # behaves as if onboarding never existed. Defaults to False until
+        # the first refresh resolves.
+        self.coordinator_onboarding_deferred: bool = False
+        self._coordinator_deferred_checked_at: float = 0.0
         self.assistant_email_provider = assistant_email_provider
         self.user_first_name = user_first_name
         self.user_surname = user_surname
@@ -1730,6 +1738,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
         )
         _render_ms = (_rl_time.perf_counter() - _t0) * 1000
 
+        # Mirror the Coordinator's global "do onboarding later" switch so
+        # the prompt builder can drop onboarding scaffolding. TTL-cached,
+        # so this is a no-op on most turns.
+        await self._refresh_coordinator_onboarding_deferred()
+
         _t0 = _rl_time.perf_counter()
         brain_spec = build_brain_spec(
             self,
@@ -2346,6 +2359,51 @@ class ConversationManager(metaclass=SingletonABCMeta):
             job_name=self.job_name,
             is_coordinator=SESSION_DETAILS.is_coordinator,
         )
+
+    async def _refresh_coordinator_onboarding_deferred(self) -> None:
+        """Best-effort refresh of the cached "do onboarding later" flag.
+
+        The global defer switch lives on Orchestra's ``Coordinator/State``
+        and is toggled from Console. We mirror it onto the session and
+        refresh on a short TTL so ``build_brain_spec`` can drop the
+        onboarding prompt scaffolding without paying an HTTP round-trip on
+        every turn. Non-coordinator sessions and Console-less deployments
+        skip the call entirely. Failures leave the previous value in place
+        — the worst case is one extra turn of stale scaffolding, while the
+        authoritative real-time suppression of reactive nudges already
+        happens server-side in Orchestra.
+        """
+        if not self.is_coordinator or not SETTINGS.DROID_CONSOLE_UI:
+            return
+        import time as _time
+
+        now = _time.monotonic()
+        # Stamp before the await so concurrent runs don't stampede the
+        # endpoint; a failed fetch still respects the TTL backoff.
+        if now - self._coordinator_deferred_checked_at < 30.0:
+            return
+        self._coordinator_deferred_checked_at = now
+        agent_id = SESSION_DETAILS.assistant.agent_id
+        if agent_id is None:
+            return
+        import httpx as _httpx
+
+        try:
+            async with _httpx.AsyncClient(timeout=3.0) as client:
+                resp = await client.get(
+                    f"{SETTINGS.ORCHESTRA_URL}/assistant/{agent_id}/state",
+                    headers={"Authorization": f"Bearer {SESSION_DETAILS.unify_key}"},
+                )
+                resp.raise_for_status()
+                info = (resp.json() or {}).get("info") or {}
+            self.coordinator_onboarding_deferred = bool(info.get("onboarding_deferred"))
+        except Exception as exc:
+            LOGGER.warning(
+                "Coordinator onboarding-deferred refresh failed; "
+                "keeping previous value (%s): %s",
+                self.coordinator_onboarding_deferred,
+                exc,
+            )
 
     async def store_chat_history(self):
         if len(self.chat_history) >= 2:
