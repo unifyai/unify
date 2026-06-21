@@ -93,6 +93,8 @@ def _make_cm():
         assistant_slack_bot_user_id="",
         assistant_has_teams=False,
         team_summaries=[],
+        coordinator_onboarding_deferred=False,
+        coordinator_onboarding_render=None,
     )
 
 
@@ -161,6 +163,8 @@ class TestBrainSpecStateMessage:
             assistant_slack_bot_user_id="",
             assistant_has_teams=False,
             team_summaries=[],
+            coordinator_onboarding_deferred=False,
+            coordinator_onboarding_render=None,
         )
         snapshot_state = SimpleNamespace(full_render="<state>ready</state>")
 
