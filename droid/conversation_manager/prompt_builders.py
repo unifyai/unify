@@ -819,11 +819,19 @@ def _build_coordinator_onboarding_progress_block(
         return ""
     steps = render.get("steps") if isinstance(render.get("steps"), list) else []
     next_targets = (
-        render.get("next_targets") if isinstance(render.get("next_targets"), list) else []
+        render.get("next_targets")
+        if isinstance(render.get("next_targets"), list)
+        else []
     )
-    done = [s.get("title") for s in steps if isinstance(s, dict) and s.get("status") == "done"]
+    done = [
+        s.get("title")
+        for s in steps
+        if isinstance(s, dict) and s.get("status") == "done"
+    ]
     skipped = [
-        s.get("title") for s in steps if isinstance(s, dict) and s.get("status") == "skipped"
+        s.get("title")
+        for s in steps
+        if isinstance(s, dict) and s.get("status") == "skipped"
     ]
 
     lines = [
@@ -835,7 +843,9 @@ def _build_coordinator_onboarding_progress_block(
     ]
     lines.append(f"Done: {', '.join(t for t in done if t) or 'nothing yet'}.")
     if skipped:
-        lines.append(f"Skipped (left for later, not done): {', '.join(t for t in skipped if t)}.")
+        lines.append(
+            f"Skipped (left for later, not done): {', '.join(t for t in skipped if t)}."
+        )
 
     if next_targets:
         lines.append(
