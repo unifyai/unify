@@ -83,6 +83,7 @@ from droid.integrations.function_metadata import (
     provider_function_metadata,
 )
 from droid.integrations.builtins_catalog import list_catalog_tools
+from droid.integrations.embedding_text import normalize_embedding_text
 from .custom_functions import (
     compute_custom_functions_hash,
     compute_custom_venvs_hash,
@@ -2124,37 +2125,37 @@ class FunctionManager(BaseFunctionManager):
     @staticmethod
     def _integration_embedding_text(
         *,
-        name: str,
-        signature: str,
-        app: str,
-        tool: str,
+        app_display: str,
+        tool_display: str,
+        tool_name: str,
         description: str,
+        category_text: str,
         input_schema: Dict[str, Any],
-        examples: list[Any],
+        example_prompts: list[Any] | None = None,
     ) -> str:
+        """Build Layer 1-normalized tool embedding text from value fields only.
+
+        Front-loaded by signal: the app/tool header, the identifier-split
+        tool-name leaf (keyword anchor), the description, harvested categories,
+        parameter names, and any example prompts. The dotted function name,
+        argspec, and raw JSON example dump are intentionally dropped;
+        ``normalize_embedding_text`` then strips noise and splits identifiers
+        across the whole text. Mirrors the Orchestra tool row builder.
+        """
+
         properties, _required = FunctionManager._integration_schema_properties(
             input_schema,
         )
         parameter_names = ", ".join(str(key) for key in properties.keys())
-        example_terms: list[str] = []
-        for example in examples:
-            if isinstance(example, dict):
-                text = json.dumps(example, sort_keys=True)
-                example_terms.append(text)
-            if len(example_terms) >= 2:
-                break
         parts = [
-            f"Function Name: {name}",
-            f"Signature: {signature}",
-            f"App: {app}",
-            f"Tool: {tool}",
-            f"Purpose: {description}",
+            f"{app_display} - {tool_display}",
+            tool_name,
+            description,
+            category_text,
+            parameter_names,
         ]
-        if parameter_names:
-            parts.append(f"Parameters: {parameter_names}")
-        if example_terms:
-            parts.append(f"Examples: {'; '.join(example_terms)}")
-        return "\n".join(parts)
+        parts.extend(str(prompt) for prompt in (example_prompts or []) if prompt)
+        return normalize_embedding_text(parts)
 
     def _integration_tool_to_function_row(self, item: Dict[str, Any]) -> Dict[str, Any]:
         tool_id = item["tool_id"]
@@ -2212,14 +2213,24 @@ class FunctionManager(BaseFunctionManager):
             "Use the approved confirmation flow for sensitive, write, destructive, "
             "or bulk-export actions."
         )
+        tool_leaf = name.rsplit(".", 1)[-1]
+        item_app_slug = item.get("app_slug")
+        tag_categories = [
+            tag for tag in (item.get("tags") or []) if tag and tag != item_app_slug
+        ]
+        category_text = ", ".join(
+            dict.fromkeys(
+                value for value in (item.get("category"), *tag_categories) if value
+            ),
+        )
         embedding_text = self._integration_embedding_text(
-            name=name,
-            signature=signature,
-            app=str(app),
-            tool=str(tool),
+            app_display=str(app),
+            tool_display=str(tool),
+            tool_name=tool_leaf,
             description=str(item.get("description") or ""),
+            category_text=category_text,
             input_schema=input_schema,
-            examples=examples,
+            example_prompts=example_prompts,
         )
         metadata = provider_function_metadata(
             {
@@ -2267,7 +2278,9 @@ class FunctionManager(BaseFunctionManager):
             or name.replace(".", "__"),
             "metadata": metadata,
         }
-        return Function.model_validate(row).model_dump(include=set(row.keys()))
+        validated = Function.model_validate(row).model_dump(include=set(row.keys()))
+        validated["description"] = str(item.get("description") or "")
+        return validated
 
     def _function_context_for_root(self, root_context: str, table_name: str) -> str:
         """Return a concrete Functions context under a registry root."""
