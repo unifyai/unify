@@ -17,6 +17,11 @@ mode = "full"
 tool_limit_per_app = 0
 include_all_managed_apps = true
 create_auth_configs = false
+# Operational one-off resync directive (NOT part of the desired-state hash):
+# set true to bypass the manifest-hash and per-unit/checkpoint skips and rewrite
+# every app/tool row (e.g. after a catalog schema or embedding-text change), then
+# set back to false. Leaving it true keeps forcing a full resync on every deploy.
+force = false
 
 [providers.pipedream]
 status = "disabled"
