@@ -113,6 +113,7 @@ def mock_cm(mock_session_logger, mock_event_broker, sample_contacts):
     cm.mode = "call"  # Default to voice mode where proactive speech is active
     cm._proactive_speech_task = None
     cm._proactive_speech_gen = 0
+    cm._proactive_speech_enabled = True
     cm._voice_pipeline_quiescent = asyncio.Event()
     cm._voice_pipeline_quiescent.set()
     cm.assistant_screen_share_active = False
@@ -225,6 +226,30 @@ class TestScheduleProactiveSpeech:
         # Task should not be created for text mode
         assert mock_cm._proactive_speech_task is None
 
+    async def test_schedule_skipped_when_proactive_speech_disabled(self, mock_cm):
+        """Proactive speech does not schedule while externally disabled."""
+        from droid.conversation_manager.conversation_manager import ConversationManager
+
+        mock_cm.mode = Mode.CALL
+        mock_cm._proactive_speech_enabled = False
+        mock_cm.cancel_proactive_speech = AsyncMock()
+
+        await ConversationManager.schedule_proactive_speech(mock_cm)
+
+        mock_cm.cancel_proactive_speech.assert_called_once()
+        assert mock_cm._proactive_speech_task is None
+
+    async def test_fast_brain_generating_does_not_rearm_when_disabled(self, mock_cm):
+        """Fast-brain activity cannot re-enable proactive speech implicitly."""
+        from droid.conversation_manager.conversation_manager import ConversationManager
+
+        mock_cm._proactive_speech_enabled = False
+        mock_cm.schedule_proactive_speech = AsyncMock()
+
+        ConversationManager._on_fast_brain_generating(mock_cm)
+
+        mock_cm.schedule_proactive_speech.assert_not_called()
+
     async def test_schedule_cancels_existing_task(self, mock_cm):
         """schedule_proactive_speech cancels any existing task first."""
         from droid.conversation_manager.conversation_manager import ConversationManager
@@ -300,6 +325,34 @@ class TestCancelProactiveSpeech:
 
         assert task.cancelled() or task.done()
         assert mock_cm._proactive_speech_task is None
+
+    async def test_set_proactive_speech_enabled_false_cancels_pending_task(
+        self, mock_cm
+    ):
+        """Disabling proactive speech cancels the pending proactive task."""
+        from droid.conversation_manager.conversation_manager import ConversationManager
+
+        mock_cm.cancel_proactive_speech = AsyncMock()
+
+        await ConversationManager.set_proactive_speech_enabled(mock_cm, False)
+
+        assert mock_cm._proactive_speech_enabled is False
+        mock_cm.cancel_proactive_speech.assert_called_once()
+
+    async def test_set_proactive_speech_enabled_true_does_not_schedule_immediately(
+        self, mock_cm
+    ):
+        """Re-enabling only opens the gate; callers choose whether to schedule."""
+        from droid.conversation_manager.conversation_manager import ConversationManager
+
+        mock_cm.cancel_proactive_speech = AsyncMock()
+        mock_cm.schedule_proactive_speech = AsyncMock()
+
+        await ConversationManager.set_proactive_speech_enabled(mock_cm, True)
+
+        assert mock_cm._proactive_speech_enabled is True
+        mock_cm.cancel_proactive_speech.assert_not_called()
+        mock_cm.schedule_proactive_speech.assert_not_called()
 
 
 # =============================================================================

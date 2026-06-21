@@ -120,6 +120,7 @@ _MESSAGE_PRODUCING_EVENTS = {
     "OutboundGoogleMeetUtterance",
     "InboundTeamsMeetUtterance",
     "OutboundTeamsMeetUtterance",
+    "AssistantTurnInjected",
     "FastBrainNotification",
     "PhoneCallReceived",
     "PhoneCallSent",
@@ -599,6 +600,26 @@ async def hydrate_global_thread(cm: "ConversationManager") -> None:
                     thread_name=notif_medium,
                     message_content=cm_event.message,
                     role="guidance",
+                    timestamp=ts,
+                )
+
+            case "AssistantTurnInjected":
+                if cm.call_manager.has_active_google_meet:
+                    injected_medium = Medium.GOOGLE_MEET
+                elif cm.call_manager.has_active_teams_meet:
+                    injected_medium = Medium.TEAMS_MEET
+                elif cm.mode == Mode.MEET:
+                    injected_medium = Medium.UNIFY_MEET
+                elif cm.call_manager._call_channel == "whatsapp_call":
+                    injected_medium = Medium.WHATSAPP_CALL
+                else:
+                    injected_medium = Medium.PHONE_CALL
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=injected_medium,
+                    message_content=cm_event.content,
+                    role="assistant",
                     timestamp=ts,
                 )
 

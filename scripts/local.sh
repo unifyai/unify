@@ -212,9 +212,11 @@ run_gateway_doctor() {
   cd "$DROID_REPO_PATH"
   local python_cmd
   python_cmd="$(get_python)"
-  local public_url_args=()
-  [[ -n "$GATEWAY_PUBLIC_URL" ]] && public_url_args=(--public-url "$GATEWAY_PUBLIC_URL")
-  "$python_cmd" -m droid.gateway doctor "${public_url_args[@]}"
+  if [[ -n "$GATEWAY_PUBLIC_URL" ]]; then
+    "$python_cmd" -m droid.gateway doctor --public-url "$GATEWAY_PUBLIC_URL"
+  else
+    "$python_cmd" -m droid.gateway doctor
+  fi
 }
 
 describe_comms_backend() {
@@ -249,8 +251,17 @@ start_gateway() {
   cd "$DROID_REPO_PATH"
   local python_cmd
   python_cmd="$(get_python)"
-  local public_url_args=()
-  [[ -n "$GATEWAY_PUBLIC_URL" ]] && public_url_args=(--public-url "$GATEWAY_PUBLIC_URL")
+
+  local gateway_command=(
+    "$python_cmd" -m droid.gateway serve
+    --host "$GATEWAY_HOST"
+    --port "$GATEWAY_PORT"
+    --mode all
+    --single-url
+  )
+  if [[ -n "$GATEWAY_PUBLIC_URL" ]]; then
+    gateway_command+=(--public-url "$GATEWAY_PUBLIC_URL")
+  fi
 
   env \
     ORCHESTRA_URL="$ORCHESTRA_URL" \
@@ -258,13 +269,8 @@ start_gateway() {
     DROID_COMMS_URL="$(gateway_base_url)" \
     DROID_ADAPTERS_URL="$(gateway_base_url)" \
     DROID_GATEWAY_LOCAL_INGRESS_URL="$(local_comms_base_url)" \
-    "$python_cmd" -m droid.gateway serve \
-      --host "$GATEWAY_HOST" \
-      --port "$GATEWAY_PORT" \
-      --mode all \
-      --single-url \
-      "${public_url_args[@]}" \
-      > "$GATEWAY_LOGFILE" 2>&1 &
+    "${gateway_command[@]}" \
+    > "$GATEWAY_LOGFILE" 2>&1 &
 
   local pid=$!
   echo "$pid" > "$GATEWAY_PIDFILE"

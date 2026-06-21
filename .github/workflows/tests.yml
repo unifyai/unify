@@ -646,6 +646,7 @@ jobs:
       # Unify API key for _prepare_shared_project.py and tests
       UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
       CLONE_TOKEN_AVAILABLE: ${{ secrets.CLONE_TOKEN != '' }}
+      GCP_SERVICE_ACCOUNT_JSON_AVAILABLE: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON != '' }}
       # Ensure local unillm/unify packages are found correctly
       # The repos are cloned to ./unillm/ and ./unify/, with packages inside
       PYTHONPATH: ${{ github.workspace }}/unillm:${{ github.workspace }}/unify
@@ -683,6 +684,7 @@ jobs:
         fetch-depth: 1
 
     - name: Authenticate to Google Cloud
+      if: env.GCP_SERVICE_ACCOUNT_JSON_AVAILABLE == 'true'
       uses: google-github-actions/auth@v2
       with:
         credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
@@ -851,11 +853,31 @@ jobs:
 
     - name: Configure unify/unillm paths for CI
       run: |
-        # Local development uses sibling paths (../unify, ../unillm).
-        # CI clones these repos into the workspace, so update paths accordingly.
-        sed -i 's|path = "../unify"|path = "./unify"|g' pyproject.toml
-        sed -i 's|path = "../unillm"|path = "./unillm"|g' pyproject.toml
-        # unillm's pyproject.toml has path = "../unify" which correctly resolves to ./unify/ from ./unillm/
+        # The checked-out dependency repos live in the workflow workspace, so
+        # point uv at those paths instead of refetching Git sources.
+        python3 <<'PY'
+        from pathlib import Path
+
+        pyproject = Path("pyproject.toml")
+        text = pyproject.read_text()
+        replacements = {
+            'unify = { git = "https://github.com/unifyai/unify.git", branch = "staging" }': 'unify = { path = "./unify", editable = true }',
+            'unillm = { git = "https://github.com/unifyai/unillm.git", branch = "staging" }': 'unillm = { path = "./unillm", editable = true }',
+            'unify = { path = "../unify", editable = true }': 'unify = { path = "./unify", editable = true }',
+            'unillm = { path = "../unillm", editable = true }': 'unillm = { path = "./unillm", editable = true }',
+        }
+        for old, new in replacements.items():
+            text = text.replace(old, new)
+        pyproject.write_text(text)
+
+        unillm_pyproject = Path("unillm/pyproject.toml")
+        text = unillm_pyproject.read_text()
+        text = text.replace(
+            'unify = { git = "https://github.com/unifyai/unify.git", branch = "staging" }',
+            'unify = { path = "../unify", editable = true }',
+        )
+        unillm_pyproject.write_text(text)
+        PY
 
     - name: Sync dependencies with uv
       run: |
