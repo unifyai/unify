@@ -2414,7 +2414,9 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 info = (resp.json() or {}).get("info") or {}
             self.coordinator_onboarding_deferred = bool(info.get("onboarding_deferred"))
             render = info.get("onboarding")
-            self.coordinator_onboarding_render = render if isinstance(render, dict) else None
+            self.coordinator_onboarding_render = (
+                render if isinstance(render, dict) else None
+            )
         except Exception as exc:
             LOGGER.warning(
                 "Coordinator onboarding-state refresh failed; "
