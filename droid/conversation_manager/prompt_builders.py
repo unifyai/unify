@@ -1575,6 +1575,7 @@ def build_system_prompt(
     console_ui_present: bool = True,
     coordinator_onboarding_deferred: bool = False,
     coordinator_onboarding_render: dict[str, Any] | None = None,
+    onboarding_catalog: dict[str, Any] | None = None,
 ) -> PromptParts:
     """Build the system prompt for the ConversationManager LLM.
 
@@ -1724,6 +1725,7 @@ def build_system_prompt(
                 console_ui.build_coordinator_console_literacy_block(
                     COORDINATOR_NAME,
                     self_reference=True,
+                    catalog=onboarding_catalog,
                 )
             )
             # ``coordinator_onboarding_deferred`` is the user's global "do
@@ -1750,6 +1752,7 @@ def build_system_prompt(
                     console_ui.build_coordinator_onboarding_flow_reference_block(
                         COORDINATOR_NAME,
                         self_reference=True,
+                        catalog=onboarding_catalog,
                     )
                 )
                 # Standing, always-current onboarding progress (done steps +
@@ -2360,6 +2363,7 @@ def build_voice_agent_prompt(
     coordinator_active_onboarding_step: str | None = None,
     coordinator_onboarding_deferred: bool = False,
     console_ui_present: bool = True,
+    onboarding_catalog: dict[str, Any] | None = None,
 ) -> PromptParts:
     """Build the system prompt for the Voice Agent (fast brain).
 
@@ -2561,6 +2565,7 @@ I let the results speak for themselves rather than narrating steps or repeating 
             console_ui.build_coordinator_console_literacy_block(
                 COORDINATOR_NAME,
                 self_reference=True,
+                catalog=onboarding_catalog,
             ),
         )
         # Onboarding UI reference so the Voice Agent can answer
@@ -2572,6 +2577,7 @@ I let the results speak for themselves rather than narrating steps or repeating 
                 console_ui.build_coordinator_onboarding_flow_reference_block(
                     COORDINATOR_NAME,
                     self_reference=True,
+                    catalog=onboarding_catalog,
                 ),
             )
 

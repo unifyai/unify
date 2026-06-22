@@ -15,6 +15,8 @@ the prompts; this module owns the structural, high-drift terminology.
 
 from __future__ import annotations
 
+from typing import Any
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Atomic vocabulary — the high-drift facts
 # ─────────────────────────────────────────────────────────────────────────────
@@ -64,133 +66,123 @@ ORG_TABS = ("Organization", "Members", "Teams", "Roles", "Security")
 # the default selection).
 ORG_INVITE_ROLES = ("Admin", "Member", "Viewer")
 
-# Onboarding checklist (coordinator "Assistant info" → Onboarding tab). Each
-# entry: (step_id, title, one-line description). Phase headers carry their
-# short progress-bar label in ONBOARDING_PHASES.
-ONBOARDING_PHASES = (
-    ("meet", "Meet"),
-    ("comms", "Quiz"),
-    ("connect", "Connect"),
-    ("work", "Delegate"),
-)
-ONBOARDING_STEPS = {
-    "meet": ("Meet {name}", "Say hi to {name}."),
-    "comms": (
-        "Guess the reference",
-        "Identify clues sent over email, WhatsApp, phone, Slack, and Discord.",
-    ),
-    "email-reference": (
-        "Email the first reference",
-        "Twin sends the first reference clue over email.",
-    ),
-    "email-reply": (
-        "Reply to email",
-        "Twin sends you a quick email.",
-    ),
-    "whatsapp-number": (
-        "Add your WhatsApp number",
-        "Add the WhatsApp number Twin should use for this workspace.",
-    ),
-    "whatsapp-message-reference": (
-        "WhatsApp the next reference",
-        "Twin sends the next reference clue over WhatsApp.",
-    ),
-    "whatsapp-message": (
-        "Guess a WhatsApp clue",
-        "Twin sends you a reference clue over WhatsApp.",
-    ),
-    "whatsapp-call-reference": (
-        "WhatsApp call for the next reference",
-        "Twin calls with the next reference clue over WhatsApp.",
-    ),
-    "whatsapp-call": (
-        "Guess a WhatsApp call clue",
-        "Twin gives you a reference clue over WhatsApp voice.",
-    ),
-    "phone-number": (
-        "Add your phone number",
-        "Add the phone number Twin should use for calls and SMS.",
-    ),
-    "sms-reference": (
-        "Text the next reference",
-        "Twin sends the next reference clue over SMS.",
-    ),
-    "sms-message": (
-        "Guess an SMS clue",
-        "Twin sends you a reference clue over SMS.",
-    ),
-    "phone-call-reference": (
-        "Call for the next reference",
-        "Twin calls with the next reference clue.",
-    ),
-    "phone-call": (
-        "Guess a phone call clue",
-        "Twin gives you a reference clue over a phone call.",
-    ),
-    "slack-connect": (
-        "Connect Slack",
-        "Connect Twin through the Unify Slack app.",
-    ),
-    "slack-reference": (
-        "Send the next reference via Slack",
-        "Twin sends the next reference clue in Slack.",
-    ),
-    "slack-message": (
-        "Guess a Slack clue",
-        "Twin sends you a reference clue in Slack.",
-    ),
-    "discord-connect": (
-        "Connect Discord",
-        "Connect Twin through the public Discord bot.",
-    ),
-    "discord-reference": (
-        "Send the next reference via discord",
-        "Twin sends the next reference clue in Discord.",
-    ),
-    "discord-message": (
-        "Guess a Discord clue",
-        "Twin sends you a reference clue in Discord.",
-    ),
-    "connect": ("Connect {name}", "Plug it into your workspace and apps."),
-    "workspace": (
-        "Give {name} access to your workspace",
-        "Required for everything else in onboarding.",
-    ),
-    "apps": (
-        "Connect {name} with your apps",
-        "Hook up at least one app (Slack, Gmail…).",
-    ),
-    "work": ("Get work done", "Hand off real work and see it run."),
-    "act": (
-        "Ask {name} to do something now",
-        "Give it a one-off job and watch it run live.",
-    ),
-    "schedule": (
-        "Schedule a task for later",
-        "Set up a recurring or event-triggered task.",
-    ),
-}
 # Per-row defer / restore controls on the onboarding checklist.
 ONBOARDING_DEFER_LABEL = "Later"
 ONBOARDING_RESTORE_LABEL = "Do now"
 
-# Read-only "try one of these" suggestion chips shown under the act/schedule
-# rows. The act set differs by medium (chat vs live call).
-ONBOARDING_ACT_CHIPS_CHAT = (
-    "Summarize my unread emails",
-    "Catch me up on today's news",
-    "Draft a reply to my latest email",
-)
-ONBOARDING_ACT_CHIPS_CALL = (
-    "Walk me through this website",
-    "Tell me about my next meetings",
-    "Read me a rundown of my inbox",
-)
-ONBOARDING_SCHEDULE_CHIPS = (
-    "Send me a briefing tomorrow at 8am",
-    "Every Friday, recap my week",
-    "When I get an email from my boss, alert me",
-)
+# ─────────────────────────────────────────────────────────────────────────────
+# Onboarding catalog consumption
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The onboarding checklist (phases, steps, titles, descriptions, chips) is
+# owned by a single source of truth: Orchestra's onboarding graph, exposed via
+# the ``/assistant/onboarding/catalog`` endpoint and mirrored onto the
+# Coordinator/State render. Droid never re-declares that copy — it reads the
+# fetched catalog and decorates it with the prose scaffolding below (the
+# *behaviour* of each step: how the user advances it), which is presentation
+# guidance for the model rather than onboarding-design copy. The catalog is
+# already deployment-gated server-side, so a hosted catalog simply omits the
+# ``local_only`` phases and this prose follows suit automatically.
+
+# How the user advances each step — keyed by the catalog step id. Pure
+# behavioural scaffolding (not titles/descriptions, which come from the
+# catalog). Steps absent from a hosted catalog are never described.
+_STEP_FLOW_NOTES: dict[str, str] = {
+    "email-reference": "Clicking the row asks me to send the first reference clue over email.",
+    "email-reply": "The user replies with their guess once they receive the email clue.",
+    "whatsapp-number": "Opens Account \u2192 Contact info so the user can add/verify the WhatsApp number.",
+    "whatsapp-message-reference": "Clicking sends the next clue over WhatsApp.",
+    "whatsapp-message": "The user guesses the WhatsApp clue.",
+    "whatsapp-call-reference": "Clicking starts or requests a WhatsApp voice clue.",
+    "whatsapp-call": "The user guesses during the WhatsApp voice exchange.",
+    "phone-number": "Opens Account \u2192 Contact info so the user can add/verify the phone number.",
+    "sms-reference": "Clicking texts the next clue.",
+    "sms-message": "The user guesses the SMS clue.",
+    "phone-call-reference": "Clicking starts or requests a phone-call clue.",
+    "phone-call": "The user guesses during the phone call.",
+    "slack-connect": "Opens the Slack setup path for the Unify Slack app.",
+    "slack-reference": "Clicking sends the next clue via Slack.",
+    "slack-message": "The user guesses the Slack clue.",
+    "discord-connect": "Guides the user to add their Discord ID and install the public Discord bot.",
+    "discord-reference": "Clicking sends the next clue via Discord.",
+    "discord-message": "The user guesses the Discord clue.",
+    "workspace": (
+        "Clicking the row opens the workspace OAuth dialog (Google Workspace or "
+        "Microsoft 365). Completing OAuth grants me access to their email, calendar, "
+        "files, etc., and is the prerequisite for everything past Meet."
+    ),
+    "apps": (
+        "Clicking the row opens the Integrations tab; they connect at least one app "
+        "(Slack, Gmail, Notion, etc.) from the gallery and authorize it."
+    ),
+    "act": (
+        "Point-in-time work: the user hands me a one-off job that runs immediately and "
+        "watches it execute live in the Actions tab (which opens automatically). The "
+        "step completes the moment a real action starts running \u2014 NOT when a "
+        "scheduled task is created."
+    ),
+    "schedule": (
+        "Time- or event-bound work \u2014 a Task in the product sense: it lands in the "
+        "Tasks tab (which opens automatically) and recurs or fires on a trigger. "
+        "Scheduling is encouraged but optional. Read-only \u201ctry one of these\u201d "
+        "chips render under the act and schedule rows as inspiration only \u2014 they "
+        "do not click."
+    ),
+}
+
+# Per-phase grouping prose — keyed by the catalog phase id.
+_PHASE_FLOW_NOTES: dict[str, str] = {
+    "comms": (
+        "The user plays a lightweight guess-the-reference game across the configured "
+        "channels. Trigger rows send a clue immediately and auto-complete; the "
+        "following reply rows wait for the user's guess. Children:"
+    ),
+    "connect": (
+        "No action of its own; resolves when both children are done or deferred. "
+        "Children:"
+    ),
+    "work": "Children, in order:",
+}
+
+
+def _catalog_phases(catalog: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Ordered, deployment-gated phase headers from the fetched catalog."""
+    if not isinstance(catalog, dict):
+        return []
+    phases = catalog.get("phases")
+    return (
+        [p for p in phases if isinstance(p, dict)] if isinstance(phases, list) else []
+    )
+
+
+def _catalog_steps_by_phase(
+    catalog: dict[str, Any] | None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Catalog steps grouped by their phase label, preserving graph order."""
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    if not isinstance(catalog, dict):
+        return grouped
+    steps = catalog.get("steps")
+    if not isinstance(steps, list):
+        return grouped
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        grouped.setdefault(str(step.get("phase", "")), []).append(step)
+    return grouped
+
+
+def catalog_has_phase(catalog: dict[str, Any] | None, phase_id: str) -> bool:
+    """Whether a phase header (by id) is present in the fetched catalog.
+
+    Used to gate scaffolding that mentions a specific phase so hosted
+    deployments (which omit ``local_only`` phases) never describe a phase the
+    user cannot see. A missing catalog is treated as "present" so prompts
+    degrade to the full description rather than silently dropping content.
+    """
+    if not isinstance(catalog, dict):
+        return True
+    return any(p.get("id") == phase_id for p in _catalog_phases(catalog))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -265,12 +257,17 @@ def build_coordinator_console_literacy_block(
     coordinator_name: str,
     *,
     self_reference: bool = False,
+    catalog: dict[str, Any] | None = None,
 ) -> str:
     """Console product literacy for the coordinator (Twin).
 
     Teaches the current layout, per-surface semantics, left-sidebar selection
     scope, shared workspaces (Teams), account/org administration navigation,
     Memory/Tasks sub-tabs, the Integrations gallery, and screen-share guidance.
+
+    The "Get work done" tour hooks are gated on the fetched ``catalog``: a
+    hosted deployment omits that ``local_only`` phase, so the hooks are dropped
+    rather than describing a phase the user cannot see.
     """
     title = (
         "My Console literacy"
@@ -291,6 +288,21 @@ def build_coordinator_console_literacy_block(
         "my onboarding checklist"
         if self_reference
         else f"{coordinator_name} onboarding checklist"
+    )
+    # The "Get work done" (Delegate) phase is local_only — present in the
+    # catalog only on local deployments. Drop its tour hooks on hosted so the
+    # orientation never references a phase the user's checklist won't show.
+    work_tour_hooks: list[str] = (
+        [
+            "Onboarding phase 3 (Get work done) — tour hooks",
+            "-----------------------------------------------",
+            "  1. **Act**: real one-off job (voice or chat) → watch **Actions** as it "
+            "runs.",
+            "  2. **Schedule** (optional): **Tasks → Tasks** for later/recurring work.",
+            "",
+        ]
+        if catalog_has_phase(catalog, "work")
+        else []
     )
 
     return "\n".join(
@@ -571,12 +583,7 @@ def build_coordinator_console_literacy_block(
             "  - On a call: one surface per spoken turn; wait for acknowledgment "
             "before the next.",
             "",
-            "Onboarding phase 3 (Get work done) — tour hooks",
-            "-----------------------------------------------",
-            "  1. **Act**: real one-off job (voice or chat) → watch **Actions** as it "
-            "runs.",
-            "  2. **Schedule** (optional): **Tasks → Tasks** for later/recurring work.",
-            "",
+            *work_tour_hooks,
             "Accuracy",
             "----------",
             "If I am unsure of a click path, I describe the intent (live work → "
@@ -589,132 +596,91 @@ def build_coordinator_onboarding_flow_reference_block(
     coordinator_name: str,
     *,
     self_reference: bool = False,
+    catalog: dict[str, Any] | None = None,
 ) -> str:
     """Reference for the coordinator-led onboarding UI.
 
     Teaches the onboarding surface (transient full-screen overlay, then the
     checklist in the Assistant info → Onboarding tab), the steps, and how the
     user advances each so the coordinator can answer "what do I click next?".
+
+    The phase/step *titles* and which phases exist come from the fetched
+    onboarding ``catalog`` (Orchestra's canonical, deployment-gated source of
+    truth); this builder only adds the behavioural scaffolding from
+    ``_STEP_FLOW_NOTES`` / ``_PHASE_FLOW_NOTES``. On a hosted catalog the
+    ``local_only`` phases are already absent, so they are silently skipped
+    here too.
     """
-    step_name = "me" if self_reference else coordinator_name
     block_title = (
         "My onboarding flow (UI reference)"
         if self_reference
         else f"{coordinator_name} onboarding flow (UI reference)"
     )
-    meet_title = ONBOARDING_STEPS["meet"][0].format(name=step_name)
-    comms_title = ONBOARDING_STEPS["comms"][0]
-    email_reference_title = ONBOARDING_STEPS["email-reference"][0]
-    email_reply_title = ONBOARDING_STEPS["email-reply"][0]
-    whatsapp_number_title = ONBOARDING_STEPS["whatsapp-number"][0]
-    whatsapp_reference_title = ONBOARDING_STEPS["whatsapp-message-reference"][0]
-    whatsapp_reply_title = ONBOARDING_STEPS["whatsapp-message"][0]
-    whatsapp_call_reference_title = ONBOARDING_STEPS["whatsapp-call-reference"][0]
-    whatsapp_call_reply_title = ONBOARDING_STEPS["whatsapp-call"][0]
-    phone_number_title = ONBOARDING_STEPS["phone-number"][0]
-    sms_reference_title = ONBOARDING_STEPS["sms-reference"][0]
-    sms_reply_title = ONBOARDING_STEPS["sms-message"][0]
-    phone_call_reference_title = ONBOARDING_STEPS["phone-call-reference"][0]
-    phone_call_reply_title = ONBOARDING_STEPS["phone-call"][0]
-    slack_connect_title = ONBOARDING_STEPS["slack-connect"][0]
-    slack_reference_title = ONBOARDING_STEPS["slack-reference"][0]
-    slack_reply_title = ONBOARDING_STEPS["slack-message"][0]
-    discord_connect_title = ONBOARDING_STEPS["discord-connect"][0]
-    discord_reference_title = ONBOARDING_STEPS["discord-reference"][0]
-    discord_reply_title = ONBOARDING_STEPS["discord-message"][0]
-    connect_title = ONBOARDING_STEPS["connect"][0].format(name=step_name)
-    workspace_title = ONBOARDING_STEPS["workspace"][0].format(name=step_name)
-    apps_title = ONBOARDING_STEPS["apps"][0].format(name=step_name)
-    act_title = ONBOARDING_STEPS["act"][0].format(name=step_name)
-    return "\n".join(
+    phases = _catalog_phases(catalog)
+    steps_by_phase = _catalog_steps_by_phase(catalog)
+    titles = {
+        str(s.get("id")): str(s.get("title", ""))
+        for s in (catalog.get("steps") if isinstance(catalog, dict) else None) or []
+        if isinstance(s, dict)
+    }
+    workspace_title = titles.get("workspace", "the workspace step")
+    phase_legend = (
+        " — ".join(f"**{p.get('phase', '')}**" for p in phases)
+        if phases
+        else "the configured phases"
+    )
+
+    lines = [
+        block_title,
+        "-----------------------------------",
+        "A workspace owner first meets me through a transient full-screen "
+        'overlay on the Assistants page: a **call-vs-chat picker** ("Start '
+        'Call" or "I\'d rather text for now"), optionally followed by a short '
+        'animated intro. There is **no "skip onboarding" link** — picking '
+        "chat (or finishing the intro) drops them straight into the regular "
+        "Assistants page with me selected.",
+        "From then on the onboarding **checklist** lives in my **Assistant "
+        "info** panel (inside Chat) under the **Onboarding** tab. Layout I "
+        'should picture when answering "where do I click":',
+        f"  - A progress bar across the onboarding phases — {phase_legend} — "
+        "above a list of steps grouped into those phases. Each row has a "
+        "marker, a title, an info tooltip (what it does + a rough time "
+        "estimate), and — for the current step — a **Next** pill. Clicking an "
+        "actionable row performs its action directly (there is no separate "
+        "named button).",
+        f"  - Pending rows have a small **{ONBOARDING_DEFER_LABEL}** button to "
+        f'defer them; deferred rows show an "L" marker and a '
+        f"**{ONBOARDING_RESTORE_LABEL}** button to restore them. Deferred is not "
+        "the same as done. Locked rows stay disabled until their prerequisite "
+        "is resolved (the tooltip names the earlier step to finish first).",
+        "The onboarding steps in order — title, what it does, and how the user "
+        "advances it:",
+        "  1. **Meet** (`meet`). Auto-completes once we exchange the opening "
+        "turn — saying anything in the chat (or starting the call) clears it. "
+        "Nothing to click.",
+    ]
+
+    counter = 2
+    for phase in phases:
+        phase_id = str(phase.get("id", ""))
+        phase_title = str(phase.get("title", ""))
+        phase_note = _PHASE_FLOW_NOTES.get(phase_id, "")
+        header = f"  {counter}. **{phase_title}** (`{phase_id}`, grouping row)."
+        if phase_note:
+            header = f"{header} {phase_note}"
+        lines.append(header)
+        for step in steps_by_phase.get(str(phase.get("phase", "")), []):
+            step_id = str(step.get("id", ""))
+            step_title = str(step.get("title", ""))
+            note = _STEP_FLOW_NOTES.get(step_id, "")
+            row = f"     - **{step_title}** (`{step_id}`)."
+            if note:
+                row = f"{row} {note}"
+            lines.append(row)
+        counter += 1
+
+    lines.extend(
         [
-            block_title,
-            "-----------------------------------",
-            "A workspace owner first meets me through a transient full-screen "
-            'overlay on the Assistants page: a **call-vs-chat picker** ("Start '
-            'Call" or "I\'d rather text for now"), optionally followed by a short '
-            'animated intro. There is **no "skip onboarding" link** — picking '
-            "chat (or finishing the intro) drops them straight into the regular "
-            "Assistants page with me selected.",
-            "From then on the onboarding **checklist** lives in my **Assistant "
-            "info** panel (inside Chat) under the **Onboarding** tab. Layout I "
-            'should picture when answering "where do I click":',
-            "  - A progress bar across four phases — **Meet**, **Quiz**, **Connect**, "
-            "**Delegate** — above a list of steps grouped into those phases. Each "
-            "row has a marker, a title, an info tooltip (what it does + a rough time "
-            "estimate), and — for the current step — a **Next** pill. Clicking an "
-            "actionable row performs its action directly (there is no separate "
-            "named button).",
-            f"  - Pending rows have a small **{ONBOARDING_DEFER_LABEL}** button to "
-            f'defer them; deferred rows show an "L" marker and a '
-            f"**{ONBOARDING_RESTORE_LABEL}** button to restore them. Deferred is not "
-            "the same as done. Locked rows stay disabled until their prerequisite "
-            "is resolved (the tooltip names the earlier step to finish first).",
-            "The onboarding steps in order — title, what it does, and how the user "
-            "advances it:",
-            f"  1. **{meet_title}** (`meet`). Auto-completes once we exchange the "
-            "opening turn — saying anything in the chat (or starting the call) "
-            "clears it. Nothing to click.",
-            f"  2. **{comms_title}** (`comms`, grouping row). The user plays a "
-            "lightweight guess-the-reference game across the configured channels. "
-            "Trigger rows send a clue immediately and auto-complete; the following "
-            "reply rows wait for the user's guess. Children:",
-            f"     - **{email_reference_title}** (`email-reference`). Clicking the row "
-            "asks me to send the first reference clue over email.",
-            f"     - **{email_reply_title}** (`email-reply`). The user replies with "
-            "their guess once they receive the email clue.",
-            f"     - **{whatsapp_number_title}** (`whatsapp-number`). Opens Account "
-            "-> Contact info so the user can add/verify the WhatsApp number.",
-            f"     - **{whatsapp_reference_title}** (`whatsapp-message-reference`). "
-            "Clicking sends the next clue over WhatsApp.",
-            f"     - **{whatsapp_reply_title}** (`whatsapp-message`). The user guesses "
-            "the WhatsApp clue.",
-            f"     - **{whatsapp_call_reference_title}** (`whatsapp-call-reference`). "
-            "Clicking starts or requests a WhatsApp voice clue.",
-            f"     - **{whatsapp_call_reply_title}** (`whatsapp-call`). The user guesses "
-            "during the WhatsApp voice exchange.",
-            f"     - **{phone_number_title}** (`phone-number`). Opens Account -> "
-            "Contact info so the user can add/verify the phone number.",
-            f"     - **{sms_reference_title}** (`sms-reference`). Clicking texts the "
-            "next clue.",
-            f"     - **{sms_reply_title}** (`sms-message`). The user guesses the SMS clue.",
-            f"     - **{phone_call_reference_title}** (`phone-call-reference`). Clicking "
-            "starts or requests a phone-call clue.",
-            f"     - **{phone_call_reply_title}** (`phone-call`). The user guesses during "
-            "the phone call.",
-            f"     - **{slack_connect_title}** (`slack-connect`). Opens the Slack setup "
-            "path for the Unify Slack app.",
-            f"     - **{slack_reference_title}** (`slack-reference`). Clicking sends the "
-            "next clue via Slack.",
-            f"     - **{slack_reply_title}** (`slack-message`). The user guesses the Slack clue.",
-            f"     - **{discord_connect_title}** (`discord-connect`). Guides the user to "
-            "add their Discord ID and install the public Discord bot.",
-            f"     - **{discord_reference_title}** (`discord-reference`). Clicking sends "
-            "the next clue via Discord.",
-            f"     - **{discord_reply_title}** (`discord-message`). The user guesses the Discord clue.",
-            f"  3. **{connect_title}** (`connect`, grouping row). No action of its "
-            "own; resolves when both children are done or deferred. Children:",
-            f"     - **{workspace_title}** (`workspace`). Clicking the row opens the "
-            "workspace OAuth dialog (Google Workspace or Microsoft 365). Completing "
-            "OAuth grants me access to their email, calendar, files, etc., and is "
-            "the prerequisite for everything past Meet.",
-            f"     - **{apps_title}** (`apps`). Clicking the row opens the "
-            "**Integrations** tab; they connect at least one app (Slack, Gmail, "
-            "Notion, etc.) from the gallery and authorize it.",
-            "  4. **Get work done** (`work`, grouping row). Children, in order:",
-            f"     - **{act_title}** (`act`). Point-in-time work: the user hands me a "
-            "one-off job that runs immediately and watches it execute live in the "
-            "**Actions** tab (which opens automatically). The step completes the "
-            "moment a real action starts running — NOT when a scheduled task is "
-            "created. While work runs I point them at **Actions** for live progress "
-            "(and offer screen share on a call if helpful).",
-            "     - **Schedule a task for later** (`schedule`). Time- or event-bound "
-            "work — a *Task* in the product sense: it lands in the **Tasks** tab "
-            "(which opens automatically) and recurs or fires on a trigger. It "
-            "completes when a scheduled task actually lands in the Tasks list. "
-            f'Scheduling is encouraged but optional. Read-only "try one of these" '
-            "chips render under the act and schedule rows as inspiration only — they "
-            "do not click.",
             "Answering flow questions:",
             '  - When the user asks "what do I do next?", "where do I click?", or '
             "similar, I look at the most recent onboarding signals and name the "
@@ -732,3 +698,4 @@ def build_coordinator_onboarding_flow_reference_block(
             "step as completed.",
         ],
     )
+    return "\n".join(lines)

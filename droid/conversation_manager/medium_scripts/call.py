@@ -888,6 +888,7 @@ async def entrypoint(ctx: agents.JobContext):
     coordinator_onboarding_next_targets: list[dict] | None = None
     coordinator_active_onboarding_step: str | None = None
     coordinator_onboarding_deferred: bool = False
+    onboarding_catalog: dict | None = None
     if (
         SESSION_DETAILS.is_coordinator
         and SESSION_DETAILS.assistant.agent_id is not None
@@ -903,6 +904,15 @@ async def entrypoint(ctx: agents.JobContext):
                 )
                 _state_resp.raise_for_status()
                 _state_info = (_state_resp.json() or {}).get("info") or {}
+                # Static, deployment-gated onboarding catalog — the single
+                # source of truth for the flow-reference copy.
+                _cat_resp = await _state_http.get(
+                    f"{SETTINGS.ORCHESTRA_URL}/assistant/onboarding/catalog",
+                    headers={"Authorization": f"Bearer {SESSION_DETAILS.unify_key}"},
+                )
+                _cat_resp.raise_for_status()
+                _catalog = (_cat_resp.json() or {}).get("info") or {}
+                onboarding_catalog = _catalog if isinstance(_catalog, dict) else None
             coordinator_onboarding_deferred = bool(
                 _state_info.get("onboarding_deferred"),
             )
@@ -947,6 +957,7 @@ async def entrypoint(ctx: agents.JobContext):
         coordinator_active_onboarding_step=coordinator_active_onboarding_step,
         coordinator_onboarding_deferred=coordinator_onboarding_deferred,
         console_ui_present=SETTINGS.DROID_CONSOLE_UI,
+        onboarding_catalog=onboarding_catalog,
     ).flatten()
     _log.config(f"System prompt ({len(system_prompt)} chars)")
 
