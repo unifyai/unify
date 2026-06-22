@@ -1249,8 +1249,8 @@ requires-dist = [
     { name = "textual-dev", specifier = ">=1.2.0" },
     { name = "tiktoken", specifier = ">=0.11.0" },
     { name = "twilio", specifier = ">=8.0.0" },
-    { name = "unify", git = "https://github.com/unifyai/unify.git?branch=staging" },
-    { name = "unillm", git = "https://github.com/unifyai/unillm.git?branch=staging" },
+    { name = "unify", editable = "../unify" },
+    { name = "unillm", editable = "../unillm" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.24.0" },
     { name = "websockify", specifier = ">=0.13.0" },
 ]
@@ -2611,7 +2611,7 @@ wheels = [
 
 [[package]]
 name = "litellm"
-version = "1.87.1"
+version = "1.88.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -2627,9 +2627,9 @@ dependencies = [
     { name = "tiktoken" },
     { name = "tokenizers" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5d/e5/d0ac1c8f55e2c8d8799589e831bef0d450e69e02ecb511901ffc8de054d9/litellm-1.87.1.tar.gz", hash = "sha256:70ac9d6b25f56ad30de6ff95d26fac3b3fc697a95da582b6072d25d8dc73d493", size = 15455709, upload-time = "2026-06-04T16:23:23.339Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9b/8c/6cfce5d15554e076b8438a955436e9e6e2a2bd39c76539656c1c3861c369/litellm-1.88.0.tar.gz", hash = "sha256:4ff794493e40bd86c6f13e91dcb3e1aad697403fd46a96902196d93356ba48f4", size = 13886026, upload-time = "2026-06-06T23:25:17.93Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ff/18/8275c95ef09e81ab0c01a162c7b780ce3fbc49066b5d532c6b6ab3dc0118/litellm-1.87.1-py3-none-any.whl", hash = "sha256:dd4e00278cdb846d52e99a09d732575a897273540b54eb044247ecbc0d98f67c", size = 17105482, upload-time = "2026-06-04T16:23:20.769Z" },
+    { url = "https://files.pythonhosted.org/packages/da/71/deb6637475253b83eb4577c058863eec4b4ddaef2d08dcd93981b1aa4209/litellm-1.88.0-py3-none-any.whl", hash = "sha256:abd3037e0bf5703f833f5565c87bdfd93578d3de46cbcb36dfa108c3ef58021c", size = 15276203, upload-time = "2026-06-06T23:25:07.257Z" },
 ]
 
 [[package]]
@@ -9459,22 +9459,72 @@ wheels = [
 [[package]]
 name = "unify"
 version = "0.0.0"
-source = { git = "https://github.com/unifyai/unify.git?branch=staging#6f95f21c6aa0675b8a03d08aa58e50d1c92d2ca3" }
+source = { editable = "../unify" }
 dependencies = [
     { name = "aiohttp" },
     { name = "requests" },
     { name = "tqdm" },
 ]
 
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", specifier = ">=3.12.14" },
+    { name = "requests", specifier = ">=2.32.4" },
+    { name = "tqdm", specifier = ">=4.67.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "autoflake", specifier = ">=1.6.1" },
+    { name = "black", specifier = "==26.3.1" },
+    { name = "flake8", specifier = ">=4.0.1" },
+    { name = "isort", specifier = ">=5.11.4" },
+    { name = "mypy", specifier = ">=1.1.1" },
+    { name = "opentelemetry-api", specifier = ">=1.20.0" },
+    { name = "opentelemetry-exporter-otlp", specifier = ">=1.20.0" },
+    { name = "opentelemetry-sdk", specifier = ">=1.20.0" },
+    { name = "pre-commit", specifier = ">=3.0.1" },
+    { name = "pytest", specifier = ">=8.3.3" },
+    { name = "pytest-asyncio", specifier = ">=0.24.0" },
+    { name = "pytest-dotenv", specifier = ">=0.5.2" },
+    { name = "pytest-timeout", specifier = ">=2.3.1" },
+    { name = "pytest-xdist", specifier = ">=3.8.0" },
+    { name = "python-dotenv", specifier = ">=1.2.1" },
+    { name = "types-requests" },
+]
+
 [[package]]
 name = "unillm"
 version = "0.0.0"
-source = { git = "https://github.com/unifyai/unillm.git?branch=staging#014d461d9a6ab49657dcc4e238f4064ae1e7623e" }
+source = { editable = "../unillm" }
 dependencies = [
     { name = "litellm" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "unify" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "litellm", specifier = "==1.88.0" },
+    { name = "pydantic", specifier = ">=2.12.5" },
+    { name = "pydantic-settings", specifier = ">=2.12.0" },
+    { name = "unify", editable = "../unify" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "autoflake", specifier = ">=2.3.1" },
+    { name = "black", specifier = "==26.3.1" },
+    { name = "opentelemetry-api", specifier = ">=1.20.0" },
+    { name = "opentelemetry-exporter-otlp", specifier = ">=1.20.0" },
+    { name = "opentelemetry-sdk", specifier = ">=1.20.0" },
+    { name = "pre-commit", specifier = ">=4.0.1" },
+    { name = "pytest", specifier = ">=8.4.2" },
+    { name = "pytest-asyncio", specifier = ">=0.24.0" },
+    { name = "pytest-dotenv", specifier = ">=0.5.2" },
+    { name = "pytest-timeout", specifier = ">=2.3.1" },
+    { name = "ruff", specifier = ">=0.15.16" },
 ]
 
 [[package]]
