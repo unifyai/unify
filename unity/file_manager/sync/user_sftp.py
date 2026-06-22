@@ -4,9 +4,9 @@ Distinct from :mod:`droid.file_manager.sync.manager` (continuous bisync with the
 assistant's managed VM). This module pulls/pushes individual paths from a
 *user's* machine on request over the raw-TCP tunnel the device registered:
 
-- Reads stage into ``~/Unity/Remote/<user-id>/`` (mirroring the remote tree).
+- Reads stage into ``~/Droid/Remote/<user-id>/`` (mirroring the remote tree).
 - Writebacks never overwrite the user's originals: edited content lands as a
-  timestamped copy under the remote ``/.unity-edits/`` mirror tree, which is in
+  timestamped copy under the remote ``/.droid-edits/`` mirror tree, which is in
   turn excluded from reads.
 
 The per-link private key is fetched on demand from the admin assistant read
@@ -32,7 +32,7 @@ from droid.session_details import UserDesktopLink
 SFTP_USER = "unity"
 # The directory (relative to the served home root) that receives versioned
 # writebacks. Excluded from reads so the assistant never pulls its own edits.
-EDITS_DIR = ".unity-edits"
+EDITS_DIR = ".droid-edits"
 
 
 def _utc_stamp() -> str:
@@ -70,7 +70,7 @@ class UserHomeSFTP:
     @property
     def local_root(self) -> Path:
         """Local stage directory mirroring this user's remote home."""
-        return Path.home() / "Unity" / "Remote" / self._user_id
+        return Path.home() / "Droid" / "Remote" / self._user_id
 
     # ── setup ────────────────────────────────────────────────────────────
     async def setup(self) -> bool:
@@ -163,7 +163,7 @@ class UserHomeSFTP:
         original is never touched. Returns the remote path of the versioned copy.
         """
         rel = _normalize_remote(dest_path)
-        stamped = f"{rel.stem}.unity-{_utc_stamp()}{rel.suffix}"
+        stamped = f"{rel.stem}.droid-{_utc_stamp()}{rel.suffix}"
         remote_rel = PurePosixPath(EDITS_DIR) / rel.parent / stamped
         src = Path(local_path).expanduser()
         if not src.is_file():
