@@ -7,14 +7,26 @@ the remote targets (managed VM, user desktop) and the resolving factory build on
 this foundation.
 """
 
-from .base import ExecResult, ExecutionTarget, coerce_output
+from .assistant_desktop import AssistantDesktopTarget
+from .base import (
+    ExecResult,
+    ExecutionTarget,
+    TargetUnavailableError,
+    coerce_output,
+)
 from .exec_client import AgentServiceExecClient
+from .factory import get_target
 from .local import LocalTarget
+from .user_desktop import UserDesktopTarget
 
 __all__ = [
     "ExecResult",
     "ExecutionTarget",
+    "TargetUnavailableError",
     "coerce_output",
     "AgentServiceExecClient",
     "LocalTarget",
+    "AssistantDesktopTarget",
+    "UserDesktopTarget",
+    "get_target",
 ]
