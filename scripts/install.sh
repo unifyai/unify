@@ -95,8 +95,10 @@ ensure_prereqs() {
 }
 
 # ----------------------------------------------------------------------------
-# Clone (or update) the droid checkout. unify / unillm are resolved as git
-# dependencies by uv, so they do not need separate clones.
+# Clone (or update) the droid checkout. unify / unillm are cloned separately as
+# editable sibling checkouts (see clone_or_update_sibling): droid's
+# pyproject.toml references them via local relative paths (../unify, ../unillm),
+# so they must sit alongside the droid checkout under $DROID_HOME.
 # ----------------------------------------------------------------------------
 clone_or_update_droid() {
     mkdir -p "$DROID_HOME"
@@ -111,6 +113,30 @@ clone_or_update_droid() {
             "$REPO_BASE/droid.git" "$DROID_REPO"
     fi
     log_success "droid checkout ready"
+}
+
+# ----------------------------------------------------------------------------
+# Clone (or update) a first-party SDK (unify / unillm) as a sibling of the droid
+# checkout. droid (and unillm) resolve these via editable relative paths, so
+# they live at $DROID_HOME/<name> == ../<name> relative to the droid repo. Falls
+# back to the main branch when the requested branch is absent in the SDK repo.
+# ----------------------------------------------------------------------------
+clone_or_update_sibling() {
+    local name="$1"
+    local dir="$DROID_HOME/$name"
+    if [ -d "$dir/.git" ]; then
+        log_info "Updating $name checkout at $dir..."
+        git -C "$dir" fetch --depth "$SHALLOW_CLONE_DEPTH" origin "$BRANCH" 2>/dev/null || true
+        git -C "$dir" checkout "$BRANCH" 2>/dev/null || true
+        git -C "$dir" pull --rebase 2>/dev/null || true
+    else
+        log_info "Cloning $name ($BRANCH) into $dir..."
+        git clone --depth "$SHALLOW_CLONE_DEPTH" --branch "$BRANCH" \
+            "$REPO_BASE/$name.git" "$dir" 2>/dev/null || \
+        git clone --depth "$SHALLOW_CLONE_DEPTH" --branch main \
+            "$REPO_BASE/$name.git" "$dir"
+    fi
+    log_success "$name checkout ready"
 }
 
 uv_sync() {
@@ -332,6 +358,12 @@ case "\${1:-}" in
     update|pull)
         echo "Updating droid checkout..."
         git -C "\$DROID_REPO" pull --rebase || true
+        for sib in unify unillm; do
+            if [ -d "\$DROID_HOME/\$sib/.git" ]; then
+                echo "Updating \$sib checkout..."
+                git -C "\$DROID_HOME/\$sib" pull --rebase || true
+            fi
+        done
         (cd "\$DROID_REPO" && uv sync --all-groups)
         MAGNITUDE_DIR="\$DROID_REPO/magnitude"
         if [ -d "\$MAGNITUDE_DIR/.git" ]; then
@@ -412,6 +444,8 @@ main() {
     echo -e "${BOLD}Droid installer${NC} (branch: $BRANCH)"
     ensure_prereqs
     clone_or_update_droid
+    clone_or_update_sibling unify
+    clone_or_update_sibling unillm
     clone_or_update_magnitude
     uv_sync
     install_agent_service
