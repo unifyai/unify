@@ -2353,6 +2353,112 @@ class CodeActActor(BaseCodeActActor):
             error=err,
         )
 
+    async def _execute_on_surface(
+        self,
+        *,
+        surface_name: str,
+        code: str,
+        language: str,
+        state_mode: str,
+        session_id: int | None,
+        session_name: str | None,
+        venv_id: int | None,
+        user_id: str | None,
+    ) -> dict[str, Any]:
+        """Run code on a non-local surface (assistant desktop or user desktop).
+
+        Remote surfaces are stateless one-shots: sessions and venvs are
+        local-only concepts, so a session/venv request is rejected with a
+        structured error the model can self-correct against, rather than being
+        silently ignored.
+        """
+        import time as _surface_time
+
+        from droid.actor.execution.surface import ExecutionSurface
+        from droid.actor.execution.targets import (
+            TargetUnavailableError,
+            get_target,
+        )
+
+        def _err(message: str, suggestion: str) -> dict[str, Any]:
+            return {
+                "stdout": "",
+                "stderr": "",
+                "result": None,
+                "error": message,
+                "suggestion": suggestion,
+                "language": language,
+                "state_mode": state_mode,
+                "session_id": None,
+                "session_name": None,
+                "venv_id": None,
+                "session_created": False,
+                "duration_ms": 0,
+                "surface": surface_name,
+            }
+
+        try:
+            surface = ExecutionSurface(surface_name)
+        except ValueError:
+            return _err(
+                f"Unknown surface: {surface_name!r}",
+                "Use one of: 'local', 'assistant_desktop', 'user_desktop'.",
+            )
+
+        if (
+            state_mode != "stateless"
+            or session_id is not None
+            or session_name is not None
+            or venv_id is not None
+        ):
+            return _err(
+                f"Surface {surface_name!r} supports only stateless execution.",
+                "Remove state_mode/session_id/session_name/venv_id (remote "
+                "surfaces are stateless), or use surface='local' for sessions "
+                "and venvs.",
+            )
+
+        t0 = _surface_time.perf_counter()
+        try:
+            target = get_target(
+                surface,
+                user_id=user_id,
+                session_executor=self._session_executor,
+                function_manager=self.function_manager,
+            )
+            await target.ensure_ready()
+            if language == "python":
+                res = await target.run_python(code)
+            else:
+                res = await target.run_shell(code)
+        except TargetUnavailableError as e:
+            return _err(
+                str(e),
+                "Check that the desktop is linked, reachable, and (for the "
+                "user desktop) that the user has granted access.",
+            )
+        except ValueError as e:
+            return _err(
+                str(e),
+                "Adjust the request to match the surface's capabilities.",
+            )
+
+        return {
+            "stdout": res.stdout,
+            "stderr": res.stderr,
+            "result": res.result if res.result is not None else res.returncode,
+            "error": res.error,
+            "returncode": res.returncode,
+            "language": language,
+            "state_mode": "stateless",
+            "session_id": None,
+            "session_name": None,
+            "venv_id": None,
+            "session_created": False,
+            "duration_ms": int((_surface_time.perf_counter() - t0) * 1000),
+            "surface": surface_name,
+        }
+
     def _get_computer_tools(self) -> Dict[str, Callable]:
         """Extracts computer-related methods from the desktop namespace."""
         if not self._computer_primitives:
@@ -2429,6 +2535,8 @@ class CodeActActor(BaseCodeActActor):
             session_id: int | None = None,
             session_name: str | None = None,
             venv_id: int | None = None,
+            surface: str = "local",
+            user_id: str | None = None,
             _notification_up_q: asyncio.Queue[dict] | None = None,
             _parent_chat_context: list[dict] | None = None,
         ) -> Any:
@@ -2445,6 +2553,17 @@ class CodeActActor(BaseCodeActActor):
             Key concepts
             -----------
             - **language**: "python" | "bash" | "zsh" | "sh" | "powershell"
+            - **surface**: which machine to run on.
+              - "local" (default): the droid host itself — the only surface that
+                supports stateful sessions and venvs.
+              - "assistant_desktop": the assistant's managed VM.
+              - "user_desktop": the user's own linked machine, when the user has
+                granted access (pass ``user_id`` to disambiguate when more than
+                one user desktop is linked).
+              Remote surfaces ("assistant_desktop"/"user_desktop") are **stateless
+              one-shots**: ``state_mode`` must be "stateless" and ``session_id`` /
+              ``session_name`` / ``venv_id`` must be omitted. Use them to run a
+              shell command or a self-contained Python snippet on that machine.
             - **state_mode**:
               - "stateless": fresh execution; no persistence of intermediate variables.
                 Environment globals and FunctionManager-discovered functions are
@@ -2515,6 +2634,7 @@ class CodeActActor(BaseCodeActActor):
                     "venv_id": venv_id,
                     "session_created": False,
                     "duration_ms": 0,
+                    "surface": surface,
                 }
 
             # ──────────────────────────────────────────────────────────────
@@ -2596,6 +2716,22 @@ class CodeActActor(BaseCodeActActor):
                         "execute_code assistant secret sync failed",
                         exc_info=True,
                     )
+
+                # Route non-local surfaces (assistant/user desktop) through the
+                # execution targets. Remote surfaces are stateless, so they skip
+                # the local session-resolution and pool machinery entirely.
+                if surface != "local":
+                    out = await self._execute_on_surface(
+                        surface_name=surface,
+                        code=code,
+                        language=str(language),
+                        state_mode=state_mode,
+                        session_id=session_id,
+                        session_name=session_name,
+                        venv_id=venv_id,
+                        user_id=user_id,
+                    )
+                    return out
 
                 _rs = self._resolve_session(
                     state_mode=state_mode,
