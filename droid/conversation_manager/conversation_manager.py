@@ -236,6 +236,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # the slow brain reads a standing progress block instead of
         # deriving "what's next". None outside active onboarding.
         self.coordinator_onboarding_render: dict[str, Any] | None = None
+        # Static, deployment-gated onboarding catalog (phases + steps + copy),
+        # fetched once from Orchestra's canonical source of truth and reused for
+        # every prompt build so console_ui never re-declares onboarding copy.
+        self.onboarding_catalog: dict[str, Any] | None = None
         self._coordinator_state_checked_at: float = 0.0
         self.assistant_email_provider = assistant_email_provider
         self.user_first_name = user_first_name
@@ -2412,6 +2416,20 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 )
                 resp.raise_for_status()
                 info = (resp.json() or {}).get("info") or {}
+                # The onboarding catalog is static + deployment-gated; fetch it
+                # once and reuse it for every subsequent prompt build.
+                if self.onboarding_catalog is None:
+                    cat_resp = await client.get(
+                        f"{SETTINGS.ORCHESTRA_URL}/assistant/onboarding/catalog",
+                        headers={
+                            "Authorization": f"Bearer {SESSION_DETAILS.unify_key}",
+                        },
+                    )
+                    cat_resp.raise_for_status()
+                    catalog = (cat_resp.json() or {}).get("info") or {}
+                    self.onboarding_catalog = (
+                        catalog if isinstance(catalog, dict) else None
+                    )
             self.coordinator_onboarding_deferred = bool(info.get("onboarding_deferred"))
             render = info.get("onboarding")
             self.coordinator_onboarding_render = (
