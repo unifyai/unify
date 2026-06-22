@@ -925,3 +925,111 @@ class TestCoordinatorOnboardingDeferGate:
             ],
         )
         assert "connecting one of their apps from the Integrations panel" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Tests – onboarding flow reference is driven by the fetched catalog
+# ---------------------------------------------------------------------------
+
+
+def _catalog_step(step_id: str, title: str, phase: str) -> dict:
+    return {
+        "id": step_id,
+        "title": title,
+        "phase": phase,
+        "kind": "connect",
+        "channel": None,
+        "can_skip": True,
+        "description": "",
+        "estimated_time": "",
+        "chips_chat": [],
+        "chips_call": [],
+    }
+
+
+# A local-mode catalog: every phase present (mirrors the shape Orchestra's
+# ``/assistant/onboarding/catalog`` returns on a self-host / dev deployment).
+_CATALOG_LOCAL: dict = {
+    "phases": [
+        {
+            "id": "comms",
+            "phase": "Quiz",
+            "title": "Guess the reference",
+            "description": "Identify clues across channels.",
+        },
+        {
+            "id": "connect",
+            "phase": "Connect",
+            "title": "Connect me",
+            "description": "Plug me into your workspace and apps.",
+        },
+        {
+            "id": "work",
+            "phase": "Delegate",
+            "title": "Get work done",
+            "description": "Hand off real work and see it run.",
+        },
+    ],
+    "steps": [
+        _catalog_step("email-reference", "Email the first reference", "Quiz"),
+        _catalog_step("workspace", "Give me access to your workspace", "Connect"),
+        _catalog_step("apps", "Connect me with your apps", "Connect"),
+        _catalog_step("act", "Ask me to do something now", "Delegate"),
+    ],
+}
+
+# A hosted catalog: Orchestra has already dropped the local_only phases
+# (Quiz / Delegate), leaving only Connect.
+_CATALOG_HOSTED: dict = {
+    "phases": [
+        {
+            "id": "connect",
+            "phase": "Connect",
+            "title": "Connect me",
+            "description": "Plug me into your workspace and apps.",
+        },
+    ],
+    "steps": [
+        _catalog_step("workspace", "Give me access to your workspace", "Connect"),
+        _catalog_step("apps", "Connect me with your apps", "Connect"),
+    ],
+}
+
+_WORK_TOUR_HOOKS_HEADER = "Onboarding phase 3 (Get work done) — tour hooks"
+
+
+class TestOnboardingCatalogDrivesFlowReference:
+    """The flow-reference block sources its phase/step titles from the fetched
+    catalog (Orchestra's single source of truth), and the hosted catalog —
+    which omits the local_only phases — drops them from the prompt too."""
+
+    def test_local_catalog_renders_all_phase_and_step_titles(self):
+        prompt = _build(is_coordinator=True, onboarding_catalog=_CATALOG_LOCAL)
+        assert "My onboarding flow (UI reference)" in prompt
+        assert "Guess the reference" in prompt
+        assert "Get work done" in prompt
+        assert "Give me access to your workspace" in prompt
+
+    def test_hosted_catalog_omits_local_only_phases(self):
+        prompt = _build(is_coordinator=True, onboarding_catalog=_CATALOG_HOSTED)
+        # The block still renders, but only the Connect phase survives.
+        assert "My onboarding flow (UI reference)" in prompt
+        assert "Connect me" in prompt
+        assert "Give me access to your workspace" in prompt
+        # The local_only phases are gone, not merely hidden.
+        assert "Guess the reference" not in prompt
+        assert "Get work done" not in prompt
+
+    def test_literacy_local_keeps_work_tour_hooks(self):
+        prompt = _build(is_coordinator=True, onboarding_catalog=_CATALOG_LOCAL)
+        assert _WORK_TOUR_HOOKS_HEADER in prompt
+
+    def test_literacy_hosted_drops_work_tour_hooks(self):
+        prompt = _build(is_coordinator=True, onboarding_catalog=_CATALOG_HOSTED)
+        assert _WORK_TOUR_HOOKS_HEADER not in prompt
+
+    def test_voice_flow_reference_uses_catalog(self):
+        prompt = _build_voice(is_coordinator=True, onboarding_catalog=_CATALOG_HOSTED)
+        assert "My onboarding flow (UI reference)" in prompt
+        assert "Get work done" not in prompt
+        assert "Connect me" in prompt
