@@ -160,6 +160,24 @@ _EXECUTION_RULES = textwrap.dedent("""
     `primitives.transcripts.ask`, etc. — every `primitives.*.ask` /
     `primitives.*.update` is a single primitive call.
 
+    ### Execution Surface: where code runs
+
+    `execute_code` runs on the **local** host by default. To run a shell
+    command or a self-contained Python snippet on another machine, pass
+    `surface`:
+
+    - `surface="local"` (default) — the only surface with stateful sessions
+      and venvs.
+    - `surface="assistant_desktop"` — your managed VM.
+    - `surface="user_desktop"` — the user's own machine, only when they have
+      linked it and asked you to act on it (pass `user_id` when more than one
+      user desktop is linked).
+
+    Remote surfaces are **stateless one-shots**: do not pass a non-stateless
+    `state_mode`, `session_id`, `session_name`, or `venv_id`. To read or write
+    files on the user's machine, prefer
+    `primitives.computer.user_desktop.files` (pull/push/list) over raw shell.
+
 ### Manager Primitive Scope
 
     `primitives.*` manager calls run as the current assistant. Their reads and
