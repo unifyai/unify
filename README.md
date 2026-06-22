@@ -123,6 +123,25 @@ Bring-your-own-keys (LLM, voice, research) live in `~/.droid/droid/.env` — edi
 
 ---
 
+## Steering while work is in-flight
+
+When Droid is mid-task in the local chat REPL, steer it the same way you would in the hosted Console: **send another message**. There are no special slash commands (`/ask`, `/i`, `/stop`) in `droid` — those were an old sandbox experiment and are not wired to the runtime.
+
+**Text:** use `msg` at the `>` prompt:
+
+```text
+> msg Actually, narrow it to ones with Rust bindings.
+> msg What step are you on?
+```
+
+Each `msg` publishes a normal inbound Unify chat message. The ConversationManager wakes the slow brain, which can answer you or redirect in-flight Actor work through its usual action-steering tools (`interject_*`, `ask_*`, `stop_*`, etc.).
+
+**Voice:** type `meet` to open a LiveKit browser session, then speak through your mic. Utterances follow the same Unify Meet path as production voice — no separate steering syntax.
+
+Use `trace`, `tree`, or `show_logs` for debugging while work is in-flight, or send another `msg` when you want to steer.
+
+---
+
 ## What this feels like
 
 ```text
