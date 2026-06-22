@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from typing import Any, Awaitable, Callable, Optional
 
 from droid.conversation_manager.events import (
@@ -257,17 +256,11 @@ async def subscribe_to_responses(
     # been "active" for too long since the last inbound publish, clear the flag
     # to avoid blocking scenario seeding forever in "no outbound" cases.
     idle_grace_s = 8.0
-    # UX: If the Actor is running but doesn't emit frequent notifications,
-    # print a lightweight "still working" line so the REPL doesn't feel stuck.
-    # Track in-flight Actor handles deterministically (by handle_id). This avoids
-    # false "still working" hints caused by late notifications after completion.
+    # Track in-flight Actor handles deterministically (by handle_id).
     actor_in_flight_ids: set[int] = set()
     actor_completed_ids: set[int] = set()
     actor_idle_ids: set[int] = set()
     actor_waiting_clarification_ids: set[int] = set()
-    last_actor_event_at = 0.0
-    last_progress_hint_at = 0.0
-    progress_hint_every_s = 6.0
 
     while True:
         if stop_event is not None and stop_event.is_set():
@@ -304,33 +297,6 @@ async def subscribe_to_responses(
                         ignore_subscribe_messages=True,
                     )
                     if not msg:
-                        # Best-effort progress hint while Actor is running.
-                        try:
-                            now = time.monotonic()
-                            actor_in_flight = bool(
-                                actor_in_flight_ids
-                                - actor_completed_ids
-                                - actor_idle_ids,
-                            )
-                            actor_waiting_clarification = bool(
-                                actor_waiting_clarification_ids,
-                            )
-                            if actor_in_flight and (not actor_waiting_clarification):
-                                if (
-                                    last_actor_event_at
-                                    and (now - last_actor_event_at)
-                                    >= progress_hint_every_s
-                                ):
-                                    if (
-                                        now - last_progress_hint_at
-                                    ) >= progress_hint_every_s:
-                                        await _maybe_call(
-                                            display_callback,
-                                            "[Actor] still working... (tip: `/ask <q>` for status, `/stop` to abort)",
-                                        )
-                                        last_progress_hint_at = now
-                        except Exception:
-                            pass
                         continue
 
                     try:
@@ -600,9 +566,8 @@ async def subscribe_to_responses(
                     ):
                         continue
 
-                    # Track Actor in-flight status for UX hints.
+                    # Track Actor handle lifecycle (clarification gating, late-event filter).
                     try:
-                        now = time.monotonic()
                         if isinstance(event, ActorHandleStarted):
                             hid = int(getattr(event, "handle_id", -1))
                             if hid >= 0:
@@ -610,7 +575,6 @@ async def subscribe_to_responses(
                                 actor_completed_ids.discard(hid)
                                 actor_idle_ids.discard(hid)
                                 actor_waiting_clarification_ids.discard(hid)
-                            last_actor_event_at = now
                             try:
                                 if trace_display is not None:
                                     trace_display.set_event_context(
@@ -642,7 +606,6 @@ async def subscribe_to_responses(
                                 actor_in_flight_ids.add(hid)
                                 actor_idle_ids.discard(hid)
                                 actor_waiting_clarification_ids.discard(hid)
-                            last_actor_event_at = now
                         elif isinstance(event, ActorClarificationRequest):
                             # Ignore empty clarification artifacts.
                             q = getattr(event, "query", None)
@@ -652,13 +615,11 @@ async def subscribe_to_responses(
                             if hid >= 0:
                                 actor_in_flight_ids.add(hid)
                                 actor_waiting_clarification_ids.add(hid)
-                            last_actor_event_at = now
                         elif isinstance(event, ActorSessionResponse):
                             hid = int(getattr(event, "handle_id", -1))
                             if hid >= 0:
                                 actor_idle_ids.add(hid)
                                 actor_waiting_clarification_ids.discard(hid)
-                            last_actor_event_at = now
                         elif isinstance(event, ActorResult):
                             hid = int(getattr(event, "handle_id", -1))
                             if hid >= 0:
@@ -666,7 +627,6 @@ async def subscribe_to_responses(
                                 actor_idle_ids.discard(hid)
                                 actor_waiting_clarification_ids.discard(hid)
                                 actor_completed_ids.add(hid)
-                            last_actor_event_at = now
                     except Exception:
                         pass
 
