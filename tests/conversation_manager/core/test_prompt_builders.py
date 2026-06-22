@@ -952,50 +952,50 @@ def _catalog_step(step_id: str, title: str, phase: str) -> dict:
 _CATALOG_LOCAL: dict = {
     "phases": [
         {
-            "id": "comms",
-            "phase": "Quiz",
-            "title": "Guess the reference",
-            "description": "Identify clues across channels.",
+            "id": "communication",
+            "phase": "Communication",
+            "title": "Communication",
+            "description": "Try communication channels.",
         },
         {
-            "id": "connect",
-            "phase": "Connect",
-            "title": "Connect me",
-            "description": "Plug me into your workspace and apps.",
+            "id": "workspace",
+            "phase": "Workspace",
+            "title": "Workspace",
+            "description": "Give access to the workspace.",
         },
         {
-            "id": "work",
-            "phase": "Delegate",
-            "title": "Get work done",
-            "description": "Hand off real work and see it run.",
+            "id": "integrations",
+            "phase": "Integrations",
+            "title": "Integrations",
+            "description": "Connect apps.",
+        },
+        {
+            "id": "tasks",
+            "phase": "Tasks",
+            "title": "Tasks",
+            "description": "Schedule work.",
+        },
+        {
+            "id": "my-computer",
+            "phase": "My Computer",
+            "title": "My Computer",
+            "description": "Ask me to operate from my computer.",
         },
     ],
     "steps": [
-        _catalog_step("email-reference", "Email the first reference", "Quiz"),
-        _catalog_step("workspace", "Give me access to your workspace", "Connect"),
-        _catalog_step("apps", "Connect me with your apps", "Connect"),
-        _catalog_step("act", "Ask me to do something now", "Delegate"),
+        _catalog_step("email-reference", "Email the first reference", "Communication"),
+        _catalog_step("workspace", "Give me access to your workspace", "Workspace"),
+        _catalog_step("apps", "Connect me with your apps", "Integrations"),
+        _catalog_step("schedule", "Schedule a task for later", "Tasks"),
+        _catalog_step("my-computer-coming-soon", "[Coming soon]", "My Computer"),
     ],
 }
 
-# A hosted catalog: Orchestra has already dropped the local_only phases
-# (Quiz / Delegate), leaving only Connect.
+# A hosted catalog: Orchestra returns the same phase structure as local mode.
 _CATALOG_HOSTED: dict = {
-    "phases": [
-        {
-            "id": "connect",
-            "phase": "Connect",
-            "title": "Connect me",
-            "description": "Plug me into your workspace and apps.",
-        },
-    ],
-    "steps": [
-        _catalog_step("workspace", "Give me access to your workspace", "Connect"),
-        _catalog_step("apps", "Connect me with your apps", "Connect"),
-    ],
+    "phases": _CATALOG_LOCAL["phases"],
+    "steps": _CATALOG_LOCAL["steps"],
 }
-
-_WORK_TOUR_HOOKS_HEADER = "Onboarding phase 3 (Get work done) — tour hooks"
 
 
 class TestOnboardingCatalogDrivesFlowReference:
@@ -1006,30 +1006,27 @@ class TestOnboardingCatalogDrivesFlowReference:
     def test_local_catalog_renders_all_phase_and_step_titles(self):
         prompt = _build(is_coordinator=True, onboarding_catalog=_CATALOG_LOCAL)
         assert "My onboarding flow (UI reference)" in prompt
-        assert "Guess the reference" in prompt
-        assert "Get work done" in prompt
+        assert "Communication" in prompt
+        assert "My Computer" in prompt
         assert "Give me access to your workspace" in prompt
 
-    def test_hosted_catalog_omits_local_only_phases(self):
+    def test_hosted_catalog_renders_all_phase_and_step_titles(self):
         prompt = _build(is_coordinator=True, onboarding_catalog=_CATALOG_HOSTED)
-        # The block still renders, but only the Connect phase survives.
         assert "My onboarding flow (UI reference)" in prompt
-        assert "Connect me" in prompt
+        assert "Communication" in prompt
+        assert "My Computer" in prompt
         assert "Give me access to your workspace" in prompt
-        # The local_only phases are gone, not merely hidden.
-        assert "Guess the reference" not in prompt
-        assert "Get work done" not in prompt
 
-    def test_literacy_local_keeps_work_tour_hooks(self):
+    def test_literacy_local_omits_removed_work_tour_hooks(self):
         prompt = _build(is_coordinator=True, onboarding_catalog=_CATALOG_LOCAL)
-        assert _WORK_TOUR_HOOKS_HEADER in prompt
+        assert "Onboarding phase 7 (My Computer) — tour hooks" not in prompt
 
-    def test_literacy_hosted_drops_work_tour_hooks(self):
+    def test_literacy_hosted_omits_removed_work_tour_hooks(self):
         prompt = _build(is_coordinator=True, onboarding_catalog=_CATALOG_HOSTED)
-        assert _WORK_TOUR_HOOKS_HEADER not in prompt
+        assert "Onboarding phase 7 (My Computer) — tour hooks" not in prompt
 
     def test_voice_flow_reference_uses_catalog(self):
         prompt = _build_voice(is_coordinator=True, onboarding_catalog=_CATALOG_HOSTED)
         assert "My onboarding flow (UI reference)" in prompt
-        assert "Get work done" not in prompt
-        assert "Connect me" in prompt
+        assert "My Computer" in prompt
+        assert "Workspace" in prompt
