@@ -143,6 +143,28 @@ async def test_get_graph_client_uses_assistant_when_lookup_succeeds(
 
 
 @pytest.mark.asyncio
+async def test_get_graph_client_resolves_by_assistant_id_when_provided(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assistant = {"secrets": {"MICROSOFT_ACCESS_TOKEN": "user-token"}}
+    by_id = AsyncMock(return_value=assistant)
+    by_email = AsyncMock(return_value=assistant)
+    with (
+        patch("droid.gateway.common.graph.lookup_assistant_by_id", new=by_id),
+        patch("droid.gateway.common.graph.lookup_assistant", new=by_email),
+        patch("droid.gateway.common.graph.GraphServiceClient") as MockClient,
+    ):
+        await get_graph_client(assistant_id=123, credentials=EnvCredentialStore())
+    by_id.assert_awaited_once()
+    by_email.assert_not_awaited()
+    MockClient.assert_called_once()
+    assert isinstance(
+        MockClient.call_args.kwargs["credentials"],
+        TokenCredentialFromSecret,
+    )
+
+
+@pytest.mark.asyncio
 async def test_get_graph_client_falls_back_to_admin_when_lookup_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

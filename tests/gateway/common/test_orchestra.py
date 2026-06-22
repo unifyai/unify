@@ -53,6 +53,57 @@ async def test_lookup_assistant_returns_first_match_on_200(
 
 
 @pytest.mark.asyncio
+async def test_lookup_assistant_by_id_queries_agent_id(
+    monkeypatch: pytest.MonkeyPatch,
+    _orchestra_settings: None,
+) -> None:
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "test-admin-key")
+    credentials = EnvCredentialStore()
+
+    fake_response = MagicMock(status_code=200)
+    fake_response.json.return_value = {
+        "info": [{"agent_id": "123", "secrets": {"GOOGLE_ACCESS_TOKEN": "tok"}}],
+    }
+    fake_client = AsyncMock()
+    fake_client.__aenter__.return_value = fake_client
+    fake_client.get.return_value = fake_response
+    with patch(
+        "droid.gateway.common.orchestra.httpx.AsyncClient",
+        return_value=fake_client,
+    ):
+        result = await orchestra.lookup_assistant_by_id(123, credentials)
+
+    assert result == {"agent_id": "123", "secrets": {"GOOGLE_ACCESS_TOKEN": "tok"}}
+    call = fake_client.get.call_args
+    assert call.args[0] == "https://orchestra.example.com/v0/admin/assistant"
+    assert call.kwargs["params"] == {"agent_id": "123"}
+
+
+@pytest.mark.asyncio
+async def test_lookup_assistant_by_id_raises_404_on_empty_info(
+    monkeypatch: pytest.MonkeyPatch,
+    _orchestra_settings: None,
+) -> None:
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "test-admin-key")
+    credentials = EnvCredentialStore()
+
+    fake_response = MagicMock(status_code=200)
+    fake_response.json.return_value = {"info": []}
+    fake_client = AsyncMock()
+    fake_client.__aenter__.return_value = fake_client
+    fake_client.get.return_value = fake_response
+    with patch(
+        "droid.gateway.common.orchestra.httpx.AsyncClient",
+        return_value=fake_client,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await orchestra.lookup_assistant_by_id(999, credentials)
+
+    assert exc.value.status_code == 404
+    assert "id=999" in exc.value.detail
+
+
+@pytest.mark.asyncio
 async def test_lookup_assistant_raises_500_when_admin_key_missing(
     monkeypatch: pytest.MonkeyPatch,
     _orchestra_settings: None,
