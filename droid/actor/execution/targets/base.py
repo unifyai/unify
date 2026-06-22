@@ -10,6 +10,10 @@ from typing import Any
 from ..surface import ExecutionSurface
 
 
+class TargetUnavailableError(RuntimeError):
+    """Raised when a surface cannot be used (absent, not ready, or consent revoked)."""
+
+
 def coerce_output(value: Any) -> str:
     """Normalize a SessionExecutor stdout/stderr field to plain text.
 
