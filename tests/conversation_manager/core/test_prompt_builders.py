@@ -826,3 +826,102 @@ class TestConsoleUIGate:
     def test_voice_platform_knowledge_absent_in_local_mode(self):
         prompt = _build_voice(is_coordinator=False, console_ui_present=False)
         assert "Platform knowledge" not in prompt
+
+
+_ONBOARDING_RENDER: dict = {
+    "active_step_id": "email-reply",
+    "steps": [
+        {
+            "id": "email-reference",
+            "title": "Email the first reference",
+            "phase": "Quiz",
+            "status": "done",
+            "can_skip": False,
+        },
+        {
+            "id": "email-reply",
+            "title": "Reply to email",
+            "phase": "Quiz",
+            "status": "available",
+            "can_skip": True,
+        },
+    ],
+    "next_targets": [
+        {
+            "id": "email-reply",
+            "title": "Reply to email",
+            "nudge_chat": "Prompt them to reply with their guess to the email clue.",
+            "nudge_voice": "replying with their guess for the email clue",
+            "channel": "email",
+        },
+    ],
+}
+
+
+class TestCoordinatorOnboardingDeferGate:
+    """The global "do onboarding later" switch drops onboarding-specific
+    scaffolding (reactive narration, the checklist/flow map, and the live
+    progress block) but keeps general Console literacy on so the
+    Coordinator can still orient the user and nudge platform behaviours."""
+
+    def test_deferred_drops_onboarding_blocks_but_keeps_console_literacy(self):
+        prompt = _build(
+            is_coordinator=True,
+            coordinator_onboarding_deferred=True,
+            coordinator_onboarding_render=_ONBOARDING_RENDER,
+        )
+        # General platform literacy stays on in every mode.
+        assert "My Console literacy" in prompt
+        # Onboarding-specific scaffolding is suppressed.
+        assert "My onboarding narration" not in prompt
+        assert "My onboarding flow (UI reference)" not in prompt
+        assert "My onboarding progress (live)" not in prompt
+
+    def test_not_deferred_keeps_all_coordinator_blocks(self):
+        prompt = _build(
+            is_coordinator=True,
+            coordinator_onboarding_render=_ONBOARDING_RENDER,
+        )
+        assert "My Console literacy" in prompt
+        assert "My onboarding narration" in prompt
+        assert "My onboarding flow (UI reference)" in prompt
+
+    # Body sentence unique to the standing progress block. The block title
+    # also appears by name inside the narration block (which points the
+    # brain at it), so assertions key off this body line instead.
+    _PROGRESS_BLOCK_MARKER = "always-current picture of the user's onboarding"
+
+    def test_progress_block_renders_next_targets_with_nudge_copy(self):
+        prompt = _build(
+            is_coordinator=True,
+            coordinator_onboarding_render=_ONBOARDING_RENDER,
+        )
+        assert self._PROGRESS_BLOCK_MARKER in prompt
+        # The standing block names the valid next target + its nudge copy
+        # so the brain reads "what's next" rather than deriving it.
+        assert "Reply to email" in prompt
+        assert "Prompt them to reply with their guess to the email clue." in prompt
+
+    def test_progress_block_absent_without_render(self):
+        prompt = _build(is_coordinator=True)
+        assert self._PROGRESS_BLOCK_MARKER not in prompt
+
+    def test_voice_deferred_keeps_literacy_drops_flow_reference(self):
+        prompt = _build_voice(is_coordinator=True, coordinator_onboarding_deferred=True)
+        assert "My Console literacy" in prompt
+        assert "My onboarding flow (UI reference)" not in prompt
+
+    def test_voice_opener_pitches_server_next_target(self):
+        prompt = _build_voice(
+            is_coordinator=True,
+            coordinator_onboarding_next_targets=[
+                {
+                    "id": "apps",
+                    "title": "Connect me with your apps",
+                    "nudge_chat": "Open Integrations and connect an app.",
+                    "nudge_voice": "connecting one of their apps from the Integrations panel",
+                    "channel": None,
+                },
+            ],
+        )
+        assert "connecting one of their apps from the Integrations panel" in prompt

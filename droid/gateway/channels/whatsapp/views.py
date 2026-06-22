@@ -599,7 +599,7 @@ async def create_whatsapp_sender(request: Request):
         "sender_id": f"whatsapp:{phone_number}",
         "profile": {
             "name": data.get("name", "Unify Assistant"),
-            "logo_url": "https://console.unify.ai/ivy_logo_only.png",
+            "logo_url": "https://console.unify.ai/icon.png",
         },
         "webhook": {
             "callback_method": "POST",
