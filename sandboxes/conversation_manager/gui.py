@@ -5,9 +5,7 @@ import logging
 import queue as _queue
 import os
 import time
-from datetime import datetime
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from sandboxes.conversation_manager.commands import HELP_TEXT, parse_command
@@ -19,11 +17,6 @@ from sandboxes.conversation_manager.ipc_protocol import (
 )
 from sandboxes.conversation_manager.event_tree_display import EventTreeDisplay
 from sandboxes.conversation_manager.log_aggregator import LogAggregator
-from sandboxes.conversation_manager.state_snapshot import (
-    capture_snapshot,
-    render_snapshot_text,
-    save_snapshot,
-)
 from sandboxes.conversation_manager.trace_display import TraceDisplay
 
 LG = logging.getLogger("conversation_manager_sandbox")
@@ -196,8 +189,7 @@ if _TEXTUAL_AVAILABLE:
             yield Label("Actions", id="title")
             yield Horizontal(
                 Button("Send SMS", id="nav_sms"),
-                Button("Send Email", id="nav_email"),
-                Button("Phone Call", id="nav_call"),
+                Button("Voice Session", id="nav_call"),
                 Button("Quit", id="quit"),
             )
 
@@ -205,8 +197,6 @@ if _TEXTUAL_AVAILABLE:
             await super().on_button_pressed(event)
             if event.button.id == "nav_sms":
                 self.app.push_screen(SMSScreen())  # type: ignore[attr-defined]
-            elif event.button.id == "nav_email":
-                self.app.push_screen(EmailScreen())  # type: ignore[attr-defined]
             elif event.button.id == "nav_call":
                 self.app.push_screen(CallScreen())  # type: ignore[attr-defined]
             elif event.button.id == "quit":
@@ -214,7 +204,7 @@ if _TEXTUAL_AVAILABLE:
 
     class SMSScreen(_BaseScreen):
         def compose_left(self) -> ComposeResult:
-            yield Label("Simulate incoming SMS", id="title")
+            yield Label("Send test inbound SMS", id="title")
             yield Input(placeholder="Message", id="sms_message")
             yield Horizontal(Button("Send", id="send_sms"), Button("Back", id="back"))
 
@@ -226,31 +216,12 @@ if _TEXTUAL_AVAILABLE:
             elif event.button.id == "back":
                 self.app.pop_screen()  # type: ignore[attr-defined]
 
-    class EmailScreen(_BaseScreen):
-        def compose_left(self) -> ComposeResult:
-            yield Label("Simulate incoming Email", id="title")
-            yield Input(placeholder="Subject", id="email_subject")
-            yield Input(placeholder="Body", id="email_body")
-            yield Horizontal(Button("Send", id="send_email"), Button("Back", id="back"))
-
-        async def on_button_pressed(self, event: Button.Pressed) -> None:
-            await super().on_button_pressed(event)
-            if event.button.id == "send_email":
-                subj = (
-                    self.query_one("#email_subject", Input).value.strip()
-                    or "Sandbox Email"
-                )
-                body = self.query_one("#email_body", Input).value.strip()
-                await self._route_raw(f"email {subj} | {body}")
-            elif event.button.id == "back":
-                self.app.pop_screen()  # type: ignore[attr-defined]
-
     class CallScreen(_BaseScreen):
         def compose_left(self) -> ComposeResult:
-            yield Label("Simulate voice call (Unify Meet)", id="title")
+            yield Label("LiveKit voice session", id="title")
             yield Horizontal(
-                Button("Start Call", id="call_start"),
-                Button("End Call", id="call_end"),
+                Button("Start Meet", id="call_start"),
+                Button("End Meet", id="call_end"),
                 Button("Back", id="back"),
             )
             yield Input(placeholder="Utterance (Send uses: say <text>)", id="call_utt")
@@ -303,13 +274,8 @@ if _TEXTUAL_AVAILABLE:
                         with Vertical(id="left_controls"):
                             yield Label("Event Controls", id="title")
                             yield Button("Compose SMS", id="btn_sms")
-                            yield Button("Compose Email", id="btn_email")
-                            yield Button("Start Call", id="btn_meet_start")
-                            yield Button("End Call", id="btn_meet_end")
-                            yield Button(
-                                "Start Screen Share",
-                                id="btn_screen_share_toggle",
-                            )
+                            yield Button("Start Meet", id="btn_meet_start")
+                            yield Button("End Meet", id="btn_meet_end")
                             yield Button("Quit", id="btn_quit")
                         with Vertical(id="right_tabs"):
                             with TabbedContent(id="tabs"):
@@ -327,7 +293,7 @@ if _TEXTUAL_AVAILABLE:
                     yield Label("", id="attachment_indicator")
                     with Horizontal(id="cmd_row"):
                         yield Input(
-                            placeholder="Type a command (e.g., sms Hello, trace 3, tree, /stop)",
+                            placeholder="Type a command (e.g., msg Hello, sms Hi, meet, trace 3, tree)",
                             id="command_input",
                         )
                         yield Button("Attach", id="btn_attach")
@@ -922,51 +888,19 @@ if _TEXTUAL_AVAILABLE:
                     except Exception:
                         pass
                     return
-                if event.button.id == "btn_email":
-                    try:
-                        app.post_message(AppendLine("[ui] Compose Email: use `email <subject> | <body>`"))  # type: ignore[attr-defined]
-                    except Exception:
-                        pass
-                    try:
-                        inp = self.query_one("#command_input", Input)
-                        inp.value = "email Subject | Body"
-                        inp.focus()
-                    except Exception:
-                        pass
-                    return
                 if event.button.id == "btn_meet_start":
                     try:
-                        app.post_message(AppendLine("[ui] Start Call pressed"))  # type: ignore[attr-defined]
+                        app.post_message(AppendLine("[ui] Start Meet pressed"))  # type: ignore[attr-defined]
                     except Exception:
                         pass
                     await app.route_command("meet")  # type: ignore[attr-defined]
                     return
                 if event.button.id == "btn_meet_end":
                     try:
-                        app.post_message(AppendLine("[ui] End Call pressed"))  # type: ignore[attr-defined]
+                        app.post_message(AppendLine("[ui] End Meet pressed"))  # type: ignore[attr-defined]
                     except Exception:
                         pass
                     await app.route_command("end_meet")  # type: ignore[attr-defined]
-                    return
-                if event.button.id == "btn_screen_share_toggle":
-                    btn = self.query_one("#btn_screen_share_toggle", Button)
-                    sharing = getattr(self, "_screen_share_active", False)
-                    if not sharing:
-                        try:
-                            app.post_message(AppendLine("[ui] Start Screen Share pressed"))  # type: ignore[attr-defined]
-                        except Exception:
-                            pass
-                        await app.route_command("assistant_screen_share_start")  # type: ignore[attr-defined]
-                        self._screen_share_active = True
-                        btn.label = "Stop Screen Share"
-                    else:
-                        try:
-                            app.post_message(AppendLine("[ui] Stop Screen Share pressed"))  # type: ignore[attr-defined]
-                        except Exception:
-                            pass
-                        await app.route_command("assistant_screen_share_stop")  # type: ignore[attr-defined]
-                        self._screen_share_active = False
-                        btn.label = "Start Screen Share"
                     return
                 if event.button.id == "btn_mic":
                     # Toggle mic recording: first click starts, second click stops.
@@ -1178,10 +1112,6 @@ if _TEXTUAL_AVAILABLE:
                 return
             if cmd.kind in {"show_logs", "collapse_logs"}:
                 self._handle_logs_locally(kind=cmd.kind, args=cmd.args)
-                return
-            if cmd.kind == "save_state":
-                for line in self._save_state_from_ui(cmd.args):
-                    self.post_message(AppendLine(line))
                 return
 
             # Quit should stop both UI and worker (best-effort).
@@ -1857,143 +1787,6 @@ if _TEXTUAL_AVAILABLE:
                 rt.dirty_trace = True
             except Exception:
                 pass
-
-        def _save_state_from_ui(self, args: str) -> list[str]:
-            rt = self.runtime
-            snapshot = capture_snapshot(
-                log_aggregator=rt.log_aggregator,
-                event_tree_display=rt.event_tree_display,
-                trace_display=rt.trace_display,
-                conversation_lines=list(rt.conversation_lines),
-            )
-
-            repo_root = Path(__file__).resolve().parents[2]
-            if args and args.strip():
-                json_path = repo_root / args.strip()
-            else:
-                timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-                json_path = repo_root / f".sandbox_state_{timestamp}.json"
-
-            try:
-                save_snapshot(snapshot, json_path)
-            except Exception as exc:
-                return [f"❌ Failed to save state: {exc}"]
-
-            try:
-                text_path = json_path.with_suffix(".txt")
-                text_content = render_snapshot_text(snapshot)
-                with open(text_path, "w", encoding="utf-8") as f:
-                    f.write(text_content)
-            except Exception as exc:
-                return [
-                    f"💾 State saved to: {json_path}",
-                    f"⚠️ Failed to save text version: {exc}",
-                ]
-
-            result_lines = [
-                "💾 State saved:",
-                f"   JSON: {json_path}",
-                f"   Text: {text_path}",
-                (
-                    f"   Summary: {snapshot.summary.get('total_conversation_lines', 0)} conversation lines, "
-                    f"{snapshot.summary['total_cm_logs']} CM logs, "
-                    f"{snapshot.summary['total_actor_logs']} actor logs, "
-                    f"{snapshot.summary['total_manager_logs']} manager logs, "
-                    f"{snapshot.summary['total_traces']} traces, "
-                    f"{snapshot.summary['total_event_trees']} trees"
-                ),
-            ]
-
-            import os
-
-            _launch_cwd = os.environ.get("DROID_SANDBOX_LAUNCH_CWD", "").strip()
-            _voice_root = Path(_launch_cwd).resolve() if _launch_cwd else repo_root
-            voice_log = _voice_root / ".logs_voice_agent.txt"
-            if voice_log.exists():
-                try:
-                    from sandboxes.conversation_manager.call_transcript import (
-                        build_timeline,
-                        collect_magnitude_traces_from_docker,
-                        format_timeline,
-                        parse_cm_log,
-                        parse_voice_log,
-                    )
-
-                    voice_data = parse_voice_log(voice_log)
-                    cm_log = _voice_root / ".logs_conversation_sandbox.txt"
-                    cm_data = parse_cm_log(cm_log) if cm_log.exists() else None
-
-                    mag_traces, _mag_dir, _agent_log = (
-                        collect_magnitude_traces_from_docker()
-                    )
-                    if cm_data and mag_traces:
-                        import re as _re
-
-                        matched_ids: set[str] = set()
-                        for atc in cm_data.actor_tool_calls:
-                            if atc.event_type != "execute_code":
-                                continue
-                            m = _re.search(r"execute_code\((\w+)\)", atc.tool_name)
-                            if m and m.group(1) in mag_traces:
-                                atc.magnitude_trace = mag_traces[m.group(1)]
-                                matched_ids.add(m.group(1))
-                        from sandboxes.conversation_manager.call_transcript import (
-                            _attach_unmatched_magnitude_traces,
-                        )
-
-                        unmatched = [
-                            t
-                            for k, t in mag_traces.items()
-                            if k not in matched_ids and not t.lineage
-                        ]
-                        if unmatched:
-                            _attach_unmatched_magnitude_traces(
-                                voice_data.actor_notifications,
-                                unmatched,
-                            )
-                    if cm_data and _agent_log:
-                        from sandboxes.conversation_manager.call_transcript import (
-                            parse_agent_service_log,
-                        )
-
-                        direct_groups = parse_agent_service_log(_agent_log)
-                        if direct_groups:
-                            exec_codes = [
-                                atc
-                                for atc in cm_data.actor_tool_calls
-                                if atc.event_type == "execute_code"
-                                and not atc.magnitude_trace
-                                and not (atc.result_summary or "").startswith("ERROR:")
-                            ]
-                            group_idx = 0
-                            for atc in exec_codes:
-                                if group_idx >= len(direct_groups):
-                                    break
-                                if atc.code and (
-                                    "session.click" in atc.code
-                                    or "session.type_text" in atc.code
-                                    or "session.scroll" in atc.code
-                                    or "session.drag" in atc.code
-                                ):
-                                    atc.direct_actions = direct_groups[group_idx]
-                                    group_idx += 1
-
-                    if voice_data.utterances:
-                        timeline = build_timeline(voice_data, cm_data)
-                        transcript_path = json_path.with_name(
-                            json_path.stem + "_transcript.txt",
-                        )
-                        with open(transcript_path, "w") as f:
-                            f.write(format_timeline(timeline, verbose=True))
-                        result_lines.append(f"   Transcript: {transcript_path}")
-                        if mag_traces:
-                            result_lines.append(
-                                f"   Magnitude traces: {len(mag_traces)} acts included",
-                            )
-                except Exception as exc:
-                    result_lines.append(f"   ⚠️ Transcript failed: {exc}")
-
-            return result_lines
 
         async def _record_and_transcribe_best_effort(self) -> str:
             """

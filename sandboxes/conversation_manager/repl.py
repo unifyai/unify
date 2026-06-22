@@ -89,7 +89,6 @@ async def run_repl(*, args: Any, state: SandboxState | None = None) -> None:
             publisher=publisher,
             chat_history=st.chat_history,
             allow_save_project=True,
-            config_manager=getattr(args, "_config_manager", None),
             trace_display=getattr(args, "_trace_display", None),
             event_tree_display=getattr(args, "_event_tree_display", None),
             log_aggregator=getattr(args, "_log_aggregator", None),
