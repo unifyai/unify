@@ -74,13 +74,18 @@ dependencies = [
 ]
 
 [dependency-groups]
+# Formatters are the single source of truth for the pinned versions CI and
+# pre-commit both run. Keep them here (locked in uv.lock), not duplicated in the
+# pre-commit hook.
+lint = [
+    "black==26.5.1",
+    "autoflake>=2.3.1",
+]
 dev = [
     "pytest>=8.4.2",
     "pytest-asyncio>=0.24.0",
     "pytest-xdist>=3.6.1",
     "pytest-html>=4.1.1",
-    "autoflake>=2.3.1",
-    "black==26.5.1",
     "hypothesis>=6.135.29",
     "viztracer>=1.0.4",
     "pytest-dotenv>=0.5.2",
@@ -92,6 +97,7 @@ dev = [
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-instrumentation-httpx>=0.41b0",
     "opentelemetry-instrumentation-aiohttp-client>=0.41b0",
+    {include-group = "lint"},
 ]
 
 [tool.setuptools.packages.find]
