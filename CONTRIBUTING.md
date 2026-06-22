@@ -36,10 +36,16 @@ Tests require a running backend (Orchestra). The test runner starts a local inst
 
 ## Code style
 
-We use `black` for formatting and `autoflake` for unused import removal. Pre-commit hooks run automatically on commit:
+We use `black` (pinned to a single version in `.pre-commit-config.yaml`) for formatting and `autoflake` for unused import removal, enforced by pre-commit hooks. Install the hooks once per checkout so they run automatically on every commit — CI runs the same pinned hooks:
 
 ```bash
-.venv/bin/python -m pre_commit run --all-files
+./scripts/install-git-hooks.sh   # or: pre-commit install
+```
+
+Run them manually any time:
+
+```bash
+pre-commit run --all-files
 ```
 
 ## CI on forks

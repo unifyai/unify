@@ -14,8 +14,8 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v6
 
-    - name: Install black
-      run: pip install black==26.1.0
+    - name: Install pre-commit
+      run: pip install pre-commit
 
-    - name: Run black check
-      run: black --diff --color --check .
+    - name: Run black via pre-commit
+      run: pre-commit run black --all-files --show-diff-on-failure

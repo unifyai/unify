@@ -61,7 +61,7 @@ repos:
     name: Format with Black
     entry: black
     language: python
-    additional_dependencies: [black==26.1.0]
+    additional_dependencies: [black==26.3.1]
     types: [python]
 
   - id: check-no-release-versioning
@@ -69,3 +69,10 @@ repos:
     entry: python3 scripts/check_no_release_versioning.py
     language: system
     pass_filenames: false
+
+  - id: block-cursoragent-identity
+    name: block cursoragent git identity
+    entry: scripts/check_git_identity.sh
+    language: system
+    pass_filenames: false
+    always_run: true
