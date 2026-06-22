@@ -150,7 +150,9 @@ def _catalog_phases(catalog: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not isinstance(catalog, dict):
         return []
     phases = catalog.get("phases")
-    return [p for p in phases if isinstance(p, dict)] if isinstance(phases, list) else []
+    return (
+        [p for p in phases if isinstance(p, dict)] if isinstance(phases, list) else []
+    )
 
 
 def _catalog_steps_by_phase(
