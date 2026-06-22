@@ -481,6 +481,7 @@ class TestTextMessageHandlers:
 
         mock_cm.request_llm_run.assert_called_once_with(
             triggering_contact_id=2,
+            credit_gate_reply_context={"medium": "sms_message", "contact_id": 2},
         )
 
     @pytest.mark.asyncio
@@ -1660,7 +1661,7 @@ class TestMeetInteractionEventHandlers:
         import json as _json
 
         data = _json.loads(guidance_calls[0].args[1])
-        content = data.get("payload", {}).get("content", "")
+        content = data.get("payload", {}).get("message", "")
         assert "screen sharing" in content.lower()
 
     @pytest.mark.asyncio
@@ -1733,7 +1734,7 @@ class TestMeetInteractionEventHandlers:
         import json
 
         event_data = json.loads(event_json)
-        content = event_data.get("payload", {}).get("content", "")
+        content = event_data.get("payload", {}).get("message", "")
         assert "screen sharing is now on" in content.lower()
 
     @pytest.mark.asyncio
@@ -2135,9 +2136,24 @@ class TestTaskDueEventHandlers:
             schedule=Schedule(start_at="2026-04-10T09:00:00+00:00"),
             repeat=[RepeatPattern(frequency=Frequency.DAILY)],
         )["details"]["task_id"]
+        # The real scheduler resolves the activation's source task by its
+        # log id (the delegate contract this test exercises), so use the
+        # actual scheduled instance's log id rather than a fabricated value.
+        # The log id lives on the store row (``unify.Log.id``), not on the
+        # sanitized ``Task`` returned by ``_filter_tasks``.
+        source_task_log_id = None
+        for _ctx in scheduler._read_task_contexts():
+            _rows = scheduler._store_for_task_context(_ctx).get_rows(
+                filter=f"task_id == {task_id}",
+                return_ids_only=False,
+            )
+            if _rows:
+                source_task_log_id = int(_rows[0].id)
+                break
+        assert source_task_log_id is not None
         event = TaskDue(
             task_id=task_id,
-            source_task_log_id=555,
+            source_task_log_id=source_task_log_id,
             activation_revision="rev-1",
             scheduled_for="2026-04-10T09:00:00+00:00",
             task_label="Scheduled integration report",
@@ -2146,7 +2162,7 @@ class TestTaskDueEventHandlers:
             assistant_id="42",
             activation_key=f"42:{task_id}",
             task_id=task_id,
-            source_task_log_id=555,
+            source_task_log_id=source_task_log_id,
             activation_revision="rev-1",
             task_name="Scheduled integration report",
         )
@@ -2163,7 +2179,7 @@ class TestTaskDueEventHandlers:
                 task_id=task_id,
                 source_type="scheduled",
                 execution_mode="live",
-                source_task_log_id=555,
+                source_task_log_id=source_task_log_id,
                 activation_revision="rev-1",
                 scheduled_for="2026-04-10T09:00:00+00:00",
                 task_name="Scheduled integration report",
@@ -2315,11 +2331,11 @@ class TestTaskDueEventHandlers:
         assert channel == "app:call:notification"
         guidance = FastBrainNotification.from_json(payload)
         assert guidance.should_speak is False
-        assert "Morning briefing" in guidance.content
+        assert "Morning briefing" in guidance.message
         assert (
-            "Prepare the morning update before the user checks in" in guidance.content
+            "Prepare the morning update before the user checks in" in guidance.message
         )
-        assert "silent action unless the user is needed" in guidance.content
+        assert "silent action unless the user is needed" in guidance.message
 
     @pytest.mark.asyncio
     async def test_task_due_ignores_stale_activation(self, mock_cm):
@@ -2518,7 +2534,7 @@ class TestInitializationCompleteHandler:
         notification = FastBrainNotification.from_json(payload)
         assert notification.should_speak is False
         assert notification.source == "initialization"
-        assert "Initialization complete" in notification.content
+        assert "Initialization complete" in notification.message
 
 
 class TestTriggeredTaskNotifications:
@@ -2650,7 +2666,10 @@ class TestTriggeredTaskNotifications:
         assert remembered.source_medium == "sms_message"
         assert remembered.attempt_token
         mock_offline_dispatch.assert_called_once()
-        mock_cm.request_llm_run.assert_called_once_with(triggering_contact_id=2)
+        mock_cm.request_llm_run.assert_called_once_with(
+            triggering_contact_id=2,
+            credit_gate_reply_context={"medium": "sms_message", "contact_id": 2},
+        )
 
     @pytest.mark.asyncio
     async def test_inbound_call_dispatches_offline_triggers_without_live_notification(
@@ -2793,9 +2812,9 @@ class TestTriggeredTaskNotifications:
         assert channel == "app:call:notification"
         guidance = FastBrainNotification.from_json(payload)
         assert guidance.should_speak is False
-        assert "Handle VIP caller" in guidance.content
-        assert "Prioritize urgent inbound calls from Alice" in guidance.content
-        assert "Do not mention the task unless it naturally helps" in guidance.content
+        assert "Handle VIP caller" in guidance.message
+        assert "Prioritize urgent inbound calls from Alice" in guidance.message
+        assert "Do not mention the task unless it naturally helps" in guidance.message
 
 
 # =============================================================================

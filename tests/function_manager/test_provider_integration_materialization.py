@@ -161,12 +161,16 @@ def test_materializes_connected_provider_tools_with_active_only_search(
     assert "Parameters\n----------" in row["docstring"]
     assert "query : str" in row["docstring"]
     assert "await primitives.integrations.hubspot.search_contacts" in row["docstring"]
-    assert (
-        "Function Name: primitives.integrations.hubspot.search_contacts"
-        in row["embedding_text"]
-    )
-    assert "Signature: (query: str, limit: int = 10) -> dict" in row["embedding_text"]
-    assert "crm.objects.contacts.read" not in row["embedding_text"]
+    embedding_text = row["embedding_text"]
+    # Layer 1 normalization (integrations-only) strips scaffolding labels and the
+    # raw argspec, and splits identifiers into words so the pooled vector is
+    # dominated by signal rather than dotted/cased identifier noise.
+    assert "Function Name:" not in embedding_text
+    assert "Signature:" not in embedding_text
+    assert "search contacts" in embedding_text
+    assert "hub spot" in embedding_text
+    assert "query" in embedding_text and "limit" in embedding_text
+    assert "crm.objects.contacts.read" not in embedding_text
     metadata = row["metadata"]
     assert metadata["source"] == "provider_backed"
     integration = metadata["integration"]

@@ -19,6 +19,10 @@ from droid.common.embed_utils import ensure_vector_column, list_private_fields
 from droid.common.semantic_search import fetch_top_k_by_terms_combined_client_side
 from droid.function_manager.hash_utils import stable_hash_for_rows
 from droid.function_manager.types.function import Function
+from droid.integrations.embedding_text import (
+    humanize_auth_modes,
+    normalize_embedding_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +112,48 @@ def _ensure_catalog_embeddings_once(project: str) -> None:
     _ENSURED_EMBEDDING_PROJECTS.add(project)
 
 
+def _harvest_category_names(
+    *,
+    category: Any,
+    raw_metadata: Dict[str, Any],
+) -> List[str]:
+    """Collect category names from the canonical field plus raw provider metadata.
+
+    The canonical ``category`` is the primary; additional names are recovered
+    best-effort from the provider's own catalog metadata so multi-category apps
+    contribute richer retrieval signal. Provider-neutral: it probes the common
+    metadata containers and tolerates both ``{"name": ...}`` dicts and strings.
+    """
+
+    names: List[str] = []
+    lowered: set[str] = set()
+
+    def add(value: Any) -> None:
+        text = str(value or "").strip()
+        if text and text.lower() not in lowered:
+            lowered.add(text.lower())
+            names.append(text)
+
+    add(category)
+    if isinstance(raw_metadata, dict):
+        for container_key in ("raw_toolkit_detail", "raw_toolkit", "raw_app"):
+            container = raw_metadata.get(container_key)
+            if not isinstance(container, dict):
+                continue
+            meta = container.get("meta")
+            categories = (
+                meta.get("categories") if isinstance(meta, dict) else None
+            ) or container.get("categories")
+            if not isinstance(categories, list):
+                continue
+            for entry in categories:
+                if isinstance(entry, dict):
+                    add(entry.get("name") or entry.get("slug") or entry.get("id"))
+                else:
+                    add(entry)
+    return names
+
+
 def app_catalog_row(
     app: Dict[str, Any],
     *,
@@ -125,22 +171,22 @@ def app_catalog_row(
         app.get("available_scopes") or app.get("available_scopes_json") or []
     )
     recommended_scopes = app.get("recommended_scopes") or []
+    api_key_schema = app.get("api_key_schema") or app.get("api_key_schema_json")
     category = app.get("category")
-    embedding_text = "\n".join(
-        part
-        for part in (
-            f"Integration App: {display_name}",
-            f"Slug: {slug}",
-            f"Source: {source_type}",
-            f"Category: {category}" if category else "",
-            f"Description: {description}" if description else "",
-            (
-                f"Scopes: {', '.join(str(scope) for scope in available_scopes)}"
-                if available_scopes
-                else ""
-            ),
-        )
-        if part
+    raw_metadata = (
+        app.get("raw_provider_metadata") or app.get("raw_provider_metadata_json") or {}
+    )
+    categories_text = ", ".join(
+        _harvest_category_names(category=category, raw_metadata=raw_metadata),
+    )
+    embedding_text = normalize_embedding_text(
+        [
+            display_name,
+            description,
+            categories_text,
+            humanize_auth_modes(auth_modes),
+            slug,
+        ],
     )
     return {
         "app_id": _stable_int_id("integration_app", f"{backend_id}:{slug}"),
@@ -154,6 +200,7 @@ def app_catalog_row(
         "auth_modes": auth_modes,
         "available_scopes": available_scopes,
         "recommended_scopes": recommended_scopes,
+        "api_key_schema": api_key_schema,
         "tool_count": int(app.get("tool_count") or 0),
         "source_type": source_type,
         "source_label": app.get("source_label")
@@ -196,6 +243,21 @@ def tool_catalog_row(
     return FunctionManager.__new__(
         FunctionManager,
     )._integration_tool_to_function_row(tool)
+
+
+def _materialize_tool_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate a catalog tool row, preserving catalog-only extra fields.
+
+    ``description`` is a catalog-row field (mirroring the Orchestra tool row) that
+    has no representation on the universal ``Function`` model, so it is re-applied
+    after validation rather than widening the shared model for an
+    integration-only concern.
+    """
+
+    validated = Function.model_validate(row).model_dump(include=set(row.keys()))
+    if "description" in row:
+        validated["description"] = row["description"]
+    return validated
 
 
 def _unit_hash(rows: Iterable[Dict[str, Any]], *, fields: tuple[str, ...]) -> str:
@@ -374,7 +436,7 @@ def seed_builtin_integrations(
         app_catalog_row(app, default_backend_id=seed_backend_id) for app in apps
     ]
     tool_rows = [
-        Function.model_validate(row).model_dump(include=set(row.keys()))
+        _materialize_tool_row(row)
         for row in (
             tool_catalog_row(tool, default_backend_id=seed_backend_id) for tool in tools
         )
@@ -426,6 +488,7 @@ def seed_builtin_integrations(
                 fields=(
                     "function_id",
                     "name",
+                    "description",
                     "argspec",
                     "docstring",
                     "embedding_text",
@@ -582,6 +645,7 @@ def list_catalog_apps(
                 "auth_modes",
                 "available_scopes",
                 "recommended_scopes",
+                "api_key_schema",
                 "tool_count",
                 "source_type",
                 "source_label",

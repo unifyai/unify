@@ -75,6 +75,7 @@ class ProviderBootstrapPlan(NamedTuple):
     desired_config: dict[str, Any]
     backend_payload: dict[str, Any]
     sync_payload: dict[str, Any] | None
+    force: bool = False
 
 
 def _json_dumps(value: Any) -> str:
@@ -103,6 +104,17 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         default=os.environ.get("DROID_SKIP_BUILTINS_INTEGRATIONS", "").lower()
         in {"1", "true", "yes"},
         help="Seed only primitives and guidance; integration bootstrap is handled elsewhere.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        default=os.environ.get("DROID_INTEGRATION_BOOTSTRAP_FORCE", "").lower()
+        in {"1", "true", "yes", "on"},
+        help=(
+            "Force a full integration resync: bypass the manifest-hash bootstrap-state "
+            "skip and the server-side per-unit hash/checkpoint skips so every app and "
+            "tool row is rewritten. Defaults to DROID_INTEGRATION_BOOTSTRAP_FORCE."
+        ),
     )
     return parser.parse_args(argv)
 
@@ -219,6 +231,11 @@ def _provider_plan(
                 f"{backend_id}-{desired_hash[:12]}"
             ),
         }
+    # ``force`` is an operational resync directive, not desired state: it is read
+    # from the manifest but deliberately excluded from ``desired_config``/
+    # ``desired_hash`` so toggling it never churns the bootstrap-state hash. Its
+    # only effects are bypassing the manifest-state and per-unit/checkpoint skips.
+    force = bool((config.get("sync") or {}).get("force", False))
     return ProviderBootstrapPlan(
         backend_id=backend_id,
         environment=environment,
@@ -226,6 +243,7 @@ def _provider_plan(
         desired_config=desired_config,
         backend_payload=backend_payload,
         sync_payload=sync_payload,
+        force=force,
     )
 
 
@@ -524,6 +542,7 @@ def _builtins_sync_request_payload(
     *,
     plan: ProviderBootstrapPlan,
     sync_payload: dict[str, Any],
+    force: bool = False,
 ) -> dict[str, Any]:
     return {
         "backend_id": plan.backend_id,
@@ -535,6 +554,7 @@ def _builtins_sync_request_payload(
         "app_slugs": list(sync_payload.get("app_slugs") or []),
         "prune_unlisted_apps": _effective_prune(sync_payload),
         "sync_payload": sync_payload,
+        "force": force,
         "batch_size": int(
             os.environ.get(
                 "DROID_INTEGRATION_BOOTSTRAP_BATCH_SIZE",
@@ -623,15 +643,21 @@ def _sync_and_seed_provider(
     plan: ProviderBootstrapPlan,
     sync_payload: dict[str, Any],
     executor: str = "api",
+    force: bool = False,
 ) -> tuple[bool, dict[str, Any]]:
     logging.info(
-        "Starting Builtins integrations artifact seed backend=%s environment=%s mode=%s executor=%s",
+        "Starting Builtins integrations artifact seed backend=%s environment=%s mode=%s executor=%s force=%s",
         plan.backend_id,
         plan.environment,
         sync_payload.get("sync_mode"),
         executor,
+        force,
     )
-    payload = _builtins_sync_request_payload(plan=plan, sync_payload=sync_payload)
+    payload = _builtins_sync_request_payload(
+        plan=plan,
+        sync_payload=sync_payload,
+        force=force,
+    )
     if executor == "api":
         result = _run_api_executor(
             base_url=base_url,
@@ -677,12 +703,14 @@ def _sync_integration_bootstrap_manifest(
     manifest_path: str,
     base_url: str,
     admin_key: str,
+    force: bool = False,
 ) -> bool:
     manifest = _load_manifest(manifest_path)
     logging.info(
-        "Starting integration bootstrap manifest path=%s providers=%s",
+        "Starting integration bootstrap manifest path=%s providers=%s force=%s",
         manifest_path,
         len(manifest["providers"]),
+        force,
     )
     changed = False
     for backend_id, config in sorted(manifest["providers"].items()):
@@ -694,12 +722,14 @@ def _sync_integration_bootstrap_manifest(
             config=config,
         )
         executor = _integration_bootstrap_executor(plan.environment)
+        provider_force = force or plan.force
         logging.info(
-            "Checking integration bootstrap state backend=%s environment=%s desired_hash=%s executor=%s",
+            "Checking integration bootstrap state backend=%s environment=%s desired_hash=%s executor=%s force=%s",
             plan.backend_id,
             plan.environment,
             plan.desired_hash,
             executor,
+            provider_force,
         )
         state = _bootstrap_state(
             base_url=base_url,
@@ -707,7 +737,12 @@ def _sync_integration_bootstrap_manifest(
             environment=plan.environment,
             backend_id=plan.backend_id,
         )
-        if _bootstrap_state_matches(state=state, plan=plan):
+        if provider_force:
+            logging.info(
+                "Forcing integration bootstrap backend=%s; bypassing manifest-hash skip",
+                backend_id,
+            )
+        elif _bootstrap_state_matches(state=state, plan=plan):
             logging.info(
                 "Skipping integration bootstrap backend=%s; manifest hash already seeded",
                 backend_id,
@@ -748,6 +783,7 @@ def _sync_integration_bootstrap_manifest(
                 plan=plan,
                 sync_payload=plan.sync_payload,
                 executor=executor,
+                force=provider_force,
             )
             logging.info(
                 "Completed integration bootstrap sync backend=%s status=%s "
@@ -813,6 +849,7 @@ def main(argv: list[str] | None = None) -> int:
             manifest_path=args.integration_bootstrap_manifest,
             base_url=base_url,
             admin_key=args.admin_key,
+            force=args.force,
         )
     else:
         integrations_changed = seed_builtin_integrations()
