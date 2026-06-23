@@ -128,12 +128,10 @@ _STEP_FLOW_NOTES: dict[str, str] = {
 def step_flow_note(step_id: str) -> str:
     """Behavioural "how the user advances this step" hint for one step.
 
-    Returns the empty string when the step has no scaffolding. The live
-    progress block folds this into the rich detail of the currently
-    startable steps so the coordinator can answer "where do I click?"
-    without re-declaring every step's behaviour on every turn.
+    Compatibility shim while all prompt callers migrate to Orchestra's
+    ``flow_note`` render field.
     """
-    return _STEP_FLOW_NOTES.get(step_id, "")
+    return ""
 
 
 def _catalog_phases(catalog: dict[str, Any] | None) -> list[dict[str, Any]]:

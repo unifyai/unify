@@ -141,6 +141,7 @@ def _coordinator_onboarding_notification_text(
         reply_step_id = _detail_string(details, "reply_step_id")
         tool_name = _detail_string(details, "tool_name")
         framing = _detail_string(details, "framing")
+        interaction = details.get("interaction")
         channel_note = f" Target outbound channel: `{channel}`." if channel else ""
         tool_note = (
             f" Use `{tool_name}` for this trigger."
@@ -162,6 +163,15 @@ def _coordinator_onboarding_notification_text(
             else ""
         )
         framing_note = f" Section framing: {framing}" if framing else ""
+        interaction_note = (
+            " Structured interaction: reference_quiz. Explain the quiz before "
+            "sending or discussing any clue; the user should know this is a "
+            "channel-proving mini-game, not a mysterious email. Outbound text "
+            "or email clue messages must include that context before the clue."
+            if isinstance(interaction, dict)
+            and interaction.get("type") == "reference_quiz"
+            else ""
+        )
         call_note = (
             " If the tool starts a call, put the briefing and framing in the call context "
             "so the spoken sidecar can run the interaction without needing this notification."
@@ -170,7 +180,7 @@ def _coordinator_onboarding_notification_text(
         )
         return (
             f"{subtype_hint} {body}{channel_note}{step_note}{clue_note}{quote_note}"
-            f"{answer_note}{tool_note}{framing_note}{call_note}"
+            f"{answer_note}{tool_note}{framing_note}{interaction_note}{call_note}"
         ).strip()
 
     if event.subtype == _SUBTYPE_ONBOARDING_SESSION_STARTED:
