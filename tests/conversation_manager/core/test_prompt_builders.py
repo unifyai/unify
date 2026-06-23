@@ -814,6 +814,10 @@ class TestConsoleUIGate:
         prompt = _build(is_coordinator=True)
         assert "Console literacy" in prompt
         assert "onboarding flow (UI reference)" in prompt
+        assert (
+            "steps route through the Assistant info → Onboarding checklist first"
+            in prompt
+        )
 
     def test_coordinator_console_blocks_absent_in_local_mode(self):
         prompt = _build(is_coordinator=True, console_ui_present=False)
@@ -957,6 +961,43 @@ _ONBOARDING_RENDER_TRIGGER: dict = {
     ],
 }
 
+_ONBOARDING_RENDER_SETUP: dict = {
+    "active_step_id": None,
+    "phases": [
+        {"id": "communication", "phase": "Communication", "title": "Communication"},
+    ],
+    "steps": [
+        {
+            "id": "whatsapp-number",
+            "title": "Add your WhatsApp number",
+            "phase": "Communication",
+            "kind": "setup",
+            "status": "available",
+            "can_skip": True,
+            "description": "Add the WhatsApp number Twin should use.",
+            "estimated_time": "30 sec",
+            "flow_note": (
+                "Clicking the 'Add your WhatsApp number' row opens Account -> "
+                "Contact info so the user can add or verify the WhatsApp number."
+            ),
+        },
+    ],
+    "next_targets": [
+        {
+            "id": "whatsapp-number",
+            "title": "Add your WhatsApp number",
+            "nudge_chat": (
+                "Have them click the 'Add your WhatsApp number' row in the "
+                "Onboarding checklist; it opens Account -> Contact info."
+            ),
+            "nudge_voice": (
+                "clicking the 'Add your WhatsApp number' row in the Onboarding checklist"
+            ),
+            "channel": "whatsapp",
+        },
+    ],
+}
+
 
 class TestCoordinatorOnboardingDeferGate:
     """The global "do onboarding later" switch drops onboarding-specific
@@ -1049,12 +1090,27 @@ class TestCoordinatorOnboardingDeferGate:
             coordinator_onboarding_render=_ONBOARDING_RENDER_TRIGGER,
         )
         assert "Current default onboarding action: Trigger email from Twin" in prompt
+        assert "a recommendation first" in prompt
+        assert "is not permission to send a message" in prompt
+        assert "only send the outbound after an explicit go-ahead" in prompt
+        assert "or after the user clicks the checklist row" in prompt
+        assert "must not call it complete early" in prompt
+
+    def test_progress_block_routes_setup_steps_through_checklist_rows(self):
+        prompt = _build(
+            is_coordinator=True,
+            coordinator_onboarding_render=_ONBOARDING_RENDER_SETUP,
+        )
+        assert "Current default onboarding action: Add your WhatsApp number" in prompt
+        assert "click that step's row in the Onboarding checklist" in prompt
         assert (
-            "the step I should execute or guide when the user gives permission"
+            "How they advance it: Clicking the 'Add your WhatsApp number' row" in prompt
+        )
+        assert (
+            "How I nudge it: Have them click the 'Add your WhatsApp number' row"
             in prompt
         )
-        assert "send the outbound myself with the matching comms tool" in prompt
-        assert "must not call it complete early" in prompt
+        assert "I do not skip straight to Account" in prompt
 
     def test_progress_block_surfaces_active_step_detail(self):
         # An in-flight step that is not itself a fresh next target still gets
@@ -1081,13 +1137,19 @@ class TestCoordinatorOnboardingDeferGate:
                 {
                     "id": "apps",
                     "title": "Connect me with your apps",
-                    "nudge_chat": "Open Integrations and connect an app.",
-                    "nudge_voice": "connecting one of their apps from the Integrations panel",
+                    "nudge_chat": "Click the row to open Integrations.",
+                    "nudge_voice": (
+                        "clicking the 'Connect me with your apps' row in the Onboarding checklist"
+                    ),
                     "channel": None,
                 },
             ],
         )
-        assert "connecting one of their apps from the Integrations panel" in prompt
+        assert (
+            "clicking the 'Connect me with your apps' row in the Onboarding checklist"
+            in prompt
+        )
+        assert "I do not send the user directly to Account" in prompt
 
     def test_voice_opener_explains_reference_quiz_before_first_clue(self):
         prompt = _build_voice(

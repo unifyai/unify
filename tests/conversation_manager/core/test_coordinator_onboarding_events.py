@@ -33,6 +33,7 @@ def test_session_started_notification_mentions_skipped_steps() -> None:
     assert "apps" in text
     assert "passed over for now, not done" in text
     assert "already done or skipped" in text
+    assert "clicking its row in the Onboarding checklist" in text
 
 
 def test_step_skipped_notification_does_not_mark_step_done() -> None:
@@ -52,6 +53,7 @@ def test_step_skipped_notification_does_not_mark_step_done() -> None:
 
     assert "leave that step for now" in text
     assert "Do not say the skipped step is complete" in text
+    assert "clicking its row in the Onboarding checklist" in text
 
 
 def test_step_started_notification_names_active_comms_step() -> None:

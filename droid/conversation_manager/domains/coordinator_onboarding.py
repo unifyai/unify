@@ -225,7 +225,9 @@ def _coordinator_onboarding_notification_text(
             "priority-ordered and already excludes done, skipped, and locked "
             "steps) — never suggest a step that isn't a valid next target "
             "(e.g. do not say 'connect your workspace' when `workspace` is "
-            "already done or skipped). If there is no evidence that the user "
+            "already done or skipped). Frame that next step as clicking its row "
+            "in the Onboarding checklist before mentioning any destination tab, "
+            "dialog, or settings page. If there is no evidence that the user "
             "has already had a meaningful onboarding orientation from you, "
             "introduce yourself as Twin, frame yourself as their digital twin "
             "or stand-in, explain that onboarding is a shared walkthrough from "
@@ -266,7 +268,8 @@ def _coordinator_onboarding_notification_text(
             "Acknowledge in one short sentence that you'll leave that step for "
             "now, then preview the first valid next target from the 'My "
             "onboarding progress (live)' section (the ordered next-steps list). "
-            "Do not say the skipped step is complete."
+            "Frame the next target as clicking its row in the Onboarding "
+            "checklist. Do not say the skipped step is complete."
         )
         return f"{subtype_hint} {body}{step_note}{skipped_note} {guidance}".strip()
 
@@ -301,6 +304,8 @@ def _coordinator_onboarding_notification_text(
     guidance = (
         "Acknowledge this in one short sentence to the user, name the thing they "
         "just completed, and preview the next pending onboarding step. "
+        "Frame that next step as clicking its row in the Onboarding checklist "
+        "before mentioning any destination tab, dialog, or settings page. "
         "Stay celebratory but brief — do not re-list every prior step. If a voice "
         "call is active you MUST speak it by calling "
         'guide_voice_agent(message="...", should_speak=True) — do not send a '
