@@ -9489,7 +9489,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "autoflake", specifier = ">=1.6.1" },
-    { name = "black", specifier = "==26.3.1" },
+    { name = "black", specifier = "==26.5.1" },
     { name = "flake8", specifier = ">=4.0.1" },
     { name = "isort", specifier = ">=5.11.4" },
     { name = "mypy", specifier = ">=1.1.1" },
@@ -9504,6 +9504,11 @@ dev = [
     { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "types-requests" },
+]
+lint = [
+    { name = "autoflake", specifier = ">=1.6.1" },
+    { name = "black", specifier = "==26.5.1" },
+    { name = "isort", specifier = ">=5.11.4" },
 ]
 
 [[package]]
@@ -9528,7 +9533,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "autoflake", specifier = ">=2.3.1" },
-    { name = "black", specifier = "==26.3.1" },
+    { name = "black", specifier = "==26.5.1" },
     { name = "opentelemetry-api", specifier = ">=1.20.0" },
     { name = "opentelemetry-exporter-otlp", specifier = ">=1.20.0" },
     { name = "opentelemetry-sdk", specifier = ">=1.20.0" },
@@ -9538,6 +9543,10 @@ dev = [
     { name = "pytest-dotenv", specifier = ">=0.5.2" },
     { name = "pytest-timeout", specifier = ">=2.3.1" },
     { name = "ruff", specifier = ">=0.15.16" },
+]
+lint = [
+    { name = "autoflake", specifier = ">=2.3.1" },
+    { name = "black", specifier = "==26.5.1" },
 ]
 
 [[package]]

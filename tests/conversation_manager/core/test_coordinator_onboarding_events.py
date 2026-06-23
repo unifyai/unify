@@ -8,23 +8,8 @@ from droid.conversation_manager.domains import coordinator_onboarding as onboard
 from droid.conversation_manager.prompt_builders import (
     _build_coordinator_onboarding_narration_block,
     _build_coordinator_voice_opening_block,
-    _voice_next_onboarding_suggestion,
 )
 from droid.settings import SETTINGS
-
-COMMS_STEP_IDS = [
-    "email-reply",
-    "whatsapp-number",
-    "whatsapp-message",
-    "whatsapp-call",
-    "phone-number",
-    "sms-message",
-    "phone-call",
-    "slack-connect",
-    "slack-message",
-    "discord-connect",
-    "discord-message",
-]
 
 
 def test_session_started_notification_mentions_skipped_steps() -> None:
@@ -46,7 +31,7 @@ def test_session_started_notification_mentions_skipped_steps() -> None:
     assert "workspace" in text
     assert "apps" in text
     assert "passed over for now, not done" in text
-    assert "done or explicitly skipped" in text
+    assert "already done or skipped" in text
 
 
 def test_step_skipped_notification_does_not_mark_step_done() -> None:
@@ -144,15 +129,6 @@ def test_reference_quiz_notification_briefs_call_context() -> None:
     assert "The Empire Strikes Back / Luke" in text
 
 
-def test_voice_next_onboarding_suggestion_ignores_done_and_skipped_steps() -> None:
-    suggestion = _voice_next_onboarding_suggestion(
-        completed_steps=[*COMMS_STEP_IDS, "workspace"],
-        skipped_steps=["apps"],
-    )
-
-    assert "one-off job" in suggestion
-
-
 def test_onboarding_narration_block_documents_reference_quiz_not_space_oddity_scripts() -> (
     None
 ):
@@ -167,10 +143,60 @@ def test_onboarding_narration_block_documents_reference_quiz_not_space_oddity_sc
     assert "tin can far above the world" not in block
 
 
+def test_voice_opening_block_gives_broader_first_orientation() -> None:
+    block = _build_coordinator_voice_opening_block(
+        next_targets=[
+            {
+                "id": "email-reference",
+                "title": "Trigger email from Twin",
+                "nudge_voice": "clicking Trigger email from Twin",
+            },
+            {
+                "id": "workspace",
+                "title": "Give me access to your workspace",
+                "nudge_voice": "connecting their workspace",
+            },
+        ],
+    )
+
+    assert "meaningful onboarding orientation" in block
+    assert "digital twin / stand-in" in block
+    assert "communication channels" in block
+    assert "recurring tasks" in block
+    assert "computer use" in block
+    assert "Pause onboarding for now" in block
+    assert "clicking Trigger email from Twin" in block
+    assert "not a monologue I must finish" in block
+
+
+def test_voice_opening_block_prevents_repeated_full_intro() -> None:
+    block = _build_coordinator_voice_opening_block(
+        next_targets=[
+            {
+                "id": "workspace",
+                "title": "Give me access to your workspace",
+                "nudge_voice": "connecting their workspace",
+            },
+        ],
+    )
+
+    assert "orientation has already happened" in block
+    assert "Do NOT re-introduce myself" in block
+    assert "repeat the onboarding overview" in block
+
+
+def test_voice_opening_block_omits_onboarding_tour_without_next_targets() -> None:
+    block = _build_coordinator_voice_opening_block(next_targets=[])
+
+    assert "No valid onboarding next target was provided" in block
+    assert "do not give the broad onboarding orientation" in block
+    assert "Pause onboarding for now" not in block
+    assert "communication channels" not in block
+
+
 def test_voice_opening_block_includes_active_phone_call_guidance() -> None:
     block = _build_coordinator_voice_opening_block(
-        completed_onboarding_steps=[],
-        skipped_onboarding_steps=[],
+        next_targets=[],
         active_onboarding_step="phone-call",
     )
 
