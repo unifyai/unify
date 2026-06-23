@@ -94,6 +94,16 @@ _OPENING_GREETING_GUARDRAIL = (
     "the first spoken turn unless the caller has already asked about them."
 )
 
+_BRIEFED_OPENING_GUARDRAIL = (
+    "[system] Opening line rule: your opening turn is governed by the most "
+    "recent system briefing in this context. Deliver that briefing as a "
+    "natural, spoken opening — this overrides the default 'start with a "
+    "generic hello / how can I help?' rule. Keep it conversational and "
+    "concise. The caller can interrupt at any time; if they do, address what "
+    "they say and then continue any remaining points from the briefing later "
+    "only if they are still relevant."
+)
+
 _COORDINATOR_ONBOARDING_FIRST_ORIENTATION_BEATS = (
     "greet the user by first name, say my name is Twin because I act as "
     "their digital twin / stand-in, explain that onboarding is a shared "
@@ -108,6 +118,7 @@ def build_opening_greeting_messages(
     *,
     system_prompt: str,
     history_messages: Sequence[dict[str, Any]],
+    authoritative_briefing: bool,
 ) -> list[dict[str, Any]]:
     """Build the sidecar prompt used for the startup greeting.
 
@@ -115,11 +126,21 @@ def build_opening_greeting_messages(
     greeting sidecar should keep buffered notification context available for
     later turns while still biasing the first spoken line toward a simple,
     social hello.
+
+    When ``authoritative_briefing`` is set, the opening turn is steered by the
+    most recent system briefing in ``history_messages`` (the caller-supplied
+    context for a ``briefed`` call opening) rather than defaulting to a generic
+    hello.
     """
 
+    guardrail = (
+        _BRIEFED_OPENING_GUARDRAIL
+        if authoritative_briefing
+        else _OPENING_GREETING_GUARDRAIL
+    )
     messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
     messages.extend(dict(message) for message in history_messages)
-    messages.append({"role": "system", "content": _OPENING_GREETING_GUARDRAIL})
+    messages.append({"role": "system", "content": guardrail})
     return messages
 
 

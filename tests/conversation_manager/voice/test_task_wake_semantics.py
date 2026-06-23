@@ -146,6 +146,7 @@ async def _get_opening_greeting(
         messages=build_opening_greeting_messages(
             system_prompt=system_prompt,
             history_messages=history_messages,
+            authoritative_briefing=False,
         ),
     )
     if isinstance(response, str):

@@ -477,7 +477,7 @@ def _hydrate_session_details_from_metadata(meta: dict) -> None:
         SESSION_DETAILS.assistant.surname = parts[1] if len(parts) > 1 else ""
 
 
-_CALL_OPENING_MODES = {"speak", "simulated", "silent"}
+_CALL_OPENING_MODES = {"speak", "simulated", "silent", "briefed"}
 
 
 def _normalize_call_opening_config(raw: object) -> dict:
@@ -490,13 +490,20 @@ def _normalize_call_opening_config(raw: object) -> dict:
 
     mode = str(raw.get("mode", "speak")).strip()
     if mode not in _CALL_OPENING_MODES:
-        raise ValueError("opening_config.mode must be one of speak, simulated, silent")
+        raise ValueError(
+            "opening_config.mode must be one of speak, simulated, silent, briefed",
+        )
 
     config = {"mode": mode}
     if raw.get("simulated_utterance") is not None:
         config["simulated_utterance"] = str(raw["simulated_utterance"])
+    if raw.get("system_context") is not None:
+        config["system_context"] = str(raw["system_context"])
     if raw.get("source") is not None:
         config["source"] = str(raw["source"])
+
+    if mode == "briefed" and not config.get("system_context", "").strip():
+        raise ValueError("briefed opening requires system_context")
     return config
 
 
@@ -2051,26 +2058,52 @@ async def entrypoint(ctx: agents.JobContext):
             reliable=True,
         )
 
-    opening_mode = opening_config["mode"]
-    if opening_mode == "speak":
+    async def _generate_opening_greeting(*, authoritative_briefing: bool) -> str:
+        """Pre-generate the opening line via a sidecar LLM call.
+
+        Returns the cached depleted-credits response when the credit gate is
+        closed, otherwise generates from the voice system prompt plus the
+        current call history (which includes any injected system briefing).
+        """
         from droid.common.llm_client import new_llm_client
 
-        credit_gate_state = credit_gate_monitor.state
-        if credit_gate_state.allowed:
-            greeting_client = new_llm_client(
-                model=SETTINGS.conversation.FAST_BRAIN_MODEL,
-                origin="fast_brain_greeting",
-                reasoning_effort="low",
-            )
-            greeting_messages = build_opening_greeting_messages(
-                system_prompt=system_prompt,
-                history_messages=_extract_chat_messages(session.history),
-            )
-            greeting_text = await greeting_client.generate(messages=greeting_messages)
-        else:
+        if not credit_gate_monitor.state.allowed:
             _log.info("Credit gate greeting served from cached state")
-            greeting_text = DEPLETED_CREDITS_FAST_BRAIN_RESPONSE
+            return DEPLETED_CREDITS_FAST_BRAIN_RESPONSE
+        greeting_client = new_llm_client(
+            model=SETTINGS.conversation.FAST_BRAIN_MODEL,
+            origin="fast_brain_greeting",
+            reasoning_effort="low",
+        )
+        greeting_messages = build_opening_greeting_messages(
+            system_prompt=system_prompt,
+            history_messages=_extract_chat_messages(session.history),
+            authoritative_briefing=authoritative_briefing,
+        )
+        return await greeting_client.generate(messages=greeting_messages)
 
+    def _inject_opening_system_context(text: str) -> None:
+        """Seed the call with a durable system briefing before the opener.
+
+        The briefing is a ``system`` message — never an assistant turn — so the
+        model retains the full intended context to fall back on (e.g. after an
+        interruption) without ever assuming the caller heard un-uttered content.
+        """
+        assistant._chat_ctx.add_message(role="system", content=[text])
+        session.history.add_message(role="system", content=[text])
+
+    opening_mode = opening_config["mode"]
+    if opening_mode == "speak":
+        greeting_text = await _generate_opening_greeting(authoritative_briefing=False)
+        await _publish_ready_to_speak()
+        session.say(
+            greeting_text,
+            allow_interruptions=True,
+            add_to_chat_ctx=True,
+        )
+    elif opening_mode == "briefed":
+        _inject_opening_system_context(opening_config["system_context"])
+        greeting_text = await _generate_opening_greeting(authoritative_briefing=True)
         await _publish_ready_to_speak()
         session.say(
             greeting_text,
@@ -2108,14 +2141,13 @@ async def entrypoint(ctx: agents.JobContext):
     if not os.environ.get("DROID_CM_INITIALIZED"):
         _init_note = (
             "[system] You have just started up and your systems are still "
-            "syncing — loading files, pulling up previous conversations, "
-            "and connecting to your tools. This takes a few moments. "
-            "If the user asks you to do something that requires looking "
-            "things up or taking action, let them know naturally that "
-            "you are still getting set up (e.g. 'I'm just pulling up our "
-            "previous sessions — give me a moment and I'll get right on "
-            "that'). Do NOT say 'I can't do that' — frame it as a brief "
-            "delay, not a limitation. You will receive a notification "
+            "syncing — loading your files, tools, and any conversation "
+            "history. This takes a few moments. If the user asks you to do "
+            "something that requires looking things up or taking action, let "
+            "them know naturally that you are still getting set up (e.g. "
+            "'give me just a moment to finish getting set up and I'll get "
+            "right on that'). Do NOT say 'I can't do that' — frame it as a "
+            "brief delay, not a limitation. You will receive a notification "
             "when everything is ready."
         )
         assistant._chat_ctx.add_message(role="system", content=[_init_note])
