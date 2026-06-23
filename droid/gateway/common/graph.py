@@ -35,7 +35,7 @@ from azure.identity import ClientSecretCredential
 from fastapi import HTTPException
 from msgraph import GraphServiceClient
 
-from droid.gateway.common.orchestra import lookup_assistant
+from droid.gateway.common.orchestra import lookup_assistant, lookup_assistant_by_id
 from droid.gateway.credentials import CredentialStore, EnvCredentialStore
 
 logger = logging.getLogger("droid.gateway.common.graph")
@@ -122,26 +122,34 @@ def graph_client_from_assistant(
 
 
 async def get_graph_client(
-    user_email: str,
+    user_email: str | None = None,
     credentials: CredentialStore | None = None,
+    *,
+    assistant_id: str | int | None = None,
 ) -> GraphServiceClient:
-    """Look up the assistant for ``user_email`` and build a Graph client.
+    """Look up the assistant and build a Graph client.
 
-    Falls back to tenant-level admin credentials when the Orchestra
-    lookup fails (e.g. during initial provisioning before the
-    AssistantContact row exists, or transient Orchestra unavailability
-    for read-only operations that admin credentials can still satisfy).
+    Resolves the assistant by ``assistant_id`` when provided (the workspace-file
+    picker's identity, which works for Coordinators too), otherwise by
+    ``user_email``. Falls back to tenant-level admin credentials when the
+    Orchestra lookup fails (e.g. during initial provisioning before the
+    AssistantContact row exists, or transient Orchestra unavailability for
+    read-only operations that admin credentials can still satisfy).
     """
     credentials = credentials or EnvCredentialStore()
+    identity = f"id={assistant_id}" if assistant_id else user_email
     try:
-        assistant = await lookup_assistant(user_email, credentials)
+        if assistant_id:
+            assistant = await lookup_assistant_by_id(assistant_id, credentials)
+        else:
+            assistant = await lookup_assistant(user_email, credentials)
     except Exception:
         logger.warning(
             "failed to look up assistant for %s; falling back to admin Graph client",
-            user_email,
+            identity,
         )
         return get_admin_graph_client(credentials)
-    return graph_client_from_assistant(assistant, user_email, credentials)
+    return graph_client_from_assistant(assistant, identity or "", credentials)
 
 
 def _get_user_node(graph: Any, sender: str, assistant: dict) -> Any:

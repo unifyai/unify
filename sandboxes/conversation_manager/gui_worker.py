@@ -879,14 +879,14 @@ async def _run_worker(*, ui_to_worker, worker_to_ui, config: dict) -> None:
     publisher = EventPublisher(cm=cm, state=state, args=args)
 
     # Create display components for logs/traces/event-tree.
-    # These are populated by subscribe_to_responses and used by save_state.
+    # Display components populated by subscribe_to_responses for trace/tree/log panels.
     trace_display = TraceDisplay()
     event_tree_display = EventTreeDisplay()
     log_aggregator = LogAggregator()
 
     # Sandbox-only: wrap CodeActActor's `execute_code` tool to stream a readable
     # trace entry over IPC (code + simplified stdout/stderr/error), and also
-    # populate the local trace_display for save_state.
+    # populate the local trace_display for the trace panel.
     try:
         actor = getattr(cm, "actor", None)
         if actor is not None and not bool(
@@ -936,7 +936,7 @@ async def _run_worker(*, ui_to_worker, worker_to_ui, config: dict) -> None:
                                 },
                                 critical=False,
                             )
-                            # Also populate local trace_display for save_state.
+                            # Also populate local trace_display for the trace panel.
                             try:
                                 trace_display.capture_execution(code=code, result=simp)
                             except Exception:
@@ -966,7 +966,6 @@ async def _run_worker(*, ui_to_worker, worker_to_ui, config: dict) -> None:
         publisher=publisher,
         chat_history=state.chat_history,
         allow_save_project=False,
-        config_manager=None,
         trace_display=trace_display,
         event_tree_display=event_tree_display,
         log_aggregator=log_aggregator,

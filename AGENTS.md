@@ -91,8 +91,16 @@ Each Cursor agent (or terminal) gets an **isolated tmux server automatically**, 
 
 ### Pre-commit
 
+Install the hooks once per checkout (they run automatically on commit; CI runs the same pinned hooks):
+
 ```bash
-.venv/bin/python -m pre_commit run --all-files
+./scripts/install-git-hooks.sh   # or: pre-commit install
+```
+
+Run them manually any time:
+
+```bash
+pre-commit run --all-files
 ```
 
 ---

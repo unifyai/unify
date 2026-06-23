@@ -81,8 +81,8 @@ ONBOARDING_RESTORE_LABEL = "Do now"
 # fetched catalog and decorates it with the prose scaffolding below (the
 # *behaviour* of each step: how the user advances it), which is presentation
 # guidance for the model rather than onboarding-design copy. The catalog is
-# already deployment-gated server-side, so a hosted catalog simply omits the
-# ``local_only`` phases and this prose follows suit automatically.
+# already deployment-gated server-side, so this prose follows whatever phase
+# structure Orchestra returns.
 
 # How the user advances each step — keyed by the catalog step id. Pure
 # behavioural scaffolding (not titles/descriptions, which come from the
@@ -115,33 +115,26 @@ _STEP_FLOW_NOTES: dict[str, str] = {
         "Clicking the row opens the Integrations tab; they connect at least one app "
         "(Slack, Gmail, Notion, etc.) from the gallery and authorize it."
     ),
-    "act": (
-        "Point-in-time work: the user hands me a one-off job that runs immediately and "
-        "watches it execute live in the Actions tab (which opens automatically). The "
-        "step completes the moment a real action starts running \u2014 NOT when a "
-        "scheduled task is created."
-    ),
     "schedule": (
         "Time- or event-bound work \u2014 a Task in the product sense: it lands in the "
         "Tasks tab (which opens automatically) and recurs or fires on a trigger. "
         "Scheduling is encouraged but optional. Read-only \u201ctry one of these\u201d "
-        "chips render under the act and schedule rows as inspiration only \u2014 they "
+        "chips render under the schedule row as inspiration only \u2014 they "
         "do not click."
     ),
 }
 
 # Per-phase grouping prose — keyed by the catalog phase id.
 _PHASE_FLOW_NOTES: dict[str, str] = {
-    "comms": (
+    "communication": (
         "The user plays a lightweight guess-the-reference game across the configured "
         "channels. Trigger rows send a clue immediately and auto-complete; the "
         "following reply rows wait for the user's guess. Children:"
     ),
-    "connect": (
-        "No action of its own; resolves when both children are done or deferred. "
-        "Children:"
-    ),
-    "work": "Children, in order:",
+    "workspace": "Workspace access tasks:",
+    "integrations": "App-connection tasks:",
+    "tasks": "Task setup:",
+    "my-computer": "One-off work on my computer:",
 }
 
 
@@ -176,8 +169,7 @@ def catalog_has_phase(catalog: dict[str, Any] | None, phase_id: str) -> bool:
     """Whether a phase header (by id) is present in the fetched catalog.
 
     Used to gate scaffolding that mentions a specific phase so hosted
-    deployments (which omit ``local_only`` phases) never describe a phase the
-    user cannot see. A missing catalog is treated as "present" so prompts
+    deployments never describe a phase the user cannot see. A missing catalog is treated as "present" so prompts
     degrade to the full description rather than silently dropping content.
     """
     if not isinstance(catalog, dict):
@@ -265,9 +257,6 @@ def build_coordinator_console_literacy_block(
     scope, shared workspaces (Teams), account/org administration navigation,
     Memory/Tasks sub-tabs, the Integrations gallery, and screen-share guidance.
 
-    The "Get work done" tour hooks are gated on the fetched ``catalog``: a
-    hosted deployment omits that ``local_only`` phase, so the hooks are dropped
-    rather than describing a phase the user cannot see.
     """
     title = (
         "My Console literacy"
@@ -289,21 +278,7 @@ def build_coordinator_console_literacy_block(
         if self_reference
         else f"{coordinator_name} onboarding checklist"
     )
-    # The "Get work done" (Delegate) phase is local_only — present in the
-    # catalog only on local deployments. Drop its tour hooks on hosted so the
-    # orientation never references a phase the user's checklist won't show.
-    work_tour_hooks: list[str] = (
-        [
-            "Onboarding phase 3 (Get work done) — tour hooks",
-            "-----------------------------------------------",
-            "  1. **Act**: real one-off job (voice or chat) → watch **Actions** as it "
-            "runs.",
-            "  2. **Schedule** (optional): **Tasks → Tasks** for later/recurring work.",
-            "",
-        ]
-        if catalog_has_phase(catalog, "work")
-        else []
-    )
+    work_tour_hooks: list[str] = []
 
     return "\n".join(
         [
@@ -607,9 +582,7 @@ def build_coordinator_onboarding_flow_reference_block(
     The phase/step *titles* and which phases exist come from the fetched
     onboarding ``catalog`` (Orchestra's canonical, deployment-gated source of
     truth); this builder only adds the behavioural scaffolding from
-    ``_STEP_FLOW_NOTES`` / ``_PHASE_FLOW_NOTES``. On a hosted catalog the
-    ``local_only`` phases are already absent, so they are silently skipped
-    here too.
+    ``_STEP_FLOW_NOTES`` / ``_PHASE_FLOW_NOTES``.
     """
     block_title = (
         "My onboarding flow (UI reference)"
