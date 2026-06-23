@@ -97,9 +97,11 @@ def test_reference_quiz_notification_briefs_text_channel() -> None:
                 "trigger_step_id": "slack-reference",
                 "reply_step_id": "slack-message",
                 "channel": "slack_message",
+                "tool_name": "send_slack_message",
                 "clue": 'The clue is: "Phone home."',
                 "quote": "Phone home.",
                 "answer": "Battlestar Galactica",
+                "framing": "Play a guess-the-reference mini-game.",
             },
         },
         message="User triggered a reference clue.",
@@ -108,7 +110,7 @@ def test_reference_quiz_notification_briefs_text_channel() -> None:
     assert event is not None
     text = onboarding._coordinator_onboarding_notification_text(event)
 
-    assert "guess the reference" in text
+    assert "guess-the-reference mini-game" in text
     assert "send_slack_message" in text
     assert "Phone home." in text
     assert "Do not reveal" in text
@@ -123,9 +125,11 @@ def test_reference_quiz_notification_briefs_call_context() -> None:
                 "trigger_step_id": "phone-call-reference",
                 "reply_step_id": "phone-call",
                 "channel": "phone_call",
+                "tool_name": "make_call_to_boss",
                 "clue": 'The clue is: "To infinity and beyond!"',
                 "quote": "To infinity and beyond!",
                 "answer": "The Empire Strikes Back / Luke",
+                "framing": "Play the reference game over a call.",
             },
         },
         message="User triggered a phone clue.",
@@ -135,9 +139,8 @@ def test_reference_quiz_notification_briefs_call_context() -> None:
     text = onboarding._coordinator_onboarding_notification_text(event)
 
     assert "make_call_to_boss" in text
-    assert "`context` argument" in text
-    assert "repeat" in text
-    assert "hints" in text
+    assert "call context" in text
+    assert "Play the reference game over a call." in text
     assert "The Empire Strikes Back / Luke" in text
 
 
@@ -156,8 +159,10 @@ def test_onboarding_narration_block_documents_reference_quiz_not_space_oddity_sc
     block = _build_coordinator_onboarding_narration_block()
 
     assert "reference_quiz_clue_requested" in block
-    assert "guess-the-reference" in block
-    assert "make_call_to_boss" in block
+    assert "task contract" in block
+    assert "tool_name" in block
+    assert "Do not hardcode onboarding game design here" in block
+    assert "make_call_to_boss" not in block
     assert "Ground Control to Major" not in block
     assert "tin can far above the world" not in block
 
