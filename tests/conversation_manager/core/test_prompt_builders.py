@@ -1039,6 +1039,24 @@ class TestCoordinatorOnboardingDeferGate:
         )
         assert "connecting one of their apps from the Integrations panel" in prompt
 
+    def test_voice_opener_explains_reference_quiz_before_first_clue(self):
+        prompt = _build_voice(
+            is_coordinator=True,
+            coordinator_onboarding_next_targets=[
+                {
+                    "id": "email-reference",
+                    "title": "Trigger email from Twin",
+                    "nudge_voice": "starting the communication-channel reference quiz",
+                    "channel": "email",
+                    "interaction": {"type": "reference_quiz"},
+                },
+            ],
+        )
+        assert "overrides the generic Brevity/Opening rule" in prompt
+        assert "how can I help" in prompt
+        assert "reference quiz" in prompt
+        assert "Before mentioning any clue" in prompt
+
 
 # ---------------------------------------------------------------------------
 # Tests – onboarding flow reference is driven by the fetched catalog

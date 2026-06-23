@@ -87,6 +87,7 @@ def test_reference_quiz_notification_briefs_text_channel() -> None:
                 "quote": "Phone home.",
                 "answer": "Battlestar Galactica",
                 "framing": "Play a guess-the-reference mini-game.",
+                "interaction": {"type": "reference_quiz"},
             },
         },
         message="User triggered a reference clue.",
@@ -100,6 +101,8 @@ def test_reference_quiz_notification_briefs_text_channel() -> None:
     assert "Phone home." in text
     assert "Do not reveal" in text
     assert "Battlestar Galactica" in text
+    assert "Explain the quiz before" in text
+    assert "include that context before the clue" in text
 
 
 def test_reference_quiz_notification_briefs_call_context() -> None:
@@ -115,6 +118,7 @@ def test_reference_quiz_notification_briefs_call_context() -> None:
                 "quote": "To infinity and beyond!",
                 "answer": "The Empire Strikes Back / Luke",
                 "framing": "Play the reference game over a call.",
+                "interaction": {"type": "reference_quiz"},
             },
         },
         message="User triggered a phone clue.",
@@ -137,6 +141,7 @@ def test_onboarding_narration_block_documents_reference_quiz_not_space_oddity_sc
     assert "reference_quiz_clue_requested" in block
     assert "task contract" in block
     assert "tool_name" in block
+    assert "do not send a bare clue" in block
     assert "Do not hardcode onboarding game design here" in block
     assert "make_call_to_boss" not in block
     assert "Ground Control to Major" not in block
@@ -150,6 +155,7 @@ def test_voice_opening_block_gives_broader_first_orientation() -> None:
                 "id": "email-reference",
                 "title": "Trigger email from Twin",
                 "nudge_voice": "clicking Trigger email from Twin",
+                "interaction": {"type": "reference_quiz"},
             },
             {
                 "id": "workspace",
@@ -166,6 +172,8 @@ def test_voice_opening_block_gives_broader_first_orientation() -> None:
     assert "computer use" in block
     assert "Pause onboarding for now" in block
     assert "clicking Trigger email from Twin" in block
+    assert "overrides the generic Brevity/Opening rule" in block
+    assert "explain the game design" in block
     assert "not a monologue I must finish" in block
 
 

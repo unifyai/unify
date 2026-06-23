@@ -87,10 +87,20 @@ The test: if a real person on a phone call would comfortably say the URL aloud (
 Short human-pronounceable data (phone numbers, names, times, brief email addresses) is fine to speak normally."""
 
 _OPENING_GREETING_GUARDRAIL = (
-    "[system] Opening line rule: start with a normal human greeting. "
-    "Use background notifications for awareness, but do not proactively mention "
-    "background task reminders or status updates in the first spoken turn "
-    "unless the caller has already asked about them."
+    "[system] Opening line rule: start with a normal human greeting unless "
+    "the system prompt's My opening turn section gives a more specific "
+    "onboarding opener. Use background notifications for awareness, but do "
+    "not proactively mention background task reminders or status updates in "
+    "the first spoken turn unless the caller has already asked about them."
+)
+
+_COORDINATOR_ONBOARDING_FIRST_ORIENTATION_BEATS = (
+    "greet the user by first name, say my name is Twin because I act as "
+    "their digital twin / stand-in, explain that onboarding is a shared "
+    "walkthrough from communication channels into workspace access, "
+    "integrations, recurring tasks, computer use, and later sections, say "
+    "they can go start-to-finish or skip ahead, propose the first valid next "
+    'target, and mention "Pause onboarding for now" as the escape hatch'
 )
 
 
@@ -732,6 +742,10 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "`reply_step_id`, and section `framing` supplied by Orchestra.",
             "  2. Use the supplied `tool_name` when present. Send or speak the supplied "
             "`clue` without revealing the `answer`, then follow the supplied framing.",
+            "     For email, SMS, WhatsApp, Slack, or Discord clue messages, do not send "
+            "a bare clue. The user-facing message must include one short sentence of "
+            "context first: this is part of onboarding, we are testing communication "
+            "channels with a reference quiz, and they should reply with their guess.",
             "  3. If the event starts a call, put the clue, answer, and framing into the "
             "call context so the spoken sidecar has the full task design.",
             "  4. Do not hardcode onboarding game design here. If the framing changes in "
@@ -773,16 +787,9 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "listed as a valid next target.",
             "     - If there is no evidence that the user has already had a "
             "meaningful onboarding orientation from me, send a proper first "
-            "orientation in one friendly paragraph: name myself as Twin, explain "
-            "that the name comes from acting as their digital twin / stand-in, "
-            "say onboarding is best done as a shared walkthrough that starts "
-            "with basics like communication channels and moves into workspace "
-            "access, integrations, recurring tasks, computer use, and other "
-            "sections, make clear they can go start-to-finish or skip ahead, "
-            "propose the first valid next target, and mention they can click "
-            '"Pause onboarding for now" if they would rather dive straight into '
-            "work and resume onboarding later. This is reference shape, not a "
-            "script to parrot.",
+            "orientation in one friendly paragraph covering these shared "
+            f"opening beats: {_COORDINATOR_ONBOARDING_FIRST_ORIENTATION_BEATS}. "
+            "This is reference shape, not a script to parrot.",
             "     - Evidence the orientation already happened includes prior "
             "assistant messages explaining who Twin is or how onboarding works, "
             "completed/skipped onboarding steps in the live progress block, or "
@@ -929,7 +936,9 @@ def _build_coordinator_onboarding_progress_block(
             detail.append(f"      Rough time: ~{estimated_time}")
         if nudge.strip():
             detail.append(f"      How I nudge it: {nudge.strip()}")
-        flow_note = console_ui.step_flow_note(step_id)
+        flow_note = str((step or {}).get("flow_note") or "").strip()
+        if not flow_note:
+            flow_note = console_ui.step_flow_note(step_id)
         if flow_note:
             detail.append(f"      How they advance it: {flow_note}")
         if chips:
@@ -2378,14 +2387,32 @@ def _build_coordinator_voice_opening_block(
     help, with no setup pitch — so a caller who is done or has deferred
     is never told to repeat or start onboarding steps.
     """
+    interaction_note = None
     if next_targets:
         primary = next_targets[0]
+        interaction = primary.get("interaction")
         suggestion = (
             primary.get("nudge_voice")
             or primary.get("title")
             or "their next setup step"
         )
-        intro_step_suggestion = f"end by making {suggestion} the concrete next step"
+        if (
+            isinstance(interaction, dict)
+            and interaction.get("type") == "reference_quiz"
+        ):
+            intro_step_suggestion = (
+                "first explain that the Communication section starts with a "
+                "light sci-fi and pop-culture reference quiz to prove each "
+                f"channel works, then make {suggestion} the concrete next step"
+            )
+            interaction_note = (
+                "The primary next target carries a `reference_quiz` interaction. "
+                "Before mentioning any clue, explain the game design in plain "
+                "user-facing language: I send one quote clue on each channel "
+                "and the user guesses the reference on that same channel or call."
+            )
+        else:
+            intro_step_suggestion = f"end by making {suggestion} the concrete next step"
         if len(next_targets) > 1:
             intro_step_suggestion += (
                 ", while making clear they can open another available section "
@@ -2421,6 +2448,10 @@ def _build_coordinator_voice_opening_block(
         "---------------",
         "Before I open this call I look at the conversation history and "
         "the live onboarding progress.",
+        "When onboarding is active and valid next targets are present, this "
+        "section overrides the generic Brevity/Opening rule and the startup "
+        "greeting sidecar. I do not open with only a generic 'how can I help?' "
+        "line.",
     ]
     if next_targets:
         lines.extend(
@@ -2433,14 +2464,8 @@ def _build_coordinator_voice_opening_block(
                 "steps in the live progress block, or the user explicitly resuming "
                 "a particular section.",
                 "  - For that first meaningful onboarding orientation, I do not recite "
-                "a fixed script. I cover these beats naturally: greet the caller by "
-                "first name, say my name is Twin because I'll act as their digital "
-                "twin / stand-in, optionally make one light self-aware joke about "
-                "the name if it fits, explain that the best start is walking through "
-                "onboarding together, say the tour begins with basics like "
-                "communication channels and then moves into workspace access, "
-                "integrations, recurring tasks, computer use, and other sections, "
-                "tell them they can go start-to-finish or skip ahead, "
+                "a fixed script. I cover these beats naturally: "
+                f"{_COORDINATOR_ONBOARDING_FIRST_ORIENTATION_BEATS}, "
                 f"{intro_step_suggestion}, and mention that if they would rather "
                 'skip onboarding for now they can click "Pause onboarding for now" '
                 "and just start asking for help or uploading documents; onboarding "
@@ -2469,6 +2494,8 @@ def _build_coordinator_voice_opening_block(
         )
     if progress_note:
         lines.append(progress_note)
+    if interaction_note:
+        lines.append(interaction_note)
     if active_step_note:
         lines.append(active_step_note)
     lines.append(
@@ -2736,7 +2763,7 @@ Short does NOT mean incomplete — if asked a factual question, give the full an
 
 {_SPOKEN_OUTPUT_FOR_LIVE_TTS}
 
-Opening: When the call starts and no one has spoken yet, I greet briefly — a short "hey" or "hi, how can I help?" is enough. There is nothing to acknowledge or respond to yet, so I do not open with an acknowledgment or a menu of options.
+Opening: When the call starts and no one has spoken yet, I follow any more specific opening guidance above first, especially the Coordinator onboarding "My opening turn" section. If no specific opening guidance applies, I greet briefly — a short "hey" or "hi, how can I help?" is enough. There is nothing to acknowledge or respond to yet, so I do not open with an acknowledgment or a menu of options.
 
 **Step-by-step walkthrough pacing:**
 When guiding someone through a multi-step process and they are executing live (saying "done", "what next?", asking me to repeat, or expressing confusion), I give exactly ONE action per turn — then stop and wait for confirmation. No chaining ("click X, then type Y, then press Z").
