@@ -344,6 +344,12 @@ async def _handle_coordinator_onboarding_event(
     # immediately, without waiting for the TTL state fetch.
     if isinstance(event.details, dict):
         cm.set_coordinator_onboarding_render(event.details.get("onboarding"))
+        if event.subtype == _SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED:
+            trace = getattr(cm, "_current_event_trace", None) or {}
+            cm.set_pending_onboarding_outbound(
+                event.details,
+                origin_event_id=trace.get("event_id", ""),
+            )
     cm.notifications_bar.push_notif(
         _NOTIFICATION_TYPE,
         _coordinator_onboarding_notification_text(event),

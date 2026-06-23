@@ -1248,6 +1248,20 @@ async def log_message(
                 metadata = metadata or {}
                 metadata["call_utterance_timestamp"] = call_utterance_timestamp
 
+            onboarding_metadata = {
+                key: value
+                for key in (
+                    "onboarding_trigger_step_id",
+                    "onboarding_reply_step_id",
+                    "onboarding_request_id",
+                    "onboarding_origin_event_id",
+                )
+                if isinstance((value := getattr(event, key, None)), str) and value
+            }
+            if onboarding_metadata:
+                metadata = metadata or {}
+                metadata.update(onboarding_metadata)
+
             tm_message_id = None
             if exchange_id == UNASSIGNED:
                 msg_data = {

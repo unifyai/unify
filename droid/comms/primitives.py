@@ -158,6 +158,14 @@ class CommsPrimitives:
             getattr(SESSION_DETAILS.assistant, "email_provider", "") == "microsoft_365"
         )
 
+    def _onboarding_event_kwargs(self, medium: Medium) -> dict[str, str]:
+        if self._cm is None:
+            return {}
+        consume = getattr(self._cm, "consume_pending_onboarding_outbound", None)
+        if not callable(consume):
+            return {}
+        return consume(medium.value) or {}
+
     def _contact_manager(self):
         if (
             self._cm is not None
@@ -633,7 +641,11 @@ class CommsPrimitives:
         )
         if response.get("success"):
             fresh_contact = self._get_contact(phone_number=to_number) or contact or {}
-            event = SMSSent(contact=fresh_contact, content=content)
+            event = SMSSent(
+                contact=fresh_contact,
+                content=content,
+                **self._onboarding_event_kwargs(Medium.SMS_MESSAGE),
+            )
             await self._event_broker.publish("app:comms:sms_sent", event.to_json())
             self._record_offline_success(
                 offline_reservation,
@@ -936,6 +948,7 @@ class CommsPrimitives:
                 content=content,
                 via_template=via_template,
                 attachments=attachments_for_event or None,
+                **self._onboarding_event_kwargs(Medium.WHATSAPP_MESSAGE),
             )
             await self._event_broker.publish(topic, event.to_json())
             pending_resends = None
@@ -1135,7 +1148,11 @@ class CommsPrimitives:
         )
         if response.get("success"):
             fresh_contact = self._get_contact(discord_id=to_discord_id) or contact or {}
-            event = DiscordMessageSent(contact=fresh_contact, content=content)
+            event = DiscordMessageSent(
+                contact=fresh_contact,
+                content=content,
+                **self._onboarding_event_kwargs(Medium.DISCORD_MESSAGE),
+            )
             await self._event_broker.publish(topic, event.to_json())
             self._record_offline_success(
                 offline_reservation,
@@ -1282,6 +1299,7 @@ class CommsPrimitives:
                 content=content,
                 channel_id=channel_id,
                 guild_id=guild_id,
+                **self._onboarding_event_kwargs(Medium.DISCORD_CHANNEL_MESSAGE),
             )
             await self._event_broker.publish(
                 "app:comms:discord_channel_message_sent",
@@ -1481,6 +1499,7 @@ class CommsPrimitives:
                 team_id=team_id,
                 channel_id=response.get("channel_id", ""),
                 thread_ts=thread_ts or "",
+                **self._onboarding_event_kwargs(Medium.SLACK_MESSAGE),
             )
             await self._event_broker.publish(topic, event.to_json())
             self._record_offline_success(
@@ -1644,6 +1663,7 @@ class CommsPrimitives:
                 team_id=team_id,
                 channel_id=channel_id,
                 thread_ts=thread_ts or "",
+                **self._onboarding_event_kwargs(Medium.SLACK_CHANNEL_MESSAGE),
             )
             await self._event_broker.publish(
                 "app:comms:slack_channel_message_sent",
@@ -3531,6 +3551,7 @@ class CommsPrimitives:
                 to=final_to,
                 cc=final_cc,
                 bcc=final_bcc,
+                **self._onboarding_event_kwargs(Medium.EMAIL),
             )
             await self._event_broker.publish(topic, event.to_json())
             self._record_offline_success(
@@ -3732,7 +3753,10 @@ class CommsPrimitives:
         response = await comms_utils.start_call(to_number=to_number)
         if response.get("success"):
             fresh_contact = self._get_contact(phone_number=to_number) or contact or {}
-            event = PhoneCallSent(contact=fresh_contact)
+            event = PhoneCallSent(
+                contact=fresh_contact,
+                **self._onboarding_event_kwargs(Medium.PHONE_CALL),
+            )
             await self._event_broker.publish("app:comms:make_call", event.to_json())
             self._record_offline_success(
                 offline_reservation,
@@ -3956,7 +3980,10 @@ class CommsPrimitives:
         if method == "direct":
             if self._cm is not None and context:
                 self._cm.call_manager.initial_notification = context
-            event = WhatsAppCallSent(contact=fresh_contact)
+            event = WhatsAppCallSent(
+                contact=fresh_contact,
+                **self._onboarding_event_kwargs(Medium.WHATSAPP_CALL),
+            )
             await self._event_broker.publish(
                 "app:comms:whatsapp_call_sent",
                 event.to_json(),

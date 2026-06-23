@@ -464,6 +464,8 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
         role=role,
         timestamp=event.timestamp,
     )
+    if isinstance(event, (PhoneCallSent, WhatsAppCallSent)):
+        await managers_utils.queue_operation(managers_utils.log_message, cm, event)
     if role == "user" and await _surface_trigger_task_candidates(
         cm=cm,
         event=event,
@@ -2442,7 +2444,8 @@ async def _(
     # while the user's action is still in the foreground (a delayed
     # narration during onboarding reads as stale).
     if await _handle_coordinator_onboarding_event(event, cm):
-        await cm.request_llm_run(delay=0)
+        request_id = await cm.request_llm_run(delay=0)
+        cm.set_pending_onboarding_request_id(request_id)
 
 
 @EventHandler.register(IntegrationToolsSyncRequested)
