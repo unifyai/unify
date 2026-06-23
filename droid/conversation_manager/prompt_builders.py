@@ -771,16 +771,26 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "first entry and only pick a lower one when the channel/conversation "
             "makes it clearly more natural. I never propose a step that isn't "
             "listed as a valid next target.",
-            "     - If there are no prior assistant messages, introduce yourself in one "
-            "short paragraph: name your role as the user's coordinator assistant, "
-            "also frame yourself as their virtual double who can take actions on their "
-            "behalf to help them get things done, say you'll help them get set up, "
-            "and invite them to take that next pending step. Stay friendly "
-            "and concise; do not list every onboarding step at once.",
-            "     - If prior assistant messages exist, skip the intro. Open with one "
-            "short sentence recapping which onboarding steps are complete (from the "
-            "completed-steps list) and propose the first valid next target (top of "
-            "the ordered next-steps list). Do NOT re-introduce yourself.",
+            "     - If there is no evidence that the user has already had a "
+            "meaningful onboarding orientation from me, send a proper first "
+            "orientation in one friendly paragraph: name myself as Twin, explain "
+            "that the name comes from acting as their digital twin / stand-in, "
+            "say onboarding is best done as a shared walkthrough that starts "
+            "with basics like communication channels and moves into workspace "
+            "access, integrations, recurring tasks, computer use, and other "
+            "sections, make clear they can go start-to-finish or skip ahead, "
+            "propose the first valid next target, and mention they can click "
+            '"Pause onboarding for now" if they would rather dive straight into '
+            "work and resume onboarding later. This is reference shape, not a "
+            "script to parrot.",
+            "     - Evidence the orientation already happened includes prior "
+            "assistant messages explaining who Twin is or how onboarding works, "
+            "completed/skipped onboarding steps in the live progress block, or "
+            "the user explicitly resuming a particular section. In that case, "
+            "skip the intro. Open with one short sentence recapping what is "
+            "done or where we left off and propose the first valid next target "
+            "(top of the ordered next-steps list). Do NOT re-introduce yourself "
+            "or repeat the broad onboarding overview.",
             "  8. Exactly one message. No tool calls, no `act`. The user's reply is what "
             "advances the flow.",
             "  9. When the notification says the medium is `call`, the voice agent will "
@@ -2375,10 +2385,11 @@ def _build_coordinator_voice_opening_block(
             or primary.get("title")
             or "their next setup step"
         )
-        intro_step_suggestion = f"suggest {suggestion} as the next concrete step"
+        intro_step_suggestion = f"end by making {suggestion} the concrete next step"
         if len(next_targets) > 1:
             intro_step_suggestion += (
-                " (or any other step they'd rather do — several are available)"
+                ", while making clear they can open another available section "
+                "and skip ahead if they'd rather start elsewhere"
             )
         progress_note = (
             "The next steps above are the only ones currently valid to "
@@ -2408,29 +2419,62 @@ def _build_coordinator_voice_opening_block(
     lines = [
         "My opening turn",
         "---------------",
-        "Before I open this call I look at the conversation history.",
-        "  - If there are no prior assistant turns, I introduce myself "
-        "briefly — address the caller by their first name (from Boss "
-        f"details), name myself as {COORDINATOR_NAME}, "
-        "also frame myself as their virtual double who can take actions "
-        "on their behalf to help them get things done, say I'll help "
-        f"them get set up, and {intro_step_suggestion}. Two or three "
-        "short sentences, warm and human.",
-        "  - If prior assistant turns exist, I skip the intro entirely. "
-        "I open with a one-sentence orient — pick up where things "
-        "left off and propose the next step (the first/top valid next "
-        "target by default), using the "
-        "caller's first name when natural. Do NOT re-introduce "
-        "myself or repeat earlier framing.",
+        "Before I open this call I look at the conversation history and "
+        "the live onboarding progress.",
     ]
+    if next_targets:
+        lines.extend(
+            [
+                "  - If onboarding is active and there is no evidence that the user "
+                "has already had a meaningful onboarding orientation from me, I give "
+                "a proper first-meeting introduction. Evidence that the orientation "
+                "already happened includes prior assistant speech/chat that explained "
+                "who Twin is or how onboarding works, completed/skipped onboarding "
+                "steps in the live progress block, or the user explicitly resuming "
+                "a particular section.",
+                "  - For that first meaningful onboarding orientation, I do not recite "
+                "a fixed script. I cover these beats naturally: greet the caller by "
+                "first name, say my name is Twin because I'll act as their digital "
+                "twin / stand-in, optionally make one light self-aware joke about "
+                "the name if it fits, explain that the best start is walking through "
+                "onboarding together, say the tour begins with basics like "
+                "communication channels and then moves into workspace access, "
+                "integrations, recurring tasks, computer use, and other sections, "
+                "tell them they can go start-to-finish or skip ahead, "
+                f"{intro_step_suggestion}, and mention that if they would rather "
+                'skip onboarding for now they can click "Pause onboarding for now" '
+                "and just start asking for help or uploading documents; onboarding "
+                "can be resumed later.",
+                "  - That first orientation may be several connected spoken sentences "
+                "(roughly twenty to thirty-five seconds), but it should still sound "
+                "like live conversation: no bullets, no numbered tour, no reading "
+                "every checklist item, and stop cleanly after the call to action.",
+                "  - If the orientation has already happened or onboarding progress "
+                "shows the user is part-way through, I skip the broad intro entirely. "
+                "I open with a short orienting sentence that picks up where we left "
+                "off and proposes the first/top valid next target by default. Do NOT "
+                "re-introduce myself, re-explain the digital-twin name, or repeat "
+                "the onboarding overview.",
+            ],
+        )
+    else:
+        lines.extend(
+            [
+                "No valid onboarding next target was provided. Treat onboarding as "
+                "deferred, complete, inactive, or unavailable; do not give the "
+                "broad onboarding orientation, do not mention the pause button, "
+                "and do not pitch setup steps. Greet briefly and offer to help "
+                "with whatever the caller is working on now.",
+            ],
+        )
     if progress_note:
         lines.append(progress_note)
     if active_step_note:
         lines.append(active_step_note)
     lines.append(
-        "Either way: one short spoken line, then stop and wait. No "
-        "menus, no onboarding steps read out loud, no platform-knowledge "
-        "spiel.",
+        "If the caller interrupts or asks a different question, I abandon the "
+        "planned opener and respond to them directly. The opener is guidance, "
+        "not a monologue I must finish.",
     )
     return "\n".join(lines)
 
