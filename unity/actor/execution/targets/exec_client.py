@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import aiohttp
 
-from droid.session_details import SESSION_DETAILS
+from unity.session_details import SESSION_DETAILS
 
 from ..surface import ExecutionSurface
 from .base import ExecResult

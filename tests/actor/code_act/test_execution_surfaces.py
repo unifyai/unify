@@ -59,6 +59,47 @@ class _Dummy:
         self.function_manager = function_manager
 
 
+class _FakeExecClient:
+    """Captures ``exec`` kwargs in place of the real agent-service HTTP client."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def exec(self, command: str, **kwargs: Any) -> ExecResult:
+        self.calls.append({"command": command, **kwargs})
+        return ExecResult(
+            surface=ExecutionSurface.ASSISTANT_DESKTOP,
+            stdout="ok",
+            returncode=0,
+        )
+
+
+class _FakeFM:
+    """Minimal FunctionManager stand-in for AssistantDesktopTarget units."""
+
+    REMOTE_WINDOWS_SHELL_MODE = "powershell"
+
+    def __init__(self, sync_manager: Any = "present", root: Path | None = None):
+        self._sync_manager = sync_manager
+        self._root = root
+        self.synced_to = 0
+        self.synced_from = 0
+
+    def _get_sync_manager(self) -> Any:
+        return self._sync_manager
+
+    def _windows_exec_local_root(self) -> Path:
+        return self._root
+
+    async def _sync_to_remote(self) -> bool:
+        self.synced_to += 1
+        return True
+
+    async def _sync_from_remote(self) -> bool:
+        self.synced_from += 1
+        return True
+
+
 @pytest.fixture
 def no_desktops(monkeypatch: pytest.MonkeyPatch) -> None:
     """Force a session with no managed VM and no linked user desktops."""
@@ -294,3 +335,109 @@ async def test_execute_on_surface_gates_unavailable_user_desktop(
     assert out["suggestion"]
     assert out["surface"] == "user_desktop"
     assert out["stdout"] == ""
+
+
+# ---------------------------------------------------------------------------
+# AssistantDesktopTarget (shared mechanics for ad-hoc exec + Windows func-exec)
+# ---------------------------------------------------------------------------
+
+
+def _assistant_target(fm: _FakeFM, os_name: str):
+    from droid.actor.execution.targets.assistant_desktop import AssistantDesktopTarget
+
+    return AssistantDesktopTarget(fm, api_url="https://vm.unify.ai", os=os_name)
+
+
+@pytest.mark.asyncio
+async def test_assistant_desktop_run_shell_forwards_powershell_on_windows() -> None:
+    target = _assistant_target(_FakeFM(), "windows")
+    fake = _FakeExecClient()
+    target._client = fake
+    await target.run_shell("dir", cwd="C:\\Droid\\Local")
+    assert fake.calls[-1]["shell_mode"] == "powershell"
+    assert fake.calls[-1]["cwd"] == "C:\\Droid\\Local"
+
+
+@pytest.mark.asyncio
+async def test_assistant_desktop_run_shell_no_shell_mode_on_linux() -> None:
+    target = _assistant_target(_FakeFM(), "ubuntu")
+    fake = _FakeExecClient()
+    target._client = fake
+    await target.run_shell("ls")
+    assert fake.calls[-1]["shell_mode"] is None
+
+
+@pytest.mark.asyncio
+async def test_assistant_desktop_run_python_inline_and_shell_mode() -> None:
+    target = _assistant_target(_FakeFM(), "windows")
+    fake = _FakeExecClient()
+    target._client = fake
+    await target.run_python("print(1)")
+    call = fake.calls[-1]
+    assert call["shell_mode"] == "powershell"
+    assert "base64" in call["command"]
+
+
+@pytest.mark.asyncio
+async def test_assistant_desktop_run_python_rejects_venv_id() -> None:
+    target = _assistant_target(_FakeFM(), "windows")
+    with pytest.raises(ValueError):
+        await target.run_python("print(1)", venv_id=5)
+
+
+@pytest.mark.asyncio
+async def test_assistant_desktop_put_file_requires_sync_manager(tmp_path: Path) -> None:
+    target = _assistant_target(_FakeFM(sync_manager=None), "windows")
+    src = tmp_path / "a.txt"
+    src.write_text("x")
+    with pytest.raises(TargetUnavailableError):
+        await target.put_file(src, "scripts/a.txt")
+
+
+@pytest.mark.asyncio
+async def test_assistant_desktop_get_file_requires_sync_manager(tmp_path: Path) -> None:
+    target = _assistant_target(_FakeFM(sync_manager=None), "windows")
+    with pytest.raises(TargetUnavailableError):
+        await target.get_file("scripts/a.txt", tmp_path / "b.txt")
+
+
+@pytest.mark.asyncio
+async def test_assistant_desktop_put_get_file_roundtrip(tmp_path: Path) -> None:
+    root = tmp_path / "local"
+    root.mkdir()
+    fm = _FakeFM(sync_manager="present", root=root)
+    target = _assistant_target(fm, "windows")
+
+    src = tmp_path / "src.txt"
+    src.write_text("payload")
+    await target.put_file(src, "scripts/dest.txt")
+    assert (root / "scripts" / "dest.txt").read_text() == "payload"
+    assert fm.synced_to == 1
+
+    back = tmp_path / "back.txt"
+    await target.get_file("scripts/dest.txt", back)
+    assert back.read_text() == "payload"
+    assert fm.synced_from == 1
+
+
+@pytest.mark.asyncio
+async def test_assistant_desktop_ensure_ready_requires_api_url() -> None:
+    from droid.actor.execution.targets.assistant_desktop import AssistantDesktopTarget
+
+    target = AssistantDesktopTarget(_FakeFM(), api_url=None, os="windows")
+    with pytest.raises(TargetUnavailableError):
+        await target.ensure_ready()
+
+
+@pytest.mark.asyncio
+async def test_assistant_desktop_ensure_ready_passes_when_vm_ready() -> None:
+    from droid.function_manager.primitives.runtime import _vm_ready
+
+    was_set = _vm_ready.is_set()
+    _vm_ready.set()
+    try:
+        target = _assistant_target(_FakeFM(), "windows")
+        await target.ensure_ready()
+    finally:
+        if not was_set:
+            _vm_ready.clear()

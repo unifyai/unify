@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 
 class LocalTarget(ExecutionTarget):
-    """Runs code on the machine hosting droid via the shared SessionExecutor.
+    """Runs code on the machine hosting Unity via the shared SessionExecutor.
 
     Shell and Python both execute statelessly through the executor, so the local
     target carries no session lifecycle of its own. File moves are plain copies
@@ -40,7 +40,7 @@ class LocalTarget(ExecutionTarget):
     def _root(self) -> Path:
         if self._local_root is not None:
             return self._local_root
-        from droid.file_manager.settings import get_local_root
+        from unity.file_manager.settings import get_local_root
 
         self._local_root = Path(get_local_root()).expanduser()
         return self._local_root

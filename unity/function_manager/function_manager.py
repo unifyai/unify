@@ -110,7 +110,9 @@ FUNCTIONS_VENV_DESTINATION_GUIDANCE = """destination : str | None, default None
     block in your system prompt; pick personal when in doubt."""
 
 if TYPE_CHECKING:  # pragma: no cover
-    pass
+    from unity.actor.execution.targets.assistant_desktop import (
+        AssistantDesktopTarget,
+    )
 
 
 class _LineageTrackedFunction:
@@ -6508,7 +6510,7 @@ class FunctionManager(BaseFunctionManager):
 
     def _windows_exec_local_root(self) -> Path:
         """Local sync root that FileSync bisyncs to the VM's ``C:\\Droid\\Local``."""
-        from droid.file_manager.settings import get_local_root
+        from unity.file_manager.settings import get_local_root
 
         return Path(get_local_root()).expanduser()
 
@@ -6539,7 +6541,7 @@ class FunctionManager(BaseFunctionManager):
 
     async def _prepare_venv_on_remote_windows(
         self,
-        desktop_url: str,
+        target: "AssistantDesktopTarget",
         venv_id: int,
     ) -> str:
         """
@@ -6547,10 +6549,11 @@ class FunctionManager(BaseFunctionManager):
 
         Assumes the venv's ``pyproject.toml`` has already been staged locally
         (see :meth:`_write_venv_pyproject_local`) and pushed to the VM by the
-        pre-exec bisync. Runs the install over the existing ``/exec`` endpoint.
+        pre-exec bisync. Runs the install over the assistant-desktop target,
+        which owns the agent-service transport.
 
         Args:
-            desktop_url: Base URL for the Windows VM agent-service.
+            target: Execution target for the managed Windows VM.
             venv_id: The venv ID to install.
 
         Returns:
@@ -6559,55 +6562,31 @@ class FunctionManager(BaseFunctionManager):
         Raises:
             RuntimeError: If venv installation fails.
         """
-        import aiohttp
-
-        from unity.session_details import SESSION_DETAILS
-
         venv_dir = f"Local\\venvs\\venv_{venv_id}"
         venv_full_path = f"{self.REMOTE_WINDOWS_LOCAL_ROOT}\\{venv_dir}"
-        headers = {"Authorization": f"Bearer {SESSION_DETAILS.unify_key}"}
 
         LOGGER.debug(f"{ICONS['windows_exec']} [windows exec] Preparing venv {venv_id}")
 
-        async with aiohttp.ClientSession() as session:
-            # Step 1: Install uv via pip
-            LOGGER.debug(f"{ICONS['windows_exec']} [windows exec] Installing uv")
-            async with session.post(
-                f"{desktop_url}/api/exec",
-                json={
-                    "command": "pip install uv",
-                    "cwd": self.REMOTE_WINDOWS_LOCAL_ROOT,
-                    "timeout": 300000,
-                    "shell_mode": self.REMOTE_WINDOWS_SHELL_MODE,
-                },
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=360),
-            ) as resp:
-                await resp.json()  # Don't fail if uv already installed
+        # Step 1: Install uv (ignore failure if already installed).
+        LOGGER.debug(f"{ICONS['windows_exec']} [windows exec] Installing uv")
+        await target.run_shell(
+            "pip install uv",
+            cwd=self.REMOTE_WINDOWS_LOCAL_ROOT,
+            timeout=300,
+        )
 
-            # Step 2: Run 'uv sync'
-            LOGGER.debug(f"{ICONS['windows_exec']} [windows exec] Running uv sync")
-            async with session.post(
-                f"{desktop_url}/api/exec",
-                json={
-                    "command": "uv sync",
-                    "cwd": venv_full_path,
-                    "timeout": 600000,
-                    "shell_mode": self.REMOTE_WINDOWS_SHELL_MODE,
-                },
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=660),
-            ) as resp:
-                result = await resp.json()
-                if result.get("exitCode", 1) != 0:
-                    raise RuntimeError(
-                        f"Failed to sync venv on remote: "
-                        f"{result.get('stderr', result.get('stdout', 'Unknown error'))}",
-                    )
+        # Step 2: Run 'uv sync'.
+        LOGGER.debug(f"{ICONS['windows_exec']} [windows exec] Running uv sync")
+        sync_res = await target.run_shell("uv sync", cwd=venv_full_path, timeout=600)
+        if sync_res.returncode != 0:
+            raise RuntimeError(
+                "Failed to sync venv on remote: "
+                f"{sync_res.stderr or sync_res.stdout or 'Unknown error'}",
+            )
 
-            python_path = f"{venv_full_path}\\.venv\\Scripts\\python.exe"
-            logger.info(f"Prepared venv {venv_id} on remote Windows VM")
-            return python_path
+        python_path = f"{venv_full_path}\\.venv\\Scripts\\python.exe"
+        logger.info(f"Prepared venv {venv_id} on remote Windows VM")
+        return python_path
 
     async def _execute_python_function_on_remote_windows(
         self,
@@ -6641,8 +6620,9 @@ class FunctionManager(BaseFunctionManager):
         """
         import uuid
 
-        import aiohttp
-
+        from unity.actor.execution.targets.assistant_desktop import (
+            AssistantDesktopTarget,
+        )
         from unity.session_details import SESSION_DETAILS
 
         # Strip @custom_function decorators (not available on remote Windows)
@@ -6653,23 +6633,14 @@ class FunctionManager(BaseFunctionManager):
             f"{ICONS['windows_exec']} [windows exec] Executing '{func_name_meta}' on remote Windows",
         )
 
-        from unity.function_manager.primitives.runtime import _vm_ready
-
-        if not _vm_ready.is_set():
-            ready = await asyncio.to_thread(_vm_ready.wait, 300)
-            if not ready:
-                raise RuntimeError(
-                    "Managed VM did not become ready within 5 minutes",
-                )
-
-        desktop_url = SESSION_DETAILS.assistant.desktop_url
-        if not desktop_url:
-            raise RuntimeError(
-                "Cannot execute on remote Windows: desktop_url not set "
-                "(AssistantDesktopReady event may not have arrived yet)",
-            )
-        desktop_url = desktop_url.rstrip("/")
-        headers = {"Authorization": f"Bearer {SESSION_DETAILS.unify_key}"}
+        # The assistant-desktop target owns the agent-service transport and the
+        # managed-VM readiness wait; ensure_ready() blocks on both.
+        target = AssistantDesktopTarget(
+            self,
+            api_url=SESSION_DETAILS.assistant.desktop_url,
+            os="windows",
+        )
+        await target.ensure_ready()
 
         # FileSync (bisync) is the sole file-movement mechanism for Windows
         # exec: the wrapper script, venv pyproject, and result file all ride
@@ -6743,7 +6714,7 @@ if __name__ == "__main__":
         # Step 4: Install the venv on the VM (its pyproject was just pushed).
         if venv_id is not None:
             python_path = await self._prepare_venv_on_remote_windows(
-                desktop_url,
+                target,
                 venv_id,
             )
         else:
@@ -6758,23 +6729,11 @@ if __name__ == "__main__":
             f"Kwargs: {call_kwargs}",
         )
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{desktop_url}/api/exec",
-                json={
-                    "command": exec_command,
-                    "cwd": cwd,
-                    "timeout": 3600000,  # 1 hour
-                    "shell_mode": self.REMOTE_WINDOWS_SHELL_MODE,
-                },
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=3660),
-            ) as resp:
-                exec_result = await resp.json()
+        exec_res = await target.run_shell(exec_command, cwd=cwd, timeout=3600)
 
-        stdout = exec_result.get("stdout", "")
-        stderr = exec_result.get("stderr", "")
-        exit_code = exec_result.get("exitCode")
+        stdout = exec_res.stdout
+        stderr = exec_res.stderr
+        exit_code = exec_res.returncode
         LOGGER.info(
             f"{ICONS['windows_exec']} [windows exec] Execution complete (exitCode={exit_code})",
         )

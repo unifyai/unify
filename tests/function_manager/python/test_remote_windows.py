@@ -187,6 +187,11 @@ class MockResponse:
         self.status = status
         self.ok = status < 400
 
+    def raise_for_status(self):
+        # Mirrors aiohttp's response API, which the shared exec client invokes.
+        if self.status >= 400:
+            raise RuntimeError(f"HTTP {self.status}")
+
     async def json(self):
         return self._payload
 
@@ -393,12 +398,22 @@ class TestPrepareVenvOnRemoteWindows:
         mock_aiohttp_session,
     ):
         """Venv preparation installs uv + runs uv sync over /exec, never /api/files."""
+        from droid.actor.execution.targets.assistant_desktop import (
+            AssistantDesktopTarget,
+        )
+
         fm = function_manager_factory()
         venv_id = fm.add_venv(venv=MINIMAL_VENV_CONTENT)
 
+        target = AssistantDesktopTarget(
+            fm,
+            api_url="https://test-vm.unify.ai",
+            os="windows",
+        )
+
         try:
             result = await fm._prepare_venv_on_remote_windows(
-                desktop_url="https://test-vm.unify.ai",
+                target,
                 venv_id=venv_id,
             )
 

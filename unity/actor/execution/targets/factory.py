@@ -11,7 +11,7 @@ from .local import LocalTarget
 from .user_desktop import UserDesktopTarget
 
 if TYPE_CHECKING:
-    from droid.function_manager.function_manager import FunctionManager
+    from unity.function_manager.function_manager import FunctionManager
 
     from ..session import SessionExecutor
 
