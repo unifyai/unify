@@ -90,37 +90,50 @@ ONBOARDING_RESTORE_LABEL = "Do now"
 _STEP_FLOW_NOTES: dict[str, str] = {
     "email-reference": "Clicking the row asks me to send the first reference clue over email.",
     "email-reply": "The user replies with their guess once they receive the email clue.",
-    "whatsapp-number": "Opens Account \u2192 Contact info so the user can add/verify the WhatsApp number.",
+    "whatsapp-number": (
+        "Clicking the 'Add your WhatsApp number' row opens Account → Contact "
+        "info so the user can add or verify the WhatsApp number."
+    ),
     "whatsapp-message-reference": "Clicking sends the next clue over WhatsApp.",
     "whatsapp-message": "The user guesses the WhatsApp clue.",
     "whatsapp-call-reference": "Clicking starts or requests a WhatsApp voice clue.",
     "whatsapp-call": "The user guesses during the WhatsApp voice exchange.",
-    "phone-number": "Opens Account \u2192 Contact info so the user can add/verify the phone number.",
+    "phone-number": (
+        "Clicking the 'Add your phone number' row opens Account → Contact info "
+        "so the user can add or verify the phone number."
+    ),
     "sms-reference": "Clicking texts the next clue.",
     "sms-message": "The user guesses the SMS clue.",
     "phone-call-reference": "Clicking starts or requests a phone-call clue.",
     "phone-call": "The user guesses during the phone call.",
-    "slack-connect": "Opens the Slack setup path for the Unify Slack app.",
+    "slack-connect": (
+        "Clicking the 'Connect Slack' row opens the Slack setup path for the "
+        "Unify Slack app."
+    ),
     "slack-reference": "Clicking sends the next clue via Slack.",
     "slack-message": "The user guesses the Slack clue.",
-    "discord-connect": "Guides the user to add their Discord ID and install the public Discord bot.",
+    "discord-connect": (
+        "Clicking the 'Connect Discord' row opens the Discord setup path for "
+        "adding their Discord ID and installing the public Discord bot."
+    ),
     "discord-reference": "Clicking sends the next clue via Discord.",
     "discord-message": "The user guesses the Discord clue.",
     "workspace": (
-        "Clicking the row opens the workspace OAuth dialog (Google Workspace or "
+        "Clicking the 'Give me access to your workspace' row opens the workspace "
+        "OAuth dialog (Google Workspace or "
         "Microsoft 365). Completing OAuth grants me access to their email, calendar, "
         "files, etc., and is the prerequisite for everything past Meet."
     ),
     "apps": (
-        "Clicking the row opens the Integrations tab; they connect at least one app "
-        "(Slack, Gmail, Notion, etc.) from the gallery and authorize it."
+        "Clicking the 'Connect me with your apps' row opens the Integrations tab; "
+        "they connect at least one app (Slack, Gmail, Notion, etc.) from the "
+        "gallery and authorize it."
     ),
     "schedule": (
-        "Time- or event-bound work \u2014 a Task in the product sense: it lands in the "
-        "Tasks tab (which opens automatically) and recurs or fires on a trigger. "
-        "Scheduling is encouraged but optional. Read-only \u201ctry one of these\u201d "
-        "chips render under the schedule row as inspiration only \u2014 they "
-        "do not click."
+        "Clicking the 'Schedule a task for later' row opens the Tasks tab. "
+        "Time- or event-bound work — a Task in the product sense — lands there "
+        "and recurs or fires on a trigger. Read-only “try one of these” chips "
+        "render under the schedule row as inspiration only — they do not click."
     ),
 }
 
@@ -131,7 +144,7 @@ def step_flow_note(step_id: str) -> str:
     Compatibility shim while all prompt callers migrate to Orchestra's
     ``flow_note`` render field.
     """
-    return ""
+    return _STEP_FLOW_NOTES.get(step_id, "")
 
 
 def _catalog_phases(catalog: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -267,6 +280,11 @@ def build_coordinator_console_literacy_block(
             "assistants work, connects systems, and inspects stored context. I "
             "explain what each surface means and how to open it — especially on "
             "voice calls where the UI is the main visual anchor.",
+            "During active onboarding, setup, connection, integration, and task "
+            "steps route through the Assistant info → Onboarding checklist first. "
+            "I tell my boss to click the relevant checklist row before I mention "
+            "direct Account, Integrations, Tasks, OAuth, or Contact Manager paths; "
+            "those paths are what the row opens or fallback routes outside onboarding.",
             "",
             "Screen-share default",
             "-------------------",

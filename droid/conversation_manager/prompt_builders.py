@@ -773,9 +773,10 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "the valid next step(s) straight from the 'My onboarding progress "
             "(live)' section — I never work out the ordering myself. That list "
             "is priority-ordered: I default to the first entry, using its nudge "
-            "copy, and only pick a lower one when the current channel and "
-            "conversation make it clearly more natural; if none is listed "
-            "(onboarding complete), I congratulate the user and stand down.",
+            "copy framed as clicking that step's row in the Onboarding checklist, "
+            "and only pick a lower one when the current channel and conversation "
+            "make it clearly more natural; if none is listed (onboarding complete), "
+            "I congratulate the user and stand down.",
             "  3. Deliver the acknowledgement on whichever channel is live. When a "
             "voice call is active you MUST speak it by calling "
             '`guide_voice_agent(message="...", should_speak=True)` with the '
@@ -949,13 +950,13 @@ def _build_coordinator_onboarding_progress_block(
                 detail.append(f"      What it involves: {description}")
         elif estimated_time:
             detail.append(f"      Rough time: ~{estimated_time}")
-        if nudge.strip():
-            detail.append(f"      How I nudge it: {nudge.strip()}")
         flow_note = str((step or {}).get("flow_note") or "").strip()
         if not flow_note:
             flow_note = console_ui.step_flow_note(step_id)
         if flow_note:
             detail.append(f"      How they advance it: {flow_note}")
+        if nudge.strip():
+            detail.append(f"      How I nudge it: {nudge.strip()}")
         if chips:
             detail.append(f"      Suggestion chips the user sees: {chips}")
         return detail
@@ -967,16 +968,27 @@ def _build_coordinator_onboarding_progress_block(
         lines.append(
             f"Current default onboarding action: {primary_title}. This is the "
             "step I should name first when the user asks what to do next, and "
-            "the step I should execute or guide when the user gives permission "
-            "to continue without naming another step.",
+            "a recommendation first: explain why it is next, then ask whether "
+            "they want me to start it. A question like 'what should I do?' or "
+            "'what is onboarding?' is not permission to send a message, start "
+            "a call, or change state.",
+        )
+        lines.append(
+            "During active onboarding, my first user-facing instruction for a "
+            "startable checklist step is to click that step's row in the "
+            "Onboarding checklist. I do not skip straight to Account, "
+            "Integrations, Tasks, OAuth, or Contact Manager unless the user is "
+            "already there or explicitly asks for an alternate route.",
         )
         primary_step = step_by_id.get(primary_id)
         if isinstance(primary_step, dict) and primary_step.get("kind") == "trigger":
             lines.append(
-                "For this communication trigger, I send the outbound myself with "
-                "the matching comms tool when the user consents or clicks the "
-                "row. The checklist turns it done only after the backend detects "
-                "my outbound transcript row; I must not call it complete early.",
+                "For this communication trigger, I only send the outbound after "
+                "an explicit go-ahead (for example: 'yes', 'send it', 'go ahead', "
+                "'kick it off') or after the user clicks the checklist row. "
+                "Until then I explain the step and ask. The checklist turns it "
+                "done only after the backend detects my outbound transcript row; "
+                "I must not call it complete early.",
             )
         lines.extend(_detail_lines(primary_id, primary.get("nudge_chat") or ""))
         lines.append(
@@ -2507,6 +2519,10 @@ def _build_coordinator_voice_opening_block(
                 "(roughly twenty to thirty-five seconds), but it should still sound "
                 "like live conversation: no bullets, no numbered tour, no reading "
                 "every checklist item, and stop cleanly after the call to action.",
+                "  - For any checklist step I suggest, the first concrete action is "
+                "clicking that step's row in the Onboarding checklist. I do not "
+                "send the user directly to Account, Integrations, Tasks, OAuth, "
+                "or Contact Manager unless they ask for an alternate route.",
                 "  - If the orientation has already happened or onboarding progress "
                 "shows the user is part-way through, I skip the broad intro entirely. "
                 "I open with a short orienting sentence that picks up where we left "
