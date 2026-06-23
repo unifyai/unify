@@ -124,18 +124,16 @@ _STEP_FLOW_NOTES: dict[str, str] = {
     ),
 }
 
-# Per-phase grouping prose — keyed by the catalog phase id.
-_PHASE_FLOW_NOTES: dict[str, str] = {
-    "communication": (
-        "The user plays a lightweight guess-the-reference game across the configured "
-        "channels. Trigger rows send a clue immediately and auto-complete; the "
-        "following reply rows wait for the user's guess. Children:"
-    ),
-    "workspace": "Workspace access tasks:",
-    "integrations": "App-connection tasks:",
-    "tasks": "Task setup:",
-    "my-computer": "One-off work on my computer:",
-}
+
+def step_flow_note(step_id: str) -> str:
+    """Behavioural "how the user advances this step" hint for one step.
+
+    Returns the empty string when the step has no scaffolding. The live
+    progress block folds this into the rich detail of the currently
+    startable steps so the coordinator can answer "where do I click?"
+    without re-declaring every step's behaviour on every turn.
+    """
+    return _STEP_FLOW_NOTES.get(step_id, "")
 
 
 def _catalog_phases(catalog: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -146,23 +144,6 @@ def _catalog_phases(catalog: dict[str, Any] | None) -> list[dict[str, Any]]:
     return (
         [p for p in phases if isinstance(p, dict)] if isinstance(phases, list) else []
     )
-
-
-def _catalog_steps_by_phase(
-    catalog: dict[str, Any] | None,
-) -> dict[str, list[dict[str, Any]]]:
-    """Catalog steps grouped by their phase label, preserving graph order."""
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    if not isinstance(catalog, dict):
-        return grouped
-    steps = catalog.get("steps")
-    if not isinstance(steps, list):
-        return grouped
-    for step in steps:
-        if not isinstance(step, dict):
-            continue
-        grouped.setdefault(str(step.get("phase", "")), []).append(step)
-    return grouped
 
 
 def catalog_has_phase(catalog: dict[str, Any] | None, phase_id: str) -> bool:
@@ -573,16 +554,18 @@ def build_coordinator_onboarding_flow_reference_block(
     self_reference: bool = False,
     catalog: dict[str, Any] | None = None,
 ) -> str:
-    """Reference for the coordinator-led onboarding UI.
+    """Reference for the coordinator-led onboarding UI surface.
 
-    Teaches the onboarding surface (transient full-screen overlay, then the
-    checklist in the Assistant info → Onboarding tab), the steps, and how the
-    user advances each so the coordinator can answer "what do I click next?".
+    Teaches the onboarding *surface* (transient full-screen overlay, then the
+    checklist in the Assistant info → Onboarding tab) and its affordances so
+    the coordinator can answer "where do I click?". This block is deliberately
+    fixed-size: the per-step list, statuses, and "what's next" all live in the
+    render-driven "My onboarding progress (live)" block, so this builder never
+    enumerates steps and stays affordable as the later sections fill in.
 
-    The phase/step *titles* and which phases exist come from the fetched
-    onboarding ``catalog`` (Orchestra's canonical, deployment-gated source of
-    truth); this builder only adds the behavioural scaffolding from
-    ``_STEP_FLOW_NOTES`` / ``_PHASE_FLOW_NOTES``.
+    Phase headers come from the fetched onboarding ``catalog`` (Orchestra's
+    canonical, deployment-gated source of truth); they only feed the progress
+    bar legend.
     """
     block_title = (
         "My onboarding flow (UI reference)"
@@ -590,13 +573,6 @@ def build_coordinator_onboarding_flow_reference_block(
         else f"{coordinator_name} onboarding flow (UI reference)"
     )
     phases = _catalog_phases(catalog)
-    steps_by_phase = _catalog_steps_by_phase(catalog)
-    titles = {
-        str(s.get("id")): str(s.get("title", ""))
-        for s in (catalog.get("steps") if isinstance(catalog, dict) else None) or []
-        if isinstance(s, dict)
-    }
-    workspace_title = titles.get("workspace", "the workspace step")
     phase_legend = (
         " — ".join(f"**{p.get('phase', '')}**" for p in phases)
         if phases
@@ -626,49 +602,27 @@ def build_coordinator_onboarding_flow_reference_block(
         f"**{ONBOARDING_RESTORE_LABEL}** button to restore them. Deferred is not "
         "the same as done. Locked rows stay disabled until their prerequisite "
         "is resolved (the tooltip names the earlier step to finish first).",
-        "The onboarding steps in order — title, what it does, and how the user "
-        "advances it:",
-        "  1. **Meet** (`meet`). Auto-completes once we exchange the opening "
-        "turn — saying anything in the chat (or starting the call) clears it. "
-        "Nothing to click.",
+        "Answering flow questions:",
+        '  - The "My onboarding progress (live)" block is my authoritative '
+        "source for the step list, each step's live status, what each "
+        "startable step involves, and which step(s) are valid to do next. I "
+        "read it from there; I do not work the ordering out myself.",
+        '  - When the user asks "what do I do next?", "where do I click?", or '
+        "similar, I name the first valid next target from that live block (it "
+        "is priority-ordered; the top is my default), phrased as a "
+        "one-sentence instruction that maps onto the row they will see — e.g. "
+        '"Open the **Onboarding** tab and click that step\'s row." I stay '
+        "ready to discuss any other listed target if they ask, but I do not "
+        "dump the whole list.",
+        "  - When the user asks what a step does, I answer from that step's "
+        "detail in the live progress block in one or two sentences, then offer "
+        "to advance them.",
+        "  - I never claim a step is done unless the live progress block shows "
+        "it done (or the corresponding system event has arrived in my "
+        "notifications: workspace OAuth → workspace_connected; integration "
+        "save → integration_connected; etc.).",
+        "  - If a step is deferred, I treat it as intentionally passed over for "
+        "now: I can move to the next step, but I do not describe the deferred "
+        "step as completed.",
     ]
-
-    counter = 2
-    for phase in phases:
-        phase_id = str(phase.get("id", ""))
-        phase_title = str(phase.get("title", ""))
-        phase_note = _PHASE_FLOW_NOTES.get(phase_id, "")
-        header = f"  {counter}. **{phase_title}** (`{phase_id}`, grouping row)."
-        if phase_note:
-            header = f"{header} {phase_note}"
-        lines.append(header)
-        for step in steps_by_phase.get(str(phase.get("phase", "")), []):
-            step_id = str(step.get("id", ""))
-            step_title = str(step.get("title", ""))
-            note = _STEP_FLOW_NOTES.get(step_id, "")
-            row = f"     - **{step_title}** (`{step_id}`)."
-            if note:
-                row = f"{row} {note}"
-            lines.append(row)
-        counter += 1
-
-    lines.extend(
-        [
-            "Answering flow questions:",
-            '  - When the user asks "what do I do next?", "where do I click?", or '
-            "similar, I look at the most recent onboarding signals and name the "
-            "single next pending step, phrased as a one-sentence instruction that "
-            'maps onto the row they will see — e.g. "Open the **Onboarding** tab and '
-            f"click **{workspace_title}**, then pick Google or "
-            'Microsoft." I do not dump the whole list.',
-            "  - When the user asks what a step does, I answer from the descriptions "
-            "above in one or two sentences, then offer to advance them.",
-            "  - I never claim a step is done unless the corresponding system event "
-            "has actually arrived in my notifications (workspace OAuth → "
-            "workspace_connected; integration save → integration_connected; etc.).",
-            "  - If a step is deferred, I treat it as intentionally passed over for "
-            "now: I can move to the next step, but I do not describe the deferred "
-            "step as completed.",
-        ],
-    )
     return "\n".join(lines)

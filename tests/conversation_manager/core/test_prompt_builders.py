@@ -224,7 +224,8 @@ class TestCoordinatorPrompt:
             not in coordinator_prompt
         )
         assert "My onboarding flow (UI reference)" in coordinator_prompt
-        assert "Give me access to your workspace" in coordinator_prompt
+        # The flow reference no longer enumerates step titles (those live in
+        # the render-driven progress block); it must still speak first-person.
         assert "Give Twin access to your workspace" not in coordinator_prompt
         assert "I propose handing it to Twin explicitly" not in coordinator_prompt
 
@@ -472,7 +473,8 @@ class TestCoordinatorVoicePrompt:
         assert "mention **both in the same reply**" in prompt
         assert "Unify internal operator tools only" in prompt
         assert "My onboarding flow (UI reference)" in prompt
-        assert "Give me access to your workspace" in prompt
+        # Step titles now live in the render-driven progress block, not the
+        # catalog flow reference; the block must still speak first-person.
         assert "Give Twin access to your workspace" not in prompt
         assert "Console knowledge\n-----------------" not in prompt
 
@@ -830,18 +832,79 @@ class TestConsoleUIGate:
 
 _ONBOARDING_RENDER: dict = {
     "active_step_id": "email-reply",
+    "phases": [
+        {
+            "id": "communication",
+            "phase": "Communication",
+            "title": "Communication",
+            "framing": "Try out the channels.",
+        },
+        {
+            "id": "workspace",
+            "phase": "Workspace",
+            "title": "Workspace",
+        },
+    ],
     "steps": [
         {
             "id": "email-reference",
             "title": "Trigger email from Twin",
-            "phase": "Quiz",
+            "phase": "Communication",
             "status": "done",
             "can_skip": False,
         },
         {
             "id": "email-reply",
             "title": "Reply to email",
-            "phase": "Quiz",
+            "phase": "Communication",
+            "status": "available",
+            "can_skip": True,
+            "description": "Reply to the clue email with your best guess.",
+            "estimated_time": "1 min",
+            "chips_chat": [{"id": "c1", "label": "Show me the clue again"}],
+        },
+        {
+            "id": "workspace",
+            "title": "Give me access to your workspace",
+            "phase": "Workspace",
+            "status": "locked",
+            "can_skip": False,
+            "description": "Connect Google Workspace or Microsoft 365.",
+            "estimated_time": "2 min",
+        },
+    ],
+    "next_targets": [
+        {
+            "id": "email-reply",
+            "title": "Reply to email",
+            "nudge_chat": "Prompt them to reply with their guess to the email clue.",
+            "nudge_voice": "replying with their guess for the email clue",
+            "channel": "email",
+        },
+    ],
+}
+
+# A render whose in-flight step is NOT itself a fresh next target, used to
+# exercise the active-step depth detail branch.
+_ONBOARDING_RENDER_ACTIVE: dict = {
+    "active_step_id": "whatsapp-call",
+    "phases": [
+        {"id": "communication", "phase": "Communication", "title": "Communication"},
+    ],
+    "steps": [
+        {
+            "id": "whatsapp-call",
+            "title": "Guess on a WhatsApp call",
+            "phase": "Communication",
+            "status": "available",
+            "can_skip": True,
+            "description": "Take the WhatsApp voice clue and guess out loud.",
+            "estimated_time": "3 min",
+        },
+        {
+            "id": "email-reply",
+            "title": "Reply to email",
+            "phase": "Communication",
             "status": "available",
             "can_skip": True,
         },
@@ -905,6 +968,56 @@ class TestCoordinatorOnboardingDeferGate:
     def test_progress_block_absent_without_render(self):
         prompt = _build(is_coordinator=True)
         assert self._PROGRESS_BLOCK_MARKER not in prompt
+
+    def test_progress_block_breadth_lists_every_step_with_status(self):
+        # Breadth overview: the whole checklist, grouped by section, one line
+        # per step with its live status marker.
+        prompt = _build(
+            is_coordinator=True,
+            coordinator_onboarding_render=_ONBOARDING_RENDER,
+        )
+        assert "Full checklist (every step, with its live status):" in prompt
+        assert "Communication:" in prompt
+        assert "Workspace:" in prompt
+        assert "[done] Trigger email from Twin" in prompt
+        assert "[available] Reply to email" in prompt
+        assert "[locked] Give me access to your workspace" in prompt
+
+    def test_progress_block_depth_only_for_frontier(self):
+        # Rich detail (description / time) appears for the startable next
+        # target, but NOT for a locked step that the user cannot start yet.
+        prompt = _build(
+            is_coordinator=True,
+            coordinator_onboarding_render=_ONBOARDING_RENDER,
+        )
+        # email-reply is a next target -> its description is surfaced.
+        assert "Reply to the clue email with your best guess." in prompt
+        assert "Show me the clue again" in prompt
+        # workspace is locked -> its description must NOT be injected.
+        assert "Connect Google Workspace or Microsoft 365." not in prompt
+
+    def test_progress_block_next_targets_priority_ordered_default(self):
+        # The block tells the brain the list is ordered and the first is the
+        # default for an open "what should I do now?".
+        prompt = _build(
+            is_coordinator=True,
+            coordinator_onboarding_render=_ONBOARDING_RENDER,
+        )
+        assert "priority-ordered" in prompt
+        assert "1. Reply to email" in prompt
+
+    def test_progress_block_surfaces_active_step_detail(self):
+        # An in-flight step that is not itself a fresh next target still gets
+        # its detail surfaced so the brain can guide it.
+        prompt = _build(
+            is_coordinator=True,
+            coordinator_onboarding_render=_ONBOARDING_RENDER_ACTIVE,
+        )
+        assert (
+            "In-flight step the user is on right now: Guess on a WhatsApp call."
+            in prompt
+        )
+        assert "Take the WhatsApp voice clue and guess out loud." in prompt
 
     def test_voice_deferred_keeps_literacy_drops_flow_reference(self):
         prompt = _build_voice(is_coordinator=True, coordinator_onboarding_deferred=True)
@@ -999,23 +1112,31 @@ _CATALOG_HOSTED: dict = {
 
 
 class TestOnboardingCatalogDrivesFlowReference:
-    """The flow-reference block sources its phase/step titles from the fetched
-    catalog (Orchestra's single source of truth), and the hosted catalog —
-    which omits the local_only phases — drops them from the prompt too."""
+    """The flow-reference block is now a fixed-size UI-literacy block: it
+    sources only the phase legend from the fetched catalog and never
+    enumerates per-step rows (the step list, statuses, and "what's next" live
+    in the render-driven progress block instead)."""
 
-    def test_local_catalog_renders_all_phase_and_step_titles(self):
+    def test_local_catalog_renders_phase_legend(self):
         prompt = _build(is_coordinator=True, onboarding_catalog=_CATALOG_LOCAL)
         assert "My onboarding flow (UI reference)" in prompt
         assert "Communication" in prompt
         assert "My Computer" in prompt
-        assert "Give me access to your workspace" in prompt
 
-    def test_hosted_catalog_renders_all_phase_and_step_titles(self):
+    def test_hosted_catalog_renders_phase_legend(self):
         prompt = _build(is_coordinator=True, onboarding_catalog=_CATALOG_HOSTED)
         assert "My onboarding flow (UI reference)" in prompt
         assert "Communication" in prompt
         assert "My Computer" in prompt
-        assert "Give me access to your workspace" in prompt
+
+    def test_flow_reference_does_not_enumerate_steps(self):
+        # The slimmed block must not list per-step rows like
+        # "**...** (`workspace`)." — that breadth now lives in the live
+        # progress block driven by the render.
+        prompt = _build(is_coordinator=True, onboarding_catalog=_CATALOG_LOCAL)
+        assert "(`workspace`)" not in prompt
+        assert "(`email-reference`)" not in prompt
+        assert "Give me access to your workspace" not in prompt
 
     def test_literacy_local_omits_removed_work_tour_hooks(self):
         prompt = _build(is_coordinator=True, onboarding_catalog=_CATALOG_LOCAL)
