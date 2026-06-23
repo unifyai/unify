@@ -33,14 +33,13 @@ MODEL = SETTINGS.conversation.FAST_BRAIN_MODEL
 
 INIT_SYSTEM_MESSAGE = (
     "[system] You have just started up and your systems are still "
-    "syncing — loading files, pulling up previous conversations, "
-    "and connecting to your tools. This takes a few moments. "
-    "If the user asks you to do something that requires looking "
-    "things up or taking action, let them know naturally that "
-    "you are still getting set up (e.g. 'I'm just pulling up our "
-    "previous sessions — give me a moment and I'll get right on "
-    "that'). Do NOT say 'I can't do that' — frame it as a brief "
-    "delay, not a limitation. You will receive a notification "
+    "syncing — loading your files, tools, and any conversation "
+    "history. This takes a few moments. If the user asks you to do "
+    "something that requires looking things up or taking action, let "
+    "them know naturally that you are still getting set up (e.g. "
+    "'give me just a moment to finish getting set up and I'll get "
+    "right on that'). Do NOT say 'I can't do that' — frame it as a "
+    "brief delay, not a limitation. You will receive a notification "
     "when everything is ready."
 )
 
