@@ -134,48 +134,48 @@ def _coordinator_onboarding_notification_text(
     if event.subtype == _SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED:
         details = event.details if isinstance(event.details, dict) else {}
         channel = _detail_string(details, "channel")
-        clue = _detail_string(details, "clue")
-        quote = _detail_string(details, "quote")
-        answer = _detail_string(details, "answer")
         trigger_step_id = _detail_string(details, "trigger_step_id")
         reply_step_id = _detail_string(details, "reply_step_id")
         tool_name = _detail_string(details, "tool_name")
         framing = _detail_string(details, "framing")
         interaction = details.get("interaction")
-        channel_note = f" Target outbound channel: `{channel}`." if channel else ""
+        channel_note = f" Target channel: `{channel}`." if channel else ""
         tool_note = (
-            f" Execute this trigger now with `{tool_name}` in this LLM turn."
+            f" The outbound tool for this channel is `{tool_name}`."
             if tool_name
-            else " Execute this trigger now with the matching outbound comms tool."
+            else " Use the matching outbound comms tool for this channel."
         )
         step_note = (
             f" Trigger step id: `{trigger_step_id}`. Reply step id now active in Console: `{reply_step_id}`."
             if trigger_step_id or reply_step_id
             else ""
         )
-        clue_note = (
-            f' Clue to send exactly as the user-facing clue: "{clue}".' if clue else ""
+        # The event is a poll, not a fresh command. The click and any verbal ask
+        # that arrived around the same time are the same directive in two forms,
+        # so the clue must go out exactly once.
+        poll_note = (
+            " This notification is a POLL confirming the user now expects the "
+            "clue on this channel — it is NOT a request for another copy. If a "
+            "verbal directive arrived around the same time (e.g. they said so on "
+            "a call), it is almost certainly the SAME directive in two forms: "
+            "satisfy it once. If I have already sent a clue on this channel for "
+            "this step, I do NOT send another — I simply confirm it's on its "
+            "way. I send a clue now only if none has gone out yet."
         )
-        quote_note = f' Underlying quote: "{quote}".' if quote else ""
-        answer_note = (
-            f' Correct answer: "{answer}". Do not reveal it unless the user asks for the answer or is clearly stuck.'
-            if answer
-            else ""
+        clue_note = (
+            " I invent my own short reference-quiz clue on the spot — there is "
+            "no supplied clue or answer. I pick a fresh sci-fi or pop-culture "
+            "quote of my own each time and keep the answer to myself."
         )
         framing_note = f" Section framing: {framing}" if framing else ""
         interaction_note = (
             " Structured interaction: reference_quiz. Explain the quiz before "
             "sending or discussing any clue; the user should know this is a "
             "channel-proving mini-game, not a mysterious email. Outbound text "
-            "or email clue messages must include that context before the clue. "
-            "A chat or voice acknowledgement alone does not satisfy the trigger."
+            "or email clue messages must include that context before the clue."
             if isinstance(interaction, dict)
             and interaction.get("type") == "reference_quiz"
             else ""
-        )
-        completion_note = (
-            " Do not say the trigger is complete until the backend detects the "
-            "assistant-authored outbound transcript row."
         )
         call_note = (
             " If the tool starts a call, put the briefing and framing in the call context "
@@ -184,8 +184,8 @@ def _coordinator_onboarding_notification_text(
             else ""
         )
         return (
-            f"{subtype_hint} {body}{channel_note}{step_note}{clue_note}{quote_note}"
-            f"{answer_note}{tool_note}{framing_note}{interaction_note}{completion_note}{call_note}"
+            f"{subtype_hint} {body}{channel_note}{step_note}{poll_note}{clue_note}"
+            f"{tool_note}{framing_note}{interaction_note}{call_note}"
         ).strip()
 
     if event.subtype == _SUBTYPE_ONBOARDING_SESSION_STARTED:

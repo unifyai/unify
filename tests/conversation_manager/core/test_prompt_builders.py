@@ -1092,8 +1092,11 @@ class TestCoordinatorOnboardingDeferGate:
         assert "Current default onboarding action: Trigger email from Twin" in prompt
         assert "a recommendation first" in prompt
         assert "is not permission to send a message" in prompt
-        assert "only send the outbound after an explicit go-ahead" in prompt
-        assert "or after the user clicks the checklist row" in prompt
+        assert "the same directive if they happen together" in prompt
+        assert (
+            "the click is just a poll and I confirm rather than send a duplicate"
+            in prompt
+        )
         assert "must not call it complete early" in prompt
 
     def test_progress_block_routes_setup_steps_through_checklist_rows(self):

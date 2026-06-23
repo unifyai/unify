@@ -86,9 +86,6 @@ def test_reference_quiz_notification_briefs_text_channel() -> None:
                 "reply_step_id": "slack-message",
                 "channel": "slack_message",
                 "tool_name": "send_slack_message",
-                "clue": 'The clue is: "Phone home."',
-                "quote": "Phone home.",
-                "answer": "Battlestar Galactica",
                 "framing": "Play a guess-the-reference mini-game.",
                 "interaction": {"type": "reference_quiz"},
             },
@@ -101,14 +98,12 @@ def test_reference_quiz_notification_briefs_text_channel() -> None:
 
     assert "guess-the-reference mini-game" in text
     assert "send_slack_message" in text
-    assert "Execute this trigger now" in text
-    assert "Phone home." in text
-    assert "Do not reveal" in text
-    assert "Battlestar Galactica" in text
+    # The event is framed as a poll, and the clue is the model's to invent.
+    assert "POLL" in text
+    assert "do NOT send another" in text
+    assert "invent my own" in text
     assert "Explain the quiz before" in text
     assert "include that context before the clue" in text
-    assert "acknowledgement alone does not satisfy the trigger" in text
-    assert "outbound transcript row" in text
 
 
 def test_reference_quiz_notification_briefs_call_context() -> None:
@@ -120,9 +115,6 @@ def test_reference_quiz_notification_briefs_call_context() -> None:
                 "reply_step_id": "phone-call",
                 "channel": "phone_call",
                 "tool_name": "make_call_to_boss",
-                "clue": 'The clue is: "To infinity and beyond!"',
-                "quote": "To infinity and beyond!",
-                "answer": "The Empire Strikes Back / Luke",
                 "framing": "Play the reference game over a call.",
                 "interaction": {"type": "reference_quiz"},
             },
@@ -134,10 +126,9 @@ def test_reference_quiz_notification_briefs_call_context() -> None:
     text = onboarding._coordinator_onboarding_notification_text(event)
 
     assert "make_call_to_boss" in text
-    assert "Execute this trigger now" in text
+    assert "POLL" in text
     assert "call context" in text
     assert "Play the reference game over a call." in text
-    assert "The Empire Strikes Back / Luke" in text
 
 
 def test_onboarding_narration_block_documents_reference_quiz_not_space_oddity_scripts() -> (
@@ -148,7 +139,9 @@ def test_onboarding_narration_block_documents_reference_quiz_not_space_oddity_sc
     assert "reference_quiz_clue_requested" in block
     assert "task contract" in block
     assert "tool_name" in block
-    assert "Use the supplied `tool_name` when present, in this same LLM turn" in block
+    assert "POLL, not a fresh command" in block
+    assert "the SAME directive in two" in block
+    assert "I invent my own" in block
     assert "Do not use `act` for the send" in block
     assert "do not send a bare clue" in block
     assert "Completion is detected only after my outbound message/call appears" in block
