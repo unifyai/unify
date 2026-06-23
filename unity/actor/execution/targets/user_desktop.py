@@ -12,8 +12,8 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-from droid.file_manager.sync.user_sftp import UserHomeSFTP
-from droid.session_details import UserDesktopLink
+from unity.file_manager.sync.user_sftp import UserHomeSFTP
+from unity.session_details import UserDesktopLink
 
 from ..surface import ExecutionSurface
 from .assistant_desktop import _inline_python_command
