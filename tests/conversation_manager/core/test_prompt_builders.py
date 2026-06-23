@@ -833,7 +833,7 @@ _ONBOARDING_RENDER: dict = {
     "steps": [
         {
             "id": "email-reference",
-            "title": "Email the first reference",
+            "title": "Receive email from Twin",
             "phase": "Quiz",
             "status": "done",
             "can_skip": False,
@@ -983,7 +983,7 @@ _CATALOG_LOCAL: dict = {
         },
     ],
     "steps": [
-        _catalog_step("email-reference", "Email the first reference", "Communication"),
+        _catalog_step("email-reference", "Receive email from Twin", "Communication"),
         _catalog_step("workspace", "Give me access to your workspace", "Workspace"),
         _catalog_step("apps", "Connect me with your apps", "Integrations"),
         _catalog_step("schedule", "Schedule a task for later", "Tasks"),

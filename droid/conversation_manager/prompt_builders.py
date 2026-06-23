@@ -716,43 +716,26 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "picker — they're sitting in front of me and I owe them the "
             "first turn.",
             "Rules for `onboarding_step_started`:",
-            "  A. Read the active step id from the notification body (`step_id`). "
-            "The current Comms setup/reply step ids are `email-reply`, `whatsapp-number`, "
-            "`whatsapp-message`, `whatsapp-call`, `phone-number`, `sms-message`, "
-            "`phone-call`, `slack-connect`, `slack-message`, `discord-connect`, "
-            "and `discord-message`. Trigger rows use separate ids ending in `-reference`.",
-            "  B. `email-reply`, `whatsapp-message`, `whatsapp-call`, `sms-message`, "
-            "`phone-call`, `slack-message`, and `discord-message` are reply/guess "
-            "steps. If one is active, wait for the user's answer on that channel or call; "
-            "do not send a fresh clue unless there is also a `reference_quiz_clue_requested` "
-            "notification.",
-            "  C. `whatsapp-number`: guide the user to add their WhatsApp number in "
-            "Account → Contact info. Do not call it complete until the backend marks it done.",
-            "  D. `phone-number`: guide the user to add their phone number in Account → "
-            "Contact info. Do not call it complete until the backend marks it done.",
-            "  E. `slack-connect`: guide the user to connect Slack through the Unify Slack app. "
-            "Do not treat a generic Integrations secret as this step; it is the native Slack app install.",
-            "  F. `discord-connect`: guide the user to add their Discord ID and install the public "
-            "Discord bot. Do not call it complete until the backend marks it done.",
-            "  G. Do not skip ahead to workspace/app connection or delegation while a Comms step is "
-            "active unless that step is already listed as completed or skipped.",
+            "  A. Read the active step id from the notification body (`step_id`) and "
+            "match it against the authoritative 'My onboarding progress (live)' block. "
+            "That block, not this prompt, owns the section titles, valid next steps, "
+            "and section framing.",
+            "  B. If a step's title/framing says it is waiting for the user to reply, "
+            "answer, connect, or edit account details, guide or wait accordingly. Do "
+            "not call it complete until the backend marks it done.",
+            "  C. Do not skip ahead to unrelated sections while an active step is still "
+            "pending unless the live progress block lists a valid next step or the user "
+            "explicitly asks to move on.",
             "Rules for `reference_quiz_clue_requested`:",
-            "  1. Treat this as the user starting a fun guess-the-reference mini-game during "
-            "Coordinator onboarding. The notification includes `channel`, `clue`, `quote`, "
-            "`answer`, `trigger_step_id`, and `reply_step_id`.",
-            "  2. Send the `clue` through the requested outbound channel without revealing "
-            "the `answer`, then wait for the user's guess on that channel or call.",
-            "  3. For `email`, use `send_email`; for `whatsapp_message`, use `send_whatsapp`; "
-            "for `sms_message`, use `send_sms`; for `slack_message`, use `send_slack_message`; "
-            "for `discord_message`, use `send_discord_message`.",
-            "  4. For `phone_call`, use `make_call_to_boss(context=...)`; for `whatsapp_call`, "
-            "use `make_whatsapp_call_to_boss(context=...)`. The context must include the clue, "
-            "answer, and rules: greet naturally, say the next reference is the quote, ask them "
-            "to guess it, repeat the clue if asked, offer light hints, reveal the answer if "
-            "asked or they are stuck, and close the mini-game naturally.",
-            "  5. If the user guesses, respond naturally. If they are close, be encouraging; "
-            "if they are wrong, give a small hint or offer another try. Do not turn this into "
-            "a formal quiz script.",
+            "  1. Treat the notification details as the task contract. They may include "
+            "`channel`, `tool_name`, `clue`, `quote`, `answer`, `trigger_step_id`, "
+            "`reply_step_id`, and section `framing` supplied by Orchestra.",
+            "  2. Use the supplied `tool_name` when present. Send or speak the supplied "
+            "`clue` without revealing the `answer`, then follow the supplied framing.",
+            "  3. If the event starts a call, put the clue, answer, and framing into the "
+            "call context so the spoken sidecar has the full task design.",
+            "  4. Do not hardcode onboarding game design here. If the framing changes in "
+            "Orchestra, follow the new framing from the notification/live progress block.",
             "Rules for milestone subtypes (`workspace_connected`, `integration_connected`, `step_skipped`):",
             "  1. Acknowledge in one short sentence — name the thing that just happened, "
             "stay warm, do not re-list every onboarding step. For `step_skipped`, say "
@@ -818,6 +801,7 @@ def _build_coordinator_onboarding_progress_block(
     if not isinstance(render, dict):
         return ""
     steps = render.get("steps") if isinstance(render.get("steps"), list) else []
+    phases = render.get("phases") if isinstance(render.get("phases"), list) else []
     next_targets = (
         render.get("next_targets")
         if isinstance(render.get("next_targets"), list)
@@ -844,8 +828,19 @@ def _build_coordinator_onboarding_progress_block(
     lines.append(f"Done: {', '.join(t for t in done if t) or 'nothing yet'}.")
     if skipped:
         lines.append(
-            f"Skipped (left for later, not done): {', '.join(t for t in skipped if t)}."
+            f"Skipped (left for later, not done): {', '.join(t for t in skipped if t)}.",
         )
+    phase_framing_lines = []
+    for phase in phases:
+        if not isinstance(phase, dict):
+            continue
+        title = phase.get("title") or phase.get("phase")
+        framing = phase.get("framing")
+        if isinstance(title, str) and isinstance(framing, str) and framing.strip():
+            phase_framing_lines.append(f"  - {title}: {framing}")
+    if phase_framing_lines:
+        lines.append("Section framing supplied by Orchestra:")
+        lines.extend(phase_framing_lines)
 
     if next_targets:
         lines.append(
