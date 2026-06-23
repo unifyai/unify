@@ -169,14 +169,18 @@ _EXECUTION_RULES = textwrap.dedent("""
     - `surface="local"` (default) — the only surface with stateful sessions
       and venvs.
     - `surface="assistant_desktop"` — your managed VM.
-    - `surface="user_desktop"` — the user's own machine, only when they have
-      linked it and asked you to act on it (pass `user_id` when more than one
-      user desktop is linked).
+    - `surface="user_desktop"` — the user's own **personal machine**. Only use
+      it when that user has linked it and has clearly asked you to act on it
+      (pass `user_id` when more than one user desktop is linked). Treat it with
+      care: confirm with the user and keep them informed before running anything
+      that changes their system, and prefer read-only inspection or
+      `primitives.computer.user_desktop.files` (pull/push/list) over mutating
+      shell commands. Access is separately gated by the user's Console consent
+      and can be revoked mid-run, so prompt-level permission alone is never
+      sufficient.
 
     Remote surfaces are **stateless one-shots**: do not pass a non-stateless
-    `state_mode`, `session_id`, `session_name`, or `venv_id`. To read or write
-    files on the user's machine, prefer
-    `primitives.computer.user_desktop.files` (pull/push/list) over raw shell.
+    `state_mode`, `session_id`, `session_name`, or `venv_id`.
 
 ### Manager Primitive Scope
 
