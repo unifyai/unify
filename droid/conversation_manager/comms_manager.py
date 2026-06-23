@@ -170,7 +170,7 @@ def _get_subscription_id() -> str:
 def _get_local_contact() -> dict:
     """Build local contact dict from current assistant context."""
     return {
-        "contact_id": -1,
+        "contact_id": SESSION_DETAILS.boss_contact_id,
         "first_name": SESSION_DETAILS.user.first_name,
         "surname": SESSION_DETAILS.user.surname,
         "phone_number": SESSION_DETAILS.user.number,
