@@ -9,6 +9,7 @@ from droid.conversation_manager.prompt_builders import (
     _build_coordinator_onboarding_narration_block,
     _build_coordinator_voice_opening_block,
 )
+from droid.conversation_manager.events import EmailSent
 from droid.settings import SETTINGS
 
 
@@ -262,3 +263,51 @@ async def test_onboarding_handler_active_with_console_ui(monkeypatch) -> None:
 
     assert result is True
     cm.notifications_bar.push_notif.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_reference_trigger_sets_pending_outbound_context(monkeypatch) -> None:
+    monkeypatch.setattr(SETTINGS, "DROID_CONSOLE_UI", True)
+    event = onboarding._coordinator_onboarding_event_from_payload(
+        {
+            "subtype": "reference_quiz_clue_requested",
+            "details": {
+                "trigger_step_id": "email-reference",
+                "reply_step_id": "email-reply",
+                "channel": "email",
+                "tool_name": "send_email",
+            },
+        },
+        message="User triggered an email clue.",
+    )
+    assert event is not None
+    cm = MagicMock()
+    cm._current_event_trace = {"event_id": "evt-1"}
+
+    result = await onboarding._handle_coordinator_onboarding_event(event, cm)
+
+    assert result is True
+    cm.set_pending_onboarding_outbound.assert_called_once_with(
+        event.details,
+        origin_event_id="evt-1",
+    )
+
+
+def test_sent_event_serializes_onboarding_metadata() -> None:
+    event = EmailSent(
+        contact={"contact_id": 1},
+        subject="Subject",
+        body="Body",
+        to=["dan@unify.ai"],
+        onboarding_trigger_step_id="email-reference",
+        onboarding_reply_step_id="email-reply",
+        onboarding_request_id="llmreq-1",
+        onboarding_origin_event_id="evt-1",
+    )
+
+    payload = event.to_dict()["payload"]
+
+    assert payload["onboarding_trigger_step_id"] == "email-reference"
+    assert payload["onboarding_reply_step_id"] == "email-reply"
+    assert payload["onboarding_request_id"] == "llmreq-1"
+    assert payload["onboarding_origin_event_id"] == "evt-1"

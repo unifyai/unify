@@ -476,6 +476,11 @@ class WhatsAppCallSent(Event):
     prominent: ClassVar[bool] = True
 
     contact: dict
+    content: str = "<Sending WhatsApp Call...>"
+    onboarding_trigger_step_id: str | None = None
+    onboarding_reply_step_id: str | None = None
+    onboarding_request_id: str | None = None
+    onboarding_origin_event_id: str | None = None
 
 
 @dataclass
@@ -560,6 +565,10 @@ class DiscordMessageSent(Event):
 
     contact: dict
     content: str
+    onboarding_trigger_step_id: str | None = None
+    onboarding_reply_step_id: str | None = None
+    onboarding_request_id: str | None = None
+    onboarding_origin_event_id: str | None = None
 
 
 @dataclass
@@ -573,6 +582,10 @@ class DiscordChannelMessageSent(Event):
     content: str
     channel_id: str = ""
     guild_id: str = ""
+    onboarding_trigger_step_id: str | None = None
+    onboarding_reply_step_id: str | None = None
+    onboarding_request_id: str | None = None
+    onboarding_origin_event_id: str | None = None
 
 
 @dataclass
@@ -636,6 +649,10 @@ class SlackMessageSent(Event):
     team_id: str = ""
     channel_id: str = ""
     thread_ts: str = ""
+    onboarding_trigger_step_id: str | None = None
+    onboarding_reply_step_id: str | None = None
+    onboarding_request_id: str | None = None
+    onboarding_origin_event_id: str | None = None
 
 
 @dataclass
@@ -650,6 +667,10 @@ class SlackChannelMessageSent(Event):
     team_id: str = ""
     channel_id: str = ""
     thread_ts: str = ""
+    onboarding_trigger_step_id: str | None = None
+    onboarding_reply_step_id: str | None = None
+    onboarding_request_id: str | None = None
+    onboarding_origin_event_id: str | None = None
 
 
 @dataclass
@@ -783,6 +804,11 @@ class PhoneCallSent(Event):
     prominent: ClassVar[bool] = True
 
     contact: dict
+    content: str = "<Sending Call...>"
+    onboarding_trigger_step_id: str | None = None
+    onboarding_reply_step_id: str | None = None
+    onboarding_request_id: str | None = None
+    onboarding_origin_event_id: str | None = None
 
 
 @dataclass
@@ -908,6 +934,10 @@ class SMSSent(Event):
 
     contact: dict
     content: str
+    onboarding_trigger_step_id: str | None = None
+    onboarding_reply_step_id: str | None = None
+    onboarding_request_id: str | None = None
+    onboarding_origin_event_id: str | None = None
 
 
 @dataclass
@@ -919,6 +949,10 @@ class WhatsAppSent(Event):
     content: str
     via_template: bool = False
     attachments: list[dict] | None = None
+    onboarding_trigger_step_id: str | None = None
+    onboarding_reply_step_id: str | None = None
+    onboarding_request_id: str | None = None
+    onboarding_origin_event_id: str | None = None
 
 
 @dataclass
@@ -960,6 +994,10 @@ class EmailSent(Event):
     to: list[str] = field(default_factory=list)
     cc: list[str] = field(default_factory=list)
     bcc: list[str] = field(default_factory=list)
+    onboarding_trigger_step_id: str | None = None
+    onboarding_reply_step_id: str | None = None
+    onboarding_request_id: str | None = None
+    onboarding_origin_event_id: str | None = None
 
 
 @dataclass
