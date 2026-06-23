@@ -742,9 +742,10 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "we'll leave that step for now; do NOT call it done.",
             "  2. Preview a next step so the user has a clear handoff. I take "
             "the valid next step(s) straight from the 'My onboarding progress "
-            "(live)' section — I never work out the ordering myself. If more "
-            "than one is listed I pick the one most natural for the current "
-            "channel and conversation, using its nudge copy; if none is listed "
+            "(live)' section — I never work out the ordering myself. That list "
+            "is priority-ordered: I default to the first entry, using its nudge "
+            "copy, and only pick a lower one when the current channel and "
+            "conversation make it clearly more natural; if none is listed "
             "(onboarding complete), I congratulate the user and stand down.",
             "  3. Deliver the acknowledgement on whichever channel is live. When a "
             "voice call is active you MUST speak it by calling "
@@ -766,7 +767,9 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  7. Look at the transcript history *before* you respond. The "
             "'My onboarding progress (live)' section is the authoritative record "
             "of what is already done/skipped and which step(s) are valid to "
-            "propose next — I propose one of those, never a step that isn't "
+            "propose next — that list is priority-ordered, so I default to its "
+            "first entry and only pick a lower one when the channel/conversation "
+            "makes it clearly more natural. I never propose a step that isn't "
             "listed as a valid next target.",
             "     - If there are no prior assistant messages, introduce yourself in one "
             "short paragraph: name your role as the user's coordinator assistant, "
@@ -776,8 +779,8 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "and concise; do not list every onboarding step at once.",
             "     - If prior assistant messages exist, skip the intro. Open with one "
             "short sentence recapping which onboarding steps are complete (from the "
-            "completed-steps list) and propose the single next pending step. Do NOT "
-            "re-introduce yourself.",
+            "completed-steps list) and propose the first valid next target (top of "
+            "the ordered next-steps list). Do NOT re-introduce yourself.",
             "  8. Exactly one message. No tool calls, no `act`. The user's reply is what "
             "advances the flow.",
             "  9. When the notification says the medium is `call`, the voice agent will "
@@ -786,17 +789,51 @@ def _build_coordinator_onboarding_narration_block() -> str:
     )
 
 
+_ONBOARDING_STATUS_MARKERS: dict[str, str] = {
+    "done": "done",
+    "available": "available",
+    "locked": "locked",
+    "skipped": "skipped (left for later)",
+    "coming_soon": "coming soon",
+}
+
+
+def _onboarding_step_chip_labels(step: dict[str, Any]) -> str:
+    """Comma-joined suggestion-chip labels the user sees under a step."""
+    chips = step.get("chips_chat")
+    if not isinstance(chips, list):
+        return ""
+    labels = [
+        str(chip.get("label")).strip()
+        for chip in chips
+        if isinstance(chip, dict) and chip.get("label")
+    ]
+    return ", ".join(label for label in labels if label)
+
+
 def _build_coordinator_onboarding_progress_block(
     render: dict[str, Any] | None,
 ) -> str:
     """Standing, always-current onboarding progress for Twin.
 
-    Orchestra precomputes the depends_on-aware picture (each step's
-    status plus the set of *valid next targets* with ready-to-use nudge
-    copy) and Droid mirrors it onto every turn. The brain reads this
+    Orchestra precomputes the depends_on-aware picture (every step's
+    status plus the ordered set of *valid next targets* with ready-to-use
+    nudge copy) and Droid mirrors it onto every turn. The brain reads this
     block instead of inferring "what's next" from the flat checklist and
-    the event stream — there may be more than one valid next target, and
-    they are listed explicitly here so no ordering has to be worked out.
+    the event stream.
+
+    Structure is breadth-then-depth so the prompt stays affordable as the
+    later sections fill in:
+
+    - Breadth: a one-line-per-step overview of the *whole* checklist with
+      each step's live status, so the brain can place any step and answer
+      "what's left?". Grows linearly and cheaply with the step count.
+    - Depth: full detail (description, time estimate, suggestion chips,
+      nudge copy, how-to-advance note) for *only* the currently startable
+      steps (``next_targets``) plus the in-flight ``active_step_id``. This
+      is the set the user can actually pick up now, so it is the set the
+      brain must be ready to discuss in detail; its size is bounded by the
+      frontier, not the total step count.
     """
     if not isinstance(render, dict):
         return ""
@@ -807,16 +844,14 @@ def _build_coordinator_onboarding_progress_block(
         if isinstance(render.get("next_targets"), list)
         else []
     )
-    done = [
-        s.get("title")
-        for s in steps
-        if isinstance(s, dict) and s.get("status") == "done"
-    ]
-    skipped = [
-        s.get("title")
-        for s in steps
-        if isinstance(s, dict) and s.get("status") == "skipped"
-    ]
+    active_step_id = render.get("active_step_id")
+
+    step_by_id = {s.get("id"): s for s in steps if isinstance(s, dict) and s.get("id")}
+    phase_title_by_label = {
+        phase.get("phase"): (phase.get("title") or phase.get("phase"))
+        for phase in phases
+        if isinstance(phase, dict) and phase.get("phase")
+    }
 
     lines = [
         "My onboarding progress (live)",
@@ -825,11 +860,30 @@ def _build_coordinator_onboarding_progress_block(
         "onboarding, computed server-side. I never re-derive what is done "
         "or what comes next — I read it straight from here.",
     ]
-    lines.append(f"Done: {', '.join(t for t in done if t) or 'nothing yet'}.")
-    if skipped:
-        lines.append(
-            f"Skipped (left for later, not done): {', '.join(t for t in skipped if t)}.",
+
+    # Breadth: the whole checklist, one line per step, grouped by section.
+    # render.steps is already in graph order (phase-major), so emitting a
+    # section header whenever the phase changes preserves the canonical order.
+    overview_lines: list[str] = []
+    current_phase: Any = object()
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        phase_label = step.get("phase")
+        if phase_label != current_phase:
+            current_phase = phase_label
+            header = phase_title_by_label.get(phase_label, phase_label) or "Other"
+            overview_lines.append(f"  {header}:")
+        marker = _ONBOARDING_STATUS_MARKERS.get(
+            step.get("status"),
+            step.get("status") or "pending",
         )
+        title = step.get("title") or step.get("id") or "step"
+        overview_lines.append(f"    - [{marker}] {title}")
+    if overview_lines:
+        lines.append("Full checklist (every step, with its live status):")
+        lines.extend(overview_lines)
+
     phase_framing_lines = []
     for phase in phases:
         if not isinstance(phase, dict):
@@ -842,25 +896,73 @@ def _build_coordinator_onboarding_progress_block(
         lines.append("Section framing supplied by Orchestra:")
         lines.extend(phase_framing_lines)
 
+    # Depth: rich detail for the startable frontier only. The brain must be
+    # ready to answer specific questions about any of these.
+    def _detail_lines(step_id: str, nudge: str = "") -> list[str]:
+        step = step_by_id.get(step_id)
+        detail: list[str] = []
+        nudge = nudge or ""
+        if step:
+            description = str(step.get("description") or "").strip()
+            estimated_time = str(step.get("estimated_time") or "").strip()
+            chips = _onboarding_step_chip_labels(step)
+        else:
+            description = estimated_time = chips = ""
+        if description:
+            if estimated_time:
+                detail.append(
+                    f"      What it involves: {description} (~{estimated_time})",
+                )
+            else:
+                detail.append(f"      What it involves: {description}")
+        elif estimated_time:
+            detail.append(f"      Rough time: ~{estimated_time}")
+        if nudge.strip():
+            detail.append(f"      How I nudge it: {nudge.strip()}")
+        flow_note = console_ui.step_flow_note(step_id)
+        if flow_note:
+            detail.append(f"      How they advance it: {flow_note}")
+        if chips:
+            detail.append(f"      Suggestion chips the user sees: {chips}")
+        return detail
+
     if next_targets:
         lines.append(
-            "Valid next steps right now — I may steer toward any of these "
-            "(there can be more than one); I pick the most natural for the "
-            "current channel and conversation, and never push a step that "
-            "is not listed here:",
+            "Valid next steps right now (priority-ordered — the first is my "
+            'default when the user just asks "what should I do now?"; I pick a '
+            "lower one only when the live channel or conversation makes it "
+            "clearly more natural, and I never push a step that isn't listed "
+            "here):",
         )
-        for target in next_targets:
+        for index, target in enumerate(next_targets, start=1):
             if not isinstance(target, dict):
                 continue
-            title = target.get("title") or target.get("id") or "next step"
-            nudge = target.get("nudge_chat") or ""
-            lines.append(f"  - {title}: {nudge}".rstrip())
+            target_id = target.get("id") or ""
+            title = target.get("title") or target_id or "next step"
+            lines.append(f"  {index}. {title}")
+            lines.extend(_detail_lines(target_id, target.get("nudge_chat") or ""))
     else:
         lines.append(
             "No onboarding steps are available right now — if everything is "
             "done, congratulate the user and stand down; otherwise just help "
             "with whatever they ask.",
         )
+
+    # The in-flight step the user clicked/resumed may not be a fresh next
+    # target; surface its detail too so the brain can guide it.
+    if (
+        isinstance(active_step_id, str)
+        and active_step_id
+        and active_step_id
+        not in {t.get("id") for t in next_targets if isinstance(t, dict)}
+    ):
+        active_step = step_by_id.get(active_step_id)
+        active_title = (
+            active_step.get("title") if isinstance(active_step, dict) else None
+        ) or active_step_id
+        lines.append(f"In-flight step the user is on right now: {active_title}.")
+        lines.extend(_detail_lines(active_step_id))
+
     return "\n".join(lines)
 
 
@@ -2316,7 +2418,8 @@ def _build_coordinator_voice_opening_block(
         "short sentences, warm and human.",
         "  - If prior assistant turns exist, I skip the intro entirely. "
         "I open with a one-sentence orient — pick up where things "
-        "left off and propose the single next step, using the "
+        "left off and propose the next step (the first/top valid next "
+        "target by default), using the "
         "caller's first name when natural. Do NOT re-introduce "
         "myself or repeat earlier framing.",
     ]

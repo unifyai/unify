@@ -193,8 +193,8 @@ def _coordinator_onboarding_notification_text(
             f"included): {joined}."
             if joined
             else (
-                " No onboarding steps are done yet — trying a quick email "
-                "reply is the first checklist step after meeting."
+                " No onboarding steps are done yet — propose the first valid "
+                "next target from the live progress block."
             )
         )
         skipped_hint = (
@@ -205,17 +205,19 @@ def _coordinator_onboarding_notification_text(
         )
         guidance = (
             "Open the session with exactly one short message. The next step "
-            "to propose is always the FIRST onboarding step that is not "
-            "listed as already done or explicitly skipped below — never suggest "
-            "a step either list marks resolved (e.g. do not say 'connect your "
-            "workspace' when `workspace` is already done or skipped). If you "
+            "to propose is the first entry in the valid next-steps list in the "
+            "'My onboarding progress (live)' section (that list is "
+            "priority-ordered and already excludes done, skipped, and locked "
+            "steps) — never suggest a step that isn't a valid next target "
+            "(e.g. do not say 'connect your workspace' when `workspace` is "
+            "already done or skipped). If you "
             "have *no* prior assistant "
             "messages in the transcript history, introduce yourself briefly "
             "as the user's coordinator assistant, say you'll help them get "
-            "set up, and invite them to take that next pending step. If "
+            "set up, and invite them to take that next step. If "
             "prior assistant messages exist, skip the intro and open with a "
-            "one-sentence recap of what's been done so far plus the single "
-            "next pending step — do NOT re-introduce yourself."
+            "one-sentence recap of what's been done so far plus that first "
+            "valid next step — do NOT re-introduce yourself."
         )
         medium_note = ""
         if medium == "call":
@@ -243,8 +245,9 @@ def _coordinator_onboarding_notification_text(
         )
         guidance = (
             "Acknowledge in one short sentence that you'll leave that step for "
-            "now, then preview the single next onboarding step that is neither "
-            "done nor skipped. Do not say the skipped step is complete."
+            "now, then preview the first valid next target from the 'My "
+            "onboarding progress (live)' section (the ordered next-steps list). "
+            "Do not say the skipped step is complete."
         )
         return f"{subtype_hint} {body}{step_note}{skipped_note} {guidance}".strip()
 
