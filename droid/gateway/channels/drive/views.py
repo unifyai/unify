@@ -7,9 +7,12 @@ file-access allowlist, and so the assistant runtime can resolve item ancestry
 when enforcing that allowlist.
 
 Credentials come from the connected BYOD account: the assistant's
-``GOOGLE_ACCESS_TOKEN`` secret, resolved by email via the shared Orchestra
-lookup (mirrors ``get_gmail_service_async``). All routes are admin-authed at
-the aggregator (see ``droid/gateway/app.py``).
+``GOOGLE_ACCESS_TOKEN`` secret, resolved via the shared Orchestra lookup. The
+caller identifies the assistant either by ``assistant_id`` (preferred) or by
+``user_email``. ``assistant_id`` is what the workspace-file picker uses, since
+a Coordinator's connected workspace account is not registered as its email
+contact. All routes are admin-authed at the aggregator (see
+``droid/gateway/app.py``).
 
 The unified item identity used across providers is ``(drive_id, item_id)``.
 For Google we model the personal corpus as the sentinel drive ``"my-drive"``
@@ -27,7 +30,7 @@ from fastapi import APIRouter, HTTPException
 from google.oauth2.credentials import Credentials as OAuthCredentials
 from googleapiclient.discovery import build
 
-from droid.gateway.common.orchestra import lookup_assistant
+from droid.gateway.common.orchestra import lookup_assistant, lookup_assistant_by_id
 from droid.gateway.credentials import EnvCredentialStore
 
 logger = logging.getLogger("droid.gateway.channels.drive")
@@ -40,9 +43,25 @@ _FILE_FIELDS = "id,name,mimeType,parents,modifiedTime,size,webViewLink"
 _LIST_FIELDS = f"nextPageToken,files({_FILE_FIELDS})"
 
 
-async def _get_drive_service(user_email: str) -> Any:
-    """Build a Drive v3 client from the connected account's BYOD token."""
-    assistant = await lookup_assistant(user_email, EnvCredentialStore())
+async def _get_drive_service(
+    user_email: Optional[str] = None,
+    assistant_id: Optional[str] = None,
+) -> Any:
+    """Build a Drive v3 client from the connected account's BYOD token.
+
+    Resolves the assistant by ``assistant_id`` when provided (the picker's
+    identity, which works for Coordinators too), otherwise by ``user_email``.
+    """
+    store = EnvCredentialStore()
+    if assistant_id:
+        assistant = await lookup_assistant_by_id(assistant_id, store)
+    elif user_email:
+        assistant = await lookup_assistant(user_email, store)
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="assistant_id or user_email is required.",
+        )
     access_token = (assistant.get("secrets") or {}).get("GOOGLE_ACCESS_TOKEN")
     if not access_token:
         raise HTTPException(
@@ -85,9 +104,12 @@ def _list_kwargs(drive_id: str) -> dict[str, Any]:
 
 
 @router.get("/roots")
-async def list_roots(user_email: str):
+async def list_roots(
+    user_email: Optional[str] = None,
+    assistant_id: Optional[str] = None,
+):
     """List the top-level corpora: personal My Drive plus shared drives."""
-    service = await _get_drive_service(user_email)
+    service = await _get_drive_service(user_email, assistant_id)
 
     def _fetch() -> list[dict[str, Any]]:
         roots: list[dict[str, Any]] = [
@@ -123,9 +145,14 @@ async def list_roots(user_email: str):
 
 
 @router.get("/children")
-async def list_children(user_email: str, drive_id: str, item_id: str):
+async def list_children(
+    drive_id: str,
+    item_id: str,
+    user_email: Optional[str] = None,
+    assistant_id: Optional[str] = None,
+):
     """List the immediate children of folder *item_id* within *drive_id*."""
-    service = await _get_drive_service(user_email)
+    service = await _get_drive_service(user_email, assistant_id)
 
     def _fetch() -> list[dict[str, Any]]:
         query = f"'{item_id}' in parents and trashed = false"
@@ -163,9 +190,14 @@ async def list_children(user_email: str, drive_id: str, item_id: str):
 
 
 @router.get("/item")
-async def get_item(user_email: str, drive_id: str, item_id: str):
+async def get_item(
+    drive_id: str,
+    item_id: str,
+    user_email: Optional[str] = None,
+    assistant_id: Optional[str] = None,
+):
     """Return metadata (including ``parents``) for a single Drive item."""
-    service = await _get_drive_service(user_email)
+    service = await _get_drive_service(user_email, assistant_id)
 
     def _fetch() -> dict[str, Any]:
         file = (
@@ -188,9 +220,14 @@ async def get_item(user_email: str, drive_id: str, item_id: str):
 
 
 @router.get("/search")
-async def search_files(user_email: str, drive_id: str, q: str):
+async def search_files(
+    drive_id: str,
+    q: str,
+    user_email: Optional[str] = None,
+    assistant_id: Optional[str] = None,
+):
     """Search items by name within a drive."""
-    service = await _get_drive_service(user_email)
+    service = await _get_drive_service(user_email, assistant_id)
     escaped = q.replace("'", "\\'")
 
     def _fetch() -> list[dict[str, Any]]:

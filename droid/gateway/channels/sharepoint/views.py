@@ -90,10 +90,13 @@ async def get_site(user_email: str, site_id: str):
 
 
 @router.get("/drives")
-async def list_user_drives(user_email: str):
+async def list_user_drives(
+    user_email: Optional[str] = None,
+    assistant_id: Optional[str] = None,
+):
     """List user's OneDrive and accessible drives."""
     try:
-        graph = await get_graph_client(user_email)
+        graph = await get_graph_client(user_email, assistant_id=assistant_id)
 
         my_drive = await graph.me.drive.get()
         drives = await graph.me.drives.get()
@@ -165,14 +168,15 @@ def _drive_ref(graph, drive_id: str):
 
 @router.get("/drives/{drive_id}/items")
 async def list_items(
-    user_email: str,
     drive_id: str,
     path: Optional[str] = None,
     item_id: Optional[str] = None,
+    user_email: Optional[str] = None,
+    assistant_id: Optional[str] = None,
 ):
     """List files and folders in a drive (by root, by path, or by item_id)."""
     try:
-        graph = await get_graph_client(user_email)
+        graph = await get_graph_client(user_email, assistant_id=assistant_id)
         drive = _drive_ref(graph, drive_id)
 
         if item_id:

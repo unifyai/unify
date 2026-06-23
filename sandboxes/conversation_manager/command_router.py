@@ -25,52 +25,22 @@ from sandboxes.conversation_manager.commands import (
     parse_command,
 )
 from sandboxes.conversation_manager.event_publisher import EventPublisher
-from droid.conversation_manager.events import (
-    AssistantScreenShareStarted,
-    AssistantScreenShareStopped,
-    UserRemoteControlStarted,
-    UserRemoteControlStopped,
-    UserScreenShareStarted,
-    UserScreenShareStopped,
-    UserWebcamStarted,
-    UserWebcamStopped,
-)
 from sandboxes.conversation_manager.io_gate import gated_input
-from sandboxes.conversation_manager.config_manager import (
-    ConfigurationManager,
-    ActorConfig,
-)
 from sandboxes.conversation_manager.trace_display import TraceDisplay
 from sandboxes.conversation_manager.event_tree_display import EventTreeDisplay
 from sandboxes.conversation_manager.log_aggregator import LogAggregator
 from sandboxes.conversation_manager.agent_service_bootstrap import (
     get_agent_service_log_path,
 )
-from sandboxes.conversation_manager.state_snapshot import (
-    capture_snapshot,
-    save_snapshot,
-    render_snapshot_text,
-)
 
 LG = logging.getLogger("conversation_manager_sandbox")
 
 _LIVEKIT_SETUP_HINT = (
-    "⚠️  Voice calls require LiveKit. Run `droid voice` once to install the server,\n"
+    "⚠️  Voice sessions require LiveKit. Run `droid voice` once to install the server,\n"
     "    then restart the sandbox — it will start automatically on next launch.\n"
     "  • Or use LiveKit Cloud: set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET\n"
     "    in ~/.droid/droid/.env  (sign up free at https://cloud.livekit.io)"
 )
-
-_MEET_INTERACTION_EVENTS: dict[str, type] = {
-    "assistant_screen_share_start": AssistantScreenShareStarted,
-    "assistant_screen_share_stop": AssistantScreenShareStopped,
-    "user_screen_share_start": UserScreenShareStarted,
-    "user_screen_share_stop": UserScreenShareStopped,
-    "user_webcam_start": UserWebcamStarted,
-    "user_webcam_stop": UserWebcamStopped,
-    "user_remote_control_start": UserRemoteControlStarted,
-    "user_remote_control_stop": UserRemoteControlStopped,
-}
 
 PromptFn = Callable[[str], Awaitable[str]]
 
@@ -96,7 +66,6 @@ class CommandRouter:
     publisher: EventPublisher
     chat_history: list[dict]
     allow_save_project: bool = True
-    config_manager: ConfigurationManager | None = None
     trace_display: TraceDisplay | None = None
     event_tree_display: EventTreeDisplay | None = None
     log_aggregator: LogAggregator | None = None
@@ -184,12 +153,6 @@ class CommandRouter:
             except Exception as exc:
                 LG.error("save_project failed: %s", exc, exc_info=True)
                 return RouterResult(lines=[f"❌ Failed to save project: {exc}"])
-        if cmd.kind == "save_state":
-            return await self._handle_save_state(cmd.args)
-
-        # Configuration
-        if cmd.kind == "config":
-            return await self._handle_config_switch(prompt_text=prompt_text)
 
         # Display
         if cmd.kind == "trace":
@@ -231,152 +194,6 @@ class CommandRouter:
         if tree is None:
             return RouterResult(lines=["⚠️ Event tree display is not initialized."])
         return RouterResult(lines=[tree.render_tree()])
-
-    async def _handle_save_state(self, args: str) -> RouterResult:
-        """Save structured state snapshot to a file."""
-        # Capture the snapshot
-        snapshot = capture_snapshot(
-            log_aggregator=self.log_aggregator,
-            event_tree_display=self.event_tree_display,
-            trace_display=self.trace_display,
-            conversation_lines=self.conversation_lines,
-        )
-
-        repo_root = Path(__file__).resolve().parents[2]
-
-        # Determine output path
-        if args and args.strip():
-            json_path = repo_root / args.strip()
-        else:
-            # Auto-generate filename with timestamp
-            timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-            json_path = repo_root / f".sandbox_state_{timestamp}.json"
-
-        # Save JSON
-        try:
-            save_snapshot(snapshot, json_path)
-        except Exception as exc:
-            LG.error("save_state failed: %s", exc, exc_info=True)
-            return RouterResult(lines=[f"❌ Failed to save state: {exc}"])
-
-        # Also save human-readable text version
-        try:
-            text_path = json_path.with_suffix(".txt")
-            text_content = render_snapshot_text(snapshot)
-            with open(text_path, "w") as f:
-                f.write(text_content)
-        except Exception as exc:
-            LG.warning("Failed to save text snapshot: %s", exc)
-            return RouterResult(
-                lines=[
-                    f"💾 State saved to: {json_path}",
-                    f"⚠️ Failed to save text version: {exc}",
-                ],
-            )
-
-        result_lines = [
-            f"💾 State saved:",
-            f"   JSON: {json_path}",
-            f"   Text: {text_path}",
-            f"   Summary: {snapshot.summary.get('total_conversation_lines', 0)} conversation lines, "
-            f"{snapshot.summary['total_cm_logs']} CM logs, "
-            f"{snapshot.summary['total_actor_logs']} actor logs, "
-            f"{snapshot.summary['total_manager_logs']} manager logs, "
-            f"{snapshot.summary['total_traces']} traces, "
-            f"{snapshot.summary['total_event_trees']} trees",
-        ]
-
-        # Generate call transcript from the voice agent log if available.
-        import os
-
-        _launch_cwd = os.environ.get("DROID_SANDBOX_LAUNCH_CWD", "").strip()
-        _voice_root = Path(_launch_cwd).resolve() if _launch_cwd else repo_root
-        voice_log = _voice_root / ".logs_voice_agent.txt"
-        if voice_log.exists():
-            try:
-                from sandboxes.conversation_manager.call_transcript import (
-                    build_timeline,
-                    collect_magnitude_traces_from_docker,
-                    format_timeline,
-                    parse_cm_log,
-                    parse_voice_log,
-                )
-
-                voice_data = parse_voice_log(voice_log)
-                cm_log = _voice_root / ".logs_conversation_sandbox.txt"
-                cm_data = parse_cm_log(cm_log) if cm_log.exists() else None
-
-                mag_traces, _mag_dir, _agent_log = (
-                    collect_magnitude_traces_from_docker()
-                )
-                if cm_data and mag_traces:
-                    import re as _re
-
-                    matched_ids: set[str] = set()
-                    for atc in cm_data.actor_tool_calls:
-                        if atc.event_type != "execute_code":
-                            continue
-                        m = _re.search(r"execute_code\((\w+)\)", atc.tool_name)
-                        if m and m.group(1) in mag_traces:
-                            atc.magnitude_trace = mag_traces[m.group(1)]
-                            matched_ids.add(m.group(1))
-                    from sandboxes.conversation_manager.call_transcript import (
-                        _attach_unmatched_magnitude_traces,
-                    )
-
-                    unmatched = [
-                        t
-                        for k, t in mag_traces.items()
-                        if k not in matched_ids and not t.lineage
-                    ]
-                    if unmatched:
-                        _attach_unmatched_magnitude_traces(
-                            voice_data.actor_notifications,
-                            unmatched,
-                        )
-                if cm_data and _agent_log:
-                    from sandboxes.conversation_manager.call_transcript import (
-                        parse_agent_service_log,
-                    )
-
-                    direct_groups = parse_agent_service_log(_agent_log)
-                    if direct_groups:
-                        exec_codes = [
-                            atc
-                            for atc in cm_data.actor_tool_calls
-                            if atc.event_type == "execute_code"
-                            and not atc.magnitude_trace
-                            and not (atc.result_summary or "").startswith("ERROR:")
-                        ]
-                        group_idx = 0
-                        for atc in exec_codes:
-                            if group_idx >= len(direct_groups):
-                                break
-                            if atc.code and (
-                                "session.click" in atc.code
-                                or "session.type_text" in atc.code
-                                or "session.scroll" in atc.code
-                                or "session.drag" in atc.code
-                            ):
-                                atc.direct_actions = direct_groups[group_idx]
-                                group_idx += 1
-
-                if voice_data.utterances:
-                    timeline = build_timeline(voice_data, cm_data)
-                    transcript_path = json_path.with_name(
-                        json_path.stem + "_transcript.txt",
-                    )
-                    with open(transcript_path, "w") as f:
-                        f.write(format_timeline(timeline, verbose=True))
-                    result_lines.append(f"   Transcript: {transcript_path}")
-                    if mag_traces:
-                        result_lines.append(
-                            f"   Magnitude traces: {len(mag_traces)} acts included",
-                        )
-            except Exception as exc:
-                LG.warning("Failed to generate call transcript: %s", exc)
-
-        return RouterResult(lines=result_lines)
 
     async def _handle_log_expansion(self, args: str, *, expand: bool) -> RouterResult:
         lg = self.log_aggregator
@@ -478,85 +295,6 @@ class CommandRouter:
             ],
         )
 
-    async def _handle_config_switch(
-        self,
-        *,
-        prompt_text: Optional[PromptFn],
-    ) -> RouterResult:
-        if prompt_text is None:
-            return RouterResult(
-                lines=["⚠️ Config switching is only available in REPL mode."],
-            )
-        cfg_mgr = self.config_manager
-        if cfg_mgr is None:
-            return RouterResult(lines=["⚠️ Configuration manager is not initialized."])
-
-        warn = "\n".join(
-            [
-                "⚠️  Switching configuration will:",
-                "- Restart ConversationManager",
-                "- Clear all conversation state (threads, notifications, in-flight actions)",
-                "- Auto-snapshot the project before switching (rollback is possible)",
-                "",
-            ],
-        )
-        ans = (await prompt_text(warn + "Continue? (y/N): ")).strip().lower()
-        if ans not in {"y", "yes"}:
-            return RouterResult(lines=["(cancelled)"])
-
-        # Snapshot first (best-effort, can take a moment).
-        try:
-            snap = await asyncio.to_thread(cfg_mgr.snapshot_state)
-            setattr(self.args, "_last_config_snapshot", snap)
-        except Exception as exc:
-            return RouterResult(lines=[f"❌ Failed to snapshot project: {exc}"])
-
-        new_cfg = ActorConfig(actor_type="codeact_real")
-
-        # Validate with retry/switch/exit (switch returns to prompt).
-        while True:
-            vr = await asyncio.to_thread(
-                cfg_mgr.validate_config,
-                new_cfg,
-                agent_server_url=getattr(
-                    self.args,
-                    "agent_server_url",
-                    "http://localhost:3000",
-                ),
-            )
-            if vr.ok:
-                break
-            msg = "\n".join(
-                [
-                    "❌ Configuration Error",
-                    "",
-                    f"Failed to initialize: {vr.failed_component or 'Unknown'}",
-                    f"Reason: {vr.error or 'Unknown'}",
-                    "",
-                    "Options:",
-                    "1. Retry (after fixing infrastructure)",
-                    "2. Switch to different configuration",
-                    "3. Exit sandbox",
-                    "",
-                ],
-            )
-            choice = (await prompt_text(msg + "Enter choice (1-3): ")).strip()
-            if choice == "1":
-                continue
-            if choice == "2":
-                new_cfg = await asyncio.to_thread(_prompt_choice)
-                continue
-            return RouterResult(lines=["Exiting..."], should_exit=True)
-
-        cfg_mgr.save_config(new_cfg)
-        # Signal to outer sandbox loop that a restart is requested.
-        setattr(self.args, "_restart_requested", True)
-        setattr(self.args, "_restart_actor_config", new_cfg)
-        return RouterResult(
-            lines=["🔄 Restarting sandbox with selected configuration..."],
-            should_exit=True,
-        )
-
     async def _reset_best_effort(self) -> None:
         st = self.state
 
@@ -645,35 +383,12 @@ class CommandRouter:
         if cmd.name == "sms":
             await self.publisher.publish_sms(cmd.args)
             return RouterResult(lines=[])
-        if cmd.name == "email":
-            working = cmd.args
-            if "|" in working:
-                subj, body = [p.strip() for p in working.split("|", 1)]
-            else:
-                parts = working.split(maxsplit=1)
-                subj = parts[0] if parts else "No subject"
-                body = parts[1] if len(parts) > 1 else ""
-            await self.publisher.publish_email(subj, body)
-            return RouterResult(lines=[])
-        if cmd.name == "call":
-            if getattr(st, "in_voice_session", False):
-                return RouterResult(
-                    lines=["⚠️ Already in a voice session. End it first."],
-                )
-            if not os.environ.get("LIVEKIT_URL"):
-                return RouterResult(lines=[_LIVEKIT_SETUP_HINT])
-            try:
-                lines = await self.publisher.start_live_call()
-                return RouterResult(lines=lines)
-            except Exception as exc:
-                st.in_call = False
-                return RouterResult(
-                    lines=[f"❌ Failed to start live voice call: {exc}"],
-                )
         if cmd.name == "meet":
             if getattr(st, "in_voice_session", False):
                 return RouterResult(
-                    lines=["⚠️ Already in a voice session. End it first."],
+                    lines=[
+                        "⚠️ Already in a voice session. End it first with `end_meet`.",
+                    ],
                 )
             if not os.environ.get("LIVEKIT_URL"):
                 return RouterResult(lines=[_LIVEKIT_SETUP_HINT])
@@ -683,22 +398,8 @@ class CommandRouter:
             except Exception as exc:
                 st.in_meet = False
                 return RouterResult(
-                    lines=[f"❌ Failed to start live meet: {exc}"],
+                    lines=[f"❌ Failed to start live voice session: {exc}"],
                 )
-        if cmd.name == "end_call":
-            if getattr(st, "live_voice_active", False):
-                try:
-                    lines = await self.publisher.end_live_session()
-                    return RouterResult(lines=lines)
-                except Exception as exc:
-                    LG.error("end_live_session failed: %s", exc, exc_info=True)
-                    st.in_call = False
-                    st.live_voice_session = None
-                    return RouterResult(
-                        lines=[f"❌ Error ending live voice session: {exc}"],
-                    )
-            await self.publisher.publish_call_end()
-            return RouterResult(lines=["📞 Call ended."])
         if cmd.name == "end_meet":
             if getattr(st, "live_voice_active", False):
                 try:
@@ -712,21 +413,7 @@ class CommandRouter:
                         lines=[f"❌ Error ending live voice session: {exc}"],
                     )
             await self.publisher.publish_meet_end()
-            return RouterResult(lines=["🎥 Unify Meet ended."])
-
-        meet_event_cls = _MEET_INTERACTION_EVENTS.get(cmd.name)
-        if meet_event_cls is not None:
-            if not getattr(st, "in_meet", False):
-                return RouterResult(
-                    lines=[
-                        "⚠️ Meet interaction events require an active meet. Use `meet` first.",
-                    ],
-                )
-            await self.publisher.publish_meet_interaction_event(
-                meet_event_cls,
-                cmd.args,
-            )
-            return RouterResult(lines=[])
+            return RouterResult(lines=["🎥 Voice session ended."])
 
         return RouterResult(lines=[f"⚠️ Unknown event command: {cmd.name}"])
 
