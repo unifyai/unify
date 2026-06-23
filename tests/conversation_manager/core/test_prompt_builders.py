@@ -920,6 +920,43 @@ _ONBOARDING_RENDER_ACTIVE: dict = {
     ],
 }
 
+_ONBOARDING_RENDER_TRIGGER: dict = {
+    "active_step_id": None,
+    "phases": [
+        {"id": "communication", "phase": "Communication", "title": "Communication"},
+    ],
+    "steps": [
+        {
+            "id": "email-reference",
+            "title": "Trigger email from Twin",
+            "phase": "Communication",
+            "kind": "trigger",
+            "status": "available",
+            "can_skip": True,
+            "description": "Twin sends a reference-quiz question over email.",
+            "estimated_time": "10 sec",
+        },
+        {
+            "id": "email-reply",
+            "title": "Reply to email",
+            "phase": "Communication",
+            "kind": "reply",
+            "status": "locked",
+            "can_skip": True,
+        },
+    ],
+    "next_targets": [
+        {
+            "id": "email-reference",
+            "title": "Trigger email from Twin",
+            "nudge_chat": "Send the email clue once the user is ready.",
+            "nudge_voice": "sending the email clue",
+            "channel": "email",
+            "interaction": {"type": "reference_quiz"},
+        },
+    ],
+}
+
 
 class TestCoordinatorOnboardingDeferGate:
     """The global "do onboarding later" switch drops onboarding-specific
@@ -1005,6 +1042,19 @@ class TestCoordinatorOnboardingDeferGate:
         )
         assert "priority-ordered" in prompt
         assert "1. Reply to email" in prompt
+
+    def test_progress_block_weights_current_trigger_action(self):
+        prompt = _build(
+            is_coordinator=True,
+            coordinator_onboarding_render=_ONBOARDING_RENDER_TRIGGER,
+        )
+        assert "Current default onboarding action: Trigger email from Twin" in prompt
+        assert (
+            "the step I should execute or guide when the user gives permission"
+            in prompt
+        )
+        assert "send the outbound myself with the matching comms tool" in prompt
+        assert "must not call it complete early" in prompt
 
     def test_progress_block_surfaces_active_step_detail(self):
         # An in-flight step that is not itself a fresh next target still gets

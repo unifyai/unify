@@ -144,9 +144,9 @@ def _coordinator_onboarding_notification_text(
         interaction = details.get("interaction")
         channel_note = f" Target outbound channel: `{channel}`." if channel else ""
         tool_note = (
-            f" Use `{tool_name}` for this trigger."
+            f" Execute this trigger now with `{tool_name}` in this LLM turn."
             if tool_name
-            else " Use the matching outbound comms tool for this trigger."
+            else " Execute this trigger now with the matching outbound comms tool."
         )
         step_note = (
             f" Trigger step id: `{trigger_step_id}`. Reply step id now active in Console: `{reply_step_id}`."
@@ -167,10 +167,15 @@ def _coordinator_onboarding_notification_text(
             " Structured interaction: reference_quiz. Explain the quiz before "
             "sending or discussing any clue; the user should know this is a "
             "channel-proving mini-game, not a mysterious email. Outbound text "
-            "or email clue messages must include that context before the clue."
+            "or email clue messages must include that context before the clue. "
+            "A chat or voice acknowledgement alone does not satisfy the trigger."
             if isinstance(interaction, dict)
             and interaction.get("type") == "reference_quiz"
             else ""
+        )
+        completion_note = (
+            " Do not say the trigger is complete until the backend detects the "
+            "assistant-authored outbound transcript row."
         )
         call_note = (
             " If the tool starts a call, put the briefing and framing in the call context "
@@ -180,7 +185,7 @@ def _coordinator_onboarding_notification_text(
         )
         return (
             f"{subtype_hint} {body}{channel_note}{step_note}{clue_note}{quote_note}"
-            f"{answer_note}{tool_note}{framing_note}{interaction_note}{call_note}"
+            f"{answer_note}{tool_note}{framing_note}{interaction_note}{completion_note}{call_note}"
         ).strip()
 
     if event.subtype == _SUBTYPE_ONBOARDING_SESSION_STARTED:

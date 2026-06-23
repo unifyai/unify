@@ -98,11 +98,14 @@ def test_reference_quiz_notification_briefs_text_channel() -> None:
 
     assert "guess-the-reference mini-game" in text
     assert "send_slack_message" in text
+    assert "Execute this trigger now" in text
     assert "Phone home." in text
     assert "Do not reveal" in text
     assert "Battlestar Galactica" in text
     assert "Explain the quiz before" in text
     assert "include that context before the clue" in text
+    assert "acknowledgement alone does not satisfy the trigger" in text
+    assert "outbound transcript row" in text
 
 
 def test_reference_quiz_notification_briefs_call_context() -> None:
@@ -128,6 +131,7 @@ def test_reference_quiz_notification_briefs_call_context() -> None:
     text = onboarding._coordinator_onboarding_notification_text(event)
 
     assert "make_call_to_boss" in text
+    assert "Execute this trigger now" in text
     assert "call context" in text
     assert "Play the reference game over a call." in text
     assert "The Empire Strikes Back / Luke" in text
@@ -141,7 +145,10 @@ def test_onboarding_narration_block_documents_reference_quiz_not_space_oddity_sc
     assert "reference_quiz_clue_requested" in block
     assert "task contract" in block
     assert "tool_name" in block
+    assert "Use the supplied `tool_name` when present, in this same LLM turn" in block
+    assert "Do not use `act` for the send" in block
     assert "do not send a bare clue" in block
+    assert "Completion is detected only after my outbound message/call appears" in block
     assert "Do not hardcode onboarding game design here" in block
     assert "make_call_to_boss" not in block
     assert "Ground Control to Major" not in block

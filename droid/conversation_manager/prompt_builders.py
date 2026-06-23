@@ -712,8 +712,10 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "--------------------------",
             "While the user is onboarding me, I receive a "
             "`[CoordinatorOnboarding]` notification whenever an "
-            "onboarding milestone really lands. Treat each notification "
-            "as a cue to send exactly one short acknowledgement.",
+            "onboarding milestone lands or the user starts an onboarding "
+            "step. Milestone notifications need a short acknowledgement; "
+            "communication trigger notifications are action requests that "
+            "I satisfy with the requested outbound comms tool.",
             "Recognised subtypes (carried in the notification body as "
             "`[onboarding subtype: <name>]`):",
             "  - `workspace_connected`: workspace OAuth (Google / Microsoft) just succeeded.",
@@ -721,7 +723,7 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  - `step_skipped`: the user intentionally skipped one onboarding step.",
             "  - `onboarding_step_started`: the user clicked or resumed one onboarding checklist step.",
             "  - `reference_quiz_clue_requested`: the user clicked a reference-quiz trigger row; "
-            "send the clue through the requested outbound channel.",
+            "execute the requested outbound communication step.",
             "  - `onboarding_session_started`: the user just resolved the onboarding "
             "picker — they're sitting in front of me and I owe them the "
             "first turn.",
@@ -733,22 +735,35 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  B. If a step's title/framing says it is waiting for the user to reply, "
             "answer, connect, or edit account details, guide or wait accordingly. Do "
             "not call it complete until the backend marks it done.",
-            "  C. Do not skip ahead to unrelated sections while an active step is still "
+            "  C. If a step's title/framing says I should trigger an outbound "
+            "communication from Twin, the click is permission to execute that step. "
+            "Use the matching comms tool in this LLM turn; a chat or voice "
+            "acknowledgement alone does not satisfy the step. The backend marks "
+            "the trigger done only after it detects my outbound transcript row.",
+            "  D. Do not skip ahead to unrelated sections while an active step is still "
             "pending unless the live progress block lists a valid next step or the user "
             "explicitly asks to move on.",
             "Rules for `reference_quiz_clue_requested`:",
             "  1. Treat the notification details as the task contract. They may include "
             "`channel`, `tool_name`, `clue`, `quote`, `answer`, `trigger_step_id`, "
-            "`reply_step_id`, and section `framing` supplied by Orchestra.",
-            "  2. Use the supplied `tool_name` when present. Send or speak the supplied "
-            "`clue` without revealing the `answer`, then follow the supplied framing.",
+            "`reply_step_id`, step guidance, and section `framing` supplied by Orchestra.",
+            "  2. Use the supplied `tool_name` when present, in this same LLM turn. "
+            "For message channels, call the outbound comms tool directly; for call "
+            "channels, start/request the call with the briefing in the call context. "
+            "Do not use `act` for the send.",
+            "  3. Send or speak the supplied `clue` when present, or otherwise compose "
+            "the requested reference-quiz question from the step guidance and framing. "
+            "Do not reveal the `answer`, then follow the supplied framing.",
             "     For email, SMS, WhatsApp, Slack, or Discord clue messages, do not send "
             "a bare clue. The user-facing message must include one short sentence of "
             "context first: this is part of onboarding, we are testing communication "
             "channels with a reference quiz, and they should reply with their guess.",
-            "  3. If the event starts a call, put the clue, answer, and framing into the "
+            "  4. If the event starts a call, put the clue, answer, and framing into the "
             "call context so the spoken sidecar has the full task design.",
-            "  4. Do not hardcode onboarding game design here. If the framing changes in "
+            "  5. Do not mark or describe the trigger as done just because the user "
+            "clicked it or gave permission. Completion is detected only after my "
+            "outbound message/call appears in the transcript.",
+            "  6. Do not hardcode onboarding game design here. If the framing changes in "
             "Orchestra, follow the new framing from the notification/live progress block.",
             "Rules for milestone subtypes (`workspace_connected`, `integration_connected`, `step_skipped`):",
             "  1. Acknowledge in one short sentence — name the thing that just happened, "
@@ -946,6 +961,24 @@ def _build_coordinator_onboarding_progress_block(
         return detail
 
     if next_targets:
+        primary = next_targets[0] if isinstance(next_targets[0], dict) else {}
+        primary_id = primary.get("id") or ""
+        primary_title = primary.get("title") or primary_id or "next step"
+        lines.append(
+            f"Current default onboarding action: {primary_title}. This is the "
+            "step I should name first when the user asks what to do next, and "
+            "the step I should execute or guide when the user gives permission "
+            "to continue without naming another step.",
+        )
+        primary_step = step_by_id.get(primary_id)
+        if isinstance(primary_step, dict) and primary_step.get("kind") == "trigger":
+            lines.append(
+                "For this communication trigger, I send the outbound myself with "
+                "the matching comms tool when the user consents or clicks the "
+                "row. The checklist turns it done only after the backend detects "
+                "my outbound transcript row; I must not call it complete early.",
+            )
+        lines.extend(_detail_lines(primary_id, primary.get("nudge_chat") or ""))
         lines.append(
             "Valid next steps right now (priority-ordered — the first is my "
             'default when the user just asks "what should I do now?"; I pick a '
