@@ -485,12 +485,15 @@ class WhatsAppCallSent(Event):
 
 @dataclass
 class WhatsAppCallInviteSent(Event):
-    """Call invite template sent (permission not yet granted)."""
+    """Call permission template sent (approval required before calling)."""
 
     topic: ClassVar[str | None] = "app:comms:whatsapp_call_invite_sent"
     prominent: ClassVar[bool] = True
 
     contact: dict
+    content: str = (
+        "<WhatsApp Call Permission Request Sent: waiting for the user to allow calls>"
+    )
 
 
 @dataclass

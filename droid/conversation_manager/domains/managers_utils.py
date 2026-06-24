@@ -747,7 +747,11 @@ async def hydrate_global_thread(cm: "ConversationManager") -> None:
                     contact_id=contact_id,
                     sender_name=sender_name,
                     thread_name=Medium.WHATSAPP_CALL,
-                    message_content="<WhatsApp Call Invite Sent>",
+                    message_content=getattr(
+                        cm_event,
+                        "content",
+                        "<WhatsApp Call Permission Request Sent: waiting for the user to allow calls>",
+                    ),
                     role="assistant",
                     timestamp=ts,
                 )
@@ -757,7 +761,11 @@ async def hydrate_global_thread(cm: "ConversationManager") -> None:
                     contact_id=contact_id,
                     sender_name=sender_name,
                     thread_name=Medium.WHATSAPP_CALL,
-                    message_content=f"<Call Permission: {'Accepted' if accepted else 'Rejected'}>",
+                    message_content=(
+                        "<WhatsApp Call Permission Granted: calling now>"
+                        if accepted
+                        else "<WhatsApp Call Permission Rejected>"
+                    ),
                     role="user",
                     timestamp=ts,
                 )
