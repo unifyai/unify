@@ -371,6 +371,15 @@ class CommsPrimitives:
             f"Check the contact's response_policy for details or ask your boss for guidance."
         )
 
+    @staticmethod
+    def _is_coordinator_boss_contact(contact_id: int | str) -> bool:
+        if not SESSION_DETAILS.is_coordinator:
+            return False
+        try:
+            return int(contact_id) == int(SESSION_DETAILS.boss_contact_id)
+        except (TypeError, ValueError):
+            return False
+
     def _resolve_or_attach_detail(
         self,
         *,
@@ -399,6 +408,12 @@ class CommsPrimitives:
 
         if not inline_value:
             detail_label = _DETAIL_LABELS[field_name]
+            if self._is_coordinator_boss_contact(contact_id):
+                return (
+                    f"{_get_contact_display_name(contact)} does not have a {detail_label} on file. "
+                    "Update the boss contact first, then retry.",
+                    contact,
+                )
             return (
                 f"{_get_contact_display_name(contact)} does not have a {detail_label} on file. "
                 f"Provide `{field_name}` in this send or update the contact first.",
