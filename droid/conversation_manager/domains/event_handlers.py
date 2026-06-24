@@ -2317,9 +2317,7 @@ async def _(event: AssistantUpdateEvent, cm: "ConversationManager", *args, **kwa
     # Sync OAuth tokens that may have changed after a re-authorization
     await managers_utils.queue_operation(managers_utils.sync_assistant_secrets)
 
-    # Update contact manager with new assistant/user details
-    await managers_utils.queue_operation(
-        managers_utils.update_session_contacts,
+    contact_sync_args = (
         cm,
         event.assistant_first_name,
         event.assistant_surname,
@@ -2333,6 +2331,16 @@ async def _(event: AssistantUpdateEvent, cm: "ConversationManager", *args, **kwa
         event.user_whatsapp_number,
         getattr(event, "assistant_job_title", "") or "",
     )
+    # A profile contact update is immediately followed by onboarding actions that
+    # read ContactManager. When the manager is live, sync before returning from
+    # this event so later sends cannot observe stale boss contact details.
+    if cm.contact_manager is not None:
+        await managers_utils.update_session_contacts(*contact_sync_args)
+    else:
+        await managers_utils.queue_operation(
+            managers_utils.update_session_contacts,
+            *contact_sync_args,
+        )
 
 
 @EventHandler.register(GetChatHistory)

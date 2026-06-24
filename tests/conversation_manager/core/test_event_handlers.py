@@ -123,6 +123,7 @@ def mock_call_manager():
     manager.call_contact = None
     manager.call_exchange_id = -1
     manager.unify_meet_exchange_id = -1
+    manager.refresh_persistent_worker_after_key_change = AsyncMock()
     return manager
 
 
@@ -2982,6 +2983,7 @@ class TestAssistantUpdateEventHandler:
             "droid.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
+            mock_utils.update_session_contacts = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
 
         mock_cm._session_logger.info.assert_any_call(
@@ -3020,6 +3022,7 @@ class TestAssistantUpdateEventHandler:
             "droid.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
+            mock_utils.update_session_contacts = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
 
         mock_cm.set_details.assert_called_once()
@@ -3055,13 +3058,14 @@ class TestAssistantUpdateEventHandler:
             "droid.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
+            mock_utils.update_session_contacts = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
 
         mock_cm.call_manager.set_config.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_assistant_update_queues_contact_update(self, mock_cm):
-        """AssistantUpdateEvent queues update_session_contacts operation."""
+        """AssistantUpdateEvent syncs live contacts before later sends."""
         mock_cm.set_details = MagicMock()
         mock_cm.get_call_config = MagicMock(return_value={})
 
@@ -3089,29 +3093,75 @@ class TestAssistantUpdateEventHandler:
             "droid.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
+            mock_utils.update_session_contacts = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
 
-            # Handler queues two operations: sync_assistant_secrets (to refresh
-            # any rotated OAuth tokens) followed by update_session_contacts.
-            assert mock_utils.queue_operation.call_count == 2
+            # Secret sync can stay queued, but contact identity must be current
+            # before the next onboarding send observes ContactManager state.
+            assert mock_utils.queue_operation.call_count == 1
 
             secrets_call = mock_utils.queue_operation.call_args_list[0]
             assert secrets_call[0][0] == mock_utils.sync_assistant_secrets
 
-            contacts_call = mock_utils.queue_operation.call_args_list[1]
-            # First arg is the function (update_session_contacts)
-            assert contacts_call[0][0] == mock_utils.update_session_contacts
-            # Remaining args are: cm, assistant_first_name, assistant_surname,
-            # assistant_number, assistant_email, user_first_name, user_surname, user_number, user_email
-            assert contacts_call[0][1] == mock_cm
-            assert contacts_call[0][2] == "New Assistant"
-            assert contacts_call[0][3] == "Name"
-            assert contacts_call[0][4] == "+15555559999"
-            assert contacts_call[0][5] == "new_assistant@test.com"
-            assert contacts_call[0][6] == "New Boss"
-            assert contacts_call[0][7] == "Name"
-            assert contacts_call[0][8] == "+15555558888"
-            assert contacts_call[0][9] == "new_boss@test.com"
+            mock_utils.update_session_contacts.assert_awaited_once()
+            contacts_call = mock_utils.update_session_contacts.await_args
+            assert contacts_call.args[0] == mock_cm
+            assert contacts_call.args[1] == "New Assistant"
+            assert contacts_call.args[2] == "Name"
+            assert contacts_call.args[3] == "+15555559999"
+            assert contacts_call.args[4] == "new_assistant@test.com"
+            assert contacts_call.args[5] == "New Boss"
+            assert contacts_call.args[6] == "Name"
+            assert contacts_call.args[7] == "+15555558888"
+            assert contacts_call.args[8] == "new_boss@test.com"
+
+    @pytest.mark.asyncio
+    async def test_assistant_update_syncs_boss_whatsapp_with_nullable_metadata(
+        self,
+        mock_cm,
+    ):
+        """Sparse assistant metadata must not block the boss WhatsApp sync."""
+        mock_cm.set_details = MagicMock()
+        mock_cm.get_call_config = MagicMock(return_value={})
+        mock_cm.contact_manager.update_contact = MagicMock()
+
+        event = AssistantUpdateEvent(
+            api_key="test_key",
+            medium="assistant_update",
+            assistant_id="asst_123",
+            user_id="user_456",
+            assistant_first_name="T-W1N",
+            assistant_surname=None,
+            assistant_age="",
+            assistant_nationality="",
+            assistant_about="",
+            assistant_number="",
+            assistant_email="assistant@test.com",
+            assistant_whatsapp_number="",
+            user_first_name="Daniel",
+            user_surname="Lenton",
+            user_number="",
+            user_email="dan@unify.ai",
+            user_whatsapp_number="+4915237826557",
+            voice_id=None,
+            voice_provider=None,
+        )
+
+        with patch(
+            "droid.conversation_manager.domains.event_handlers.managers_utils.queue_operation",
+            new_callable=AsyncMock,
+        ):
+            await EventHandler.handle_event(event, mock_cm)
+
+        boss_call = next(
+            call
+            for call in mock_cm.contact_manager.update_contact.call_args_list
+            if call.kwargs.get("contact_id") == 1
+        )
+        assert boss_call.kwargs["first_name"] == "Daniel"
+        assert boss_call.kwargs["surname"] == "Lenton"
+        assert boss_call.kwargs["email_address"] == "dan@unify.ai"
+        assert boss_call.kwargs["whatsapp_number"] == "+4915237826557"
 
     @pytest.mark.asyncio
     async def test_assistant_update_handles_no_contact_manager(self, mock_cm):
@@ -3285,6 +3335,8 @@ class TestAssistantUpdateEventHandler:
             user_surname="Boss",
             user_number="+15555558888",
             user_email="new_boss@test.com",
+            assistant_whatsapp_number="+15555557777",
+            user_whatsapp_number="+4915237826557",
         )
 
         # Verify update_contact was called for both contacts
@@ -3297,6 +3349,7 @@ class TestAssistantUpdateEventHandler:
         assert call_0.kwargs["email_address"] == "new_assistant@test.com"
         assert call_0.kwargs["first_name"] == "New"
         assert call_0.kwargs["surname"] == "Assistant"
+        assert call_0.kwargs["whatsapp_number"] == "+15555557777"
 
         # Check boss contact (ID 1) - "New Boss" splits to first="New", surname="Boss"
         call_1 = next(c for c in calls if c.kwargs.get("contact_id") == 1)
@@ -3304,6 +3357,7 @@ class TestAssistantUpdateEventHandler:
         assert call_1.kwargs["email_address"] == "new_boss@test.com"
         assert call_1.kwargs["first_name"] == "New"
         assert call_1.kwargs["surname"] == "Boss"
+        assert call_1.kwargs["whatsapp_number"] == "+4915237826557"
 
     @pytest.mark.asyncio
     async def test_update_session_contacts_handles_failure(self, mock_cm, caplog):
