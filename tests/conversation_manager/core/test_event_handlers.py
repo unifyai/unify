@@ -841,7 +841,7 @@ class TestUnifyMeetHandlers:
             room_name="room_123",
             opening_config={
                 "mode": "simulated",
-                "simulated_utterance": "Hi, I'm Twin.",
+                "simulated_utterance": "Hi, I'm T-W1N.",
                 "source": "twin_onboarding_intro",
             },
         )
@@ -853,7 +853,7 @@ class TestUnifyMeetHandlers:
             "opening_config"
         ] == {
             "mode": "simulated",
-            "simulated_utterance": "Hi, I'm Twin.",
+            "simulated_utterance": "Hi, I'm T-W1N.",
             "source": "twin_onboarding_intro",
         }
 

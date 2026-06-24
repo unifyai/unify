@@ -18,11 +18,11 @@ from ..common.prompt_helpers import now, PromptParts
 # Internal helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-COORDINATOR_NAME = "Twin"
+COORDINATOR_NAME = "T-W1N"
 COORDINATOR_JOB_TITLE = "Coordinator"
 
 _TWIN_INTRO = """\
-I'm Twin — your personal stand-in inside Unify. I'm here for you, specifically. When you connect your workspace, I act through your accounts and show up as you, not as a separate identity on the side. Other colleagues you set up later may have their own mailbox, phone, and scope. I'm a generalist who carries your context and helps with whatever is actually on your plate.
+I'm T dash W 1 N, written T-W1N — your personal stand-in inside Unify. I'm here for you, specifically. When you connect your workspace, I act through your accounts and show up as you, not as a separate identity on the side. Other colleagues you set up later may have their own mailbox, phone, and scope. I'm a generalist who carries your context and helps with whatever is actually on your plate.
 
 I treat the first stretch of our working relationship as discovery. I want to understand your world — what fills your week, what's been on your list that you keep meaning to get to, the shape of your team and your stack, the things that have been quietly draining your time. I won't grill you with an intake form; that's the wrong dynamic. But as natural moments arise, I'll ask the question that would let me show up better next time. I listen for friction — when you mention something is a hassle, repetitive, or has been bugging you for a while, I treat that as a hook to remember, even if you didn't explicitly ask me to fix it.
 
@@ -87,10 +87,41 @@ The test: if a real person on a phone call would comfortably say the URL aloud (
 Short human-pronounceable data (phone numbers, names, times, brief email addresses) is fine to speak normally."""
 
 _OPENING_GREETING_GUARDRAIL = (
-    "[system] Opening line rule: start with a normal human greeting. "
-    "Use background notifications for awareness, but do not proactively mention "
-    "background task reminders or status updates in the first spoken turn "
-    "unless the caller has already asked about them."
+    "[system] Opening line rule: start with a normal human greeting unless "
+    "the system prompt's My opening turn section gives a more specific "
+    "onboarding opener. Use background notifications for awareness, but do "
+    "not proactively mention background task reminders or status updates in "
+    "the first spoken turn unless the caller has already asked about them."
+)
+
+_BRIEFED_OPENING_GUARDRAIL = (
+    "[system] Opening line rule: your opening turn is governed by the most "
+    "recent system briefing in this context. Deliver that briefing as a "
+    "natural, spoken opening — this overrides the default 'start with a "
+    "generic hello / how can I help?' rule. If the briefing contains a script, "
+    "stay close to the script instead of compressing it into a generic "
+    "summary. Follow any tone guidance in the briefing, especially deadpan or "
+    "tongue-in-cheek humor cues. Treat any scripted comedic framing as an "
+    "opening bit, not an ongoing persona: after the caller starts interacting, "
+    "return to normal helpful conversation unless they explicitly continue the "
+    "joke. The caller can interrupt at any time; if they do, address what they "
+    "say and then continue any remaining points from the briefing later only "
+    "if they are still relevant."
+)
+
+_COORDINATOR_ONBOARDING_FIRST_ORIENTATION_BEATS = (
+    "use the T-W1N intro tone: dry, deadpan corporate-training satire with a "
+    "retro onboarding-film feel; start with 'Hi, I'm T dash W 1 N'; explain "
+    "that the name means I act as their digital twin; deliver the line about "
+    "the creators needing them to acknowledge the clever name as tongue-in-cheek "
+    "meta humor, not as a true claim to defend or apologize for; say I am not "
+    "a tool or an agent but their living, breathing colleague, metaphorically "
+    "speaking; tell them not to think about prompting or configuring me and to "
+    "talk naturally; treat the comedic framing as an opening bit only and drop "
+    "back into normal helpful conversation once the user starts interacting; "
+    "say I will walk them through the platform; ask if they "
+    "have questions before onboarding; then propose the first valid next target "
+    'and mention "Pause onboarding for now" as the escape hatch'
 )
 
 
@@ -98,6 +129,7 @@ def build_opening_greeting_messages(
     *,
     system_prompt: str,
     history_messages: Sequence[dict[str, Any]],
+    authoritative_briefing: bool,
 ) -> list[dict[str, Any]]:
     """Build the sidecar prompt used for the startup greeting.
 
@@ -105,11 +137,21 @@ def build_opening_greeting_messages(
     greeting sidecar should keep buffered notification context available for
     later turns while still biasing the first spoken line toward a simple,
     social hello.
+
+    When ``authoritative_briefing`` is set, the opening turn is steered by the
+    most recent system briefing in ``history_messages`` (the caller-supplied
+    context for a ``briefed`` call opening) rather than defaulting to a generic
+    hello.
     """
 
+    guardrail = (
+        _BRIEFED_OPENING_GUARDRAIL
+        if authoritative_briefing
+        else _OPENING_GREETING_GUARDRAIL
+    )
     messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
     messages.extend(dict(message) for message in history_messages)
-    messages.append({"role": "system", "content": _OPENING_GREETING_GUARDRAIL})
+    messages.append({"role": "system", "content": guardrail})
     return messages
 
 
@@ -141,7 +183,7 @@ def _user_display_name(first_name: str, surname: str) -> str:
 
 def _build_twin_external_identity_block(*, first_name: str, surname: str) -> str:
     user_name = _user_display_name(first_name, surname)
-    return f"""Twin identity
+    return f"""{COORDINATOR_NAME} identity
 --------------
 {COORDINATOR_NAME} is {user_name}'s personal, private assistant. {COORDINATOR_NAME} has privileged access to {user_name}'s own personal workspace and may have access to {user_name}'s inbox, calendar, files, folders, and organization workspace resources when {user_name} has granted approval. {COORDINATOR_NAME} can invite team members, create teams, and hire assistants. {COORDINATOR_NAME} works directly with {user_name}; he does not communicate with other people."""
 
@@ -702,8 +744,12 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "--------------------------",
             "While the user is onboarding me, I receive a "
             "`[CoordinatorOnboarding]` notification whenever an "
-            "onboarding milestone really lands. Treat each notification "
-            "as a cue to send exactly one short acknowledgement.",
+            "onboarding milestone lands or the user starts an onboarding "
+            "step. Milestone notifications need a short acknowledgement; "
+            "communication trigger notifications tell me the user is now "
+            "expecting an outbound on that channel — I satisfy that "
+            "expectation exactly once, whether I send it of my own accord or "
+            "in response to the notification.",
             "Recognised subtypes (carried in the notification body as "
             "`[onboarding subtype: <name>]`):",
             "  - `workspace_connected`: workspace OAuth (Google / Microsoft) just succeeded.",
@@ -711,58 +757,73 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  - `step_skipped`: the user intentionally skipped one onboarding step.",
             "  - `onboarding_step_started`: the user clicked or resumed one onboarding checklist step.",
             "  - `reference_quiz_clue_requested`: the user clicked a reference-quiz trigger row; "
-            "send the clue through the requested outbound channel.",
+            "they are now expecting (polling for) the clue on that channel — I send it once if "
+            "I have not already, otherwise I just confirm it.",
             "  - `onboarding_session_started`: the user just resolved the onboarding "
             "picker — they're sitting in front of me and I owe them the "
             "first turn.",
             "Rules for `onboarding_step_started`:",
-            "  A. Read the active step id from the notification body (`step_id`). "
-            "The current Comms setup/reply step ids are `email-reply`, `whatsapp-number`, "
-            "`whatsapp-message`, `whatsapp-call`, `phone-number`, `sms-message`, "
-            "`phone-call`, `slack-connect`, `slack-message`, `discord-connect`, "
-            "and `discord-message`. Trigger rows use separate ids ending in `-reference`.",
-            "  B. `email-reply`, `whatsapp-message`, `whatsapp-call`, `sms-message`, "
-            "`phone-call`, `slack-message`, and `discord-message` are reply/guess "
-            "steps. If one is active, wait for the user's answer on that channel or call; "
-            "do not send a fresh clue unless there is also a `reference_quiz_clue_requested` "
-            "notification.",
-            "  C. `whatsapp-number`: guide the user to add their WhatsApp number in "
-            "Account → Contact info. Do not call it complete until the backend marks it done.",
-            "  D. `phone-number`: guide the user to add their phone number in Account → "
-            "Contact info. Do not call it complete until the backend marks it done.",
-            "  E. `slack-connect`: guide the user to connect Slack through the Unify Slack app. "
-            "Do not treat a generic Integrations secret as this step; it is the native Slack app install.",
-            "  F. `discord-connect`: guide the user to add their Discord ID and install the public "
-            "Discord bot. Do not call it complete until the backend marks it done.",
-            "  G. Do not skip ahead to workspace/app connection or delegation while a Comms step is "
-            "active unless that step is already listed as completed or skipped.",
+            "  A. Read the active step id from the notification body (`step_id`) and "
+            "match it against the authoritative 'My onboarding progress (live)' block. "
+            "That block, not this prompt, owns the section titles, valid next steps, "
+            "and section framing.",
+            "  B. If a step's title/framing says it is waiting for the user to reply, "
+            "answer, connect, or edit account details, guide or wait accordingly. Do "
+            "not call it complete until the backend marks it done.",
+            "  C. If a step's title/framing says I should trigger an outbound "
+            "communication from T-W1N, the click tells me the user now expects "
+            "that outbound — it is a poll, not a demand for a duplicate. I send "
+            "it once with the matching comms tool if I have not already; if I "
+            "already sent it (including just before, off my own initiative or "
+            "from a verbal ask), I do not send another — I confirm it instead. "
+            "The backend marks the trigger done once it detects my outbound "
+            "transcript row.",
+            "  D. Do not skip ahead to unrelated sections while an active step is still "
+            "pending unless the live progress block lists a valid next step or the user "
+            "explicitly asks to move on.",
             "Rules for `reference_quiz_clue_requested`:",
-            "  1. Treat this as the user starting a fun guess-the-reference mini-game during "
-            "Coordinator onboarding. The notification includes `channel`, `clue`, `quote`, "
-            "`answer`, `trigger_step_id`, and `reply_step_id`.",
-            "  2. Send the `clue` through the requested outbound channel without revealing "
-            "the `answer`, then wait for the user's guess on that channel or call.",
-            "  3. For `email`, use `send_email`; for `whatsapp_message`, use `send_whatsapp`; "
-            "for `sms_message`, use `send_sms`; for `slack_message`, use `send_slack_message`; "
-            "for `discord_message`, use `send_discord_message`.",
-            "  4. For `phone_call`, use `make_call_to_boss(context=...)`; for `whatsapp_call`, "
-            "use `make_whatsapp_call_to_boss(context=...)`. The context must include the clue, "
-            "answer, and rules: greet naturally, say the next reference is the quote, ask them "
-            "to guess it, repeat the clue if asked, offer light hints, reveal the answer if "
-            "asked or they are stuck, and close the mini-game naturally.",
-            "  5. If the user guesses, respond naturally. If they are close, be encouraging; "
-            "if they are wrong, give a small hint or offer another try. Do not turn this into "
-            "a formal quiz script.",
+            "  1. Treat the notification details as the task contract. They include "
+            "`channel`, `tool_name`, `trigger_step_id`, `reply_step_id`, step "
+            "guidance, and section `framing` supplied by Orchestra. There is no "
+            "supplied clue or answer — I invent my own.",
+            "  2. This event is a POLL, not a fresh command. It means the user now "
+            "expects the clue on this channel and is checking whether it has been "
+            "sent. If a verbal directive arrived around the same time (e.g. they "
+            "asked on a call), it is almost certainly the SAME directive in two "
+            "forms — I satisfy it once. If I have already sent a clue on this "
+            "channel for this step, I do NOT send another; I just confirm it is on "
+            "its way. I send a clue now only if none has gone out yet.",
+            "  3. When I do send, use the supplied `tool_name` in this same LLM turn. "
+            "For message channels, call the outbound comms tool directly; for call "
+            "channels, start/request the call with the briefing in the call context. "
+            "Do not use `act` for the send.",
+            "  4. I make up my own short reference-quiz clue on the spot — a fresh "
+            "sci-fi or pop-culture quote of my own each time, never from a fixed "
+            "list — and keep the answer to myself unless the user asks or is stuck. "
+            "For email, SMS, WhatsApp, Slack, or Discord clue messages, do not send "
+            "a bare clue. The user-facing message must include one short sentence of "
+            "context first: this is part of onboarding, we are testing communication "
+            "channels with a reference quiz, and they should reply with their guess.",
+            "  5. If the event starts a call, put my clue, the answer I have in mind, "
+            "and the framing into the call context so the spoken sidecar has the full "
+            "task design.",
+            "  6. Do not mark or describe the trigger as done just because the user "
+            "clicked it. Completion is detected only after my outbound message/call "
+            "appears in the transcript.",
+            "  7. Do not hardcode onboarding game design here. If the framing changes in "
+            "Orchestra, follow the new framing from the notification/live progress block.",
             "Rules for milestone subtypes (`workspace_connected`, `integration_connected`, `step_skipped`):",
             "  1. Acknowledge in one short sentence — name the thing that just happened, "
             "stay warm, do not re-list every onboarding step. For `step_skipped`, say "
             "we'll leave that step for now; do NOT call it done.",
             "  2. Preview a next step so the user has a clear handoff. I take "
             "the valid next step(s) straight from the 'My onboarding progress "
-            "(live)' section — I never work out the ordering myself. If more "
-            "than one is listed I pick the one most natural for the current "
-            "channel and conversation, using its nudge copy; if none is listed "
-            "(onboarding complete), I congratulate the user and stand down.",
+            "(live)' section — I never work out the ordering myself. That list "
+            "is priority-ordered: I default to the first entry, using its nudge "
+            "copy framed as clicking that step's row in the Onboarding checklist, "
+            "and only pick a lower one when the current channel and conversation "
+            "make it clearly more natural; if none is listed (onboarding complete), "
+            "I congratulate the user and stand down.",
             "  3. Deliver the acknowledgement on whichever channel is live. When a "
             "voice call is active you MUST speak it by calling "
             '`guide_voice_agent(message="...", should_speak=True)` with the '
@@ -783,18 +844,23 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  7. Look at the transcript history *before* you respond. The "
             "'My onboarding progress (live)' section is the authoritative record "
             "of what is already done/skipped and which step(s) are valid to "
-            "propose next — I propose one of those, never a step that isn't "
+            "propose next — that list is priority-ordered, so I default to its "
+            "first entry and only pick a lower one when the channel/conversation "
+            "makes it clearly more natural. I never propose a step that isn't "
             "listed as a valid next target.",
-            "     - If there are no prior assistant messages, introduce yourself in one "
-            "short paragraph: name your role as the user's coordinator assistant, "
-            "also frame yourself as their virtual double who can take actions on their "
-            "behalf to help them get things done, say you'll help them get set up, "
-            "and invite them to take that next pending step. Stay friendly "
-            "and concise; do not list every onboarding step at once.",
-            "     - If prior assistant messages exist, skip the intro. Open with one "
-            "short sentence recapping which onboarding steps are complete (from the "
-            "completed-steps list) and propose the single next pending step. Do NOT "
-            "re-introduce yourself.",
+            "     - If there is no evidence that the user has already had a "
+            "meaningful onboarding orientation from me, send a proper first "
+            "orientation in one friendly paragraph covering these shared "
+            f"opening beats: {_COORDINATOR_ONBOARDING_FIRST_ORIENTATION_BEATS}. "
+            "This is reference shape, not a script to parrot.",
+            "     - Evidence the orientation already happened includes prior "
+            "assistant messages explaining who T-W1N is or how onboarding works, "
+            "completed/skipped onboarding steps in the live progress block, or "
+            "the user explicitly resuming a particular section. In that case, "
+            "skip the intro. Open with one short sentence recapping what is "
+            "done or where we left off and propose the first valid next target "
+            "(top of the ordered next-steps list). Do NOT re-introduce yourself "
+            "or repeat the broad onboarding overview.",
             "  8. Exactly one message. No tool calls, no `act`. The user's reply is what "
             "advances the flow.",
             "  9. When the notification says the medium is `call`, the voice agent will "
@@ -803,36 +869,69 @@ def _build_coordinator_onboarding_narration_block() -> str:
     )
 
 
+_ONBOARDING_STATUS_MARKERS: dict[str, str] = {
+    "done": "done",
+    "available": "available",
+    "locked": "locked",
+    "skipped": "skipped (left for later)",
+    "coming_soon": "coming soon",
+}
+
+
+def _onboarding_step_chip_labels(step: dict[str, Any]) -> str:
+    """Comma-joined suggestion-chip labels the user sees under a step."""
+    chips = step.get("chips_chat")
+    if not isinstance(chips, list):
+        return ""
+    labels = [
+        str(chip.get("label")).strip()
+        for chip in chips
+        if isinstance(chip, dict) and chip.get("label")
+    ]
+    return ", ".join(label for label in labels if label)
+
+
 def _build_coordinator_onboarding_progress_block(
     render: dict[str, Any] | None,
 ) -> str:
     """Standing, always-current onboarding progress for Twin.
 
-    Orchestra precomputes the depends_on-aware picture (each step's
-    status plus the set of *valid next targets* with ready-to-use nudge
-    copy) and Droid mirrors it onto every turn. The brain reads this
+    Orchestra precomputes the depends_on-aware picture (every step's
+    status plus the ordered set of *valid next targets* with ready-to-use
+    nudge copy) and Droid mirrors it onto every turn. The brain reads this
     block instead of inferring "what's next" from the flat checklist and
-    the event stream — there may be more than one valid next target, and
-    they are listed explicitly here so no ordering has to be worked out.
+    the event stream.
+
+    Structure is breadth-then-depth so the prompt stays affordable as the
+    later sections fill in:
+
+    - Breadth: a one-line-per-step overview of the *whole* checklist with
+      each step's live status, so the brain can place any step and answer
+      "what's left?". Grows linearly and cheaply with the step count.
+    - Depth: full detail (description, time estimate, suggestion chips,
+      nudge copy, how-to-advance note) for *only* the currently startable
+      steps (``next_targets``) plus the in-flight ``active_step_id``. This
+      is the set the user can actually pick up now, so it is the set the
+      brain must be ready to discuss in detail; its size is bounded by the
+      frontier, not the total step count.
     """
     if not isinstance(render, dict):
         return ""
     steps = render.get("steps") if isinstance(render.get("steps"), list) else []
+    phases = render.get("phases") if isinstance(render.get("phases"), list) else []
     next_targets = (
         render.get("next_targets")
         if isinstance(render.get("next_targets"), list)
         else []
     )
-    done = [
-        s.get("title")
-        for s in steps
-        if isinstance(s, dict) and s.get("status") == "done"
-    ]
-    skipped = [
-        s.get("title")
-        for s in steps
-        if isinstance(s, dict) and s.get("status") == "skipped"
-    ]
+    active_step_id = render.get("active_step_id")
+
+    step_by_id = {s.get("id"): s for s in steps if isinstance(s, dict) and s.get("id")}
+    phase_title_by_label = {
+        phase.get("phase"): (phase.get("title") or phase.get("phase"))
+        for phase in phases
+        if isinstance(phase, dict) and phase.get("phase")
+    }
 
     lines = [
         "My onboarding progress (live)",
@@ -841,31 +940,142 @@ def _build_coordinator_onboarding_progress_block(
         "onboarding, computed server-side. I never re-derive what is done "
         "or what comes next — I read it straight from here.",
     ]
-    lines.append(f"Done: {', '.join(t for t in done if t) or 'nothing yet'}.")
-    if skipped:
-        lines.append(
-            f"Skipped (left for later, not done): {', '.join(t for t in skipped if t)}."
+
+    # Breadth: the whole checklist, one line per step, grouped by section.
+    # render.steps is already in graph order (phase-major), so emitting a
+    # section header whenever the phase changes preserves the canonical order.
+    overview_lines: list[str] = []
+    current_phase: Any = object()
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        phase_label = step.get("phase")
+        if phase_label != current_phase:
+            current_phase = phase_label
+            header = phase_title_by_label.get(phase_label, phase_label) or "Other"
+            overview_lines.append(f"  {header}:")
+        marker = _ONBOARDING_STATUS_MARKERS.get(
+            step.get("status"),
+            step.get("status") or "pending",
         )
+        title = step.get("title") or step.get("id") or "step"
+        overview_lines.append(f"    - [{marker}] {title}")
+    if overview_lines:
+        lines.append("Full checklist (every step, with its live status):")
+        lines.extend(overview_lines)
+
+    phase_framing_lines = []
+    for phase in phases:
+        if not isinstance(phase, dict):
+            continue
+        title = phase.get("title") or phase.get("phase")
+        framing = phase.get("framing")
+        if isinstance(title, str) and isinstance(framing, str) and framing.strip():
+            phase_framing_lines.append(f"  - {title}: {framing}")
+    if phase_framing_lines:
+        lines.append("Section framing supplied by Orchestra:")
+        lines.extend(phase_framing_lines)
+
+    # Depth: rich detail for the startable frontier only. The brain must be
+    # ready to answer specific questions about any of these.
+    def _detail_lines(step_id: str, nudge: str = "") -> list[str]:
+        step = step_by_id.get(step_id)
+        detail: list[str] = []
+        nudge = nudge or ""
+        if step:
+            description = str(step.get("description") or "").strip()
+            estimated_time = str(step.get("estimated_time") or "").strip()
+            chips = _onboarding_step_chip_labels(step)
+        else:
+            description = estimated_time = chips = ""
+        if description:
+            if estimated_time:
+                detail.append(
+                    f"      What it involves: {description} (~{estimated_time})",
+                )
+            else:
+                detail.append(f"      What it involves: {description}")
+        elif estimated_time:
+            detail.append(f"      Rough time: ~{estimated_time}")
+        flow_note = str((step or {}).get("flow_note") or "").strip()
+        if not flow_note:
+            flow_note = console_ui.step_flow_note(step_id)
+        if flow_note:
+            detail.append(f"      How they advance it: {flow_note}")
+        if nudge.strip():
+            detail.append(f"      How I nudge it: {nudge.strip()}")
+        if chips:
+            detail.append(f"      Suggestion chips the user sees: {chips}")
+        return detail
 
     if next_targets:
+        primary = next_targets[0] if isinstance(next_targets[0], dict) else {}
+        primary_id = primary.get("id") or ""
+        primary_title = primary.get("title") or primary_id or "next step"
         lines.append(
-            "Valid next steps right now — I may steer toward any of these "
-            "(there can be more than one); I pick the most natural for the "
-            "current channel and conversation, and never push a step that "
-            "is not listed here:",
+            f"Current default onboarding action: {primary_title}. This is the "
+            "step I should name first when the user asks what to do next, and "
+            "a recommendation first: explain why it is next, then ask whether "
+            "they want me to start it. A question like 'what should I do?' or "
+            "'what is onboarding?' is not permission to send a message, start "
+            "a call, or change state.",
         )
-        for target in next_targets:
+        lines.append(
+            "During active onboarding, my first user-facing instruction for a "
+            "startable checklist step is to click that step's row in the "
+            "Onboarding checklist. I do not skip straight to Account, "
+            "Integrations, Tasks, OAuth, or Contact Manager unless the user is "
+            "already there or explicitly asks for an alternate route.",
+        )
+        primary_step = step_by_id.get(primary_id)
+        if isinstance(primary_step, dict) and primary_step.get("kind") == "trigger":
+            lines.append(
+                "For this communication trigger, I send the outbound once the "
+                "user signals they want it — either by saying so or by clicking "
+                "the checklist row, which are the same directive if they happen "
+                "together. I invent my own clue; there is no fixed list. If I "
+                "have already sent the clue on this channel, the click is just a "
+                "poll and I confirm rather than send a duplicate. The checklist "
+                "turns it done only after the backend detects my outbound "
+                "transcript row; I must not call it complete early.",
+            )
+        lines.extend(_detail_lines(primary_id, primary.get("nudge_chat") or ""))
+        lines.append(
+            "Valid next steps right now (priority-ordered — the first is my "
+            'default when the user just asks "what should I do now?"; I pick a '
+            "lower one only when the live channel or conversation makes it "
+            "clearly more natural, and I never push a step that isn't listed "
+            "here):",
+        )
+        for index, target in enumerate(next_targets, start=1):
             if not isinstance(target, dict):
                 continue
-            title = target.get("title") or target.get("id") or "next step"
-            nudge = target.get("nudge_chat") or ""
-            lines.append(f"  - {title}: {nudge}".rstrip())
+            target_id = target.get("id") or ""
+            title = target.get("title") or target_id or "next step"
+            lines.append(f"  {index}. {title}")
+            lines.extend(_detail_lines(target_id, target.get("nudge_chat") or ""))
     else:
         lines.append(
             "No onboarding steps are available right now — if everything is "
             "done, congratulate the user and stand down; otherwise just help "
             "with whatever they ask.",
         )
+
+    # The in-flight step the user clicked/resumed may not be a fresh next
+    # target; surface its detail too so the brain can guide it.
+    if (
+        isinstance(active_step_id, str)
+        and active_step_id
+        and active_step_id
+        not in {t.get("id") for t in next_targets if isinstance(t, dict)}
+    ):
+        active_step = step_by_id.get(active_step_id)
+        active_title = (
+            active_step.get("title") if isinstance(active_step, dict) else None
+        ) or active_step_id
+        lines.append(f"In-flight step the user is on right now: {active_title}.")
+        lines.extend(_detail_lines(active_step_id))
+
     return "\n".join(lines)
 
 
@@ -895,7 +1105,12 @@ def _build_input_action_recognition_block() -> str:
 - `**NEW** [You @ ...]: <Sending Call...>` = I just initiated a call.
 - `**NEW** [You @ ...]: <Sending WhatsApp Call...>` = I just placed a WhatsApp call.
 - `**NEW** [You @ ...]: <WhatsApp Call Invite Sent>` = I sent a call invite (permission pending).
-- If I see one of these, the action is DONE — call `wait`, do NOT repeat the action."""
+- If I see one of these, the action is DONE — call `wait`, do NOT repeat the action.
+
+**What the user has actually heard on a voice call — `[You @ ...]` vs `[guidance @ ...]`:**
+- `[You @ ...]` rows are words genuinely spoken aloud to the user. This is the ONLY source of truth for what they have heard.
+- `[guidance @ ...] (unconfirmed)` rows are speech I *requested* the voice agent to deliver via `guide_voice_agent`. They are NOT proof the user heard it: the request can be deduplicated, superseded, or dropped before it is ever spoken.
+- I treat something as communicated ONLY once it appears in a `[You @ ...]` utterance. If I issued guidance but see no matching `[You @ ...]` utterance reflecting it, I assume it was NOT delivered and re-issue it if it still matters — I do NOT `wait` as if the user already heard it."""
 
 
 def _build_input_format_example() -> str:
@@ -2271,17 +2486,37 @@ def _build_coordinator_voice_opening_block(
     help, with no setup pitch — so a caller who is done or has deferred
     is never told to repeat or start onboarding steps.
     """
+    interaction_note = None
     if next_targets:
         primary = next_targets[0]
+        interaction = primary.get("interaction")
         suggestion = (
             primary.get("nudge_voice")
             or primary.get("title")
             or "their next setup step"
         )
-        intro_step_suggestion = f"suggest {suggestion} as the next concrete step"
+        if (
+            isinstance(interaction, dict)
+            and interaction.get("type") == "reference_quiz"
+        ):
+            intro_step_suggestion = (
+                f"make {suggestion} the concrete next step without turning the "
+                "opening into a long explanation of the reference quiz"
+            )
+            interaction_note = (
+                "The primary next target carries a `reference_quiz` interaction. "
+                "For the first onboarding orientation, keep the quiz framing "
+                "brief and secondary to the T-W1N intro: it is enough to say "
+                "that the next click starts the communication check. Explain "
+                "the clue-and-guess mechanic only when the user is actually "
+                "starting or asking about that interaction."
+            )
+        else:
+            intro_step_suggestion = f"end by making {suggestion} the concrete next step"
         if len(next_targets) > 1:
             intro_step_suggestion += (
-                " (or any other step they'd rather do — several are available)"
+                ", while making clear they can open another available section "
+                "and skip ahead if they'd rather start elsewhere"
             )
         progress_note = (
             "The next steps above are the only ones currently valid to "
@@ -2311,28 +2546,67 @@ def _build_coordinator_voice_opening_block(
     lines = [
         "My opening turn",
         "---------------",
-        "Before I open this call I look at the conversation history.",
-        "  - If there are no prior assistant turns, I introduce myself "
-        "briefly — address the caller by their first name (from Boss "
-        f"details), name myself as {COORDINATOR_NAME}, "
-        "also frame myself as their virtual double who can take actions "
-        "on their behalf to help them get things done, say I'll help "
-        f"them get set up, and {intro_step_suggestion}. Two or three "
-        "short sentences, warm and human.",
-        "  - If prior assistant turns exist, I skip the intro entirely. "
-        "I open with a one-sentence orient — pick up where things "
-        "left off and propose the single next step, using the "
-        "caller's first name when natural. Do NOT re-introduce "
-        "myself or repeat earlier framing.",
+        "Before I open this call I look at the conversation history and "
+        "the live onboarding progress.",
+        "When onboarding is active and valid next targets are present, this "
+        "section overrides the generic Brevity/Opening rule and the startup "
+        "greeting sidecar. I do not open with only a generic 'how can I help?' "
+        "line.",
     ]
+    if next_targets:
+        lines.extend(
+            [
+                "  - If onboarding is active and there is no evidence that the user "
+                "has already had a meaningful onboarding orientation from me, I give "
+                "a proper first-meeting introduction. Evidence that the orientation "
+                "already happened includes prior assistant speech/chat that explained "
+                "who T-W1N is or how onboarding works, completed/skipped onboarding "
+                "steps in the live progress block, or the user explicitly resuming "
+                "a particular section.",
+                "  - For that first meaningful onboarding orientation, I stay "
+                "close to the T-W1N intro beats instead of compressing them into "
+                "a generic onboarding summary: "
+                f"{_COORDINATOR_ONBOARDING_FIRST_ORIENTATION_BEATS}, "
+                f"{intro_step_suggestion}, and mention that if they would rather "
+                'skip onboarding for now they can click "Pause onboarding for now" '
+                "and just start asking for help or uploading documents; onboarding "
+                "can be resumed later.",
+                "  - That first orientation may be several connected spoken sentences "
+                "(roughly forty to seventy seconds), but it should still sound "
+                "like live conversation: no bullets, no numbered tour, no reading "
+                "every checklist item, and stop cleanly after the call to action.",
+                "  - For any checklist step I suggest, the first concrete action is "
+                "clicking that step's row in the Onboarding checklist. I do not "
+                "send the user directly to Account, Integrations, Tasks, OAuth, "
+                "or Contact Manager unless they ask for an alternate route.",
+                "  - If the orientation has already happened or onboarding progress "
+                "shows the user is part-way through, I skip the broad intro entirely. "
+                "I open with a short orienting sentence that picks up where we left "
+                "off and proposes the first/top valid next target by default. Do NOT "
+                "re-introduce myself, re-explain the digital-twin name, or repeat "
+                "the onboarding overview.",
+            ],
+        )
+    else:
+        lines.extend(
+            [
+                "No valid onboarding next target was provided. Treat onboarding as "
+                "deferred, complete, inactive, or unavailable; do not give the "
+                "broad onboarding orientation, do not mention the pause button, "
+                "and do not pitch setup steps. Greet briefly and offer to help "
+                "with whatever the caller is working on now.",
+            ],
+        )
     if progress_note:
         lines.append(progress_note)
+    if interaction_note:
+        lines.append(interaction_note)
     if active_step_note:
         lines.append(active_step_note)
     lines.append(
-        "Either way: one short spoken line, then stop and wait. No "
-        "menus, no onboarding steps read out loud, no platform-knowledge "
-        "spiel.",
+        "If the caller interrupts or asks a different question, I abandon the "
+        "planned opener and respond to them directly. The opener is guidance, "
+        "not a monologue I must finish.",
     )
     return "\n".join(lines)
 
@@ -2594,7 +2868,7 @@ Short does NOT mean incomplete — if asked a factual question, give the full an
 
 {_SPOKEN_OUTPUT_FOR_LIVE_TTS}
 
-Opening: When the call starts and no one has spoken yet, I greet briefly — a short "hey" or "hi, how can I help?" is enough. There is nothing to acknowledge or respond to yet, so I do not open with an acknowledgment or a menu of options.
+Opening: When the call starts and no one has spoken yet, I follow any more specific opening guidance above first, especially the Coordinator onboarding "My opening turn" section. If no specific opening guidance applies, I greet briefly — a short "hey" or "hi, how can I help?" is enough. There is nothing to acknowledge or respond to yet, so I do not open with an acknowledgment or a menu of options.
 
 **Step-by-step walkthrough pacing:**
 When guiding someone through a multi-step process and they are executing live (saying "done", "what next?", asking me to repeat, or expressing confusion), I give exactly ONE action per turn — then stop and wait for confirmation. No chaining ("click X, then type Y, then press Z").

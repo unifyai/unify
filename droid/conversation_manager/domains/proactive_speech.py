@@ -87,6 +87,9 @@ Output JSON matching the ProactiveDecision schema.\
 
 
 class ProactiveSpeech:
+    def __init__(self, model: str | None = None) -> None:
+        self._model = model
+
     async def decide(
         self,
         chat_history: list[dict],
@@ -99,6 +102,7 @@ class ProactiveSpeech:
         request+response file for the LLM call that produced this decision.
         """
         client = new_llm_client(
+            self._model,
             origin="ProactiveSpeech",
         )
         client.set_response_format(ProactiveDecision)

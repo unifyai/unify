@@ -90,52 +90,61 @@ ONBOARDING_RESTORE_LABEL = "Do now"
 _STEP_FLOW_NOTES: dict[str, str] = {
     "email-reference": "Clicking the row asks me to send the first reference clue over email.",
     "email-reply": "The user replies with their guess once they receive the email clue.",
-    "whatsapp-number": "Opens Account \u2192 Contact info so the user can add/verify the WhatsApp number.",
+    "whatsapp-number": (
+        "Clicking the 'Add your WhatsApp number' row opens Account → Contact "
+        "info so the user can add or verify the WhatsApp number."
+    ),
     "whatsapp-message-reference": "Clicking sends the next clue over WhatsApp.",
     "whatsapp-message": "The user guesses the WhatsApp clue.",
     "whatsapp-call-reference": "Clicking starts or requests a WhatsApp voice clue.",
     "whatsapp-call": "The user guesses during the WhatsApp voice exchange.",
-    "phone-number": "Opens Account \u2192 Contact info so the user can add/verify the phone number.",
+    "phone-number": (
+        "Clicking the 'Add your phone number' row opens Account → Contact info "
+        "so the user can add or verify the phone number."
+    ),
     "sms-reference": "Clicking texts the next clue.",
     "sms-message": "The user guesses the SMS clue.",
     "phone-call-reference": "Clicking starts or requests a phone-call clue.",
     "phone-call": "The user guesses during the phone call.",
-    "slack-connect": "Opens the Slack setup path for the Unify Slack app.",
+    "slack-connect": (
+        "Clicking the 'Connect Slack' row opens the Slack setup path for the "
+        "Unify Slack app."
+    ),
     "slack-reference": "Clicking sends the next clue via Slack.",
     "slack-message": "The user guesses the Slack clue.",
-    "discord-connect": "Guides the user to add their Discord ID and install the public Discord bot.",
+    "discord-connect": (
+        "Clicking the 'Connect Discord' row opens the Discord setup path for "
+        "adding their Discord ID and installing the public Discord bot."
+    ),
     "discord-reference": "Clicking sends the next clue via Discord.",
     "discord-message": "The user guesses the Discord clue.",
     "workspace": (
-        "Clicking the row opens the workspace OAuth dialog (Google Workspace or "
+        "Clicking the 'Give me access to your workspace' row opens the workspace "
+        "OAuth dialog (Google Workspace or "
         "Microsoft 365). Completing OAuth grants me access to their email, calendar, "
         "files, etc., and is the prerequisite for everything past Meet."
     ),
     "apps": (
-        "Clicking the row opens the Integrations tab; they connect at least one app "
-        "(Slack, Gmail, Notion, etc.) from the gallery and authorize it."
+        "Clicking the 'Connect me with your apps' row opens the Integrations tab; "
+        "they connect at least one app (Slack, Gmail, Notion, etc.) from the "
+        "gallery and authorize it."
     ),
     "schedule": (
-        "Time- or event-bound work \u2014 a Task in the product sense: it lands in the "
-        "Tasks tab (which opens automatically) and recurs or fires on a trigger. "
-        "Scheduling is encouraged but optional. Read-only \u201ctry one of these\u201d "
-        "chips render under the schedule row as inspiration only \u2014 they "
-        "do not click."
+        "Clicking the 'Schedule a task for later' row opens the Tasks tab. "
+        "Time- or event-bound work — a Task in the product sense — lands there "
+        "and recurs or fires on a trigger. Read-only “try one of these” chips "
+        "render under the schedule row as inspiration only — they do not click."
     ),
 }
 
-# Per-phase grouping prose — keyed by the catalog phase id.
-_PHASE_FLOW_NOTES: dict[str, str] = {
-    "communication": (
-        "The user plays a lightweight guess-the-reference game across the configured "
-        "channels. Trigger rows send a clue immediately and auto-complete; the "
-        "following reply rows wait for the user's guess. Children:"
-    ),
-    "workspace": "Workspace access tasks:",
-    "integrations": "App-connection tasks:",
-    "tasks": "Task setup:",
-    "my-computer": "One-off work on my computer:",
-}
+
+def step_flow_note(step_id: str) -> str:
+    """Behavioural "how the user advances this step" hint for one step.
+
+    Compatibility shim while all prompt callers migrate to Orchestra's
+    ``flow_note`` render field.
+    """
+    return _STEP_FLOW_NOTES.get(step_id, "")
 
 
 def _catalog_phases(catalog: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -146,23 +155,6 @@ def _catalog_phases(catalog: dict[str, Any] | None) -> list[dict[str, Any]]:
     return (
         [p for p in phases if isinstance(p, dict)] if isinstance(phases, list) else []
     )
-
-
-def _catalog_steps_by_phase(
-    catalog: dict[str, Any] | None,
-) -> dict[str, list[dict[str, Any]]]:
-    """Catalog steps grouped by their phase label, preserving graph order."""
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    if not isinstance(catalog, dict):
-        return grouped
-    steps = catalog.get("steps")
-    if not isinstance(steps, list):
-        return grouped
-    for step in steps:
-        if not isinstance(step, dict):
-            continue
-        grouped.setdefault(str(step.get("phase", "")), []).append(step)
-    return grouped
 
 
 def catalog_has_phase(catalog: dict[str, Any] | None, phase_id: str) -> bool:
@@ -288,6 +280,11 @@ def build_coordinator_console_literacy_block(
             "assistants work, connects systems, and inspects stored context. I "
             "explain what each surface means and how to open it — especially on "
             "voice calls where the UI is the main visual anchor.",
+            "During active onboarding, setup, connection, integration, and task "
+            "steps route through the Assistant info → Onboarding checklist first. "
+            "I tell my boss to click the relevant checklist row before I mention "
+            "direct Account, Integrations, Tasks, OAuth, or Contact Manager paths; "
+            "those paths are what the row opens or fallback routes outside onboarding.",
             "",
             "Screen-share default",
             "-------------------",
@@ -573,16 +570,18 @@ def build_coordinator_onboarding_flow_reference_block(
     self_reference: bool = False,
     catalog: dict[str, Any] | None = None,
 ) -> str:
-    """Reference for the coordinator-led onboarding UI.
+    """Reference for the coordinator-led onboarding UI surface.
 
-    Teaches the onboarding surface (transient full-screen overlay, then the
-    checklist in the Assistant info → Onboarding tab), the steps, and how the
-    user advances each so the coordinator can answer "what do I click next?".
+    Teaches the onboarding *surface* (transient full-screen overlay, then the
+    checklist in the Assistant info → Onboarding tab) and its affordances so
+    the coordinator can answer "where do I click?". This block is deliberately
+    fixed-size: the per-step list, statuses, and "what's next" all live in the
+    render-driven "My onboarding progress (live)" block, so this builder never
+    enumerates steps and stays affordable as the later sections fill in.
 
-    The phase/step *titles* and which phases exist come from the fetched
-    onboarding ``catalog`` (Orchestra's canonical, deployment-gated source of
-    truth); this builder only adds the behavioural scaffolding from
-    ``_STEP_FLOW_NOTES`` / ``_PHASE_FLOW_NOTES``.
+    Phase headers come from the fetched onboarding ``catalog`` (Orchestra's
+    canonical, deployment-gated source of truth); they only feed the progress
+    bar legend.
     """
     block_title = (
         "My onboarding flow (UI reference)"
@@ -590,13 +589,6 @@ def build_coordinator_onboarding_flow_reference_block(
         else f"{coordinator_name} onboarding flow (UI reference)"
     )
     phases = _catalog_phases(catalog)
-    steps_by_phase = _catalog_steps_by_phase(catalog)
-    titles = {
-        str(s.get("id")): str(s.get("title", ""))
-        for s in (catalog.get("steps") if isinstance(catalog, dict) else None) or []
-        if isinstance(s, dict)
-    }
-    workspace_title = titles.get("workspace", "the workspace step")
     phase_legend = (
         " — ".join(f"**{p.get('phase', '')}**" for p in phases)
         if phases
@@ -626,49 +618,27 @@ def build_coordinator_onboarding_flow_reference_block(
         f"**{ONBOARDING_RESTORE_LABEL}** button to restore them. Deferred is not "
         "the same as done. Locked rows stay disabled until their prerequisite "
         "is resolved (the tooltip names the earlier step to finish first).",
-        "The onboarding steps in order — title, what it does, and how the user "
-        "advances it:",
-        "  1. **Meet** (`meet`). Auto-completes once we exchange the opening "
-        "turn — saying anything in the chat (or starting the call) clears it. "
-        "Nothing to click.",
+        "Answering flow questions:",
+        '  - The "My onboarding progress (live)" block is my authoritative '
+        "source for the step list, each step's live status, what each "
+        "startable step involves, and which step(s) are valid to do next. I "
+        "read it from there; I do not work the ordering out myself.",
+        '  - When the user asks "what do I do next?", "where do I click?", or '
+        "similar, I name the first valid next target from that live block (it "
+        "is priority-ordered; the top is my default), phrased as a "
+        "one-sentence instruction that maps onto the row they will see — e.g. "
+        '"Open the **Onboarding** tab and click that step\'s row." I stay '
+        "ready to discuss any other listed target if they ask, but I do not "
+        "dump the whole list.",
+        "  - When the user asks what a step does, I answer from that step's "
+        "detail in the live progress block in one or two sentences, then offer "
+        "to advance them.",
+        "  - I never claim a step is done unless the live progress block shows "
+        "it done (or the corresponding system event has arrived in my "
+        "notifications: workspace OAuth → workspace_connected; integration "
+        "save → integration_connected; etc.).",
+        "  - If a step is deferred, I treat it as intentionally passed over for "
+        "now: I can move to the next step, but I do not describe the deferred "
+        "step as completed.",
     ]
-
-    counter = 2
-    for phase in phases:
-        phase_id = str(phase.get("id", ""))
-        phase_title = str(phase.get("title", ""))
-        phase_note = _PHASE_FLOW_NOTES.get(phase_id, "")
-        header = f"  {counter}. **{phase_title}** (`{phase_id}`, grouping row)."
-        if phase_note:
-            header = f"{header} {phase_note}"
-        lines.append(header)
-        for step in steps_by_phase.get(str(phase.get("phase", "")), []):
-            step_id = str(step.get("id", ""))
-            step_title = str(step.get("title", ""))
-            note = _STEP_FLOW_NOTES.get(step_id, "")
-            row = f"     - **{step_title}** (`{step_id}`)."
-            if note:
-                row = f"{row} {note}"
-            lines.append(row)
-        counter += 1
-
-    lines.extend(
-        [
-            "Answering flow questions:",
-            '  - When the user asks "what do I do next?", "where do I click?", or '
-            "similar, I look at the most recent onboarding signals and name the "
-            "single next pending step, phrased as a one-sentence instruction that "
-            'maps onto the row they will see — e.g. "Open the **Onboarding** tab and '
-            f"click **{workspace_title}**, then pick Google or "
-            'Microsoft." I do not dump the whole list.',
-            "  - When the user asks what a step does, I answer from the descriptions "
-            "above in one or two sentences, then offer to advance them.",
-            "  - I never claim a step is done unless the corresponding system event "
-            "has actually arrived in my notifications (workspace OAuth → "
-            "workspace_connected; integration save → integration_connected; etc.).",
-            "  - If a step is deferred, I treat it as intentionally passed over for "
-            "now: I can move to the next step, but I do not describe the deferred "
-            "step as completed.",
-        ],
-    )
     return "\n".join(lines)

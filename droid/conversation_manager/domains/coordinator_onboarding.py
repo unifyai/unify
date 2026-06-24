@@ -57,17 +57,6 @@ _SUBTYPE_STEP_SKIPPED = "step_skipped"
 _SUBTYPE_STEP_STARTED = "onboarding_step_started"
 _SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED = "reference_quiz_clue_requested"
 
-_REFERENCE_QUIZ_CHANNEL_TO_TOOL = {
-    "email": "send_email",
-    "whatsapp_message": "send_whatsapp",
-    "sms_message": "send_sms",
-    "slack_message": "send_slack_message",
-    "discord_message": "send_discord_message",
-    "phone_call": "make_call_to_boss",
-    "whatsapp_call": "make_whatsapp_call_to_boss",
-}
-_REFERENCE_QUIZ_CALL_CHANNELS = {"phone_call", "whatsapp_call"}
-
 
 def _detail_string(details: dict[str, Any], key: str) -> str:
     value = details.get(key)
@@ -145,56 +134,58 @@ def _coordinator_onboarding_notification_text(
     if event.subtype == _SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED:
         details = event.details if isinstance(event.details, dict) else {}
         channel = _detail_string(details, "channel")
-        clue = _detail_string(details, "clue")
-        quote = _detail_string(details, "quote")
-        answer = _detail_string(details, "answer")
         trigger_step_id = _detail_string(details, "trigger_step_id")
         reply_step_id = _detail_string(details, "reply_step_id")
-        tool_name = _REFERENCE_QUIZ_CHANNEL_TO_TOOL.get(channel, "")
-        channel_note = f" Target outbound channel: `{channel}`." if channel else ""
+        tool_name = _detail_string(details, "tool_name")
+        framing = _detail_string(details, "framing")
+        interaction = details.get("interaction")
+        channel_note = f" Target channel: `{channel}`." if channel else ""
         tool_note = (
-            f" Use `{tool_name}` for this trigger."
+            f" The outbound tool for this channel is `{tool_name}`."
             if tool_name
-            else " Use the matching outbound comms tool for this trigger."
+            else " Use the matching outbound comms tool for this channel."
         )
         step_note = (
             f" Trigger step id: `{trigger_step_id}`. Reply step id now active in Console: `{reply_step_id}`."
             if trigger_step_id or reply_step_id
             else ""
         )
-        clue_note = (
-            f' Clue to send exactly as the user-facing clue: "{clue}".' if clue else ""
+        # The event is a poll, not a fresh command. The click and any verbal ask
+        # that arrived around the same time are the same directive in two forms,
+        # so the clue must go out exactly once.
+        poll_note = (
+            " This notification is a POLL confirming the user now expects the "
+            "clue on this channel — it is NOT a request for another copy. If a "
+            "verbal directive arrived around the same time (e.g. they said so on "
+            "a call), it is almost certainly the SAME directive in two forms: "
+            "satisfy it once. If I have already sent a clue on this channel for "
+            "this step, I do NOT send another — I simply confirm it's on its "
+            "way. I send a clue now only if none has gone out yet."
         )
-        quote_note = f' Underlying quote: "{quote}".' if quote else ""
-        answer_note = (
-            f' Correct answer: "{answer}". Do not reveal it unless the user asks for the answer or is clearly stuck.'
-            if answer
+        clue_note = (
+            " I invent my own short reference-quiz clue on the spot — there is "
+            "no supplied clue or answer. I pick a fresh sci-fi or pop-culture "
+            "quote of my own each time and keep the answer to myself."
+        )
+        framing_note = f" Section framing: {framing}" if framing else ""
+        interaction_note = (
+            " Structured interaction: reference_quiz. Explain the quiz before "
+            "sending or discussing any clue; the user should know this is a "
+            "channel-proving mini-game, not a mysterious email. Outbound text "
+            "or email clue messages must include that context before the clue."
+            if isinstance(interaction, dict)
+            and interaction.get("type") == "reference_quiz"
             else ""
         )
-        shared_rules = (
-            " This is a Coordinator onboarding mini-game called guess the reference. "
-            "Send the clue without revealing the answer, then wait for the user's guess. "
-            "If they ask to hear or see it again, repeat the clue. If they ask for a hint, "
-            "give a light hint without immediately revealing the answer. If they ask for "
-            "the answer, or they are stuck for a long time, reveal it warmly and close the "
-            "mini-game naturally. Do not skip ahead to later onboarding steps until the "
-            "reply step is complete or skipped."
+        call_note = (
+            " If the tool starts a call, put the briefing and framing in the call context "
+            "so the spoken sidecar can run the interaction without needing this notification."
+            if tool_name.startswith("make_") or "call" in channel
+            else ""
         )
-        if channel in _REFERENCE_QUIZ_CALL_CHANNELS:
-            call_rules = (
-                " For this call trigger, start the outbound call with the listed call tool "
-                "and put the whole mini-game briefing in the `context` argument: greet the "
-                "user by first name when natural; say the next reference is the quote; ask "
-                "if they can guess what it is; speak conversationally; support repeats, "
-                "hints, answer reveal, and a natural close."
-            )
-            return (
-                f"{subtype_hint} {body}{channel_note}{step_note}{clue_note}{quote_note}"
-                f"{answer_note}{tool_note}{shared_rules}{call_rules}"
-            ).strip()
         return (
-            f"{subtype_hint} {body}{channel_note}{step_note}{clue_note}{quote_note}"
-            f"{answer_note}{tool_note}{shared_rules}"
+            f"{subtype_hint} {body}{channel_note}{step_note}{poll_note}{clue_note}"
+            f"{tool_note}{framing_note}{interaction_note}{call_note}"
         ).strip()
 
     if event.subtype == _SUBTYPE_ONBOARDING_SESSION_STARTED:
@@ -217,8 +208,8 @@ def _coordinator_onboarding_notification_text(
             f"included): {joined}."
             if joined
             else (
-                " No onboarding steps are done yet — trying a quick email "
-                "reply is the first checklist step after meeting."
+                " No onboarding steps are done yet — propose the first valid "
+                "next target from the live progress block."
             )
         )
         skipped_hint = (
@@ -228,18 +219,26 @@ def _coordinator_onboarding_notification_text(
             else ""
         )
         guidance = (
-            "Open the session with exactly one short message. The next step "
-            "to propose is always the FIRST onboarding step that is not "
-            "listed as already done or explicitly skipped below — never suggest "
-            "a step either list marks resolved (e.g. do not say 'connect your "
-            "workspace' when `workspace` is already done or skipped). If you "
-            "have *no* prior assistant "
-            "messages in the transcript history, introduce yourself briefly "
-            "as the user's coordinator assistant, say you'll help them get "
-            "set up, and invite them to take that next pending step. If "
-            "prior assistant messages exist, skip the intro and open with a "
-            "one-sentence recap of what's been done so far plus the single "
-            "next pending step — do NOT re-introduce yourself."
+            "Open the session with exactly one message. The next step to "
+            "propose is the first entry in the valid next-steps list in the "
+            "'My onboarding progress (live)' section (that list is "
+            "priority-ordered and already excludes done, skipped, and locked "
+            "steps) — never suggest a step that isn't a valid next target "
+            "(e.g. do not say 'connect your workspace' when `workspace` is "
+            "already done or skipped). Frame that next step as clicking its row "
+            "in the Onboarding checklist before mentioning any destination tab, "
+            "dialog, or settings page. If there is no evidence that the user "
+            "has already had a meaningful onboarding orientation from you, "
+            "introduce yourself as T-W1N, frame yourself as their digital twin "
+            "or stand-in, explain that onboarding is a shared walkthrough from "
+            "communication basics into workspace access, integrations, "
+            "recurring tasks, computer use, and other sections, invite them "
+            "to take that first valid next step, and mention they can pause "
+            "onboarding and resume later. If prior assistant messages, "
+            "completed/skipped steps, or the user's current section show that "
+            "orientation already happened, skip the intro and open with a "
+            "one-sentence recap of what's been done so far plus that first "
+            "valid next step — do NOT re-introduce yourself."
         )
         medium_note = ""
         if medium == "call":
@@ -267,8 +266,10 @@ def _coordinator_onboarding_notification_text(
         )
         guidance = (
             "Acknowledge in one short sentence that you'll leave that step for "
-            "now, then preview the single next onboarding step that is neither "
-            "done nor skipped. Do not say the skipped step is complete."
+            "now, then preview the first valid next target from the 'My "
+            "onboarding progress (live)' section (the ordered next-steps list). "
+            "Frame the next target as clicking its row in the Onboarding "
+            "checklist. Do not say the skipped step is complete."
         )
         return f"{subtype_hint} {body}{step_note}{skipped_note} {guidance}".strip()
 
@@ -303,6 +304,8 @@ def _coordinator_onboarding_notification_text(
     guidance = (
         "Acknowledge this in one short sentence to the user, name the thing they "
         "just completed, and preview the next pending onboarding step. "
+        "Frame that next step as clicking its row in the Onboarding checklist "
+        "before mentioning any destination tab, dialog, or settings page. "
         "Stay celebratory but brief — do not re-list every prior step. If a voice "
         "call is active you MUST speak it by calling "
         'guide_voice_agent(message="...", should_speak=True) — do not send a '
@@ -346,6 +349,12 @@ async def _handle_coordinator_onboarding_event(
     # immediately, without waiting for the TTL state fetch.
     if isinstance(event.details, dict):
         cm.set_coordinator_onboarding_render(event.details.get("onboarding"))
+        if event.subtype == _SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED:
+            trace = getattr(cm, "_current_event_trace", None) or {}
+            cm.set_pending_onboarding_outbound(
+                event.details,
+                origin_event_id=trace.get("event_id", ""),
+            )
     cm.notifications_bar.push_notif(
         _NOTIFICATION_TYPE,
         _coordinator_onboarding_notification_text(event),

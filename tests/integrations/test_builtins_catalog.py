@@ -827,3 +827,100 @@ def test_seed_builtin_integrations_dedupes_and_deletes_tools_by_function_id(
         builtins_catalog.BUILTINS_INTEGRATION_TOOLS_CONTEXT,
         [17],
     ) in deleted
+
+
+def test_run_api_executor_returns_inline_terminal_result(monkeypatch) -> None:
+    module = _seed_script_module()
+    calls: list[tuple[str, str]] = []
+
+    def fake_admin_request(*, method, path, payload=None, **_kwargs):
+        calls.append((method, path))
+        return {"status": "success", "apps_upserted": 2, "tools_upserted": 3}
+
+    monkeypatch.setattr(module, "_admin_request", fake_admin_request)
+
+    result = module._run_api_executor(
+        base_url="http://orchestra/v0",
+        admin_key="admin",
+        payload={
+            "backend_id": "composio",
+            "environment": "selfhost",
+            "desired_hash": "h1",
+        },
+    )
+
+    assert result["status"] == "success"
+    assert result["apps_upserted"] == 2
+    assert [call[0] for call in calls] == ["POST"]
+
+
+def test_run_api_executor_polls_until_terminal(monkeypatch) -> None:
+    module = _seed_script_module()
+    calls: list[tuple[str, str]] = []
+    states = [
+        {"last_status": "running", "run_id": "r1", "last_sync_diagnostics": {}},
+        {"last_status": "running", "run_id": "r1", "last_sync_diagnostics": {}},
+        {
+            "last_status": "success",
+            "run_id": "r1",
+            "desired_hash": "h1",
+            "apps_upserted": 5,
+            "tools_upserted": 9,
+            "last_sync_diagnostics": {
+                "completed_batches": 2,
+                "skipped_batches": 0,
+                "elapsed_seconds": 1.5,
+            },
+        },
+    ]
+
+    def fake_admin_request(*, method, path, payload=None, **_kwargs):
+        calls.append((method, path))
+        if method == "POST":
+            assert path == "/admin/integrations/builtins-sync/start"
+            return {"status": "running", "run_id": "r1", "desired_hash": "h1"}
+        return states.pop(0)
+
+    monkeypatch.setattr(module, "_admin_request", fake_admin_request)
+    monkeypatch.setattr(module.time, "sleep", lambda *_a, **_k: None)
+
+    result = module._run_api_executor(
+        base_url="http://orchestra/v0",
+        admin_key="admin",
+        payload={
+            "backend_id": "composio",
+            "environment": "production",
+            "desired_hash": "h1",
+        },
+    )
+
+    assert result["status"] == "success"
+    assert result["run_id"] == "r1"
+    assert result["apps_upserted"] == 5
+    assert result["tools_upserted"] == 9
+    assert result["completed_batches"] == 2
+    assert calls[0][0] == "POST"
+    assert [call[0] for call in calls[1:]] == ["GET", "GET", "GET"]
+
+
+def test_run_api_executor_times_out_when_run_never_completes(monkeypatch) -> None:
+    module = _seed_script_module()
+    monkeypatch.setenv("DROID_INTEGRATION_BOOTSTRAP_POLL_TIMEOUT", "0")
+
+    def fake_admin_request(*, method, path, payload=None, **_kwargs):
+        if method == "POST":
+            return {"status": "running", "run_id": "r1", "desired_hash": "h1"}
+        return {"last_status": "running", "run_id": "r1", "last_sync_diagnostics": {}}
+
+    monkeypatch.setattr(module, "_admin_request", fake_admin_request)
+
+    with pytest.raises(RuntimeError, match="Timed out polling"):
+        module._run_api_executor(
+            base_url="http://orchestra/v0",
+            admin_key="admin",
+            payload={
+                "backend_id": "composio",
+                "environment": "production",
+                "desired_hash": "h1",
+            },
+        )

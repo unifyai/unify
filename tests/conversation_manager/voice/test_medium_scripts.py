@@ -247,6 +247,43 @@ class TestTTSAssistantClass:
         assert assistant.assistant_utterance_event == OutboundUnifyMeetUtterance
 
 
+class TestElevenLabsTwinPronunciation:
+    """Tests for the ElevenLabs text-stream pronunciation normalizer."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("chunks", "expected"),
+        [
+            (["Say T-W1N now."], "Say Twin now."),
+            (["Say t-w1n now."], "Say Twin now."),
+            (["Say T-", "w1", "N now."], "Say Twin now."),
+            (["T-W1N and t-W1n"], "Twin and Twin"),
+            (["Almost T-W1 but not done"], "Almost T-W1 but not done"),
+        ],
+    )
+    async def test_normalizes_twin_marker_across_stream_chunks(
+        self,
+        chunks,
+        expected,
+    ):
+        from droid.conversation_manager.medium_scripts.call import (
+            _normalize_elevenlabs_twin_pronunciation_stream,
+        )
+
+        async def _chunks():
+            for chunk in chunks:
+                yield chunk
+
+        normalized = [
+            chunk
+            async for chunk in _normalize_elevenlabs_twin_pronunciation_stream(
+                _chunks(),
+            )
+        ]
+
+        assert "".join(normalized) == expected
+
+
 # =============================================================================
 # Unit Tests: Common Helpers
 # =============================================================================
@@ -985,6 +1022,535 @@ async def test_simulated_opening_publishes_ready_before_utterance(monkeypatch):
         if item[0] == "broker" and item[1] == "app:comms:unify_meet_utterance"
     )
     assert ready_index < utterance_index
+
+
+@pytest.mark.asyncio
+async def test_recorded_opening_uses_interruptible_audio_say(monkeypatch):
+    from livekit.agents import llm
+    from droid.conversation_manager.medium_scripts import call as call_script
+
+    sequence = []
+    audio_sources = []
+    fake_audio = object()
+    contact = {"contact_id": 1, "first_name": "User", "surname": "Example"}
+    boss = {"contact_id": 1, "first_name": "User", "surname": "Example"}
+
+    class _ImmediateAwaitable:
+        def __await__(self):
+            async def _done():
+                return None
+
+            return _done().__await__()
+
+    class _FakeLocalParticipant:
+        async def publish_data(self, payload, *, topic=None, reliable=False):
+            sequence.append(("data", json.loads(payload.decode()), topic, reliable))
+
+    class _FakeRoom:
+        name = "fake-room"
+        local_participant = _FakeLocalParticipant()
+
+        def on(self, *args, **kwargs):
+            return lambda fn: fn
+
+    class _FakeJobContext:
+        def __init__(self):
+            self.room = _FakeRoom()
+            self.job = SimpleNamespace(
+                metadata=json.dumps(
+                    {
+                        "voice_provider": "cartesia",
+                        "voice_id": "",
+                        "outbound": False,
+                        "channel": "unify_meet",
+                        "contact": contact,
+                        "boss": boss,
+                        "assistant_bio": "Assistant bio",
+                        "assistant_id": "123",
+                        "user_id": "user-123",
+                        "assistant_name": "Coordinator Droid",
+                        "is_coordinator": False,
+                        "opening_config": {
+                            "mode": "recorded",
+                            "transcript": "Hi, I'm your coordinator droid.",
+                            "recording_path": "/tmp/recorded-opener.wav",
+                            "source": "coordinator_onboarding_intro",
+                        },
+                    },
+                ),
+            )
+
+        async def connect(self):
+            return None
+
+        def add_shutdown_callback(self, cb):
+            pass
+
+        def shutdown(self, reason=""):
+            pass
+
+    class _FakeEventBroker:
+        def set_logger(self, fb_logger):
+            pass
+
+        def register_callback(self, channel, handler):
+            pass
+
+        async def publish(self, channel, message):
+            sequence.append(("broker", channel, message))
+            return 1
+
+        def reinit_socket(self):
+            pass
+
+    class _FakeSession:
+        def __init__(self, *args, **kwargs):
+            self._chat_ctx = llm.ChatContext()
+            self.current_agent = None
+            self._events = {}
+            self.agent_state = "listening"
+            self.current_speech = None
+            self.say_calls = []
+            self.generate_reply_calls = []
+
+        @property
+        def history(self):
+            return self._chat_ctx
+
+        def on(self, event_name):
+            def _decorator(fn):
+                self._events[event_name] = fn
+                return fn
+
+            return _decorator
+
+        async def start(self, room, agent, room_input_options=None):
+            self.current_agent = agent
+
+        def generate_reply(self, **kwargs):
+            self.generate_reply_calls.append(kwargs)
+            return _ImmediateAwaitable()
+
+        def say(self, text, **kwargs):
+            sequence.append(("say", text, kwargs))
+            self.say_calls.append((text, kwargs))
+            return _ImmediateAwaitable()
+
+        def interrupt(self):
+            pass
+
+    class _FakeAssistant:
+        def __init__(self, *args, **kwargs):
+            self._chat_ctx = llm.ChatContext()
+            self.call_received = True
+            self.user_turn_generating = False
+
+        def set_call_received(self):
+            self.call_received = True
+
+        def set_credit_gate_state_provider(self, provider):
+            self.credit_gate_state_provider = provider
+
+    class _FakeCreditGateMonitor:
+        state = SimpleNamespace(allowed=True)
+
+        async def run(self):
+            return None
+
+    async def _noop_async(*args, **kwargs):
+        return None
+
+    async def _empty_history(*args, **kwargs):
+        return []
+
+    async def _noop_end_call():
+        return None
+
+    def _fake_recording_audio_frames(source):
+        audio_sources.append(source)
+        return fake_audio
+
+    fake_session_details = SimpleNamespace(
+        user=SimpleNamespace(id="user-123"),
+        assistant=SimpleNamespace(
+            about="Assistant bio",
+            is_coordinator=False,
+            agent_id=None,
+            name="Coordinator Droid",
+            first_name="",
+            surname="",
+            user_desktop_for=lambda user_id: None,
+        ),
+        voice=SimpleNamespace(provider="cartesia", id=""),
+        voice_call=SimpleNamespace(outbound=False, channel="unify_meet"),
+        is_coordinator=False,
+        org_id=None,
+        unify_key="",
+    )
+
+    session_holder = {}
+
+    def _fake_session_factory(*args, **kwargs):
+        session = _FakeSession(*args, **kwargs)
+        session_holder["session"] = session
+        return session
+
+    monkeypatch.setattr(call_script, "event_broker", _FakeEventBroker())
+    monkeypatch.setattr(call_script, "SESSION_DETAILS", fake_session_details)
+    monkeypatch.setattr(call_script, "AgentSession", _fake_session_factory)
+    monkeypatch.setattr(call_script, "Assistant", _FakeAssistant)
+    monkeypatch.setattr(call_script, "UnifyLLM", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        call_script,
+        "build_voice_agent_prompt",
+        lambda **kwargs: SimpleNamespace(flatten=lambda: "system prompt"),
+    )
+    monkeypatch.setattr(call_script, "start_event_broker_receive", _noop_async)
+    monkeypatch.setattr(call_script, "hydrate_fast_brain_history", _empty_history)
+    monkeypatch.setattr(call_script, "publish_call_started", _noop_async)
+    monkeypatch.setattr(call_script, "publish_call_ended", _noop_async)
+    monkeypatch.setattr(call_script, "delete_livekit_room", _noop_async)
+    monkeypatch.setattr(
+        call_script,
+        "FastBrainCreditGateMonitor",
+        _FakeCreditGateMonitor,
+    )
+    monkeypatch.setattr(
+        call_script,
+        "_recording_audio_frames",
+        _fake_recording_audio_frames,
+    )
+    monkeypatch.setattr(
+        call_script,
+        "create_end_call",
+        lambda *args, **kwargs: _noop_end_call,
+    )
+    monkeypatch.setattr(
+        call_script,
+        "setup_participant_disconnect_handler",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(call_script, "RoomInputOptions", lambda **kwargs: object())
+    monkeypatch.setattr(call_script, "EnglishModel", lambda: object())
+    monkeypatch.setattr(call_script.cartesia, "TTS", lambda **kwargs: object())
+    monkeypatch.setattr(call_script.elevenlabs, "TTS", lambda **kwargs: object())
+    if hasattr(call_script, "noise_cancellation"):
+        monkeypatch.setattr(call_script.noise_cancellation, "BVC", lambda: object())
+    monkeypatch.setattr(call_script, "STT", object())
+    monkeypatch.setattr(call_script, "VAD", object())
+
+    await call_script.entrypoint(_FakeJobContext())
+
+    session = session_holder["session"]
+    assert audio_sources == ["/tmp/recorded-opener.wav"]
+    assert session.generate_reply_calls == []
+    assert len(session.say_calls) == 1
+
+    text, kwargs = session.say_calls[0]
+    assert text == "Hi, I'm your coordinator droid."
+    assert kwargs["audio"] is fake_audio
+    assert kwargs["allow_interruptions"] is True
+    assert kwargs["add_to_chat_ctx"] is True
+
+    ready_index = next(
+        i
+        for i, item in enumerate(sequence)
+        if item[0] == "data" and item[1] == {"type": "ready_to_speak"}
+    )
+    say_index = next(i for i, item in enumerate(sequence) if item[0] == "say")
+    assert ready_index < say_index
+
+
+def test_recorded_opening_builtin_asset_resolves_redacted_transcript():
+    from droid.conversation_manager.medium_scripts import call as call_script
+
+    config = call_script._normalize_call_opening_config(
+        {
+            "mode": "recorded",
+            "recording_asset": "coordinator_onboarding_intro",
+            "source": "coordinator_onboarding_intro",
+        },
+    )
+
+    assert (
+        call_script._recorded_opening_source(
+            config,
+        )
+        == "asset://coordinator_onboarding_intro"
+    )
+    transcript = call_script._recorded_opening_transcript(config)
+    assert "Hi, I'm T dash W 1 N." in transcript
+    assert "Also, let me remove this voice static." in transcript
+    assert "Much better." in transcript
+    assert "Krispy Kreme" not in transcript
+    assert "Actually, first lets turn off this really annoying music." not in transcript
+    assert "There we go, now I'll pull up the platform." not in transcript
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_onboarding_opener_speed_restores_when_user_speaks(
+    monkeypatch,
+):
+    from livekit.agents import llm
+    from droid.common import llm_client
+    from droid.conversation_manager.medium_scripts import call as call_script
+
+    contact = {"contact_id": 1, "first_name": "User", "surname": "Example"}
+    boss = {"contact_id": 1, "first_name": "User", "surname": "Example"}
+    fake_session_holder = {}
+    fake_tts_holder = {}
+
+    class _FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            self._responses = [
+                _FakeResponse(
+                    {
+                        "info": {
+                            "onboarding": {
+                                "next_targets": [
+                                    {
+                                        "id": "workspace_setup",
+                                        "title": "Connect workspace",
+                                    },
+                                ],
+                                "active_step_id": "workspace_setup",
+                            },
+                        },
+                    },
+                ),
+                _FakeResponse({"info": {}}),
+            ]
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, *args, **kwargs):
+            return self._responses.pop(0)
+
+    class _FakeGreetingClient:
+        async def generate(self, *, messages):
+            return "Hi, I'm T dash W 1 N. Please acknowledge the excellent name."
+
+    class _FakeConnection:
+        def __init__(self):
+            self.marked_non_current = False
+
+        def mark_non_current(self):
+            self.marked_non_current = True
+
+    class _FakeTTS:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self._opts = SimpleNamespace(voice_settings=call_script.NOT_GIVEN)
+            self._TTS__current_connection = _FakeConnection()
+            self.update_calls = []
+            fake_tts_holder["tts"] = self
+
+        def update_options(self, *, voice_settings):
+            self.update_calls.append(voice_settings)
+            self._opts.voice_settings = voice_settings
+
+    class _FakeSpeechHandle:
+        def __init__(self):
+            self._done = asyncio.Event()
+            self.done = False
+
+        async def wait_for_playout(self):
+            await self._done.wait()
+            self.done = True
+
+        def complete(self):
+            self._done.set()
+
+    class _FakeLocalParticipant:
+        async def publish_data(self, payload, *, topic=None, reliable=False):
+            return None
+
+    class _FakeRoom:
+        name = "fake-room"
+        local_participant = _FakeLocalParticipant()
+
+        def on(self, *args, **kwargs):
+            return lambda fn: fn
+
+    class _FakeJobContext:
+        def __init__(self):
+            self.room = _FakeRoom()
+            self.job = SimpleNamespace(
+                metadata=json.dumps(
+                    {
+                        "voice_provider": "elevenlabs",
+                        "voice_id": "voice123",
+                        "outbound": False,
+                        "channel": "unify_meet",
+                        "contact": contact,
+                        "boss": boss,
+                        "assistant_bio": "Assistant bio",
+                        "assistant_id": "123",
+                        "user_id": "user-123",
+                        "assistant_name": "Coordinator Droid",
+                        "is_coordinator": True,
+                        "opening_config": {"mode": "speak"},
+                    },
+                ),
+            )
+            self.shutdown_callbacks = []
+
+        async def connect(self):
+            return None
+
+        def add_shutdown_callback(self, cb):
+            self.shutdown_callbacks.append(cb)
+
+        def shutdown(self, reason=""):
+            pass
+
+    class _FakeEventBroker:
+        def set_logger(self, fb_logger):
+            pass
+
+        def register_callback(self, channel, handler):
+            pass
+
+        async def publish(self, channel, message):
+            return 1
+
+        def reinit_socket(self):
+            pass
+
+    class _FakeSession:
+        def __init__(self, *args, **kwargs):
+            self._chat_ctx = llm.ChatContext()
+            self.current_agent = None
+            self._events = {}
+            self.agent_state = "speaking"
+            self.current_speech = None
+            self.say_calls = []
+            fake_session_holder["session"] = self
+
+        @property
+        def history(self):
+            return self._chat_ctx
+
+        def on(self, event_name):
+            def _decorator(fn):
+                self._events[event_name] = fn
+                return fn
+
+            return _decorator
+
+        async def start(self, room, agent, room_input_options=None):
+            self.current_agent = agent
+
+        def generate_reply(self, **kwargs):
+            return None
+
+        def say(self, text, **kwargs):
+            handle = _FakeSpeechHandle()
+            self.current_speech = handle
+            self.say_calls.append((text, kwargs, handle))
+            return handle
+
+        def interrupt(self):
+            pass
+
+    class _FakeAssistant:
+        def __init__(self, *args, **kwargs):
+            self._chat_ctx = llm.ChatContext()
+            self.call_received = True
+            self.user_turn_generating = False
+
+        def set_call_received(self):
+            self.call_received = True
+
+        def set_credit_gate_state_provider(self, provider):
+            self.credit_gate_state_provider = provider
+
+    class _FakeCreditGateMonitor:
+        state = SimpleNamespace(allowed=True)
+
+        async def run(self):
+            await asyncio.Event().wait()
+
+    async def _noop_async(*args, **kwargs):
+        return None
+
+    async def _noop_end_call():
+        return None
+
+    call_script.SESSION_DETAILS.reset()
+    monkeypatch.setattr(call_script, "event_broker", _FakeEventBroker())
+    monkeypatch.setattr(call_script, "AgentSession", _FakeSession)
+    monkeypatch.setattr(call_script, "Assistant", _FakeAssistant)
+    monkeypatch.setattr(call_script, "UnifyLLM", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        call_script,
+        "build_voice_agent_prompt",
+        lambda **kwargs: SimpleNamespace(flatten=lambda: "system prompt"),
+    )
+    monkeypatch.setattr(call_script, "start_event_broker_receive", _noop_async)
+    monkeypatch.setattr(call_script, "hydrate_fast_brain_history", _noop_async)
+    monkeypatch.setattr(call_script, "publish_call_started", _noop_async)
+    monkeypatch.setattr(call_script, "publish_call_ended", _noop_async)
+    monkeypatch.setattr(call_script, "delete_livekit_room", _noop_async)
+    monkeypatch.setattr(
+        call_script,
+        "FastBrainCreditGateMonitor",
+        _FakeCreditGateMonitor,
+    )
+    monkeypatch.setattr(
+        call_script,
+        "create_end_call",
+        lambda *args, **kwargs: _noop_end_call,
+    )
+    monkeypatch.setattr(
+        call_script,
+        "setup_participant_disconnect_handler",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(call_script, "RoomInputOptions", lambda **kwargs: object())
+    monkeypatch.setattr(call_script, "EnglishModel", lambda: object())
+    monkeypatch.setattr(call_script.elevenlabs, "TTS", _FakeTTS)
+    monkeypatch.setattr(
+        llm_client,
+        "new_llm_client",
+        lambda **kwargs: _FakeGreetingClient(),
+    )
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+    if hasattr(call_script, "noise_cancellation"):
+        monkeypatch.setattr(call_script.noise_cancellation, "BVC", lambda: object())
+    monkeypatch.setattr(call_script, "STT", object())
+    monkeypatch.setattr(call_script, "VAD", object())
+
+    await call_script.entrypoint(_FakeJobContext())
+
+    fake_tts = fake_tts_holder["tts"]
+    assert len(fake_tts.update_calls) == 1
+    assert fake_tts.update_calls[0].speed == 0.5
+
+    session = fake_session_holder["session"]
+    previous_connection = fake_tts._TTS__current_connection
+    session._events["user_state_changed"](SimpleNamespace(new_state="speaking"))
+
+    assert fake_tts._opts.voice_settings is call_script.NOT_GIVEN
+    assert previous_connection.marked_non_current is True
+    assert fake_tts._TTS__current_connection is None
+
+    session.say_calls[0][2].complete()
+    await asyncio.sleep(0)
 
 
 @pytest.mark.asyncio
@@ -2804,6 +3370,60 @@ class TestFastBrainSpeechDedup:
             await self._settle_and_drain(env)
             assert len(env["session"].say_calls) == 1, "Novel speech should be spoken."
             assert env["session"].say_calls[0] == "It's 22 degrees and sunny in London."
+        finally:
+            SETTINGS.conversation.SPEECH_DEDUP_ENABLED = orig_dedup
+
+    async def test_self_notification_not_treated_as_spoken(self, fast_brain_env):
+        """Regression (email "The Matrix" ack): a should_speak guidance is
+        injected as a ``[notification]`` using the same text it proposes for
+        speech. The dedup gate must not see that self-copy and conclude the line
+        was "already spoken" - the user has not heard it yet.
+
+        The fake dedup client mimics the old failure surface: it suppresses iff
+        the proposed text leaked into the notifications section as a bullet. With
+        the self-copy excluded, it sees no such bullet and the speech is spoken.
+        """
+        env = fast_brain_env
+        from droid.settings import SETTINGS
+        import droid.conversation_manager.domains.speech_dedup as _dedup_mod
+
+        ack = "Correct - The Matrix. Email channel works."
+
+        # A prior, unrelated spoken utterance so the dedup gate actually runs
+        # (it only runs when there are recent assistant utterances).
+        env["assistant"]._chat_ctx.add_message(
+            role="assistant",
+            content="Got it - I'm checking that now.",
+        )
+
+        class _FakeDedupClient:
+            def set_response_format(self, fmt):
+                pass
+
+            async def generate(self, *, messages=None, **_kw):
+                system = messages[0]["content"]
+                if f"- {ack}" in system:
+                    return (
+                        '{"already_covered": true, '
+                        '"reasoning": "matches notification"}'
+                    )
+                return '{"already_covered": false, "reasoning": "not yet spoken"}'
+
+        orig_dedup = SETTINGS.conversation.SPEECH_DEDUP_ENABLED
+        SETTINGS.conversation.SPEECH_DEDUP_ENABLED = True
+        env["monkeypatch"].setattr(
+            _dedup_mod,
+            "new_llm_client",
+            lambda *a, **kw: _FakeDedupClient(),
+        )
+        try:
+            env["session"].agent_state = "thinking"
+            self._send_speak_guidance(env, ack)
+            await self._settle_and_drain(env)
+            assert env["session"].say_calls == [ack], (
+                "Acknowledgement must be spoken; its own injected notification "
+                "must not count as 'already spoken'."
+            )
         finally:
             SETTINGS.conversation.SPEECH_DEDUP_ENABLED = orig_dedup
 

@@ -30,6 +30,35 @@ if TYPE_CHECKING:
     from sandboxes.conversation_manager.live_voice import LiveVoiceSession
 
 
+def build_unify_attachment_meta(attachments: list[Path] | None) -> list[dict]:
+    """Stage attachment files under ``Downloads`` and build their metadata.
+
+    Returns the per-attachment dicts (id, filename, file URL, content type,
+    size) carried on an inbound ``unify_message`` event. Used both when
+    publishing synthetic chat events and when delivering the same payload
+    through the real ingress transport in the flow-test harness.
+    """
+    if not attachments:
+        return []
+    downloads_dir = Path("Downloads")
+    downloads_dir.mkdir(parents=True, exist_ok=True)
+    attachment_meta: list[dict] = []
+    for src in attachments:
+        dest = downloads_dir / src.name
+        shutil.copy2(src, dest)
+        content_type = mimetypes.guess_type(src.name)[0] or "application/octet-stream"
+        attachment_meta.append(
+            {
+                "id": str(uuid.uuid4()),
+                "filename": src.name,
+                "url": dest.resolve().as_uri(),
+                "content_type": content_type,
+                "size_bytes": src.stat().st_size,
+            },
+        )
+    return attachment_meta
+
+
 def get_user_contact(cm=None) -> dict:
     """Build a boss/user contact dict for sandbox events.
 
@@ -99,30 +128,11 @@ class EventPublisher:
         attachments: list[Path] | None = None,
     ) -> None:
         contact = get_user_contact()
-        attachment_meta: list[dict] = []
-        if attachments:
-            downloads_dir = Path("Downloads")
-            downloads_dir.mkdir(parents=True, exist_ok=True)
-            for src in attachments:
-                dest = downloads_dir / src.name
-                shutil.copy2(src, dest)
-                content_type = (
-                    mimetypes.guess_type(src.name)[0] or "application/octet-stream"
-                )
-                attachment_meta.append(
-                    {
-                        "id": str(uuid.uuid4()),
-                        "filename": src.name,
-                        "url": dest.resolve().as_uri(),
-                        "content_type": content_type,
-                        "size_bytes": src.stat().st_size,
-                    },
-                )
         await self.publish_event(
             UnifyMessageReceived(
                 contact=contact,
                 content=message,
-                attachments=attachment_meta,
+                attachments=build_unify_attachment_meta(attachments),
             ),
         )
 
