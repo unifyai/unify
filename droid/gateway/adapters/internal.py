@@ -218,6 +218,9 @@ async def unify_meet_webhook(
         "livekit_room": room_name,
         "livekit_agent_name": payload.get("livekit_agent_name") or room_name,
     }
+    call_session_id = payload.get("call_session_id")
+    if call_session_id:
+        event_data["call_session_id"] = str(call_session_id)
     opening_config = payload.get("opening_config")
     if opening_config not in (None, ""):
         opening_config = parse_json_field(opening_config)

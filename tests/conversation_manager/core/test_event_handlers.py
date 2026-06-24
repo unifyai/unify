@@ -125,6 +125,7 @@ def mock_call_manager():
     manager.call_contact = None
     manager.call_exchange_id = -1
     manager.unify_meet_exchange_id = -1
+    manager.unify_meet_call_session_id = ""
     manager.refresh_persistent_worker_after_key_change = AsyncMock()
     return manager
 
@@ -913,6 +914,7 @@ class TestUnifyMeetHandlers:
         event = UnifyMeetReceived(
             contact={"contact_id": 1},  # Boss contact
             room_name="room_123",
+            call_session_id="session-123",
             opening_config={
                 "mode": "simulated",
                 "simulated_utterance": "Hi, I'm T-W1N.",
@@ -923,6 +925,10 @@ class TestUnifyMeetHandlers:
         await EventHandler.handle_event(event, mock_cm)
 
         mock_cm.call_manager.start_unify_meet.assert_called_once()
+        assert (
+            mock_cm.call_manager.start_unify_meet.await_args.kwargs["call_session_id"]
+            == "session-123"
+        )
         assert mock_cm.call_manager.start_unify_meet.await_args.kwargs[
             "opening_config"
         ] == {
@@ -935,18 +941,37 @@ class TestUnifyMeetHandlers:
     async def test_unify_meet_started_sets_mode(self, mock_cm):
         """UnifyMeetStarted sets mode to 'unify_meet'."""
         mock_cm.mode = Mode.TEXT
+        mock_cm.call_manager.unify_meet_call_session_id = "session-123"
         event = UnifyMeetStarted(
             contact={"contact_id": 1},
+            call_session_id="session-123",
         )
 
         await EventHandler.handle_event(event, mock_cm)
 
         assert mock_cm.mode == Mode.MEET
+        assert mock_cm.call_manager.unify_meet_call_session_id == "session-123"
+
+    @pytest.mark.asyncio
+    async def test_unify_meet_started_ignores_stale_session(self, mock_cm):
+        """UnifyMeetStarted from an old agent job does not replace the active session."""
+        mock_cm.mode = Mode.TEXT
+        mock_cm.call_manager.unify_meet_call_session_id = "current-session"
+        event = UnifyMeetStarted(
+            contact={"contact_id": 1},
+            call_session_id="old-session",
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        assert mock_cm.mode == Mode.TEXT
+        mock_cm.call_manager.cleanup_call_proc.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_unify_meet_ended_resets_mode(self, mock_cm):
         """UnifyMeetEnded resets mode to 'text'."""
         mock_cm.mode = Mode.MEET
+        mock_cm.call_manager.unify_meet_call_session_id = "current-session"
         mock_cm.contact_index.push_message(
             contact_id=1,
             sender_name="Boss",
@@ -955,11 +980,26 @@ class TestUnifyMeetHandlers:
         )
         mock_cm.contact_index.active_conversations[1].on_call = True
 
-        event = UnifyMeetEnded(contact={"contact_id": 1})
+        event = UnifyMeetEnded(
+            contact={"contact_id": 1},
+            call_session_id="current-session",
+        )
 
         await EventHandler.handle_event(event, mock_cm)
 
         assert mock_cm.mode == Mode.TEXT
+
+    @pytest.mark.asyncio
+    async def test_unify_meet_ended_ignores_stale_session(self, mock_cm):
+        """UnifyMeetEnded from an old agent job does not tear down the current call."""
+        mock_cm.mode = Mode.MEET
+        mock_cm.call_manager.unify_meet_call_session_id = "current-session"
+        event = UnifyMeetEnded(contact={"contact_id": 1}, call_session_id="old-session")
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        assert mock_cm.mode == Mode.MEET
+        mock_cm.call_manager.cleanup_call_proc.assert_not_called()
 
 
 # =============================================================================

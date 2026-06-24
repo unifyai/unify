@@ -92,6 +92,7 @@ class LivekitCallManager:
         self.conference_name = ""
         self.room_name = ""
         self.call_session_id = ""
+        self.unify_meet_call_session_id = ""
         self.provider_call_sid = ""
         self._event_broker = event_broker
         self._socket_server: CallEventSocketServer | None = None
@@ -105,6 +106,7 @@ class LivekitCallManager:
         self._boss_notification_task: asyncio.Task | None = None
         self._worker_watchdog_task: asyncio.Task | None = None
         self._dispatch_watchdog_task: asyncio.Task | None = None
+        self._dispatch_lock = asyncio.Lock()
         # WhatsApp call joining state
         self._whatsapp_call_joining: bool = False
         # Browser-meet shared state (Google Meet / Teams Meet).  Only one
@@ -319,48 +321,50 @@ class LivekitCallManager:
         extra_metadata: dict | None = None,
     ) -> None:
         """Dispatch a LiveKit job to the persistent worker."""
-        await self._wait_for_worker_registered()
-        socket_path = await self._ensure_socket_server()
+        async with self._dispatch_lock:
+            await self._wait_for_worker_registered()
+            socket_path = await self._ensure_socket_server()
 
-        meta_dict = {
-            "voice_provider": self.voice_provider or "cartesia",
-            "voice_id": self.voice_id or "",
-            "outbound": outbound,
-            "channel": channel,
-            "contact": contact,
-            "boss": boss,
-            "assistant_bio": self.assistant_bio,
-            "assistant_id": self.assistant_id,
-            "user_id": self.user_id,
-            "assistant_name": self.assistant_name,
-            "is_coordinator": self.is_coordinator,
-            "ipc_socket_path": socket_path or "",
-        }
-        if extra_metadata:
-            meta_dict.update(extra_metadata)
-        metadata = json.dumps(meta_dict)
+            meta_dict = {
+                "voice_provider": self.voice_provider or "cartesia",
+                "voice_id": self.voice_id or "",
+                "outbound": outbound,
+                "channel": channel,
+                "contact": contact,
+                "boss": boss,
+                "assistant_bio": self.assistant_bio,
+                "assistant_id": self.assistant_id,
+                "user_id": self.user_id,
+                "assistant_name": self.assistant_name,
+                "is_coordinator": self.is_coordinator,
+                "ipc_socket_path": socket_path or "",
+            }
+            if extra_metadata:
+                meta_dict.update(extra_metadata)
+            metadata = json.dumps(meta_dict)
 
-        lk = LiveKitAPI(
-            url=os.environ.get("LIVEKIT_URL", ""),
-            api_key=os.environ.get("LIVEKIT_API_KEY", ""),
-            api_secret=os.environ.get("LIVEKIT_API_SECRET", ""),
-        )
-        try:
-            dispatch = await lk.agent_dispatch.create_dispatch(
-                CreateAgentDispatchRequest(
-                    agent_name=self.worker_agent_name,
-                    room=room_name,
-                    metadata=metadata,
-                ),
+            lk = LiveKitAPI(
+                url=os.environ.get("LIVEKIT_URL", ""),
+                api_key=os.environ.get("LIVEKIT_API_KEY", ""),
+                api_secret=os.environ.get("LIVEKIT_API_SECRET", ""),
             )
-            self._active_job = True
-            self._schedule_dispatch_watchdog()
-            LOGGER.info(
-                f"{ICONS['ipc']} [LivekitCallManager] Dispatched job "
-                f"(dispatch_id={dispatch.id}, room={room_name})",
-            )
-        finally:
-            await lk.aclose()
+            try:
+                dispatch = await lk.agent_dispatch.create_dispatch(
+                    CreateAgentDispatchRequest(
+                        agent_name=self.worker_agent_name,
+                        room=room_name,
+                        metadata=metadata,
+                    ),
+                )
+                self._active_job = True
+                self._schedule_dispatch_watchdog()
+                LOGGER.info(
+                    f"{ICONS['ipc']} [LivekitCallManager] Dispatched job "
+                    f"(dispatch_id={dispatch.id}, room={room_name}, "
+                    f"call_session_id={meta_dict.get('call_session_id', '')})",
+                )
+            finally:
+                await lk.aclose()
 
     async def _ensure_socket_server(self) -> str | None:
         """Start the socket server if not running, return socket path."""
@@ -479,6 +483,7 @@ class LivekitCallManager:
         room_name: str | None,
         *,
         opening_config: dict | None = None,
+        call_session_id: str | None = None,
     ):
         if self.has_active_call:
             if self._clear_stale_dispatch_state():
@@ -506,10 +511,22 @@ class LivekitCallManager:
 
         room_name = room_name or make_room_name(self.assistant_id, "meet")
         self.room_name = room_name
-        extra_metadata = {"opening_config": opening_config} if opening_config else None
-        extra_env = (
-            {"opening_config": json.dumps(opening_config)} if opening_config else None
-        )
+        self.unify_meet_call_session_id = call_session_id or ""
+        extra_metadata = {}
+        if opening_config:
+            extra_metadata["opening_config"] = opening_config
+        if call_session_id:
+            extra_metadata["call_session_id"] = call_session_id
+        extra_env = {
+            key: value
+            for key, value in {
+                "opening_config": (
+                    json.dumps(opening_config) if opening_config else None
+                ),
+                "CALL_SESSION_ID": call_session_id,
+            }.items()
+            if value
+        } or None
 
         if self._worker_proc is not None and self._worker_proc.poll() is None:
             await self._dispatch_job(
@@ -518,7 +535,7 @@ class LivekitCallManager:
                 contact,
                 boss,
                 False,
-                extra_metadata=extra_metadata,
+                extra_metadata=extra_metadata or None,
             )
         else:
             await self._start_call_subprocess(
@@ -956,7 +973,10 @@ class LivekitCallManager:
         elif channel == "phone_call":
             event = PhoneCallEnded(contact=contact)
         else:
-            event = UnifyMeetEnded(contact=contact)
+            event = UnifyMeetEnded(
+                contact=contact,
+                call_session_id=self.unify_meet_call_session_id or None,
+            )
         LOGGER.debug(
             f"{ICONS['ipc']} [LivekitCallManager] IPC client disconnected without cleanup, "
             f"publishing fallback {event.__class__.__name__}",
@@ -1003,6 +1023,7 @@ class LivekitCallManager:
         self.initial_notification = ""
         self._call_channel = None
         self._disconnect_contact = None
+        self.unify_meet_call_session_id = ""
 
         if self._boss_notification_task and not self._boss_notification_task.done():
             self._boss_notification_task.cancel()
