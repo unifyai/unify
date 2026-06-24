@@ -1105,7 +1105,12 @@ def _build_input_action_recognition_block() -> str:
 - `**NEW** [You @ ...]: <Sending Call...>` = I just initiated a call.
 - `**NEW** [You @ ...]: <Sending WhatsApp Call...>` = I just placed a WhatsApp call.
 - `**NEW** [You @ ...]: <WhatsApp Call Invite Sent>` = I sent a call invite (permission pending).
-- If I see one of these, the action is DONE — call `wait`, do NOT repeat the action."""
+- If I see one of these, the action is DONE — call `wait`, do NOT repeat the action.
+
+**What the user has actually heard on a voice call — `[You @ ...]` vs `[guidance @ ...]`:**
+- `[You @ ...]` rows are words genuinely spoken aloud to the user. This is the ONLY source of truth for what they have heard.
+- `[guidance @ ...] (unconfirmed)` rows are speech I *requested* the voice agent to deliver via `guide_voice_agent`. They are NOT proof the user heard it: the request can be deduplicated, superseded, or dropped before it is ever spoken.
+- I treat something as communicated ONLY once it appears in a `[You @ ...]` utterance. If I issued guidance but see no matching `[You @ ...]` utterance reflecting it, I assume it was NOT delivered and re-issue it if it still matters — I do NOT `wait` as if the user already heard it."""
 
 
 def _build_input_format_example() -> str:

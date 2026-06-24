@@ -300,6 +300,64 @@ class TestSpeechGateContradictionDetection:
         system_msg = captured["messages"][0]["content"]
         assert "(none)" in system_msg  # notifications section shows "(none)"
 
+    async def test_self_notification_only_skips_check(self):
+        """The slow brain's guidance is injected as a ``[notification]`` using the
+        same text it then proposes for speech. When that self-copy is the only
+        context, it is dropped and the check short-circuits to allow speech
+        (no LLM call) - the user has not actually heard it yet."""
+        proposed = "Correct - The Matrix. Email channel works."
+        checker = SpeechDeduplicationChecker()
+
+        result = await checker.evaluate(
+            proposed_speech=proposed,
+            recent_utterances=[],
+            recent_notifications=[proposed],
+        )
+
+        assert result.should_suppress is False
+        # Reasoning marks the no-LLM short-circuit, proving the self-copy was
+        # excluded before any model call.
+        assert result.reasoning == "no recent context to compare against"
+
+    async def test_self_notification_excluded_from_prompt(self):
+        """A notification equal to the proposed speech is filtered out before the
+        prompt is built, so the gate can never match the proposal against itself.
+        Other, genuinely distinct notifications are preserved."""
+        proposed = "Correct - The Matrix. Email channel works."
+        other = "Email check completed for Daniel."
+        captured: dict = {}
+        mock_client = MagicMock()
+        mock_client.set_response_format = MagicMock()
+
+        async def capture_generate(*, messages=None, **_kwargs):
+            captured["messages"] = messages
+            return json.dumps(
+                {
+                    "already_covered": False,
+                    "contradicts_current_state": False,
+                    "reasoning": "novel",
+                },
+            )
+
+        mock_client.generate = AsyncMock(side_effect=capture_generate)
+
+        with patch(
+            "droid.conversation_manager.domains.speech_dedup.new_llm_client",
+            return_value=mock_client,
+        ):
+            checker = SpeechDeduplicationChecker()
+            await checker.evaluate(
+                proposed_speech=proposed,
+                recent_utterances=["Got it - I'm checking that now."],
+                recent_notifications=[proposed, other],
+            )
+
+        system_msg = captured["messages"][0]["content"]
+        # The self-copy is not rendered as a notification bullet ("- {text}"),
+        # while the distinct notification is retained.
+        assert f"- {proposed}" not in system_msg
+        assert f"- {other}" in system_msg
+
 
 @pytest.mark.eval
 @pytest.mark.asyncio
@@ -354,6 +412,33 @@ class TestSpeechGateContradictionEval:
 
         assert result.should_suppress is False, (
             f"Expected novel info to pass through. " f"Reasoning: {result.reasoning}"
+        )
+
+    async def test_never_spoken_ack_not_suppressed(self):
+        """Regression: the email "The Matrix" acknowledgement was wrongly
+        suppressed because its own injected ``[notification]`` copy was treated
+        as "already spoken aloud".
+
+        The proposed acknowledgement matches a recent notification (the slow
+        brain's own guidance) but NO spoken utterance covers it - the user has
+        only heard "Got it, I'm checking". It must NOT be suppressed.
+        """
+        from droid.settings import SETTINGS
+
+        ack = "Correct - The Matrix. That's correct, well done. " "Email channel works."
+        checker = SpeechDeduplicationChecker(
+            model=SETTINGS.conversation.FAST_BRAIN_MODEL,
+        )
+
+        result = await checker.evaluate(
+            proposed_speech=ack,
+            recent_utterances=["Got it - I'm checking that now."],
+            recent_notifications=[ack],
+        )
+
+        assert result.should_suppress is False, (
+            f"Never-spoken acknowledgement must not be suppressed just because it "
+            f"matches its own guidance notification. Reasoning: {result.reasoning}"
         )
 
 

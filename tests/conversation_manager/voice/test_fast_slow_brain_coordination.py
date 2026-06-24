@@ -834,6 +834,35 @@ class TestSlowBrainTextAcknowledgmentPrompt:
             )
 
 
+class TestSlowBrainGuidanceDeliveryPrompt:
+    """Verify the slow brain prompt distinguishes confirmed-spoken `[You @ ...]`
+    utterances from unconfirmed `[guidance @ ...]` intent.
+
+    Regression: the slow brain treated its own `guide_voice_agent` guidance as if
+    the user had heard it (it reasoned "already confirmed" and called `wait`),
+    even when the speech was suppressed/dropped before being spoken. The prompt
+    must instruct it that only `[You @ ...]` rows prove delivery.
+    """
+
+    def test_prompt_marks_guidance_as_unconfirmed(self):
+        from droid.conversation_manager.prompt_builders import build_system_prompt
+
+        prompt = build_system_prompt(
+            bio="Test assistant.",
+            contact_id=1,
+            first_name="Alex",
+            surname="Demo",
+            is_voice_call=True,
+        ).flatten()
+
+        # Guidance rows are explicitly marked as not-yet-delivered.
+        assert "(unconfirmed)" in prompt
+        # Spoken utterances are the single source of truth for what was heard.
+        assert "source of truth for what they have heard" in prompt
+        # The model is told not to wait as if guidance was already heard.
+        assert "NOT proof the user heard it" in prompt
+
+
 # =============================================================================
 # Test: slow brain should not send text messages during voice calls
 # =============================================================================

@@ -8,8 +8,10 @@ from droid.logger import LOGGER
 class SpeechDedup(BaseModel):
     already_covered: bool = Field(
         description=(
-            "Whether the proposed speech has already been communicated "
-            "to the user by recent assistant utterances on this call."
+            "Whether the proposed speech has already been spoken aloud to the "
+            "user, judged ONLY against recent assistant utterances (the spoken "
+            "transcript). Notifications never count as 'already said' - they are "
+            "system state, not speech the user has heard."
         ),
     )
     contradicts_current_state: bool = Field(
@@ -41,11 +43,19 @@ The system has two brains running in parallel:
 During the slow brain's thinking time, the fast brain may have already answered, \
 OR new notifications may have arrived that make the proposed speech stale or wrong.
 
-## Recent assistant utterances (what the user has already heard)
+## Recent assistant utterances (the ONLY record of what the user has actually heard)
+
+These are the words that were genuinely spoken aloud on the call. This is the single \
+source of truth for what the user has heard.
 
 {recent_utterances}
 
-## Recent notifications (authoritative system state)
+## Recent notifications (authoritative system *state* - NOT speech the user has heard)
+
+These describe what is true in the system. They are NOT things the user has been told. \
+A notification matching the proposed speech does NOT mean the user has heard it - the \
+slow brain routinely queues speech that also appears here as state. Never treat a \
+notification as evidence that something was already said.
 
 {recent_notifications}
 
@@ -55,10 +65,16 @@ OR new notifications may have arrived that make the proposed speech stale or wro
 
 ## Suppress (already_covered=True) when
 
-- The recent utterances already convey the same core information or conclusion
-- The user has already been told about the completion, result, or status that the \
-proposed speech covers
-- Speaking this would be noticeably redundant to the listener
+Judge this ONLY against the recent assistant utterances above - never against \
+notifications.
+
+- The recent *utterances* already convey the same core information or conclusion
+- The user has already been *told aloud* about the completion, result, or status that \
+the proposed speech covers
+- Speaking this would be noticeably redundant to the listener given what was *spoken*
+
+If the only overlap is with a notification (and no spoken utterance covers it), \
+already_covered MUST be False - the user has not heard it yet.
 
 ## Suppress (contradicts_current_state=True) when
 
@@ -77,6 +93,8 @@ already progressed past that step
 - No recent utterances or notifications address the same topic at all
 - The overlap is only superficial (e.g., both mention the same person but discuss \
 different things about them)
+- The proposed speech only matches a notification (system state) and has not been \
+spoken in any recent utterance - the user still needs to hear it
 
 Output JSON matching the SpeechDedup schema.\
 """
@@ -107,6 +125,16 @@ class SpeechDeduplicationChecker:
         are no recent utterances to compare against (no LLM call needed).
         On error, fails open (allows speech).
         """
+        # Drop the proposal's own copy from the notifications. The slow brain's
+        # guide_voice_agent guidance is injected into the fast brain's context as a
+        # ``[notification]`` system message using the very same text that is now
+        # being proposed for speech. Without this exclusion the gate would compare
+        # the proposal against itself and wrongly conclude it was "already covered".
+        proposed_norm = proposed_speech.strip()
+        recent_notifications = [
+            n for n in (recent_notifications or []) if n.strip() != proposed_norm
+        ]
+
         if not recent_utterances and not recent_notifications:
             return SpeechDedup(
                 already_covered=False,

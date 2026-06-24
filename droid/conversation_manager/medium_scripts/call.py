@@ -1804,6 +1804,12 @@ async def entrypoint(ctx: agents.JobContext):
         try:
             recent = _get_recent_assistant_utterances()
             notifications = _get_recent_notifications() if recent else []
+            # Exclude this guidance's own injected ``[notification]`` copy so the
+            # gate never compares the proposal against itself. apply_notification
+            # injects ``notification_content`` verbatim; the spoken ``text`` may
+            # differ (spoken_message), so drop both forms.
+            _self_texts = {text.strip(), (notification_content or "").strip()}
+            notifications = [n for n in notifications if n.strip() not in _self_texts]
             if recent and SETTINGS.conversation.SPEECH_DEDUP_ENABLED:
                 from droid.conversation_manager.domains.speech_dedup import (
                     SpeechDeduplicationChecker,
