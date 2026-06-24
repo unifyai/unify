@@ -799,6 +799,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     # Browser-meet diarization config (Google Meet / Teams Meet)
     meet_session_id: str = ""
+    call_session_id: str = ""
     meet_url: str = ""
     meet_agent_service_url: str = ""
     # Per-channel agent-service URL prefix.
@@ -816,6 +817,11 @@ async def entrypoint(ctx: agents.JobContext):
             meet_session_id = os.environ.get("MEET_SESSION_ID", "")
             meet_url = os.environ.get("MEET_URL", "")
             meet_agent_service_url = os.environ.get("AGENT_SERVICE_URL", "")
+    call_session_id = (
+        str(meta.get("call_session_id", "")).strip()
+        if meta
+        else os.environ.get("CALL_SESSION_ID", "").strip()
+    )
 
     _log.config(
         f"voice_provider={voice_provider} voice_id={voice_id} outbound={outbound} channel={channel} opening_mode={opening_config['mode']}",
@@ -1425,10 +1431,16 @@ async def entrypoint(ctx: agents.JobContext):
         )
 
     credit_gate_task: asyncio.Task | None = None
+    explicit_stop_requested = False
+    shutdown_completed = False
 
     # Register cleanup as a LiveKit shutdown callback so it runs on any
     # exit path: participant disconnect or explicit stop.
     async def _on_job_shutdown():
+        nonlocal shutdown_completed
+        if shutdown_completed:
+            return
+        shutdown_completed = True
         if elevenlabs_opener_restore_task is not None:
             await utils.aio.cancel_and_wait(elevenlabs_opener_restore_task)
         if credit_gate_task is not None:
@@ -1437,8 +1449,11 @@ async def entrypoint(ctx: agents.JobContext):
             await utils.aio.cancel_and_wait(mood_classification_task)
         if audio_bridge is not None:
             await asyncio.to_thread(audio_bridge.stop)
-        await delete_livekit_room(ctx.room.name)
-        await publish_call_ended(contact, channel)
+        await screen_capture.close()
+        await webcam_capture.close()
+        if channel != "unify_meet" or explicit_stop_requested:
+            await delete_livekit_room(ctx.room.name)
+        await publish_call_ended(contact, channel, call_session_id=call_session_id)
 
     ctx.add_shutdown_callback(_on_job_shutdown)
 
@@ -1879,11 +1894,13 @@ async def entrypoint(ctx: agents.JobContext):
         noise_cancellation=(
             noise_cancellation.BVC() if sys.platform == "darwin" else None
         ),
-        close_on_disconnect=(channel not in ("google_meet", "teams_meet")),
+        close_on_disconnect=(
+            channel not in ("google_meet", "teams_meet", "unify_meet")
+        ),
     )
 
     # Publish call started (shared helper)
-    await publish_call_started(contact, channel)
+    await publish_call_started(contact, channel, call_session_id=call_session_id)
 
     pending_notifications: list[tuple[str, str, bool, str, str, str]] = (
         []
@@ -1892,7 +1909,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     def on_status(data: dict) -> None:
         """Handle status events (call_answered, stop, meet_session_id)."""
-        nonlocal meet_session_id
+        nonlocal explicit_stop_requested, meet_session_id
         event_type = data.get("type", "")
         _log.call_status(event_type)
 
@@ -1902,6 +1919,7 @@ async def entrypoint(ctx: agents.JobContext):
         elif event_type in ("meet_session_id", "gmeet_session_id"):
             meet_session_id = data.get("session_id", "")
         elif event_type == "stop":
+            explicit_stop_requested = True
             ctx.shutdown(reason="stopped")
 
     def _is_pipeline_quiescent() -> bool:

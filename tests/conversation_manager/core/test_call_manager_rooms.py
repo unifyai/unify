@@ -77,11 +77,13 @@ async def test_start_unify_meet_passes_opening_config_to_worker(monkeypatch):
         boss,
         "droid_123_meet",
         opening_config=opening_config,
+        call_session_id="session-123",
     )
 
     dispatch_job.assert_awaited_once()
     assert dispatch_job.await_args.kwargs["extra_metadata"] == {
         "opening_config": opening_config,
+        "call_session_id": "session-123",
     }
 
     manager._worker_proc = None
@@ -91,12 +93,17 @@ async def test_start_unify_meet_passes_opening_config_to_worker(monkeypatch):
         boss,
         "droid_123_meet",
         opening_config=opening_config,
+        call_session_id="session-456",
     )
 
     start_subprocess.assert_awaited_once()
     assert json.loads(
         start_subprocess.await_args.kwargs["extra_env"]["opening_config"],
     ) == (opening_config)
+    assert (
+        start_subprocess.await_args.kwargs["extra_env"]["CALL_SESSION_ID"]
+        == "session-456"
+    )
 
 
 class _FakeCredentials:

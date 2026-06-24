@@ -421,7 +421,11 @@ async def start_event_broker_receive() -> bool:
 # -------- Call lifecycle helpers -------- #
 
 
-async def publish_call_started(contact: dict, channel: str) -> None:
+async def publish_call_started(
+    contact: dict,
+    channel: str,
+    call_session_id: str | None = None,
+) -> None:
     if channel == "phone_call":
         event = PhoneCallStarted(contact=contact)
     elif channel == "whatsapp_call":
@@ -431,11 +435,15 @@ async def publish_call_started(contact: dict, channel: str) -> None:
     elif channel == "teams_meet":
         event = TeamsMeetStarted(contact=contact)
     else:
-        event = UnifyMeetStarted(contact=contact)
+        event = UnifyMeetStarted(contact=contact, call_session_id=call_session_id)
     await event_broker.publish(event.topic, event.to_json())
 
 
-async def publish_call_ended(contact: dict, channel: str) -> None:
+async def publish_call_ended(
+    contact: dict,
+    channel: str,
+    call_session_id: str | None = None,
+) -> None:
     if channel == "phone_call":
         event = PhoneCallEnded(contact=contact)
     elif channel == "whatsapp_call":
@@ -445,7 +453,7 @@ async def publish_call_ended(contact: dict, channel: str) -> None:
     elif channel == "teams_meet":
         event = TeamsMeetEnded(contact=contact)
     else:
-        event = UnifyMeetEnded(contact=contact)
+        event = UnifyMeetEnded(contact=contact, call_session_id=call_session_id)
     await event_broker.publish(event.topic, event.to_json())
 
 
@@ -679,6 +687,8 @@ class UserTrackCaptureManager:
         self._stream = None
         self._on_track_change = on_track_change
         self._log = fb_logger
+        self._room = room
+        self._closed = False
 
         source_map = {
             "screenshare": rtc.TrackSource.SOURCE_SCREENSHARE,
@@ -694,6 +704,9 @@ class UserTrackCaptureManager:
         @room.on("track_unsubscribed")
         def _on_track_unsubscribed(track, publication, participant):
             self._handle_track_unsubscribed(publication)
+
+        self._on_track_subscribed = _on_track_subscribed
+        self._on_track_unsubscribed = _on_track_unsubscribed
 
     def _handle_track_subscribed(self, track, publication) -> None:
         from livekit import rtc
@@ -781,6 +794,11 @@ class UserTrackCaptureManager:
 
     async def close(self) -> None:
         """Cancel the capture loop and release resources."""
+        if self._closed:
+            return
+        self._closed = True
+        self._room.off("track_subscribed", self._on_track_subscribed)
+        self._room.off("track_unsubscribed", self._on_track_unsubscribed)
         if self._capture_task and not self._capture_task.done():
             self._capture_task.cancel()
             try:

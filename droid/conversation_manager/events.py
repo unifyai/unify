@@ -176,6 +176,7 @@ class UnifyMeetReceived(Event):
     contact: dict
     room_name: str | None = None
     opening_config: dict | None = None
+    call_session_id: str | None = None
 
 
 @dataclass
@@ -197,6 +198,7 @@ class UnifyMeetStarted(Event):
     prominent: ClassVar[bool] = True
 
     contact: dict
+    call_session_id: str | None = None
 
 
 @dataclass
@@ -254,6 +256,7 @@ class UnifyMeetEnded(Event):
     prominent: ClassVar[bool] = True
 
     contact: dict
+    call_session_id: str | None = None
 
 
 @dataclass

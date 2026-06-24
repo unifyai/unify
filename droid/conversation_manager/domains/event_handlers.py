@@ -368,9 +368,17 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
     """
     Handle incoming/outgoing call initiation - spawn voice agent subprocess.
     """
-    # Don't start a new call if we're already in voice mode
+    # Don't start a new call if we're already in voice mode. Unify Meet is the
+    # exception: the browser can remain in the room while an assistant job drops,
+    # so a fresh UnifyMeetReceived is allowed to redispatch the agent when the
+    # previous job has already been cleaned up.
     if cm.mode.is_voice:
-        return
+        if not (
+            isinstance(event, UnifyMeetReceived)
+            and cm.mode == Mode.MEET
+            and not cm.call_manager.has_active_call
+        ):
+            return
 
     boss_contact_id = SESSION_DETAILS.boss_contact_id
     boss = (
@@ -444,6 +452,7 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
                 boss,
                 e.room_name,
                 opening_config=e.opening_config,
+                call_session_id=e.call_session_id,
             )
             message_content = "<Recieving Call...>"
             notif_content = f"Call received from {sender_name}"
@@ -664,6 +673,20 @@ async def _(
     *args,
     **kwargs,
 ):
+    if isinstance(event, UnifyMeetStarted):
+        active_session = cm.call_manager.unify_meet_call_session_id
+        if (
+            event.call_session_id
+            and active_session
+            and event.call_session_id != active_session
+        ):
+            LOGGER.info(
+                "Ignoring stale UnifyMeetStarted for session %s (active=%s)",
+                event.call_session_id,
+                active_session,
+            )
+            return
+
     if isinstance(event, WhatsAppCallStarted):
         cm.mode = Mode.CALL
         whatsapp_number = event.contact.get("whatsapp_number")
@@ -700,6 +723,7 @@ async def _(
         cm.call_manager.teams_meet_start_timestamp = event.timestamp
         label = "Teams Meeting"
     elif isinstance(event, UnifyMeetStarted):
+        cm.call_manager.unify_meet_call_session_id = event.call_session_id or ""
         cm.call_manager.unify_meet_start_timestamp = event.timestamp
         label = "Unify Meet"
     else:
@@ -1255,6 +1279,20 @@ async def _(
     *args,
     **kwargs,
 ):
+    if isinstance(event, UnifyMeetEnded):
+        active_session = cm.call_manager.unify_meet_call_session_id
+        if (
+            event.call_session_id
+            and active_session
+            and event.call_session_id != active_session
+        ):
+            LOGGER.info(
+                "Ignoring stale UnifyMeetEnded for session %s (active=%s)",
+                event.call_session_id,
+                active_session,
+            )
+            return
+
     # Persist session identifiers in exchange metadata and stash the
     # exchange_id so the async RecordingReady handler can find it.
     if isinstance(event, (PhoneCallEnded, WhatsAppCallEnded)):
@@ -1301,9 +1339,18 @@ async def _(
     else:
         exchange_id = cm.call_manager.unify_meet_exchange_id
         if exchange_id != UNASSIGNED and cm.call_manager.room_name:
+            metadata = {
+                key: value
+                for key, value in {
+                    "room_name": cm.call_manager.room_name,
+                    "call_session_id": cm.call_manager.unify_meet_call_session_id
+                    or event.call_session_id,
+                }.items()
+                if value
+            }
             cm.transcript_manager.update_exchange_metadata(
                 exchange_id,
-                {"room_name": cm.call_manager.room_name},
+                metadata,
             )
             cm._recording_exchange_ids[cm.call_manager.room_name] = exchange_id
 
@@ -1344,6 +1391,7 @@ async def _(
     cm.call_manager.conference_name = None
     cm.call_manager.room_name = None
     cm.call_manager.call_session_id = ""
+    cm.call_manager.unify_meet_call_session_id = ""
     cm.call_manager.provider_call_sid = ""
     cm.call_manager.call_start_timestamp = None
     cm.call_manager.unify_meet_start_timestamp = None
