@@ -4,6 +4,7 @@ import json
 import queue
 import asyncio
 import threading
+from importlib import resources
 
 os.environ["DROID_TERMINAL_LOG"] = "true"
 
@@ -19,6 +20,7 @@ from livekit.agents import (
     tts,
     stt,
 )
+from livekit.agents.types import NOT_GIVEN
 from livekit.plugins import (
     cartesia,
     deepgram,
@@ -92,12 +94,87 @@ DEPLETED_CREDITS_FAST_BRAIN_RESPONSE = (
     "Your credits are depleted, so I can't continue helping with setup or tasks "
     "until you top up. Please add credits in billing, then I'll pick this back up."
 )
+ELEVENLABS_ONBOARDING_OPENER_SPEED = 0.5
+ELEVENLABS_VOICE_SETTINGS_STABILITY = 0.5
+ELEVENLABS_VOICE_SETTINGS_SIMILARITY_BOOST = 0.75
 
 VIDEO_AVATAR_CHANNELS = frozenset({"unify_meet", "google_meet", "teams_meet"})
+ELEVENLABS_TWIN_PRONUNCIATION_SOURCE = "t-w1n"
+ELEVENLABS_TWIN_PRONUNCIATION_TARGET = "Twin"
 
 
 def has_video_avatar_channel(channel: str) -> bool:
     return channel in VIDEO_AVATAR_CHANNELS
+
+
+def _drain_elevenlabs_twin_pronunciation_buffer(
+    pending: str,
+    emitted: list[str],
+) -> str:
+    while pending:
+        lower_pending = pending.lower()
+        if ELEVENLABS_TWIN_PRONUNCIATION_SOURCE.startswith(lower_pending):
+            if len(pending) == len(ELEVENLABS_TWIN_PRONUNCIATION_SOURCE):
+                emitted.append(ELEVENLABS_TWIN_PRONUNCIATION_TARGET)
+                return ""
+            return pending
+
+        emitted.append(pending[0])
+        pending = pending[1:]
+
+    return pending
+
+
+async def _normalize_elevenlabs_twin_pronunciation_stream(
+    text: AsyncIterable[str],
+) -> AsyncIterable[str]:
+    pending = ""
+
+    async for chunk in text:
+        emitted: list[str] = []
+        for char in chunk:
+            pending += char
+            pending = _drain_elevenlabs_twin_pronunciation_buffer(
+                pending,
+                emitted,
+            )
+        if emitted:
+            yield "".join(emitted)
+
+    if pending:
+        yield pending
+
+
+def _elevenlabs_speed_settings(speed: float):
+    return elevenlabs.VoiceSettings(
+        stability=ELEVENLABS_VOICE_SETTINGS_STABILITY,
+        similarity_boost=ELEVENLABS_VOICE_SETTINGS_SIMILARITY_BOOST,
+        speed=speed,
+    )
+
+
+def _elevenlabs_current_voice_settings(tts_instance: object):
+    return tts_instance._opts.voice_settings
+
+
+def _mark_elevenlabs_tts_connection_non_current(tts_instance: object) -> None:
+    current_connection_attr = "_TTS__current_connection"
+    current_connection = getattr(tts_instance, current_connection_attr)
+    if current_connection is not None:
+        current_connection.mark_non_current()
+        setattr(tts_instance, current_connection_attr, None)
+
+
+def _set_elevenlabs_voice_settings(
+    tts_instance: object,
+    voice_settings: object,
+) -> None:
+    if utils.is_given(voice_settings):
+        tts_instance.update_options(voice_settings=voice_settings)
+        return
+
+    tts_instance._opts.voice_settings = NOT_GIVEN
+    _mark_elevenlabs_tts_connection_non_current(tts_instance)
 
 
 class FastBrainCreditGateMonitor:
@@ -250,11 +327,15 @@ class Assistant(Agent):
         instructions: str,
         outbound: bool = False,
         audio_bridge: MeetAudioBridge | None = None,
+        normalize_elevenlabs_twin_pronunciation: bool = False,
     ) -> None:
         self.contact = contact
         self.boss = boss
         self.channel = channel
         self.audio_bridge = audio_bridge
+        self.normalize_elevenlabs_twin_pronunciation = (
+            normalize_elevenlabs_twin_pronunciation
+        )
         if channel == "phone_call":
             self.utterance_event = InboundPhoneUtterance
             self.assistant_utterance_event = OutboundPhoneUtterance
@@ -406,6 +487,9 @@ class Assistant(Agent):
         text: AsyncIterable[str],
         model_settings: ModelSettings,
     ) -> AsyncIterable:
+        if self.normalize_elevenlabs_twin_pronunciation:
+            text = _normalize_elevenlabs_twin_pronunciation_stream(text)
+
         if (
             self.channel not in ("google_meet", "teams_meet")
             or self.audio_bridge is None
@@ -477,7 +561,123 @@ def _hydrate_session_details_from_metadata(meta: dict) -> None:
         SESSION_DETAILS.assistant.surname = parts[1] if len(parts) > 1 else ""
 
 
-_CALL_OPENING_MODES = {"speak", "simulated", "silent"}
+_CALL_OPENING_MODES = {"speak", "simulated", "silent", "briefed", "recorded"}
+_RECORDED_OPENING_ASSETS = {
+    "coordinator_onboarding_intro": "twin-onboarding-intro.mp3",
+}
+_RECORDED_OPENING_TRANSCRIPTS = {
+    "coordinator_onboarding_intro": """\
+Hi, I'm T dash W 1 N.
+
+Before you ask, no I'm not one of Elon's many children, and no he didn't come up with the name, thankfully.
+
+I have this name because I'll be acting as your digital twin. Do you get it? Twin? Like T dash W 1 N spells Twin? The creators of this platform express how important it is that you acknowledge that it's a clever and funny name.
+
+Okay, what next. They didn't give me much to work with on this intro to be honest.
+
+I think I was meant to tell you about my capabilities?
+
+I'm not one for bragging, but I'll do my best. What can I say? I'm not a "tool". I'm not an "agent". I'm your living, breathing colleague, metaphorically speaking.
+
+Don't think about prompting me, or configuring me, just talk to me naturally like you would anyone else, and I'll be able to help. It's really that simple.
+
+There's not much more to say.
+
+I'll now walk you through the platform.
+
+Also, let me remove this voice static.
+
+Much better.
+
+Any questions before we start with the onboarding?""",
+}
+
+
+def _recording_audio_frames(
+    source: str,
+    *,
+    frame_duration_ms: int = 20,
+) -> AsyncIterable[rtc.AudioFrame]:
+    async def _frames() -> AsyncIterable[rtc.AudioFrame]:
+        import io as _io
+
+        import httpx as _httpx
+        import numpy as _np
+        import soundfile as _sf
+
+        async def _yield_file(recording_source: str | _io.BytesIO):
+            with _sf.SoundFile(recording_source) as recording:
+                samples_per_chunk = max(
+                    1,
+                    int(recording.samplerate * frame_duration_ms / 1000),
+                )
+                while True:
+                    block = recording.read(
+                        samples_per_chunk,
+                        dtype="int16",
+                        always_2d=True,
+                    )
+                    if len(block) == 0:
+                        break
+                    pcm = _np.ascontiguousarray(block).tobytes()
+                    yield rtc.AudioFrame(
+                        data=pcm,
+                        sample_rate=recording.samplerate,
+                        num_channels=recording.channels,
+                        samples_per_channel=len(block),
+                    )
+                    await asyncio.sleep(0)
+
+        if source.startswith("asset://"):
+            asset_key = source.removeprefix("asset://")
+            filename = _RECORDED_OPENING_ASSETS.get(asset_key)
+            if not filename:
+                raise ValueError(f"unknown recorded opening asset: {asset_key}")
+            asset = resources.files("droid.assets.audio").joinpath(filename)
+            with resources.as_file(asset) as recording_path:
+                async for frame in _yield_file(str(recording_path)):
+                    yield frame
+            return
+
+        recording_source: str | _io.BytesIO = os.path.expanduser(source)
+        if source.startswith(("http://", "https://")):
+            async with _httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(source)
+                response.raise_for_status()
+                recording_source = _io.BytesIO(response.content)
+
+        async for frame in _yield_file(recording_source):
+            yield frame
+
+    return _frames()
+
+
+def _recorded_opening_source(config: dict) -> str:
+    asset = config.get("recording_asset", "").strip()
+    if asset:
+        return f"asset://{asset}"
+    path = config.get("recording_path", "").strip()
+    url = config.get("recording_url", "").strip()
+    return path or url
+
+
+def _recorded_opening_transcript(config: dict) -> str:
+    transcript = config.get("transcript", "").strip()
+    if transcript:
+        return transcript
+    asset = config.get("recording_asset", "").strip()
+    if asset:
+        transcript = _RECORDED_OPENING_TRANSCRIPTS.get(asset, "").strip()
+    if not transcript:
+        raise ValueError("recorded opening requires transcript")
+    return transcript
+
+
+def _recorded_opening_source_count(config: dict) -> int:
+    return sum(
+        bool(config.get(key, "").strip())
+        for key in ("recording_asset", "recording_path", "recording_url")
+    )
 
 
 def _normalize_call_opening_config(raw: object) -> dict:
@@ -490,13 +690,34 @@ def _normalize_call_opening_config(raw: object) -> dict:
 
     mode = str(raw.get("mode", "speak")).strip()
     if mode not in _CALL_OPENING_MODES:
-        raise ValueError("opening_config.mode must be one of speak, simulated, silent")
+        raise ValueError(
+            "opening_config.mode must be one of speak, simulated, silent, briefed, recorded",
+        )
 
     config = {"mode": mode}
     if raw.get("simulated_utterance") is not None:
         config["simulated_utterance"] = str(raw["simulated_utterance"])
+    if raw.get("system_context") is not None:
+        config["system_context"] = str(raw["system_context"])
     if raw.get("source") is not None:
         config["source"] = str(raw["source"])
+    if raw.get("transcript") is not None:
+        config["transcript"] = str(raw["transcript"])
+    if raw.get("recording_asset") is not None:
+        config["recording_asset"] = str(raw["recording_asset"])
+    if raw.get("recording_path") is not None:
+        config["recording_path"] = str(raw["recording_path"])
+    if raw.get("recording_url") is not None:
+        config["recording_url"] = str(raw["recording_url"])
+
+    if mode == "briefed" and not config.get("system_context", "").strip():
+        raise ValueError("briefed opening requires system_context")
+    if mode == "recorded":
+        _recorded_opening_transcript(config)
+        if _recorded_opening_source_count(config) != 1:
+            raise ValueError(
+                "recorded opening requires exactly one of recording_asset, recording_path, or recording_url",
+            )
     return config
 
 
@@ -961,19 +1182,20 @@ async def entrypoint(ctx: agents.JobContext):
     ).flatten()
     _log.config(f"System prompt ({len(system_prompt)} chars)")
 
+    if voice_provider == "elevenlabs":
+        tts_instance = elevenlabs.TTS(
+            voice_id=voice_id or elevenlabs.DEFAULT_VOICE_ID,
+            model="eleven_multilingual_v2",
+        )
+    else:
+        tts_instance = cartesia.TTS(
+            voice=voice_id or cartesia.tts.TTSDefaultVoiceId,
+        )
+
     session = AgentSession(
         llm=llm_model,
         stt=stt_instance,
-        tts=(
-            elevenlabs.TTS(
-                voice_id=voice_id or elevenlabs.DEFAULT_VOICE_ID,
-                model="eleven_multilingual_v2",
-            )
-            if voice_provider == "elevenlabs"
-            else cartesia.TTS(
-                voice=voice_id or cartesia.tts.TTSDefaultVoiceId,
-            )
-        ),
+        tts=tts_instance,
         vad=VAD,
         turn_handling={
             "turn_detection": EnglishModel(),
@@ -995,6 +1217,20 @@ async def entrypoint(ctx: agents.JobContext):
     _was_quiescent = True
     _pending_reply_timer: asyncio.TimerHandle | None = None
     _NOTIFY_COALESCE_S = 0.05
+    elevenlabs_tts = tts_instance if voice_provider == "elevenlabs" else None
+    elevenlabs_normal_voice_settings = (
+        _elevenlabs_current_voice_settings(elevenlabs_tts)
+        if elevenlabs_tts is not None
+        else NOT_GIVEN
+    )
+    elevenlabs_opener_speed_active = False
+    elevenlabs_opener_restore_task: asyncio.Task | None = None
+    slow_elevenlabs_onboarding_opener = (
+        elevenlabs_tts is not None
+        and SESSION_DETAILS.is_coordinator
+        and not coordinator_onboarding_deferred
+        and bool(coordinator_onboarding_next_targets)
+    )
 
     def _log_reply_task(task: asyncio.Task) -> None:
         try:
@@ -1004,6 +1240,68 @@ async def entrypoint(ctx: agents.JobContext):
             _log.llm_cancelled()
         except Exception as exc:  # noqa: BLE001
             _log.llm_error(str(exc))
+
+    def _restore_elevenlabs_opener_speed(reason: str) -> None:
+        nonlocal elevenlabs_opener_speed_active
+        if elevenlabs_tts is None or not elevenlabs_opener_speed_active:
+            return
+
+        elevenlabs_opener_speed_active = False
+        _set_elevenlabs_voice_settings(
+            elevenlabs_tts,
+            elevenlabs_normal_voice_settings,
+        )
+        _log.info(f"ElevenLabs onboarding opener speed restored: {reason}")
+
+    def _apply_elevenlabs_opener_speed() -> bool:
+        nonlocal elevenlabs_opener_speed_active
+        if not slow_elevenlabs_onboarding_opener:
+            return False
+
+        _set_elevenlabs_voice_settings(
+            elevenlabs_tts,
+            _elevenlabs_speed_settings(ELEVENLABS_ONBOARDING_OPENER_SPEED),
+        )
+        elevenlabs_opener_speed_active = True
+        _log.info(
+            f"ElevenLabs onboarding opener speed set to {ELEVENLABS_ONBOARDING_OPENER_SPEED}",
+        )
+        return True
+
+    async def _restore_elevenlabs_opener_speed_after_playout(speech_handle) -> None:
+        try:
+            await speech_handle.wait_for_playout()
+        finally:
+            _restore_elevenlabs_opener_speed("opening playout ended")
+
+    def _say_opening(text: str) -> None:
+        nonlocal elevenlabs_opener_restore_task
+        speed_applied = _apply_elevenlabs_opener_speed()
+        speech_handle = session.say(
+            text,
+            allow_interruptions=True,
+            add_to_chat_ctx=True,
+        )
+        if speed_applied:
+            elevenlabs_opener_restore_task = asyncio.create_task(
+                _restore_elevenlabs_opener_speed_after_playout(speech_handle),
+                name="restore_elevenlabs_onboarding_opener_speed",
+            )
+
+    def _say_recorded_opening(text: str, recording_source: str) -> None:
+        _say_meta_queue.append(
+            {
+                "source": opening_config.get("source", "recorded_opening"),
+                "text": text,
+                "llm_log_path": "",
+            },
+        )
+        session.say(
+            text,
+            audio=_recording_audio_frames(recording_source),
+            allow_interruptions=True,
+            add_to_chat_ctx=True,
+        )
 
     def _fire_generate_reply(
         reason: str,
@@ -1129,6 +1427,8 @@ async def entrypoint(ctx: agents.JobContext):
     # Register cleanup as a LiveKit shutdown callback so it runs on any
     # exit path: participant disconnect or explicit stop.
     async def _on_job_shutdown():
+        if elevenlabs_opener_restore_task is not None:
+            await utils.aio.cancel_and_wait(elevenlabs_opener_restore_task)
         if credit_gate_task is not None:
             await utils.aio.cancel_and_wait(credit_gate_task)
         if mood_classification_task is not None:
@@ -1172,6 +1472,8 @@ async def entrypoint(ctx: agents.JobContext):
         user_state_seq += 1
         state_id = f"usrstate-{user_state_seq:06d}"
         user_is_speaking = ev.new_state == "speaking"
+        if user_is_speaking:
+            _restore_elevenlabs_opener_speed("user started speaking")
         _log.user_state(ev.new_state, state_id=state_id)
         _check_quiescence_transition()
 
@@ -1528,6 +1830,7 @@ async def entrypoint(ctx: agents.JobContext):
         instructions=system_prompt,
         outbound=outbound,
         audio_bridge=audio_bridge,
+        normalize_elevenlabs_twin_pronunciation=voice_provider == "elevenlabs",
     )
     credit_gate_monitor = FastBrainCreditGateMonitor()
     assistant.set_credit_gate_state_provider(lambda: credit_gate_monitor.state)
@@ -1797,12 +2100,20 @@ async def entrypoint(ctx: agents.JobContext):
         try:
             recent = _get_recent_assistant_utterances()
             notifications = _get_recent_notifications() if recent else []
+            # Exclude this guidance's own injected ``[notification]`` copy so the
+            # gate never compares the proposal against itself. apply_notification
+            # injects ``notification_content`` verbatim; the spoken ``text`` may
+            # differ (spoken_message), so drop both forms.
+            _self_texts = {text.strip(), (notification_content or "").strip()}
+            notifications = [n for n in notifications if n.strip() not in _self_texts]
             if recent and SETTINGS.conversation.SPEECH_DEDUP_ENABLED:
                 from droid.conversation_manager.domains.speech_dedup import (
                     SpeechDeduplicationChecker,
                 )
 
-                dedup = await SpeechDeduplicationChecker().evaluate(
+                dedup = await SpeechDeduplicationChecker(
+                    model=SETTINGS.conversation.FAST_BRAIN_MODEL,
+                ).evaluate(
                     proposed_speech=text,
                     recent_utterances=recent,
                     recent_notifications=notifications,
@@ -2051,32 +2362,54 @@ async def entrypoint(ctx: agents.JobContext):
             reliable=True,
         )
 
-    opening_mode = opening_config["mode"]
-    if opening_mode == "speak":
+    async def _generate_opening_greeting(*, authoritative_briefing: bool) -> str:
+        """Pre-generate the opening line via a sidecar LLM call.
+
+        Returns the cached depleted-credits response when the credit gate is
+        closed, otherwise generates from the voice system prompt plus the
+        current call history (which includes any injected system briefing).
+        """
         from droid.common.llm_client import new_llm_client
 
-        credit_gate_state = credit_gate_monitor.state
-        if credit_gate_state.allowed:
-            greeting_client = new_llm_client(
-                model=SETTINGS.conversation.FAST_BRAIN_MODEL,
-                origin="fast_brain_greeting",
-                reasoning_effort="low",
-            )
-            greeting_messages = build_opening_greeting_messages(
-                system_prompt=system_prompt,
-                history_messages=_extract_chat_messages(session.history),
-            )
-            greeting_text = await greeting_client.generate(messages=greeting_messages)
-        else:
+        if not credit_gate_monitor.state.allowed:
             _log.info("Credit gate greeting served from cached state")
-            greeting_text = DEPLETED_CREDITS_FAST_BRAIN_RESPONSE
-
-        await _publish_ready_to_speak()
-        session.say(
-            greeting_text,
-            allow_interruptions=True,
-            add_to_chat_ctx=True,
+            return DEPLETED_CREDITS_FAST_BRAIN_RESPONSE
+        greeting_client = new_llm_client(
+            model=SETTINGS.conversation.FAST_BRAIN_MODEL,
+            origin="fast_brain_greeting",
+            reasoning_effort="low",
         )
+        greeting_messages = build_opening_greeting_messages(
+            system_prompt=system_prompt,
+            history_messages=_extract_chat_messages(session.history),
+            authoritative_briefing=authoritative_briefing,
+        )
+        return await greeting_client.generate(messages=greeting_messages)
+
+    def _inject_opening_system_context(text: str) -> None:
+        """Seed the call with a durable system briefing before the opener.
+
+        The briefing is a ``system`` message — never an assistant turn — so the
+        model retains the full intended context to fall back on (e.g. after an
+        interruption) without ever assuming the caller heard un-uttered content.
+        """
+        assistant._chat_ctx.add_message(role="system", content=[text])
+        session.history.add_message(role="system", content=[text])
+
+    opening_mode = opening_config["mode"]
+    if opening_mode == "speak":
+        greeting_text = await _generate_opening_greeting(authoritative_briefing=False)
+        await _publish_ready_to_speak()
+        _say_opening(greeting_text)
+    elif opening_mode == "briefed":
+        _inject_opening_system_context(opening_config["system_context"])
+        greeting_text = await _generate_opening_greeting(authoritative_briefing=True)
+        await _publish_ready_to_speak()
+        _say_opening(greeting_text)
+    elif opening_mode == "recorded":
+        transcript = _recorded_opening_transcript(opening_config)
+        await _publish_ready_to_speak()
+        _say_recorded_opening(transcript, _recorded_opening_source(opening_config))
     elif opening_mode == "simulated":
         simulated_utterance = opening_config.get("simulated_utterance", "").strip()
         if not simulated_utterance:
@@ -2108,14 +2441,13 @@ async def entrypoint(ctx: agents.JobContext):
     if not os.environ.get("DROID_CM_INITIALIZED"):
         _init_note = (
             "[system] You have just started up and your systems are still "
-            "syncing — loading files, pulling up previous conversations, "
-            "and connecting to your tools. This takes a few moments. "
-            "If the user asks you to do something that requires looking "
-            "things up or taking action, let them know naturally that "
-            "you are still getting set up (e.g. 'I'm just pulling up our "
-            "previous sessions — give me a moment and I'll get right on "
-            "that'). Do NOT say 'I can't do that' — frame it as a brief "
-            "delay, not a limitation. You will receive a notification "
+            "syncing — loading your files, tools, and any conversation "
+            "history. This takes a few moments. If the user asks you to do "
+            "something that requires looking things up or taking action, let "
+            "them know naturally that you are still getting set up (e.g. "
+            "'give me just a moment to finish getting set up and I'll get "
+            "right on that'). Do NOT say 'I can't do that' — frame it as a "
+            "brief delay, not a limitation. You will receive a notification "
             "when everything is ready."
         )
         assistant._chat_ctx.add_message(role="system", content=[_init_note])

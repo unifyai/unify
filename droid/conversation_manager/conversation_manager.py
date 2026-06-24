@@ -59,6 +59,7 @@ MAX_CONV_MANAGER_MSGS = 50
 RECENT_TOOL_EXECUTIONS_LIMIT = 20
 RECENT_TOOL_PREVIEW_CHARS = 500
 CREDIT_GATE_REPLY_THROTTLE_SECONDS = 300
+ONBOARDING_OUTBOUND_CONTEXT_TTL_SECONDS = 120
 DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE = (
     "Your credits are depleted, so I can't continue helping with setup or tasks "
     "until you top up. Please add credits in billing, then I'll pick this back up."
@@ -339,7 +340,9 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self._recording_exchange_ids: dict[str, int] = {}
 
         # proactive speech
-        self.proactive_speech = ProactiveSpeech()
+        self.proactive_speech = ProactiveSpeech(
+            model=SETTINGS.conversation.FAST_BRAIN_MODEL,
+        )
         self._proactive_speech_task: asyncio.Task | None = None
         self._proactive_speech_gen: int = 0
         self._proactive_speech_enabled: bool = True
@@ -374,6 +377,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # When the contact grants permission (taps "Call now"), the context is
         # injected as call_manager.initial_notification.  Maps contact_id → context.
         self._pending_whatsapp_call_contexts: dict[int, str] = {}
+        self._pending_onboarding_outbound: dict[str, Any] | None = None
         self._startup_wake_reasons: list[dict[str, Any]] = []
 
         # Hierarchical session logger for consistent nested logging
@@ -1438,7 +1442,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         triggering_contact_id: int | None = None,
         is_user_origin: bool = False,
         credit_gate_reply_context: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> str:
         """Request an LLM run.
 
         The request is recorded and later scheduled by the event loop after
@@ -1483,6 +1487,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 f"is_user_origin={is_user_origin}"
             ),
         )
+        return request_id
 
     async def flush_llm_requests(self) -> None:
         """Schedule any pending LLM runs recorded during event handling."""
@@ -2452,6 +2457,80 @@ class ConversationManager(metaclass=SingletonABCMeta):
         """
         if isinstance(render, dict):
             self.coordinator_onboarding_render = render
+
+    def set_pending_onboarding_outbound(
+        self,
+        details: dict[str, Any],
+        *,
+        origin_event_id: str = "",
+    ) -> None:
+        trigger_step_id = details.get("trigger_step_id")
+        channel = details.get("channel")
+        tool_name = details.get("tool_name")
+        if not isinstance(trigger_step_id, str) or not trigger_step_id.strip():
+            return
+        if not isinstance(channel, str) or not channel.strip():
+            return
+        self._pending_onboarding_outbound = {
+            "onboarding_trigger_step_id": trigger_step_id.strip(),
+            "onboarding_reply_step_id": (
+                details.get("reply_step_id").strip()
+                if isinstance(details.get("reply_step_id"), str)
+                else ""
+            ),
+            "onboarding_request_id": "",
+            "onboarding_origin_event_id": origin_event_id,
+            "channel": channel.strip(),
+            "tool_name": tool_name.strip() if isinstance(tool_name, str) else "",
+            "expires_at": self.loop.time() + ONBOARDING_OUTBOUND_CONTEXT_TTL_SECONDS,
+        }
+
+    def set_pending_onboarding_request_id(self, request_id: str) -> None:
+        if self._pending_onboarding_outbound:
+            self._pending_onboarding_outbound["onboarding_request_id"] = request_id
+
+    def clear_pending_onboarding_outbound(self, step_id: str | None = None) -> None:
+        if not self._pending_onboarding_outbound:
+            return
+        if (
+            step_id
+            and self._pending_onboarding_outbound.get(
+                "onboarding_trigger_step_id",
+            )
+            != step_id
+        ):
+            return
+        self._pending_onboarding_outbound = None
+
+    def consume_pending_onboarding_outbound(self, medium: str) -> dict[str, str] | None:
+        pending = self._pending_onboarding_outbound
+        if not pending:
+            return None
+        if self.loop.time() > float(pending.get("expires_at", 0)):
+            self._pending_onboarding_outbound = None
+            return None
+        expected_media = {
+            "email": {"email"},
+            "sms_message": {"sms_message"},
+            "whatsapp_message": {"whatsapp_message"},
+            "whatsapp_call": {"whatsapp_call"},
+            "phone_call": {"phone_call"},
+            "slack_message": {"slack_message", "slack_channel_message"},
+            "discord_message": {"discord_message", "discord_channel_message"},
+        }.get(str(pending.get("channel", "")), set())
+        if medium not in expected_media:
+            return None
+        self._pending_onboarding_outbound = None
+        return {
+            key: value
+            for key in (
+                "onboarding_trigger_step_id",
+                "onboarding_reply_step_id",
+                "onboarding_request_id",
+                "onboarding_origin_event_id",
+            )
+            if isinstance((value := pending.get(key)), str) and value
+        }
 
     async def store_chat_history(self):
         if len(self.chat_history) >= 2:

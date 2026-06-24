@@ -407,9 +407,9 @@ class TestBuildBrainSpecCoordinatorPrompt:
             spec = build_brain_spec(_make_cm(), _make_snapshot())
 
         prompt = spec.system_prompt.flatten()
-        assert "Twin identity" in prompt
-        assert "Twin is Dana Owner's personal, private assistant" in prompt
-        assert "I propose handing it to Twin explicitly" in prompt
+        assert "T-W1N identity" in prompt
+        assert "T-W1N is Dana Owner's personal, private assistant" in prompt
+        assert "I propose handing it to T-W1N explicitly" in prompt
         list_assistants.assert_not_called()
 
     def test_coordinator_prompt_does_not_render_reciprocal_block(self):
@@ -431,9 +431,9 @@ class TestBuildBrainSpecCoordinatorPrompt:
         prompt = spec.system_prompt.flatten()
         assert "Authorized humans" in prompt
         assert "My identity" in prompt
-        assert "I am Twin, Dana Owner's personal, private assistant" in prompt
-        assert "Twin is Dana Owner's personal, private assistant" not in prompt
-        assert "I propose handing it to Twin explicitly" not in prompt
+        assert "I am T-W1N, Dana Owner's personal, private assistant" in prompt
+        assert "T-W1N is Dana Owner's personal, private assistant" not in prompt
+        assert "I propose handing it to T-W1N explicitly" not in prompt
         assert "I cannot forward it automatically" not in prompt
         list_org_members.assert_called_once_with(
             7,
@@ -453,9 +453,9 @@ class TestBuildBrainSpecCoordinatorPrompt:
             spec = build_brain_spec(_make_cm(), _make_snapshot())
 
         prompt = spec.system_prompt.flatten()
-        assert "Twin identity" in prompt
-        assert "I propose handing it to Twin explicitly" in prompt
-        assert "Escalate to Twin" not in prompt
+        assert "T-W1N identity" in prompt
+        assert "I propose handing it to T-W1N explicitly" in prompt
+        assert "Escalate to T-W1N" not in prompt
         list_assistants.assert_not_called()
 
     def test_personal_coordinator_skips_org_member_and_workspace_fetch(self):

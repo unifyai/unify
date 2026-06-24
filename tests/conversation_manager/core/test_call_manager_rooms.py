@@ -64,7 +64,7 @@ async def test_start_unify_meet_passes_opening_config_to_worker(monkeypatch):
 
     opening_config = {
         "mode": "simulated",
-        "simulated_utterance": "Hi, I'm Twin.",
+        "simulated_utterance": "Hi, I'm T-W1N.",
         "source": "twin_onboarding_intro",
     }
     contact = {"contact_id": 1, "is_system": False}

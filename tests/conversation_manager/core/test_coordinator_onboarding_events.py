@@ -8,23 +8,9 @@ from droid.conversation_manager.domains import coordinator_onboarding as onboard
 from droid.conversation_manager.prompt_builders import (
     _build_coordinator_onboarding_narration_block,
     _build_coordinator_voice_opening_block,
-    _voice_next_onboarding_suggestion,
 )
+from droid.conversation_manager.events import EmailSent
 from droid.settings import SETTINGS
-
-COMMS_STEP_IDS = [
-    "email-reply",
-    "whatsapp-number",
-    "whatsapp-message",
-    "whatsapp-call",
-    "phone-number",
-    "sms-message",
-    "phone-call",
-    "slack-connect",
-    "slack-message",
-    "discord-connect",
-    "discord-message",
-]
 
 
 def test_session_started_notification_mentions_skipped_steps() -> None:
@@ -46,7 +32,8 @@ def test_session_started_notification_mentions_skipped_steps() -> None:
     assert "workspace" in text
     assert "apps" in text
     assert "passed over for now, not done" in text
-    assert "done or explicitly skipped" in text
+    assert "already done or skipped" in text
+    assert "clicking its row in the Onboarding checklist" in text
 
 
 def test_step_skipped_notification_does_not_mark_step_done() -> None:
@@ -66,6 +53,7 @@ def test_step_skipped_notification_does_not_mark_step_done() -> None:
 
     assert "leave that step for now" in text
     assert "Do not say the skipped step is complete" in text
+    assert "clicking its row in the Onboarding checklist" in text
 
 
 def test_step_started_notification_names_active_comms_step() -> None:
@@ -97,9 +85,9 @@ def test_reference_quiz_notification_briefs_text_channel() -> None:
                 "trigger_step_id": "slack-reference",
                 "reply_step_id": "slack-message",
                 "channel": "slack_message",
-                "clue": 'The clue is: "Phone home."',
-                "quote": "Phone home.",
-                "answer": "Battlestar Galactica",
+                "tool_name": "send_slack_message",
+                "framing": "Play a guess-the-reference mini-game.",
+                "interaction": {"type": "reference_quiz"},
             },
         },
         message="User triggered a reference clue.",
@@ -108,11 +96,14 @@ def test_reference_quiz_notification_briefs_text_channel() -> None:
     assert event is not None
     text = onboarding._coordinator_onboarding_notification_text(event)
 
-    assert "guess the reference" in text
+    assert "guess-the-reference mini-game" in text
     assert "send_slack_message" in text
-    assert "Phone home." in text
-    assert "Do not reveal" in text
-    assert "Battlestar Galactica" in text
+    # The event is framed as a poll, and the clue is the model's to invent.
+    assert "POLL" in text
+    assert "do NOT send another" in text
+    assert "invent my own" in text
+    assert "Explain the quiz before" in text
+    assert "include that context before the clue" in text
 
 
 def test_reference_quiz_notification_briefs_call_context() -> None:
@@ -123,9 +114,9 @@ def test_reference_quiz_notification_briefs_call_context() -> None:
                 "trigger_step_id": "phone-call-reference",
                 "reply_step_id": "phone-call",
                 "channel": "phone_call",
-                "clue": 'The clue is: "To infinity and beyond!"',
-                "quote": "To infinity and beyond!",
-                "answer": "The Empire Strikes Back / Luke",
+                "tool_name": "make_call_to_boss",
+                "framing": "Play the reference game over a call.",
+                "interaction": {"type": "reference_quiz"},
             },
         },
         message="User triggered a phone clue.",
@@ -135,19 +126,9 @@ def test_reference_quiz_notification_briefs_call_context() -> None:
     text = onboarding._coordinator_onboarding_notification_text(event)
 
     assert "make_call_to_boss" in text
-    assert "`context` argument" in text
-    assert "repeat" in text
-    assert "hints" in text
-    assert "The Empire Strikes Back / Luke" in text
-
-
-def test_voice_next_onboarding_suggestion_ignores_done_and_skipped_steps() -> None:
-    suggestion = _voice_next_onboarding_suggestion(
-        completed_steps=[*COMMS_STEP_IDS, "workspace"],
-        skipped_steps=["apps"],
-    )
-
-    assert "one-off job" in suggestion
+    assert "POLL" in text
+    assert "call context" in text
+    assert "Play the reference game over a call." in text
 
 
 def test_onboarding_narration_block_documents_reference_quiz_not_space_oddity_scripts() -> (
@@ -156,16 +137,77 @@ def test_onboarding_narration_block_documents_reference_quiz_not_space_oddity_sc
     block = _build_coordinator_onboarding_narration_block()
 
     assert "reference_quiz_clue_requested" in block
-    assert "guess-the-reference" in block
-    assert "make_call_to_boss" in block
+    assert "task contract" in block
+    assert "tool_name" in block
+    assert "POLL, not a fresh command" in block
+    assert "the SAME directive in two" in block
+    assert "I invent my own" in block
+    assert "Do not use `act` for the send" in block
+    assert "do not send a bare clue" in block
+    assert "Completion is detected only after my outbound message/call appears" in block
+    assert "Do not hardcode onboarding game design here" in block
+    assert "make_call_to_boss" not in block
     assert "Ground Control to Major" not in block
     assert "tin can far above the world" not in block
 
 
+def test_voice_opening_block_gives_broader_first_orientation() -> None:
+    block = _build_coordinator_voice_opening_block(
+        next_targets=[
+            {
+                "id": "email-reference",
+                "title": "Trigger email from T-W1N",
+                "nudge_voice": "clicking Trigger email from T-W1N",
+                "interaction": {"type": "reference_quiz"},
+            },
+            {
+                "id": "workspace",
+                "title": "Give me access to your workspace",
+                "nudge_voice": "connecting their workspace",
+            },
+        ],
+    )
+
+    assert "meaningful onboarding orientation" in block
+    assert "digital twin / stand-in" in block
+    assert "communication channels" in block
+    assert "recurring tasks" in block
+    assert "computer use" in block
+    assert "Pause onboarding for now" in block
+    assert "clicking Trigger email from T-W1N" in block
+    assert "overrides the generic Brevity/Opening rule" in block
+    assert "explain the game design" in block
+    assert "not a monologue I must finish" in block
+
+
+def test_voice_opening_block_prevents_repeated_full_intro() -> None:
+    block = _build_coordinator_voice_opening_block(
+        next_targets=[
+            {
+                "id": "workspace",
+                "title": "Give me access to your workspace",
+                "nudge_voice": "connecting their workspace",
+            },
+        ],
+    )
+
+    assert "orientation has already happened" in block
+    assert "Do NOT re-introduce myself" in block
+    assert "repeat the onboarding overview" in block
+
+
+def test_voice_opening_block_omits_onboarding_tour_without_next_targets() -> None:
+    block = _build_coordinator_voice_opening_block(next_targets=[])
+
+    assert "No valid onboarding next target was provided" in block
+    assert "do not give the broad onboarding orientation" in block
+    assert "Pause onboarding for now" not in block
+    assert "communication channels" not in block
+
+
 def test_voice_opening_block_includes_active_phone_call_guidance() -> None:
     block = _build_coordinator_voice_opening_block(
-        completed_onboarding_steps=[],
-        skipped_onboarding_steps=[],
+        next_targets=[],
         active_onboarding_step="phone-call",
     )
 
@@ -216,3 +258,51 @@ async def test_onboarding_handler_active_with_console_ui(monkeypatch) -> None:
 
     assert result is True
     cm.notifications_bar.push_notif.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_reference_trigger_sets_pending_outbound_context(monkeypatch) -> None:
+    monkeypatch.setattr(SETTINGS, "DROID_CONSOLE_UI", True)
+    event = onboarding._coordinator_onboarding_event_from_payload(
+        {
+            "subtype": "reference_quiz_clue_requested",
+            "details": {
+                "trigger_step_id": "email-reference",
+                "reply_step_id": "email-reply",
+                "channel": "email",
+                "tool_name": "send_email",
+            },
+        },
+        message="User triggered an email clue.",
+    )
+    assert event is not None
+    cm = MagicMock()
+    cm._current_event_trace = {"event_id": "evt-1"}
+
+    result = await onboarding._handle_coordinator_onboarding_event(event, cm)
+
+    assert result is True
+    cm.set_pending_onboarding_outbound.assert_called_once_with(
+        event.details,
+        origin_event_id="evt-1",
+    )
+
+
+def test_sent_event_serializes_onboarding_metadata() -> None:
+    event = EmailSent(
+        contact={"contact_id": 1},
+        subject="Subject",
+        body="Body",
+        to=["dan@unify.ai"],
+        onboarding_trigger_step_id="email-reference",
+        onboarding_reply_step_id="email-reply",
+        onboarding_request_id="llmreq-1",
+        onboarding_origin_event_id="evt-1",
+    )
+
+    payload = event.to_dict()["payload"]
+
+    assert payload["onboarding_trigger_step_id"] == "email-reference"
+    assert payload["onboarding_reply_step_id"] == "email-reply"
+    assert payload["onboarding_request_id"] == "llmreq-1"
+    assert payload["onboarding_origin_event_id"] == "evt-1"
