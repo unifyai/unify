@@ -513,7 +513,57 @@ def _hydrate_session_details_from_metadata(meta: dict) -> None:
         SESSION_DETAILS.assistant.surname = parts[1] if len(parts) > 1 else ""
 
 
-_CALL_OPENING_MODES = {"speak", "simulated", "silent", "briefed"}
+_CALL_OPENING_MODES = {"speak", "simulated", "silent", "briefed", "recorded"}
+
+
+def _recording_audio_frames(
+    source: str,
+    *,
+    frame_duration_ms: int = 20,
+) -> AsyncIterable[rtc.AudioFrame]:
+    async def _frames() -> AsyncIterable[rtc.AudioFrame]:
+        import io as _io
+
+        import httpx as _httpx
+        import numpy as _np
+        import soundfile as _sf
+
+        recording_source: str | _io.BytesIO = os.path.expanduser(source)
+        if source.startswith(("http://", "https://")):
+            async with _httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(source)
+                response.raise_for_status()
+                recording_source = _io.BytesIO(response.content)
+
+        with _sf.SoundFile(recording_source) as recording:
+            samples_per_chunk = max(
+                1,
+                int(recording.samplerate * frame_duration_ms / 1000),
+            )
+            while True:
+                block = recording.read(
+                    samples_per_chunk,
+                    dtype="int16",
+                    always_2d=True,
+                )
+                if len(block) == 0:
+                    break
+                pcm = _np.ascontiguousarray(block).tobytes()
+                yield rtc.AudioFrame(
+                    data=pcm,
+                    sample_rate=recording.samplerate,
+                    num_channels=recording.channels,
+                    samples_per_channel=len(block),
+                )
+                await asyncio.sleep(0)
+
+    return _frames()
+
+
+def _recorded_opening_source(config: dict) -> str:
+    path = config.get("recording_path", "").strip()
+    url = config.get("recording_url", "").strip()
+    return path or url
 
 
 def _normalize_call_opening_config(raw: object) -> dict:
@@ -527,7 +577,7 @@ def _normalize_call_opening_config(raw: object) -> dict:
     mode = str(raw.get("mode", "speak")).strip()
     if mode not in _CALL_OPENING_MODES:
         raise ValueError(
-            "opening_config.mode must be one of speak, simulated, silent, briefed",
+            "opening_config.mode must be one of speak, simulated, silent, briefed, recorded",
         )
 
     config = {"mode": mode}
@@ -537,9 +587,24 @@ def _normalize_call_opening_config(raw: object) -> dict:
         config["system_context"] = str(raw["system_context"])
     if raw.get("source") is not None:
         config["source"] = str(raw["source"])
+    if raw.get("transcript") is not None:
+        config["transcript"] = str(raw["transcript"])
+    if raw.get("recording_path") is not None:
+        config["recording_path"] = str(raw["recording_path"])
+    if raw.get("recording_url") is not None:
+        config["recording_url"] = str(raw["recording_url"])
 
     if mode == "briefed" and not config.get("system_context", "").strip():
         raise ValueError("briefed opening requires system_context")
+    if mode == "recorded":
+        if not config.get("transcript", "").strip():
+            raise ValueError("recorded opening requires transcript")
+        has_path = bool(config.get("recording_path", "").strip())
+        has_url = bool(config.get("recording_url", "").strip())
+        if has_path == has_url:
+            raise ValueError(
+                "recorded opening requires exactly one of recording_path or recording_url",
+            )
     return config
 
 
@@ -1109,6 +1174,21 @@ async def entrypoint(ctx: agents.JobContext):
                 _restore_elevenlabs_opener_speed_after_playout(speech_handle),
                 name="restore_elevenlabs_onboarding_opener_speed",
             )
+
+    def _say_recorded_opening(text: str, recording_source: str) -> None:
+        _say_meta_queue.append(
+            {
+                "source": opening_config.get("source", "recorded_opening"),
+                "text": text,
+                "llm_log_path": "",
+            },
+        )
+        session.say(
+            text,
+            audio=_recording_audio_frames(recording_source),
+            allow_interruptions=True,
+            add_to_chat_ctx=True,
+        )
 
     def _fire_generate_reply(
         reason: str,
@@ -2212,6 +2292,10 @@ async def entrypoint(ctx: agents.JobContext):
         greeting_text = await _generate_opening_greeting(authoritative_briefing=True)
         await _publish_ready_to_speak()
         _say_opening(greeting_text)
+    elif opening_mode == "recorded":
+        transcript = opening_config["transcript"].strip()
+        await _publish_ready_to_speak()
+        _say_recorded_opening(transcript, _recorded_opening_source(opening_config))
     elif opening_mode == "simulated":
         simulated_utterance = opening_config.get("simulated_utterance", "").strip()
         if not simulated_utterance:
