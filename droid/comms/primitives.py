@@ -954,6 +954,9 @@ class CommsPrimitives:
         )
         if response.get("success"):
             via_template = response.get("method") == "template"
+            delivered_content = response.get("delivered_body") or (
+                None if via_template else content
+            )
             fresh_contact = (
                 self._get_contact(whatsapp_number=to_number) or contact or {}
             )
@@ -962,6 +965,7 @@ class CommsPrimitives:
                 contact=fresh_contact,
                 content=content,
                 via_template=via_template,
+                delivered_content=delivered_content,
                 attachments=attachments_for_event or None,
                 **self._onboarding_event_kwargs(Medium.WHATSAPP_MESSAGE),
             )

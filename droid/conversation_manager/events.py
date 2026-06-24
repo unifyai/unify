@@ -948,6 +948,7 @@ class WhatsAppSent(Event):
     contact: dict
     content: str
     via_template: bool = False
+    delivered_content: str | None = None
     attachments: list[dict] | None = None
     onboarding_trigger_step_id: str | None = None
     onboarding_reply_step_id: str | None = None

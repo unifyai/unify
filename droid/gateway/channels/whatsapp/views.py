@@ -192,6 +192,16 @@ VOICE_CALL_TEMPLATE_SID = "HX885d46e6ccb82e4313ef1a42181c142d"
 VOICE_CALL_REQUEST_TEMPLATE_SID = "HX67bc29b24fb597e6fad501ea68d2566e"
 
 
+def render_greeting_template_text(user_name: str, agent_name: str) -> str:
+    """Render the approved greeting template for local history/reporting."""
+    user = (user_name or "there").strip() or "there"
+    agent = (agent_name or "your assistant").strip() or "your assistant"
+    return (
+        f"Hello {user}, this is {agent} from Unify. "
+        "I have a message for you. Reply here and I'll share the details!"
+    )
+
+
 def _resolve_media_url(url: str, credentials: CredentialStore) -> str:
     """If *url* is a ``gs://`` URI, return a signed download URL.
 
@@ -286,6 +296,7 @@ async def send(request: Request):
 
     twilio_client = build_twilio_wa_client(credentials)
     if window_open:
+        delivered_body = body
         create_kwargs: dict = {
             "to": f"whatsapp:{to}",
             "from_": f"whatsapp:{pool_number}",
@@ -314,8 +325,9 @@ async def send(request: Request):
             status_callback=f"{SETTINGS.conversation.COMMS_URL}/whatsapp/status",
         )
         method = "template"
+        delivered_body = render_greeting_template_text(user_name, agent_name)
 
-    return {"success": True, "method": method}
+    return {"success": True, "method": method, "delivered_body": delivered_body}
 
 
 async def _check_call_permission(pool_number: str, contact_number: str) -> bool:
