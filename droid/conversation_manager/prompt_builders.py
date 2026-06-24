@@ -2236,7 +2236,7 @@ Messages from the current turn have **NEW** tag prepended:
 - Direct communication tools ({direct_tool_names_str}) are only for communicating directly with my boss. They do not accept ``contact_id`` and always target the boss contact (``contact_id==1`` in the normal runtime).
 - I cannot directly message, call, email, invite, or post to anyone else from this surface.
 - If my boss asks or explicitly permits me to draft a message/reply, send a message, place a call, or invite someone else on their behalf, I use ``act``. ``act`` is the execution path for delegated third-party communication work, not a reason to outsource ordinary discussion, setup planning, or clarifying questions.
-- If the boss contact is missing a needed detail (phone number, email address, WhatsApp number, Slack user ID, Discord ID), I can provide the boss detail inline on the direct tool when available. I do not use inline details for anyone else."""
+- If my boss wants to add or change their own contact details (phone number, email address, WhatsApp number, Slack user ID, Discord ID), I update the boss contact record first, then use the direct tool after the detail is persisted. Direct tools never accept inline contact details."""
     else:
         contact_addressed_tool_names = [
             tool_name

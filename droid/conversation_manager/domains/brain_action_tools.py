@@ -262,7 +262,6 @@ class ConversationManagerBrainActionTools:
         self,
         *,
         content: str,
-        phone_number: str | None = None,
     ) -> dict[str, Any]:
         """Send an SMS message directly to my boss only.
 
@@ -275,13 +274,10 @@ class ConversationManagerBrainActionTools:
         ----------
         content : str
             Message body to send to my boss.
-        phone_number : str | None, optional
-            Boss phone number to attach if the boss contact is missing one.
         """
         return await self._comms.send_sms(
             contact_id=self._boss_contact_id(),
             content=content,
-            phone_number=phone_number,
         )
 
     @wraps(CommsPrimitives.send_whatsapp)
@@ -304,7 +300,6 @@ class ConversationManagerBrainActionTools:
         self,
         *,
         content: str,
-        whatsapp_number: str | None = None,
         attachment_filepath: str | None = None,
     ) -> dict[str, Any]:
         """Send a WhatsApp message directly to my boss only.
@@ -319,15 +314,12 @@ class ConversationManagerBrainActionTools:
         ----------
         content : str
             Message body to send to my boss.
-        whatsapp_number : str | None, optional
-            Boss WhatsApp number to attach if the boss contact is missing one.
         attachment_filepath : str | None, optional
             Workspace-relative path for one attachment.
         """
         return await self._comms.send_whatsapp(
             contact_id=self._boss_contact_id(),
             content=content,
-            whatsapp_number=whatsapp_number,
             attachment_filepath=attachment_filepath,
         )
 
@@ -349,7 +341,6 @@ class ConversationManagerBrainActionTools:
         self,
         *,
         content: str,
-        discord_id: str | None = None,
     ) -> dict[str, Any]:
         """Send a Discord direct message to my boss only.
 
@@ -362,13 +353,10 @@ class ConversationManagerBrainActionTools:
         ----------
         content : str
             Message body to send to my boss.
-        discord_id : str | None, optional
-            Boss Discord ID to attach if the boss contact is missing one.
         """
         return await self._comms.send_discord_message(
             contact_id=self._boss_contact_id(),
             content=content,
-            discord_id=discord_id,
         )
 
     @wraps(CommsPrimitives.send_discord_channel_message)
@@ -410,7 +398,6 @@ class ConversationManagerBrainActionTools:
         *,
         content: str,
         team_id: str,
-        slack_user_id: str | None = None,
         thread_ts: str | None = None,
     ) -> dict[str, Any]:
         """Send a Slack direct message to my boss only.
@@ -427,8 +414,6 @@ class ConversationManagerBrainActionTools:
             Message body to send to my boss.
         team_id : str
             Slack workspace/team ID from the inbound boss DM annotation.
-        slack_user_id : str | None, optional
-            Boss Slack user ID to attach if the boss contact is missing one.
         thread_ts : str | None, optional
             Existing boss DM thread timestamp to reply inside.
         """
@@ -436,7 +421,6 @@ class ConversationManagerBrainActionTools:
             contact_id=self._boss_contact_id(),
             content=content,
             team_id=team_id,
-            slack_user_id=slack_user_id,
             thread_ts=thread_ts,
         )
 
@@ -485,7 +469,6 @@ class ConversationManagerBrainActionTools:
         *,
         content: str,
         chat_id: str | None = None,
-        email_address: str | None = None,
         attachment_filepath: str | None = None,
     ) -> dict[str, Any]:
         """Send a Microsoft Teams message directly to my boss only.
@@ -503,21 +486,11 @@ class ConversationManagerBrainActionTools:
         chat_id : str | None, optional
             Existing boss Teams chat ID to reply inside. Omit to create or
             reuse a 1:1 chat with my boss.
-        email_address : str | None, optional
-            Boss email address to attach if the boss contact is missing one.
         attachment_filepath : str | None, optional
             Workspace-relative path for one attachment.
         """
-        recipient: int | dict[str, int | str]
-        if email_address:
-            recipient = {
-                "contact_id": self._boss_contact_id(),
-                "email_address": email_address,
-            }
-        else:
-            recipient = self._boss_contact_id()
         return await self._comms.send_teams_message(
-            contact_id=recipient,
+            contact_id=self._boss_contact_id(),
             content=content,
             chat_id=chat_id,
             attachment_filepath=attachment_filepath,
@@ -573,7 +546,6 @@ class ConversationManagerBrainActionTools:
         start: str | None = None,
         duration_minutes: int = 30,
         timezone: str = "UTC",
-        email_address: str | None = None,
         body_html: str | None = None,
         location: str | None = None,
     ) -> dict[str, Any]:
@@ -597,28 +569,20 @@ class ConversationManagerBrainActionTools:
             Meeting duration in minutes for scheduled meetings.
         timezone : str, optional
             Timezone name forwarded to Microsoft Graph.
-        email_address : str | None, optional
-            Boss email address to attach if the boss contact is missing one.
         body_html : str | None, optional
             Meeting body, sent to Graph as HTML.
         location : str | None, optional
             Display-name location for the calendar event.
         """
-        attendee: int | dict[str, int | str]
-        if email_address:
-            attendee = {
-                "contact_id": self._boss_contact_id(),
-                "email_address": email_address,
-            }
-        else:
-            attendee = self._boss_contact_id()
         return await self._comms.create_teams_meet(
             mode=mode,
             subject=subject,
             start=start,
             duration_minutes=duration_minutes,
             timezone=timezone,
-            attendee_contact_ids=[attendee] if mode == "scheduled" else None,
+            attendee_contact_ids=(
+                [self._boss_contact_id()] if mode == "scheduled" else None
+            ),
             body_html=body_html,
             location=location,
         )
@@ -740,7 +704,6 @@ class ConversationManagerBrainActionTools:
         subject: str,
         body: str,
         email_id_to_reply_to: str | None = None,
-        email_address: str | None = None,
         attachment_filepath: str | None = None,
     ) -> dict[str, Any]:
         """Send an email directly to my boss only.
@@ -759,21 +722,11 @@ class ConversationManagerBrainActionTools:
             Email body content to send to my boss.
         email_id_to_reply_to : str | None, optional
             Existing boss email ID to reply to for threading.
-        email_address : str | None, optional
-            Boss email address to attach if the boss contact is missing one.
         attachment_filepath : str | None, optional
             Workspace-relative path for one attachment.
         """
-        recipient: int | dict[str, int | str]
-        if email_address:
-            recipient = {
-                "contact_id": self._boss_contact_id(),
-                "email_address": email_address,
-            }
-        else:
-            recipient = self._boss_contact_id()
         return await self._comms.send_email(
-            to=[recipient],
+            to=[self._boss_contact_id()],
             subject=subject,
             body=body,
             email_id_to_reply_to=email_id_to_reply_to,
@@ -798,7 +751,6 @@ class ConversationManagerBrainActionTools:
         self,
         *,
         context: str,
-        phone_number: str | None = None,
     ) -> dict[str, Any]:
         """Start an outbound phone call to my boss only.
 
@@ -811,13 +763,10 @@ class ConversationManagerBrainActionTools:
         ----------
         context : str
             Mission briefing for the voice agent speaking with my boss.
-        phone_number : str | None, optional
-            Boss phone number to attach if the boss contact is missing one.
         """
         return await self._comms.make_call(
             contact_id=self._boss_contact_id(),
             context=context,
-            phone_number=phone_number,
         )
 
     @wraps(CommsPrimitives.make_whatsapp_call)
@@ -838,7 +787,6 @@ class ConversationManagerBrainActionTools:
         self,
         *,
         context: str,
-        whatsapp_number: str | None = None,
     ) -> dict[str, Any]:
         """Start a WhatsApp voice call to my boss only.
 
@@ -851,13 +799,10 @@ class ConversationManagerBrainActionTools:
         ----------
         context : str
             Mission briefing for the voice agent speaking with my boss.
-        whatsapp_number : str | None, optional
-            Boss WhatsApp number to attach if the boss contact is missing one.
         """
         return await self._comms.make_whatsapp_call(
             contact_id=self._boss_contact_id(),
             context=context,
-            whatsapp_number=whatsapp_number,
         )
 
     async def join_google_meet(

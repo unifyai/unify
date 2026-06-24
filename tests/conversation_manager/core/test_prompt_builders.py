@@ -267,6 +267,8 @@ class TestCoordinatorPrompt:
             "send a message, draft a reply, place a call, or invite someone else on their behalf"
             in prompt
         )
+        assert "Direct tools never accept inline contact details" in prompt
+        assert "update the boss contact record first" in prompt
         assert "contact_id=5" not in prompt
         assert "Use the contact_id visible in active_conversations" not in prompt
         assert "send_slack_channel_message" not in prompt

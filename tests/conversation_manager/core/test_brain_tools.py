@@ -491,7 +491,7 @@ class TestActionToolsAsTools:
         )
         meet_props = meet_schema["function"]["parameters"]["properties"]
         assert "attendee_contact_ids" not in meet_props
-        assert "email_address" in meet_props
+        assert "email_address" not in meet_props
 
     @pytest.mark.asyncio
     async def test_coordinator_comms_wrappers_force_boss_recipient(
@@ -535,26 +535,23 @@ class TestActionToolsAsTools:
             return_value={"status": "ok"},
         )
 
-        await tools["send_sms"](content="hello", phone_number="+15550000001")
+        await tools["send_sms"](content="hello")
         brain_action_tools._comms.send_sms.assert_called_once_with(
             contact_id=SESSION_DETAILS.boss_contact_id,
             content="hello",
-            phone_number="+15550000001",
         )
 
         await tools["send_whatsapp"](content="hello")
         brain_action_tools._comms.send_whatsapp.assert_called_once_with(
             contact_id=SESSION_DETAILS.boss_contact_id,
             content="hello",
-            whatsapp_number=None,
             attachment_filepath=None,
         )
 
-        await tools["send_discord_message"](content="hello", discord_id="D1")
+        await tools["send_discord_message"](content="hello")
         brain_action_tools._comms.send_discord_message.assert_called_once_with(
             contact_id=SESSION_DETAILS.boss_contact_id,
             content="hello",
-            discord_id="D1",
         )
 
         await tools["send_slack_message"](content="hello", team_id="T1")
@@ -562,7 +559,6 @@ class TestActionToolsAsTools:
             contact_id=SESSION_DETAILS.boss_contact_id,
             content="hello",
             team_id="T1",
-            slack_user_id=None,
             thread_ts=None,
         )
 
@@ -585,28 +581,20 @@ class TestActionToolsAsTools:
         brain_action_tools._comms.make_call.assert_called_once_with(
             contact_id=SESSION_DETAILS.boss_contact_id,
             context="briefing",
-            phone_number=None,
         )
 
         await tools["make_whatsapp_call"](context="briefing")
         brain_action_tools._comms.make_whatsapp_call.assert_called_once_with(
             contact_id=SESSION_DETAILS.boss_contact_id,
             context="briefing",
-            whatsapp_number=None,
         )
 
         await tools["send_email"](
             subject="Hi",
             body="Body",
-            email_address="boss@example.com",
         )
         brain_action_tools._comms.send_email.assert_called_once_with(
-            to=[
-                {
-                    "contact_id": SESSION_DETAILS.boss_contact_id,
-                    "email_address": "boss@example.com",
-                },
-            ],
+            to=[SESSION_DETAILS.boss_contact_id],
             subject="Hi",
             body="Body",
             email_id_to_reply_to=None,
@@ -616,13 +604,9 @@ class TestActionToolsAsTools:
         await tools["send_teams_message"](
             content="hello",
             chat_id="chat-1",
-            email_address="boss@example.com",
         )
         brain_action_tools._comms.send_teams_message.assert_called_once_with(
-            contact_id={
-                "contact_id": SESSION_DETAILS.boss_contact_id,
-                "email_address": "boss@example.com",
-            },
+            contact_id=SESSION_DETAILS.boss_contact_id,
             content="hello",
             chat_id="chat-1",
             attachment_filepath=None,
@@ -630,7 +614,6 @@ class TestActionToolsAsTools:
 
         await tools["create_teams_meet"](
             subject="Sync",
-            email_address="boss@example.com",
         )
         brain_action_tools._comms.create_teams_meet.assert_called_once_with(
             mode="scheduled",
@@ -638,12 +621,7 @@ class TestActionToolsAsTools:
             start=None,
             duration_minutes=30,
             timezone="UTC",
-            attendee_contact_ids=[
-                {
-                    "contact_id": SESSION_DETAILS.boss_contact_id,
-                    "email_address": "boss@example.com",
-                },
-            ],
+            attendee_contact_ids=[SESSION_DETAILS.boss_contact_id],
             body_html=None,
             location=None,
         )

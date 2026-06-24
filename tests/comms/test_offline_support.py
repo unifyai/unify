@@ -87,6 +87,49 @@ def _stub_offline_tracking(monkeypatch, *, operation_key: str):
     return updated_records, transcript_calls
 
 
+def test_missing_detail_error_is_coordinator_boss_aware(monkeypatch):
+    comms = CommsPrimitives()
+    monkeypatch.setattr(
+        "droid.comms.primitives.SESSION_DETAILS.is_coordinator",
+        True,
+    )
+    monkeypatch.setattr(
+        "droid.comms.primitives.SESSION_DETAILS.boss_contact_id",
+        1,
+    )
+
+    error, _ = comms._resolve_or_attach_detail(
+        contact={"contact_id": 1, "first_name": "Boss", "surname": "User"},
+        contact_id=1,
+        field_name="whatsapp_number",
+        inline_value=None,
+        medium_label="WhatsApp",
+    )
+
+    assert error is not None
+    assert "Update the boss contact first, then retry." in error
+    assert "Provide `whatsapp_number`" not in error
+
+
+def test_missing_detail_error_keeps_inline_guidance_for_regular_contacts(monkeypatch):
+    comms = CommsPrimitives()
+    monkeypatch.setattr(
+        "droid.comms.primitives.SESSION_DETAILS.is_coordinator",
+        False,
+    )
+
+    error, _ = comms._resolve_or_attach_detail(
+        contact={"contact_id": 5, "first_name": "Alice", "surname": "Owner"},
+        contact_id=5,
+        field_name="whatsapp_number",
+        inline_value=None,
+        medium_label="WhatsApp",
+    )
+
+    assert error is not None
+    assert "Provide `whatsapp_number` in this send" in error
+
+
 def test_reserve_outbound_operation_dedupes_completed_row(monkeypatch):
     _seed_offline_env(monkeypatch)
 
