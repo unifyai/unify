@@ -2807,6 +2807,60 @@ class TestFastBrainSpeechDedup:
         finally:
             SETTINGS.conversation.SPEECH_DEDUP_ENABLED = orig_dedup
 
+    async def test_self_notification_not_treated_as_spoken(self, fast_brain_env):
+        """Regression (email "The Matrix" ack): a should_speak guidance is
+        injected as a ``[notification]`` using the same text it proposes for
+        speech. The dedup gate must not see that self-copy and conclude the line
+        was "already spoken" - the user has not heard it yet.
+
+        The fake dedup client mimics the old failure surface: it suppresses iff
+        the proposed text leaked into the notifications section as a bullet. With
+        the self-copy excluded, it sees no such bullet and the speech is spoken.
+        """
+        env = fast_brain_env
+        from droid.settings import SETTINGS
+        import droid.conversation_manager.domains.speech_dedup as _dedup_mod
+
+        ack = "Correct - The Matrix. Email channel works."
+
+        # A prior, unrelated spoken utterance so the dedup gate actually runs
+        # (it only runs when there are recent assistant utterances).
+        env["assistant"]._chat_ctx.add_message(
+            role="assistant",
+            content="Got it - I'm checking that now.",
+        )
+
+        class _FakeDedupClient:
+            def set_response_format(self, fmt):
+                pass
+
+            async def generate(self, *, messages=None, **_kw):
+                system = messages[0]["content"]
+                if f"- {ack}" in system:
+                    return (
+                        '{"already_covered": true, '
+                        '"reasoning": "matches notification"}'
+                    )
+                return '{"already_covered": false, "reasoning": "not yet spoken"}'
+
+        orig_dedup = SETTINGS.conversation.SPEECH_DEDUP_ENABLED
+        SETTINGS.conversation.SPEECH_DEDUP_ENABLED = True
+        env["monkeypatch"].setattr(
+            _dedup_mod,
+            "new_llm_client",
+            lambda *a, **kw: _FakeDedupClient(),
+        )
+        try:
+            env["session"].agent_state = "thinking"
+            self._send_speak_guidance(env, ack)
+            await self._settle_and_drain(env)
+            assert env["session"].say_calls == [ack], (
+                "Acknowledgement must be spoken; its own injected notification "
+                "must not count as 'already spoken'."
+            )
+        finally:
+            SETTINGS.conversation.SPEECH_DEDUP_ENABLED = orig_dedup
+
     async def test_dedup_skipped_when_disabled(self, fast_brain_env):
         """When SPEECH_DEDUP_ENABLED is False, speech plays without a dedup check."""
         env = fast_brain_env
