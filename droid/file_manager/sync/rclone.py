@@ -96,7 +96,6 @@ class RcloneSync:
                 )
 
                 # 3. Create rclone config file
-                self._config_path = tempfile.mktemp(suffix=".conf", prefix="rclone_")
                 rclone_config = f"""[{self.REMOTE_NAME}]
 type = sftp
 host = {self.config.ssh_host}
@@ -105,7 +104,14 @@ user = {self.config.ssh_user}
 key_file = {self.config.ssh_key_path}
 set_modtime = false
 """
-                Path(self._config_path).write_text(rclone_config)
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    suffix=".conf",
+                    prefix="rclone_",
+                    delete=False,
+                ) as cfg_file:
+                    cfg_file.write(rclone_config)
+                    self._config_path = cfg_file.name
                 LOGGER.debug(
                     f"{ICONS['file_sync']} [FileSync] Rclone config written to {self._config_path}",
                 )
