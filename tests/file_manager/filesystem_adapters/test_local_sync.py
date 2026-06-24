@@ -4,15 +4,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from droid.file_manager.filesystem_adapters.local_adapter import LocalFileSystemAdapter
-from droid.file_manager.sync.rclone import SyncResult
+from unity.file_manager.filesystem_adapters.local_adapter import LocalFileSystemAdapter
+from unity.file_manager.sync.rclone import SyncResult
 
 
 class TestLocalFileSystemAdapterSync:
     """Tests for LocalFileSystemAdapter sync integration."""
 
     def test_adapter_default_root(self, tmp_path):
-        """Test adapter default root is ~/Droid."""
+        """Test adapter default root is ~/Unity."""
         # With explicit root
         adapter = LocalFileSystemAdapter(str(tmp_path), enable_sync=False)
         assert adapter._root == tmp_path
@@ -88,7 +88,7 @@ class TestLocalFileSystemAdapterAsyncSync:
         mock_manager.enabled = False  # No desktop_url configured
 
         with patch(
-            "droid.file_manager.sync.SyncManager",
+            "unity.file_manager.sync.SyncManager",
             return_value=mock_manager,
         ):
             result = await adapter.start_sync()
@@ -108,7 +108,7 @@ class TestLocalFileSystemAdapterAsyncSync:
         mock_manager.start = AsyncMock(return_value=True)
 
         with patch(
-            "droid.file_manager.sync.SyncManager",
+            "unity.file_manager.sync.SyncManager",
             return_value=mock_manager,
         ):
             result = await adapter.start_sync()

@@ -39,7 +39,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import pytest_asyncio
 
-from droid.conversation_manager.events import (
+from unity.conversation_manager.events import (
     Ping,
 )
 
@@ -51,7 +51,7 @@ from droid.conversation_manager.events import (
 @pytest_asyncio.fixture
 async def event_broker():
     """Create a fresh in-memory event broker."""
-    from droid.conversation_manager.in_memory_event_broker import (
+    from unity.conversation_manager.in_memory_event_broker import (
         create_in_memory_event_broker,
         reset_in_memory_event_broker,
     )
@@ -110,7 +110,7 @@ class TestInactivityDetectionBasics:
         This is the core behavior: after 6 minutes of no activity, the container
         should shut down gracefully.
         """
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         stop_event = asyncio.Event()
         cm = ConversationManager(
@@ -165,7 +165,7 @@ class TestInactivityDetectionBasics:
         When wait_for_events() receives a message, it should update
         last_activity_time to the current loop time.
         """
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         stop_event = asyncio.Event()
         cm = ConversationManager(
@@ -206,7 +206,7 @@ class TestInactivityDetectionBasics:
         If last_activity_time keeps getting updated, the inactivity timeout
         should never be reached.
         """
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         stop_event = asyncio.Event()
         cm = ConversationManager(
@@ -270,8 +270,8 @@ class TestEventBusKeepAlive:
         """EventBus.publish() keeps the container alive even without pubsub events."""
         import time as _time
 
-        from droid.conversation_manager.conversation_manager import ConversationManager
-        from droid.events.event_bus import EventBus
+        from unity.conversation_manager.conversation_manager import ConversationManager
+        from unity.events.event_bus import EventBus
 
         stop_event = asyncio.Event()
         cm = ConversationManager(
@@ -322,8 +322,8 @@ class TestEventBusKeepAlive:
         """Container shuts down when both pubsub and EventBus are idle."""
         import time as _time
 
-        from droid.conversation_manager.conversation_manager import ConversationManager
-        from droid.events.event_bus import EventBus
+        from unity.conversation_manager.conversation_manager import ConversationManager
+        from unity.events.event_bus import EventBus
 
         stop_event = asyncio.Event()
         cm = ConversationManager(
@@ -376,9 +376,9 @@ class TestActiveWorkKeepAlive:
     ):
         import time as _time
 
-        from droid.conversation_manager.conversation_manager import ConversationManager
-        from droid.events.active_work import ACTIVE_WORK
-        from droid.events.event_bus import EventBus
+        from unity.conversation_manager.conversation_manager import ConversationManager
+        from unity.events.active_work import ACTIVE_WORK
+        from unity.events.event_bus import EventBus
 
         ACTIVE_WORK.clear()
 
@@ -443,8 +443,8 @@ class TestPingKeepAlive:
         Idle containers send pings every 30 seconds to stay alive. Each ping
         should reset the inactivity timer.
         """
-        from droid.conversation_manager.conversation_manager import ConversationManager
-        from droid.conversation_manager.domains.event_handlers import EventHandler
+        from unity.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.domains.event_handlers import EventHandler
 
         stop_event = asyncio.Event()
         cm = ConversationManager(
@@ -496,7 +496,7 @@ class TestCleanupSequence:
         Live containers (with real assistant_id) must mark their job as done
         in AssistantJobs so the system knows they're no longer running.
         """
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         stop_event = asyncio.Event()
         cm = ConversationManager(
@@ -519,7 +519,7 @@ class TestCleanupSequence:
         )
 
         with patch(
-            "droid.conversation_manager.conversation_manager.assistant_jobs.mark_job_done",
+            "unity.conversation_manager.conversation_manager.assistant_jobs.mark_job_done",
         ) as mock_mark_done:
             await cm.cleanup()
 
@@ -539,7 +539,7 @@ class TestCleanupSequence:
         A graceful inactivity shutdown should tell AssistantJobs to stop the
         session so Comms can transition offline instead of restarting.
         """
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         stop_event = asyncio.Event()
         cm = ConversationManager(
@@ -563,7 +563,7 @@ class TestCleanupSequence:
         cm.shutdown_reason = "idle_timeout"
 
         with patch(
-            "droid.conversation_manager.conversation_manager.assistant_jobs.mark_job_done",
+            "unity.conversation_manager.conversation_manager.assistant_jobs.mark_job_done",
         ) as mock_mark_done:
             await cm.cleanup()
 
@@ -581,7 +581,7 @@ class TestCleanupSequence:
         Idle containers (with assistant_id=None) were never "live" in the
         AssistantJobs sense, so we don't need to mark them as done.
         """
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         stop_event = asyncio.Event()
         cm = ConversationManager(
@@ -604,7 +604,7 @@ class TestCleanupSequence:
         )
 
         with patch(
-            "droid.conversation_manager.conversation_manager.assistant_jobs.mark_job_done",
+            "unity.conversation_manager.conversation_manager.assistant_jobs.mark_job_done",
         ) as mock_mark_done:
             await cm.cleanup()
 
@@ -617,7 +617,7 @@ class TestCleanupSequence:
 
         Any running voice agent subprocess must be terminated on shutdown.
         """
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         stop_event = asyncio.Event()
         cm = ConversationManager(
@@ -643,7 +643,7 @@ class TestCleanupSequence:
         cm.call_manager.cleanup_call_proc = AsyncMock()
 
         with patch(
-            "droid.conversation_manager.conversation_manager.assistant_jobs.mark_job_done",
+            "unity.conversation_manager.conversation_manager.assistant_jobs.mark_job_done",
         ):
             await cm.cleanup()
 
@@ -656,7 +656,7 @@ class TestCleanupSequence:
 
         This signals to main.py that shutdown is complete.
         """
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         stop_event = asyncio.Event()
         cm = ConversationManager(
@@ -681,7 +681,7 @@ class TestCleanupSequence:
         assert not stop_event.is_set(), "Stop event should not be set initially"
 
         with patch(
-            "droid.conversation_manager.conversation_manager.assistant_jobs.mark_job_done",
+            "unity.conversation_manager.conversation_manager.assistant_jobs.mark_job_done",
         ):
             await cm.cleanup()
 
@@ -704,7 +704,7 @@ class TestEventBrokerLifecycle:
         When check_inactivity() triggers shutdown, it should close the event
         broker to release resources and signal to wait_for_events() to stop.
         """
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         stop_event = asyncio.Event()
         cm = ConversationManager(
@@ -779,7 +779,7 @@ class TestFullLifecycleIntegration:
         4. No activity for timeout period
         5. Shuts down gracefully
         """
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         stop_event = asyncio.Event()
         cm = ConversationManager(
@@ -866,7 +866,7 @@ class TestFullLifecycleIntegration:
         4. Mark job done
         5. Set stop event
         """
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         stop_event = asyncio.Event()
         cm = ConversationManager(
@@ -901,7 +901,7 @@ class TestFullLifecycleIntegration:
         cm.store_chat_history = mock_store_chat_history
 
         with patch(
-            "droid.conversation_manager.conversation_manager.assistant_jobs.mark_job_done",
+            "unity.conversation_manager.conversation_manager.assistant_jobs.mark_job_done",
             side_effect=lambda *args: call_order.append("mark_job_done"),
         ):
             await cm.cleanup()
@@ -935,7 +935,7 @@ class TestEdgeCases:
 
         In some error scenarios, job_name might not be set.
         """
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         stop_event = asyncio.Event()
         cm = ConversationManager(
@@ -958,7 +958,7 @@ class TestEdgeCases:
         )
 
         with patch(
-            "droid.conversation_manager.conversation_manager.assistant_jobs.mark_job_done",
+            "unity.conversation_manager.conversation_manager.assistant_jobs.mark_job_done",
         ) as mock_mark_done:
             # Should not raise
             await cm.cleanup()
@@ -973,7 +973,7 @@ class TestEdgeCases:
 
         Once stop is set, subsequent checks should be no-ops.
         """
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         stop_event = asyncio.Event()
         cm = ConversationManager(

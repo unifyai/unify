@@ -55,8 +55,8 @@ from sandboxes.conversation_manager.ipc_protocol import (
     create_message,
     parse_message,
 )
-from droid.common.tool_spec import ToolSpec
-from droid.events.types.manager_method import ManagerMethodPayload
+from unity.common.tool_spec import ToolSpec
+from unity.events.types.manager_method import ManagerMethodPayload
 
 LG = logging.getLogger("conversation_manager_sandbox")
 
@@ -466,7 +466,7 @@ def _build_args_namespace(*, config: dict, sender: _Sender) -> Any:
     args = SimpleNamespace(**cfg)
     # Ensure required defaults.
     if not hasattr(args, "project_name"):
-        setattr(args, "project_name", "droid")
+        setattr(args, "project_name", "unity")
     if not hasattr(args, "agent_server_url"):
         setattr(args, "agent_server_url", None)
     if not hasattr(args, "headless"):
@@ -787,7 +787,7 @@ async def _run_worker(*, ui_to_worker, worker_to_ui, config: dict) -> None:
     args = _build_args_namespace(config=config, sender=sender)
     actor_cfg: ActorConfig = getattr(args, "_actor_config", ActorConfig())
     try:
-        project_name = str(getattr(args, "project_name", "droid"))
+        project_name = str(getattr(args, "project_name", "unity"))
         overwrite = bool(getattr(args, "overwrite", False))
         activate_project(project_name, overwrite)
     except Exception as exc:
@@ -801,7 +801,7 @@ async def _run_worker(*, ui_to_worker, worker_to_ui, config: dict) -> None:
         sender.send_worker_exit(restart=False, config=None)
         return
     cfg_mgr = ConfigurationManager(
-        project_name=str(getattr(args, "project_name", "droid")),
+        project_name=str(getattr(args, "project_name", "unity")),
         project_root=Path(__file__).resolve().parents[2],
     )
 
@@ -810,7 +810,7 @@ async def _run_worker(*, ui_to_worker, worker_to_ui, config: dict) -> None:
     desktop_container_id: Optional[str] = None
     try:
         if actor_cfg.actor_type == "codeact_real":
-            from droid.function_manager.primitives import DEFAULT_AGENT_SERVER_URL
+            from unity.function_manager.primitives import DEFAULT_AGENT_SERVER_URL
 
             container_url = (
                 getattr(args, "agent_server_url", None) or DEFAULT_AGENT_SERVER_URL

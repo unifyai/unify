@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from droid.transcript_manager.simulated import (
+from unity.transcript_manager.simulated import (
     SimulatedTranscriptManager,
 )
-from droid.transcript_manager.types.message import Message
-from droid.conversation_manager.cm_types import Medium
+from unity.transcript_manager.types.message import Message
+from unity.conversation_manager.cm_types import Medium
 from datetime import datetime, timezone
 
 # Helper identical to the one used elsewhere in the test-suite
@@ -24,8 +24,8 @@ def test_docstrings_match_base():
     Public methods in SimulatedTranscriptManager should copy the real
     BaseTranscriptManager doc-strings one-for-one (via functools.wraps).
     """
-    from droid.transcript_manager.base import BaseTranscriptManager
-    from droid.transcript_manager.simulated import SimulatedTranscriptManager
+    from unity.transcript_manager.base import BaseTranscriptManager
+    from unity.transcript_manager.simulated import SimulatedTranscriptManager
 
     assert (
         BaseTranscriptManager.ask.__doc__.strip()

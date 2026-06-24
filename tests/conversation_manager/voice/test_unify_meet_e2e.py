@@ -46,7 +46,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 
-from droid.conversation_manager.events import (
+from unity.conversation_manager.events import (
     UnifyMeetReceived,
     UnifyMeetStarted,
     UnifyMeetEnded,
@@ -54,7 +54,7 @@ from droid.conversation_manager.events import (
     OutboundUnifyMeetUtterance,
     FastBrainNotification,
 )
-from droid.conversation_manager.cm_types import Medium, Mode
+from unity.conversation_manager.cm_types import Medium, Mode
 
 from tests.conversation_manager.conftest import TEST_CONTACTS
 
@@ -130,7 +130,7 @@ def alice_contact():
 @pytest_asyncio.fixture
 async def event_broker():
     """Real in-memory event broker."""
-    from droid.conversation_manager.in_memory_event_broker import (
+    from unity.conversation_manager.in_memory_event_broker import (
         create_in_memory_event_broker,
         reset_in_memory_event_broker,
     )
@@ -572,7 +572,7 @@ class TestUnifyMeetSubprocessSpawning:
         ) as mock_start:
             event = UnifyMeetReceived(
                 contact=boss_contact,
-                room_name="droid_25_meet",
+                room_name="unity_25_meet",
             )
             await initialized_cm.step(event)
 
@@ -603,12 +603,12 @@ class TestUnifyMeetSubprocessSpawning:
         ):
             event = UnifyMeetReceived(
                 contact=boss_contact,
-                room_name="droid_42_meet",
+                room_name="unity_42_meet",
             )
             await initialized_cm.step(event)
 
         assert (
-            captured_args["room_name"] == "droid_42_meet"
+            captured_args["room_name"] == "unity_42_meet"
         ), f"Room name not passed correctly: {captured_args.get('room_name')}"
 
     async def test_unify_meet_received_ignored_when_already_in_voice_mode(
@@ -765,7 +765,7 @@ class TestFullUnifyMeetLifecycle:
         ):
             received = UnifyMeetReceived(
                 contact=boss_contact,
-                room_name="droid_test_room",
+                room_name="unity_test_room",
             )
             await initialized_cm.step(received)
 
@@ -872,7 +872,7 @@ class TestRealLiveKitUnifyMeet:
 
         This exercises the actual call.py script with LiveKit.
         """
-        from droid.conversation_manager.domains.ipc_socket import (
+        from unity.conversation_manager.domains.ipc_socket import (
             CallEventSocketServer,
             CM_EVENT_SOCKET_ENV,
         )
@@ -898,7 +898,7 @@ class TestRealLiveKitUnifyMeet:
         proc = None
         call_py = (
             Path(__file__).parent.parent.parent.parent
-            / "droid"
+            / "unity"
             / "conversation_manager"
             / "medium_scripts"
             / "call.py"
@@ -1017,7 +1017,7 @@ class TestRealLiveKitUnifyMeet:
         """
         Test that call guidance flows correctly via IPC during Unify Meet.
         """
-        from droid.conversation_manager.domains.ipc_socket import (
+        from unity.conversation_manager.domains.ipc_socket import (
             CallEventSocketServer,
             CM_EVENT_SOCKET_ENV,
         )
@@ -1074,7 +1074,7 @@ class TestRealLiveKitUnifyMeet:
 
             # Send Unify Meet specific guidance
             events_from_subprocess.clear()
-            from droid.conversation_manager.events import FastBrainNotification
+            from unity.conversation_manager.events import FastBrainNotification
 
             guidance_message = "The boss mentioned they prefer morning meetings"
 

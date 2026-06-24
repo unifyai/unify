@@ -63,13 +63,13 @@ RUN npm ci
 # so the browser build matches what magnitude-core expects at runtime.
 # Install into unityuser-accessible cache — symlinking /root/.cache breaks because
 # agent-service runs as unityuser and cannot traverse /root/.cache (mode 700).
-ENV PLAYWRIGHT_BROWSERS_PATH=/Droid/.cache/ms-playwright
-RUN mkdir -p /Droid/.cache/ms-playwright && \
+ENV PLAYWRIGHT_BROWSERS_PATH=/Unity/.cache/ms-playwright
+RUN mkdir -p /Unity/.cache/ms-playwright && \
     cd /app/magnitude/packages/magnitude-core && npx patchright install --with-deps chromium && \
-    chown -R unityuser:unityuser /Droid/.cache/ms-playwright
+    chown -R unityuser:unityuser /Unity/.cache/ms-playwright
 
 # Configure Chromium as default browser so GUI apps and XFCE can find it
-RUN CHROME_PATH=$(find /Droid/.cache/ms-playwright -name "chrome" -type f -executable 2>/dev/null | head -1) && \
+RUN CHROME_PATH=$(find /Unity/.cache/ms-playwright -name "chrome" -type f -executable 2>/dev/null | head -1) && \
     printf '#!/bin/bash\nexec "%s" --no-sandbox "$@"\n' "$CHROME_PATH" > /usr/local/bin/chromium-browser && \
     chmod +x /usr/local/bin/chromium-browser && \
     printf '[Desktop Entry]\nVersion=1.0\nName=Chromium Web Browser\nExec=/usr/local/bin/chromium-browser %%U\nTerminal=false\nType=Application\nIcon=web-browser\nCategories=Network;WebBrowser;\nMimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;\nStartupNotify=true\n' \
@@ -92,14 +92,14 @@ RUN mkdir -p /usr/share/xfce4/helpers && \
 # disabled in xfconf, which blanks the VNC framebuffer after idle and leaves a
 # black liveview until real input arrives.
 RUN rm -f /etc/xdg/autostart/xfce4-screensaver.desktop /etc/xdg/autostart/xscreensaver.desktop && \
-    mkdir -p /Droid/.config/xfce4/xfconf/xfce-perchannel-xml && \
+    mkdir -p /Unity/.config/xfce4/xfconf/xfce-perchannel-xml && \
     printf '<?xml version="1.0" encoding="UTF-8"?>\n<channel name="xfce4-power-manager" version="1.0">\n  <property name="xfce4-power-manager" type="empty">\n    <property name="dpms-enabled" type="bool" value="false"/>\n    <property name="blank-on-ac" type="int" value="0"/>\n    <property name="dpms-on-ac-sleep" type="uint" value="0"/>\n    <property name="dpms-on-ac-off" type="uint" value="0"/>\n  </property>\n</channel>\n' \
-        > /Droid/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-power-manager.xml && \
+        > /Unity/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-power-manager.xml && \
     printf '<?xml version="1.0" encoding="UTF-8"?>\n<channel name="xfce4-screensaver" version="1.0">\n  <property name="saver" type="empty">\n    <property name="enabled" type="bool" value="false"/>\n  </property>\n  <property name="lock" type="empty">\n    <property name="enabled" type="bool" value="false"/>\n  </property>\n</channel>\n' \
-        > /Droid/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-screensaver.xml && \
+        > /Unity/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-screensaver.xml && \
     printf 'WebBrowser=chromium-browser\nTerminalEmulator=xfce4-terminal\n' \
-        > /Droid/.config/xfce4/helpers.rc && \
-    chown -R unityuser:unityuser /Droid/.config
+        > /Unity/.config/xfce4/helpers.rc && \
+    chown -R unityuser:unityuser /Unity/.config
 
 WORKDIR /app
 

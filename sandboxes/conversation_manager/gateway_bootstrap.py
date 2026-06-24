@@ -1,7 +1,7 @@
 """
 Local gateway auto-start helper for the ConversationManager sandbox.
 
-Starts a local ``droid.gateway`` process on port 8787 for:
+Starts a local ``unity.gateway`` process on port 8787 for:
 - UniLLM proxy traffic used by agent-service / Magnitude computer use
 - Outbound SMS/calls when Twilio credentials are also configured
 
@@ -24,9 +24,9 @@ LG = logging.getLogger("conversation_manager_sandbox")
 ProgressCallback = Callable[[str], None]
 
 _GATEWAY_HEALTH_PATH = "/health"
-# Port 8787 matches the CM's LOCAL_COMMS_PORT default (DROID_CONVERSATION_LOCAL_COMMS_PORT).
+# Port 8787 matches the CM's LOCAL_COMMS_PORT default (UNITY_CONVERSATION_LOCAL_COMMS_PORT).
 # Starting on this exact port means the CM's _local_comms_base_url() fallback resolves
-# correctly without needing DROID_COMMS_URL to be set (which would be too late after
+# correctly without needing UNITY_COMMS_URL to be set (which would be too late after
 # pydantic-settings has already instantiated SETTINGS at import time).
 _GATEWAY_PORT = 8787
 _GATEWAY_STARTUP_TIMEOUT_S = 15.0
@@ -85,7 +85,7 @@ def try_start_gateway_direct(
     timeout_s: float = _GATEWAY_STARTUP_TIMEOUT_S,
 ) -> GatewayBootstrapResult:
     """
-    Start a local droid.gateway subprocess on port 8787.
+    Start a local unity.gateway subprocess on port 8787.
 
     The gateway exposes ``/unillm`` for agent-service computer use and, when
     Twilio credentials are configured, outbound SMS/call routes as well.
@@ -118,7 +118,7 @@ def try_start_gateway_direct(
             ok=False,
             summary=(
                 f"Port {port} is in use by an unrelated process. "
-                "Free that port or set DROID_CONVERSATION_LOCAL_COMMS_PORT to override."
+                "Free that port or set UNITY_CONVERSATION_LOCAL_COMMS_PORT to override."
             ),
         )
 
@@ -128,8 +128,8 @@ def try_start_gateway_direct(
 
     gateway_env = {
         **os.environ,
-        "DROID_GATEWAY_HOST": "127.0.0.1",
-        "DROID_GATEWAY_PORT": str(port),
+        "UNITY_GATEWAY_HOST": "127.0.0.1",
+        "UNITY_GATEWAY_PORT": str(port),
     }
 
     log_dir = repo_root / "logs" / "gateway"
@@ -142,7 +142,7 @@ def try_start_gateway_direct(
     try:
         log_file = open(log_path, "a")  # noqa: WPS515 – intentional open for subprocess
         process = subprocess.Popen(
-            [python, "-m", "droid.gateway", "serve"],
+            [python, "-m", "unity.gateway", "serve"],
             cwd=str(repo_root),
             env=gateway_env,
             stdout=log_file,

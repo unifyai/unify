@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 
-from droid.conversation_manager.medium_scripts.common import ScreenshotHistory
-from droid.conversation_manager.cm_types.screenshot import ScreenshotEntry
+from unity.conversation_manager.medium_scripts.common import ScreenshotHistory
+from unity.conversation_manager.cm_types.screenshot import ScreenshotEntry
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 

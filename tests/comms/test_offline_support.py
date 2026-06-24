@@ -3,12 +3,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from droid.comms import offline_support
-from droid.comms.primitives import CommsPrimitives
-from droid.conversation_manager.cm_types import Medium
-from droid.conversation_manager.domains import comms_utils
-from droid.conversation_manager.events import Event, WhatsAppSent
-from droid.task_scheduler.machine_state import (
+from unity.comms import offline_support
+from unity.comms.primitives import CommsPrimitives
+from unity.conversation_manager.cm_types import Medium
+from unity.conversation_manager.domains import comms_utils
+from unity.conversation_manager.events import Event, WhatsAppSent
+from unity.task_scheduler.machine_state import (
     TaskOutboundOperationRecord,
     TaskOutboundOperationReference,
 )
@@ -16,11 +16,11 @@ from droid.task_scheduler.machine_state import (
 
 def _seed_offline_env(monkeypatch):
     monkeypatch.setenv(
-        "DROID_OFFLINE_TASK_RUN_KEY",
+        "UNITY_OFFLINE_TASK_RUN_KEY",
         "offline:scheduled:42:101:rev:once",
     )
-    monkeypatch.setenv("DROID_OFFLINE_TASK_ID", "101")
-    monkeypatch.setenv("DROID_OFFLINE_TASK_SOURCE_TASK_LOG_ID", "555")
+    monkeypatch.setenv("UNITY_OFFLINE_TASK_ID", "101")
+    monkeypatch.setenv("UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID", "555")
     monkeypatch.setattr(offline_support, "_OPERATION_COUNTER", 0)
     monkeypatch.setattr(offline_support.SESSION_DETAILS.assistant, "agent_id", 42)
     monkeypatch.setattr(offline_support.SESSION_DETAILS.assistant, "contact_id", 0)
@@ -91,11 +91,11 @@ def _stub_offline_tracking(monkeypatch, *, operation_key: str):
 def test_missing_detail_error_is_coordinator_boss_aware(monkeypatch):
     comms = CommsPrimitives()
     monkeypatch.setattr(
-        "droid.comms.primitives.SESSION_DETAILS.is_coordinator",
+        "unity.comms.primitives.SESSION_DETAILS.is_coordinator",
         True,
     )
     monkeypatch.setattr(
-        "droid.comms.primitives.SESSION_DETAILS.boss_contact_id",
+        "unity.comms.primitives.SESSION_DETAILS.boss_contact_id",
         1,
     )
 
@@ -115,7 +115,7 @@ def test_missing_detail_error_is_coordinator_boss_aware(monkeypatch):
 def test_missing_detail_error_keeps_inline_guidance_for_regular_contacts(monkeypatch):
     comms = CommsPrimitives()
     monkeypatch.setattr(
-        "droid.comms.primitives.SESSION_DETAILS.is_coordinator",
+        "unity.comms.primitives.SESSION_DETAILS.is_coordinator",
         False,
     )
 
@@ -480,7 +480,7 @@ async def test_send_sms_offline_duplicate_skips_transport(monkeypatch):
     comms._event_broker.publish = AsyncMock()
 
     monkeypatch.setattr(
-        "droid.comms.primitives.reserve_outbound_operation",
+        "unity.comms.primitives.reserve_outbound_operation",
         lambda **kwargs: offline_support.OfflineOutboundDecision(
             reservation=None,
             response={"status": "ok", "deduped": True},
@@ -509,7 +509,7 @@ async def test_send_email_missing_assistant_email_does_not_reserve_or_attach(
     )
     monkeypatch.setattr(comms, "_assistant_email", lambda: "")
     monkeypatch.setattr(
-        "droid.comms.primitives.reserve_outbound_operation",
+        "unity.comms.primitives.reserve_outbound_operation",
         lambda **kwargs: (_ for _ in ()).throw(
             AssertionError("offline reservation should not happen"),
         ),
@@ -543,7 +543,7 @@ async def test_send_discord_channel_missing_bot_does_not_reserve_or_send(monkeyp
         },
     )
     monkeypatch.setattr(
-        "droid.comms.primitives.reserve_outbound_operation",
+        "unity.comms.primitives.reserve_outbound_operation",
         lambda **kwargs: (_ for _ in ()).throw(
             AssertionError("offline reservation should not happen"),
         ),
@@ -618,12 +618,12 @@ async def test_send_whatsapp_template_live_tracks_delivered_template_and_pending
     comms._event_broker.publish = AsyncMock()
     monkeypatch.setattr(comms, "_assistant_whatsapp_number", lambda: "+15555550001")
     monkeypatch.setattr(
-        "droid.comms.primitives.SESSION_DETAILS.assistant.first_name",
+        "unity.comms.primitives.SESSION_DETAILS.assistant.first_name",
         "T-W1N",
         raising=False,
     )
     monkeypatch.setattr(
-        "droid.comms.primitives.SESSION_DETAILS.assistant.agent_id",
+        "unity.comms.primitives.SESSION_DETAILS.assistant.agent_id",
         42,
         raising=False,
     )
@@ -679,7 +679,7 @@ async def test_make_whatsapp_call_invite_offline_does_not_claim_pending_callback
     comms._event_broker.publish = AsyncMock()
 
     monkeypatch.setattr(
-        "droid.conversation_manager.domains.call_manager.make_room_name",
+        "unity.conversation_manager.domains.call_manager.make_room_name",
         lambda assistant_id, medium: f"{assistant_id}-{medium}",
     )
 

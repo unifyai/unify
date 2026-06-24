@@ -39,7 +39,7 @@ repos:
         logs/.*|
         assets/.*|
         scripts/skill_migration/builtins_skills\.lock\.json$|
-        droid/guidance_manager/builtins_guidance\.json$|
+        unity/guidance_manager/builtins_guidance\.json$|
         .*/__pycache__/.*
       )$
 

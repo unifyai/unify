@@ -15,9 +15,9 @@ import asyncio
 from typing import List
 
 import pytest
-from droid.common.async_tool_loop import start_async_tool_loop
+from unity.common.async_tool_loop import start_async_tool_loop
 from tests.helpers import _handle_project
-from droid.common.llm_client import new_llm_client
+from unity.common.llm_client import new_llm_client
 from tests.async_helpers import (
     _wait_for_tool_request,
     _wait_for_tool_result,
@@ -284,7 +284,7 @@ async def test_patient_interjection_defers_turn(
     """
     client = new_llm_client(**llm_config)
 
-    from droid.common._async_tool import loop as _loop
+    from unity.common._async_tool import loop as _loop
 
     llm_started = asyncio.Event()
     release_first = asyncio.Event()
@@ -377,7 +377,7 @@ async def test_patient_interjection_does_not_cancel_inflight_llm(
     """
     client = new_llm_client(**llm_config)
 
-    from droid.common._async_tool import loop as _loop
+    from unity.common._async_tool import loop as _loop
 
     llm_started = asyncio.Event()
     interjection_sent = asyncio.Event()
@@ -452,7 +452,7 @@ async def test_immediate_interjection_cancels_llm(llm_config, monkeypatch) -> No
     """
     client = new_llm_client(**llm_config)
 
-    from droid.common._async_tool import loop as _loop
+    from unity.common._async_tool import loop as _loop
 
     llm_started = asyncio.Event()
     was_cancelled = {"value": False}

@@ -644,7 +644,7 @@ def diagnose_agent_service_setup(
             lines.append(f"- {', '.join(missing_bits)}")
             lines.append("")
             lines.append("Fix:")
-            lines.append("- Install Node.js (Node 22+ recommended for Droid).")
+            lines.append("- Install Node.js (Node 22+ recommended for Unity).")
             lines.append("- Re-run the sandbox.")
             lines.append("")
         else:
@@ -662,7 +662,7 @@ def diagnose_agent_service_setup(
         if not magnitude_dir.exists():
             lines.append("Magnitude dependency:")
             lines.append(
-                "- Missing `magnitude/` (Droid's Magnitude fork). This is required because "
+                "- Missing `magnitude/` (Unity's Magnitude fork). This is required because "
                 "`agent-service/package.json` depends on local `magnitude-core`.",
             )
             lines.append("")
@@ -765,7 +765,7 @@ def try_auto_bootstrap_agent_service(
         return AgentServiceBootstrapResult(
             ok=False,
             summary=(
-                "Missing `magnitude/` (Droid's Magnitude fork). Cannot auto-bootstrap "
+                "Missing `magnitude/` (Unity's Magnitude fork). Cannot auto-bootstrap "
                 "because agent-service depends on local magnitude-core."
             ),
             process=None,

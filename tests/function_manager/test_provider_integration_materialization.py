@@ -5,12 +5,12 @@ from types import SimpleNamespace
 
 import pytest
 
-import droid.function_manager.function_manager as fm_module
-from droid.function_manager.function_manager import FunctionManager
-from droid.function_manager.primitives.scope import PrimitiveScope
-from droid.function_manager.types.function import Function
-from droid.integrations.primitives import IntegrationPrimitives
-from droid.settings import SETTINGS
+import unity.function_manager.function_manager as fm_module
+from unity.function_manager.function_manager import FunctionManager
+from unity.function_manager.primitives.scope import PrimitiveScope
+from unity.function_manager.types.function import Function
+from unity.integrations.primitives import IntegrationPrimitives
+from unity.settings import SETTINGS
 
 MOCK_TOOL = {
     "tool_id": "composio:hubspot:search_contacts",
@@ -116,9 +116,9 @@ def _fake_function_manager() -> FunctionManager:
 
 
 def _capture_function_manager_logs(caplog):
-    sync_logger = logging.getLogger("droid.function_manager.function_manager")
+    sync_logger = logging.getLogger("unity.function_manager.function_manager")
     sync_logger.addHandler(caplog.handler)
-    caplog.set_level(logging.INFO, logger="droid.function_manager.function_manager")
+    caplog.set_level(logging.INFO, logger="unity.function_manager.function_manager")
     return sync_logger
 
 
@@ -127,7 +127,7 @@ def test_materializes_connected_provider_tools_with_active_only_search(
 ) -> None:
     client = FakeIntegrationOps()
     monkeypatch.setattr(
-        "droid.integrations.ops.list_connections",
+        "unity.integrations.ops.list_connections",
         client.list_connections,
     )
     catalog_calls: list[dict[str, object]] = []
@@ -137,7 +137,7 @@ def test_materializes_connected_provider_tools_with_active_only_search(
         return list(client.results)
 
     monkeypatch.setattr(
-        "droid.function_manager.function_manager.list_catalog_tools",
+        "unity.function_manager.function_manager.list_catalog_tools",
         fake_list_catalog_tools,
     )
     fm = _fake_function_manager()
@@ -316,7 +316,7 @@ async def test_execute_function_dispatches_provider_backed_primitive_by_row(
         calls.append((tool_id, arguments))
         return {"status": "ok", "tool_id": tool_id, "arguments": arguments}
 
-    monkeypatch.setattr("droid.integrations.ops.run_tool", fake_run_tool)
+    monkeypatch.setattr("unity.integrations.ops.run_tool", fake_run_tool)
     fm = FunctionManager.__new__(FunctionManager)
     fm._include_primitives = True
     fm._get_function_data_by_name = lambda name: None
@@ -324,7 +324,7 @@ async def test_execute_function_dispatches_provider_backed_primitive_by_row(
     fm._get_stored_primitive_data_by_name = lambda name: {
         "name": "primitives.integrations.gmail.fetch_emails",
         "is_primitive": True,
-        "primitive_class": "droid.integrations.primitives.IntegrationPrimitives",
+        "primitive_class": "unity.integrations.primitives.IntegrationPrimitives",
         "primitive_method": "primitives_integrations__gmail__fetch_emails",
         "metadata": {
             "source": "provider_backed",
@@ -364,7 +364,7 @@ def test_materialization_excludes_unconnected_tools(monkeypatch) -> None:
         },
     ]
     monkeypatch.setattr(
-        "droid.integrations.ops.list_connections",
+        "unity.integrations.ops.list_connections",
         client.list_connections,
     )
     catalog_calls: list[dict[str, object]] = []
@@ -374,7 +374,7 @@ def test_materialization_excludes_unconnected_tools(monkeypatch) -> None:
         return list(client.results)
 
     monkeypatch.setattr(
-        "droid.function_manager.function_manager.list_catalog_tools",
+        "unity.function_manager.function_manager.list_catalog_tools",
         fake_list_catalog_tools,
     )
     fm = _fake_function_manager()
@@ -390,11 +390,11 @@ def test_staging_sync_logs_zero_row_state(monkeypatch, caplog) -> None:
     client = FakeIntegrationOps()
     client.results = []
     monkeypatch.setattr(
-        "droid.integrations.ops.list_connections",
+        "unity.integrations.ops.list_connections",
         client.list_connections,
     )
     monkeypatch.setattr(
-        "droid.function_manager.function_manager.list_catalog_tools",
+        "unity.function_manager.function_manager.list_catalog_tools",
         lambda **_kwargs: list(client.results),
     )
     fm = _fake_function_manager()
@@ -431,15 +431,15 @@ def test_staging_sync_logs_insert_mismatch(monkeypatch, caplog) -> None:
     monkeypatch.setattr(SETTINGS, "DEPLOY_ENV", "staging")
     client = FakeIntegrationOps()
     monkeypatch.setattr(
-        "droid.integrations.ops.list_connections",
+        "unity.integrations.ops.list_connections",
         client.list_connections,
     )
     monkeypatch.setattr(
-        "droid.function_manager.function_manager.list_catalog_tools",
+        "unity.function_manager.function_manager.list_catalog_tools",
         lambda **_kwargs: list(client.results),
     )
     monkeypatch.setattr(
-        "droid.function_manager.function_manager.list_private_fields",
+        "unity.function_manager.function_manager.list_private_fields",
         lambda _context: [],
     )
     monkeypatch.setattr("unify.get_logs", lambda **_kwargs: [])
@@ -476,7 +476,7 @@ def test_materialization_pages_app_scoped_provider_tools(monkeypatch) -> None:
         },
     ]
     monkeypatch.setattr(
-        "droid.integrations.ops.list_connections",
+        "unity.integrations.ops.list_connections",
         client.list_connections,
     )
     catalog_calls: list[dict[str, object]] = []
@@ -486,7 +486,7 @@ def test_materialization_pages_app_scoped_provider_tools(monkeypatch) -> None:
         return list(client.results)
 
     monkeypatch.setattr(
-        "droid.function_manager.function_manager.list_catalog_tools",
+        "unity.function_manager.function_manager.list_catalog_tools",
         fake_list_catalog_tools,
     )
     fm = _fake_function_manager()
@@ -536,11 +536,11 @@ def test_materialized_rows_include_pipedream_metadata_without_user_state(
         },
     ]
     monkeypatch.setattr(
-        "droid.integrations.ops.list_connections",
+        "unity.integrations.ops.list_connections",
         client.list_connections,
     )
     monkeypatch.setattr(
-        "droid.function_manager.function_manager.list_catalog_tools",
+        "unity.function_manager.function_manager.list_catalog_tools",
         lambda **_kwargs: list(client.results),
     )
     fm = _fake_function_manager()
@@ -570,7 +570,7 @@ def test_insert_primitives_preserves_validated_integration_metadata(
         captured.extend(kwargs["entries"])
 
     monkeypatch.setattr(
-        "droid.function_manager.function_manager.droid_create_logs",
+        "unity.function_manager.function_manager.unity_create_logs",
         fake_create_logs,
     )
     monkeypatch.setattr(
@@ -614,7 +614,7 @@ def test_insert_primitives_preserves_static_primitive_null_shape(monkeypatch) ->
         captured.extend(kwargs["entries"])
 
     monkeypatch.setattr(
-        "droid.function_manager.function_manager.droid_create_logs",
+        "unity.function_manager.function_manager.unity_create_logs",
         fake_create_logs,
     )
     monkeypatch.setattr(
@@ -640,7 +640,7 @@ def test_insert_primitives_preserves_static_primitive_null_shape(monkeypatch) ->
                 "verify": False,
                 "is_primitive": True,
                 "guidance_ids": [],
-                "primitive_class": "droid.integrations.primitives.IntegrationPrimitives",
+                "primitive_class": "unity.integrations.primitives.IntegrationPrimitives",
                 "primitive_method": "search_integrations",
             },
         ],
@@ -661,7 +661,7 @@ def test_insert_primitives_replaces_exact_function_ids(monkeypatch) -> None:
         lambda self, function_ids: deleted_ids.extend(function_ids),
     )
     monkeypatch.setattr(
-        "droid.function_manager.function_manager.droid_create_logs",
+        "unity.function_manager.function_manager.unity_create_logs",
         lambda **kwargs: captured.extend(kwargs["entries"]),
     )
     fm = _fake_function_manager()
@@ -682,7 +682,7 @@ def test_insert_primitives_replaces_exact_function_ids(monkeypatch) -> None:
                 "verify": False,
                 "is_primitive": True,
                 "guidance_ids": [],
-                "primitive_class": "droid.integrations.primitives.IntegrationPrimitives",
+                "primitive_class": "unity.integrations.primitives.IntegrationPrimitives",
                 "primitive_method": "search_integrations",
             },
         ],
@@ -705,7 +705,7 @@ def test_function_manager_queries_do_not_call_integration_ops(monkeypatch) -> No
             "FunctionManager query paths must not call integration ops",
         )
 
-    monkeypatch.setattr("droid.integrations.ops.list_connections", fail_ops)
+    monkeypatch.setattr("unity.integrations.ops.list_connections", fail_ops)
     monkeypatch.setattr(
         "unify.get_logs",
         lambda **kwargs: (
@@ -745,11 +745,11 @@ def test_materialization_hash_match_skips_delete_and_insert(monkeypatch) -> None
     )._integration_tool_to_function_row(MOCK_TOOL)
     current_hash = FunctionManager._hash_integration_rows([expected_row])
     monkeypatch.setattr(
-        "droid.integrations.ops.list_connections",
+        "unity.integrations.ops.list_connections",
         client.list_connections,
     )
     monkeypatch.setattr(
-        "droid.function_manager.function_manager.list_catalog_tools",
+        "unity.function_manager.function_manager.list_catalog_tools",
         lambda **_kwargs: list(client.results),
     )
     fm = _fake_function_manager()
@@ -769,11 +769,11 @@ def test_disconnect_cleanup_removes_materialized_rows(monkeypatch) -> None:
     client = FakeIntegrationOps()
     client.connections = []
     monkeypatch.setattr(
-        "droid.integrations.ops.list_connections",
+        "unity.integrations.ops.list_connections",
         client.list_connections,
     )
     monkeypatch.setattr(
-        "droid.function_manager.function_manager.list_catalog_tools",
+        "unity.function_manager.function_manager.list_catalog_tools",
         lambda **_kwargs: list(client.results),
     )
     fm = _fake_function_manager()
@@ -855,11 +855,11 @@ def test_connection_cleanup_removes_app_rows_when_last_connection_drops(
     client = FakeIntegrationOps()
     client.connections = []
     monkeypatch.setattr(
-        "droid.integrations.ops.list_connections",
+        "unity.integrations.ops.list_connections",
         client.list_connections,
     )
     monkeypatch.setattr(
-        "droid.function_manager.function_manager.list_catalog_tools",
+        "unity.function_manager.function_manager.list_catalog_tools",
         lambda **_kwargs: list(client.results),
     )
     fm = _fake_function_manager()
@@ -891,11 +891,11 @@ def test_connection_cleanup_keeps_rows_while_other_connection_remains(
         },
     ]
     monkeypatch.setattr(
-        "droid.integrations.ops.list_connections",
+        "unity.integrations.ops.list_connections",
         client.list_connections,
     )
     monkeypatch.setattr(
-        "droid.function_manager.function_manager.list_catalog_tools",
+        "unity.function_manager.function_manager.list_catalog_tools",
         lambda **_kwargs: list(client.results),
     )
     fm = _fake_function_manager()
@@ -922,11 +922,11 @@ def test_missing_active_connection_for_specific_sync_returns_error(monkeypatch) 
     client = FakeIntegrationOps()
     client.connections = []
     monkeypatch.setattr(
-        "droid.integrations.ops.list_connections",
+        "unity.integrations.ops.list_connections",
         client.list_connections,
     )
     monkeypatch.setattr(
-        "droid.function_manager.function_manager.list_catalog_tools",
+        "unity.function_manager.function_manager.list_catalog_tools",
         lambda **_kwargs: list(client.results),
     )
     fm = _fake_function_manager()

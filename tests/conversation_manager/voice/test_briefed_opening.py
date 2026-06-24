@@ -19,13 +19,13 @@ from __future__ import annotations
 import pytest
 
 from tests.helpers import _handle_project
-from droid.conversation_manager.prompt_builders import (
+from unity.conversation_manager.prompt_builders import (
     _BRIEFED_OPENING_GUARDRAIL,
     _OPENING_GREETING_GUARDRAIL,
     build_opening_greeting_messages,
     build_voice_agent_prompt,
 )
-from droid.settings import SETTINGS
+from unity.settings import SETTINGS
 
 from tests.conversation_manager.voice.test_fast_brain_deferral import (
     get_fast_brain_response,

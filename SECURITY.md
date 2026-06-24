@@ -1,6 +1,6 @@
 # Security Policy
 
-This document describes Droid's trust model, names the load-bearing
+This document describes Unity's trust model, names the load-bearing
 boundaries, and defines what's in and out of scope for vulnerability
 reports.
 
@@ -10,16 +10,16 @@ reports.
 
 Report privately via **[security@unify.ai](mailto:security@unify.ai)** or
 through [GitHub Security
-Advisories](https://github.com/unifyai/droid/security/advisories/new).
-**Do not open public issues for security vulnerabilities.** Droid does not
+Advisories](https://github.com/unifyai/unity/security/advisories/new).
+**Do not open public issues for security vulnerabilities.** Unity does not
 operate a bug bounty program.
 
 A useful report includes:
 
 - A concise description and severity assessment.
 - The affected component, identified by file path and line range
-  (e.g. `droid/secret_manager/__init__.py:120-145`).
-- Environment details (Droid commit SHA, OS, Python version, whether
+  (e.g. `unity/secret_manager/__init__.py:120-145`).
+- Environment details (Unity commit SHA, OS, Python version, whether
   hosted or local install).
 - A reproduction against the `staging` branch.
 - A statement of which trust boundary in §2 is crossed.
@@ -33,7 +33,7 @@ issues or pull requests, but not through the private channel.
 
 ## 2. Trust Model
 
-Droid is a single-tenant personal-assistant runtime. The trust boundaries
+Unity is a single-tenant personal-assistant runtime. The trust boundaries
 differ between the open-source local install and the hosted product at
 [console.unify.ai](https://console.unify.ai). **This policy describes the
 local install.** The hosted product is operated separately and its
@@ -42,7 +42,7 @@ it go through the same channels but reference the hosted endpoint.
 
 ### 2.1 Definitions
 
-- **Operator.** The person who installed Droid and runs the `droid`
+- **Operator.** The person who installed Unity and runs the `unity`
   command. The operator's user account is the trust envelope.
 - **Assistant.** The LLM-driven runtime that the operator is talking to,
   composed of the `ConversationManager`, `Actor`, and the typed back
@@ -54,13 +54,13 @@ it go through the same channels but reference the hosted endpoint.
   — Python plans executed by the `Actor`, outbound comms via the gateway,
   filesystem reads and writes, network calls.
 - **Trust envelope.** The set of resources the operator's user account
-  can reach. The local install assumes this is what Droid is allowed to
+  can reach. The local install assumes this is what Unity is allowed to
   reach.
 
 ### 2.2 The load-bearing fact: the Actor writes and executes Python
 
 The `Actor` generates a Python program per turn and executes it. Execution
-runs in a dedicated subprocess (`droid.function_manager.execution_env`)
+runs in a dedicated subprocess (`unity.function_manager.execution_env`)
 with an isolated venv, but **the subprocess shares the operator's user
 account, the operator's filesystem, and the operator's network**. The
 execution boundary is process-level, not OS-level.
@@ -69,7 +69,7 @@ What this confines: accidental misuse of Python's standard library against
 the wrong path. What this does **not** confine: anything the operator's
 own shell could do.
 
-If you run Droid against an LLM whose context can be steered by an
+If you run Unity against an LLM whose context can be steered by an
 attacker — via prompt injection in an inbound email, a fetched web page,
 a calendar invite, a phone-call transcript, etc. — the system has **no
 in-process boundary** that stops the resulting Python from running.
@@ -78,7 +78,7 @@ boundary.
 
 ### 2.3 Credential surfaces
 
-- **`~/.droid/droid/.env`** — LLM provider keys, `ORCHESTRA_URL`,
+- **`~/.unity/unity/.env`** — LLM provider keys, `ORCHESTRA_URL`,
   `UNIFY_KEY`, and any optional integration keys (Twilio, Cartesia,
   ElevenLabs, Tavily, etc.). Owned by the operator's user account;
   readable by anything the operator runs.
@@ -86,7 +86,7 @@ boundary.
   `primitives.secrets.ask(...)` returns metadata only (names, types,
   placeholders), never the secret value; `primitives.secrets.update(...)`
   is the only mutation. The encryption key is operator-supplied and not
-  bound by Droid to any specific KMS. This is the **highest-blast-radius
+  bound by Unity to any specific KMS. This is the **highest-blast-radius
   surface in the codebase** — see [`.github/CODEOWNERS`](.github/CODEOWNERS).
 - **Actor subprocess environment** — the Python plan inherits the
   operator's `os.environ` by default. Provider keys are *not* stripped
@@ -110,7 +110,7 @@ the real boundary.
 
 ### 2.5 Inbound surfaces
 
-When Droid is configured to receive messages from external channels (SMS,
+When Unity is configured to receive messages from external channels (SMS,
 email, phone, voice, web search results, fetched files), every byte that
 reaches the model is attacker-influenceable. Treat every channel as
 untrusted.
@@ -125,15 +125,15 @@ Particularly load-bearing:
 - **Voice / phone transcripts** — STT output is opaque text that flows
   into the model the same way chat does.
 
-The supported posture for adversarial inbound surfaces is to run Droid
+The supported posture for adversarial inbound surfaces is to run Unity
 inside a whole-process sandbox (container, VM, or per-session sandbox).
-That is on the operator; Droid does not ship one.
+That is on the operator; Unity does not ship one.
 
 ### 2.6 Bundled Orchestra Postgres
 
 The local install runs `orchestra` as a Docker container with a named
 volume, bound to `127.0.0.1`. The API key for it is generated locally and
-written to `~/.droid/droid/.env`. There is **no multi-tenant isolation**;
+written to `~/.unity/unity/.env`. There is **no multi-tenant isolation**;
 the container is a single-tenant database that holds everything the
 assistant remembers.
 
@@ -147,13 +147,13 @@ interface, that's an explicit operator choice and is unsupported.
 ### 3.1 In Scope
 
 - **Trust-boundary bypasses** that let an unauthenticated network actor
-  cause Droid to run code, exfiltrate credentials, or persist data without
+  cause Unity to run code, exfiltrate credentials, or persist data without
   operator approval.
 - **`SecretManager` bugs** that expose secret material outside the
   documented placeholder/metadata API.
 - **Parsing-surface bugs** — path traversal, command injection,
   deserialisation in `FileManager`, gateway channels, or comms ingress.
-- **AuthN/AuthZ bugs** in any code under `droid/gateway/`.
+- **AuthN/AuthZ bugs** in any code under `unity/gateway/`.
 - **Hard-coded credentials or secrets** in the repository.
 - **Supply-chain issues** affecting `uv.lock` or
   `agent-service/package-lock.json` — lockfile tampering, typo-squat.
@@ -168,31 +168,31 @@ interface, that's an explicit operator choice and is unsupported.
   channels.
 - **Anything in the sibling repos** (`unify`, `unillm`, `orchestra`)
   — report against those repos directly.
-- **Operator-chosen exposures** — running Droid with the Orchestra port
+- **Operator-chosen exposures** — running Unity with the Orchestra port
   bound to non-loopback, or with `.env` written world-readable, or
   installing a third-party function without reading it.
 - **Provider-side findings** — bugs in LLM provider APIs, Twilio,
   Deepgram, etc. should be reported to the provider.
-- **Pre-existing files in the operator's home directory** that Droid does
+- **Pre-existing files in the operator's home directory** that Unity does
   not create or write.
 
 ---
 
 ## 4. Deployment Hardening
 
-Recommendations for operators running Droid against untrusted inbound
+Recommendations for operators running Unity against untrusted inbound
 surfaces:
 
 - **Use scoped provider keys** where the provider supports them (per-
   project keys, IP allowlists, spend caps).
-- **Run Droid in a container or VM** if you intend to expose it to
+- **Run Unity in a container or VM** if you intend to expose it to
   adversarial inbound surfaces. The default local install is the
   supported posture only when the operator trusts every input.
 - **Tighten `.env` permissions** (`chmod 600`) and consider full-disk
   encryption on the host.
 - **Read any `FunctionManager`-stored function** before installing it.
   Installed functions execute arbitrary Python under the operator's user.
-- **Watch the `droid logs` stream** during the first few sessions to see
+- **Watch the `unity logs` stream** during the first few sessions to see
   what the `Actor` is actually doing.
 
 ---

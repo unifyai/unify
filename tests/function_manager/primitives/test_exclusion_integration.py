@@ -8,10 +8,10 @@ filter_functions, or list_primitives results -- using real backend queries.
 
 import pytest
 
-from droid.function_manager.function_manager import FunctionManager
-from droid.function_manager.primitives import Primitives, PrimitiveScope, get_registry
-from droid.actor.environments.state_managers import StateManagerEnvironment
-from droid.common.context_registry import ContextRegistry
+from unity.function_manager.function_manager import FunctionManager
+from unity.function_manager.primitives import Primitives, PrimitiveScope, get_registry
+from unity.actor.environments.state_managers import StateManagerEnvironment
+from unity.common.context_registry import ContextRegistry
 from tests.helpers import _handle_project
 
 # ────────────────────────────────────────────────────────────────────────────

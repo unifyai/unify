@@ -6,11 +6,11 @@ import pytest
 import unify
 
 from tests.helpers import _handle_project
-from droid.blacklist_manager.blacklist_manager import BlackListManager
-from droid.common.context_registry import ContextRegistry
-from droid.conversation_manager.cm_types import Medium
-from droid.manager_registry import ManagerRegistry
-from droid.session_details import SESSION_DETAILS
+from unity.blacklist_manager.blacklist_manager import BlackListManager
+from unity.common.context_registry import ContextRegistry
+from unity.conversation_manager.cm_types import Medium
+from unity.manager_registry import ManagerRegistry
+from unity.session_details import SESSION_DETAILS
 
 
 def _configure_teams() -> tuple[int, int]:
@@ -88,8 +88,8 @@ def test_blacklist_writes_route_to_destination_and_reads_merge_roots():
 
 @_handle_project
 def test_blacklist_any_visible_root_blocks_contact_detail(monkeypatch):
-    from droid.conversation_manager import comms_manager
-    from droid.settings import SETTINGS
+    from unity.conversation_manager import comms_manager
+    from unity.settings import SETTINGS
 
     team_ids = _configure_teams()
     detail = f"blocked.{uuid.uuid4().hex}@example.com"

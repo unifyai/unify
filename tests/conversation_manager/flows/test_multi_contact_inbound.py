@@ -18,7 +18,7 @@ import pytest
 from tests.helpers import _handle_project
 from tests.conversation_manager.cm_helpers import filter_events_by_type
 from tests.conversation_manager.conftest import TEST_CONTACTS, BOSS
-from droid.conversation_manager.events import (
+from unity.conversation_manager.events import (
     SMSReceived,
     SMSSent,
     EmailReceived,

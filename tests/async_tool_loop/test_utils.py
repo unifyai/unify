@@ -2,7 +2,7 @@
 tests/async_tool_loop/test_utils.py
 =========================================
 
-Unit tests for utility functions in droid.common._async_tool.
+Unit tests for utility functions in unity.common._async_tool.
 """
 
 import asyncio
@@ -13,16 +13,16 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import BaseModel, Field
 
-from droid.common._async_tool.utils import (
+from unity.common._async_tool.utils import (
     format_json_for_log,
     format_llm_response_for_log,
     get_handle_paused_state,
     maybe_await,
     try_parse_json,
 )
-from droid.common._async_tool.formatting import serialize_tool_content
-from droid.logger import _MillisFormatter
-from droid.syntax_highlight import highlight_code_blocks
+from unity.common._async_tool.formatting import serialize_tool_content
+from unity.logger import _MillisFormatter
+from unity.syntax_highlight import highlight_code_blocks
 
 # =============================================================================
 # get_handle_paused_state tests
@@ -399,7 +399,7 @@ class TestMillisFormatterTtyHighlighting:
 
     def _make_record(self, msg: str) -> logging.LogRecord:
         return logging.LogRecord(
-            name="droid",
+            name="unity",
             level=logging.INFO,
             pathname="",
             lineno=0,

@@ -15,7 +15,7 @@ RUN DEP_BRANCH=$([ "$BRANCH" = "main" ] && echo "main" || echo "staging") && \
     pip install --no-cache-dir /tmp/unify && \
     rm -rf /tmp/unify
 
-COPY droid/conversation_manager/assistant_jobs_api.py .
+COPY unity/conversation_manager/assistant_jobs_api.py .
 COPY deploy/scripts/job-watcher/watcher.py .
 
 CMD ["kopf", "run", "watcher.py", "--liveness=http://0.0.0.0:8080/healthz"]

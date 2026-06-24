@@ -14,7 +14,7 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 import httpx
 
-from droid.demo_meta import (
+from unity.demo_meta import (
     DemoProspectDetails,
     fetch_demo_meta,
     apply_prospect_to_boss_contact,
@@ -79,7 +79,7 @@ class TestFetchDemoMeta:
         }
 
         with patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"}):
-            with patch("droid.demo_meta.httpx.AsyncClient") as mock_client_class:
+            with patch("unity.demo_meta.httpx.AsyncClient") as mock_client_class:
                 mock_client = AsyncMock()
                 mock_client.__aenter__.return_value = mock_client
                 mock_client.__aexit__.return_value = None
@@ -106,7 +106,7 @@ class TestFetchDemoMeta:
         }
 
         with patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"}):
-            with patch("droid.demo_meta.httpx.AsyncClient") as mock_client_class:
+            with patch("unity.demo_meta.httpx.AsyncClient") as mock_client_class:
                 mock_client = AsyncMock()
                 mock_client.__aenter__.return_value = mock_client
                 mock_client.__aexit__.return_value = None
@@ -128,7 +128,7 @@ class TestFetchDemoMeta:
         mock_response.status_code = 404
 
         with patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"}):
-            with patch("droid.demo_meta.httpx.AsyncClient") as mock_client_class:
+            with patch("unity.demo_meta.httpx.AsyncClient") as mock_client_class:
                 mock_client = AsyncMock()
                 mock_client.__aenter__.return_value = mock_client
                 mock_client.__aexit__.return_value = None
@@ -156,7 +156,7 @@ class TestFetchDemoMeta:
     async def test_fetch_demo_meta_timeout_returns_none(self):
         """fetch_demo_meta returns None on timeout."""
         with patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"}):
-            with patch("droid.demo_meta.httpx.AsyncClient") as mock_client_class:
+            with patch("unity.demo_meta.httpx.AsyncClient") as mock_client_class:
                 mock_client = AsyncMock()
                 mock_client.__aenter__.return_value = mock_client
                 mock_client.__aexit__.return_value = None
@@ -174,7 +174,7 @@ class TestFetchDemoMeta:
         mock_response.status_code = 500
 
         with patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"}):
-            with patch("droid.demo_meta.httpx.AsyncClient") as mock_client_class:
+            with patch("unity.demo_meta.httpx.AsyncClient") as mock_client_class:
                 mock_client = AsyncMock()
                 mock_client.__aenter__.return_value = mock_client
                 mock_client.__aexit__.return_value = None
@@ -274,10 +274,10 @@ class TestUpdateSessionContactsDemoModeProtection:
     async def test_update_session_contacts_creates_demoer_in_demo_mode(self):
         """In demo mode, update_session_contacts should create demoer contact (id=2)."""
         from unittest.mock import MagicMock
-        from droid.conversation_manager.domains.managers_utils import (
+        from unity.conversation_manager.domains.managers_utils import (
             update_session_contacts,
         )
-        from droid.settings import SETTINGS
+        from unity.settings import SETTINGS
 
         # Save original and enable demo mode
         original_demo_mode = SETTINGS.DEMO_MODE
@@ -332,10 +332,10 @@ class TestUpdateSessionContactsDemoModeProtection:
     async def test_update_session_contacts_updates_boss_in_normal_mode(self):
         """In normal mode, update_session_contacts should update both contacts."""
         from unittest.mock import MagicMock
-        from droid.conversation_manager.domains.managers_utils import (
+        from unity.conversation_manager.domains.managers_utils import (
             update_session_contacts,
         )
-        from droid.settings import SETTINGS
+        from unity.settings import SETTINGS
 
         # Save original and disable demo mode
         original_demo_mode = SETTINGS.DEMO_MODE

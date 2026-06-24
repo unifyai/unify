@@ -2,7 +2,7 @@
 
 Simulates `CodeActActor.act` sessions for the Console action pane at
 `http://localhost:3333/assistants`. Useful for developing and testing the
-action viewer UI without running a real Droid deployment.
+action viewer UI without running a real Unity deployment.
 
 Events faithfully replicate the real event model: `ManagerMethod`
 incoming/outgoing lifecycle events, `ToolLoop` messages (user requests,
@@ -47,7 +47,7 @@ execution for email drafting, and a post-completion `StorageCheck` phase
 that reviews the trajectory and decides nothing is worth storing.
 
 **live** — Runs a real `CodeActActor.act()` with the request given via
-`--request`. Initialises Droid against the local Orchestra, monkeypatches
+`--request`. Initialises Unity against the local Orchestra, monkeypatches
 the EventBus to forward action events to the Console's local SSE push
 endpoint (same noise filtering as production), and awaits the result.
 Requires `.env` with `UNIFY_KEY`, `ORCHESTRA_URL`, and LLM API keys.

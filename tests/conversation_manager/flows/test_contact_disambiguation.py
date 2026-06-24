@@ -23,8 +23,8 @@ import pytest
 from tests.conversation_manager.cm_helpers import filter_events_by_type
 from tests.conversation_manager.conftest import BOSS
 from tests.helpers import _handle_project
-from droid.common.async_tool_loop import SteerableToolHandle
-from droid.conversation_manager.events import SMSReceived, SMSSent
+from unity.common.async_tool_loop import SteerableToolHandle
+from unity.conversation_manager.events import SMSReceived, SMSSent
 
 pytestmark = pytest.mark.eval
 
@@ -108,7 +108,7 @@ async def test_contact_lookup_disambiguation_is_not_lossy_and_does_not_loop(
     original_contact_ask = cm.cm.contact_manager.ask
     # Ensure Actor watcher tasks publish onto the same broker the step driver patches.
     # (Some CM helper modules cache a broker singleton at import time.)
-    from droid.conversation_manager.domains import managers_utils as _managers_utils
+    from unity.conversation_manager.domains import managers_utils as _managers_utils
 
     original_broker = getattr(_managers_utils, "event_broker", None)
     cm.cm.actor = _DeterministicActor()

@@ -5,7 +5,7 @@ import sys
 import subprocess
 import textwrap
 
-from droid.session_details import UNASSIGNED_USER_CONTEXT, UNASSIGNED_ASSISTANT_CONTEXT
+from unity.session_details import UNASSIGNED_USER_CONTEXT, UNASSIGNED_ASSISTANT_CONTEXT
 from tests.assertion_helpers import first_diff_block
 from tests.helpers import _handle_project
 
@@ -30,7 +30,7 @@ def test_all_ask_tools_have_sufficient_docstrings(file_manager):
 
 
 def test_file_write_tools_expose_destination_guidance():
-    from droid.file_manager.managers.base import BaseFileManager
+    from unity.file_manager.managers.base import BaseFileManager
 
     for method_name in (
         "ingest_files",
@@ -65,16 +65,16 @@ def _build_tools_schema_in_subprocess(method: str, test_context: str) -> str:
 		sys.path.insert(0, os.getcwd())
 		import unify
 		# Activate the test project before setting context
-		project_name = os.environ.get("DROID_TEST_PROJECT_NAME", "UnityTests")
+		project_name = os.environ.get("UNITY_TEST_PROJECT_NAME", "UnityTests")
 		unify.activate(project_name, overwrite=False)
 		# Set test-specific context before creating FileManager to avoid races
 		test_ctx = os.environ.get("_TEST_CONTEXT")
 		if test_ctx:
 			unify.set_context(test_ctx, relative=False)
-		from droid.common.llm_helpers import method_to_schema
+		from unity.common.llm_helpers import method_to_schema
 		def _unwrap_callable(tool):
 			return getattr(tool, "fn", tool)
-		from droid.file_manager.managers.local import LocalFileManager as FileManager
+		from unity.file_manager.managers.local import LocalFileManager as FileManager
 		fm = FileManager()
 		tools = fm.get_tools("{method}")
 		if not tools:

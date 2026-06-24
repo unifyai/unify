@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 from datetime import datetime, UTC
 
-from droid.transcript_manager.types.message import Message
-from droid.image_manager.types import AnnotatedImageRefs, RawImageRef, AnnotatedImageRef
+from unity.transcript_manager.types.message import Message
+from unity.image_manager.types import AnnotatedImageRefs, RawImageRef, AnnotatedImageRef
 from tests.helpers import _handle_project
 
 
@@ -65,12 +65,12 @@ async def test_ask_search_tool_omits_empty(static_now, monkeypatch):
     images: [] or screen_share: {} to the LLM.
     """
     import json
-    from droid.settings import SETTINGS
-    from droid.transcript_manager.transcript_manager import TranscriptManager
+    from unity.settings import SETTINGS
+    from unity.transcript_manager.transcript_manager import TranscriptManager
 
     # Force search_messages on the first step so the assertion below is deterministic
     monkeypatch.setattr(SETTINGS, "FIRST_ASK_TOOL_IS_SEARCH", True)
-    from droid.transcript_manager.types.message import Message
+    from unity.transcript_manager.types.message import Message
 
     tm = TranscriptManager()
 

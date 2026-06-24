@@ -4,7 +4,7 @@ from tests.destination_routing_helpers import (
     EVAL_TEAM_SUMMARIES,
     routing_decision_prompt,
 )
-from droid.common.accessible_teams_block import build_accessible_teams_block
+from unity.common.accessible_teams_block import build_accessible_teams_block
 
 
 def test_routing_eval_prompt_uses_product_accessible_teams_block() -> None:

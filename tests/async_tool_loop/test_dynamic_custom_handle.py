@@ -7,13 +7,13 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
-from droid.common.async_tool_loop import (
+from unity.common.async_tool_loop import (
     SteerableToolHandle,
     AsyncToolLoopHandle,
     start_async_tool_loop,
 )
 from tests.helpers import _handle_project
-from droid.common.llm_client import new_llm_client
+from unity.common.llm_client import new_llm_client
 from tests.async_helpers import (
     _wait_for_tool_request,
     _wait_for_condition,
@@ -342,7 +342,7 @@ async def test_dynamic_helpers_use_base_docstrings(client):
         return BaseLikeHandle()
 
     # Spy dynamic registrations to capture effective docstrings
-    from droid.common._async_tool import dynamic_tools_factory as _dtf
+    from unity.common._async_tool import dynamic_tools_factory as _dtf
 
     registered_docs: Dict[str, str] = {}
     orig_register_tool = _dtf.DynamicToolFactory._register_tool
@@ -449,7 +449,7 @@ async def test_dynamic_helpers_use_overridden_docstrings(client):
     async def spawn_handle() -> SteerableToolHandle:  # type: ignore[name-defined]
         return OverrideDocHandle()
 
-    from droid.common._async_tool import dynamic_tools_factory as _dtf
+    from unity.common._async_tool import dynamic_tools_factory as _dtf
 
     registered_docs: Dict[str, str] = {}
     orig_register_tool = _dtf.DynamicToolFactory._register_tool
@@ -548,7 +548,7 @@ async def test_dynamic_helpers_adopt_custom_method_docstring(client):
     async def spawn_handle() -> SteerableToolHandle:  # type: ignore[name-defined]
         return CustomMethodHandle()
 
-    from droid.common._async_tool import dynamic_tools_factory as _dtf
+    from unity.common._async_tool import dynamic_tools_factory as _dtf
 
     registered_docs: Dict[str, str] = {}
     orig_register_tool = _dtf.DynamicToolFactory._register_tool
@@ -604,11 +604,11 @@ async def test_dynamic_helper_preserves_annotations_for_public_methods(llm_confi
     import inspect
     from contextlib import suppress
 
-    from droid.common.async_tool_loop import SteerableToolHandle
-    from droid.common._async_tool.tools_data import ToolsData
-    from droid.common._async_tool.tools_utils import ToolCallMetadata
-    from droid.common._async_tool.dynamic_tools_factory import DynamicToolFactory
-    from droid.common.llm_helpers import method_to_schema
+    from unity.common.async_tool_loop import SteerableToolHandle
+    from unity.common._async_tool.tools_data import ToolsData
+    from unity.common._async_tool.tools_utils import ToolCallMetadata
+    from unity.common._async_tool.dynamic_tools_factory import DynamicToolFactory
+    from unity.common.llm_helpers import method_to_schema
 
     class _AnnotatedHandle(SteerableToolHandle):
         def __init__(self) -> None:
@@ -738,11 +738,11 @@ async def test_dynamic_factory_ignores_internal_introspection_methods(llm_config
     public methods.
     """
     from contextlib import suppress
-    from droid.common.async_tool_loop import SteerableToolHandle
-    from droid.common._async_tool.tools_data import ToolsData
-    from droid.common._async_tool.tools_utils import ToolCallMetadata
-    from droid.common._async_tool.dynamic_tools_factory import DynamicToolFactory
-    from droid.common.handle_wrappers import HandleWrapperMixin
+    from unity.common.async_tool_loop import SteerableToolHandle
+    from unity.common._async_tool.tools_data import ToolsData
+    from unity.common._async_tool.tools_utils import ToolCallMetadata
+    from unity.common._async_tool.dynamic_tools_factory import DynamicToolFactory
+    from unity.common.handle_wrappers import HandleWrapperMixin
 
     # A custom handle that mixes in wrapper functionality and defines introspection-like methods
     class IntrospectiveHandle(SteerableToolHandle, HandleWrapperMixin):

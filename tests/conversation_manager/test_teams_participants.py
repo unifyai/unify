@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from droid.conversation_manager.comms_manager import _resolve_teams_participants
-from droid.conversation_manager.events import (
+from unity.conversation_manager.comms_manager import _resolve_teams_participants
+from unity.conversation_manager.events import (
     TeamsChannelMessageReceived,
     TeamsChannelMessageSent,
     TeamsMessageReceived,

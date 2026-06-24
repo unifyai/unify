@@ -17,9 +17,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from droid.comms import offline_support
-from droid.comms.primitives import CommsPrimitives
-from droid.conversation_manager.domains import comms_utils
+from unity.comms import offline_support
+from unity.comms.primitives import CommsPrimitives
+from unity.conversation_manager.domains import comms_utils
 
 TEST_SELF_CONTACT_ID = 337
 
@@ -27,13 +27,13 @@ TEST_SELF_CONTACT_ID = 337
 def _make_comms_with_teams(monkeypatch) -> CommsPrimitives:
     """Build a CommsPrimitives instance wired up with Teams enabled."""
     monkeypatch.setattr(
-        "droid.comms.primitives.SESSION_DETAILS.self_contact_id",
+        "unity.comms.primitives.SESSION_DETAILS.self_contact_id",
         TEST_SELF_CONTACT_ID,
     )
     comms = CommsPrimitives()
     monkeypatch.setattr(comms, "_assistant_has_teams", lambda: True)
     monkeypatch.setattr(
-        "droid.comms.primitives.reserve_outbound_operation",
+        "unity.comms.primitives.reserve_outbound_operation",
         lambda **kwargs: offline_support.OfflineOutboundDecision(
             reservation=None,
             response=None,

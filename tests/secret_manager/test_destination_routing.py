@@ -3,9 +3,9 @@ from __future__ import annotations
 import pytest
 import unify
 
-from droid.common.tool_outcome import ToolError
-from droid.function_manager.function_manager import VenvPool
-from droid.secret_manager.secret_manager import SecretManager
+from unity.common.tool_outcome import ToolError
+from unity.function_manager.function_manager import VenvPool
+from unity.secret_manager.secret_manager import SecretManager
 
 
 def _rows(context: str) -> list[dict]:

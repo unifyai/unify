@@ -19,7 +19,7 @@ from tests.conversation_manager.actions.integration.helpers import (
     wait_for_actor_completion,
     wait_for_condition,
 )
-from droid.conversation_manager.events import SMSReceived, SMSSent
+from unity.conversation_manager.events import SMSReceived, SMSSent
 
 pytestmark = [pytest.mark.integration, pytest.mark.eval]
 

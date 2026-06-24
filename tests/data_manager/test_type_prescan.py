@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from droid.data_manager.ops.type_prescan import (
+from unity.data_manager.ops.type_prescan import (
     TypeMap,
     _stratified_indices,
     coerce_batch,

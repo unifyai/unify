@@ -5,7 +5,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from droid.conversation_manager import (
+from unity.conversation_manager import (
     assistant_session_k8s as assistant_session_k8s_module,
 )
 
@@ -51,14 +51,14 @@ def test_read_job_assignment_record_uses_controller_binding_metadata(monkeypatch
     monkeypatch.setattr(assistant_session_k8s_module, "_namespace", lambda: "staging")
     monkeypatch.setattr(assistant_session_k8s_module, "_batch_api", batch_api)
 
-    record = assistant_session_k8s_module.read_job_assignment_record("droid-job-42")
+    record = assistant_session_k8s_module.read_job_assignment_record("unity-job-42")
 
     assert record == assistant_session_k8s_module.JobAssignmentRecord(
         session_name="assistant-session-42",
         binding_id="binding-42",
     )
     batch_api.read_namespaced_job.assert_called_once_with(
-        name="droid-job-42",
+        name="unity-job-42",
         namespace="staging",
     )
 

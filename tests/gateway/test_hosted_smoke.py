@@ -6,15 +6,15 @@ import httpx
 import pytest
 
 pytestmark = pytest.mark.skipif(
-    os.environ.get("DROID_RUN_HOSTED_GATEWAY_SMOKE") != "true",
+    os.environ.get("UNITY_RUN_HOSTED_GATEWAY_SMOKE") != "true",
     reason="Hosted gateway smoke tests require live provider/backend credentials.",
 )
 
 
 def _gateway_url() -> str:
-    url = os.environ.get("DROID_HOSTED_GATEWAY_URL", "").rstrip("/")
+    url = os.environ.get("UNITY_HOSTED_GATEWAY_URL", "").rstrip("/")
     if not url:
-        pytest.skip("DROID_HOSTED_GATEWAY_URL is required")
+        pytest.skip("UNITY_HOSTED_GATEWAY_URL is required")
     return url
 
 

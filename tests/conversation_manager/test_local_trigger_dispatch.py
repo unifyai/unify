@@ -2,7 +2,7 @@
 
 When ``SETTINGS.task.LOCAL_SCHEDULER_ENABLED`` is True, inbound-event
 trigger matches that need offline (background) execution should spawn
-``droid.task_scheduler.offline_runner`` as a child subprocess instead of
+``unity.task_scheduler.offline_runner`` as a child subprocess instead of
 POSTing to Communication for a K8s job.
 """
 
@@ -13,9 +13,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from droid.conversation_manager.cm_types import Medium
-from droid.conversation_manager.domains import task_activation
-from droid.task_scheduler.machine_state import TaskActivationSnapshot
+from unity.conversation_manager.cm_types import Medium
+from unity.conversation_manager.domains import task_activation
+from unity.task_scheduler.machine_state import TaskActivationSnapshot
 
 # --------------------------------------------------------------------------- #
 # Fixtures                                                                    #
@@ -101,14 +101,14 @@ class TestLocalOfflineTriggerDispatch:
         )
 
         # Subprocess invoked with the offline runner module.
-        assert captured["args"][-2:] == ("-m", "droid.task_scheduler.offline_runner")
+        assert captured["args"][-2:] == ("-m", "unity.task_scheduler.offline_runner")
         env = captured["env"]
         # Triggered source semantics propagate.
-        assert env["DROID_OFFLINE_TASK_SOURCE_TYPE"] == "triggered"
-        assert env["DROID_OFFLINE_TASK_SOURCE_MEDIUM"] == "sms_message"
-        assert env["DROID_OFFLINE_TASK_SOURCE_CONTACT_ID"] == "123"
+        assert env["UNITY_OFFLINE_TASK_SOURCE_TYPE"] == "triggered"
+        assert env["UNITY_OFFLINE_TASK_SOURCE_MEDIUM"] == "sms_message"
+        assert env["UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID"] == "123"
         # Source ref is built per inbound and is non-empty.
-        assert env["DROID_OFFLINE_TASK_SOURCE_REF"]
+        assert env["UNITY_OFFLINE_TASK_SOURCE_REF"]
         # Result shape used by the caller's logging.
         assert result["success"] is True
         assert result["status"] == "spawned_local"

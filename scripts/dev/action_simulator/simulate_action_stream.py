@@ -2502,7 +2502,7 @@ def _install_console_bridge(assistant_id: str) -> None:
     bus instead of GCP Pub/Sub.  All other EventBus behaviour (Orchestra writes,
     callbacks, periodic flush) is untouched.
     """
-    from droid.events.event_bus import EVENT_BUS
+    from unity.events.event_bus import EVENT_BUS
 
     push_url = f"{CONSOLE_BASE}/api/assistant/{assistant_id}/actions/push"
 
@@ -2542,20 +2542,20 @@ def run_live(request: str, kwargs: dict, assistant_id: str) -> None:
     load_dotenv(Path(__file__).resolve().parents[3] / ".env")
     os.environ["EVENTBUS_PUBLISHING_ENABLED"] = "true"
 
-    import droid
-    from droid.events.event_bus import EVENT_BUS
+    import unity
+    from unity.events.event_bus import EVENT_BUS
 
-    print("\n--- Initialising Droid ---")
-    droid.init(project_name=PROJECT, overwrite=False)
+    print("\n--- Initialising Unity ---")
+    unity.init(project_name=PROJECT, overwrite=False)
     EVENT_BUS.clear()
 
     _install_console_bridge(assistant_id)
     print(f"  Console bridge installed → {CONSOLE_BASE}")
 
-    from droid.actor.code_act_actor import CodeActActor
-    from droid.actor.environments import StateManagerEnvironment
-    from droid.function_manager.primitives import Primitives
-    from droid.manager_registry import ManagerRegistry
+    from unity.actor.code_act_actor import CodeActActor
+    from unity.actor.environments import StateManagerEnvironment
+    from unity.function_manager.primitives import Primitives
+    from unity.manager_registry import ManagerRegistry
 
     primitives = Primitives()
     environments = [StateManagerEnvironment(primitives)]

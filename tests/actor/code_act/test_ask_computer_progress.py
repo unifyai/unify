@@ -3,9 +3,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import droid.actor.code_act_actor as code_act_module
-from droid.actor.code_act_actor import CodeActActor
-from droid.common import async_tool_loop as atl
+import unity.actor.code_act_actor as code_act_module
+from unity.actor.code_act_actor import CodeActActor
+from unity.common import async_tool_loop as atl
 
 pytestmark = pytest.mark.llm_call
 
@@ -27,7 +27,7 @@ def _make_actor_with_mock_computer(
 ) -> CodeActActor:
     """Construct a CodeActActor with a mock _computer_primitives for testing."""
     actor = CodeActActor(timeout=timeout)
-    from droid.function_manager.computer_backends import ActResult
+    from unity.function_manager.computer_backends import ActResult
 
     mock_desktop = MagicMock()
     mock_desktop.query = AsyncMock(return_value=query_return)

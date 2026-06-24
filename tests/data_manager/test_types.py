@@ -5,7 +5,7 @@ Tests for DataManager types (Pydantic models).
 from __future__ import annotations
 
 
-from droid.data_manager.types import (
+from unity.data_manager.types import (
     TableDescription,
     TableSchema,
     ColumnInfo,

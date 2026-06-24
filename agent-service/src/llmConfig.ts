@@ -1,19 +1,19 @@
 export interface LlmConfigEnv {
   [key: string]: string | undefined;
-  DROID_UNILLM_URL?: string;
-  DROID_COMMS_URL?: string;
-  DROID_GATEWAY_URL?: string;
-  DROID_AGENT_SERVICE_LLM_MODEL?: string;
+  UNITY_UNILLM_URL?: string;
+  UNITY_COMMS_URL?: string;
+  UNITY_GATEWAY_URL?: string;
+  UNITY_AGENT_SERVICE_LLM_MODEL?: string;
   UNIFY_MODEL?: string;
   UNIFY_KEY?: string;
 }
 
-/** Matches ``ProductionSettings.UNIFY_MODEL`` in ``droid/settings.py``. */
+/** Matches ``ProductionSettings.UNIFY_MODEL`` in ``unity/settings.py``. */
 const DEFAULT_UNIFY_MODEL = 'deepseek-v4-max@deepseek';
 
 export function resolveAgentServiceModel(env: LlmConfigEnv = process.env): string {
   return (
-    env.DROID_AGENT_SERVICE_LLM_MODEL?.trim() ||
+    env.UNITY_AGENT_SERVICE_LLM_MODEL?.trim() ||
     env.UNIFY_MODEL?.trim() ||
     DEFAULT_UNIFY_MODEL
   );
@@ -28,18 +28,18 @@ function withUnillmPath(baseUrl: string): string {
 }
 
 export function resolveUnillmBaseUrl(env: LlmConfigEnv = process.env): string {
-  if (env.DROID_UNILLM_URL?.trim()) {
-    return cleanUrl(env.DROID_UNILLM_URL);
+  if (env.UNITY_UNILLM_URL?.trim()) {
+    return cleanUrl(env.UNITY_UNILLM_URL);
   }
-  if (env.DROID_COMMS_URL?.trim()) {
-    return withUnillmPath(env.DROID_COMMS_URL);
+  if (env.UNITY_COMMS_URL?.trim()) {
+    return withUnillmPath(env.UNITY_COMMS_URL);
   }
-  if (env.DROID_GATEWAY_URL?.trim()) {
-    return withUnillmPath(env.DROID_GATEWAY_URL);
+  if (env.UNITY_GATEWAY_URL?.trim()) {
+    return withUnillmPath(env.UNITY_GATEWAY_URL);
   }
   throw new Error(
-    'No UniLLM proxy configured for agent-service. Set DROID_UNILLM_URL, ' +
-    'DROID_COMMS_URL, or DROID_GATEWAY_URL. Direct provider API fallbacks are disabled.'
+    'No UniLLM proxy configured for agent-service. Set UNITY_UNILLM_URL, ' +
+    'UNITY_COMMS_URL, or UNITY_GATEWAY_URL. Direct provider API fallbacks are disabled.'
   );
 }
 

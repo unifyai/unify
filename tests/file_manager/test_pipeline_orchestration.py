@@ -6,14 +6,14 @@ import json
 import time
 from pathlib import Path
 
-from droid.common.pipeline import (
+from unity.common.pipeline import (
     ArtifactWorkItem,
     PipelineCancelled,
     PipelineInstrumentation,
     ingest_artifacts,
     run_with_retry,
 )
-from droid.common.pipeline.work_queue import CancellationCheck
+from unity.common.pipeline.work_queue import CancellationCheck
 
 # ---------------------------------------------------------------------------
 # PipelineInstrumentation lifecycle
@@ -24,7 +24,7 @@ class TestPipelineInstrumentationLifecycle:
     """Verify instrumentation wires up ledgers and produces JSONL correctly."""
 
     def test_enabled_mode_produces_run_manifests(self, tmp_path: Path):
-        from droid.common.pipeline.run_ledger import JsonlRunLedger
+        from unity.common.pipeline.run_ledger import JsonlRunLedger
 
         ledger_path = tmp_path / "run_ledger.jsonl"
         ledger = JsonlRunLedger(path=ledger_path)
@@ -98,7 +98,7 @@ class TestPipelineInstrumentationLifecycle:
             )
 
     def test_cost_accumulation(self, tmp_path: Path):
-        from droid.common.pipeline.cost_ledger import (
+        from unity.common.pipeline.cost_ledger import (
             JsonlCostLedger,
             PipelineCostAccumulator,
             PipelineCostRateCard,
@@ -294,7 +294,7 @@ class TestIngestArtifacts:
         assert "bad data" in (results[0].error or "")
 
     def test_records_stage_manifests(self, tmp_path: Path):
-        from droid.common.pipeline.run_ledger import JsonlRunLedger
+        from unity.common.pipeline.run_ledger import JsonlRunLedger
 
         ledger_path = tmp_path / "stages.jsonl"
         ledger = JsonlRunLedger(path=ledger_path)
@@ -343,7 +343,7 @@ class TestRunWithRetry:
         assert result.retries == 0
 
     def test_retries_transient_errors(self):
-        from droid.file_manager.types import RetryConfig
+        from unity.file_manager.types import RetryConfig
 
         attempts = {"count": 0}
 
@@ -364,7 +364,7 @@ class TestRunWithRetry:
         assert result.retries == 2
 
     def test_non_retryable_fails_immediately(self):
-        from droid.file_manager.types import RetryConfig
+        from unity.file_manager.types import RetryConfig
 
         cfg = RetryConfig(
             max_retries=3,

@@ -5,8 +5,8 @@ import uuid
 import pytest
 import unify
 
-from droid.common.context_registry import ContextRegistry
-from droid.session_details import SESSION_DETAILS
+from unity.common.context_registry import ContextRegistry
+from unity.session_details import SESSION_DETAILS
 
 
 @pytest.fixture(scope="function")

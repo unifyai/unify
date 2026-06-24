@@ -36,13 +36,13 @@ from __future__ import annotations
 
 import pytest
 
-from droid.conversation_manager.prompt_builders import build_voice_agent_prompt
-from droid.settings import SETTINGS
-from droid.conversation_manager.events import (
+from unity.conversation_manager.prompt_builders import build_voice_agent_prompt
+from unity.settings import SETTINGS
+from unity.conversation_manager.events import (
     PhoneCallStarted,
     InboundPhoneUtterance,
 )
-from droid.conversation_manager.cm_types import Mode
+from unity.conversation_manager.cm_types import Mode
 
 from tests.conversation_manager.conftest import BOSS
 
@@ -94,7 +94,7 @@ async def _get_fast_brain_response_raw(
     NOT append an artificial "Respond as the assistant" meta-instruction. The model
     receives exactly the system prompt + conversation messages, matching production.
     """
-    from droid.conversation_manager.livekit_unify_adapter import UnifyLLM
+    from unity.conversation_manager.livekit_unify_adapter import UnifyLLM
     from livekit.agents import llm
 
     llm_instance = UnifyLLM(

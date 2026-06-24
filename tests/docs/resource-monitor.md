@@ -179,13 +179,13 @@ Active: 192
 
 ```bash
 # Re-attach to a running dashboard
-tmux attach -t droid-monitor
+tmux attach -t unity-monitor
 
 # Kill the dashboard
-tmux kill-session -t droid-monitor
+tmux kill-session -t unity-monitor
 
 # Check if dashboard is running
-tmux has-session -t droid-monitor && echo "Running"
+tmux has-session -t unity-monitor && echo "Running"
 ```
 
 ---

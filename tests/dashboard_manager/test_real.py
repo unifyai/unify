@@ -15,18 +15,18 @@ registration.
 Each test gets a fresh, isolated Unify context that is cleaned up after the test.
 """
 
-from droid.dashboard_manager.dashboard_manager import DashboardManager
+from unity.dashboard_manager.dashboard_manager import DashboardManager
 import json
 
 import pytest
 
-from droid.dashboard_manager.types.dashboard import TilePosition
-from droid.dashboard_manager.types.tile import (
+from unity.dashboard_manager.types.dashboard import TilePosition
+from unity.dashboard_manager.types.tile import (
     DASHBOARD_BRIDGE_MAX_ROW_LIMIT,
     FilterBinding,
 )
-from droid.function_manager.primitives import Primitives
-from droid.manager_registry import ManagerRegistry
+from unity.function_manager.primitives import Primitives
+from unity.manager_registry import ManagerRegistry
 from tests.dashboard_manager.helpers import (
     active_read_root,
     create_context_if_missing,

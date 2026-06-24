@@ -15,8 +15,8 @@ import sys
 
 import pytest
 
-from droid.actor.code_act_actor import CodeActActor
-from droid.actor.execution.package_overlay import (
+from unity.actor.code_act_actor import CodeActActor
+from unity.actor.execution.package_overlay import (
     PackageOverlay,
     _CURRENT_PACKAGE_OVERLAY,
 )

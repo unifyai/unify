@@ -5,9 +5,9 @@ import asyncio as _asyncio
 
 import pytest
 
-from droid.image_manager.image_manager import ImageManager
-from droid.image_manager.utils import make_solid_png_base64
-from droid.common.data_store import DataStore
+from unity.image_manager.image_manager import ImageManager
+from unity.image_manager.utils import make_solid_png_base64
+from unity.common.data_store import DataStore
 from tests.helpers import _handle_project
 
 PNG_GRAY_B64 = make_solid_png_base64(32, 32, (128, 128, 128))
@@ -268,8 +268,8 @@ async def test_wait_for_caption_and_resolution_together():
 
 @_handle_project
 def test_constructor_annotation_is_set_and_not_persisted():
-    from droid.image_manager.image_manager import ImageHandle
-    from droid.image_manager.types.image import Image
+    from unity.image_manager.image_manager import ImageHandle
+    from unity.image_manager.types.image import Image
 
     im = ImageManager()
     ds = DataStore.for_context(im._ctx, key_fields=("image_id",))
@@ -332,8 +332,8 @@ def test_add_images_with_annotation_sets_handle_local_only():
 @pytest.mark.asyncio
 @_handle_project
 async def test_wait_for_annotation_immediate_via_constructor():
-    from droid.image_manager.image_manager import ImageHandle
-    from droid.image_manager.types.image import Image
+    from unity.image_manager.image_manager import ImageHandle
+    from unity.image_manager.types.image import Image
 
     im = ImageManager()
     ds = DataStore.for_context(im._ctx, key_fields=("image_id",))

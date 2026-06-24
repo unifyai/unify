@@ -5,26 +5,26 @@ from pathlib import Path
 import pytest
 
 from tests.helpers import _handle_project
-from droid.file_manager.file_parsers import (
+from unity.file_manager.file_parsers import (
     FileParseRequest,
     FileParser,
     FileFormat,
     MimeType,
 )
-from droid.file_manager.file_parsers.conversion import (
+from unity.file_manager.file_parsers.conversion import (
     DocumentConversionManager,
     DocxToPdfConverter,
 )
-from droid.file_manager.file_parsers.registry import BackendRegistry
-from droid.file_manager.file_parsers.settings import FILE_PARSER_SETTINGS
-from droid.file_manager.file_parsers.types.backend import BaseFileParserBackend
-from droid.file_manager.file_parsers.types.contracts import FileParseResult
-from droid.file_manager.file_parsers.types.contracts import FileParseTrace
-from droid.file_manager.file_parsers.types.enums import ContentType
-from droid.file_manager.file_parsers.utils import format_policy  # type: ignore[attr-defined]
-from droid.file_manager.file_parsers.utils.tracing import safe_call, traced_step
-from droid.file_manager.parse_adapter import adapt_parse_result_for_file_manager
-from droid.file_manager.types import FilePipelineConfig, ParseConfig
+from unity.file_manager.file_parsers.registry import BackendRegistry
+from unity.file_manager.file_parsers.settings import FILE_PARSER_SETTINGS
+from unity.file_manager.file_parsers.types.backend import BaseFileParserBackend
+from unity.file_manager.file_parsers.types.contracts import FileParseResult
+from unity.file_manager.file_parsers.types.contracts import FileParseTrace
+from unity.file_manager.file_parsers.types.enums import ContentType
+from unity.file_manager.file_parsers.utils import format_policy  # type: ignore[attr-defined]
+from unity.file_manager.file_parsers.utils.tracing import safe_call, traced_step
+from unity.file_manager.parse_adapter import adapt_parse_result_for_file_manager
+from unity.file_manager.types import FilePipelineConfig, ParseConfig
 
 
 @_handle_project
@@ -87,7 +87,7 @@ def test_registry_normalizes_override_keys_with_dots_and_case():
     # Override with a key that includes a dot and mixed case; should still resolve.
     reg = BackendRegistry.from_config(
         backend_class_paths_by_format={
-            ".TXT": "droid.file_manager.file_parsers.implementations.python.backends.text_backend.TextBackend",
+            ".TXT": "unity.file_manager.file_parsers.implementations.python.backends.text_backend.TextBackend",
         },
     )
     b = reg.pick_backend(FileFormat.TXT)
@@ -417,7 +417,7 @@ def test_parse_adapter_text_rows_keep_content_text_for_paragraphs_and_sentences(
 
 @_handle_project
 def test_parse_adapter_error_result_is_best_effort_and_forwards_tables():
-    from droid.file_manager.file_parsers.types.table import ExtractedTable
+    from unity.file_manager.file_parsers.types.table import ExtractedTable
 
     tbl = ExtractedTable(
         table_id="table:0",
@@ -450,7 +450,7 @@ def test_parse_adapter_error_result_is_best_effort_and_forwards_tables():
 
 @_handle_project
 def test_parse_adapter_success_without_graph_returns_empty_rows_but_keeps_tables():
-    from droid.file_manager.file_parsers.types.table import ExtractedTable
+    from unity.file_manager.file_parsers.types.table import ExtractedTable
 
     tbl = ExtractedTable(
         table_id="table:0",
@@ -479,7 +479,7 @@ def test_parse_adapter_success_without_graph_returns_empty_rows_but_keeps_tables
 
 @_handle_project
 def test_parse_adapter_graph_with_missing_root_is_handled(tmp_path: Path):
-    from droid.file_manager.file_parsers.types.graph import ContentGraph
+    from unity.file_manager.file_parsers.types.graph import ContentGraph
 
     pr = FileParseResult(
         logical_path="logical/root_missing.txt",
@@ -500,7 +500,7 @@ def test_format_policy_spreadsheet_profile_truncation_marker_present(tmp_path: P
     """
     Unit coverage for `format_policy.build_spreadsheet_profile_text` truncation behavior.
     """
-    from droid.file_manager.file_parsers.types.table import ExtractedTable
+    from unity.file_manager.file_parsers.types.table import ExtractedTable
 
     tables = []
     for i in range(20):
@@ -719,7 +719,7 @@ def test_file_parser_skips_injected_backend_when_can_handle_raises(tmp_path: Pat
 def test_file_parser_fills_spreadsheet_summary_when_backend_returns_blank(
     tmp_path: Path,
 ):
-    from droid.file_manager.file_parsers.types.table import ExtractedTable
+    from unity.file_manager.file_parsers.types.table import ExtractedTable
 
     p = tmp_path / "book.csv"
     p.write_text("A,B\n1,2\n", encoding="utf-8")

@@ -25,7 +25,7 @@ from tests.conversation_manager.conftest import BOSS
 from tests.conversation_manager.actions.integration.helpers import (
     run_cm_until_wait,
 )
-from droid.conversation_manager.events import (
+from unity.conversation_manager.events import (
     SMSReceived,
     SMSSent,
 )
@@ -105,7 +105,7 @@ async def test_storage_check_result_relay(initialized_cm):
         run_llm=False,
     )
 
-    from droid.common.prompt_helpers import now as prompt_now
+    from unity.common.prompt_helpers import now as prompt_now
 
     handle_id = 0
 

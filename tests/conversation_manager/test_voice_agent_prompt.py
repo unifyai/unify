@@ -22,9 +22,9 @@ from dataclasses import dataclass
 import pytest
 from pydantic import BaseModel, Field
 
-from droid.common.llm_client import new_llm_client
-from droid.common.reasoning import query_llm
-from droid.conversation_manager.prompt_builders import build_voice_agent_prompt
+from unity.common.llm_client import new_llm_client
+from unity.common.reasoning import query_llm
+from unity.conversation_manager.prompt_builders import build_voice_agent_prompt
 
 # =============================================================================
 # Constants

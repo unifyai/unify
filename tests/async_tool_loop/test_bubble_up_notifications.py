@@ -6,9 +6,9 @@ import json
 
 import pytest
 import unillm
-from droid.common.async_tool_loop import start_async_tool_loop
+from unity.common.async_tool_loop import start_async_tool_loop
 from tests.helpers import _handle_project
-from droid.common.llm_client import new_llm_client
+from unity.common.llm_client import new_llm_client
 from tests.async_helpers import (
     _wait_for_tool_request,
     _wait_for_assistant_call_prefix,

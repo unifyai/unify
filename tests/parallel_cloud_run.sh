@@ -23,7 +23,7 @@ set -euo pipefail
 #   parallel_cloud_run.sh --env UNILLM_CACHE=false tests/  # Override .env
 #   parallel_cloud_run.sh --push-local tests/  # Include local uncommitted/unpushed changes
 
-REPO="unifyai/droid"
+REPO="unifyai/unity"
 WORKFLOW="tests.yml"
 POLL_TIMEOUT=30  # seconds to wait for run to appear
 
