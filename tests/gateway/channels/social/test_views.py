@@ -1,4 +1,4 @@
-"""Behavioural tests for ``droid.gateway.channels.social``.
+"""Behavioural tests for ``unity.gateway.channels.social``.
 
 This is the reference test layout for the Phase B channel migration.
 Other channels should mirror its structure: pin the router contract,
@@ -15,16 +15,16 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from droid.gateway.channels.social import router
-from droid.gateway.channels.social.views import (
+from unity.gateway.channels.social import router
+from unity.gateway.channels.social.views import (
     DEFAULT_WHATSAPP_VERIFICATION_FROM_NUMBER,
     MESSAGING_SERVICE_NAME,
     VerificationRequest,
     _get_messaging_service_sid,
     _reset_messaging_service_sid_cache,
 )
-from droid.gateway.common.twilio import build_twilio_client, build_twilio_wa_client
-from droid.gateway.credentials import EnvCredentialStore
+from unity.gateway.common.twilio import build_twilio_client, build_twilio_wa_client
+from unity.gateway.credentials import EnvCredentialStore
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -79,7 +79,7 @@ def test_router_exposes_expected_route_paths() -> None:
 
 def test_router_is_importable_from_package_root() -> None:
     """Mirroring `from communication.social.views import router`."""
-    from droid.gateway.channels.social import router as exported_router
+    from unity.gateway.channels.social import router as exported_router
 
     assert exported_router is router
 
@@ -146,7 +146,7 @@ def test_verify_whatsapp_sends_via_twilio_with_expected_args(
 ) -> None:
     fake_wa_client = MagicMock(name="TwilioWaClient")
     with patch(
-        "droid.gateway.channels.social.views.build_twilio_wa_client",
+        "unity.gateway.channels.social.views.build_twilio_wa_client",
         return_value=fake_wa_client,
     ):
         response = client.post(
@@ -185,7 +185,7 @@ def test_verify_whatsapp_uses_requested_sender_override(
 ) -> None:
     fake_wa_client = MagicMock(name="TwilioWaClient")
     with patch(
-        "droid.gateway.channels.social.views.build_twilio_wa_client",
+        "unity.gateway.channels.social.views.build_twilio_wa_client",
         return_value=fake_wa_client,
     ):
         response = client.post(
@@ -211,7 +211,7 @@ def test_verify_whatsapp_propagates_twilio_failure_as_500(
     fake_wa_client = MagicMock(name="TwilioWaClient")
     fake_wa_client.messages.create.side_effect = RuntimeError("twilio down")
     with patch(
-        "droid.gateway.channels.social.views.build_twilio_wa_client",
+        "unity.gateway.channels.social.views.build_twilio_wa_client",
         return_value=fake_wa_client,
     ):
         response = client.post(
@@ -243,7 +243,7 @@ def test_verify_phone_sends_via_twilio_messaging_service(
     fake_client.messaging.v1.services.list.return_value = [fake_service]
 
     with patch(
-        "droid.gateway.channels.social.views.build_twilio_client",
+        "unity.gateway.channels.social.views.build_twilio_client",
         return_value=fake_client,
     ):
         response = client.post(
@@ -275,7 +275,7 @@ def test_verify_phone_propagates_twilio_failure_as_500(
     fake_client.messages.create.side_effect = RuntimeError("twilio down")
 
     with patch(
-        "droid.gateway.channels.social.views.build_twilio_client",
+        "unity.gateway.channels.social.views.build_twilio_client",
         return_value=fake_client,
     ):
         response = client.post(
@@ -291,7 +291,7 @@ def test_verify_phone_raises_when_messaging_service_missing(
     client: TestClient,
     _twilio_credentials: None,
 ) -> None:
-    """If no MessagingService named 'Droid' exists, we 500 with a clear error."""
+    """If no MessagingService named 'Unity' exists, we 500 with a clear error."""
     fake_client = MagicMock(name="TwilioClient")
     fake_other = MagicMock()
     fake_other.friendly_name = "SomeOtherService"
@@ -299,7 +299,7 @@ def test_verify_phone_raises_when_messaging_service_missing(
     fake_client.messaging.v1.services.list.return_value = [fake_other]
 
     with patch(
-        "droid.gateway.channels.social.views.build_twilio_client",
+        "unity.gateway.channels.social.views.build_twilio_client",
         return_value=fake_client,
     ):
         response = client.post(
@@ -367,7 +367,7 @@ def test_get_messaging_service_sid_caches_result(
     fake_client.messaging.v1.services.list.return_value = [fake_service]
 
     with patch(
-        "droid.gateway.channels.social.views.build_twilio_client",
+        "unity.gateway.channels.social.views.build_twilio_client",
         return_value=fake_client,
     ):
         sid1 = _get_messaging_service_sid(credentials)

@@ -3,9 +3,9 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel, Field
 
-from droid.common.async_tool_loop import start_async_tool_loop
+from unity.common.async_tool_loop import start_async_tool_loop
 from tests.helpers import _handle_project
-from droid.common.llm_client import new_llm_client
+from unity.common.llm_client import new_llm_client
 
 pytestmark = pytest.mark.llm_call
 

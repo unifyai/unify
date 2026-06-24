@@ -13,9 +13,9 @@ from __future__ import annotations
 import pytest
 from unify.utils.http import RequestError
 
-from droid.data_manager.data_manager import DataManager
-from droid.data_manager.types import TableDescription
-from droid.manager_registry import ManagerRegistry
+from unity.data_manager.data_manager import DataManager
+from unity.data_manager.types import TableDescription
+from unity.manager_registry import ManagerRegistry
 from tests.helpers import _handle_project
 
 # ────────────────────────────────────────────────────────────────────────────

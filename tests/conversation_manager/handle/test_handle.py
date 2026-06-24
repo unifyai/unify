@@ -37,7 +37,7 @@ from pydantic import BaseModel, Field
 
 from tests.helpers import _handle_project
 from tests.conversation_manager.conftest import TEST_CONTACTS
-from droid.conversation_manager.events import (
+from unity.conversation_manager.events import (
     DirectMessageEvent,
     EmailReceived,
     Event,
@@ -50,7 +50,7 @@ from droid.conversation_manager.events import (
     UnifyMeetStarted,
     UnifyMessageReceived,
 )
-from droid.conversation_manager.handle import ConversationManagerHandle
+from unity.conversation_manager.handle import ConversationManagerHandle
 
 pytestmark = pytest.mark.eval
 

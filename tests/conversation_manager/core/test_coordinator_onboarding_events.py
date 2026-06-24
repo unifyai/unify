@@ -4,13 +4,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from droid.conversation_manager.domains import coordinator_onboarding as onboarding
-from droid.conversation_manager.prompt_builders import (
+from unity.conversation_manager.domains import coordinator_onboarding as onboarding
+from unity.conversation_manager.prompt_builders import (
     _build_coordinator_onboarding_narration_block,
     _build_coordinator_voice_opening_block,
 )
-from droid.conversation_manager.events import EmailSent
-from droid.settings import SETTINGS
+from unity.conversation_manager.events import EmailSent
+from unity.settings import SETTINGS
 
 
 def test_session_started_notification_mentions_skipped_steps() -> None:
@@ -232,7 +232,7 @@ def _onboarding_event():
 async def test_onboarding_handler_inert_without_console_ui(monkeypatch) -> None:
     """With no Console front-end, onboarding events are dropped entirely:
     no notification is pushed and no LLM run is requested."""
-    monkeypatch.setattr(SETTINGS, "DROID_CONSOLE_UI", False)
+    monkeypatch.setattr(SETTINGS, "UNITY_CONSOLE_UI", False)
     cm = MagicMock()
 
     result = await onboarding._handle_coordinator_onboarding_event(
@@ -248,7 +248,7 @@ async def test_onboarding_handler_inert_without_console_ui(monkeypatch) -> None:
 async def test_onboarding_handler_active_with_console_ui(monkeypatch) -> None:
     """With a Console present, the handler pushes a notification and asks for
     an LLM run (default behavior, unchanged)."""
-    monkeypatch.setattr(SETTINGS, "DROID_CONSOLE_UI", True)
+    monkeypatch.setattr(SETTINGS, "UNITY_CONSOLE_UI", True)
     cm = MagicMock()
 
     result = await onboarding._handle_coordinator_onboarding_event(
@@ -262,7 +262,7 @@ async def test_onboarding_handler_active_with_console_ui(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_reference_trigger_sets_pending_outbound_context(monkeypatch) -> None:
-    monkeypatch.setattr(SETTINGS, "DROID_CONSOLE_UI", True)
+    monkeypatch.setattr(SETTINGS, "UNITY_CONSOLE_UI", True)
     event = onboarding._coordinator_onboarding_event_from_payload(
         {
             "subtype": "reference_quiz_clue_requested",

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from droid.contact_manager.simulated import (
+from unity.contact_manager.simulated import (
     SimulatedContactManager,
 )
 
@@ -20,8 +20,8 @@ def test_docstrings_match_base():
     Public methods in SimulatedContactManager should copy the real
     BaseContactManager doc-strings one-for-one (via functools.wraps).
     """
-    from droid.contact_manager.base import BaseContactManager
-    from droid.contact_manager.simulated import SimulatedContactManager
+    from unity.contact_manager.base import BaseContactManager
+    from unity.contact_manager.simulated import SimulatedContactManager
 
     assert (
         BaseContactManager.ask.__doc__.strip()

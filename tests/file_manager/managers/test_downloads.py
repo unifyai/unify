@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 from tests.helpers import _handle_project
-from droid.settings import SETTINGS
+from unity.settings import SETTINGS
 
 
 @pytest.mark.asyncio

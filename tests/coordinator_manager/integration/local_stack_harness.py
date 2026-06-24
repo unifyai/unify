@@ -51,9 +51,9 @@ class ManagedLocalStack:
 
 
 def _real_home() -> Path:
-    """Return the developer home directory before Droid pytest HOME sandboxing."""
+    """Return the developer home directory before Unity pytest HOME sandboxing."""
 
-    configured = os.getenv("DROID_REAL_HOME", "").strip()
+    configured = os.getenv("UNITY_REAL_HOME", "").strip()
     if configured:
         return Path(configured).expanduser()
     return Path.home()
@@ -83,10 +83,10 @@ def resolve_sibling_repo(name: str) -> Path:
 
 
 def _resolve_stack_script() -> tuple[Path, Path]:
-    # The self-host stack orchestration lives in the private droid-deploy repo
-    # (selfhost/stack.sh), which drives the sibling droid/console/orchestra
+    # The self-host stack orchestration lives in the private unity-deploy repo
+    # (selfhost/stack.sh), which drives the sibling unity/console/orchestra
     # checkouts. Returns (cwd, stack.sh path).
-    deploy_repo = resolve_sibling_repo("droid-deploy")
+    deploy_repo = resolve_sibling_repo("unity-deploy")
     stack_script = deploy_repo / "selfhost" / "stack.sh"
     if not stack_script.is_file():
         raise FileNotFoundError(f"stack.sh not found at {stack_script}")
@@ -97,7 +97,7 @@ def _self_host_credentials_path() -> Path:
     configured = os.getenv("SELF_HOST_CREDENTIALS_FILE", "").strip()
     if configured:
         return Path(configured).expanduser()
-    return _real_home() / ".droid" / "self-host-credentials.json"
+    return _real_home() / ".unity" / "self-host-credentials.json"
 
 
 def _orchestra_db_port() -> int:
@@ -180,11 +180,11 @@ def resolve_local_stack_urls() -> LocalStackUrls:
     )
     adapters_url = os.getenv(
         "TEST_ADAPTERS_URL",
-        config_values.get("DROID_ADAPTERS_URL", DEFAULT_LOCAL_ADAPTERS_URL),
+        config_values.get("UNITY_ADAPTERS_URL", DEFAULT_LOCAL_ADAPTERS_URL),
     ).rstrip("/")
     comms_url = os.getenv(
         "TEST_COMMS_APP_URL",
-        config_values.get("DROID_COMMS_URL", DEFAULT_LOCAL_COMMS_URL),
+        config_values.get("UNITY_COMMS_URL", DEFAULT_LOCAL_COMMS_URL),
     ).rstrip("/")
     pubsub_emulator_host = os.getenv(
         "PUBSUB_EMULATOR_HOST",
@@ -214,7 +214,7 @@ def _stack_subprocess_env() -> dict[str, str]:
         "COMMUNICATION_REPO_PATH",
         str(resolve_sibling_repo("communication")),
     )
-    env.setdefault("DROID_REPO_PATH", str(resolve_sibling_repo("droid")))
+    env.setdefault("UNITY_REPO_PATH", str(resolve_sibling_repo("unity")))
     env.setdefault("CONSOLE_REPO_PATH", str(resolve_sibling_repo("console")))
     env.setdefault("UNIFY_REPO_PATH", str(resolve_sibling_repo("unify")))
     env.setdefault("UNIFY_STACK_ROOT", str(_resolve_unify_root()))
@@ -396,10 +396,10 @@ def reset_and_start_local_stack(urls: LocalStackUrls) -> None:
 
     _ensure_orchestra_db_port_available()
 
-    droid_repo, stack_script = _resolve_stack_script()
+    unity_repo, stack_script = _resolve_stack_script()
     subprocess.run(
         ["bash", str(stack_script), "down"],
-        cwd=droid_repo,
+        cwd=unity_repo,
         env=_stack_subprocess_env(),
         check=False,
         timeout=120,
@@ -407,7 +407,7 @@ def reset_and_start_local_stack(urls: LocalStackUrls) -> None:
     _purge_local_orchestra()
     completed = subprocess.run(
         ["bash", str(stack_script), "up"],
-        cwd=droid_repo,
+        cwd=unity_repo,
         env=_stack_subprocess_env(),
         check=False,
         timeout=LOCAL_STACK_START_TIMEOUT_SECONDS,
@@ -415,7 +415,7 @@ def reset_and_start_local_stack(urls: LocalStackUrls) -> None:
     if completed.returncode != 0:
         print(
             f"stack.sh up exited {completed.returncode}. "
-            "Droid/Console startup may have failed; continuing if Orchestra, "
+            "Unity/Console startup may have failed; continuing if Orchestra, "
             "Adapters, and Comms are reachable.",
         )
     _seed_local_orchestra_rbac()
@@ -423,10 +423,10 @@ def reset_and_start_local_stack(urls: LocalStackUrls) -> None:
 
 
 def stop_local_stack() -> None:
-    droid_repo, stack_script = _resolve_stack_script()
+    unity_repo, stack_script = _resolve_stack_script()
     subprocess.run(
         ["bash", str(stack_script), "down"],
-        cwd=droid_repo,
+        cwd=unity_repo,
         env=_stack_subprocess_env(),
         check=False,
         timeout=120,

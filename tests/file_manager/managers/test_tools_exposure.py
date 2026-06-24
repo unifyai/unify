@@ -21,7 +21,7 @@ async def test_ask_about_file_exposes_join_tools(file_manager, tmp_path: Path):
     fm.ingest_files(name)
 
     with patch(
-        "droid.file_manager.managers.file_manager.start_async_tool_loop",
+        "unity.file_manager.managers.file_manager.start_async_tool_loop",
     ) as mock_loop:
         mock_handle = MagicMock()
         mock_handle.result = AsyncMock(return_value="ok")

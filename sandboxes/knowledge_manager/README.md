@@ -1,7 +1,7 @@
 Knowledge Manager Sandbox
 =========================
 
-This folder contains an **interactive playground** for the `KnowledgeManager` component that lives in `droid/knowledge_manager/`. The goal of the sandbox is to let you experiment with the manager in isolation – seed imaginary knowledge tables, query them in natural‑language, and observe how the underlying tool‑loop behaves (including steerable tools and clarification requests) before you integrate the manager into a larger system.
+This folder contains an **interactive playground** for the `KnowledgeManager` component that lives in `unity/knowledge_manager/`. The goal of the sandbox is to let you experiment with the manager in isolation – seed imaginary knowledge tables, query them in natural‑language, and observe how the underlying tool‑loop behaves (including steerable tools and clarification requests) before you integrate the manager into a larger system.
 
 ### Video walkthroughs
 

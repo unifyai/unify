@@ -16,7 +16,7 @@ from tests.assertion_helpers import (
 )
 
 
-from droid.file_manager.prompt_builders import (
+from unity.file_manager.prompt_builders import (
     build_file_manager_ask_about_file_prompt,
 )
 
@@ -163,7 +163,7 @@ def _build_prompt_in_subprocess(method: str) -> str:
         sys.path.insert(0, os.getcwd())
         # Install the same static timestamp override used by pytest's autouse fixture,
         # but inside this fresh process so the time footer is deterministic.
-        import droid.common.prompt_helpers as _ph
+        import unity.common.prompt_helpers as _ph
         from datetime import datetime, timezone
         def _static_now(time_only: bool = False):
             dt = datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc)
@@ -172,7 +172,7 @@ def _build_prompt_in_subprocess(method: str) -> str:
                 return dt.strftime("%I:%M %p ") + label
             return dt.strftime("%A, %B %d, %Y at %I:%M %p ") + label
         _ph.now = _static_now
-        from droid.file_manager.prompt_builders import (
+        from unity.file_manager.prompt_builders import (
             build_file_manager_ask_about_file_prompt,
         )
 

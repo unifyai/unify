@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from droid.gateway.factory import (
+from unity.gateway.factory import (
     KNOWN_TRANSPORT_KINDS,
     TRANSPORT_KIND_INMEMORY,
     TRANSPORT_KIND_LEGACY,
@@ -21,10 +21,10 @@ from droid.gateway.factory import (
     create_ingress_transport_factory,
     create_outbound_transport,
 )
-from droid.gateway.ingress_inmemory import InMemoryIngressTransport
-from droid.gateway.ingress_pubsub import PubSubIngressTransport
-from droid.gateway.outbound_inmemory import InMemoryOutboundTransport
-from droid.gateway.outbound_pubsub import PubSubOutboundTransport
+from unity.gateway.ingress_inmemory import InMemoryIngressTransport
+from unity.gateway.ingress_pubsub import PubSubIngressTransport
+from unity.gateway.outbound_inmemory import InMemoryOutboundTransport
+from unity.gateway.outbound_pubsub import PubSubOutboundTransport
 
 # ---------------------------------------------------------------------------
 # Default / fallback behaviour -- the production safety net
@@ -43,7 +43,7 @@ def test_legacy_kind_returns_none() -> None:
 def test_unknown_kind_returns_none() -> None:
     """Misspelled env values must not crash; they fall back to legacy.
 
-    A warning is emitted but Droid's custom logger setup intercepts log
+    A warning is emitted but Unity's custom logger setup intercepts log
     records, so we only assert the externally-observable behaviour
     (return value). The warning text is verified by reading the log
     output during deploy soak.
@@ -94,7 +94,7 @@ def test_pubsub_kind_requires_project_id() -> None:
     with pytest.raises(ValueError, match="project_id"):
         create_ingress_transport_factory(
             kind=TRANSPORT_KIND_PUBSUB,
-            subscription_id_resolver=lambda: "droid-42-sub",
+            subscription_id_resolver=lambda: "unity-42-sub",
             project_id="",
         )
 
@@ -105,7 +105,7 @@ def test_pubsub_factory_invokes_resolver_lazily() -> None:
 
     def resolver() -> str:
         calls.append(1)
-        return "droid-42-sub"
+        return "unity-42-sub"
 
     factory = create_ingress_transport_factory(
         kind=TRANSPORT_KIND_PUBSUB,
@@ -117,14 +117,14 @@ def test_pubsub_factory_invokes_resolver_lazily() -> None:
     transport = factory()
     assert calls == [1]
     assert isinstance(transport, PubSubIngressTransport)
-    assert transport.subscription_id == "droid-42-sub"
+    assert transport.subscription_id == "unity-42-sub"
     assert transport.project_id == "responsive-city-458413-a2"
 
 
 def test_pubsub_factory_returns_none_when_resolver_returns_empty() -> None:
     """A blank subscription_id at resolve time degrades to legacy gracefully.
 
-    A warning is emitted (visible in stdout) but Droid's custom logger
+    A warning is emitted (visible in stdout) but Unity's custom logger
     intercepts log records, so we only assert externally-observable
     behaviour (the factory's return value of ``None`` causes
     CommsManager to fall through to the legacy inline path).
@@ -141,7 +141,7 @@ def test_pubsub_factory_returns_none_when_resolver_returns_empty() -> None:
 def test_pubsub_factory_passes_max_messages_through_to_transport() -> None:
     factory = create_ingress_transport_factory(
         kind=TRANSPORT_KIND_PUBSUB,
-        subscription_id_resolver=lambda: "droid-42-sub",
+        subscription_id_resolver=lambda: "unity-42-sub",
         project_id="p",
         max_messages=25,
     )
@@ -155,7 +155,7 @@ def test_pubsub_factory_max_messages_defaults_to_ten() -> None:
     """Default max_messages mirrors the legacy subscribe_to_topic call."""
     factory = create_ingress_transport_factory(
         kind=TRANSPORT_KIND_PUBSUB,
-        subscription_id_resolver=lambda: "droid-42-sub",
+        subscription_id_resolver=lambda: "unity-42-sub",
         project_id="p",
     )
     assert factory is not None

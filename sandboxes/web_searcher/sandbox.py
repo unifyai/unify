@@ -26,9 +26,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# droid imports
-from droid.web_searcher.web_searcher import WebSearcher
-from droid.common.async_tool_loop import SteerableToolHandle
+# unity imports
+from unity.web_searcher.web_searcher import WebSearcher
+from unity.common.async_tool_loop import SteerableToolHandle
 from sandboxes.utils import (
     record_until_enter as _record_until_enter,
     transcribe_deepgram as _transcribe_deepgram,

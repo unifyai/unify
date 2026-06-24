@@ -397,19 +397,19 @@ jobs:
         # 1. --env LOCAL_ORCHESTRA_BRANCH=xxx (handled below in FLAGS parsing)
         # 2. env_file_content LOCAL_ORCHESTRA_BRANCH=xxx (handled below)
         # 3. Repository variable LOCAL_ORCHESTRA_BRANCH (if set)
-        # 4. Auto-detect from droid branch (main→main, otherwise→staging)
+        # 4. Auto-detect from unity branch (main→main, otherwise→staging)
         REPO_VAR_BRANCH="${{ vars.LOCAL_ORCHESTRA_BRANCH }}"
         if [[ -n "$REPO_VAR_BRANCH" ]]; then
           ORCHESTRA_BRANCH="$REPO_VAR_BRANCH"
           echo "Orchestra branch from repo variable: $ORCHESTRA_BRANCH" >&2
         else
-          DROID_BRANCH="${{ github.ref_name }}"
-          if [[ "$DROID_BRANCH" == "main" ]]; then
+          UNITY_BRANCH="${{ github.ref_name }}"
+          if [[ "$UNITY_BRANCH" == "main" ]]; then
             ORCHESTRA_BRANCH="main"
           else
             ORCHESTRA_BRANCH="staging"
           fi
-          echo "Orchestra branch auto-detected: $ORCHESTRA_BRANCH (droid on '$DROID_BRANCH')" >&2
+          echo "Orchestra branch auto-detected: $ORCHESTRA_BRANCH (unity on '$UNITY_BRANCH')" >&2
         fi
 
         # Parse env_file_content for project management flags only
@@ -607,7 +607,7 @@ jobs:
   pytest:
     name: pytest (${{ matrix.test_path }})
     runs-on: ubuntu-latest-8-cores
-    environment: droid-testing
+    environment: unity-testing
     # Fixed timeout - dynamic timeout from needs.discover.outputs caused silent job creation failure
     timeout-minutes: 130
     # Depend on setup job (it may be skipped, but that's OK - GitHub handles this)
@@ -636,7 +636,7 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_CI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_CI_API_KEY }}
       # Communication service URL (org secret is still named UNITY_COMMS_URL)
-      DROID_COMMS_URL: ${{ secrets.UNITY_COMMS_URL }}
+      UNITY_COMMS_URL: ${{ secrets.UNITY_COMMS_URL }}
       # Orchestra GCP configuration (set by google-github-actions/auth step)
       # GOOGLE_APPLICATION_CREDENTIALS is set automatically by the google-github-actions/auth action
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
@@ -922,7 +922,7 @@ jobs:
     # both `managers/` and `file_parser/` exercise docling's PDF pipeline,
     # which downloads the docling-project/docling-models weights on first
     # use). Without a stable cache, every CI run does a fresh multi-GB
-    # download into /tmp/droid_test_home/.cache/huggingface (set by
+    # download into /tmp/unity_test_home/.cache/huggingface (set by
     # tests/conftest.py's HOME isolation), and the chunked-download temp
     # dirs race with each other across parallel pytest workers →
     # "[Errno 2] No such file or directory: '.../tmp_<uuid>'" mid-
@@ -934,7 +934,7 @@ jobs:
     # the gate so any matrix entry under tests/file_manager/ is covered.
     #
     # Caching ~/.cache/huggingface (the original $HOME location) makes
-    # droid/tests/conftest.py:pytest_configure() honor its HF_HOME-preserve
+    # unity/tests/conftest.py:pytest_configure() honor its HF_HOME-preserve
     # branch (which only fires when ~/.cache/huggingface exists on the
     # original HOME), pointing the test process at the warm cache instead
     # of a fresh /tmp dir. After the first successful CI run populates the
@@ -1142,7 +1142,7 @@ jobs:
         # Get failed sessions from tmux (these persist, unlike passing sessions which auto-close)
         FAILED_SESSIONS=""
         FAIL_COUNT=0
-        for sock in /tmp/tmux-$(id -u)/droid*; do
+        for sock in /tmp/tmux-$(id -u)/unity*; do
           if [ -S "$sock" ]; then
             socket_name=$(basename "$sock")
             FAILED_SESSIONS=$(tmux -L "$socket_name" ls 2>/dev/null | sed 's/: .*//' | grep '^f ' || true)
@@ -1332,7 +1332,7 @@ jobs:
       if: cancelled()
       run: |
         echo "Workflow cancelled - cleaning up tmux sessions and orphaned processes..."
-        # Kill all droid tmux servers and purge orphaned test processes
+        # Kill all unity tmux servers and purge orphaned test processes
         tests/kill_server.sh --all || true
         # Orchestra already stopped before log upload, but ensure it's down
         orchestra/scripts/local.sh stop || true

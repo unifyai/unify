@@ -3,7 +3,7 @@
 Phase A.bis.7.4 lands ``set_outbound_transport`` /
 ``get_outbound_transport`` + the shared
 ``_publish_to_assistant_topic`` helper in
-``droid.conversation_manager.domains.comms_utils``, and refactors the
+``unity.conversation_manager.domains.comms_utils``, and refactors the
 three publish helpers to route through it. This test exercises both
 arms:
 
@@ -28,8 +28,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from droid.conversation_manager.domains import comms_utils
-from droid.gateway.outbound_inmemory import InMemoryOutboundTransport
+from unity.conversation_manager.domains import comms_utils
+from unity.gateway.outbound_inmemory import InMemoryOutboundTransport
 
 # ---------------------------------------------------------------------------
 # Test helpers
@@ -119,7 +119,7 @@ def test_helper_routes_through_injected_transport(
     assert msg_id == "inmemory-0"
     assert len(transport.published) == 1
     envelope = transport.published[0]
-    assert envelope.topic == "droid-42-staging"
+    assert envelope.topic == "unity-42-staging"
     assert envelope.thread == "msg"
     assert json.loads(envelope.message) == {
         "thread": "msg",
@@ -142,7 +142,7 @@ def test_helper_forwards_timeout_to_transport(
     )
     transport.publish.assert_called_once()
     args, kwargs = transport.publish.call_args
-    assert args[0] == "droid-42-staging"
+    assert args[0] == "unity-42-staging"
     assert json.loads(args[1]) == {
         "thread": "system_error",
         "event": {"content": "boom"},
@@ -175,7 +175,7 @@ def test_helper_falls_back_to_legacy_publisher_when_no_transport(
 ) -> None:
     fake_publisher = MagicMock(name="LegacyPublisher")
     fake_publisher.topic_path.return_value = (
-        "projects/responsive-city-458413-a2/topics/droid-42-staging"
+        "projects/responsive-city-458413-a2/topics/unity-42-staging"
     )
     fake_future = MagicMock()
     fake_future.result.return_value = "legacy-broker-id"
@@ -191,10 +191,10 @@ def test_helper_falls_back_to_legacy_publisher_when_no_transport(
     assert msg_id == "legacy-broker-id"
     fake_publisher.topic_path.assert_called_once_with(
         "responsive-city-458413-a2",
-        "droid-42-staging",
+        "unity-42-staging",
     )
     fake_publisher.publish.assert_called_once_with(
-        "projects/responsive-city-458413-a2/topics/droid-42-staging",
+        "projects/responsive-city-458413-a2/topics/unity-42-staging",
         b'{"thread": "msg", "event": {"body": "hi"}}',
         thread="msg",
     )
@@ -229,7 +229,7 @@ def test_helper_forwards_timeout_to_legacy_publisher(
 def test_topic_naming_includes_env_suffix_for_staging(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Convention: droid-{agent_id}{env_suffix}. Hosted staging uses -staging."""
+    """Convention: unity-{agent_id}{env_suffix}. Hosted staging uses -staging."""
     monkeypatch.setattr(comms_utils.SESSION_DETAILS.assistant, "agent_id", 42)
     _stub_settings(monkeypatch, env_suffix="-staging")
     transport = InMemoryOutboundTransport()
@@ -240,13 +240,13 @@ def test_topic_naming_includes_env_suffix_for_staging(
         thread="msg",
         event={},
     )
-    assert transport.published[0].topic == "droid-42-staging"
+    assert transport.published[0].topic == "unity-42-staging"
 
 
 def test_topic_naming_omits_env_suffix_for_production(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Hosted production: env_suffix is empty -> droid-{agent_id}."""
+    """Hosted production: env_suffix is empty -> unity-{agent_id}."""
     monkeypatch.setattr(comms_utils.SESSION_DETAILS.assistant, "agent_id", 42)
     _stub_settings(monkeypatch, env_suffix="")
     transport = InMemoryOutboundTransport()
@@ -257,7 +257,7 @@ def test_topic_naming_omits_env_suffix_for_production(
         thread="msg",
         event={},
     )
-    assert transport.published[0].topic == "droid-42"
+    assert transport.published[0].topic == "unity-42"
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +279,7 @@ async def test_send_unify_message_routes_through_injected_transport(
     assert result == {"success": True}
     assert len(transport.published) == 1
     env = transport.published[0]
-    assert env.topic == "droid-42-staging"
+    assert env.topic == "unity-42-staging"
     assert env.thread == "unify_message_outbound"
     payload = json.loads(env.message)
     assert payload == {

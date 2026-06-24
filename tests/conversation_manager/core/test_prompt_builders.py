@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import pytest
 
-from droid.conversation_manager.prompt_builders import (
+from unity.conversation_manager.prompt_builders import (
     build_system_prompt,
     build_voice_agent_prompt,
 )
-from droid.session_details import TeamSummary
+from unity.session_details import TeamSummary
 
 pytestmark = pytest.mark.no_unify_context
 
@@ -693,7 +693,7 @@ class TestPerUserDesktopResolution:
 
     @staticmethod
     def _assistant_with_links() -> object:
-        from droid.session_details import AssistantDetails, UserDesktopLink
+        from unity.session_details import AssistantDetails, UserDesktopLink
 
         a = AssistantDetails()
         a.user_desktops = {

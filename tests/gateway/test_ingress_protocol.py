@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from droid.gateway.ingress import (
+from unity.gateway.ingress import (
     AckCallable,
     EnvelopeDispatcher,
     IngressTransport,
@@ -95,11 +95,11 @@ async def test_dispatcher_receives_payload_with_keyword_args() -> None:
             "body": "hi",
         },
     }
-    await transport.deliver(envelope, source_topic="droid-1-staging")
+    await transport.deliver(envelope, source_topic="unity-1-staging")
     assert received == [
         {
             "payload": envelope,
-            "source_topic": "droid-1-staging",
+            "source_topic": "unity-1-staging",
             "ack": None,
             "nack": None,
         },
@@ -176,7 +176,7 @@ async def test_envelope_dispatcher_type_alias_matches_real_dispatcher_shape() ->
     Pinned here because Phase A.bis.4 wires CommsManager directly; if its
     public signature drifts, the seam silently breaks.
     """
-    from droid.conversation_manager.comms_manager import CommsManager
+    from unity.conversation_manager.comms_manager import CommsManager
     import inspect
 
     sig = inspect.signature(CommsManager.dispatch_envelope_payload)
@@ -210,7 +210,7 @@ async def test_multiple_concurrent_deliveries_dispatch_in_order_from_a_single_ca
 
 def test_module_exports_match_documented_surface() -> None:
     """Public exports match what the docstring promises."""
-    import droid.gateway.ingress as ingress_mod
+    import unity.gateway.ingress as ingress_mod
 
     assert hasattr(ingress_mod, "IngressTransport")
     assert hasattr(ingress_mod, "EnvelopeDispatcher")

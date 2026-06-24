@@ -4,9 +4,9 @@ import asyncio
 import logging
 import pytest
 
-from droid.common.async_tool_loop import start_async_tool_loop
+from unity.common.async_tool_loop import start_async_tool_loop
 from tests.helpers import _handle_project
-from droid.common.llm_client import new_llm_client
+from unity.common.llm_client import new_llm_client
 from tests.async_helpers import (
     make_gated_async_tool,
     _wait_for_tool_result,
@@ -128,21 +128,21 @@ async def test_wait_called_and_pruned_when_other_tool_is_very_slow(
         interrupt_llm_with_interjections=True,
     )
 
-    # The async-tool-loop `wait` log emission goes through Droid's
-    # `droid` logger (droid/logger.py:LOGGER), which is configured with
+    # The async-tool-loop `wait` log emission goes through Unity's
+    # `unity` logger (unity/logger.py:LOGGER), which is configured with
     # `propagate=False` since 5ed695ffe (2026-02-20 "Consolidate logging
-    # into droid.logger as single authority"). pytest's `caplog`
+    # into unity.logger as single authority"). pytest's `caplog`
     # attaches its handler to the ROOT logger only; `set_level(level,
     # logger=name)` adjusts the named logger's level but does NOT
     # attach a handler to it. With propagate=False, no record ever
     # reaches the root handler, so caplog never sees it. Attach
-    # caplog's handler directly to the "droid" logger for the duration
+    # caplog's handler directly to the "unity" logger for the duration
     # of this test so `_wait_for_wait_tool_log` actually finds the
     # "Assistant chose `wait`" emission. Remove it in the finally
     # block so the handler doesn't leak across tests.
-    _droid_logger = logging.getLogger("droid")
-    _droid_logger.addHandler(caplog.handler)
-    caplog.set_level(logging.INFO, logger="droid")
+    _unity_logger = logging.getLogger("unity")
+    _unity_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.INFO, logger="unity")
     caplog.set_level(logging.INFO)
     caplog.clear()
 
@@ -163,7 +163,7 @@ async def test_wait_called_and_pruned_when_other_tool_is_very_slow(
         # Wait for the loop to complete
         await handle.result()
     finally:
-        _droid_logger.removeHandler(caplog.handler)
+        _unity_logger.removeHandler(caplog.handler)
 
     # ── Assertions ───────────────────────────────────────────────────────
 

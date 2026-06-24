@@ -11,7 +11,7 @@ In CodeAct + web mode, the Magnitude agent runs in a separate Chromium instance
 
 This module provides a tiny tracker plus a helper to wrap a `ComputerPrimitives`
 instance in-place (by monkey-patching methods) so we can record activity without
-changing Droid core classes.
+changing Unity core classes.
 """
 
 from __future__ import annotations

@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from droid.gateway.ingress import IngressTransport
-from droid.gateway.ingress_inmemory import InMemoryIngressTransport
+from unity.gateway.ingress import IngressTransport
+from unity.gateway.ingress_inmemory import InMemoryIngressTransport
 
 
 def test_satisfies_ingress_transport_protocol() -> None:
@@ -90,14 +90,14 @@ async def test_dispatcher_receives_payload_and_kwargs() -> None:
     ack_called: list[None] = []
     await transport.deliver(
         env,
-        source_topic="droid-42-staging",
+        source_topic="unity-42-staging",
         ack=lambda: ack_called.append(None),
         nack=None,
     )
     assert received == [
         {
             "payload": env,
-            "source_topic": "droid-42-staging",
+            "source_topic": "unity-42-staging",
             "ack": received[0]["ack"],
             "nack": None,
         },

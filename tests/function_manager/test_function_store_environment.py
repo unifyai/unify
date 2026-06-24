@@ -8,9 +8,9 @@ automatically excluded from FunctionManager search results.
 
 import pytest
 
-from droid.actor.environments.function_store import FunctionStoreEnvironment
-from droid.function_manager.function_manager import FunctionManager
-from droid.common.context_registry import ContextRegistry
+from unity.actor.environments.function_store import FunctionStoreEnvironment
+from unity.function_manager.function_manager import FunctionManager
+from unity.common.context_registry import ContextRegistry
 from tests.helpers import _handle_project
 
 # ────────────────────────────────────────────────────────────────────────────

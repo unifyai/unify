@@ -14,11 +14,11 @@ from unittest.mock import patch
 
 import pytest
 
-from droid.data_manager.ops.ingest_ops import (
+from unity.data_manager.ops.ingest_ops import (
     _derive_target_name,
     _run_post_ingest_rules,
 )
-from droid.data_manager.types.ingest import (
+from unity.data_manager.types.ingest import (
     AutoDerivedColumn,
     ExplicitDerivedColumn,
     PostIngestConfig,
@@ -162,8 +162,8 @@ class TestDeriveTargetName:
 
 class TestRunPostIngestRules:
 
-    @patch("droid.data_manager.ops.ingest_ops._ensure_derived_column")
-    @patch("droid.data_manager.ops.ingest_ops._unify")
+    @patch("unity.data_manager.ops.ingest_ops._ensure_derived_column")
+    @patch("unity.data_manager.ops.ingest_ops._unify")
     def test_explicit_source_field(self, mock_unify, mock_ensure):
         config = PostIngestConfig(
             derived_columns=[
@@ -185,8 +185,8 @@ class TestRunPostIngestRules:
         )
         mock_unify.get_fields.assert_not_called()
 
-    @patch("droid.data_manager.ops.ingest_ops._ensure_derived_column")
-    @patch("droid.data_manager.ops.ingest_ops._unify")
+    @patch("unity.data_manager.ops.ingest_ops._ensure_derived_column")
+    @patch("unity.data_manager.ops.ingest_ops._unify")
     def test_auto_discovery_by_source_type(self, mock_unify, mock_ensure):
         mock_unify.get_fields.return_value = {
             "VisitDate": {"data_type": "datetime"},
@@ -221,8 +221,8 @@ class TestRunPostIngestRules:
             referenced_logs_context="test/ctx",
         )
 
-    @patch("droid.data_manager.ops.ingest_ops._ensure_derived_column")
-    @patch("droid.data_manager.ops.ingest_ops._unify")
+    @patch("unity.data_manager.ops.ingest_ops._ensure_derived_column")
+    @patch("unity.data_manager.ops.ingest_ops._unify")
     def test_mixed_rules(self, mock_unify, mock_ensure):
         mock_unify.get_fields.return_value = {
             "VisitDate": {"data_type": "datetime"},
@@ -248,7 +248,7 @@ class TestRunPostIngestRules:
         assert result == ["VisitDate_Date", "Idling time duration seconds"]
         assert mock_ensure.call_count == 2
 
-    @patch("droid.data_manager.ops.ingest_ops._ensure_derived_column")
+    @patch("unity.data_manager.ops.ingest_ops._ensure_derived_column")
     def test_empty_config_no_calls(self, mock_ensure):
         config = PostIngestConfig(derived_columns=[])
         result = _run_post_ingest_rules("test/ctx", config)
@@ -264,16 +264,16 @@ class TestRunPostIngestRules:
 
 class TestRunIngestPostIngestIntegration:
 
-    @patch("droid.data_manager.ops.ingest_ops._run_post_ingest_rules")
-    @patch("droid.data_manager.ops.ingest_ops.PipelineExecutor")
-    @patch("droid.data_manager.ops.ingest_ops.create_table_impl")
+    @patch("unity.data_manager.ops.ingest_ops._run_post_ingest_rules")
+    @patch("unity.data_manager.ops.ingest_ops.PipelineExecutor")
+    @patch("unity.data_manager.ops.ingest_ops.create_table_impl")
     def test_post_ingest_called_when_config_provided(
         self,
         mock_create,
         mock_executor_cls,
         mock_run_rules,
     ):
-        from droid.data_manager.ops.ingest_ops import run_ingest
+        from unity.data_manager.ops.ingest_ops import run_ingest
 
         mock_executor = mock_executor_cls.return_value
         mock_executor.execute.return_value = {}
@@ -299,16 +299,16 @@ class TestRunIngestPostIngestIntegration:
         mock_run_rules.assert_called_once_with("test/ctx", config)
         assert result.derived_columns_created == ["col_a"]
 
-    @patch("droid.data_manager.ops.ingest_ops._run_post_ingest_rules")
-    @patch("droid.data_manager.ops.ingest_ops.PipelineExecutor")
-    @patch("droid.data_manager.ops.ingest_ops.create_table_impl")
+    @patch("unity.data_manager.ops.ingest_ops._run_post_ingest_rules")
+    @patch("unity.data_manager.ops.ingest_ops.PipelineExecutor")
+    @patch("unity.data_manager.ops.ingest_ops.create_table_impl")
     def test_no_post_ingest_when_none(
         self,
         mock_create,
         mock_executor_cls,
         mock_run_rules,
     ):
-        from droid.data_manager.ops.ingest_ops import run_ingest
+        from unity.data_manager.ops.ingest_ops import run_ingest
 
         mock_executor = mock_executor_cls.return_value
         mock_executor.execute.return_value = {}
@@ -323,16 +323,16 @@ class TestRunIngestPostIngestIntegration:
         mock_run_rules.assert_not_called()
         assert result.derived_columns_created == []
 
-    @patch("droid.data_manager.ops.ingest_ops._run_post_ingest_rules")
-    @patch("droid.data_manager.ops.ingest_ops.PipelineExecutor")
-    @patch("droid.data_manager.ops.ingest_ops.create_table_impl")
+    @patch("unity.data_manager.ops.ingest_ops._run_post_ingest_rules")
+    @patch("unity.data_manager.ops.ingest_ops.PipelineExecutor")
+    @patch("unity.data_manager.ops.ingest_ops.create_table_impl")
     def test_empty_post_ingest_no_rules_called(
         self,
         mock_create,
         mock_executor_cls,
         mock_run_rules,
     ):
-        from droid.data_manager.ops.ingest_ops import run_ingest
+        from unity.data_manager.ops.ingest_ops import run_ingest
 
         mock_executor = mock_executor_cls.return_value
         mock_executor.execute.return_value = {}
@@ -355,10 +355,10 @@ class TestRunIngestPostIngestIntegration:
 
 class TestFieldsDescriptionPassthrough:
 
-    @patch("droid.data_manager.ops.table_ops.unify")
+    @patch("unity.data_manager.ops.table_ops.unify")
     def test_rich_fields_payload_reaches_create_fields(self, mock_unify):
         """Verify that fields with descriptions pass through to unify.create_fields."""
-        from droid.data_manager.ops.table_ops import create_table_impl
+        from unity.data_manager.ops.table_ops import create_table_impl
 
         rich_fields = {
             "WorksOrderRef": {
@@ -382,10 +382,10 @@ class TestFieldsDescriptionPassthrough:
             context="test/ctx",
         )
 
-    @patch("droid.data_manager.ops.table_ops.unify")
+    @patch("unity.data_manager.ops.table_ops.unify")
     def test_simple_fields_still_work(self, mock_unify):
         """Backward compatibility: plain {name: type_str} still works."""
-        from droid.data_manager.ops.table_ops import create_table_impl
+        from unity.data_manager.ops.table_ops import create_table_impl
 
         simple_fields = {"name": "str", "age": "int"}
 
@@ -396,10 +396,10 @@ class TestFieldsDescriptionPassthrough:
             context="test/ctx",
         )
 
-    @patch("droid.data_manager.ops.table_ops.unify")
+    @patch("unity.data_manager.ops.table_ops.unify")
     def test_none_fields_skips_create_fields(self, mock_unify):
         """When fields is None, create_fields should not be called."""
-        from droid.data_manager.ops.table_ops import create_table_impl
+        from unity.data_manager.ops.table_ops import create_table_impl
 
         create_table_impl("test/ctx", fields=None)
 
@@ -420,8 +420,8 @@ class TestAutoRuleTypeMatching:
     these; the ``types_match`` fix makes them pass.
     """
 
-    @patch("droid.data_manager.ops.ingest_ops._ensure_derived_column")
-    @patch("droid.data_manager.ops.ingest_ops._unify")
+    @patch("unity.data_manager.ops.ingest_ops._ensure_derived_column")
+    @patch("unity.data_manager.ops.ingest_ops._unify")
     def test_auto_rule_matches_normalized_type(self, mock_unify, mock_ensure):
         """Capital 'DateTime' should match source_type='datetime'."""
         mock_unify.get_fields.return_value = {
@@ -440,8 +440,8 @@ class TestAutoRuleTypeMatching:
         assert "Departure_Date" in result
         mock_ensure.assert_called_once()
 
-    @patch("droid.data_manager.ops.ingest_ops._ensure_derived_column")
-    @patch("droid.data_manager.ops.ingest_ops._unify")
+    @patch("unity.data_manager.ops.ingest_ops._ensure_derived_column")
+    @patch("unity.data_manager.ops.ingest_ops._unify")
     def test_auto_rule_matches_optional_type(self, mock_unify, mock_ensure):
         """Union[datetime, NoneType] should match source_type='datetime'."""
         mock_unify.get_fields.return_value = {
@@ -468,16 +468,16 @@ class TestAutoRuleTypeMatching:
 
 class TestRunIngestCoerceTypes:
 
-    @patch("droid.data_manager.ops.ingest_ops._run_post_ingest_rules")
-    @patch("droid.data_manager.ops.ingest_ops.PipelineExecutor")
-    @patch("droid.data_manager.ops.ingest_ops.create_table_impl")
+    @patch("unity.data_manager.ops.ingest_ops._run_post_ingest_rules")
+    @patch("unity.data_manager.ops.ingest_ops.PipelineExecutor")
+    @patch("unity.data_manager.ops.ingest_ops.create_table_impl")
     def test_coerce_types_true_injects_explicit_types(
         self,
         mock_create,
         mock_executor_cls,
         mock_rules,
     ):
-        from droid.data_manager.ops.ingest_ops import run_ingest
+        from unity.data_manager.ops.ingest_ops import run_ingest
 
         mock_executor = mock_executor_cls.return_value
         mock_executor.execute.return_value = {}
@@ -493,16 +493,16 @@ class TestRunIngestCoerceTypes:
             assert "dt" in row["explicit_types"]
             assert "val" in row["explicit_types"]
 
-    @patch("droid.data_manager.ops.ingest_ops._run_post_ingest_rules")
-    @patch("droid.data_manager.ops.ingest_ops.PipelineExecutor")
-    @patch("droid.data_manager.ops.ingest_ops.create_table_impl")
+    @patch("unity.data_manager.ops.ingest_ops._run_post_ingest_rules")
+    @patch("unity.data_manager.ops.ingest_ops.PipelineExecutor")
+    @patch("unity.data_manager.ops.ingest_ops.create_table_impl")
     def test_coerce_types_false_no_explicit_types(
         self,
         mock_create,
         mock_executor_cls,
         mock_rules,
     ):
-        from droid.data_manager.ops.ingest_ops import run_ingest
+        from unity.data_manager.ops.ingest_ops import run_ingest
 
         mock_executor = mock_executor_cls.return_value
         mock_executor.execute.return_value = {}
@@ -513,16 +513,16 @@ class TestRunIngestCoerceTypes:
         for row in rows:
             assert "explicit_types" not in row
 
-    @patch("droid.data_manager.ops.ingest_ops._run_post_ingest_rules")
-    @patch("droid.data_manager.ops.ingest_ops.PipelineExecutor")
-    @patch("droid.data_manager.ops.ingest_ops.create_table_impl")
+    @patch("unity.data_manager.ops.ingest_ops._run_post_ingest_rules")
+    @patch("unity.data_manager.ops.ingest_ops.PipelineExecutor")
+    @patch("unity.data_manager.ops.ingest_ops.create_table_impl")
     def test_coerce_types_true_coerces_empty_strings(
         self,
         mock_create,
         mock_executor_cls,
         mock_rules,
     ):
-        from droid.data_manager.ops.ingest_ops import run_ingest
+        from unity.data_manager.ops.ingest_ops import run_ingest
 
         mock_executor = mock_executor_cls.return_value
         mock_executor.execute.return_value = {}
@@ -535,16 +535,16 @@ class TestRunIngestCoerceTypes:
         assert result.coercion_stats is not None
         assert result.coercion_stats["empty_strings_coerced"] == 1
 
-    @patch("droid.data_manager.ops.ingest_ops._run_post_ingest_rules")
-    @patch("droid.data_manager.ops.ingest_ops.PipelineExecutor")
-    @patch("droid.data_manager.ops.ingest_ops.create_table_impl")
+    @patch("unity.data_manager.ops.ingest_ops._run_post_ingest_rules")
+    @patch("unity.data_manager.ops.ingest_ops.PipelineExecutor")
+    @patch("unity.data_manager.ops.ingest_ops.create_table_impl")
     def test_coerce_types_false_coerces_only_empty_strings(
         self,
         mock_create,
         mock_executor_cls,
         mock_rules,
     ):
-        from droid.data_manager.ops.ingest_ops import run_ingest
+        from unity.data_manager.ops.ingest_ops import run_ingest
 
         mock_executor = mock_executor_cls.return_value
         mock_executor.execute.return_value = {}
@@ -555,16 +555,16 @@ class TestRunIngestCoerceTypes:
         assert rows[0]["a"] is None
         assert rows[0]["b"] == "garbage_not_a_datetime"
 
-    @patch("droid.data_manager.ops.ingest_ops._run_post_ingest_rules")
-    @patch("droid.data_manager.ops.ingest_ops.PipelineExecutor")
-    @patch("droid.data_manager.ops.ingest_ops.create_table_impl")
+    @patch("unity.data_manager.ops.ingest_ops._run_post_ingest_rules")
+    @patch("unity.data_manager.ops.ingest_ops.PipelineExecutor")
+    @patch("unity.data_manager.ops.ingest_ops.create_table_impl")
     def test_coerce_types_true_coerces_type_mismatches(
         self,
         mock_create,
         mock_executor_cls,
         mock_rules,
     ):
-        from droid.data_manager.ops.ingest_ops import run_ingest
+        from unity.data_manager.ops.ingest_ops import run_ingest
 
         mock_executor = mock_executor_cls.return_value
         mock_executor.execute.return_value = {}

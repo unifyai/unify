@@ -8,9 +8,9 @@ import json
 import pytest
 from pathlib import Path
 from typing import Any, Dict
-from droid.file_manager.managers.local import LocalFileManager
-from droid.file_manager.simulated import SimulatedFileManager
-from droid.common.llm_client import new_llm_client
+from unity.file_manager.managers.local import LocalFileManager
+from unity.file_manager.simulated import SimulatedFileManager
+from unity.common.llm_client import new_llm_client
 
 
 async def llm_judge_html_equivalence(
@@ -127,8 +127,8 @@ def rootless_file_manager():
     This allows tests to exercise absolute-path behavior without conflicting
     with the session-scoped LocalFileManager singleton.
     """
-    from droid.file_manager.managers.file_manager import FileManager
-    from droid.file_manager.filesystem_adapters.local_adapter import (
+    from unity.file_manager.managers.file_manager import FileManager
+    from unity.file_manager.filesystem_adapters.local_adapter import (
         LocalFileSystemAdapter,
     )
 

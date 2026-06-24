@@ -1,4 +1,4 @@
-"""Unit tests for droid.events.stream_filters and ToolLoopKind classification.
+"""Unit tests for unity.events.stream_filters and ToolLoopKind classification.
 
 All tests are synchronous, zero-IO, and test the predicate/classifier
 functions directly.  No EventBus, Pub/Sub, or project setup is needed.
@@ -6,11 +6,11 @@ functions directly.  No EventBus, Pub/Sub, or project setup is needed.
 
 import json
 
-from droid.events.stream_filters import (
+from unity.events.stream_filters import (
     is_streaming_noise,
     is_suppressed_manager_tree,
 )
-from droid.events.types.tool_loop import (
+from unity.events.types.tool_loop import (
     ToolLoopKind,
     classify_tool_loop_message,
 )

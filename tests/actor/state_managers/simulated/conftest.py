@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from droid.manager_registry import ManagerRegistry
+from unity.manager_registry import ManagerRegistry
 
 
 @pytest.fixture(autouse=True)

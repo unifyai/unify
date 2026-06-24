@@ -13,11 +13,11 @@ import asyncio
 import pytest
 import shutil
 
-from droid.function_manager.function_manager import (
+from unity.function_manager.function_manager import (
     FunctionManager,
     VenvPool,
 )
-from droid.common.context_registry import ContextRegistry
+from unity.common.context_registry import ContextRegistry
 from tests.helpers import _handle_project
 
 # Sample pyproject.toml with minimal dependencies (fast to sync)

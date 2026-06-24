@@ -14,7 +14,7 @@ import asyncio
 import pytest
 from PIL import Image
 
-from droid.manager_registry import ManagerRegistry
+from unity.manager_registry import ManagerRegistry
 
 
 @pytest.fixture(autouse=True)
@@ -25,7 +25,7 @@ def _clear_registry():
 
 
 def _make_primitives():
-    from droid.function_manager.primitives.runtime import ComputerPrimitives
+    from unity.function_manager.primitives.runtime import ComputerPrimitives
 
     return ComputerPrimitives(computer_mode="mock")
 
@@ -61,7 +61,7 @@ class TestDesktopNamespace:
 
     @pytest.mark.asyncio
     async def test_desktop_act(self):
-        from droid.function_manager.computer_backends import ActResult
+        from unity.function_manager.computer_backends import ActResult
 
         cp = _make_primitives()
         result = await cp.desktop.act("Click the Start menu")
@@ -100,7 +100,7 @@ class TestObserveBypassDomProcessing:
 
     @pytest.mark.asyncio
     async def test_desktop_observe_forces_bypass_dom_processing(self, monkeypatch):
-        from droid.function_manager.computer_backends import ComputerSession
+        from unity.function_manager.computer_backends import ComputerSession
 
         session = ComputerSession(
             session_id="desktop-session",
@@ -129,7 +129,7 @@ class TestObserveBypassDomProcessing:
         self,
         monkeypatch,
     ):
-        from droid.function_manager.computer_backends import ComputerSession
+        from unity.function_manager.computer_backends import ComputerSession
 
         session = ComputerSession(
             session_id="web-session",
@@ -158,7 +158,7 @@ class TestObserveBypassDomProcessing:
         self,
         monkeypatch,
     ):
-        from droid.function_manager.computer_backends import ComputerSession
+        from unity.function_manager.computer_backends import ComputerSession
 
         session = ComputerSession(
             session_id="web-session",
@@ -193,7 +193,7 @@ class TestWebSessionFactory:
     """primitives.computer.web is a factory with new_session()."""
 
     def test_web_property_returns_factory(self):
-        from droid.function_manager.primitives.runtime import _WebSessionFactory
+        from unity.function_manager.primitives.runtime import _WebSessionFactory
 
         cp = _make_primitives()
         factory = cp.web
@@ -224,7 +224,7 @@ class TestWebSessionHandle:
 
     @pytest.mark.asyncio
     async def test_new_session_returns_handle(self):
-        from droid.function_manager.primitives.runtime import WebSessionHandle
+        from unity.function_manager.primitives.runtime import WebSessionHandle
 
         cp = _make_primitives()
         session = await cp.web.new_session()
@@ -418,7 +418,7 @@ class TestEnvironmentToolDiscovery:
     """ComputerEnvironment exposes the correct tools for the new API."""
 
     def test_get_tools_includes_desktop_methods(self):
-        from droid.actor.environments.computer import ComputerEnvironment
+        from unity.actor.environments.computer import ComputerEnvironment
 
         cp = _make_primitives()
         env = ComputerEnvironment(cp)
@@ -435,7 +435,7 @@ class TestEnvironmentToolDiscovery:
             assert fq in tools, f"Expected tool {fq} in get_tools()"
 
     def test_get_tools_excludes_desktop_get_content(self):
-        from droid.actor.environments.computer import ComputerEnvironment
+        from unity.actor.environments.computer import ComputerEnvironment
 
         cp = _make_primitives()
         env = ComputerEnvironment(cp)
@@ -443,7 +443,7 @@ class TestEnvironmentToolDiscovery:
         assert "primitives.computer.desktop.get_content" not in tools
 
     def test_get_tools_includes_web_factory(self):
-        from droid.actor.environments.computer import ComputerEnvironment
+        from unity.actor.environments.computer import ComputerEnvironment
 
         cp = _make_primitives()
         env = ComputerEnvironment(cp)
@@ -452,7 +452,7 @@ class TestEnvironmentToolDiscovery:
 
     def test_get_tools_does_not_include_flat_methods(self):
         """Tools should NOT be at primitives.computer.act (flat, no mode prefix)."""
-        from droid.actor.environments.computer import ComputerEnvironment
+        from unity.actor.environments.computer import ComputerEnvironment
 
         cp = _make_primitives()
         env = ComputerEnvironment(cp)
@@ -462,7 +462,7 @@ class TestEnvironmentToolDiscovery:
             assert flat not in tools, f"Flat tool name {flat} should not exist"
 
     def test_new_session_tool_has_docstring(self):
-        from droid.actor.environments.computer import ComputerEnvironment
+        from unity.actor.environments.computer import ComputerEnvironment
 
         cp = _make_primitives()
         env = ComputerEnvironment(cp)
@@ -473,7 +473,7 @@ class TestEnvironmentToolDiscovery:
         assert "browser" in meta.docstring.lower()
 
     def test_new_session_tool_has_signature(self):
-        from droid.actor.environments.computer import ComputerEnvironment
+        from unity.actor.environments.computer import ComputerEnvironment
 
         cp = _make_primitives()
         env = ComputerEnvironment(cp)
@@ -483,7 +483,7 @@ class TestEnvironmentToolDiscovery:
         assert "visible" in meta.signature
 
     def test_get_tools_includes_list_sessions(self):
-        from droid.actor.environments.computer import ComputerEnvironment
+        from unity.actor.environments.computer import ComputerEnvironment
 
         cp = _make_primitives()
         env = ComputerEnvironment(cp)
@@ -491,7 +491,7 @@ class TestEnvironmentToolDiscovery:
         assert "primitives.computer.web.list_sessions" in tools
 
     def test_get_tools_includes_get_session(self):
-        from droid.actor.environments.computer import ComputerEnvironment
+        from unity.actor.environments.computer import ComputerEnvironment
 
         cp = _make_primitives()
         env = ComputerEnvironment(cp)
@@ -499,7 +499,7 @@ class TestEnvironmentToolDiscovery:
         assert "primitives.computer.web.get_session" in tools
 
     def test_list_sessions_tool_has_docstring(self):
-        from droid.actor.environments.computer import ComputerEnvironment
+        from unity.actor.environments.computer import ComputerEnvironment
 
         cp = _make_primitives()
         env = ComputerEnvironment(cp)
@@ -510,7 +510,7 @@ class TestEnvironmentToolDiscovery:
         assert "active_only" in meta.docstring
 
     def test_get_session_tool_has_docstring(self):
-        from droid.actor.environments.computer import ComputerEnvironment
+        from unity.actor.environments.computer import ComputerEnvironment
 
         cp = _make_primitives()
         env = ComputerEnvironment(cp)
@@ -521,7 +521,7 @@ class TestEnvironmentToolDiscovery:
         assert "reattach" in meta.docstring.lower()
 
     def test_prompt_context_mentions_both_interfaces(self):
-        from droid.actor.environments.computer import ComputerEnvironment
+        from unity.actor.environments.computer import ComputerEnvironment
 
         cp = _make_primitives()
         env = ComputerEnvironment(cp)
@@ -655,7 +655,7 @@ class TestLazySessionInvalidation:
     @pytest.mark.asyncio
     async def test_session_not_found_marks_handle_inactive(self):
         from unittest.mock import AsyncMock
-        from droid.function_manager.computer_backends import ComputerAgentError
+        from unity.function_manager.computer_backends import ComputerAgentError
 
         cp = _make_primitives()
         session = await cp.web.new_session()
@@ -671,7 +671,7 @@ class TestLazySessionInvalidation:
     @pytest.mark.asyncio
     async def test_browser_closed_marks_handle_inactive(self):
         from unittest.mock import AsyncMock
-        from droid.function_manager.computer_backends import ComputerAgentError
+        from unity.function_manager.computer_backends import ComputerAgentError
 
         cp = _make_primitives()
         session = await cp.web.new_session()
@@ -689,7 +689,7 @@ class TestLazySessionInvalidation:
     @pytest.mark.asyncio
     async def test_transient_error_does_not_invalidate(self):
         from unittest.mock import AsyncMock
-        from droid.function_manager.computer_backends import ComputerAgentError
+        from unity.function_manager.computer_backends import ComputerAgentError
 
         cp = _make_primitives()
         session = await cp.web.new_session()
@@ -704,7 +704,7 @@ class TestLazySessionInvalidation:
     @pytest.mark.asyncio
     async def test_list_sessions_excludes_lazily_invalidated(self):
         from unittest.mock import AsyncMock
-        from droid.function_manager.computer_backends import ComputerAgentError
+        from unity.function_manager.computer_backends import ComputerAgentError
 
         cp = _make_primitives()
         s1 = await cp.web.new_session()
@@ -830,7 +830,7 @@ class TestRendererMetadata:
     """Renderer includes label and URL in <active_web_sessions>."""
 
     def test_render_with_metadata_dicts(self):
-        from droid.conversation_manager.domains.renderer import Renderer
+        from unity.conversation_manager.domains.renderer import Renderer
 
         sessions = [
             {"session_id": 0, "label": "Web 0", "url": "https://google.com"},

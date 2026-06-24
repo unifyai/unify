@@ -18,11 +18,11 @@ from unittest.mock import patch
 
 import pytest
 
-from droid.conversation_manager.comms_manager import CommsManager
-from droid.conversation_manager.in_memory_event_broker import (
+from unity.conversation_manager.comms_manager import CommsManager
+from unity.conversation_manager.in_memory_event_broker import (
     create_in_memory_event_broker,
 )
-from droid.gateway.ingress_inmemory import InMemoryIngressTransport
+from unity.gateway.ingress_inmemory import InMemoryIngressTransport
 
 # ---------------------------------------------------------------------------
 # Construction
@@ -171,13 +171,13 @@ async def test_factory_materialized_transport_dispatches_through_comms_manager()
 async def test_factory_can_inspect_session_details_at_resolution_time() -> None:
     """Lazy resolution: factory can read SESSION_DETAILS.assistant.agent_id.
 
-    This is the pattern hosted Droid will use: the factory closes over
+    This is the pattern hosted Unity will use: the factory closes over
     SESSION_DETAILS and constructs a PubSubIngressTransport whose
     subscription_id derives from agent_id, which by the time
     _start_inbound_subscription runs has been set by
     _poll_for_assignment.
     """
-    from droid.session_details import SESSION_DETAILS
+    from unity.session_details import SESSION_DETAILS
 
     broker = create_in_memory_event_broker()
     seen_agent_ids: list[Any] = []

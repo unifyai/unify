@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from droid.file_manager.filesystem_adapters.local_adapter import LocalFileSystemAdapter
+from unity.file_manager.filesystem_adapters.local_adapter import LocalFileSystemAdapter
 
 
 @pytest.mark.asyncio

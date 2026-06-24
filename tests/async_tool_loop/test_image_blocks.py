@@ -1,7 +1,7 @@
 # tests/async_tool_loop/test_image_blocks.py
 #
 # Regression tests for the image-promotion logic in
-# `droid.common.llm_helpers`.
+# `unity.common.llm_helpers`.
 
 from __future__ import annotations
 
@@ -10,9 +10,9 @@ import base64
 from pathlib import Path
 
 import pytest
-from droid.common.async_tool_loop import start_async_tool_loop
+from unity.common.async_tool_loop import start_async_tool_loop
 from tests.helpers import _handle_project
-from droid.common.llm_client import new_llm_client
+from unity.common.llm_client import new_llm_client
 
 pytestmark = pytest.mark.llm_call
 

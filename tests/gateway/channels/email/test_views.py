@@ -1,4 +1,4 @@
-"""Behavioural tests for ``droid.gateway.channels.email``.
+"""Behavioural tests for ``unity.gateway.channels.email``.
 
 No existing tests in ``communication/tests/email/`` to port (the
 dispatcher was only tested end-to-end with real gmail/outlook
@@ -15,8 +15,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from droid.gateway.channels.email import router
-from droid.gateway.channels.email.views import _is_outlook_assistant
+from unity.gateway.channels.email import router
+from unity.gateway.channels.email.views import _is_outlook_assistant
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -56,7 +56,7 @@ def test_router_exposes_expected_paths() -> None:
 
 
 def test_router_importable_from_package_root() -> None:
-    from droid.gateway.channels.email import router as exported
+    from unity.gateway.channels.email import router as exported
 
     assert exported is router
 
@@ -143,15 +143,15 @@ class TestSendDispatch:
         gmail_handler = AsyncMock(return_value={"success": True, "via": "gmail"})
         with (
             patch(
-                "droid.gateway.channels.email.views.lookup_assistant",
+                "unity.gateway.channels.email.views.lookup_assistant",
                 new=AsyncMock(return_value={"email_provider": "microsoft_365"}),
             ),
             patch(
-                "droid.gateway.channels.email.views.send_outlook_email",
+                "unity.gateway.channels.email.views.send_outlook_email",
                 new=outlook_handler,
             ),
             patch(
-                "droid.gateway.channels.email.views.gmail_send_email",
+                "unity.gateway.channels.email.views.gmail_send_email",
                 new=gmail_handler,
             ),
         ):
@@ -177,15 +177,15 @@ class TestSendDispatch:
         gmail_handler = AsyncMock(return_value={"success": True, "via": "gmail"})
         with (
             patch(
-                "droid.gateway.channels.email.views.lookup_assistant",
+                "unity.gateway.channels.email.views.lookup_assistant",
                 new=AsyncMock(return_value={"email_provider": "google_workspace"}),
             ),
             patch(
-                "droid.gateway.channels.email.views.send_outlook_email",
+                "unity.gateway.channels.email.views.send_outlook_email",
                 new=outlook_handler,
             ),
             patch(
-                "droid.gateway.channels.email.views.gmail_send_email",
+                "unity.gateway.channels.email.views.gmail_send_email",
                 new=gmail_handler,
             ),
         ):
@@ -213,15 +213,15 @@ class TestSendDispatch:
         legacy_assistant = {"secrets": {"MICROSOFT_ACCESS_TOKEN": "legacy-token"}}
         with (
             patch(
-                "droid.gateway.channels.email.views.lookup_assistant",
+                "unity.gateway.channels.email.views.lookup_assistant",
                 new=AsyncMock(return_value=legacy_assistant),
             ),
             patch(
-                "droid.gateway.channels.email.views.send_outlook_email",
+                "unity.gateway.channels.email.views.send_outlook_email",
                 new=outlook_handler,
             ),
             patch(
-                "droid.gateway.channels.email.views.gmail_send_email",
+                "unity.gateway.channels.email.views.gmail_send_email",
                 new=gmail_handler,
             ),
         ):
@@ -245,15 +245,15 @@ class TestSendDispatch:
         gmail_handler = AsyncMock(return_value={"success": True, "via": "gmail"})
         with (
             patch(
-                "droid.gateway.channels.email.views.lookup_assistant",
+                "unity.gateway.channels.email.views.lookup_assistant",
                 new=AsyncMock(return_value={}),
             ),
             patch(
-                "droid.gateway.channels.email.views.send_outlook_email",
+                "unity.gateway.channels.email.views.send_outlook_email",
                 new=outlook_handler,
             ),
             patch(
-                "droid.gateway.channels.email.views.gmail_send_email",
+                "unity.gateway.channels.email.views.gmail_send_email",
                 new=gmail_handler,
             ),
         ):
@@ -283,11 +283,11 @@ class TestSendDispatch:
 
         with (
             patch(
-                "droid.gateway.channels.email.views.lookup_assistant",
+                "unity.gateway.channels.email.views.lookup_assistant",
                 new=AsyncMock(return_value={}),
             ),
             patch(
-                "droid.gateway.channels.email.views.gmail_send_email",
+                "unity.gateway.channels.email.views.gmail_send_email",
                 new=fake_gmail_send,
             ),
         ):
@@ -321,15 +321,15 @@ class TestSendDispatch:
         gmail_handler = AsyncMock(return_value={"success": True, "via": "gmail"})
         with (
             patch(
-                "droid.gateway.channels.email.views.lookup_assistant",
+                "unity.gateway.channels.email.views.lookup_assistant",
                 new=lookup,
             ),
             patch(
-                "droid.gateway.channels.email.views.send_outlook_email",
+                "unity.gateway.channels.email.views.send_outlook_email",
                 new=outlook_handler,
             ),
             patch(
-                "droid.gateway.channels.email.views.gmail_send_email",
+                "unity.gateway.channels.email.views.gmail_send_email",
                 new=gmail_handler,
             ),
         ):
@@ -362,15 +362,15 @@ class TestAttachmentDispatch:
         gmail_handler = AsyncMock(return_value=b"gmail-bytes")
         with (
             patch(
-                "droid.gateway.channels.email.views.lookup_assistant",
+                "unity.gateway.channels.email.views.lookup_assistant",
                 new=AsyncMock(return_value={"email_provider": "microsoft_365"}),
             ),
             patch(
-                "droid.gateway.channels.email.views.get_outlook_attachment",
+                "unity.gateway.channels.email.views.get_outlook_attachment",
                 new=outlook_handler,
             ),
             patch(
-                "droid.gateway.channels.email.views.gmail_get_attachment",
+                "unity.gateway.channels.email.views.gmail_get_attachment",
                 new=gmail_handler,
             ),
         ):
@@ -405,15 +405,15 @@ class TestAttachmentDispatch:
         gmail_handler = AsyncMock(return_value=b"gmail-bytes")
         with (
             patch(
-                "droid.gateway.channels.email.views.lookup_assistant",
+                "unity.gateway.channels.email.views.lookup_assistant",
                 new=AsyncMock(return_value={"email_provider": "google_workspace"}),
             ),
             patch(
-                "droid.gateway.channels.email.views.get_outlook_attachment",
+                "unity.gateway.channels.email.views.get_outlook_attachment",
                 new=outlook_handler,
             ),
             patch(
-                "droid.gateway.channels.email.views.gmail_get_attachment",
+                "unity.gateway.channels.email.views.gmail_get_attachment",
                 new=gmail_handler,
             ),
         ):
@@ -443,11 +443,11 @@ class TestAttachmentDispatch:
         gmail_handler = AsyncMock(return_value=b"x")
         with (
             patch(
-                "droid.gateway.channels.email.views.lookup_assistant",
+                "unity.gateway.channels.email.views.lookup_assistant",
                 new=AsyncMock(return_value={}),
             ),
             patch(
-                "droid.gateway.channels.email.views.gmail_get_attachment",
+                "unity.gateway.channels.email.views.gmail_get_attachment",
                 new=gmail_handler,
             ),
         ):
@@ -471,15 +471,15 @@ class TestAttachmentDispatch:
         gmail_handler = AsyncMock(return_value=b"gmail-bytes")
         with (
             patch(
-                "droid.gateway.channels.email.views.lookup_assistant",
+                "unity.gateway.channels.email.views.lookup_assistant",
                 new=lookup,
             ),
             patch(
-                "droid.gateway.channels.email.views.get_outlook_attachment",
+                "unity.gateway.channels.email.views.get_outlook_attachment",
                 new=outlook_handler,
             ),
             patch(
-                "droid.gateway.channels.email.views.gmail_get_attachment",
+                "unity.gateway.channels.email.views.gmail_get_attachment",
                 new=gmail_handler,
             ),
         ):

@@ -14,8 +14,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from droid.gateway.ingress import IngressTransport
-from droid.gateway.ingress_pubsub import PubSubIngressTransport
+from unity.gateway.ingress import IngressTransport
+from unity.gateway.ingress_pubsub import PubSubIngressTransport
 
 # ---------------------------------------------------------------------------
 # Test helpers: minimal stand-ins for Pub/Sub primitives
@@ -53,7 +53,7 @@ def _install_pubsub_stub(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
         **kwargs,
     )
     monkeypatch.setattr(
-        "droid.gateway.ingress_pubsub.pubsub_v1",
+        "unity.gateway.ingress_pubsub.pubsub_v1",
         pubsub_stub,
     )
     return pubsub_stub
@@ -79,7 +79,7 @@ def test_satisfies_ingress_transport_protocol(
 ) -> None:
     _install_pubsub_stub(monkeypatch)
     transport = PubSubIngressTransport(
-        subscription_id="droid-42-sub",
+        subscription_id="unity-42-sub",
         project_id="responsive-city-458413-a2",
     )
     assert isinstance(transport, IngressTransport)
@@ -87,10 +87,10 @@ def test_satisfies_ingress_transport_protocol(
 
 def test_source_topic_derives_from_subscription_id() -> None:
     transport = PubSubIngressTransport(
-        subscription_id="droid-42-staging-sub",
+        subscription_id="unity-42-staging-sub",
         project_id="p",
     )
-    assert transport.source_topic == "droid-42-staging"
+    assert transport.source_topic == "unity-42-staging"
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +104,7 @@ async def test_start_creates_subscriber_and_subscribes(
 ) -> None:
     pubsub_stub = _install_pubsub_stub(monkeypatch)
     transport = PubSubIngressTransport(
-        subscription_id="droid-42-sub",
+        subscription_id="unity-42-sub",
         project_id="responsive-city-458413-a2",
         max_messages=10,
     )
@@ -117,7 +117,7 @@ async def test_start_creates_subscriber_and_subscribes(
     client_instance = pubsub_stub.SubscriberClient.return_value
     client_instance.subscription_path.assert_called_once_with(
         "responsive-city-458413-a2",
-        "droid-42-sub",
+        "unity-42-sub",
     )
     pubsub_stub.types.FlowControl.assert_called_once_with(max_messages=10)
     client_instance.subscribe.assert_called_once()
@@ -131,7 +131,7 @@ async def test_start_passes_credentials_when_provided(
     pubsub_stub = _install_pubsub_stub(monkeypatch)
     creds = MagicMock(name="Credentials")
     transport = PubSubIngressTransport(
-        subscription_id="droid-42-sub",
+        subscription_id="unity-42-sub",
         project_id="p",
         credentials=creds,
     )
@@ -195,7 +195,7 @@ async def test_stop_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_start_without_pubsub_v1_raises_runtime_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("droid.gateway.ingress_pubsub.pubsub_v1", None)
+    monkeypatch.setattr("unity.gateway.ingress_pubsub.pubsub_v1", None)
     transport = PubSubIngressTransport(subscription_id="s", project_id="p")
 
     async def dispatcher(payload: dict, **_kwargs: Any) -> None:
@@ -236,7 +236,7 @@ async def test_handle_message_decodes_payload_and_dispatches(
         dispatched.set()
 
     transport = PubSubIngressTransport(
-        subscription_id="droid-42-staging-sub",
+        subscription_id="unity-42-staging-sub",
         project_id="p",
     )
     await transport.start(dispatcher)
@@ -262,7 +262,7 @@ async def test_handle_message_decodes_payload_and_dispatches(
 
     assert len(received) == 1
     assert received[0]["payload"] == envelope
-    assert received[0]["source_topic"] == "droid-42-staging"
+    assert received[0]["source_topic"] == "unity-42-staging"
     assert received[0]["ack"] is message.ack
     assert received[0]["nack"] is message.nack
     await transport.stop()
@@ -283,7 +283,7 @@ async def test_blocking_dispatch_for_call_threads(
         order.append("dispatch_end")
 
     transport = PubSubIngressTransport(
-        subscription_id="droid-42-sub",
+        subscription_id="unity-42-sub",
         project_id="p",
         blocking_dispatch_threads=("call", "meet"),
     )
@@ -318,7 +318,7 @@ async def test_nonblocking_dispatch_for_regular_threads(
         await proceed.wait()
 
     transport = PubSubIngressTransport(
-        subscription_id="droid-42-sub",
+        subscription_id="unity-42-sub",
         project_id="p",
     )
     await transport.start(dispatcher)

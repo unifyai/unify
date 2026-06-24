@@ -6,11 +6,11 @@ import time
 import unify
 
 from tests.helpers import _handle_project
-from droid.common.context_registry import ContextRegistry
-from droid.contact_manager.contact_manager import ContactManager
-from droid.conversation_manager.cm_types import Medium
-from droid.manager_registry import ManagerRegistry
-from droid.session_details import SESSION_DETAILS
+from unity.common.context_registry import ContextRegistry
+from unity.contact_manager.contact_manager import ContactManager
+from unity.conversation_manager.cm_types import Medium
+from unity.manager_registry import ManagerRegistry
+from unity.session_details import SESSION_DETAILS
 
 
 def _configure_space() -> int:

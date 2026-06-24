@@ -28,8 +28,8 @@ from urllib.parse import quote
 
 ProgressCallback = Callable[[str], None]
 
-DESKTOP_IMAGE_TAG = "droid-desktop"
-DESKTOP_CONTAINER_NAME = "droid-desktop-sandbox"
+DESKTOP_IMAGE_TAG = "unity-desktop"
+DESKTOP_CONTAINER_NAME = "unity-desktop-sandbox"
 
 # Env vars referenced by deploy/desktop/supervisord.conf via %(ENV_X)s interpolation.
 # These must be passed as explicit ``docker run -e KEY=VALUE`` flags — supervisord
@@ -38,8 +38,8 @@ DESKTOP_CONTAINER_NAME = "droid-desktop-sandbox"
 CONTAINER_ENV_KEYS: tuple[str, ...] = (
     "UNIFY_KEY",
     "ORCHESTRA_URL",
-    "DROID_GATEWAY_URL",
-    "DROID_COMMS_URL",
+    "UNITY_GATEWAY_URL",
+    "UNITY_COMMS_URL",
     "UNIFY_MODEL",
     "ANTHROPIC_API_KEY",
 )
@@ -48,8 +48,8 @@ CONTAINER_ENV_KEYS: tuple[str, ...] = (
 _SUPERVISORD_ENV_KEYS: tuple[str, ...] = (
     "UNIFY_KEY",
     "ORCHESTRA_URL",
-    "DROID_GATEWAY_URL",
-    "DROID_COMMS_URL",
+    "UNITY_GATEWAY_URL",
+    "UNITY_COMMS_URL",
     "UNIFY_MODEL",
 )
 
@@ -109,7 +109,7 @@ def _check_magnitude_packages(repo_root: Path) -> Optional[str]:
     magnitude_dir = repo_root / "magnitude"
     if not magnitude_dir.exists():
         return (
-            "Missing `magnitude/` directory. This is Droid's Magnitude fork, required "
+            "Missing `magnitude/` directory. This is Unity's Magnitude fork, required "
             "because agent-service depends on local magnitude-core and magnitude-extract.\n\n"
             "Clone it into the repo root:\n"
             "  git clone <magnitude-repo-url> magnitude"
@@ -443,7 +443,7 @@ def _start_container(
             "[desktop] Missing required env for desktop container: "
             f"{', '.join(missing)}. "
             "Run the install wizard or add them to .env "
-            "(DROID_GATEWAY_URL/DROID_COMMS_URL default to http://localhost:8787).",
+            "(UNITY_GATEWAY_URL/UNITY_COMMS_URL default to http://localhost:8787).",
         )
         return None
 

@@ -4,17 +4,17 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.helpers import _handle_project
-from droid.file_manager.file_parsers import FileParseRequest, FileParser, FileFormat
-from droid.file_manager.file_parsers.settings import FILE_PARSER_SETTINGS
-from droid.file_manager.file_parsers.types.table import CsvDialect
-from droid.file_manager.parse_adapter import adapt_parse_result_for_file_manager
-from droid.common.pipeline import (
+from unity.file_manager.file_parsers import FileParseRequest, FileParser, FileFormat
+from unity.file_manager.file_parsers.settings import FILE_PARSER_SETTINGS
+from unity.file_manager.file_parsers.types.table import CsvDialect
+from unity.file_manager.parse_adapter import adapt_parse_result_for_file_manager
+from unity.common.pipeline import (
     CsvFileHandle,
     ObjectStoreArtifactHandle,
     XlsxSheetHandle,
 )
-from droid.file_manager.parse_adapter.row_streaming import iter_table_input_row_batches
-from droid.file_manager.types.config import FilePipelineConfig
+from unity.file_manager.parse_adapter.row_streaming import iter_table_input_row_batches
+from unity.file_manager.types.config import FilePipelineConfig
 
 
 @_handle_project
@@ -155,7 +155,7 @@ def test_csv_dialect_populated_on_extracted_table_and_reused(tmp_path: Path):
     assert table.csv_dialect.delimiter == ";"
 
     with patch(
-        "droid.common.pipeline.transport.detect_csv_dialect",
+        "unity.common.pipeline.transport.detect_csv_dialect",
         side_effect=AssertionError("detect_csv_dialect should not be called"),
     ):
         adapted = adapt_parse_result_for_file_manager(
@@ -184,7 +184,7 @@ def test_csv_parser_repairs_bad_single_quote_row_count(tmp_path: Path):
         "sample_bytes": csv_path.stat().st_size,
     }
     with patch(
-        "droid.file_manager.file_parsers.implementations.native.backends."
+        "unity.file_manager.file_parsers.implementations.native.backends."
         "csv_backend._detect_csv_dialect",
         return_value=forced_bad_dialect,
     ):

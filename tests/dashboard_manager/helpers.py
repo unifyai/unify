@@ -6,8 +6,8 @@ import json
 
 import unify
 
-from droid.dashboard_manager.dashboard_manager import DashboardManager
-from droid.manager_registry import ManagerRegistry
+from unity.dashboard_manager.dashboard_manager import DashboardManager
+from unity.manager_registry import ManagerRegistry
 
 
 def fresh_dashboard_manager() -> DashboardManager:

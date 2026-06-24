@@ -12,7 +12,7 @@ from dataclasses import fields
 
 import pytest
 
-from droid.session_details import (
+from unity.session_details import (
     SESSION_DETAILS,
     AssistantDetails,
     SessionDetails,
@@ -306,7 +306,7 @@ class TestAssistantManagedDesktop:
     def test_desktop_mode_with_url_is_managed(self):
         assistant = AssistantDetails(
             desktop_mode="ubuntu",
-            desktop_url="https://droid-pool-1.vm.unify.ai",
+            desktop_url="https://unity-pool-1.vm.unify.ai",
         )
         assert assistant.has_managed_desktop is True
 

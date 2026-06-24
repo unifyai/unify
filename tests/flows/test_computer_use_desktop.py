@@ -22,8 +22,8 @@ import urllib.request
 
 import pytest
 
-from droid.function_manager.primitives.runtime import DEFAULT_AGENT_SERVER_URL
-from droid.session_details import SESSION_DETAILS
+from unity.function_manager.primitives.runtime import DEFAULT_AGENT_SERVER_URL
+from unity.session_details import SESSION_DETAILS
 
 from tests.flows.harness import FlowHarness
 
@@ -59,7 +59,7 @@ async def test_desktop_screenshot_via_computer_use(
 ) -> None:
     """Brain captures the desktop through primitives.computer.desktop."""
 
-    from droid.function_manager.primitives.runtime import _vm_ready
+    from unity.function_manager.primitives.runtime import _vm_ready
 
     previous_desktop_url = SESSION_DETAILS.assistant.desktop_url
     previous_vm_ready = _vm_ready.is_set()

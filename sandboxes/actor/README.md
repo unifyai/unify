@@ -1,9 +1,9 @@
 Actor Sandbox
 =============
 
-This folder contains an **interactive "flight simulator"** for the `CodeActActor` that lives in `droid/actor/`. The goal of this sandbox is to launch, monitor, and steer the actor as it works on a high-level goal.
+This folder contains an **interactive "flight simulator"** for the `CodeActActor` that lives in `unity/actor/`. The goal of this sandbox is to launch, monitor, and steer the actor as it works on a high-level goal.
 
-[What are Actors?](https://github.com/unifyai/droid/blob/main/droid/actor/README.md)
+[What are Actors?](https://github.com/unifyai/unity/blob/main/unity/actor/README.md)
 ----------------
 **Actors** are the "brains" of the agent framework. They are responsible for taking a natural-language goal and executing a plan to achieve it.
 
@@ -16,7 +16,7 @@ When an actor starts a task, it returns a `SteerableToolHandle`, which the sandb
 ### Magnitude Agent Service Setup
 The `CodeActActor` requires the Magnitude agent service to be running for web automation tasks.
 
-The repo uses Droid's modified `magnitude-core` for the agent service (see `agent-service/package.json` dependency: `"magnitude-core": "file:../magnitude/packages/magnitude-core"`). The `magnitude/` directory contains our fork with Droid-specific enhancements.
+The repo uses Unity's modified `magnitude-core` for the agent service (see `agent-service/package.json` dependency: `"magnitude-core": "file:../magnitude/packages/magnitude-core"`). The `magnitude/` directory contains our fork with Unity-specific enhancements.
 
 **1. Build local magnitude-core:**
 ```bash

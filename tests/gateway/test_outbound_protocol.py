@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from droid.gateway.outbound import OutboundTransport
+from unity.gateway.outbound import OutboundTransport
 
 
 class _CapturingOutbound:
@@ -62,14 +62,14 @@ def test_capturing_transport_satisfies_outbound_transport_protocol() -> None:
 def test_publish_records_topic_and_message_and_thread() -> None:
     transport = _CapturingOutbound()
     msg_id = transport.publish(
-        "droid-42-staging",
+        "unity-42-staging",
         b'{"thread":"msg","event":{}}',
         thread="msg",
     )
     assert msg_id == "msg-0"
     assert transport.published == [
         {
-            "topic": "droid-42-staging",
+            "topic": "unity-42-staging",
             "message": b'{"thread":"msg","event":{}}',
             "thread": "msg",
             "timeout": None,
@@ -126,6 +126,6 @@ def test_publish_shape_pins_three_call_sites_in_comms_utils() -> None:
 
 
 def test_module_exports_match_documented_surface() -> None:
-    import droid.gateway.outbound as outbound_mod
+    import unity.gateway.outbound as outbound_mod
 
     assert hasattr(outbound_mod, "OutboundTransport")

@@ -1,9 +1,9 @@
 import pytest
 import datetime as dt
 from tests.helpers import _handle_project
-from droid.events.event_bus import EventBus, Event
-from droid.events.types.comms import CommsPayload
-from droid.events.types.manager_method import ManagerMethodPayload
+from unity.events.event_bus import EventBus, Event
+from unity.events.types.comms import CommsPayload
+from unity.events.types.manager_method import ManagerMethodPayload
 
 # -------------------------------------------------------------------
 #  helpers

@@ -27,4 +27,4 @@ async def terminate_room(room_name: str):
 
 
 if __name__ == "__main__":
-    asyncio.run(terminate_room("droid_"))
+    asyncio.run(terminate_room("unity_"))

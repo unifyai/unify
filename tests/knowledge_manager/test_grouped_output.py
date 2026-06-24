@@ -1,6 +1,6 @@
 import pytest
 
-from droid.knowledge_manager.knowledge_manager import KnowledgeManager
+from unity.knowledge_manager.knowledge_manager import KnowledgeManager
 from tests.helpers import _handle_project
 
 

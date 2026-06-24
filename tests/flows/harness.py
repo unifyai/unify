@@ -2,7 +2,7 @@
 
 Boots an in-process CM with a real CodeAct actor and real manager backends
 against the local Orchestra project. Inbound messages are injected through
-the same EventPublisher path as the ``droid`` sandbox CLI; outbound replies
+the same EventPublisher path as the ``unity`` sandbox CLI; outbound replies
 are captured from the in-memory outbound transport and ``UnifyMessageSent``
 events on the CM event broker.
 """
@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 
 # Flow tests run in parallel via parallel_run.sh; disable the shared LLM cache
-# before any droid/unillm imports so completions cannot bleed across sessions.
+# before any unity/unillm imports so completions cannot bleed across sessions.
 # Mirrors conftest: a developer who opts into a per-process cache by exporting
 # UNILLM_CACHE_DIR keeps their setting.
 if not os.environ.get("UNILLM_CACHE_DIR"):
@@ -28,21 +28,21 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from droid.actor.code_act_actor import CodeActActor
-from droid.actor.environments import StateManagerEnvironment
-from droid.conversation_manager.comms_manager import CommsManager
-from droid.conversation_manager.domains import managers_utils
-from droid.conversation_manager.domains.comms_utils import set_outbound_transport
-from droid.conversation_manager.event_broker import get_event_broker, reset_event_broker
-from droid.conversation_manager.events import Event, UnifyMessageSent
-from droid.conversation_manager.main import run_conversation_manager
-from droid.gateway.factory import (
+from unity.actor.code_act_actor import CodeActActor
+from unity.actor.environments import StateManagerEnvironment
+from unity.conversation_manager.comms_manager import CommsManager
+from unity.conversation_manager.domains import managers_utils
+from unity.conversation_manager.domains.comms_utils import set_outbound_transport
+from unity.conversation_manager.event_broker import get_event_broker, reset_event_broker
+from unity.conversation_manager.events import Event, UnifyMessageSent
+from unity.conversation_manager.main import run_conversation_manager
+from unity.gateway.factory import (
     create_ingress_transport_factory,
     create_outbound_transport,
 )
-from droid.gateway.outbound_inmemory import InMemoryOutboundTransport
-from droid.manager_registry import ManagerRegistry
-from droid.session_details import SESSION_DETAILS
+from unity.gateway.outbound_inmemory import InMemoryOutboundTransport
+from unity.manager_registry import ManagerRegistry
+from unity.session_details import SESSION_DETAILS
 from sandboxes.conversation_manager.actor_factory import ActorFactory
 from sandboxes.conversation_manager.event_publisher import (
     EventPublisher,
@@ -279,7 +279,7 @@ class FlowHarness:
         a LiveKit server.
         """
 
-        from droid.conversation_manager.events import UnifyMeetStarted
+        from unity.conversation_manager.events import UnifyMeetStarted
 
         self._bind_flow_context()
         self.reset_turn_state()
@@ -290,7 +290,7 @@ class FlowHarness:
     async def speak_in_meet(self, text: str) -> None:
         """Deliver a spoken user utterance into the active meet."""
 
-        from droid.conversation_manager.events import InboundUnifyMeetUtterance
+        from unity.conversation_manager.events import InboundUnifyMeetUtterance
 
         self._reply_baseline = len(self._reply_events)
         await self.publisher.publish_event(
@@ -300,7 +300,7 @@ class FlowHarness:
     async def end_meet(self) -> None:
         """End the active meet and let lifecycle teardown run."""
 
-        from droid.conversation_manager.events import UnifyMeetEnded
+        from unity.conversation_manager.events import UnifyMeetEnded
 
         await self.publisher.publish_event(
             UnifyMeetEnded(contact=self._boss_contact()),
@@ -464,8 +464,8 @@ class FlowHarness:
             return
         try:
             import unify
-            from droid.common.context_registry import ContextRegistry
-            from droid.knowledge_manager.knowledge_manager import KNOWLEDGE_TABLE
+            from unity.common.context_registry import ContextRegistry
+            from unity.knowledge_manager.knowledge_manager import KNOWLEDGE_TABLE
 
             try:
                 unify.set_context(self.context_path, relative=False, skip_create=True)
@@ -536,7 +536,7 @@ async def build_flow_harness(
     """Start a real CM + CodeAct actor for flow tests."""
 
     import unify
-    from droid.settings import SETTINGS
+    from unity.settings import SETTINGS
 
     await _reset_operations_queue()
 
@@ -545,8 +545,8 @@ async def build_flow_harness(
 
     unify.activate(project_name, overwrite=False)
     try:
-        from droid.common.context_registry import ContextRegistry
-        from droid.events.event_bus import EVENT_BUS
+        from unity.common.context_registry import ContextRegistry
+        from unity.events.event_bus import EVENT_BUS
 
         ContextRegistry.clear()
         EVENT_BUS.clear(delete_contexts=False)

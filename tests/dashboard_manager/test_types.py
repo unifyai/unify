@@ -6,14 +6,14 @@ from unittest.mock import patch
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from droid.dashboard_manager.ops.tile_ops import (
+from unity.dashboard_manager.ops.tile_ops import (
     _match_context,
     ensure_binding_aliases,
     resolve_binding_contexts,
     serialize_bindings,
     validate_on_data,
 )
-from droid.dashboard_manager.types.tile import (
+from unity.dashboard_manager.types.tile import (
     DASHBOARD_BRIDGE_MAX_ROW_LIMIT,
     DataBinding,
     FilterBinding,
@@ -24,7 +24,7 @@ from droid.dashboard_manager.types.tile import (
     TileRecordRow,
     TileResult,
 )
-from droid.dashboard_manager.types.dashboard import (
+from unity.dashboard_manager.types.dashboard import (
     DashboardRecordRow,
     DashboardResult,
     TilePosition,
@@ -612,20 +612,20 @@ class TestResolveBindingContexts:
         """Return a context manager that patches ContextRegistry and unify."""
         patches = {}
         patches["registry"] = patch(
-            "droid.dashboard_manager.ops.tile_ops.ContextRegistry",
+            "unity.dashboard_manager.ops.tile_ops.ContextRegistry",
         )
         patches["unify"] = patch(
-            "droid.dashboard_manager.ops.tile_ops.unify",
+            "unity.dashboard_manager.ops.tile_ops.unify",
         )
         return patches
 
     def test_filter_binding_resolved(self):
         with (
             patch(
-                "droid.dashboard_manager.ops.tile_ops.ContextRegistry",
+                "unity.dashboard_manager.ops.tile_ops.ContextRegistry",
             ) as mock_reg,
             patch(
-                "droid.dashboard_manager.ops.tile_ops.unify",
+                "unity.dashboard_manager.ops.tile_ops.unify",
             ) as mock_unify,
         ):
             mock_reg._base_context = BASE
@@ -646,10 +646,10 @@ class TestResolveBindingContexts:
         }
         with (
             patch(
-                "droid.dashboard_manager.ops.tile_ops.ContextRegistry",
+                "unity.dashboard_manager.ops.tile_ops.ContextRegistry",
             ) as mock_reg,
             patch(
-                "droid.dashboard_manager.ops.tile_ops.unify",
+                "unity.dashboard_manager.ops.tile_ops.unify",
             ) as mock_unify,
         ):
             mock_reg._base_context = BASE
@@ -664,10 +664,10 @@ class TestResolveBindingContexts:
     def test_reduce_binding_resolved(self):
         with (
             patch(
-                "droid.dashboard_manager.ops.tile_ops.ContextRegistry",
+                "unity.dashboard_manager.ops.tile_ops.ContextRegistry",
             ) as mock_reg,
             patch(
-                "droid.dashboard_manager.ops.tile_ops.unify",
+                "unity.dashboard_manager.ops.tile_ops.unify",
             ) as mock_unify,
         ):
             mock_reg._base_context = BASE
@@ -683,10 +683,10 @@ class TestResolveBindingContexts:
     def test_join_binding_tables_and_expr_resolved(self):
         with (
             patch(
-                "droid.dashboard_manager.ops.tile_ops.ContextRegistry",
+                "unity.dashboard_manager.ops.tile_ops.ContextRegistry",
             ) as mock_reg,
             patch(
-                "droid.dashboard_manager.ops.tile_ops.unify",
+                "unity.dashboard_manager.ops.tile_ops.unify",
             ) as mock_unify,
         ):
             mock_reg._base_context = BASE
@@ -723,10 +723,10 @@ class TestResolveBindingContexts:
     def test_join_reduce_binding_resolved(self):
         with (
             patch(
-                "droid.dashboard_manager.ops.tile_ops.ContextRegistry",
+                "unity.dashboard_manager.ops.tile_ops.ContextRegistry",
             ) as mock_reg,
             patch(
-                "droid.dashboard_manager.ops.tile_ops.unify",
+                "unity.dashboard_manager.ops.tile_ops.unify",
             ) as mock_unify,
         ):
             mock_reg._base_context = BASE
@@ -759,10 +759,10 @@ class TestResolveBindingContexts:
     def test_no_base_context_returns_unchanged(self):
         with (
             patch(
-                "droid.dashboard_manager.ops.tile_ops.ContextRegistry",
+                "unity.dashboard_manager.ops.tile_ops.ContextRegistry",
             ) as mock_reg,
             patch(
-                "droid.dashboard_manager.ops.tile_ops.unify",
+                "unity.dashboard_manager.ops.tile_ops.unify",
             ) as mock_unify,
         ):
             mock_reg._base_context = None
@@ -776,10 +776,10 @@ class TestResolveBindingContexts:
     def test_no_known_contexts_returns_unchanged(self):
         with (
             patch(
-                "droid.dashboard_manager.ops.tile_ops.ContextRegistry",
+                "unity.dashboard_manager.ops.tile_ops.ContextRegistry",
             ) as mock_reg,
             patch(
-                "droid.dashboard_manager.ops.tile_ops.unify",
+                "unity.dashboard_manager.ops.tile_ops.unify",
             ) as mock_unify,
         ):
             mock_reg._base_context = BASE
@@ -793,10 +793,10 @@ class TestResolveBindingContexts:
     def test_already_qualified_passes_through(self):
         with (
             patch(
-                "droid.dashboard_manager.ops.tile_ops.ContextRegistry",
+                "unity.dashboard_manager.ops.tile_ops.ContextRegistry",
             ) as mock_reg,
             patch(
-                "droid.dashboard_manager.ops.tile_ops.unify",
+                "unity.dashboard_manager.ops.tile_ops.unify",
             ) as mock_unify,
         ):
             mock_reg._base_context = BASE
@@ -811,10 +811,10 @@ class TestResolveBindingContexts:
     def test_suffix_match_relative_path(self):
         with (
             patch(
-                "droid.dashboard_manager.ops.tile_ops.ContextRegistry",
+                "unity.dashboard_manager.ops.tile_ops.ContextRegistry",
             ) as mock_reg,
             patch(
-                "droid.dashboard_manager.ops.tile_ops.unify",
+                "unity.dashboard_manager.ops.tile_ops.unify",
             ) as mock_unify,
         ):
             mock_reg._base_context = BASE

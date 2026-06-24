@@ -10,13 +10,13 @@ Covers:
 
 import pytest
 
-from droid.actor.environments.base import (
+from unity.actor.environments.base import (
     matches_segment,
     resolve_directly_callable,
 )
-from droid.actor.environments.state_managers import StateManagerEnvironment
-from droid.function_manager.primitives import Primitives, PrimitiveScope
-from droid.function_manager.primitives.registry import get_registry
+from unity.actor.environments.state_managers import StateManagerEnvironment
+from unity.function_manager.primitives import Primitives, PrimitiveScope
+from unity.function_manager.primitives.registry import get_registry
 
 # ────────────────────────────────────────────────────────────────────────────
 # 1. matches_segment
@@ -264,7 +264,7 @@ def _make_mock_fm(known_names: dict):
 
 def test_build_envs_from_db_primitives_only():
     """Primitive patterns produce a scoped StateManagerEnvironment."""
-    from droid.actor.environments.actor import _build_environments_from_db
+    from unity.actor.environments.actor import _build_environments_from_db
 
     fm = _make_mock_fm({"primitives.contacts.ask": {}})
     envs = _build_environments_from_db(["primitives.contacts.ask"], fm)
@@ -281,7 +281,7 @@ def test_build_envs_from_db_primitives_only():
 
 def test_build_envs_from_db_empty_prompt_functions():
     """Empty prompt_functions produces no environments."""
-    from droid.actor.environments.actor import _build_environments_from_db
+    from unity.actor.environments.actor import _build_environments_from_db
 
     envs = _build_environments_from_db([], None)
     assert envs == []
@@ -289,7 +289,7 @@ def test_build_envs_from_db_empty_prompt_functions():
 
 def test_build_envs_from_db_none_prompt_functions():
     """None prompt_functions produces no environments."""
-    from droid.actor.environments.actor import _build_environments_from_db
+    from unity.actor.environments.actor import _build_environments_from_db
 
     envs = _build_environments_from_db(None, None)
     assert envs == []
@@ -297,7 +297,7 @@ def test_build_envs_from_db_none_prompt_functions():
 
 def test_build_envs_from_db_unknown_pattern_raises():
     """Unknown pattern raises ValueError when no names match."""
-    from droid.actor.environments.actor import _build_environments_from_db
+    from unity.actor.environments.actor import _build_environments_from_db
 
     fm = _make_mock_fm({"primitives.contacts.ask": {}})
     with pytest.raises(ValueError, match="did not match"):
@@ -306,7 +306,7 @@ def test_build_envs_from_db_unknown_pattern_raises():
 
 def test_build_envs_from_db_namespace_expansion():
     """Namespace pattern expands and creates correctly scoped environment."""
-    from droid.actor.environments.actor import _build_environments_from_db
+    from unity.actor.environments.actor import _build_environments_from_db
 
     fm = _make_mock_fm(
         {

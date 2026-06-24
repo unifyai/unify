@@ -9,8 +9,8 @@ Tests the Functions/VirtualEnvs context, including:
 
 import pytest
 
-from droid.function_manager.function_manager import FunctionManager
-from droid.common.context_registry import ContextRegistry
+from unity.function_manager.function_manager import FunctionManager
+from unity.common.context_registry import ContextRegistry
 from tests.helpers import _handle_project
 
 # Sample pyproject.toml content for testing

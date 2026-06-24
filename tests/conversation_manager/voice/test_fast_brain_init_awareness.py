@@ -22,9 +22,9 @@ import re
 import pytest
 
 from tests.helpers import _handle_project
-from droid.conversation_manager.prompt_builders import build_voice_agent_prompt
-from droid.conversation_manager.livekit_unify_adapter import UnifyLLM
-from droid.settings import SETTINGS
+from unity.conversation_manager.prompt_builders import build_voice_agent_prompt
+from unity.conversation_manager.livekit_unify_adapter import UnifyLLM
+from unity.settings import SETTINGS
 from livekit.agents import llm
 
 pytestmark = pytest.mark.eval

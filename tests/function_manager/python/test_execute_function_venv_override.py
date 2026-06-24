@@ -18,10 +18,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from tests.helpers import _handle_project
-from droid.function_manager.function_manager import FunctionManager
-from droid.file_manager.managers.local import LocalFileManager
-from droid.common.context_registry import ContextRegistry
-from droid.manager_registry import ManagerRegistry
+from unity.function_manager.function_manager import FunctionManager
+from unity.file_manager.managers.local import LocalFileManager
+from unity.common.context_registry import ContextRegistry
+from unity.manager_registry import ManagerRegistry
 
 # ────────────────────────────────────────────────────────────────────────────
 # Sample Functions
@@ -66,7 +66,7 @@ def function_manager_factory(tmp_path):
     """Factory fixture that creates FunctionManager instances.
 
     Uses tmp_path as the LocalFileManager root so function files are written to
-    an ephemeral directory rather than ~/Droid/Local (which on macOS's
+    an ephemeral directory rather than ~/Unity/Local (which on macOS's
     case-insensitive filesystem can collide with the repo checkout).
     """
     managers = []

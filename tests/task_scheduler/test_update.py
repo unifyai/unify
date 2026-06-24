@@ -3,9 +3,9 @@ import pytest
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
 from tests.helpers import _handle_project
-from droid.task_scheduler.task_scheduler import TaskScheduler
-from droid.task_scheduler.types.status import Status
-from droid.task_scheduler.types.priority import Priority
+from unity.task_scheduler.task_scheduler import TaskScheduler
+from unity.task_scheduler.types.status import Status
+from unity.task_scheduler.types.priority import Priority
 
 
 @_handle_project

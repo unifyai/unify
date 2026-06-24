@@ -17,7 +17,7 @@ if _is_local_orchestra_url(os.environ.get("ORCHESTRA_URL", "")):
     os.environ.setdefault("SELF_HOST", "1")
 
 # The CM-backed flow sessions (flow_session) run unassigned (agent_id unset)
-# BEFORE importing the harness (which imports droid.conversation_manager.main
+# BEFORE importing the harness (which imports unity.conversation_manager.main
 # -> load_dotenv()). Keeping agent_id unset means the local scheduler, Orchestra
 # contact-membership sync, and offline runs (all keyed by agent_id, not by the
 # per-test context path) cannot cross-fire between parallel sessions sharing one
@@ -33,8 +33,8 @@ os.environ["USER_ID"] = "default"
 # Voice/meet turns are exercised event-driven (no LiveKit audio transport); the
 # live-voice path would raise without a LiveKit server, so keep it unset.
 os.environ["LIVEKIT_URL"] = ""
-os.environ.setdefault("DROID_CONVERSATION_JOB_NAME", "flow_test_job")
-os.environ.setdefault("DROID_INACTIVITY_TIMEOUT_SECONDS", "0")
+os.environ.setdefault("UNITY_CONVERSATION_JOB_NAME", "flow_test_job")
+os.environ.setdefault("UNITY_INACTIVITY_TIMEOUT_SECONDS", "0")
 # A realistic boss/owner profile rather than placeholder stubs, so contact- and
 # transcript-grounded flows read like a real user's data.
 os.environ.setdefault("USER_FIRST_NAME", "Alex")
@@ -42,26 +42,26 @@ os.environ.setdefault("USER_SURNAME", "Rivera")
 os.environ.setdefault("USER_EMAIL", "alex.rivera@example.com")
 os.environ.setdefault("USER_NUMBER", "+14155550142")
 os.environ.setdefault("TEST", "true")
-os.environ.setdefault("DROID_INCREMENTING_TIMESTAMPS", "true")
+os.environ.setdefault("UNITY_INCREMENTING_TIMESTAMPS", "true")
 os.environ.setdefault("UNIFY_PRETEST_CONTEXT_CREATE", "true")
-os.environ.setdefault("DROID_MEMORY_ENABLED", "false")
-os.environ.setdefault("DROID_GUIDANCE_ENABLED", "false")
+os.environ.setdefault("UNITY_MEMORY_ENABLED", "false")
+os.environ.setdefault("UNITY_GUIDANCE_ENABLED", "false")
 # The state-manager combo flow exercises secrets.* end-to-end.
-os.environ.setdefault("DROID_SECRET_ENABLED", "true")
-os.environ.setdefault("DROID_SKILL_ENABLED", "false")
-os.environ.setdefault("DROID_WEB_ENABLED", "false")
+os.environ.setdefault("UNITY_SECRET_ENABLED", "true")
+os.environ.setdefault("UNITY_SKILL_ENABLED", "false")
+os.environ.setdefault("UNITY_WEB_ENABLED", "false")
 # Flow tests run against local Orchestra only; hosted Comms URLs in .env would
 # disable the in-process task scheduler and route outbound comms elsewhere.
-os.environ["DROID_COMMS_URL"] = ""
-os.environ["DROID_LOCAL_SCHEDULER"] = "true"
-os.environ["DROID_KNOWLEDGE_ENABLED"] = "true"
-os.environ["DROID_FILE_ENABLED"] = "true"
+os.environ["UNITY_COMMS_URL"] = ""
+os.environ["UNITY_LOCAL_SCHEDULER"] = "true"
+os.environ["UNITY_KNOWLEDGE_ENABLED"] = "true"
+os.environ["UNITY_FILE_ENABLED"] = "true"
 # Route inbound through the real CommsManager + in-memory ingress transport and
 # capture outbound on the in-memory outbound transport, so flow turns exercise
 # the same envelope -> dispatch_inbound_envelope normalization as production
-# without standing up Pub/Sub. See droid/gateway/factory.py.
-os.environ.setdefault("DROID_CONVERSATION_INGRESS_TRANSPORT", "inmemory")
-os.environ.setdefault("DROID_CONVERSATION_OUTBOUND_TRANSPORT", "inmemory")
+# without standing up Pub/Sub. See unity/gateway/factory.py.
+os.environ.setdefault("UNITY_CONVERSATION_INGRESS_TRANSPORT", "inmemory")
+os.environ.setdefault("UNITY_CONVERSATION_OUTBOUND_TRANSPORT", "inmemory")
 # Parallel flow sessions must not share cached LLM completions; otherwise
 # unrelated tests' prompts/replies bleed into one another under parallel_run.
 # Caching stays off at the merge gate (a cache hit would skip the live brain we
@@ -76,7 +76,7 @@ import re
 import pytest
 import pytest_asyncio
 
-from droid.session_details import UNASSIGNED_ASSISTANT_CONTEXT, UNASSIGNED_USER_CONTEXT
+from unity.session_details import UNASSIGNED_ASSISTANT_CONTEXT, UNASSIGNED_USER_CONTEXT
 from tests.flows.harness import FlowHarness, build_flow_harness
 from tests.helpers import scenario_file_lock
 from tests.settings import SETTINGS
@@ -176,7 +176,7 @@ async def flow_harness(request: pytest.FixtureRequest) -> FlowHarness:
 
     # parallel_run.sh runs one flow test per process; the file lock only serializes
     # sequential pytest workers that share in-process CM globals.
-    if os.environ.get("DROID_TMUX_SESSION_ID"):
+    if os.environ.get("UNITY_TMUX_SESSION_ID"):
         harness = await _run_harness()
         yield harness
         await harness.shutdown()

@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 
 from tests.helpers import _handle_project
-from droid.transcript_manager.transcript_manager import TranscriptManager
-from droid.common.read_only_ask_guard import ReadOnlyAskGuardHandle
+from unity.transcript_manager.transcript_manager import TranscriptManager
+from unity.common.read_only_ask_guard import ReadOnlyAskGuardHandle
 
 pytestmark = pytest.mark.llm_call
 
@@ -13,12 +13,12 @@ pytestmark = pytest.mark.llm_call
 @_handle_project
 async def test_guard_triggers_when_enabled(monkeypatch):
     """
-    When DROID_READONLY_ASK_GUARD is enabled, TranscriptManager.ask should be guarded:
+    When UNITY_READONLY_ASK_GUARD is enabled, TranscriptManager.ask should be guarded:
     mutation intent triggers an early stop and returns the early response.
     """
 
     # Ensure the env flag is on for this test only
-    monkeypatch.setenv("DROID_READONLY_ASK_GUARD", "true")
+    monkeypatch.setenv("UNITY_READONLY_ASK_GUARD", "true")
 
     tm = TranscriptManager()
 

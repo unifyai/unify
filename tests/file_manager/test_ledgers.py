@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 
 
-from droid.common.pipeline import (
+from unity.common.pipeline import (
     JsonlCostLedger,
     JsonlRunLedger,
     PipelineCostAccumulator,
@@ -23,12 +23,12 @@ from droid.common.pipeline import (
     build_parse_cost_line_items,
     build_transport_cost_line_items,
 )
-from droid.common.pipeline.types import (
+from unity.common.pipeline.types import (
     InlineRowsHandle,
     ObjectStoreArtifactHandle,
     ParsedFileBundle,
 )
-from droid.file_manager.file_parsers.types.contracts import FileParseResult
+from unity.file_manager.file_parsers.types.contracts import FileParseResult
 
 
 class TestRunLedgerJSONL:

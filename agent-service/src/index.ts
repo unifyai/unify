@@ -103,15 +103,15 @@ function debugLog(line: string): void {
 // --- File System and Command Execution Utilities ---
 //
 // Workspace root for file operations, command execution, and browser downloads.
-// Matches Droid's get_local_root() default of ~/Droid/Local.
-// Override via DROID_LOCAL_ROOT env var.
-const LOCAL_ROOT = process.env.DROID_LOCAL_ROOT || path.join(os.homedir(), 'Droid', 'Local');
+// Matches Unity's get_local_root() default of ~/Unity/Local.
+// Override via UNITY_LOCAL_ROOT env var.
+const LOCAL_ROOT = process.env.UNITY_LOCAL_ROOT || path.join(os.homedir(), 'Unity', 'Local');
 try { fs.mkdirSync(LOCAL_ROOT, { recursive: true }); } catch (_e) { /* ignore */ }
 const DEFAULT_EXEC_TIMEOUT = 60 * 60 * 1000; // 1 hour
 
 
 // Multer configuration for multipart file uploads
-const uploadTempDir = path.join(os.tmpdir(), 'droid-uploads');
+const uploadTempDir = path.join(os.tmpdir(), 'unity-uploads');
 try {
   fs.mkdirSync(uploadTempDir, { recursive: true });
 } catch (_e) {
@@ -1703,7 +1703,7 @@ function nativeScreenshotCommand(dest: string): string {
 }
 
 function nativeScreenshot(): string {
-  const dest = path.join(os.tmpdir(), `droid-screenshot-${randomUUID()}.png`);
+  const dest = path.join(os.tmpdir(), `unity-screenshot-${randomUUID()}.png`);
   try {
     execSync(nativeScreenshotCommand(dest), { timeout: 10_000 });
     const buf = fs.readFileSync(dest);
@@ -2345,7 +2345,7 @@ app.post('/googlemeet/join', auth, async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'bad_request', message: 'meetUrl is required.' });
   }
 
-  const name = displayName || 'Droid Assistant';
+  const name = displayName || 'Unity Assistant';
   const sessionId = randomUUID();
   const t0 = Date.now();
   console.log(`[googlemeet/join] BEGIN sessionId=${sessionId} url=${meetUrl}`);
@@ -2932,7 +2932,7 @@ app.post('/teamsmeet/join', auth, async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'bad_request', message: 'meetUrl is required.' });
   }
 
-  const name = displayName || 'Droid Assistant';
+  const name = displayName || 'Unity Assistant';
   const sessionId = randomUUID();
   const t0 = Date.now();
   console.log(`[teamsmeet/join] BEGIN sessionId=${sessionId} url=${meetUrl}`);

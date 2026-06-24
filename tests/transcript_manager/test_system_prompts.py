@@ -14,10 +14,10 @@ from tests.assertion_helpers import (
 )
 from tests.helpers import _handle_project
 
-from droid.contact_manager.types.contact import Contact
-from droid.transcript_manager.prompt_builders import build_ask_prompt
-from droid.transcript_manager.transcript_manager import TranscriptManager
-from droid.session_details import (
+from unity.contact_manager.types.contact import Contact
+from unity.transcript_manager.prompt_builders import build_ask_prompt
+from unity.transcript_manager.transcript_manager import TranscriptManager
+from unity.session_details import (
     SESSION_DETAILS,
     UNASSIGNED_USER_CONTEXT,
     UNASSIGNED_ASSISTANT_CONTEXT,
@@ -46,14 +46,14 @@ def _build_prompt_in_subprocess(test_context: str) -> str:
         sys.path.insert(0, os.getcwd())
         import unify
         # Activate the test project before setting context
-        project_name = os.environ.get("DROID_TEST_PROJECT_NAME", "UnityTests")
+        project_name = os.environ.get("UNITY_TEST_PROJECT_NAME", "UnityTests")
         unify.activate(project_name, overwrite=False)
         # Set test-specific context before creating TranscriptManager to avoid races
         test_ctx = os.environ.get("_TEST_CONTEXT")
         if test_ctx:
             unify.set_context(test_ctx, relative=False)
         # Install a deterministic timestamp inside this fresh process
-        import droid.common.prompt_helpers as _ph
+        import unity.common.prompt_helpers as _ph
         from datetime import datetime, timezone
         def _static_now(time_only: bool = False):
             dt = datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc)
@@ -63,9 +63,9 @@ def _build_prompt_in_subprocess(test_context: str) -> str:
             return dt.strftime("%A, %B %d, %Y at %I:%M %p ") + label
         _ph.now = _static_now
 
-        from droid.contact_manager.types.contact import Contact
-        from droid.transcript_manager.transcript_manager import TranscriptManager
-        from droid.transcript_manager.prompt_builders import build_ask_prompt
+        from unity.contact_manager.types.contact import Contact
+        from unity.transcript_manager.transcript_manager import TranscriptManager
+        from unity.transcript_manager.prompt_builders import build_ask_prompt
 
         tm = TranscriptManager()
         tools = dict(tm.get_tools("ask"))

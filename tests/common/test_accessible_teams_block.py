@@ -1,7 +1,7 @@
 """Tests for the shared-team prompt guidance block."""
 
-from droid.common.accessible_teams_block import build_accessible_teams_block
-from droid.session_details import TeamSummary
+from unity.common.accessible_teams_block import build_accessible_teams_block
+from unity.session_details import TeamSummary
 
 
 def test_renders_solo_assistant_block() -> None:

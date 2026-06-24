@@ -1,6 +1,6 @@
 # Tests
 
-This directory contains the test suite for Droid.
+This directory contains the test suite for Unity.
 
 ## Table of Contents
 
@@ -39,7 +39,7 @@ git commit -m "Fix bug [run-tests]"
 
 ```bash
 # Add to ~/.zshrc for permanent aliases
-source /path/to/droid/tests/shell_init.zsh
+source /path/to/unity/tests/shell_init.zsh
 
 # Then use shorter commands
 parallel_run tests/
@@ -181,7 +181,7 @@ attach 'f ❌ contact_manager-test_ask'
 
 # Or check the log file
 ls logs/pytest/*/             # Find the run directory
-cat logs/pytest/2025-12-05T14-30-22_droid_dev_ttys042/contact_manager-test_ask.txt
+cat logs/pytest/2025-12-05T14-30-22_unity_dev_ttys042/contact_manager-test_ask.txt
 ```
 
 ### Clean up after tests
@@ -189,7 +189,7 @@ cat logs/pytest/2025-12-05T14-30-22_droid_dev_ttys042/contact_manager-test_ask.t
 ```bash
 kill_failed           # Kill failed sessions (keep passing ones)
 kill_server           # Kill this terminal's tmux server
-kill_server --all     # Kill all droid* tmux servers
+kill_server --all     # Kill all unity* tmux servers
 kill_server --global  # Kill ALL tmux servers
 ```
 
@@ -290,25 +290,25 @@ brew install gh
 gh auth login
 
 # Run a targeted cached path
-gh workflow run tests.yml --repo unifyai/droid --ref main -f test_path=tests/contact_manager
+gh workflow run tests.yml --repo unifyai/unity --ref main -f test_path=tests/contact_manager
 
 # Protected cache refresh / uncached eval path
-gh workflow run llm-cache-refresh.yml --repo unifyai/droid --ref main \
+gh workflow run llm-cache-refresh.yml --repo unifyai/unity --ref main \
   -f test_path=tests/contact_manager/test_ask.py \
   -f cache_mode=write-misses \
   -f confirm_llm_spend=LLM_SPEND_OK
 
 # Run specific folder
-gh workflow run tests.yml --repo unifyai/droid --ref main \
+gh workflow run tests.yml --repo unifyai/unity --ref main \
   -f test_path="tests/actor"
 
 # Run with extra args
-gh workflow run tests.yml --repo unifyai/droid --ref main \
+gh workflow run tests.yml --repo unifyai/unity --ref main \
   -f test_path="tests/actor" \
   -f parallel_run_args="--eval-only"
 
 # Run on a different branch
-gh workflow run tests.yml --repo unifyai/droid --ref my-feature-branch \
+gh workflow run tests.yml --repo unifyai/unity --ref my-feature-branch \
   -f test_path="tests/contact_manager"
 ```
 
@@ -325,9 +325,9 @@ gh workflow run tests.yml --repo unifyai/droid --ref my-feature-branch \
 **Watch the run:**
 
 ```bash
-gh run list --repo unifyai/droid --workflow tests.yml
-gh run watch --repo unifyai/droid <run-id>
-gh run view --repo unifyai/droid <run-id> --log
+gh run list --repo unifyai/unity --workflow tests.yml
+gh run watch --repo unifyai/unity <run-id>
+gh run view --repo unifyai/unity <run-id> --log
 ```
 
 ### Manual Workflow Dispatch (UI)
@@ -381,15 +381,15 @@ This means concurrent tests from different worktrees can run without restarting 
 When tests run from a worktree (via any method - `parallel_run`, direct `pytest`, etc.), **symlinks are automatically created** in the main repo's log directories pointing to each worktree's logs:
 
 ```
-/Users/you/droid/logs/pytest/
-├── 2025-12-05T14-30-45_droid_dev_ttys042/   # main repo's own logs
-├── worktree-oty/  →  ~/.cursor/worktrees/droid/oty/logs/pytest/
-├── worktree-xyz/  →  ~/.cursor/worktrees/droid/xyz/logs/pytest/
+/Users/you/unity/logs/pytest/
+├── 2025-12-05T14-30-45_unity_dev_ttys042/   # main repo's own logs
+├── worktree-oty/  →  ~/.cursor/worktrees/unity/oty/logs/pytest/
+├── worktree-xyz/  →  ~/.cursor/worktrees/unity/xyz/logs/pytest/
 └── ...
 
-/Users/you/droid/logs/unillm/
-├── 2025-12-05T14-30-45_droid_dev_ttys042/    # main repo's logs (terminal A)
-├── worktree-oty/  →  ~/.cursor/worktrees/droid/oty/logs/unillm/
+/Users/you/unity/logs/unillm/
+├── 2025-12-05T14-30-45_unity_dev_ttys042/    # main repo's logs (terminal A)
+├── worktree-oty/  →  ~/.cursor/worktrees/unity/oty/logs/unillm/
 └── ...
 ```
 
@@ -479,7 +479,7 @@ Normal CI sets `UNILLM_CACHE=read-only`, rejects explicit cache overrides in `pa
 
 ### pydantic-settings (Python side)
 
-Once inside a pytest process, `droid/settings.py` uses pydantic-settings with `env_file=".env"`. This reads the repo-root `.env` **again** at Python import time. So variables that aren't in the shell whitelist can still be picked up by the `SETTINGS` object — but only if the `.env` file exists in the working directory (which it does locally, but not on CI for commit-triggered runs).
+Once inside a pytest process, `unity/settings.py` uses pydantic-settings with `env_file=".env"`. This reads the repo-root `.env` **again** at Python import time. So variables that aren't in the shell whitelist can still be picked up by the `SETTINGS` object — but only if the `.env` file exists in the working directory (which it does locally, but not on CI for commit-triggered runs).
 
 ---
 

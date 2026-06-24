@@ -28,33 +28,33 @@ def pytest_configure(config) -> None:
     """
     Configure environment variables for CodeActActor integration tests.
 
-    Note: parent CM tests' conftest sets DROID_ACTOR_IMPL="simulated" and disables
+    Note: parent CM tests' conftest sets UNITY_ACTOR_IMPL="simulated" and disables
     several optional managers. We inject CodeActActor directly, so we do NOT rely
-    on DROID_ACTOR_IMPL, but we DO override manager enablement as needed.
+    on UNITY_ACTOR_IMPL, but we DO override manager enablement as needed.
     """
     os.environ.setdefault("TEST", "true")
-    os.environ.setdefault("DROID_CONVERSATION_JOB_NAME", "test_job")
+    os.environ.setdefault("UNITY_CONVERSATION_JOB_NAME", "test_job")
 
     # These tests validate direct manager behavior (including fast-path tools),
     # so they need concrete manager implementations.
-    os.environ["DROID_CONTACT_IMPL"] = "real"
-    os.environ["DROID_TRANSCRIPT_IMPL"] = "real"
+    os.environ["UNITY_CONTACT_IMPL"] = "real"
+    os.environ["UNITY_TRANSCRIPT_IMPL"] = "real"
 
     # Enable FileManager for attachment/file flows.
-    os.environ["DROID_FILE_ENABLED"] = "true"
+    os.environ["UNITY_FILE_ENABLED"] = "true"
 
     # Keep KnowledgeManager disabled for determinism/performance in this suite.
-    os.environ["DROID_KNOWLEDGE_ENABLED"] = "false"
+    os.environ["UNITY_KNOWLEDGE_ENABLED"] = "false"
 
     # Keep optional managers disabled for focus + determinism.
-    os.environ["DROID_GUIDANCE_ENABLED"] = "false"
-    os.environ["DROID_SECRET_ENABLED"] = "false"
-    os.environ["DROID_SKILL_ENABLED"] = "false"
-    os.environ["DROID_WEB_ENABLED"] = "false"
-    os.environ["DROID_MEMORY_ENABLED"] = "false"
+    os.environ["UNITY_GUIDANCE_ENABLED"] = "false"
+    os.environ["UNITY_SECRET_ENABLED"] = "false"
+    os.environ["UNITY_SKILL_ENABLED"] = "false"
+    os.environ["UNITY_WEB_ENABLED"] = "false"
+    os.environ["UNITY_MEMORY_ENABLED"] = "false"
 
     # Ensure NEW marker comparisons are stable in tests.
-    os.environ.setdefault("DROID_INCREMENTING_TIMESTAMPS", "true")
+    os.environ.setdefault("UNITY_INCREMENTING_TIMESTAMPS", "true")
 
     # Some Unify log readers assume contexts already exist. These integration tests
     # often run in isolation (fresh project, empty DB), so pre-create contexts to
@@ -105,10 +105,10 @@ async def conversation_manager_codeact() -> AsyncIterator[CMStepDriver]:
     test's CodeActActor handle. Module-scoped async fixtures run on a different
     loop under pytest-asyncio strict mode, which can prevent ActorResult propagation.
     """
-    from droid.conversation_manager.event_broker import reset_event_broker
-    from droid.conversation_manager import start_async, stop_async
-    from droid.conversation_manager.domains import managers_utils
-    from droid.common.prompt_helpers import now as prompt_now
+    from unity.conversation_manager.event_broker import reset_event_broker
+    from unity.conversation_manager import start_async, stop_async
+    from unity.conversation_manager.domains import managers_utils
+    from unity.common.prompt_helpers import now as prompt_now
 
     reset_event_broker()
 
@@ -172,9 +172,9 @@ async def conversation_manager_codeact() -> AsyncIterator[CMStepDriver]:
 @pytest_asyncio.fixture
 async def code_act_actor() -> AsyncIterator[object]:
     """Create a fresh primitives-only CodeActActor for each test."""
-    from droid.actor.code_act_actor import CodeActActor
-    from droid.actor.environments import StateManagerEnvironment
-    from droid.function_manager.primitives import Primitives, PrimitiveScope
+    from unity.actor.code_act_actor import CodeActActor
+    from unity.actor.environments import StateManagerEnvironment
+    from unity.function_manager.primitives import Primitives, PrimitiveScope
 
     scope = PrimitiveScope(
         scoped_managers=frozenset({"contacts", "tasks", "transcripts", "files"}),
@@ -228,7 +228,7 @@ def initialized_cm_codeact(
     assert fixtures_dir.exists(), f"Missing fixtures directory: {fixtures_dir}"
 
     # Reset last_snapshot to use current (possibly patched) prompt time.
-    from droid.common.prompt_helpers import now as prompt_now
+    from unity.common.prompt_helpers import now as prompt_now
 
     driver.cm.last_snapshot = prompt_now(as_string=False)
 

@@ -143,7 +143,7 @@ def try_start_livekit_direct(
                 ok=False,
                 summary=(
                     "livekit-server not found and auto-install failed. "
-                    "Run `droid voice` to install it manually."
+                    "Run `unity voice` to install it manually."
                 ),
             )
         _log("[livekit] livekit-server installed.")

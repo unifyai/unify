@@ -10,7 +10,7 @@ from __future__ import annotations
 import threading
 from unittest.mock import patch
 
-from droid.data_manager.utils.pipeline import (
+from unity.data_manager.utils.pipeline import (
     ExecutionConfig,
     PipelineExecutor,
     Task,
@@ -362,7 +362,7 @@ class TestPipelineExecutor:
 
 class TestIngestGraphScheduling:
     def test_build_ingest_graph_serializes_only_when_required(self):
-        from droid.data_manager.ops.ingest_ops import _build_ingest_graph
+        from unity.data_manager.ops.ingest_ops import _build_ingest_graph
 
         chunks = [[{"value": 1}], [{"value": 2}], [{"value": 3}]]
 
@@ -448,7 +448,7 @@ class TestIngestGraphScheduling:
         ]
 
     def test_make_embed_func_batches_ids_and_syncs_first_batch(self):
-        from droid.data_manager.ops.ingest_ops import (
+        from unity.data_manager.ops.ingest_ops import (
             _InsertedIdsStore,
             _make_embed_func,
         )
@@ -467,7 +467,7 @@ class TestIngestGraphScheduling:
             )
 
         with patch(
-            "droid.data_manager.ops.ingest_ops._ensure_vector_column",
+            "unity.data_manager.ops.ingest_ops._ensure_vector_column",
             side_effect=_fake_ensure_vector_column,
         ):
             result = _make_embed_func(
@@ -484,15 +484,15 @@ class TestIngestGraphScheduling:
         assert [call["from_ids"] for call in calls] == [[1, 2], [3, 4], [5]]
         assert [call["async_embeddings"] for call in calls] == [False, True, True]
 
-    @patch("droid.data_manager.ops.ingest_ops.PipelineExecutor")
-    @patch("droid.data_manager.ops.ingest_ops._build_ingest_graph")
+    @patch("unity.data_manager.ops.ingest_ops.PipelineExecutor")
+    @patch("unity.data_manager.ops.ingest_ops._build_ingest_graph")
     def test_run_ingest_passes_throughput_execution_knobs(
         self,
         mock_build_ingest_graph,
         mock_executor_cls,
     ):
-        from droid.data_manager.ops.ingest_ops import run_ingest
-        from droid.data_manager.types.ingest import IngestExecutionConfig
+        from unity.data_manager.ops.ingest_ops import run_ingest
+        from unity.data_manager.types.ingest import IngestExecutionConfig
 
         mock_build_ingest_graph.return_value = TaskGraph(name="mock-ingest")
         mock_executor_cls.return_value.execute.return_value = {}

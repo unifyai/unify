@@ -13,13 +13,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from droid.conversation_manager.domains.brain_action_tools import (
+from unity.conversation_manager.domains.brain_action_tools import (
     ConversationManagerBrainActionTools,
 )
-from droid.conversation_manager.domains.contact_index import ContactIndex
-from droid.conversation_manager.domains.notifications import NotificationBar
-from droid.conversation_manager.cm_types import Mode
-from droid.common.single_shot import (
+from unity.conversation_manager.domains.contact_index import ContactIndex
+from unity.conversation_manager.domains.notifications import NotificationBar
+from unity.conversation_manager.cm_types import Mode
+from unity.common.single_shot import (
     single_shot_tool_decision,
 )
 
@@ -63,7 +63,7 @@ class TestMakeCallNotExposedDuringVoice:
         """make_call is available when in TEXT mode with no active call."""
         cm = _make_mock_cm(mode=Mode.TEXT)
         with patch(
-            "droid.conversation_manager.domains.brain_action_tools.get_event_broker",
+            "unity.conversation_manager.domains.brain_action_tools.get_event_broker",
         ) as mock_broker:
             mock_broker.return_value = MagicMock()
             tools_instance = ConversationManagerBrainActionTools(cm)
@@ -74,7 +74,7 @@ class TestMakeCallNotExposedDuringVoice:
         """make_call is not available when cm.mode is CALL."""
         cm = _make_mock_cm(mode=Mode.CALL)
         with patch(
-            "droid.conversation_manager.domains.brain_action_tools.get_event_broker",
+            "unity.conversation_manager.domains.brain_action_tools.get_event_broker",
         ) as mock_broker:
             mock_broker.return_value = MagicMock()
             tools_instance = ConversationManagerBrainActionTools(cm)
@@ -85,7 +85,7 @@ class TestMakeCallNotExposedDuringVoice:
         """make_call is not available when cm.mode is MEET."""
         cm = _make_mock_cm(mode=Mode.MEET)
         with patch(
-            "droid.conversation_manager.domains.brain_action_tools.get_event_broker",
+            "unity.conversation_manager.domains.brain_action_tools.get_event_broker",
         ) as mock_broker:
             mock_broker.return_value = MagicMock()
             tools_instance = ConversationManagerBrainActionTools(cm)
@@ -97,7 +97,7 @@ class TestMakeCallNotExposedDuringVoice:
         even if cm.mode hasn't transitioned to voice yet."""
         cm = _make_mock_cm(mode=Mode.TEXT, has_call_proc=True)
         with patch(
-            "droid.conversation_manager.domains.brain_action_tools.get_event_broker",
+            "unity.conversation_manager.domains.brain_action_tools.get_event_broker",
         ) as mock_broker:
             mock_broker.return_value = MagicMock()
             tools_instance = ConversationManagerBrainActionTools(cm)
@@ -108,7 +108,7 @@ class TestMakeCallNotExposedDuringVoice:
         """send_sms and send_email remain available during voice calls."""
         cm = _make_mock_cm(mode=Mode.CALL)
         with patch(
-            "droid.conversation_manager.domains.brain_action_tools.get_event_broker",
+            "unity.conversation_manager.domains.brain_action_tools.get_event_broker",
         ) as mock_broker:
             mock_broker.return_value = MagicMock()
             tools_instance = ConversationManagerBrainActionTools(cm)
@@ -120,7 +120,7 @@ class TestMakeCallNotExposedDuringVoice:
         """make_call is not available when assistant has no phone number."""
         cm = _make_mock_cm(mode=Mode.TEXT, assistant_number="")
         with patch(
-            "droid.conversation_manager.domains.brain_action_tools.get_event_broker",
+            "unity.conversation_manager.domains.brain_action_tools.get_event_broker",
         ) as mock_broker:
             mock_broker.return_value = MagicMock()
             tools_instance = ConversationManagerBrainActionTools(cm)

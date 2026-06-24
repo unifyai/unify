@@ -1,4 +1,4 @@
-"""Behavioural tests for ``droid.gateway.channels.teams``.
+"""Behavioural tests for ``unity.gateway.channels.teams``.
 
 12 endpoints; tests cover router contract + at least one happy-path
 + key edge cases per endpoint. Existing tests in
@@ -17,7 +17,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from droid.gateway.channels.teams import router
+from unity.gateway.channels.teams import router
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -35,7 +35,7 @@ def _teams_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def _adapters_settings(monkeypatch: pytest.MonkeyPatch) -> None:
-    from droid.gateway.channels.teams import views as teams_views
+    from unity.gateway.channels.teams import views as teams_views
 
     monkeypatch.setattr(
         teams_views,
@@ -88,7 +88,7 @@ def test_router_exposes_expected_paths() -> None:
 
 
 def test_router_importable_from_package_root() -> None:
-    from droid.gateway.channels.teams import router as exported
+    from unity.gateway.channels.teams import router as exported
 
     assert exported is router
 
@@ -117,7 +117,7 @@ class TestSendChat:
             return_value=MagicMock(id="msg-123"),
         )
         with patch(
-            "droid.gateway.channels.teams.views.get_graph_client",
+            "unity.gateway.channels.teams.views.get_graph_client",
             new=AsyncMock(return_value=fake_graph),
         ):
             resp = client.post(
@@ -211,7 +211,7 @@ class TestCreateChat:
         )
         fake_graph.chats.post = AsyncMock(return_value=MagicMock(id="chat-1"))
         with patch(
-            "droid.gateway.channels.teams.views.get_graph_client",
+            "unity.gateway.channels.teams.views.get_graph_client",
             new=AsyncMock(return_value=fake_graph),
         ):
             resp = client.post(
@@ -248,7 +248,7 @@ def test_list_chats_returns_chat_records(
     )
     fake_graph.me.chats.get = AsyncMock(return_value=MagicMock(value=[chat1]))
     with patch(
-        "droid.gateway.channels.teams.views.get_graph_client",
+        "unity.gateway.channels.teams.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
     ):
         resp = client.get("/teams/chats", params={"user_email": "alice@unify.ai"})
@@ -279,7 +279,7 @@ class TestWatchTeams:
     ) -> None:
         """BYOD-only: missing delegated token must 409, not silently fall back."""
         with patch(
-            "droid.gateway.channels.teams.views.lookup_assistant",
+            "unity.gateway.channels.teams.views.lookup_assistant",
             new=AsyncMock(return_value={"secrets": {}}),
         ):
             resp = client.post(
@@ -309,11 +309,11 @@ class TestWatchTeams:
         fake_graph.me.joined_teams.get = AsyncMock(return_value=MagicMock(value=[]))
         with (
             patch(
-                "droid.gateway.channels.teams.views.lookup_assistant",
+                "unity.gateway.channels.teams.views.lookup_assistant",
                 new=AsyncMock(return_value=_byod_assistant()),
             ),
             patch(
-                "droid.gateway.channels.teams.views.graph_client_from_assistant",
+                "unity.gateway.channels.teams.views.graph_client_from_assistant",
                 return_value=fake_graph,
             ),
         ):
@@ -350,11 +350,11 @@ class TestDeleteWatch:
         fake_graph.subscriptions.get = AsyncMock(return_value=MagicMock(value=[]))
         with (
             patch(
-                "droid.gateway.channels.teams.views.lookup_assistant",
+                "unity.gateway.channels.teams.views.lookup_assistant",
                 new=AsyncMock(return_value=_byod_assistant()),
             ),
             patch(
-                "droid.gateway.channels.teams.views.graph_client_from_assistant",
+                "unity.gateway.channels.teams.views.graph_client_from_assistant",
                 return_value=fake_graph,
             ),
         ):
@@ -387,11 +387,11 @@ class TestDeleteWatch:
         fake_graph.subscriptions.by_subscription_id.return_value.delete = AsyncMock()
         with (
             patch(
-                "droid.gateway.channels.teams.views.lookup_assistant",
+                "unity.gateway.channels.teams.views.lookup_assistant",
                 new=AsyncMock(return_value=_byod_assistant()),
             ),
             patch(
-                "droid.gateway.channels.teams.views.graph_client_from_assistant",
+                "unity.gateway.channels.teams.views.graph_client_from_assistant",
                 return_value=fake_graph,
             ),
         ):
@@ -427,7 +427,7 @@ def test_get_chat_messages_returns_list(
         return_value=MagicMock(value=[msg]),
     )
     with patch(
-        "droid.gateway.channels.teams.views.get_graph_client",
+        "unity.gateway.channels.teams.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
     ):
         resp = client.get(
@@ -453,7 +453,7 @@ def test_list_joined_teams(
     team = MagicMock(id="t-1", display_name="Team A", description="...")
     fake_graph.me.joined_teams.get = AsyncMock(return_value=MagicMock(value=[team]))
     with patch(
-        "droid.gateway.channels.teams.views.get_graph_client",
+        "unity.gateway.channels.teams.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
     ):
         resp = client.get("/teams/teams", params={"user_email": "alice@unify.ai"})
@@ -476,7 +476,7 @@ def test_list_team_channels(
         return_value=MagicMock(value=[ch]),
     )
     with patch(
-        "droid.gateway.channels.teams.views.get_graph_client",
+        "unity.gateway.channels.teams.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
     ):
         resp = client.get(
@@ -551,7 +551,7 @@ class TestCreateChannel:
         # me.get for the watch-rebuild side effect
         fake_graph.me.get = AsyncMock(return_value=MagicMock(id=None))
         with patch(
-            "droid.gateway.channels.teams.views.get_graph_client",
+            "unity.gateway.channels.teams.views.get_graph_client",
             new=AsyncMock(return_value=fake_graph),
         ):
             resp = client.post(
@@ -583,7 +583,7 @@ def test_send_channel_message_success(
         return_value=MagicMock(id="ch-msg-1"),
     )
     with patch(
-        "droid.gateway.channels.teams.views.get_graph_client",
+        "unity.gateway.channels.teams.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
     ):
         resp = client.post(
@@ -636,7 +636,7 @@ class TestCreateMeeting:
         _teams_credentials: None,
     ) -> None:
         with patch(
-            "droid.gateway.channels.teams.views.lookup_assistant",
+            "unity.gateway.channels.teams.views.lookup_assistant",
             new=AsyncMock(return_value={"secrets": {}}),
         ):
             resp = client.post(
@@ -650,7 +650,7 @@ class TestCreateMeeting:
         client: TestClient,
         _teams_credentials: None,
     ) -> None:
-        from droid.gateway.channels.teams.create_meeting import CreatedMeeting
+        from unity.gateway.channels.teams.create_meeting import CreatedMeeting
 
         created = CreatedMeeting(
             join_web_url="https://teams.microsoft.com/l/...",
@@ -659,11 +659,11 @@ class TestCreateMeeting:
         )
         with (
             patch(
-                "droid.gateway.channels.teams.views.lookup_assistant",
+                "unity.gateway.channels.teams.views.lookup_assistant",
                 new=AsyncMock(return_value=_byod_assistant()),
             ),
             patch(
-                "droid.gateway.channels.teams.create_meeting.create_instant_onlinemeeting",
+                "unity.gateway.channels.teams.create_meeting.create_instant_onlinemeeting",
                 new=AsyncMock(return_value=created),
             ),
         ):
@@ -683,7 +683,7 @@ class TestCreateMeeting:
         _teams_credentials: None,
     ) -> None:
         with patch(
-            "droid.gateway.channels.teams.views.lookup_assistant",
+            "unity.gateway.channels.teams.views.lookup_assistant",
             new=AsyncMock(return_value=_byod_assistant()),
         ):
             resp = client.post(
@@ -704,11 +704,11 @@ class TestCreateMeeting:
     ) -> None:
         with (
             patch(
-                "droid.gateway.channels.teams.views.lookup_assistant",
+                "unity.gateway.channels.teams.views.lookup_assistant",
                 new=AsyncMock(return_value=_byod_assistant()),
             ),
             patch(
-                "droid.gateway.channels.teams.create_meeting.create_instant_onlinemeeting",
+                "unity.gateway.channels.teams.create_meeting.create_instant_onlinemeeting",
                 new=AsyncMock(side_effect=PermissionError("Graph rejected token: 403")),
             ),
         ):

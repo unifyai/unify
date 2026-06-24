@@ -6,20 +6,20 @@ import pytest
 
 from tests.helpers import _handle_project
 
-from droid.events.event_bus import EVENT_BUS, Event
+from unity.events.event_bus import EVENT_BUS, Event
 
 # This test publishes events to verify MemoryManager behavior
 pytestmark = pytest.mark.enable_eventbus
-from droid.events.manager_event_logging import publish_manager_method_event, new_call_id
-from droid.memory_manager.memory_manager import MemoryManager
+from unity.events.manager_event_logging import publish_manager_method_event, new_call_id
+from unity.memory_manager.memory_manager import MemoryManager
 
 # Simulated manager stand-ins (no external I/O)
-from droid.contact_manager.simulated import SimulatedContactManager
-from droid.transcript_manager.simulated import SimulatedTranscriptManager
-from droid.knowledge_manager.simulated import SimulatedKnowledgeManager
-from droid.task_scheduler.simulated import SimulatedTaskScheduler
-from droid.transcript_manager.types.message import Message
-from droid.conversation_manager.cm_types import Medium
+from unity.contact_manager.simulated import SimulatedContactManager
+from unity.transcript_manager.simulated import SimulatedTranscriptManager
+from unity.knowledge_manager.simulated import SimulatedKnowledgeManager
+from unity.task_scheduler.simulated import SimulatedTaskScheduler
+from unity.transcript_manager.types.message import Message
+from unity.conversation_manager.cm_types import Medium
 
 
 @pytest.mark.asyncio

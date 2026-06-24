@@ -1,4 +1,4 @@
-"""Behavioural tests for ``droid.gateway.channels.discord``.
+"""Behavioural tests for ``unity.gateway.channels.discord``.
 
 Discord is the most complex channel (WebSocket gateway + pool
 manager + admin API). Tests cover:
@@ -23,15 +23,15 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from droid.gateway.channels.discord import bot_manager, router
-from droid.gateway.channels.discord.gateway import (
+from unity.gateway.channels.discord import bot_manager, router
+from unity.gateway.channels.discord.gateway import (
     GatewayConnection,
 )
-from droid.gateway.channels.discord.gateway import (
+from unity.gateway.channels.discord.gateway import (
     _assistant_topic,
     _ensure_job_running,
 )
-from droid.gateway.common import pubsub as shared_pubsub
+from unity.gateway.common import pubsub as shared_pubsub
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -58,7 +58,7 @@ def _reset_dedup_cache() -> None:
 @pytest.fixture
 def _settings(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub SETTINGS in views.py (covers the SecretStr-shaped admin key)."""
-    from droid.gateway.channels.discord import views as discord_views
+    from unity.gateway.channels.discord import views as discord_views
 
     stub_secret = SimpleNamespace(get_secret_value=lambda: "test-admin-key")
     monkeypatch.setattr(
@@ -102,13 +102,13 @@ def test_router_exposes_expected_paths() -> None:
 
 
 def test_router_importable_from_package_root() -> None:
-    from droid.gateway.channels.discord import router as exported
+    from unity.gateway.channels.discord import router as exported
 
     assert exported is router
 
 
 def test_bot_manager_importable() -> None:
-    from droid.gateway.channels.discord import bot_manager as bm
+    from unity.gateway.channels.discord import bot_manager as bm
 
     assert hasattr(bm, "connect_bot")
     assert hasattr(bm, "disconnect_bot")
@@ -116,7 +116,7 @@ def test_bot_manager_importable() -> None:
 
 
 def test_gateway_importable() -> None:
-    from droid.gateway.channels.discord.gateway import (
+    from unity.gateway.channels.discord.gateway import (
         BOT_INTENTS,
         DISCORD_API_BASE,
         DISCORD_GATEWAY_URL,
@@ -147,23 +147,23 @@ class TestAssistantTopic:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from droid.gateway.channels.discord import gateway as gw
+        from unity.gateway.channels.discord import gateway as gw
 
         monkeypatch.setattr(
             gw,
             "SETTINGS",
             SimpleNamespace(ENV_SUFFIX="-staging"),
         )
-        assert _assistant_topic("42") == "droid-42-staging"
+        assert _assistant_topic("42") == "unity-42-staging"
 
     def test_empty_suffix_for_production(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from droid.gateway.channels.discord import gateway as gw
+        from unity.gateway.channels.discord import gateway as gw
 
         monkeypatch.setattr(gw, "SETTINGS", SimpleNamespace(ENV_SUFFIX=""))
-        assert _assistant_topic("42") == "droid-42"
+        assert _assistant_topic("42") == "unity-42"
 
 
 class TestEnsureJobRunning:
@@ -175,7 +175,7 @@ class TestEnsureJobRunning:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from droid.gateway.channels.discord import gateway as gw
+        from unity.gateway.channels.discord import gateway as gw
 
         stub_secret = SimpleNamespace(get_secret_value=lambda: "admin-key")
         monkeypatch.setattr(
@@ -245,7 +245,7 @@ class TestBotManager:
     @pytest.mark.asyncio
     async def test_connect_bot_registers_and_starts(self) -> None:
         with patch(
-            "droid.gateway.channels.discord.bot_manager.GatewayConnection",
+            "unity.gateway.channels.discord.bot_manager.GatewayConnection",
         ) as MockConn:
             instance = MagicMock()
             instance.start = AsyncMock()
@@ -263,7 +263,7 @@ class TestBotManager:
         existing = MagicMock(connected=True)
         bot_manager._bots["bot-1"] = ("existing-token", existing)
         with patch(
-            "droid.gateway.channels.discord.bot_manager.GatewayConnection",
+            "unity.gateway.channels.discord.bot_manager.GatewayConnection",
         ) as MockConn:
             await bot_manager.connect_bot("bot-1", "different-token")
             MockConn.assert_not_called()
@@ -359,7 +359,7 @@ class TestSend:
         httpx_client.post.return_value = msg_resp
 
         with patch(
-            "droid.gateway.channels.discord.views.httpx.AsyncClient",
+            "unity.gateway.channels.discord.views.httpx.AsyncClient",
             return_value=httpx_client,
         ):
             resp = client.post(
@@ -403,7 +403,7 @@ class TestSend:
         httpx_client.post = _post
 
         with patch(
-            "droid.gateway.channels.discord.views.httpx.AsyncClient",
+            "unity.gateway.channels.discord.views.httpx.AsyncClient",
             return_value=httpx_client,
         ):
             resp = client.post(
@@ -434,7 +434,7 @@ class TestSend:
         httpx_client.post.return_value = route_resp
 
         with patch(
-            "droid.gateway.channels.discord.views.httpx.AsyncClient",
+            "unity.gateway.channels.discord.views.httpx.AsyncClient",
             return_value=httpx_client,
         ):
             resp = client.post(

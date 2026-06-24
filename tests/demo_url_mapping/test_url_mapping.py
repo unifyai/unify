@@ -14,10 +14,10 @@ import asyncio
 import pytest
 
 from tests.helpers import _handle_project
-from droid.actor.code_act_actor import CodeActActor
-from droid.actor.environments.computer import ComputerEnvironment
-from droid.function_manager.primitives import ComputerPrimitives
-from droid.manager_registry import ManagerRegistry
+from unity.actor.code_act_actor import CodeActActor
+from unity.actor.environments.computer import ComputerEnvironment
+from unity.function_manager.primitives import ComputerPrimitives
+from unity.manager_registry import ManagerRegistry
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 

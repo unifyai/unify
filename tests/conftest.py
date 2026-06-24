@@ -2,7 +2,7 @@
 tests/conftest.py
 =================
 
-Global pytest configuration for Droid test suite.
+Global pytest configuration for Unity test suite.
 
 Sections:
   1. Imports and logging guard
@@ -43,7 +43,7 @@ if not _root_logger_early.handlers:
 
 from tests.helpers import PRECREATED_CONTEXTS, set_session_tags
 from tests.settings import SETTINGS
-from droid.session_details import UNASSIGNED_ASSISTANT_CONTEXT, UNASSIGNED_USER_CONTEXT
+from unity.session_details import UNASSIGNED_ASSISTANT_CONTEXT, UNASSIGNED_USER_CONTEXT
 
 
 # --------------------------------------------------------------------------- #
@@ -62,7 +62,7 @@ def _check_orchestra_available() -> bool:
     # (added in e47d5c648) so we hit `/v0/projects` exactly once. Before
     # this fix, a `/v0`-suffixed ORCHESTRA_URL would resolve to
     # `/v0/v0/projects` → 404 → returns False → pytest_sessionstart
-    # silently skipped droid.init() → eval tests crashed downstream with
+    # silently skipped unity.init() → eval tests crashed downstream with
     # "EVENT_BUS has not been initialised yet".
     if base.endswith("/v0"):
         url = f"{base}/projects"
@@ -116,7 +116,7 @@ def _derive_test_context(item: pytest.Item) -> str:
 def _set_unify_context_for_test(item: pytest.Item) -> None:
     """Set a unique per-test Unify context early (before fixtures)."""
     ctx = _derive_test_context(item)
-    setattr(item, "_droid_unify_test_ctx", ctx)
+    setattr(item, "_unity_unify_test_ctx", ctx)
 
     # Clean slate unless contexts are pre-created during collection.
     skip_ctx_create = False
@@ -136,9 +136,9 @@ def _set_unify_context_for_test(item: pytest.Item) -> None:
     # Ensure singleton registries don't leak across tests and that fixtures see
     # the correct context for any context-derived subcontexts (e.g. FunctionManager).
     try:
-        from droid.common.context_registry import ContextRegistry
-        from droid.manager_registry import ManagerRegistry
-        from droid.events.event_bus import EVENT_BUS
+        from unity.common.context_registry import ContextRegistry
+        from unity.manager_registry import ManagerRegistry
+        from unity.events.event_bus import EVENT_BUS
 
         ManagerRegistry.clear()
         ContextRegistry.clear()
@@ -155,7 +155,7 @@ def _uses_unify_context(item: pytest.Item) -> bool:
 
 def _unset_unify_context_for_test(item: pytest.Item) -> None:
     """Unset (and optionally delete) the per-test Unify context after fixture teardown."""
-    ctx = getattr(item, "_droid_unify_test_ctx", None)
+    ctx = getattr(item, "_unity_unify_test_ctx", None)
     try:
         if ctx and SETTINGS.UNIFY_DELETE_CONTEXT_ON_EXIT:
             try:
@@ -173,7 +173,7 @@ def pytest_report_header(config):
     settings_str = [f"{k}={v}" for k, v in SETTINGS.model_dump().items()]
     return [
         f"orchestra_url={os.environ.get('ORCHESTRA_URL')}",
-        f"droid_comms_url={os.environ.get('DROID_COMMS_URL')}",
+        f"unity_comms_url={os.environ.get('UNITY_COMMS_URL')}",
         f"unify_project={unify.active_project()}",
         f"UNILLM_CACHE={os.environ.get('UNILLM_CACHE', 'not set')}",
     ] + settings_str
@@ -203,7 +203,7 @@ def stub_external_deps(monkeypatch):
     # - A formatted string (as_string=True): "Friday, June 13, 2025 at 12:00 PM UTC"
     # - A datetime object (as_string=False): for timestamp comparisons
     #
-    # When DROID_INCREMENTING_TIMESTAMPS is enabled (e.g., ConversationManager tests),
+    # When UNITY_INCREMENTING_TIMESTAMPS is enabled (e.g., ConversationManager tests),
     # datetime objects auto-increment by microseconds so last_snapshot < message.timestamp
     # comparisons work correctly for **NEW** markers.
 
@@ -213,7 +213,7 @@ def stub_external_deps(monkeypatch):
 
     def _static_now(time_only: bool = False, as_string: bool = True):
         """Return a fixed timestamp for testing."""
-        if SETTINGS.DROID_INCREMENTING_TIMESTAMPS and not as_string:
+        if SETTINGS.UNITY_INCREMENTING_TIMESTAMPS and not as_string:
             # Return incrementing datetime for **NEW** marker comparisons
             _timestamp_counter["value"] += 1
             return _FIXED_DATETIME + timedelta(microseconds=_timestamp_counter["value"])
@@ -227,23 +227,23 @@ def stub_external_deps(monkeypatch):
         return _FIXED_DATETIME.strftime("%A, %B %d, %Y at %I:%M %p ") + label
 
     # Patch prompt_helpers.now everywhere it's imported
-    monkeypatch.setattr("droid.common.prompt_helpers.now", _static_now)
-    monkeypatch.setattr("droid.secret_manager.prompt_builders.now", _static_now)
-    monkeypatch.setattr("droid.image_manager.prompt_builders.now", _static_now)
-    monkeypatch.setattr("droid.memory_manager.prompt_builders.now", _static_now)
-    monkeypatch.setattr("droid.file_manager.prompt_builders.now", _static_now)
-    monkeypatch.setattr("droid.conversation_manager.prompt_builders.now", _static_now)
-    monkeypatch.setattr("droid.conversation_manager.events.prompt_now", _static_now)
+    monkeypatch.setattr("unity.common.prompt_helpers.now", _static_now)
+    monkeypatch.setattr("unity.secret_manager.prompt_builders.now", _static_now)
+    monkeypatch.setattr("unity.image_manager.prompt_builders.now", _static_now)
+    monkeypatch.setattr("unity.memory_manager.prompt_builders.now", _static_now)
+    monkeypatch.setattr("unity.file_manager.prompt_builders.now", _static_now)
+    monkeypatch.setattr("unity.conversation_manager.prompt_builders.now", _static_now)
+    monkeypatch.setattr("unity.conversation_manager.events.prompt_now", _static_now)
     monkeypatch.setattr(
-        "droid.conversation_manager.domains.contact_index.prompt_now",
+        "unity.conversation_manager.domains.contact_index.prompt_now",
         _static_now,
     )
     monkeypatch.setattr(
-        "droid.conversation_manager.domains.managers_utils.prompt_now",
+        "unity.conversation_manager.domains.managers_utils.prompt_now",
         _static_now,
     )
     monkeypatch.setattr(
-        "droid.conversation_manager.conversation_manager.prompt_now",
+        "unity.conversation_manager.conversation_manager.prompt_now",
         _static_now,
     )
 
@@ -272,7 +272,7 @@ def stub_external_deps(monkeypatch):
             return _FIXED_DATETIME.astimezone(tz)
 
     monkeypatch.setattr(
-        "droid.task_scheduler.task_scheduler.datetime",
+        "unity.task_scheduler.task_scheduler.datetime",
         _StubbedDatetime,
     )
 
@@ -280,7 +280,7 @@ def stub_external_deps(monkeypatch):
         return 1000.0
 
     monkeypatch.setattr(
-        "droid.common._async_tool.time_context.perf_counter",
+        "unity.common._async_tool.time_context.perf_counter",
         _static_perf_counter,
     )
 
@@ -289,8 +289,8 @@ def stub_external_deps(monkeypatch):
 # 3. Singleton isolation                                                      #
 # --------------------------------------------------------------------------- #
 
-from droid.common.context_registry import ContextRegistry
-from droid.manager_registry import ManagerRegistry
+from unity.common.context_registry import ContextRegistry
+from unity.manager_registry import ManagerRegistry
 
 
 @pytest.fixture(autouse=True)
@@ -308,7 +308,7 @@ def _enable_eventbus_for_marked_tests(request):
     By default, EventBus publishing is disabled during tests (via SETTINGS).
     Tests that need to verify event publishing behavior opt-in via the marker.
     """
-    from droid.events.event_bus import EventBus
+    from unity.events.event_bus import EventBus
 
     if request.node.get_closest_marker("enable_eventbus"):
         EventBus._publishing_enabled = True
@@ -424,17 +424,17 @@ def get_test_log_format(config):
 
 
 def pytest_sessionstart(session):
-    if os.environ.get("SKIP_DROID_TEST_INIT"):
+    if os.environ.get("SKIP_UNITY_TEST_INIT"):
         return
 
     # ------------------------------------------------------------------
-    #  Initialize Droid's OpenTelemetry TracerProvider FIRST
-    #  This ensures Droid owns the provider (service: "droid") before
+    #  Initialize Unity's OpenTelemetry TracerProvider FIRST
+    #  This ensures Unity owns the provider (service: "unity") before
     #  any library (unify, unillm) makes traced calls.
     # ------------------------------------------------------------------
-    from droid.logger import get_tracer
+    from unity.logger import get_tracer
 
-    get_tracer()  # Creates TracerProvider with service="droid" if OTEL enabled
+    get_tracer()  # Creates TracerProvider with service="unity" if OTEL enabled
 
     # ------------------------------------------------------------------
     #  Skip Orchestra-dependent setup if Orchestra isn't reachable.
@@ -443,7 +443,7 @@ def pytest_sessionstart(session):
     #   - CI: parallel_run.sh's `local.sh start` failed (e.g. docker
     #     unavailable, port conflict). The warning is logged but the
     #     session still launches.
-    #   - Local: developer running `pytest` without `droid setup`.
+    #   - Local: developer running `pytest` without `unity setup`.
     #
     #  In both cases, crashing here would kill the whole pytest session
     #  before any test (including pure unit tests that don't need
@@ -453,7 +453,7 @@ def pytest_sessionstart(session):
     # ------------------------------------------------------------------
     if not _check_orchestra_available():
         print(
-            "\n[droid-conftest] Orchestra not reachable at "
+            "\n[unity-conftest] Orchestra not reachable at "
             f"{os.environ.get('ORCHESTRA_URL', 'http://localhost:8000')}; "
             "skipping session-level project/context setup. "
             "Tests marked `requires_orchestra` will skip; others run as normal.\n",
@@ -500,16 +500,16 @@ def pytest_sessionstart(session):
         unify.set_user_logging(False)
 
     # ------------------------------------------------------------------
-    #  Ensure the droid runtime is fully initialised for the test suite
+    #  Ensure the unity runtime is fully initialised for the test suite
     # ------------------------------------------------------------------
 
-    import droid  # local import to avoid affecting stub installation order
+    import unity  # local import to avoid affecting stub installation order
 
     try:
-        droid.init(project_name)
+        unity.init(project_name)
     except Exception:
         # Fallback to default project if UnityTests not available yet
-        droid.init()
+        unity.init()
 
     # ------------------------------------------------------------------
     #  Ensure the global builtins catalogues (primitives + guidance)
@@ -518,11 +518,11 @@ def pytest_sessionstart(session):
     #  cross-process lock serialises the rare cold-start race between
     #  parallel sessions.
     # ------------------------------------------------------------------
-    from droid.common.builtins import builtins_project
-    from droid.common.embed_utils import _cross_process_column_lock
-    from droid.function_manager.builtins_catalog import seed_builtin_primitives
-    from droid.guidance_manager.builtins_catalog import seed_builtin_guidance
-    from droid.integrations.builtins_catalog import seed_builtin_integrations
+    from unity.common.builtins import builtins_project
+    from unity.common.embed_utils import _cross_process_column_lock
+    from unity.function_manager.builtins_catalog import seed_builtin_primitives
+    from unity.guidance_manager.builtins_catalog import seed_builtin_guidance
+    from unity.integrations.builtins_catalog import seed_builtin_integrations
 
     with _cross_process_column_lock(builtins_project(), "builtins_seed"):
         seed_builtin_primitives()
@@ -532,7 +532,7 @@ def pytest_sessionstart(session):
     # ------------------------------------------------------------------
     #  Configure EventBus publishing (disabled by default in tests)
     # ------------------------------------------------------------------
-    from droid.events.event_bus import EventBus
+    from unity.events.event_bus import EventBus
 
     EventBus._publishing_enabled = SETTINGS.EVENTBUS_PUBLISHING_ENABLED
 
@@ -573,12 +573,12 @@ def pytest_sessionstart(session):
 
 def pytest_sessionfinish(session, exitstatus):
     # Write cache stats to a temp file for parallel_run.sh to consume
-    # The file is keyed by DROID_TMUX_SESSION_ID env var (set by parallel_run.sh)
+    # The file is keyed by UNITY_TMUX_SESSION_ID env var (set by parallel_run.sh)
     try:
         import unillm
 
         stats = unillm.get_cache_stats()
-        session_id = os.environ.get("DROID_TMUX_SESSION_ID", "")
+        session_id = os.environ.get("UNITY_TMUX_SESSION_ID", "")
         if session_id:
             stats_file = f"/tmp/parallel_run_cache_{session_id}.txt"
             with open(stats_file, "w") as f:
@@ -588,7 +588,7 @@ def pytest_sessionfinish(session, exitstatus):
 
     # Write LLM provider cost to a temp file for parallel_run.sh to consume
     try:
-        session_id = os.environ.get("DROID_TMUX_SESSION_ID", "")
+        session_id = os.environ.get("UNITY_TMUX_SESSION_ID", "")
         if session_id:
             total_cost = sum(cost for _, cost in _session_costs)
             cost_file = f"/tmp/parallel_run_cost_{session_id}.txt"
@@ -604,12 +604,12 @@ def pytest_sessionfinish(session, exitstatus):
 def pytest_unconfigure(config):
     """Restore HOME (and HF_HOME if we set it).
 
-    We deliberately do NOT rmtree `/tmp/droid_test_home` here. The path
+    We deliberately do NOT rmtree `/tmp/unity_test_home` here. The path
     is shared across every parallel pytest session that
     ``parallel_run.sh`` spawns (deterministic so LLM cache keys
-    embedding ``~/Droid/Local`` stay stable). Wiping it on this
+    embedding ``~/Unity/Local`` stay stable). Wiping it on this
     session's exit also wipes the in-flight venvs (FunctionManager
-    creates them under ``$HOME/Droid/Local/.droid/venvs/<ctx>/<id>/``)
+    creates them under ``$HOME/Unity/Local/.unity/venvs/<ctx>/<id>/``)
     that other still-running pytest sessions are about to invoke —
     producing the "venv python disappeared between prepare_venv() and
     create_subprocess_exec()" RuntimeError that the function_manager/
@@ -617,14 +617,14 @@ def pytest_unconfigure(config):
 
     Diagnostic confirming the race: the failure dump showed
     ancestor existence "False" all the way up to ``/tmp/`` —
-    i.e. the whole ``droid_test_home/`` tree was gone between
+    i.e. the whole ``unity_test_home/`` tree was gone between
     prepare_venv's verification and the subsequent subprocess
     invocation, ruling out a leaf-only cleanup.
 
     The directory accumulates on the CI runner across this session
     only — the runner is ephemeral, so it's reclaimed when the runner
     shuts down. On local dev machines users can ``rm -rf
-    /tmp/droid_test_home`` manually when they want a clean slate.
+    /tmp/unity_test_home`` manually when they want a clean slate.
     """
     if _original_home is None:
         os.environ.pop("HOME", None)
@@ -635,7 +635,7 @@ def pytest_unconfigure(config):
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
-    if SETTINGS.DROID_CACHE_STATS:
+    if SETTINGS.UNITY_CACHE_STATS:
         import unillm
 
         stats = unillm.get_cache_stats()
@@ -667,12 +667,12 @@ def pytest_configure(config):
 
     # ------------------------------------------------------------------
     # Isolate HOME so that tests never touch the real home directory.
-    # get_local_root() defaults to ~/Droid/Local, and the process cwd
+    # get_local_root() defaults to ~/Unity/Local, and the process cwd
     # is set to the same path at startup.  By pointing HOME at a temp
     # dir we keep Attachments/, .env, snapshots, etc. sandboxed.
     #
     # The path is deterministic (not random) so that CodeActActor system
-    # prompts — which embed the resolved ~/Droid/Local path — produce
+    # prompts — which embed the resolved ~/Unity/Local path — produce
     # stable LLM cache keys across pytest sessions.  Actual test file
     # isolation is handled by pytest's tmp_path fixture, not HOME.
     # ------------------------------------------------------------------
@@ -681,8 +681,8 @@ def pytest_configure(config):
     global _original_home
     _original_home = os.environ.get("HOME")
     if _original_home:
-        os.environ["DROID_REAL_HOME"] = _original_home
-    test_home = os.path.join(tempfile.gettempdir(), "droid_test_home")
+        os.environ["UNITY_REAL_HOME"] = _original_home
+    test_home = os.path.join(tempfile.gettempdir(), "unity_test_home")
     os.makedirs(test_home, exist_ok=True)
     os.environ["HOME"] = test_home
 
@@ -717,7 +717,7 @@ def pytest_configure(config):
     )
 
     # Required to disable explicit log level if set from pytest.ini or command line options
-    if os.environ.get("DROID_TESTS_CLI_LOGGING", "true").lower() == "false":
+    if os.environ.get("UNITY_TESTS_CLI_LOGGING", "true").lower() == "false":
         config.option.log_cli_level = None
         config.option.showcapture = "no"
         config.option.capture = "no"
@@ -749,7 +749,7 @@ def pytest_configure(config):
 # Skip tests marked with requires_orchestra when Orchestra is not available
 def pytest_runtest_setup(item):
     test_name_log_filter.set_test_name(item.nodeid)
-    if not os.environ.get("SKIP_DROID_TEST_INIT") and _uses_unify_context(item):
+    if not os.environ.get("SKIP_UNITY_TEST_INIT") and _uses_unify_context(item):
         _set_unify_context_for_test(item)
 
     # Skip requires_orchestra tests if Orchestra is not running
@@ -794,15 +794,15 @@ def pytest_runtest_call(item):
     if "[" in item.nodeid:  # Any parametrization (markers, fixtures, etc.)
         # Need to keep track of invocation count for parametrized tests
         # In case of a later failure.
-        current_count = getattr(target_obj, "_droid_pytest_invocation_count", 0)
-        setattr(target_obj, "_droid_pytest_invocation_count", current_count + 1)
+        current_count = getattr(target_obj, "_unity_pytest_invocation_count", 0)
+        setattr(target_obj, "_unity_pytest_invocation_count", current_count + 1)
 
         normalized_id = _normalize_pytest_nodeid(item.nodeid)
         if normalized_id is None:
             normalized_id = f"_{current_count}_"
         func_name = f"{func_name}/{normalized_id}"
 
-    setattr(target_obj, "_droid_pytest_nodeid", func_name)
+    setattr(target_obj, "_unity_pytest_nodeid", func_name)
 
     with capture_costs() as events:
         yield
@@ -834,13 +834,13 @@ def pytest_report_teststatus(report, config):
 
 
 def pytest_runtest_teardown(item, nextitem=None):
-    if not os.environ.get("SKIP_DROID_TEST_INIT") and _uses_unify_context(item):
+    if not os.environ.get("SKIP_UNITY_TEST_INIT") and _uses_unify_context(item):
         _unset_unify_context_for_test(item)
     test_name_log_filter.reset_test_name()
 
 
 def pytest_html_results_summary(prefix, summary, postfix):
-    if SETTINGS.DROID_CACHE_STATS:
+    if SETTINGS.UNITY_CACHE_STATS:
         import unillm
 
         stats = unillm.get_cache_stats()

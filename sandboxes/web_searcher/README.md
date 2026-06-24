@@ -1,7 +1,7 @@
 WebSearcher Sandbox
 ===================
 
-This folder contains an interactive playground for the `WebSearcher` component that lives in `droid/web_searcher/`. The goal of the sandbox is to let you experiment with the manager in isolation – issue natural‑language web queries, observe tool selection (search/extract/crawl/map), and iterate on prompt/policy settings before integrating into larger flows.
+This folder contains an interactive playground for the `WebSearcher` component that lives in `unity/web_searcher/`. The goal of the sandbox is to let you experiment with the manager in isolation – issue natural‑language web queries, observe tool selection (search/extract/crawl/map), and iterate on prompt/policy settings before integrating into larger flows.
 
 ### Video walkthrough
 
@@ -60,7 +60,7 @@ Once the sandbox starts you will see a prompt and a small help table. Important 
 
 In‑flight steering (during a running request)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-While an `ask` call is running, you can steer it in‑flight using the same controls printed by the sandbox (interject/pause/resume/stop). Clarification questions are surfaced inline and your replies are forwarded to the manager. The handle honors the shared steerable API from `droid.common.async_tool_loop`.
+While an `ask` call is running, you can steer it in‑flight using the same controls printed by the sandbox (interject/pause/resume/stop). Clarification questions are surfaced inline and your replies are forwarded to the manager. The handle honors the shared steerable API from `unity.common.async_tool_loop`.
 
 Example session (text mode)
 ---------------------------
@@ -120,7 +120,7 @@ Logging and debugging
 
 Troubleshooting
 ---------------
-* Ensure the environment variable `DROID_WEB_TAVILY_API_KEY` is set.
+* Ensure the environment variable `UNITY_WEB_TAVILY_API_KEY` is set.
 * If voice mode is enabled, ensure `DEEPGRAM_API_KEY` and `CARTESIA_API_KEY` are set.
 * The sandbox uses your configured Unify credentials (`UNIFY_KEY`, `ORCHESTRA_URL`). Missing or invalid credentials may cause HTTP errors.
 * If the loop appears to stall on tools, enable `-d` to inspect the decision policy and prompts.

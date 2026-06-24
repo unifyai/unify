@@ -6,8 +6,8 @@ import time
 
 import pytest
 
-from droid.conversation_manager import comms_manager as cm
-from droid.conversation_manager.comms_manager import _already_seen_teams
+from unity.conversation_manager import comms_manager as cm
+from unity.conversation_manager.comms_manager import _already_seen_teams
 
 
 @pytest.fixture(autouse=True)

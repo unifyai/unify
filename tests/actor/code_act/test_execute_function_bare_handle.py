@@ -20,14 +20,14 @@ from unittest.mock import AsyncMock
 import pytest
 import pytest_asyncio
 
-from droid.actor.code_act_actor import CodeActActor
-from droid.actor.execution import ExecutionResult
-from droid.actor.environments import StateManagerEnvironment
-from droid.common.async_tool_loop import SteerableToolHandle
-from droid.common.llm_helpers import method_to_schema
-from droid.function_manager.function_manager import FunctionManager
-from droid.function_manager.primitives import Primitives, PrimitiveScope
-from droid.manager_registry import ManagerRegistry
+from unity.actor.code_act_actor import CodeActActor
+from unity.actor.execution import ExecutionResult
+from unity.actor.environments import StateManagerEnvironment
+from unity.common.async_tool_loop import SteerableToolHandle
+from unity.common.llm_helpers import method_to_schema
+from unity.function_manager.function_manager import FunctionManager
+from unity.function_manager.primitives import Primitives, PrimitiveScope
+from unity.manager_registry import ManagerRegistry
 
 pytestmark = pytest.mark.llm_call
 
@@ -38,10 +38,10 @@ pytestmark = pytest.mark.llm_call
 
 @pytest.fixture
 def configure_simulated_managers(monkeypatch: pytest.MonkeyPatch) -> None:
-    from droid.settings import SETTINGS
+    from unity.settings import SETTINGS
 
     for name in ("CONTACT", "TASK", "TRANSCRIPT", "KNOWLEDGE", "GUIDANCE", "WEB"):
-        monkeypatch.setenv(f"DROID_{name}_IMPL", "simulated")
+        monkeypatch.setenv(f"UNITY_{name}_IMPL", "simulated")
         attr = name.lower()
         if hasattr(SETTINGS, attr):
             monkeypatch.setattr(
@@ -52,7 +52,7 @@ def configure_simulated_managers(monkeypatch: pytest.MonkeyPatch) -> None:
             )
 
     for name in ("GUIDANCE", "WEB", "KNOWLEDGE"):
-        monkeypatch.setenv(f"DROID_{name}_ENABLED", "true")
+        monkeypatch.setenv(f"UNITY_{name}_ENABLED", "true")
         attr = name.lower()
         if hasattr(SETTINGS, attr):
             monkeypatch.setattr(
@@ -403,8 +403,8 @@ async def test_execute_function_returns_composite_when_side_output_present(
     the execution produces stdout alongside the handle."""
     # A composed function that prints AND returns a handle — the print
     # output is meaningful intermediate content the LLM should observe.
-    from droid.function_manager.function_manager import FunctionManager
-    from droid.common.context_registry import ContextRegistry
+    from unity.function_manager.function_manager import FunctionManager
+    from unity.common.context_registry import ContextRegistry
 
     ContextRegistry.forget(FunctionManager, "Functions/VirtualEnvs")
     ContextRegistry.forget(FunctionManager, "Functions/Compositional")

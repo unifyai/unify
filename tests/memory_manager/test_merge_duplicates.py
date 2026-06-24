@@ -2,11 +2,11 @@ import pytest
 
 from tests.helpers import _handle_project
 
-from droid.memory_manager.memory_manager import MemoryManager
-from droid.contact_manager.simulated import SimulatedContactManager
-from droid.transcript_manager.simulated import SimulatedTranscriptManager
-from droid.knowledge_manager.simulated import SimulatedKnowledgeManager
-from droid.task_scheduler.simulated import SimulatedTaskScheduler
+from unity.memory_manager.memory_manager import MemoryManager
+from unity.contact_manager.simulated import SimulatedContactManager
+from unity.transcript_manager.simulated import SimulatedTranscriptManager
+from unity.knowledge_manager.simulated import SimulatedKnowledgeManager
+from unity.task_scheduler.simulated import SimulatedTaskScheduler
 
 
 @pytest.mark.asyncio
@@ -75,7 +75,7 @@ async def test_update_contacts_merges_duplicates(monkeypatch):
     # ------------------------------------------------------------------
     # 2.  Replace the heavy tool-use loop with a stub that calls merge_contacts
     # ------------------------------------------------------------------
-    import droid.memory_manager.memory_manager as mm_mod
+    import unity.memory_manager.memory_manager as mm_mod
 
     def _fake_tool_loop(client, message, tools, *_, **__):  # noqa: D401 – stub
         class _Handle:

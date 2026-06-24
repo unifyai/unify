@@ -11,8 +11,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from droid.gateway.outbound import OutboundTransport
-from droid.gateway.outbound_pubsub import PubSubOutboundTransport
+from unity.gateway.outbound import OutboundTransport
+from unity.gateway.outbound_pubsub import PubSubOutboundTransport
 
 # ---------------------------------------------------------------------------
 # Test helpers
@@ -38,7 +38,7 @@ def _install_pubsub_stub(
     pubsub_stub = MagicMock(name="pubsub_v1")
     pubsub_stub.PublisherClient.return_value = _fake_publisher_client(message_id)
     monkeypatch.setattr(
-        "droid.gateway.outbound_pubsub.pubsub_v1",
+        "unity.gateway.outbound_pubsub.pubsub_v1",
         pubsub_stub,
     )
     return pubsub_stub
@@ -106,15 +106,15 @@ def test_publish_builds_full_topic_path_via_publisher(
 ) -> None:
     pubsub_stub = _install_pubsub_stub(monkeypatch)
     transport = PubSubOutboundTransport(project_id="responsive-city-458413-a2")
-    transport.publish("droid-42-staging", b'{"thread":"msg"}', thread="msg")
+    transport.publish("unity-42-staging", b'{"thread":"msg"}', thread="msg")
 
     client = pubsub_stub.PublisherClient.return_value
     client.topic_path.assert_called_once_with(
         "responsive-city-458413-a2",
-        "droid-42-staging",
+        "unity-42-staging",
     )
     client.publish.assert_called_once_with(
-        "projects/responsive-city-458413-a2/topics/droid-42-staging",
+        "projects/responsive-city-458413-a2/topics/unity-42-staging",
         b'{"thread":"msg"}',
         thread="msg",
     )
@@ -225,7 +225,7 @@ async def test_aclose_before_publish_is_a_noop(
 def test_publish_without_pubsub_v1_raises_runtime_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("droid.gateway.outbound_pubsub.pubsub_v1", None)
+    monkeypatch.setattr("unity.gateway.outbound_pubsub.pubsub_v1", None)
     transport = PubSubOutboundTransport(project_id="p")
     with pytest.raises(RuntimeError, match="google-cloud-pubsub"):
         transport.publish("topic", b"data", thread="msg")

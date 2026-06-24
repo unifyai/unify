@@ -25,8 +25,8 @@ from datetime import datetime
 
 import pytest
 
-from droid.conversation_manager.domains import comms_utils
-from droid.conversation_manager.events import UnifyMessageReceived, UnifyMessageSent
+from unity.conversation_manager.domains import comms_utils
+from unity.conversation_manager.events import UnifyMessageReceived, UnifyMessageSent
 
 # =============================================================================
 # Event Attachment Metadata Tests
@@ -158,14 +158,14 @@ class TestAddUnifyMessageAttachments:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "droid.manager_registry.ManagerRegistry.get_file_manager",
+                "unity.manager_registry.ManagerRegistry.get_file_manager",
                 return_value=mock_file_manager,
             ),
             patch(
-                "droid.file_manager.managers.utils.attachment_ingestion.enqueue_attachment_ingestion",
+                "unity.file_manager.managers.utils.attachment_ingestion.enqueue_attachment_ingestion",
             ) as mock_enqueue,
             patch(
-                "droid.conversation_manager.domains.comms_utils.SETTINGS",
+                "unity.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_settings.file.IMPLICIT_INGESTION = True
@@ -209,7 +209,7 @@ class TestAddUnifyMessageAttachments:
         )
 
         with patch(
-            "droid.manager_registry.ManagerRegistry.get_file_manager",
+            "unity.manager_registry.ManagerRegistry.get_file_manager",
             return_value=mock_file_manager,
         ):
             attachments = [
@@ -251,7 +251,7 @@ class TestAddUnifyMessageAttachments:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "droid.manager_registry.ManagerRegistry.get_file_manager",
+                "unity.manager_registry.ManagerRegistry.get_file_manager",
                 return_value=mock_file_manager,
             ),
         ):
@@ -306,14 +306,14 @@ class TestAddUnifyMessageAttachments:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "droid.manager_registry.ManagerRegistry.get_file_manager",
+                "unity.manager_registry.ManagerRegistry.get_file_manager",
                 return_value=mock_file_manager,
             ),
             patch(
-                "droid.file_manager.managers.utils.attachment_ingestion.enqueue_attachment_ingestion",
+                "unity.file_manager.managers.utils.attachment_ingestion.enqueue_attachment_ingestion",
             ) as mock_enqueue,
             patch(
-                "droid.conversation_manager.domains.comms_utils.SETTINGS",
+                "unity.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_settings.ORCHESTRA_URL = "http://localhost:8000"
@@ -360,7 +360,7 @@ class TestAddUnifyMessageAttachments:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "droid.manager_registry.ManagerRegistry.get_file_manager",
+                "unity.manager_registry.ManagerRegistry.get_file_manager",
                 return_value=mock_file_manager,
             ),
         ):
@@ -408,7 +408,7 @@ class TestAttachmentDownloadIdempotency:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "droid.manager_registry.ManagerRegistry.get_file_manager",
+                "unity.manager_registry.ManagerRegistry.get_file_manager",
                 return_value=mock_file_manager,
             ),
         ):
@@ -454,7 +454,7 @@ class TestAttachmentDownloadIdempotency:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "droid.manager_registry.ManagerRegistry.get_file_manager",
+                "unity.manager_registry.ManagerRegistry.get_file_manager",
                 return_value=mock_file_manager,
             ),
         ):
@@ -482,8 +482,8 @@ class TestMessageModelAttachments:
 
     def test_message_has_attachments_field(self):
         """Message model has an attachments field."""
-        from droid.transcript_manager.types.message import Message
-        from droid.conversation_manager.cm_types import Medium
+        from unity.transcript_manager.types.message import Message
+        from unity.conversation_manager.cm_types import Medium
 
         msg = Message(
             message_id=1,
@@ -510,15 +510,15 @@ class TestMessageModelAttachments:
 
     def test_message_attachments_shorthand(self):
         """Message SHORTHAND_MAP includes attachments -> atts."""
-        from droid.transcript_manager.types.message import Message
+        from unity.transcript_manager.types.message import Message
 
         assert "attachments" in Message.SHORTHAND_MAP
         assert Message.SHORTHAND_MAP["attachments"] == "atts"
 
     def test_message_to_post_json_includes_attachments(self):
         """to_post_json includes attachments in the payload."""
-        from droid.transcript_manager.types.message import Message
-        from droid.conversation_manager.cm_types import Medium
+        from unity.transcript_manager.types.message import Message
+        from unity.conversation_manager.cm_types import Medium
 
         msg = Message(
             message_id=1,
@@ -576,10 +576,10 @@ class TestUploadUnifyAttachmentEnhanced:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "droid.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session_details,
             patch(
-                "droid.conversation_manager.domains.comms_utils.SETTINGS",
+                "unity.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_session_details.assistant.agent_id = 42

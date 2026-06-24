@@ -20,20 +20,20 @@ import pytest
 from tests.helpers import _handle_project
 
 # Core classes under test ----------------------------------------------------
-from droid.memory_manager.memory_manager import MemoryManager
-from droid.events.event_bus import EVENT_BUS, Event
+from unity.memory_manager.memory_manager import MemoryManager
+from unity.events.event_bus import EVENT_BUS, Event
 
 # This test publishes events to verify MemoryManager chunk processing
 pytestmark = pytest.mark.enable_eventbus
 
 # Simulated manager test-doubles (no external I/O) ---------------------------
-from droid.contact_manager.simulated import SimulatedContactManager
-from droid.transcript_manager.simulated import SimulatedTranscriptManager
-from droid.knowledge_manager.simulated import SimulatedKnowledgeManager
-from droid.task_scheduler.simulated import SimulatedTaskScheduler
+from unity.contact_manager.simulated import SimulatedContactManager
+from unity.transcript_manager.simulated import SimulatedTranscriptManager
+from unity.knowledge_manager.simulated import SimulatedKnowledgeManager
+from unity.task_scheduler.simulated import SimulatedTaskScheduler
 
-from droid.transcript_manager.types.message import Message
-from droid.conversation_manager.cm_types import Medium
+from unity.transcript_manager.types.message import Message
+from unity.conversation_manager.cm_types import Medium
 
 # ---------------------------------------------------------------------------
 #                             TEST CASE                                      #

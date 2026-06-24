@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from tests.actor.code_act.conftest import make_fm_mock
-from droid.actor.code_act_actor import (
+from unity.actor.code_act_actor import (
     AgentContext,
     CodeActActor,
     _StorageCheckHandle,
@@ -146,7 +146,7 @@ async def test_store_skills_tool_absent_without_guidance_manager():
     # Prevent ManagerRegistry from supplying a default GuidanceManager
     # by patching the registry method to return None during construction.
     with _patch(
-        "droid.manager_registry.ManagerRegistry.get_guidance_manager",
+        "unity.manager_registry.ManagerRegistry.get_guidance_manager",
         return_value=None,
     ):
         actor = CodeActActor(
@@ -218,7 +218,7 @@ async def test_store_skills_filtered_when_can_store_false():
 async def test_proactive_storage_loop_receives_request_and_trajectory():
     """``_start_proactive_storage_loop`` is called with the trajectory snapshot
     and the request string from the ``store_skills`` tool."""
-    from droid.function_manager.function_manager import FunctionManager
+    from unity.function_manager.function_manager import FunctionManager
 
     fm = FunctionManager(include_primitives=False)
     gm = _TrackingGuidanceManager()
@@ -234,10 +234,10 @@ async def test_proactive_storage_loop_receives_request_and_trajectory():
     with (
         patch.object(MagicMock, "__repr__", return_value="<MockHandle>"),
         patch(
-            "droid.actor.code_act_actor._start_proactive_storage_loop",
+            "unity.actor.code_act_actor._start_proactive_storage_loop",
         ) as mock_proactive,
         patch(
-            "droid.actor.code_act_actor.publish_manager_method_event",
+            "unity.actor.code_act_actor.publish_manager_method_event",
             new_callable=AsyncMock,
         ),
     ):
@@ -308,7 +308,7 @@ async def test_storage_check_receives_proactive_summaries():
     post-processing ``_start_storage_check_loop`` receives them via the
     ``proactive_summaries`` keyword argument."""
 
-    from droid.actor.code_act_actor import _CURRENT_AGENT_CONTEXT
+    from unity.actor.code_act_actor import _CURRENT_AGENT_CONTEXT
 
     result_future: asyncio.Future[str] = asyncio.get_event_loop().create_future()
 
@@ -351,10 +351,10 @@ async def test_storage_check_receives_proactive_summaries():
     try:
         with (
             patch(
-                "droid.actor.code_act_actor._start_storage_check_loop",
+                "unity.actor.code_act_actor._start_storage_check_loop",
             ) as mock_loop,
             patch(
-                "droid.actor.code_act_actor.publish_manager_method_event",
+                "unity.actor.code_act_actor.publish_manager_method_event",
                 new_callable=AsyncMock,
             ),
         ):
@@ -385,7 +385,7 @@ async def test_storage_check_receives_proactive_summaries():
 async def test_storage_check_no_proactive_summaries_passes_none():
     """When no proactive storage occurred, ``proactive_summaries`` is None."""
 
-    from droid.actor.code_act_actor import _CURRENT_AGENT_CONTEXT
+    from unity.actor.code_act_actor import _CURRENT_AGENT_CONTEXT
 
     result_future: asyncio.Future[str] = asyncio.get_event_loop().create_future()
 
@@ -424,10 +424,10 @@ async def test_storage_check_no_proactive_summaries_passes_none():
     try:
         with (
             patch(
-                "droid.actor.code_act_actor._start_storage_check_loop",
+                "unity.actor.code_act_actor._start_storage_check_loop",
             ) as mock_loop,
             patch(
-                "droid.actor.code_act_actor.publish_manager_method_event",
+                "unity.actor.code_act_actor.publish_manager_method_event",
                 new_callable=AsyncMock,
             ),
         ):
@@ -520,7 +520,7 @@ def test_agent_context_proactive_storage_summaries_isolated():
 async def test_proactive_storage_publishes_manager_method_events():
     """The ``store_skills`` tool publishes incoming and outgoing
     ManagerMethod events with method='ProactiveStorage'."""
-    from droid.actor.code_act_actor import (
+    from unity.actor.code_act_actor import (
         _CURRENT_AGENT_CONTEXT,
     )
 
@@ -558,10 +558,10 @@ async def test_proactive_storage_publishes_manager_method_events():
     try:
         with (
             patch(
-                "droid.actor.code_act_actor._start_proactive_storage_loop",
+                "unity.actor.code_act_actor._start_proactive_storage_loop",
             ) as mock_proactive,
             patch(
-                "droid.actor.code_act_actor.publish_manager_method_event",
+                "unity.actor.code_act_actor.publish_manager_method_event",
                 new_callable=AsyncMock,
             ) as mock_publish,
         ):

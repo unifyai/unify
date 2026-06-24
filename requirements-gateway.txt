@@ -1,4 +1,4 @@
-# Slim runtime requirements for `python -m droid.gateway` (the
+# Slim runtime requirements for `python -m unity.gateway` (the
 # Phase B/C gateway aggregator) in container deploys.
 #
 # Excludes the heavy assistant-runtime deps (pyaudio, browser-use,
@@ -7,14 +7,14 @@
 # system-level compilers or audio libs.
 #
 # Use:
-#   pip install --no-deps /path/to/droid   # droid package itself
-#   pip install -r /path/to/droid/requirements-gateway.txt
+#   pip install --no-deps /path/to/unity   # unity package itself
+#   pip install -r /path/to/unity/requirements-gateway.txt
 #
 # Why a requirements file and not a [gateway] pyproject extra:
 # pip's resolver re-evaluates base deps when installing extras, so
-# `pip install droid[gateway]` still tries to satisfy pyaudio etc.
+# `pip install unity[gateway]` still tries to satisfy pyaudio etc.
 # A requirements file lets the Dockerfile install the gateway dep
-# set explicitly without going through droid's full base-deps
+# set explicitly without going through unity's full base-deps
 # resolution.
 
 # Web framework
@@ -47,6 +47,6 @@ twilio>=8.0.0
 # heavy assistant-runtime stack.
 livekit-api>=0.4.0
 
-# Telemetry (used by droid.logger module-level setup)
+# Telemetry (used by unity.logger module-level setup)
 opentelemetry-api>=1.20.0
 opentelemetry-sdk>=1.20.0

@@ -2,11 +2,11 @@
 Minimal conftest for parallel_run.sh fixture tests.
 
 These tests exist only to verify parallel_run.sh behavior (session creation,
-status prefixes, exit codes, etc.), not to test droid functionality.
+status prefixes, exit codes, etc.), not to test unity functionality.
 
 By overriding the global session hooks, we skip:
 - Random project creation (API calls)
-- Heavy droid imports
+- Heavy unity imports
 - Context setup
 
 This makes fixture tests complete in milliseconds instead of seconds,

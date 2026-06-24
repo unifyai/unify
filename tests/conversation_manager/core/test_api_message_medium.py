@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from droid.conversation_manager.events import (
+from unity.conversation_manager.events import (
     ApiMessageReceived,
     ApiMessageSent,
     Event,
 )
-from droid.conversation_manager.cm_types import Medium, MEDIUM_REGISTRY, Mode
+from unity.conversation_manager.cm_types import Medium, MEDIUM_REGISTRY, Mode
 
 
 def test_medium_enum_has_api_message():
@@ -86,7 +86,7 @@ def test_api_message_events_are_content_logged():
 
 def test_event_handler_registers_api_events():
     """Verify both API message events are handled by the shared comms handler."""
-    from droid.conversation_manager.domains.event_handlers import EventHandler
+    from unity.conversation_manager.domains.event_handlers import EventHandler
 
     for event_cls in (ApiMessageReceived, ApiMessageSent):
         assert (
@@ -161,7 +161,7 @@ def test_log_message_contact_isinstance_check():
         content="test",
     )
 
-    from droid.conversation_manager.events import (
+    from unity.conversation_manager.events import (
         UnifyMessageSent,
         UnifyMessageReceived,
         InboundUnifyMeetUtterance,
@@ -230,7 +230,7 @@ def test_send_api_response_contact_fallback_has_contact_id():
 
 def test_api_messages_in_hydration_set():
     """ApiMessage events must be in _MESSAGE_PRODUCING_EVENTS for session hydration."""
-    from droid.conversation_manager.domains.managers_utils import (
+    from unity.conversation_manager.domains.managers_utils import (
         _MESSAGE_PRODUCING_EVENTS,
     )
 
@@ -353,7 +353,7 @@ def test_api_message_sent_roundtrip_with_attachments_and_tags():
 
 
 def test_api_message_comms_type_exists():
-    from droid.conversation_manager.domains.contact_index import ApiMessage
+    from unity.conversation_manager.domains.contact_index import ApiMessage
 
     msg = ApiMessage(
         name="Boss",
@@ -371,7 +371,7 @@ def test_api_message_comms_type_exists():
 
 
 def test_api_message_in_message_type_to_medium():
-    from droid.conversation_manager.domains.contact_index import (
+    from unity.conversation_manager.domains.contact_index import (
         ApiMessage,
         _MESSAGE_TYPE_TO_MEDIUM,
     )
@@ -382,7 +382,7 @@ def test_api_message_in_message_type_to_medium():
 
 def test_build_message_creates_api_message_type():
     """build_message with API_MESSAGE medium creates an ApiMessage, not generic Message."""
-    from droid.conversation_manager.domains.contact_index import (
+    from unity.conversation_manager.domains.contact_index import (
         ApiMessage,
         ContactIndex,
     )
@@ -411,8 +411,8 @@ def test_build_message_creates_api_message_type():
 
 def test_renderer_renders_api_message_with_tags_and_attachments():
     """The renderer should include [Tags: ...] and [Attachments: ...] for ApiMessage."""
-    from droid.conversation_manager.domains.contact_index import ApiMessage
-    from droid.conversation_manager.domains.renderer import Renderer
+    from unity.conversation_manager.domains.contact_index import ApiMessage
+    from unity.conversation_manager.domains.renderer import Renderer
 
     from datetime import datetime
 
@@ -435,8 +435,8 @@ def test_renderer_renders_api_message_with_tags_and_attachments():
 
 
 def test_renderer_renders_api_message_without_tags():
-    from droid.conversation_manager.domains.contact_index import ApiMessage
-    from droid.conversation_manager.domains.renderer import Renderer
+    from unity.conversation_manager.domains.contact_index import ApiMessage
+    from unity.conversation_manager.domains.renderer import Renderer
     from datetime import datetime
 
     renderer = Renderer()

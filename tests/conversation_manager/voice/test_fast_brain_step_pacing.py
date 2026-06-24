@@ -13,7 +13,7 @@ Key behavioural rule:
   contain exactly ONE user action. Think of it like a human saying "now click
   X" and then *waiting* for "okay, done" before continuing.
 
-Ref: production logs from droid-2026-03-09-02-18-32-uda01-staging
+Ref: production logs from unity-2026-03-09-02-18-32-uda01-staging
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ import re
 
 import pytest
 
-from droid.conversation_manager.prompt_builders import build_voice_agent_prompt
+from unity.conversation_manager.prompt_builders import build_voice_agent_prompt
 
 from tests.conversation_manager.voice.test_fast_brain_deferral import (
     MODEL_TTS,

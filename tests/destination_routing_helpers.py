@@ -14,14 +14,14 @@ from pydantic import BaseModel, Field
 from unify.utils.http import RequestError
 
 from tests.async_tool_loop.conftest import LLM_CONFIGS
-from droid.blacklist_manager.base import BaseBlackListManager
-from droid.common.accessible_teams_block import build_accessible_teams_block
-from droid.common.async_tool_loop import start_async_tool_loop
-from droid.common.context_registry import ContextRegistry
-from droid.common.llm_client import new_llm_client
-from droid.data_manager.base import BaseDataManager
-from droid.file_manager.managers.base import BaseFileManager
-from droid.session_details import SESSION_DETAILS, TeamSummary
+from unity.blacklist_manager.base import BaseBlackListManager
+from unity.common.accessible_teams_block import build_accessible_teams_block
+from unity.common.async_tool_loop import start_async_tool_loop
+from unity.common.context_registry import ContextRegistry
+from unity.common.llm_client import new_llm_client
+from unity.data_manager.base import BaseDataManager
+from unity.file_manager.managers.base import BaseFileManager
+from unity.session_details import SESSION_DETAILS, TeamSummary
 
 PATCH_TEAM_DESTINATION = "team:41001"
 FAMILY_TEAM_DESTINATION = "team:41002"
