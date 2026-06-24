@@ -98,10 +98,50 @@ ELEVENLABS_VOICE_SETTINGS_STABILITY = 0.5
 ELEVENLABS_VOICE_SETTINGS_SIMILARITY_BOOST = 0.75
 
 VIDEO_AVATAR_CHANNELS = frozenset({"unify_meet", "google_meet", "teams_meet"})
+ELEVENLABS_TWIN_PRONUNCIATION_SOURCE = "t-w1n"
+ELEVENLABS_TWIN_PRONUNCIATION_TARGET = "Twin"
 
 
 def has_video_avatar_channel(channel: str) -> bool:
     return channel in VIDEO_AVATAR_CHANNELS
+
+
+def _drain_elevenlabs_twin_pronunciation_buffer(
+    pending: str,
+    emitted: list[str],
+) -> str:
+    while pending:
+        lower_pending = pending.lower()
+        if ELEVENLABS_TWIN_PRONUNCIATION_SOURCE.startswith(lower_pending):
+            if len(pending) == len(ELEVENLABS_TWIN_PRONUNCIATION_SOURCE):
+                emitted.append(ELEVENLABS_TWIN_PRONUNCIATION_TARGET)
+                return ""
+            return pending
+
+        emitted.append(pending[0])
+        pending = pending[1:]
+
+    return pending
+
+
+async def _normalize_elevenlabs_twin_pronunciation_stream(
+    text: AsyncIterable[str],
+) -> AsyncIterable[str]:
+    pending = ""
+
+    async for chunk in text:
+        emitted: list[str] = []
+        for char in chunk:
+            pending += char
+            pending = _drain_elevenlabs_twin_pronunciation_buffer(
+                pending,
+                emitted,
+            )
+        if emitted:
+            yield "".join(emitted)
+
+    if pending:
+        yield pending
 
 
 def _elevenlabs_speed_settings(speed: float):
@@ -286,11 +326,15 @@ class Assistant(Agent):
         instructions: str,
         outbound: bool = False,
         audio_bridge: MeetAudioBridge | None = None,
+        normalize_elevenlabs_twin_pronunciation: bool = False,
     ) -> None:
         self.contact = contact
         self.boss = boss
         self.channel = channel
         self.audio_bridge = audio_bridge
+        self.normalize_elevenlabs_twin_pronunciation = (
+            normalize_elevenlabs_twin_pronunciation
+        )
         if channel == "phone_call":
             self.utterance_event = InboundPhoneUtterance
             self.assistant_utterance_event = OutboundPhoneUtterance
@@ -442,6 +486,9 @@ class Assistant(Agent):
         text: AsyncIterable[str],
         model_settings: ModelSettings,
     ) -> AsyncIterable:
+        if self.normalize_elevenlabs_twin_pronunciation:
+            text = _normalize_elevenlabs_twin_pronunciation_stream(text)
+
         if (
             self.channel not in ("google_meet", "teams_meet")
             or self.audio_bridge is None
@@ -1717,6 +1764,7 @@ async def entrypoint(ctx: agents.JobContext):
         instructions=system_prompt,
         outbound=outbound,
         audio_bridge=audio_bridge,
+        normalize_elevenlabs_twin_pronunciation=voice_provider == "elevenlabs",
     )
     credit_gate_monitor = FastBrainCreditGateMonitor()
     assistant.set_credit_gate_state_provider(lambda: credit_gate_monitor.state)
