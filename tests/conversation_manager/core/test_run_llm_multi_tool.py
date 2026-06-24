@@ -273,6 +273,22 @@ async def test_run_llm_records_recent_tool_executions_for_follow_up_turns(
     assert "team_id" in last["result_preview"]
 
 
+def test_run_llm_marks_tool_commit_boundary():
+    cm = ConversationManager.__new__(ConversationManager)
+    cm._session_logger = MagicMock()
+    cm.debouncer = MagicMock()
+    cm.debouncer.running_task_trace_meta = {
+        "run_id": "llmrun-000123",
+        "origin_event_name": "CoordinatorOnboardingEvent",
+    }
+    trace_meta = {"origin_event_name": "CoordinatorOnboardingEvent"}
+
+    cm._mark_tool_commit_started(trace_meta, "llmrun-000123")
+
+    assert trace_meta["tool_commit_started"] == "true"
+    assert cm.debouncer.running_task_trace_meta["tool_commit_started"] == "true"
+
+
 @pytest.mark.asyncio
 @_handle_project
 async def test_run_llm_carries_recent_tool_executions_into_next_turn_prompt(

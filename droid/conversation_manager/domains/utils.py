@@ -142,11 +142,24 @@ class Debouncer:
     async def _cancel_tasks(self, pending=True, running=False):
         if running:
             if self.running_task and not self.running_task.done():
-                self.running_task.cancel()
-                try:
-                    await self.running_task
-                except asyncio.CancelledError:
-                    pass
+                tool_commit_started = (
+                    str(self.running_task_trace_meta.get("tool_commit_started", ""))
+                    .strip()
+                    .lower()
+                    == "true"
+                )
+                if tool_commit_started:
+                    if self._name:
+                        LOGGER.info(
+                            f"🚦 [{self._name}] running request is in tool commit; "
+                            "queueing replacement",
+                        )
+                else:
+                    self.running_task.cancel()
+                    try:
+                        await self.running_task
+                    except asyncio.CancelledError:
+                        pass
         if pending:
             if self.pending_task and not self.pending_task.done():
                 self.pending_task.cancel()

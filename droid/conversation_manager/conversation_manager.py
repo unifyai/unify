@@ -1944,6 +1944,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             len(messages),
         )
         self._active_llm_trace_meta = trace_meta
+
         try:
             try:
                 result = await single_shot_tool_decision(
@@ -1958,6 +1959,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
                         "join_google_meet",
                         "join_teams_meet",
                     },
+                    on_tool_execution_start=lambda: self._mark_tool_commit_started(
+                        trace_meta,
+                        run_id,
+                    ),
                 )
             except Exception:
                 _log_slow_brain_single_shot_failure(
@@ -2099,6 +2104,21 @@ class ConversationManager(metaclass=SingletonABCMeta):
         )
 
         return tool_names
+
+    def _mark_tool_commit_started(
+        self,
+        trace_meta: dict[str, str] | None,
+        run_id: str,
+    ) -> None:
+        if trace_meta is not None:
+            trace_meta["tool_commit_started"] = "true"
+        running_meta = getattr(self.debouncer, "running_task_trace_meta", None)
+        if isinstance(running_meta, dict) and running_meta.get("run_id") == run_id:
+            running_meta["tool_commit_started"] = "true"
+        self._session_logger.debug(
+            "llm_thinking",
+            f"Slow-brain run entered tool commit run_id={run_id}",
+        )
 
     async def wait_for_events(self):
         async with self.event_broker.pubsub() as pubsub:

@@ -101,6 +101,7 @@ async def single_shot_tool_decision(
     include_class_name: bool = False,
     response_format: Type[BaseModel] | None = None,
     exclusive_tools: set[str] | None = None,
+    on_tool_execution_start: Callable[[], None] | None = None,
 ) -> SingleShotResult:
     """Make a single LLM call, execute all selected tools, return the results.
 
@@ -141,6 +142,9 @@ async def single_shot_tool_decision(
         Tool names that must appear at most once per LLM turn. If the LLM calls
         an exclusive tool more than once, ALL instances are rejected without
         execution and replaced with error results.
+    on_tool_execution_start : Callable[[], None] | None, default None
+        Called immediately before executing selected tools. Callers use this
+        boundary to treat the rest of the turn as a commit phase.
 
     Returns
     -------
@@ -410,33 +414,45 @@ async def single_shot_tool_decision(
     _ss_logger.debug(
         f"⏱️ [single_shot +{_ss_ms()}] executing {len(expanded_calls)} tools: {_tool_names}",
     )
+    if expanded_calls and on_tool_execution_start is not None:
+        on_tool_execution_start()
 
-    if violated_tools:
-        error_msg = (
-            f"Rejected: multiple calls to exclusive tool(s) "
-            f"{violated_tools} in a single turn. None were executed."
-        )
-        _ss_logger.warning(f"⏱️ [single_shot] {error_msg}")
+    async def _execute_expanded_calls() -> list[ToolExecution]:
+        if violated_tools:
+            error_msg = (
+                f"Rejected: multiple calls to exclusive tool(s) "
+                f"{violated_tools} in a single turn. None were executed."
+            )
+            _ss_logger.warning(f"⏱️ [single_shot] {error_msg}")
 
-        async def _execute_or_reject(call: dict) -> ToolExecution:
-            fn_info = call.get("function", {})
-            fn_name = fn_info.get("name")
-            fn_args = _parse_json_args(fn_info.get("arguments", "{}"))
-            if fn_name in violated_tools:
-                return ToolExecution(
-                    name=fn_name,
-                    args=fn_args,
-                    result={"error": error_msg},
-                )
-            return await execute_tool_call(call)
+            async def _execute_or_reject(call: dict) -> ToolExecution:
+                fn_info = call.get("function", {})
+                fn_name = fn_info.get("name")
+                fn_args = _parse_json_args(fn_info.get("arguments", "{}"))
+                if fn_name in violated_tools:
+                    return ToolExecution(
+                        name=fn_name,
+                        args=fn_args,
+                        result={"error": error_msg},
+                    )
+                return await execute_tool_call(call)
 
-        tool_executions = await asyncio.gather(
-            *[_execute_or_reject(call) for call in expanded_calls],
-        )
-    else:
-        tool_executions = await asyncio.gather(
+            return await asyncio.gather(
+                *[_execute_or_reject(call) for call in expanded_calls],
+            )
+        return await asyncio.gather(
             *[execute_tool_call(call) for call in expanded_calls],
         )
+
+    tool_execution_task = asyncio.create_task(_execute_expanded_calls())
+    try:
+        tool_executions = await asyncio.shield(tool_execution_task)
+    except asyncio.CancelledError:
+        _ss_logger.info(
+            "⏱️ [single_shot +%s] cancellation deferred until tool execution completes",
+            _ss_ms(),
+        )
+        tool_executions = await tool_execution_task
     _ss_logger.debug(f"⏱️ [single_shot +{_ss_ms()}] all tools completed")
 
     return SingleShotResult(
