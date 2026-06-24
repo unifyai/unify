@@ -334,6 +334,9 @@ _EXECUTION_RULES = textwrap.dedent("""
        - `display(obj)` emits rich output (text or PIL images) to stdout.
        - Images are base64-encoded.
        - Use `display(...)` instead of `print(...)` for image output.
+       - Anything you `display()` (including screenshots) is returned to you
+         as visual input on your next turn — inspect and describe it directly
+         rather than routing through a separate vision/observe call.
 
     6. **Error Handling**: If your code produces an error, the traceback will be returned. Read it carefully, correct your code, and try again.
 

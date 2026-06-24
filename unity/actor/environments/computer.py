@@ -271,7 +271,11 @@ class ComputerEnvironment(BaseEnvironment):
             "ud = primitives.computer.user_desktop.session()\n"
             "display(await ud.get_screenshot())\n"
             "await ud.act('Open the Downloads folder')\n"
-            "```",
+            "```\n\n"
+            "For a pure 'look and tell me what's on my screen' request, stop "
+            "after `display(await ud.get_screenshot())` and describe the image "
+            "yourself -- you do not need `observe()` or `act()` for first-person "
+            "perception.",
         )
 
         parts.append(
@@ -284,6 +288,13 @@ class ComputerEnvironment(BaseEnvironment):
             "# Web session\n"
             "display(await session.get_screenshot())\n"
             "```\n\n"
+            "**A screenshot you `display()` is visible to you on the next turn "
+            "-- read it and answer directly.**  For 'what's on screen / describe "
+            "my desktop' questions, the screenshot *is* the answer: `display()` "
+            "it and describe what you see.  Do not call `observe()`/`act()` just "
+            "to obtain a textual description -- those add a round trip through "
+            "the remote extraction model and are for *structured* extraction or "
+            "*executing* actions, not first-person perception.\n\n"
             "**Coordinate spaces are NOT interchangeable.**  Desktop screenshots "
             "capture the full physical display (including browser chrome, address "
             "bar, taskbar, window decorations).  Web session screenshots capture "
