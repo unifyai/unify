@@ -73,6 +73,8 @@ from unity.conversation_manager.events import (
     UserRemoteControlStopped,
     UserWebcamStarted,
     UserWebcamStopped,
+    UserFilesysAccessStarted,
+    UserFilesysAccessStopped,
 )
 from unity.contact_manager.simulated import SimulatedContactManager
 from unity.conversation_manager.domains.contact_index import ContactIndex
@@ -4079,3 +4081,75 @@ class TestRenderInfrastructureState:
         )
         assert "Attachments/" in result
         assert "sync_pending" in result
+
+
+# =============================================================================
+# User Filesystem-Access consent handler
+# =============================================================================
+
+
+class TestUserFilesysAccessHandler:
+    """The handler applies live consent changes to the ComputerPrimitives.
+
+    Started → grant the desktop owner's link; stopped → revoke it (passing a
+    conversation snapshot). Resolution goes through ManagerRegistry, so we patch
+    it to a recording stub.
+    """
+
+    @pytest.mark.asyncio
+    async def test_started_grants_for_user(self, mock_cm):
+        cp = MagicMock()
+        with patch(
+            "droid.manager_registry.ManagerRegistry.get_instance",
+            return_value=cp,
+        ):
+            await EventHandler.handle_event(
+                UserFilesysAccessStarted(user_id="42"),
+                mock_cm,
+            )
+        cp.grant_user_filesys_access.assert_called_once_with("42")
+        cp.revoke_user_filesys_access.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stopped_revokes_with_conversation_context(self, mock_cm):
+        cp = MagicMock()
+        with patch(
+            "droid.manager_registry.ManagerRegistry.get_instance",
+            return_value=cp,
+        ):
+            await EventHandler.handle_event(
+                UserFilesysAccessStopped(user_id="42"),
+                mock_cm,
+            )
+        cp.grant_user_filesys_access.assert_not_called()
+        cp.revoke_user_filesys_access.assert_called_once()
+        args, kwargs = cp.revoke_user_filesys_access.call_args
+        assert args[0] == "42"
+        assert "conversation_context" in kwargs
+
+    @pytest.mark.asyncio
+    async def test_empty_user_id_is_ignored(self, mock_cm):
+        cp = MagicMock()
+        with patch(
+            "droid.manager_registry.ManagerRegistry.get_instance",
+            return_value=cp,
+        ) as get_instance:
+            await EventHandler.handle_event(
+                UserFilesysAccessStarted(user_id=""),
+                mock_cm,
+            )
+        get_instance.assert_not_called()
+        cp.grant_user_filesys_access.assert_not_called()
+        cp.revoke_user_filesys_access.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_absent_primitive_does_not_crash(self, mock_cm):
+        with patch(
+            "droid.manager_registry.ManagerRegistry.get_instance",
+            return_value=None,
+        ):
+            # Must return cleanly even when no ComputerPrimitives is registered.
+            await EventHandler.handle_event(
+                UserFilesysAccessStopped(user_id="42"),
+                mock_cm,
+            )
