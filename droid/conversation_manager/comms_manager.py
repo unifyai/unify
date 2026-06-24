@@ -420,6 +420,43 @@ def _get_or_create_unknown_contact(
             return None
 
 
+def _lookup_known_contact(medium: str, contact_detail: str) -> dict | None:
+    """Resolve a sender to an existing contact via the live ContactManager.
+
+    The inbound resolver matches senders against adapter-supplied contacts and
+    the session-snapshot local contact. Neither reflects later edits to the
+    Contacts context (the single source of truth) — e.g. the owner adding their
+    WhatsApp number on the account page after the session started. This queries
+    ContactManager directly so such edits resolve immediately. It only reads
+    known contacts: it never creates one and is not gated by blacklist checks
+    (that gating governs unknown-contact creation, not lookup of known senders).
+    """
+    try:
+        medium_enum = Medium(medium)
+    except ValueError:
+        return None
+    field_name = MEDIUM_TO_CONTACT_FIELD.get(medium_enum)
+    if not field_name:
+        return None
+    try:
+        from droid.manager_registry import ManagerRegistry
+
+        cm = ManagerRegistry.get_contact_manager()
+        if cm is None:
+            return None
+        result = cm.filter_contacts(
+            filter=f"{field_name} == '{contact_detail}'",
+            limit=1,
+        )
+        contacts = result.get("contacts", [])
+        if contacts:
+            contact = contacts[0]
+            return contact.model_dump() if hasattr(contact, "model_dump") else contact
+    except Exception as e:
+        LOGGER.error(f"{DEFAULT_ICON} Error in _lookup_known_contact: {e}")
+    return None
+
+
 def _normalize_name(name: str) -> str:
     """Lower-case + strip punctuation/diacritics for tolerant name compares."""
     if not name:
@@ -1168,6 +1205,11 @@ class CommsManager:
                     )
                     is_new_unknown = False
                     if contact is None:
+                        contact = _lookup_known_contact(
+                            medium_for_blacklist,
+                            contact_detail,
+                        )
+                    if contact is None:
                         contact = _get_or_create_unknown_contact(
                             medium_for_blacklist,
                             contact_detail,
@@ -1577,6 +1619,11 @@ class CommsManager:
                     None,
                 )
                 is_new_unknown = False
+                if contact is None:
+                    contact = _lookup_known_contact(
+                        medium_for_blacklist,
+                        contact_detail,
+                    )
                 if contact is None:
                     contact = _get_or_create_unknown_contact(
                         medium_for_blacklist,
