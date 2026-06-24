@@ -63,7 +63,7 @@ jobs:
       ORCHESTRA_URL: ${{ vars.ORCHESTRA_URL }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_CI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_CI_API_KEY }}
-      DROID_COMMS_URL: ${{ vars.DROID_COMMS_URL }}
+      DROID_COMMS_URL: ${{ secrets.UNITY_COMMS_URL }}
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
       GCP_LOCATION: ${{ vars.GCP_LOCATION }}
       ORCHESTRA_GCP_BUCKET_NAME: ${{ vars.GCP_BUCKET_LOGS }}
