@@ -589,7 +589,9 @@ Also, let me remove this voice static.
 
 Much better.
 
-Any questions before we start with the onboarding?""",
+Any questions before we start with the onboarding?
+
+By the way, you'll probably want to unmute yourself first. Click the microphone at the bottom of the meet window, and then I'll be able to hear you.""",
 }
 
 
