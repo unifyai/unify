@@ -1742,6 +1742,11 @@ class CommsManager:
                     )
                     is_new_unknown = False
                     if contact is None:
+                        contact = _lookup_known_contact(
+                            Medium.WHATSAPP_CALL,
+                            number,
+                        )
+                    if contact is None:
                         contact = _get_or_create_unknown_contact(
                             Medium.WHATSAPP_CALL,
                             number,
@@ -1788,6 +1793,11 @@ class CommsManager:
                         None,
                     )
                     is_new_unknown = False
+                    if contact is None:
+                        contact = _lookup_known_contact(
+                            Medium.PHONE_CALL,
+                            number,
+                        )
                     if contact is None:
                         contact = _get_or_create_unknown_contact(
                             Medium.PHONE_CALL,

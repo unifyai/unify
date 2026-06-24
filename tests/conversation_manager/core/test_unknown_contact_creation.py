@@ -535,3 +535,104 @@ class TestDuplicatePrevention:
 
             # Should still have only one contact (reused the existing one)
             assert len(get_non_system_contacts(contact_manager)) == 1
+
+
+# =============================================================================
+# Test: Known-contact resolution via the live ContactManager
+# (_lookup_known_contact — shared by the phone/WhatsApp call branches)
+# =============================================================================
+
+
+def test_lookup_known_contact_resolves_call_media():
+    """The call branches resolve a sender that lives only in the ContactManager
+    (not in the event contacts or the session-snapshot local contact), and
+    return None for an unknown sender."""
+    from droid.conversation_manager.cm_types import Medium
+    from droid.conversation_manager.comms_manager import _lookup_known_contact
+    from droid.contact_manager.simulated import SimulatedContactManager
+
+    contact_manager = SimulatedContactManager()
+    contact_manager._create_contact(
+        first_name="Known",
+        phone_number="+15555551234",
+        whatsapp_number="+15555551234",
+        should_respond=True,
+    )
+
+    with patch(
+        "droid.manager_registry.ManagerRegistry.get_contact_manager",
+        return_value=contact_manager,
+    ):
+        phone_contact = _lookup_known_contact(Medium.PHONE_CALL, "+15555551234")
+        assert phone_contact is not None
+        assert phone_contact["phone_number"] == "+15555551234"
+
+        wa_contact = _lookup_known_contact(Medium.WHATSAPP_CALL, "+15555551234")
+        assert wa_contact is not None
+        assert wa_contact["whatsapp_number"] == "+15555551234"
+
+        assert _lookup_known_contact(Medium.PHONE_CALL, "+19999999999") is None
+
+
+class TestKnownContactResolutionViaContactManager:
+    """Inbound from a sender present only in the ContactManager resolves via the
+    live-Contacts fallback rather than minting an unknown contact."""
+
+    @pytest.mark.asyncio
+    async def test_whatsapp_message_resolves_known_contact_from_manager(
+        self,
+        broker,
+        mock_session_details,
+        mock_settings,
+    ):
+        from droid.conversation_manager.comms_manager import CommsManager
+
+        cm = CommsManager(broker)
+        cm.loop = asyncio.get_event_loop()
+
+        # The sender is NOT the boss (mock_session_details uses +15555550000) and
+        # is NOT in the event contacts; it exists only in the ContactManager.
+        contact_manager = SimulatedContactManager()
+        contact_manager._create_contact(
+            first_name="Known",
+            whatsapp_number="+15555557777",
+            should_respond=True,
+        )
+
+        async with broker.pubsub() as pubsub:
+            await pubsub.psubscribe("app:comms:*")
+
+            message = create_pubsub_message(
+                "whatsapp",
+                {
+                    "body": "hi from a known non-boss contact",
+                    "from_number": "+15555557777",
+                    "to_number": "+447414266034",
+                    "contacts": [],
+                },
+            )
+
+            with (
+                patch(
+                    "droid.conversation_manager.comms_manager._is_blacklisted",
+                    return_value=False,
+                ),
+                patch(
+                    "droid.manager_registry.ManagerRegistry.get_contact_manager",
+                    return_value=contact_manager,
+                ),
+            ):
+                cm.handle_message(message)
+                await _wait_for_condition(lambda: message._acked)
+
+            messages = await collect_messages(
+                pubsub,
+                ["app:comms:unknown_contact_created", "app:comms:whatsapp_message"],
+                timeout=1.0,
+            )
+            channels = [m["channel"] for m in messages]
+            # Resolved + dispatched as a normal message, and NOT minted as unknown.
+            assert "app:comms:whatsapp_message" in channels
+            assert "app:comms:unknown_contact_created" not in channels
+            # No new contact was created — the existing one was reused.
+            assert len(get_non_system_contacts(contact_manager)) == 1
