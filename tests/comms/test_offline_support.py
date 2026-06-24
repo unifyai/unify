@@ -7,6 +7,7 @@ from droid.comms import offline_support
 from droid.comms.primitives import CommsPrimitives
 from droid.conversation_manager.cm_types import Medium
 from droid.conversation_manager.domains import comms_utils
+from droid.conversation_manager.events import Event, WhatsAppSent
 from droid.task_scheduler.machine_state import (
     TaskOutboundOperationRecord,
     TaskOutboundOperationReference,
@@ -599,6 +600,62 @@ async def test_send_whatsapp_template_offline_does_not_claim_pending_resend(
     assert transcript_calls
     assert updated_records
     assert updated_records[0][1]["status"] == "completed"
+
+
+@pytest.mark.anyio
+async def test_send_whatsapp_template_live_tracks_delivered_template_and_pending_resend(
+    monkeypatch,
+):
+    cm = SimpleNamespace(_pending_whatsapp_resends={})
+    comms = CommsPrimitives(conversation_manager=cm)
+    comms._get_contact = lambda **kwargs: {
+        "contact_id": 5,
+        "first_name": "Alice",
+        "surname": "Owner",
+        "whatsapp_number": "+15555550123",
+        "should_respond": True,
+    }
+    comms._event_broker.publish = AsyncMock()
+    monkeypatch.setattr(comms, "_assistant_whatsapp_number", lambda: "+15555550001")
+    monkeypatch.setattr(
+        "droid.comms.primitives.SESSION_DETAILS.assistant.first_name",
+        "T-W1N",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "droid.comms.primitives.SESSION_DETAILS.assistant.agent_id",
+        42,
+        raising=False,
+    )
+
+    async def _fake_send_whatsapp_message(**kwargs):
+        assert kwargs["content"] == "Original clue"
+        return {
+            "success": True,
+            "method": "template",
+            "delivered_body": (
+                "Hello Alice, this is T-W1N from Unify. I have a message for you. "
+                "Reply here and I'll share the details!"
+            ),
+        }
+
+    monkeypatch.setattr(
+        comms_utils,
+        "send_whatsapp_message",
+        _fake_send_whatsapp_message,
+    )
+
+    result = await comms.send_whatsapp(contact_id=5, content="Original clue")
+
+    assert result["status"] == "ok"
+    assert result["pending_resend"] is True
+    assert cm._pending_whatsapp_resends[5] == "Original clue"
+
+    published = Event.from_json(comms._event_broker.publish.await_args.args[1])
+    assert isinstance(published, WhatsAppSent)
+    assert published.via_template is True
+    assert published.content == "Original clue"
+    assert published.delivered_content.startswith("Hello Alice, this is T-W1N")
 
 
 @pytest.mark.anyio

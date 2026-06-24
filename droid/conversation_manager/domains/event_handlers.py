@@ -42,6 +42,9 @@ from droid.conversation_manager.domains.task_activation import (
     _handle_task_trigger_requested_event,
     _surface_trigger_task_candidates,
 )
+from droid.conversation_manager.domains.whatsapp_history import (
+    whatsapp_sent_history_content,
+)
 from droid.memory_manager import broader_context
 from droid.task_scheduler.machine_state import invalidate_task_machine_state_reads
 from droid.conversation_manager.cm_types import Medium, Mode
@@ -1674,14 +1677,18 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             )
         case WhatsAppSent():
             medium = Medium.WHATSAPP_MESSAGE
-            message_content = event.content
+            message_content = whatsapp_sent_history_content(event)
             attachments = event.attachments
-            notif_content = f"WhatsApp sent to {sender_name}"
+            notif_content = (
+                f"WhatsApp template fallback sent to {sender_name}; original pending resend"
+                if event.via_template
+                else f"WhatsApp sent to {sender_name}"
+            )
             role = "assistant"
             event_trace = getattr(cm, "_current_event_trace", None) or {}
             cm._session_logger.info(
                 "whatsapp_sent",
-                f"WhatsApp to {sender_name}: {event.content}",
+                f"WhatsApp to {sender_name}: {message_content}",
             )
         case WhatsAppReceived():
             medium = Medium.WHATSAPP_MESSAGE

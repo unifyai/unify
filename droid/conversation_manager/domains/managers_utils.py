@@ -26,6 +26,9 @@ from droid.events.event_bus import EVENT_BUS
 from droid.manager_registry import ManagerRegistry
 from droid.function_manager.primitives import default_runtime_scope
 from droid.conversation_manager.cm_types import Medium, Mode
+from droid.conversation_manager.domains.whatsapp_history import (
+    whatsapp_sent_history_content,
+)
 
 if TYPE_CHECKING:
     from droid.actor.base import BaseActor
@@ -259,7 +262,7 @@ async def hydrate_global_thread(cm: "ConversationManager") -> None:
                     contact_id=contact_id,
                     sender_name=sender_name,
                     thread_name=Medium.WHATSAPP_MESSAGE,
-                    message_content=cm_event.content,
+                    message_content=whatsapp_sent_history_content(cm_event),
                     role="assistant",
                     timestamp=ts,
                     attachments=getattr(cm_event, "attachments", None),
@@ -1038,7 +1041,9 @@ async def log_message(
     )
     if "prehire" in event_name:
         role = event.role.capitalize()
-    if isinstance(event, (EmailSent, EmailReceived)):
+    if isinstance(event, WhatsAppSent):
+        content = whatsapp_sent_history_content(event)
+    elif isinstance(event, (EmailSent, EmailReceived)):
         content = event.subject + "\n\n" + event.body
     else:
         content = event.content

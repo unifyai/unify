@@ -31,6 +31,7 @@ from droid.conversation_manager.events import (
     Ping,
     SMSReceived,
     SMSSent,
+    WhatsAppSent,
     EmailReceived,
     EmailSent,
     UnifyMessageReceived,
@@ -502,6 +503,38 @@ class TestTextMessageHandlers:
         msgs = mock_cm.contact_index.get_messages_for_contact(2, Medium.SMS_MESSAGE)
         assert len(msgs) == 1
         # Sent messages have assistant role, not user
+
+    @pytest.mark.asyncio
+    async def test_whatsapp_template_sent_records_delivered_template(self, mock_cm):
+        """Template fallback history shows what WhatsApp actually delivered."""
+        event = WhatsAppSent(
+            contact={"contact_id": 2, "first_name": "Alice", "surname": "Smith"},
+            content="The clue is Blade Runner.",
+            via_template=True,
+            delivered_content=(
+                "Hello Alice, this is T-W1N from Unify. I have a message for you. "
+                "Reply here and I'll share the details!"
+            ),
+        )
+
+        with patch(
+            "droid.conversation_manager.domains.event_handlers.managers_utils",
+        ) as mock_utils:
+            mock_utils.queue_operation = AsyncMock()
+            await EventHandler.handle_event(event, mock_cm)
+
+        msgs = mock_cm.contact_index.get_messages_for_contact(
+            2,
+            Medium.WHATSAPP_MESSAGE,
+        )
+        assert len(msgs) == 1
+        assert "Hello Alice, this is T-W1N from Unify" in msgs[0].content
+        assert "The clue is Blade Runner." in msgs[0].content
+        assert "template fallback" in msgs[0].content
+        assert (
+            "WhatsApp template fallback sent"
+            in mock_cm.notifications_bar.notifications[0].content
+        )
 
     @pytest.mark.asyncio
     async def test_email_received_stores_subject_and_body(self, mock_cm):

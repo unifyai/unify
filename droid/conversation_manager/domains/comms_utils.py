@@ -201,7 +201,8 @@ async def send_whatsapp_message(
 
     Communication automatically handles the WhatsApp 24h session window:
     if the window is open, ``content`` is sent as free-form text; if closed,
-    it falls back to an approved greeting template with ``content`` appended.
+    it falls back to an approved greeting template and returns the delivered
+    template body separately from the intended ``content``.
 
     Args:
         to_number: The recipient's WhatsApp number (E.164)

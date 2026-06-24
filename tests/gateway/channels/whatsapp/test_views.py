@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from droid.gateway.channels.whatsapp import auth_router, unauth_router
+from droid.gateway.channels.whatsapp.views import render_greeting_template_text
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -80,6 +81,83 @@ def _async_httpx_response(
     resp = MagicMock(status_code=status_code, text=text_body)
     resp.json.return_value = json_body or {}
     return resp
+
+
+def test_send_closed_window_returns_template_delivered_body(client: TestClient):
+    twilio_client = MagicMock()
+    twilio_client.messages.create.return_value = MagicMock(sid="SM_template")
+
+    with (
+        patch(
+            "droid.gateway.channels.whatsapp.views._resolve_route",
+            new=AsyncMock(
+                return_value={"pool_number": "+15550000001", "window_open": False},
+            ),
+        ),
+        patch(
+            "droid.gateway.channels.whatsapp.views.build_twilio_wa_client",
+            return_value=twilio_client,
+        ),
+    ):
+        response = client.post(
+            "/whatsapp/send",
+            json={
+                "to": "+4915237826557",
+                "body": "The clue is Blade Runner.",
+                "assistant_id": 110,
+                "user_name": "Daniel",
+                "agent_name": "T-W1N",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        "method": "template",
+        "delivered_body": render_greeting_template_text("Daniel", "T-W1N"),
+    }
+    create_kwargs = twilio_client.messages.create.call_args.kwargs
+    assert "body" not in create_kwargs
+    assert create_kwargs["content_sid"]
+
+
+def test_send_open_window_returns_freeform_delivered_body(client: TestClient):
+    twilio_client = MagicMock()
+    twilio_client.messages.create.return_value = MagicMock(sid="SM_freeform")
+
+    with (
+        patch(
+            "droid.gateway.channels.whatsapp.views._resolve_route",
+            new=AsyncMock(
+                return_value={"pool_number": "+15550000001", "window_open": True},
+            ),
+        ),
+        patch(
+            "droid.gateway.channels.whatsapp.views.build_twilio_wa_client",
+            return_value=twilio_client,
+        ),
+    ):
+        response = client.post(
+            "/whatsapp/send",
+            json={
+                "to": "+4915237826557",
+                "body": "The clue is Blade Runner.",
+                "assistant_id": 110,
+                "user_name": "Daniel",
+                "agent_name": "T-W1N",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        "method": "freeform",
+        "delivered_body": "The clue is Blade Runner.",
+    }
+    assert (
+        twilio_client.messages.create.call_args.kwargs["body"]
+        == "The clue is Blade Runner."
+    )
 
 
 def _async_client_returning(response_mock: MagicMock) -> MagicMock:
