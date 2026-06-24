@@ -64,6 +64,8 @@ SYNC_PASSTHROUGH_FIELDS = {
 }
 DEFAULT_COMPOSIO_BATCH_SIZE = 25
 BOOTSTRAP_STATUS_SUCCESS = "success"
+BOOTSTRAP_TERMINAL_STATUSES = {BOOTSTRAP_STATUS_SUCCESS, "skipped", "failed"}
+BOOTSTRAP_POLL_BACKOFF_CAP = 60.0
 BUILTINS_BOOTSTRAP_SEED_OWNER = "public-builtins"
 INTEGRATION_BOOTSTRAP_EXECUTORS = {"direct_worker", "api", "none"}
 
@@ -619,21 +621,109 @@ def _run_direct_worker_executor(payload: dict[str, Any]) -> dict[str, Any]:
     return _run_json_command(shlex.split(command), request_payload=payload)
 
 
+def _bootstrap_state_to_result(state: dict[str, Any]) -> dict[str, Any]:
+    diagnostics = state.get("last_sync_diagnostics") or {}
+    return {
+        "status": state.get("last_status"),
+        "run_id": state.get("run_id"),
+        "desired_hash": state.get("desired_hash"),
+        "apps_upserted": int(state.get("apps_upserted", 0) or 0),
+        "tools_upserted": int(state.get("tools_upserted", 0) or 0),
+        "completed_batches": int(diagnostics.get("completed_batches", 0) or 0),
+        "skipped_batches": int(diagnostics.get("skipped_batches", 0) or 0),
+        "error": state.get("last_error"),
+        "elapsed_seconds": diagnostics.get("elapsed_seconds"),
+    }
+
+
+def _poll_builtins_sync(
+    *,
+    base_url: str,
+    admin_key: str,
+    environment: str,
+    backend_id: str,
+    run_id: str | None,
+    timeout: float,
+    interval: float,
+) -> dict[str, Any]:
+    """Poll bootstrap-state until the triggered run reaches a terminal status.
+
+    Correlates on ``run_id`` so a stale terminal row from a previous run cannot
+    satisfy the wait; bounded by ``timeout`` so the seed job fails loudly rather
+    than hanging forever.
+    """
+
+    deadline = time.monotonic() + timeout
+    backoff = interval
+    last_status: str | None = None
+    while True:
+        state = _bootstrap_state(
+            base_url=base_url,
+            admin_key=admin_key,
+            environment=environment,
+            backend_id=backend_id,
+        )
+        if state:
+            state_run_id = state.get("run_id")
+            status_value = state.get("last_status")
+            run_matches = run_id is None or state_run_id == run_id
+            if run_matches and status_value != last_status:
+                logging.info(
+                    "Polling Builtins seed run_id=%s status=%s apps=%s tools=%s",
+                    state_run_id,
+                    status_value,
+                    state.get("apps_upserted", 0),
+                    state.get("tools_upserted", 0),
+                )
+                last_status = status_value
+            if run_matches and status_value in BOOTSTRAP_TERMINAL_STATUSES:
+                return _bootstrap_state_to_result(state)
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                "Timed out polling Builtins seed bootstrap-state for "
+                f"{environment}/{backend_id} run_id={run_id} after {timeout:.0f}s",
+            )
+        time.sleep(min(backoff, max(0.0, deadline - time.monotonic())))
+        backoff = min(backoff * 1.5, BOOTSTRAP_POLL_BACKOFF_CAP)
+
+
 def _run_api_executor(
     *,
     base_url: str,
     admin_key: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    result = _admin_request(
+    """Trigger the hosted seed and wait for completion via bootstrap-state.
+
+    The hosted endpoint launches a Cloud Run Job and returns ``202`` with a
+    ``run_id`` immediately, so the heavy sync never holds this HTTP connection.
+    Self-host/local Orchestra runs the sync inline and returns a terminal
+    result directly, which is returned unchanged.
+    """
+
+    start = _admin_request(
         base_url=base_url,
         admin_key=admin_key,
         method="POST",
         path="/admin/integrations/builtins-sync/start",
         payload=payload,
-        timeout=float(os.environ.get("DROID_INTEGRATION_BOOTSTRAP_TIMEOUT", "3600")),
+        timeout=float(os.environ.get("DROID_INTEGRATION_BOOTSTRAP_TIMEOUT", "300")),
     )
-    return result
+    if start.get("status") in BOOTSTRAP_TERMINAL_STATUSES:
+        return start
+    return _poll_builtins_sync(
+        base_url=base_url,
+        admin_key=admin_key,
+        environment=str(payload["environment"]),
+        backend_id=str(payload["backend_id"]),
+        run_id=start.get("run_id"),
+        timeout=float(
+            os.environ.get("DROID_INTEGRATION_BOOTSTRAP_POLL_TIMEOUT", "5400"),
+        ),
+        interval=float(
+            os.environ.get("DROID_INTEGRATION_BOOTSTRAP_POLL_INTERVAL", "15"),
+        ),
+    )
 
 
 def _sync_and_seed_provider(
