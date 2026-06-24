@@ -2,6 +2,10 @@
 # Fork users: this will not run without the required secrets.
 name: Sync staging with main
 
+# Needs write access to fast-forward the staging ref via the API.
+permissions:
+  contents: write
+
 on:
   push:
     branches:
