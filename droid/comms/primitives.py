@@ -3832,11 +3832,13 @@ class CommsPrimitives:
         - Do not supply a different WhatsApp number from the one already on
           file. Update the contact first, then retry.
 
-        If WhatsApp call permission has not yet been granted by the contact, a
-        call invite can be sent instead. A live assistant session can keep the
-        callback context ready for when the contact taps "Call now". Headless
-        offline task runs cannot queue that follow-up context, so they only
-        report that an invite was sent.
+        WhatsApp Business Calling may require the contact to approve calls from
+        this business first. If permission has not yet been granted, this sends
+        a WhatsApp call-permission request instead of placing the call. In a live
+        assistant session, the call context is kept ready so the call is placed
+        automatically after the contact taps "Allow calls" / "Call now".
+        Headless offline task runs cannot queue that follow-up context, so they
+        only report that an invite was sent.
 
         Parameters
         ----------
@@ -4063,17 +4065,19 @@ class CommsPrimitives:
                 "status": "ok",
                 "pending_callback": True,
                 "note": (
-                    "Call permission not yet granted. A call invite was sent instead. "
-                    "When the contact taps 'Call now', the call will connect and you will "
-                    "be briefed with the context you provided."
+                    "WhatsApp requires the contact to approve calls from this business first. "
+                    "A call-permission request was sent instead of the call. Tell the user "
+                    "to tap Allow calls / Call now; when they approve, the call will be "
+                    "placed automatically with your briefing context."
                 ),
             }
         return {
             "status": "ok",
             "note": (
-                "Call permission not yet granted. A call invite was sent instead. "
-                "Because this send ran without a live assistant session, the callback "
-                "was not queued with your briefing context."
+                "WhatsApp requires the contact to approve calls from this business first. "
+                "A call-permission request was sent instead of the call. Because this send "
+                "ran without a live assistant session, the callback was not queued with "
+                "your briefing context."
             ),
         }
 

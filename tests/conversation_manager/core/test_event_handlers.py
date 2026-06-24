@@ -39,6 +39,7 @@ from droid.conversation_manager.events import (
     PhoneCallStarted,
     PhoneCallEnded,
     PhoneCallAnswered,
+    WhatsAppCallInviteSent,
     WhatsAppCallPermissionResponse,
     UnifyMeetReceived,
     UnifyMeetStarted,
@@ -856,6 +857,45 @@ class TestPhoneCallHandlers:
             "droid_None_whatsapp_call"
         )
         mock_cm.request_llm_run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_whatsapp_call_invite_is_permission_request(self, mock_cm):
+        event = WhatsAppCallInviteSent(
+            contact={
+                "contact_id": 2,
+                "first_name": "Alice",
+                "surname": "Smith",
+            },
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        msgs = mock_cm.contact_index.get_messages_for_contact(2, Medium.WHATSAPP_CALL)
+        assert msgs[-1].content == (
+            "<WhatsApp Call Permission Request Sent: waiting for the user to allow calls>"
+        )
+        assert (
+            "permission request sent"
+            in mock_cm.notifications_bar.notifications[-1].content
+        )
+
+    @pytest.mark.asyncio
+    async def test_whatsapp_permission_acceptance_says_calling_now(self, mock_cm):
+        event = WhatsAppCallPermissionResponse(
+            contact={
+                "contact_id": 2,
+                "first_name": "Alice",
+                "surname": "Smith",
+                "whatsapp_number": "+15555552222",
+            },
+            accepted=True,
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        msgs = mock_cm.contact_index.get_messages_for_contact(2, Medium.WHATSAPP_CALL)
+        assert msgs[-1].content == "<WhatsApp Call Permission Granted: calling now>"
+        assert "calling now" in mock_cm.notifications_bar.notifications[-1].content
 
 
 # =============================================================================

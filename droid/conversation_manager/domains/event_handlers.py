@@ -957,7 +957,7 @@ async def _(
     has_pending_context = contact_id in cm._pending_whatsapp_call_contexts
 
     if event.accepted:
-        notif_content = f"{sender_name} granted WhatsApp call permission"
+        notif_content = f"{sender_name} granted WhatsApp call permission; calling now"
     else:
         notif_content = f"{sender_name} rejected WhatsApp call permission"
         cm._pending_whatsapp_call_contexts.pop(contact_id, None)
@@ -968,7 +968,11 @@ async def _(
         contact_id=contact_id,
         sender_name=sender_name,
         thread_name=Medium.WHATSAPP_CALL,
-        message_content=f"<Call Permission: {'Accepted' if event.accepted else 'Rejected'}>",
+        message_content=(
+            "<WhatsApp Call Permission Granted: calling now>"
+            if event.accepted
+            else "<WhatsApp Call Permission Rejected>"
+        ),
         role="user",
         timestamp=event.timestamp,
     )
@@ -1035,7 +1039,7 @@ async def _(
 
     cm.notifications_bar.push_notif(
         "Comms",
-        f"WhatsApp call invite sent to {sender_name}",
+        f"WhatsApp call permission request sent to {sender_name}; waiting for approval",
         event.timestamp,
     )
 
@@ -1043,7 +1047,7 @@ async def _(
         contact_id=contact_id,
         sender_name=sender_name,
         thread_name=Medium.WHATSAPP_CALL,
-        message_content="<WhatsApp Call Invite Sent>",
+        message_content=event.content,
         role="assistant",
         timestamp=event.timestamp,
     )
