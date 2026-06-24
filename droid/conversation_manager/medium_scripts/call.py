@@ -1815,7 +1815,9 @@ async def entrypoint(ctx: agents.JobContext):
                     SpeechDeduplicationChecker,
                 )
 
-                dedup = await SpeechDeduplicationChecker().evaluate(
+                dedup = await SpeechDeduplicationChecker(
+                    model=SETTINGS.conversation.FAST_BRAIN_MODEL,
+                ).evaluate(
                     proposed_speech=text,
                     recent_utterances=recent,
                     recent_notifications=notifications,

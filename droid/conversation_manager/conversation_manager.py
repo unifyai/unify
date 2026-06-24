@@ -340,7 +340,9 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self._recording_exchange_ids: dict[str, int] = {}
 
         # proactive speech
-        self.proactive_speech = ProactiveSpeech()
+        self.proactive_speech = ProactiveSpeech(
+            model=SETTINGS.conversation.FAST_BRAIN_MODEL,
+        )
         self._proactive_speech_task: asyncio.Task | None = None
         self._proactive_speech_gen: int = 0
         self._proactive_speech_enabled: bool = True
