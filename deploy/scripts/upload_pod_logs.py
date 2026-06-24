@@ -54,7 +54,9 @@ def compress_logs(log_dirs: list[str]) -> Path | None:
         return None
 
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
-    tmp = Path(tempfile.mktemp(suffix=f"_{ts}.tar.gz"))
+    _tmp_fd, _tmp_name = tempfile.mkstemp(suffix=f"_{ts}.tar.gz")
+    os.close(_tmp_fd)
+    tmp = Path(_tmp_name)
     skipped = 0
 
     with tarfile.open(tmp, "w:gz") as tar:

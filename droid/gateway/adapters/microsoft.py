@@ -76,8 +76,8 @@ async def microsoft_oauth_callback(
         )
     try:
         state_data = verify_oauth_state(state, signing_key)
-    except OAuthStateError as exc:
-        return Response(content=str(exc), status_code=400)
+    except OAuthStateError:
+        return Response(content="Invalid OAuth state", status_code=400)
 
     assistant_id = str(state_data.get("assistant_id") or "")
     if not assistant_id:
