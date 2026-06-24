@@ -104,6 +104,9 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["droid", "droid.*"]
 
+[tool.setuptools.package-data]
+"droid.assets.audio" = ["*.mp3"]
+
 [tool.uv.sources]
 unify = { path = "../unify", editable = true }
 unillm = { path = "../unillm", editable = true }

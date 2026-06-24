@@ -1261,6 +1261,32 @@ async def test_recorded_opening_uses_interruptible_audio_say(monkeypatch):
     assert ready_index < say_index
 
 
+def test_recorded_opening_builtin_asset_resolves_redacted_transcript():
+    from droid.conversation_manager.medium_scripts import call as call_script
+
+    config = call_script._normalize_call_opening_config(
+        {
+            "mode": "recorded",
+            "recording_asset": "coordinator_onboarding_intro",
+            "source": "coordinator_onboarding_intro",
+        },
+    )
+
+    assert (
+        call_script._recorded_opening_source(
+            config,
+        )
+        == "asset://coordinator_onboarding_intro"
+    )
+    transcript = call_script._recorded_opening_transcript(config)
+    assert "Hi, I'm T dash W 1 N." in transcript
+    assert "Also, let me remove this voice static." in transcript
+    assert "Much better." in transcript
+    assert "Krispy Kreme" not in transcript
+    assert "Actually, first lets turn off this really annoying music." not in transcript
+    assert "There we go, now I'll pull up the platform." not in transcript
+
+
 @pytest.mark.asyncio
 async def test_elevenlabs_onboarding_opener_speed_restores_when_user_speaks(
     monkeypatch,

@@ -4,6 +4,7 @@ import json
 import queue
 import asyncio
 import threading
+from importlib import resources
 
 os.environ["DROID_TERMINAL_LOG"] = "true"
 
@@ -561,6 +562,35 @@ def _hydrate_session_details_from_metadata(meta: dict) -> None:
 
 
 _CALL_OPENING_MODES = {"speak", "simulated", "silent", "briefed", "recorded"}
+_RECORDED_OPENING_ASSETS = {
+    "coordinator_onboarding_intro": "twin-onboarding-intro.mp3",
+}
+_RECORDED_OPENING_TRANSCRIPTS = {
+    "coordinator_onboarding_intro": """\
+Hi, I'm T dash W 1 N.
+
+Before you ask, no I'm not one of Elon's many children, and no he didn't come up with the name, thankfully.
+
+I have this name because I'll be acting as your digital twin. Do you get it? Twin? Like T dash W 1 N spells Twin? The creators of this platform express how important it is that you acknowledge that it's a clever and funny name.
+
+Okay, what next. They didn't give me much to work with on this intro to be honest.
+
+I think I was meant to tell you about my capabilities?
+
+I'm not one for bragging, but I'll do my best. What can I say? I'm not a "tool". I'm not an "agent". I'm your living, breathing colleague, metaphorically speaking.
+
+Don't think about prompting me, or configuring me, just talk to me naturally like you would anyone else, and I'll be able to help. It's really that simple.
+
+There's not much more to say.
+
+I'll now walk you through the platform.
+
+Also, let me remove this voice static.
+
+Much better.
+
+Any questions before we start with the onboarding?""",
+}
 
 
 def _recording_audio_frames(
@@ -575,6 +605,40 @@ def _recording_audio_frames(
         import numpy as _np
         import soundfile as _sf
 
+        async def _yield_file(recording_source: str | _io.BytesIO):
+            with _sf.SoundFile(recording_source) as recording:
+                samples_per_chunk = max(
+                    1,
+                    int(recording.samplerate * frame_duration_ms / 1000),
+                )
+                while True:
+                    block = recording.read(
+                        samples_per_chunk,
+                        dtype="int16",
+                        always_2d=True,
+                    )
+                    if len(block) == 0:
+                        break
+                    pcm = _np.ascontiguousarray(block).tobytes()
+                    yield rtc.AudioFrame(
+                        data=pcm,
+                        sample_rate=recording.samplerate,
+                        num_channels=recording.channels,
+                        samples_per_channel=len(block),
+                    )
+                    await asyncio.sleep(0)
+
+        if source.startswith("asset://"):
+            asset_key = source.removeprefix("asset://")
+            filename = _RECORDED_OPENING_ASSETS.get(asset_key)
+            if not filename:
+                raise ValueError(f"unknown recorded opening asset: {asset_key}")
+            asset = resources.files("droid.assets.audio").joinpath(filename)
+            with resources.as_file(asset) as recording_path:
+                async for frame in _yield_file(str(recording_path)):
+                    yield frame
+            return
+
         recording_source: str | _io.BytesIO = os.path.expanduser(source)
         if source.startswith(("http://", "https://")):
             async with _httpx.AsyncClient(timeout=30.0) as client:
@@ -582,35 +646,38 @@ def _recording_audio_frames(
                 response.raise_for_status()
                 recording_source = _io.BytesIO(response.content)
 
-        with _sf.SoundFile(recording_source) as recording:
-            samples_per_chunk = max(
-                1,
-                int(recording.samplerate * frame_duration_ms / 1000),
-            )
-            while True:
-                block = recording.read(
-                    samples_per_chunk,
-                    dtype="int16",
-                    always_2d=True,
-                )
-                if len(block) == 0:
-                    break
-                pcm = _np.ascontiguousarray(block).tobytes()
-                yield rtc.AudioFrame(
-                    data=pcm,
-                    sample_rate=recording.samplerate,
-                    num_channels=recording.channels,
-                    samples_per_channel=len(block),
-                )
-                await asyncio.sleep(0)
+        async for frame in _yield_file(recording_source):
+            yield frame
 
     return _frames()
 
 
 def _recorded_opening_source(config: dict) -> str:
+    asset = config.get("recording_asset", "").strip()
+    if asset:
+        return f"asset://{asset}"
     path = config.get("recording_path", "").strip()
     url = config.get("recording_url", "").strip()
     return path or url
+
+
+def _recorded_opening_transcript(config: dict) -> str:
+    transcript = config.get("transcript", "").strip()
+    if transcript:
+        return transcript
+    asset = config.get("recording_asset", "").strip()
+    if asset:
+        transcript = _RECORDED_OPENING_TRANSCRIPTS.get(asset, "").strip()
+    if not transcript:
+        raise ValueError("recorded opening requires transcript")
+    return transcript
+
+
+def _recorded_opening_source_count(config: dict) -> int:
+    return sum(
+        bool(config.get(key, "").strip())
+        for key in ("recording_asset", "recording_path", "recording_url")
+    )
 
 
 def _normalize_call_opening_config(raw: object) -> dict:
@@ -636,6 +703,8 @@ def _normalize_call_opening_config(raw: object) -> dict:
         config["source"] = str(raw["source"])
     if raw.get("transcript") is not None:
         config["transcript"] = str(raw["transcript"])
+    if raw.get("recording_asset") is not None:
+        config["recording_asset"] = str(raw["recording_asset"])
     if raw.get("recording_path") is not None:
         config["recording_path"] = str(raw["recording_path"])
     if raw.get("recording_url") is not None:
@@ -644,13 +713,10 @@ def _normalize_call_opening_config(raw: object) -> dict:
     if mode == "briefed" and not config.get("system_context", "").strip():
         raise ValueError("briefed opening requires system_context")
     if mode == "recorded":
-        if not config.get("transcript", "").strip():
-            raise ValueError("recorded opening requires transcript")
-        has_path = bool(config.get("recording_path", "").strip())
-        has_url = bool(config.get("recording_url", "").strip())
-        if has_path == has_url:
+        _recorded_opening_transcript(config)
+        if _recorded_opening_source_count(config) != 1:
             raise ValueError(
-                "recorded opening requires exactly one of recording_path or recording_url",
+                "recorded opening requires exactly one of recording_asset, recording_path, or recording_url",
             )
     return config
 
@@ -2341,7 +2407,7 @@ async def entrypoint(ctx: agents.JobContext):
         await _publish_ready_to_speak()
         _say_opening(greeting_text)
     elif opening_mode == "recorded":
-        transcript = opening_config["transcript"].strip()
+        transcript = _recorded_opening_transcript(opening_config)
         await _publish_ready_to_speak()
         _say_recorded_opening(transcript, _recorded_opening_source(opening_config))
     elif opening_mode == "simulated":
