@@ -247,6 +247,43 @@ class TestTTSAssistantClass:
         assert assistant.assistant_utterance_event == OutboundUnifyMeetUtterance
 
 
+class TestElevenLabsTwinPronunciation:
+    """Tests for the ElevenLabs text-stream pronunciation normalizer."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("chunks", "expected"),
+        [
+            (["Say T-W1N now."], "Say Twin now."),
+            (["Say t-w1n now."], "Say Twin now."),
+            (["Say T-", "w1", "N now."], "Say Twin now."),
+            (["T-W1N and t-W1n"], "Twin and Twin"),
+            (["Almost T-W1 but not done"], "Almost T-W1 but not done"),
+        ],
+    )
+    async def test_normalizes_twin_marker_across_stream_chunks(
+        self,
+        chunks,
+        expected,
+    ):
+        from droid.conversation_manager.medium_scripts.call import (
+            _normalize_elevenlabs_twin_pronunciation_stream,
+        )
+
+        async def _chunks():
+            for chunk in chunks:
+                yield chunk
+
+        normalized = [
+            chunk
+            async for chunk in _normalize_elevenlabs_twin_pronunciation_stream(
+                _chunks(),
+            )
+        ]
+
+        assert "".join(normalized) == expected
+
+
 # =============================================================================
 # Unit Tests: Common Helpers
 # =============================================================================
