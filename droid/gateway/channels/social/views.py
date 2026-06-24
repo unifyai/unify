@@ -17,10 +17,10 @@ applying the translation rules from
   per-assistant Pub/Sub topic; it's a synchronous Twilio SMS /
   WhatsApp send.
 
-The wire shape (route paths, request/response models, status codes,
-error semantics) is preserved bit-for-bit so the gateway-app
-aggregator in Phase B can mount this router at ``/social`` and
-external callers see no change.
+The route paths, status codes, and error semantics match the original
+communication service. The request model also accepts an optional
+WhatsApp sender override for callers that know which approved sender
+should deliver the code.
 """
 
 from __future__ import annotations
@@ -43,6 +43,7 @@ router = APIRouter()
 
 MESSAGING_SERVICE_NAME = "Droid"
 DEFAULT_CODE_LENGTH = 6
+DEFAULT_WHATSAPP_VERIFICATION_FROM_NUMBER = "+16626772032"
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +60,10 @@ class VerificationRequest(BaseModel):
         ...,
         description="The user's account identifier (e.g., phone number).",
     )
+    from_number: str | None = Field(
+        None,
+        description="Optional WhatsApp sender number for verification delivery.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +74,10 @@ class VerificationRequest(BaseModel):
 def _generate_verification_code(length: int = DEFAULT_CODE_LENGTH) -> str:
     """Generate a random numeric verification code."""
     return "".join(random.choices(string.digits, k=length))
+
+
+def _normalize_whatsapp_number(number: str) -> str:
+    return number.replace("whatsapp:", "").strip()
 
 
 _messaging_service_sid: str | None = None
@@ -129,11 +138,14 @@ async def send_verification_message(request: VerificationRequest):
     if platform == "whatsapp":
         try:
             twilio_client = build_twilio_wa_client(credentials)
+            from_number = _normalize_whatsapp_number(
+                request.from_number or DEFAULT_WHATSAPP_VERIFICATION_FROM_NUMBER,
+            )
             twilio_client.messages.create(
                 content_sid="HX66a14c4ec2f4e8a9d1d14ac2fa439a29",
                 content_variables=json.dumps({"1": code}),
                 to=f"whatsapp:{identifier}",
-                from_="whatsapp:+16626772032",
+                from_=f"whatsapp:{from_number}",
             )
         except Exception as exc:
             logger.error("WhatsApp verification send failed: %s", exc)
@@ -174,4 +186,9 @@ async def send_verification_message(request: VerificationRequest):
     }
 
 
-__all__ = ["router", "VerificationRequest", "MESSAGING_SERVICE_NAME"]
+__all__ = [
+    "router",
+    "VerificationRequest",
+    "MESSAGING_SERVICE_NAME",
+    "DEFAULT_WHATSAPP_VERIFICATION_FROM_NUMBER",
+]

@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 
 from droid.gateway.channels.social import router
 from droid.gateway.channels.social.views import (
+    DEFAULT_WHATSAPP_VERIFICATION_FROM_NUMBER,
     MESSAGING_SERVICE_NAME,
     VerificationRequest,
     _get_messaging_service_sid,
@@ -166,7 +167,9 @@ def test_verify_whatsapp_sends_via_twilio_with_expected_args(
     fake_wa_client.messages.create.assert_called_once()
     call_kwargs = fake_wa_client.messages.create.call_args.kwargs
     assert call_kwargs["to"] == "whatsapp:+15555550000"
-    assert call_kwargs["from_"] == "whatsapp:+16626772032"
+    assert (
+        call_kwargs["from_"] == f"whatsapp:{DEFAULT_WHATSAPP_VERIFICATION_FROM_NUMBER}"
+    )
     assert call_kwargs["content_sid"].startswith("HX")  # Twilio content template SID
     # The generated code is the same one returned in the response.
     import json as _json
@@ -174,6 +177,31 @@ def test_verify_whatsapp_sends_via_twilio_with_expected_args(
     assert _json.loads(call_kwargs["content_variables"]) == {
         "1": body["verification_code"],
     }
+
+
+def test_verify_whatsapp_uses_requested_sender_override(
+    client: TestClient,
+    _twilio_credentials: None,
+) -> None:
+    fake_wa_client = MagicMock(name="TwilioWaClient")
+    with patch(
+        "droid.gateway.channels.social.views.build_twilio_wa_client",
+        return_value=fake_wa_client,
+    ):
+        response = client.post(
+            "/social/verify",
+            json={
+                "platform": "whatsapp",
+                "account_identifier": "+15555550000",
+                "from_number": "whatsapp:+447414266034",
+            },
+        )
+
+    assert response.status_code == 200
+    fake_wa_client.messages.create.assert_called_once()
+    call_kwargs = fake_wa_client.messages.create.call_args.kwargs
+    assert call_kwargs["to"] == "whatsapp:+15555550000"
+    assert call_kwargs["from_"] == "whatsapp:+447414266034"
 
 
 def test_verify_whatsapp_propagates_twilio_failure_as_500(
