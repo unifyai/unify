@@ -988,6 +988,243 @@ async def test_simulated_opening_publishes_ready_before_utterance(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_recorded_opening_uses_interruptible_audio_say(monkeypatch):
+    from livekit.agents import llm
+    from droid.conversation_manager.medium_scripts import call as call_script
+
+    sequence = []
+    audio_sources = []
+    fake_audio = object()
+    contact = {"contact_id": 1, "first_name": "User", "surname": "Example"}
+    boss = {"contact_id": 1, "first_name": "User", "surname": "Example"}
+
+    class _ImmediateAwaitable:
+        def __await__(self):
+            async def _done():
+                return None
+
+            return _done().__await__()
+
+    class _FakeLocalParticipant:
+        async def publish_data(self, payload, *, topic=None, reliable=False):
+            sequence.append(("data", json.loads(payload.decode()), topic, reliable))
+
+    class _FakeRoom:
+        name = "fake-room"
+        local_participant = _FakeLocalParticipant()
+
+        def on(self, *args, **kwargs):
+            return lambda fn: fn
+
+    class _FakeJobContext:
+        def __init__(self):
+            self.room = _FakeRoom()
+            self.job = SimpleNamespace(
+                metadata=json.dumps(
+                    {
+                        "voice_provider": "cartesia",
+                        "voice_id": "",
+                        "outbound": False,
+                        "channel": "unify_meet",
+                        "contact": contact,
+                        "boss": boss,
+                        "assistant_bio": "Assistant bio",
+                        "assistant_id": "123",
+                        "user_id": "user-123",
+                        "assistant_name": "Coordinator Droid",
+                        "is_coordinator": False,
+                        "opening_config": {
+                            "mode": "recorded",
+                            "transcript": "Hi, I'm your coordinator droid.",
+                            "recording_path": "/tmp/recorded-opener.wav",
+                            "source": "coordinator_onboarding_intro",
+                        },
+                    },
+                ),
+            )
+
+        async def connect(self):
+            return None
+
+        def add_shutdown_callback(self, cb):
+            pass
+
+        def shutdown(self, reason=""):
+            pass
+
+    class _FakeEventBroker:
+        def set_logger(self, fb_logger):
+            pass
+
+        def register_callback(self, channel, handler):
+            pass
+
+        async def publish(self, channel, message):
+            sequence.append(("broker", channel, message))
+            return 1
+
+        def reinit_socket(self):
+            pass
+
+    class _FakeSession:
+        def __init__(self, *args, **kwargs):
+            self._chat_ctx = llm.ChatContext()
+            self.current_agent = None
+            self._events = {}
+            self.agent_state = "listening"
+            self.current_speech = None
+            self.say_calls = []
+            self.generate_reply_calls = []
+
+        @property
+        def history(self):
+            return self._chat_ctx
+
+        def on(self, event_name):
+            def _decorator(fn):
+                self._events[event_name] = fn
+                return fn
+
+            return _decorator
+
+        async def start(self, room, agent, room_input_options=None):
+            self.current_agent = agent
+
+        def generate_reply(self, **kwargs):
+            self.generate_reply_calls.append(kwargs)
+            return _ImmediateAwaitable()
+
+        def say(self, text, **kwargs):
+            sequence.append(("say", text, kwargs))
+            self.say_calls.append((text, kwargs))
+            return _ImmediateAwaitable()
+
+        def interrupt(self):
+            pass
+
+    class _FakeAssistant:
+        def __init__(self, *args, **kwargs):
+            self._chat_ctx = llm.ChatContext()
+            self.call_received = True
+            self.user_turn_generating = False
+
+        def set_call_received(self):
+            self.call_received = True
+
+        def set_credit_gate_state_provider(self, provider):
+            self.credit_gate_state_provider = provider
+
+    class _FakeCreditGateMonitor:
+        state = SimpleNamespace(allowed=True)
+
+        async def run(self):
+            return None
+
+    async def _noop_async(*args, **kwargs):
+        return None
+
+    async def _empty_history(*args, **kwargs):
+        return []
+
+    async def _noop_end_call():
+        return None
+
+    def _fake_recording_audio_frames(source):
+        audio_sources.append(source)
+        return fake_audio
+
+    fake_session_details = SimpleNamespace(
+        user=SimpleNamespace(id="user-123"),
+        assistant=SimpleNamespace(
+            about="Assistant bio",
+            is_coordinator=False,
+            agent_id=None,
+            name="Coordinator Droid",
+            first_name="",
+            surname="",
+            user_desktop_for=lambda user_id: None,
+        ),
+        voice=SimpleNamespace(provider="cartesia", id=""),
+        voice_call=SimpleNamespace(outbound=False, channel="unify_meet"),
+        is_coordinator=False,
+        org_id=None,
+        unify_key="",
+    )
+
+    session_holder = {}
+
+    def _fake_session_factory(*args, **kwargs):
+        session = _FakeSession(*args, **kwargs)
+        session_holder["session"] = session
+        return session
+
+    monkeypatch.setattr(call_script, "event_broker", _FakeEventBroker())
+    monkeypatch.setattr(call_script, "SESSION_DETAILS", fake_session_details)
+    monkeypatch.setattr(call_script, "AgentSession", _fake_session_factory)
+    monkeypatch.setattr(call_script, "Assistant", _FakeAssistant)
+    monkeypatch.setattr(call_script, "UnifyLLM", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        call_script,
+        "build_voice_agent_prompt",
+        lambda **kwargs: SimpleNamespace(flatten=lambda: "system prompt"),
+    )
+    monkeypatch.setattr(call_script, "start_event_broker_receive", _noop_async)
+    monkeypatch.setattr(call_script, "hydrate_fast_brain_history", _empty_history)
+    monkeypatch.setattr(call_script, "publish_call_started", _noop_async)
+    monkeypatch.setattr(call_script, "publish_call_ended", _noop_async)
+    monkeypatch.setattr(call_script, "delete_livekit_room", _noop_async)
+    monkeypatch.setattr(
+        call_script,
+        "FastBrainCreditGateMonitor",
+        _FakeCreditGateMonitor,
+    )
+    monkeypatch.setattr(
+        call_script,
+        "_recording_audio_frames",
+        _fake_recording_audio_frames,
+    )
+    monkeypatch.setattr(
+        call_script,
+        "create_end_call",
+        lambda *args, **kwargs: _noop_end_call,
+    )
+    monkeypatch.setattr(
+        call_script,
+        "setup_participant_disconnect_handler",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(call_script, "RoomInputOptions", lambda **kwargs: object())
+    monkeypatch.setattr(call_script, "EnglishModel", lambda: object())
+    monkeypatch.setattr(call_script.cartesia, "TTS", lambda **kwargs: object())
+    monkeypatch.setattr(call_script.elevenlabs, "TTS", lambda **kwargs: object())
+    if hasattr(call_script, "noise_cancellation"):
+        monkeypatch.setattr(call_script.noise_cancellation, "BVC", lambda: object())
+    monkeypatch.setattr(call_script, "STT", object())
+    monkeypatch.setattr(call_script, "VAD", object())
+
+    await call_script.entrypoint(_FakeJobContext())
+
+    session = session_holder["session"]
+    assert audio_sources == ["/tmp/recorded-opener.wav"]
+    assert session.generate_reply_calls == []
+    assert len(session.say_calls) == 1
+
+    text, kwargs = session.say_calls[0]
+    assert text == "Hi, I'm your coordinator droid."
+    assert kwargs["audio"] is fake_audio
+    assert kwargs["allow_interruptions"] is True
+    assert kwargs["add_to_chat_ctx"] is True
+
+    ready_index = next(
+        i
+        for i, item in enumerate(sequence)
+        if item[0] == "data" and item[1] == {"type": "ready_to_speak"}
+    )
+    say_index = next(i for i, item in enumerate(sequence) if item[0] == "say")
+    assert ready_index < say_index
+
+
+@pytest.mark.asyncio
 async def test_elevenlabs_onboarding_opener_speed_restores_when_user_speaks(
     monkeypatch,
 ):
