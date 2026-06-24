@@ -93,7 +93,7 @@ DEPLETED_CREDITS_FAST_BRAIN_RESPONSE = (
     "Your credits are depleted, so I can't continue helping with setup or tasks "
     "until you top up. Please add credits in billing, then I'll pick this back up."
 )
-ELEVENLABS_ONBOARDING_OPENER_SPEED = 0.9
+ELEVENLABS_ONBOARDING_OPENER_SPEED = 0.5
 ELEVENLABS_VOICE_SETTINGS_STABILITY = 0.5
 ELEVENLABS_VOICE_SETTINGS_SIMILARITY_BOOST = 0.75
 

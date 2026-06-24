@@ -1476,7 +1476,7 @@ async def test_elevenlabs_onboarding_opener_speed_restores_when_user_speaks(
 
     fake_tts = fake_tts_holder["tts"]
     assert len(fake_tts.update_calls) == 1
-    assert fake_tts.update_calls[0].speed == 0.9
+    assert fake_tts.update_calls[0].speed == 0.5
 
     session = fake_session_holder["session"]
     previous_connection = fake_tts._TTS__current_connection
