@@ -826,7 +826,7 @@ class TestUnifyMeetHandling:
                     "contacts": contacts,
                     "opening_config": {
                         "mode": "simulated",
-                        "simulated_utterance": "Hi, I'm Twin.",
+                        "simulated_utterance": "Hi, I'm T-W1N.",
                         "source": "twin_onboarding_intro",
                     },
                 },
@@ -844,7 +844,7 @@ class TestUnifyMeetHandling:
             assert event.room_name == "room_123"
             assert event.opening_config == {
                 "mode": "simulated",
-                "simulated_utterance": "Hi, I'm Twin.",
+                "simulated_utterance": "Hi, I'm T-W1N.",
                 "source": "twin_onboarding_intro",
             }
 
@@ -1569,8 +1569,8 @@ class TestSystemEvents:
                 "droid_system_event",
                 {
                     "event_type": "assistant_turn_injected",
-                    "message": "Twin gave the prerecorded intro.",
-                    "content": "Twin gave the prerecorded intro.",
+                    "message": "T-W1N gave the prerecorded intro.",
+                    "content": "T-W1N gave the prerecorded intro.",
                     "contact_id": 1,
                     "source": "twin_onboarding_intro",
                     "schedule_proactive": True,
@@ -1589,7 +1589,7 @@ class TestSystemEvents:
             event = Event.from_json(msg["data"])
             assert isinstance(event, AssistantTurnInjected)
             assert event.contact == {"contact_id": 1}
-            assert event.content == "Twin gave the prerecorded intro."
+            assert event.content == "T-W1N gave the prerecorded intro."
             assert event.source == "twin_onboarding_intro"
             assert event.schedule_proactive is True
 

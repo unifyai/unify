@@ -229,7 +229,7 @@ def _coordinator_onboarding_notification_text(
             "in the Onboarding checklist before mentioning any destination tab, "
             "dialog, or settings page. If there is no evidence that the user "
             "has already had a meaningful onboarding orientation from you, "
-            "introduce yourself as Twin, frame yourself as their digital twin "
+            "introduce yourself as T-W1N, frame yourself as their digital twin "
             "or stand-in, explain that onboarding is a shared walkthrough from "
             "communication basics into workspace access, integrations, "
             "recurring tasks, computer use, and other sections, invite them "

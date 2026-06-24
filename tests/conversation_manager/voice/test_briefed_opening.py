@@ -37,12 +37,12 @@ SAMPLE_BRIEFING = (
     "[Briefing for your opening turn]\n"
     "This is the user's first onboarding voice call with you. Open with a "
     "warm, natural first-meeting introduction in your own words. Cover:\n"
-    "- Greet the user by first name and introduce yourself as Twin, their "
+    "- Greet the user by first name and introduce yourself as T-W1N, their "
     "digital twin / stand-in.\n"
     "- Explain that onboarding is a short shared walkthrough covering "
     "Communication, Workspace, Integrations, and that they can skip ahead.\n"
     "- Make this the concrete next step: starting the communication-channel "
-    "reference quiz by clicking the 'Trigger email from Twin' row."
+    "reference quiz by clicking the 'Trigger email from T-W1N' row."
 )
 
 
@@ -89,7 +89,7 @@ def test_default_opening_uses_generic_guardrail():
 @_handle_project
 async def test_briefed_opener_follows_briefing():
     """With a coordinator onboarding briefing in context and the authoritative
-    briefed guardrail, the opening turn should orient the user (introduce Twin /
+    briefed guardrail, the opening turn should orient the user (introduce T-W1N /
     onboarding / the next step) rather than emit a bare generic greeting."""
     prompt = build_voice_agent_prompt(
         bio="A helpful and efficient assistant.",

@@ -156,8 +156,8 @@ def test_voice_opening_block_gives_broader_first_orientation() -> None:
         next_targets=[
             {
                 "id": "email-reference",
-                "title": "Trigger email from Twin",
-                "nudge_voice": "clicking Trigger email from Twin",
+                "title": "Trigger email from T-W1N",
+                "nudge_voice": "clicking Trigger email from T-W1N",
                 "interaction": {"type": "reference_quiz"},
             },
             {
@@ -174,7 +174,7 @@ def test_voice_opening_block_gives_broader_first_orientation() -> None:
     assert "recurring tasks" in block
     assert "computer use" in block
     assert "Pause onboarding for now" in block
-    assert "clicking Trigger email from Twin" in block
+    assert "clicking Trigger email from T-W1N" in block
     assert "overrides the generic Brevity/Opening rule" in block
     assert "explain the game design" in block
     assert "not a monologue I must finish" in block
