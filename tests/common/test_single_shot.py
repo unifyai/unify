@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from types import SimpleNamespace
 
@@ -266,6 +267,99 @@ async def test_staging_logs_single_shot_response_shape(monkeypatch, caplog):
 # --------------------------------------------------------------------------- #
 #  Integration tests: real LLM calls (cached)                                 #
 # --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_single_shot_cancels_during_model_generation():
+    """Cancellation before the model returns should stop the stale turn."""
+    generate_started = asyncio.Event()
+    tool_called = False
+
+    async def fake_generate(**_kwargs):
+        generate_started.set()
+        await asyncio.Event().wait()
+
+    async def slow_tool() -> str:
+        """Run a slow side-effecting tool."""
+        nonlocal tool_called
+        tool_called = True
+        return "done"
+
+    client = SimpleNamespace(messages=[], generate=fake_generate)
+    task = asyncio.create_task(
+        single_shot_tool_decision(
+            client,
+            "hello",
+            {"slow_tool": slow_tool},
+        ),
+    )
+
+    await asyncio.wait_for(generate_started.wait(), timeout=2.0)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert tool_called is False
+
+
+@pytest.mark.asyncio
+async def test_single_shot_defers_cancellation_after_tool_execution_starts():
+    """Once tools begin executing, cancellation waits for them to complete."""
+    tool_started = asyncio.Event()
+    tool_can_finish = asyncio.Event()
+    tool_finished = asyncio.Event()
+    callback_calls = 0
+
+    async def fake_generate(**_kwargs):
+        client.messages = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "slow_tool",
+                            "arguments": '{"value": 7}',
+                        },
+                    },
+                ],
+            },
+        ]
+
+    async def slow_tool(*, value: int) -> int:
+        """Return a value after the test allows the tool to finish."""
+        tool_started.set()
+        await tool_can_finish.wait()
+        tool_finished.set()
+        return value + 1
+
+    def on_tool_execution_start() -> None:
+        nonlocal callback_calls
+        callback_calls += 1
+
+    client = SimpleNamespace(messages=[], generate=fake_generate)
+    task = asyncio.create_task(
+        single_shot_tool_decision(
+            client,
+            "hello",
+            {"slow_tool": slow_tool},
+            on_tool_execution_start=on_tool_execution_start,
+        ),
+    )
+
+    await asyncio.wait_for(tool_started.wait(), timeout=2.0)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert task.done() is False
+
+    tool_can_finish.set()
+    result = await asyncio.wait_for(task, timeout=2.0)
+
+    assert callback_calls == 1
+    assert tool_finished.is_set()
+    assert result.tool_name == "slow_tool"
+    assert result.tool_result == 8
 
 
 @pytest.mark.asyncio

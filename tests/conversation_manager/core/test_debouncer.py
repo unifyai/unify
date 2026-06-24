@@ -167,6 +167,60 @@ class TestDebouncerCancelRunning:
             f"Task 2 should have completed!\n" f"  Execution log: {execution_log}"
         )
 
+    @pytest.mark.asyncio
+    async def test_cancel_running_queues_when_tool_commit_started(self):
+        """
+        Once a running slow-brain task enters tool commit, replacements wait.
+        """
+        from droid.conversation_manager.domains.utils import Debouncer
+
+        debouncer = Debouncer(name="TestCM")
+        execution_log = []
+        task1_started = asyncio.Event()
+        task1_can_complete = asyncio.Event()
+
+        async def task1():
+            execution_log.append("task1:started")
+            task1_started.set()
+            try:
+                await task1_can_complete.wait()
+            except asyncio.CancelledError:
+                execution_log.append("task1:cancelled")
+                raise
+            execution_log.append("task1:completed")
+
+        async def task2():
+            execution_log.append("task2:started")
+            await asyncio.sleep(0)
+            execution_log.append("task2:completed")
+
+        await debouncer.submit(
+            task1,
+            cancel_running=False,
+            trace_meta={"tool_commit_started": "true"},
+        )
+        await asyncio.wait_for(task1_started.wait(), timeout=2.0)
+
+        await debouncer.submit(task2, cancel_running=True)
+        await asyncio.sleep(0)
+
+        assert "task1:cancelled" not in execution_log
+        assert "task2:started" not in execution_log
+        assert debouncer.pending_task is not None
+
+        task1_can_complete.set()
+        await _wait_for_condition(
+            lambda: "task1:completed" in execution_log
+            and "task2:completed" in execution_log,
+        )
+
+        assert execution_log == [
+            "task1:started",
+            "task1:completed",
+            "task2:started",
+            "task2:completed",
+        ]
+
 
 class TestDebouncerCancellationPropagation:
     """
