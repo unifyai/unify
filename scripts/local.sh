@@ -200,6 +200,10 @@ local_comms_base_url() {
   fi
 }
 
+local_comms_internal_url() {
+  echo "http://$LOCAL_COMMS_HOST:$LOCAL_COMMS_PORT"
+}
+
 gateway_base_url() {
   if [[ -n "$GATEWAY_PUBLIC_URL" ]]; then
     echo "$GATEWAY_PUBLIC_URL"
@@ -268,7 +272,7 @@ start_gateway() {
     ORCHESTRA_ADMIN_KEY="${ORCHESTRA_ADMIN_KEY:-}" \
     DROID_COMMS_URL="$(gateway_base_url)" \
     DROID_ADAPTERS_URL="$(gateway_base_url)" \
-    DROID_GATEWAY_LOCAL_INGRESS_URL="$(local_comms_base_url)" \
+    DROID_GATEWAY_LOCAL_INGRESS_URL="$(local_comms_internal_url)" \
     "${gateway_command[@]}" \
     > "$GATEWAY_LOGFILE" 2>&1 &
 
