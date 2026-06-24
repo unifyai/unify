@@ -77,6 +77,11 @@ def _decode_int_csv(value: str) -> list[int]:
     return [int(item) for item in value.split(",") if item.strip()]
 
 
+def _runtime_str(value: object) -> str:
+    """Normalize nullable runtime wire values to env-safe strings."""
+    return "" if value is None else str(value)
+
+
 @dataclass
 class TeamSummary:
     """Display and routing metadata for one shared team membership."""
@@ -519,41 +524,41 @@ class SessionDetails:
         Called by ConversationManager when a StartupEvent is received.
         """
         self.assistant.agent_id = agent_id
-        self.assistant.first_name = assistant_first_name
-        self.assistant.surname = assistant_surname
-        self.assistant.age = assistant_age
-        self.assistant.nationality = assistant_nationality
-        self.assistant.timezone = assistant_timezone
-        self.assistant.about = assistant_about
-        self.assistant.job_title = assistant_job_title
-        self.assistant.number = assistant_number
-        self.assistant.email = assistant_email
-        self.assistant.email_provider = assistant_email_provider
-        self.assistant.whatsapp_number = assistant_whatsapp_number
-        self.assistant.discord_bot_id = assistant_discord_bot_id
-        self.assistant.slack_bot_user_id = assistant_slack_bot_user_id
+        self.assistant.first_name = _runtime_str(assistant_first_name)
+        self.assistant.surname = _runtime_str(assistant_surname)
+        self.assistant.age = _runtime_str(assistant_age)
+        self.assistant.nationality = _runtime_str(assistant_nationality)
+        self.assistant.timezone = _runtime_str(assistant_timezone)
+        self.assistant.about = _runtime_str(assistant_about)
+        self.assistant.job_title = _runtime_str(assistant_job_title)
+        self.assistant.number = _runtime_str(assistant_number)
+        self.assistant.email = _runtime_str(assistant_email)
+        self.assistant.email_provider = _runtime_str(assistant_email_provider)
+        self.assistant.whatsapp_number = _runtime_str(assistant_whatsapp_number)
+        self.assistant.discord_bot_id = _runtime_str(assistant_discord_bot_id)
+        self.assistant.slack_bot_user_id = _runtime_str(assistant_slack_bot_user_id)
         self.assistant.is_coordinator = assistant_is_coordinator
         self.assistant.contact_id = assistant_contact_id
         self.self_contact_id = assistant_self_contact_id
-        self.assistant.binding_id = binding_id
-        self.assistant.desktop_mode = desktop_mode
+        self.assistant.binding_id = _runtime_str(binding_id)
+        self.assistant.desktop_mode = _runtime_str(desktop_mode)
         self.assistant.user_desktops = (
             normalize_user_desktops(user_desktops) if user_desktops else {}
         )
         self.assistant.is_coordinator = is_coordinator
-        self.user.id = user_id
-        self.user.first_name = user_first_name
-        self.user.surname = user_surname
-        self.user.number = user_number
-        self.user.email = user_email
-        self.user.whatsapp_number = user_whatsapp_number
+        self.user.id = _runtime_str(user_id)
+        self.user.first_name = _runtime_str(user_first_name)
+        self.user.surname = _runtime_str(user_surname)
+        self.user.number = _runtime_str(user_number)
+        self.user.email = _runtime_str(user_email)
+        self.user.whatsapp_number = _runtime_str(user_whatsapp_number)
         self.boss_contact_id = user_boss_contact_id
         self.org.id = org_id
-        self.org.name = org_name
+        self.org.name = _runtime_str(org_name)
         self.team_ids = team_ids or []
         self.team_summaries = team_summaries or []
-        self.voice.provider = voice_provider
-        self.voice.id = voice_id
+        self.voice.provider = _runtime_str(voice_provider)
+        self.voice.id = _runtime_str(voice_id)
         self._initialized = True
 
     def reset(self) -> None:
@@ -575,46 +580,60 @@ class SessionDetails:
         os.environ["ASSISTANT_ID"] = (
             str(self.assistant.agent_id) if self.assistant.agent_id is not None else ""
         )
-        os.environ["ASSISTANT_FIRST_NAME"] = self.assistant.first_name
-        os.environ["ASSISTANT_SURNAME"] = self.assistant.surname
-        os.environ["ASSISTANT_NAME"] = self.assistant.name
-        os.environ["ASSISTANT_AGE"] = self.assistant.age
-        os.environ["ASSISTANT_NATIONALITY"] = self.assistant.nationality
-        os.environ["ASSISTANT_TIMEZONE"] = self.assistant.timezone
-        os.environ["ASSISTANT_ABOUT"] = self.assistant.about
-        os.environ["ASSISTANT_JOB_TITLE"] = self.assistant.job_title
-        os.environ["ASSISTANT_NUMBER"] = self.assistant.number
-        os.environ["ASSISTANT_EMAIL"] = self.assistant.email
-        os.environ["ASSISTANT_EMAIL_PROVIDER"] = self.assistant.email_provider
-        os.environ["ASSISTANT_WHATSAPP_NUMBER"] = self.assistant.whatsapp_number
-        os.environ["ASSISTANT_DISCORD_BOT_ID"] = self.assistant.discord_bot_id
-        os.environ["ASSISTANT_SLACK_BOT_USER_ID"] = self.assistant.slack_bot_user_id
-        os.environ["ASSISTANT_DESKTOP_MODE"] = self.assistant.desktop_mode
-        os.environ["ASSISTANT_DESKTOP_URL"] = self.assistant.desktop_url or ""
+        os.environ["ASSISTANT_FIRST_NAME"] = _runtime_str(self.assistant.first_name)
+        os.environ["ASSISTANT_SURNAME"] = _runtime_str(self.assistant.surname)
+        os.environ["ASSISTANT_NAME"] = _runtime_str(self.assistant.name)
+        os.environ["ASSISTANT_AGE"] = _runtime_str(self.assistant.age)
+        os.environ["ASSISTANT_NATIONALITY"] = _runtime_str(
+            self.assistant.nationality,
+        )
+        os.environ["ASSISTANT_TIMEZONE"] = _runtime_str(self.assistant.timezone)
+        os.environ["ASSISTANT_ABOUT"] = _runtime_str(self.assistant.about)
+        os.environ["ASSISTANT_JOB_TITLE"] = _runtime_str(self.assistant.job_title)
+        os.environ["ASSISTANT_NUMBER"] = _runtime_str(self.assistant.number)
+        os.environ["ASSISTANT_EMAIL"] = _runtime_str(self.assistant.email)
+        os.environ["ASSISTANT_EMAIL_PROVIDER"] = _runtime_str(
+            self.assistant.email_provider,
+        )
+        os.environ["ASSISTANT_WHATSAPP_NUMBER"] = _runtime_str(
+            self.assistant.whatsapp_number,
+        )
+        os.environ["ASSISTANT_DISCORD_BOT_ID"] = _runtime_str(
+            self.assistant.discord_bot_id,
+        )
+        os.environ["ASSISTANT_SLACK_BOT_USER_ID"] = _runtime_str(
+            self.assistant.slack_bot_user_id,
+        )
+        os.environ["ASSISTANT_DESKTOP_MODE"] = _runtime_str(
+            self.assistant.desktop_mode,
+        )
+        os.environ["ASSISTANT_DESKTOP_URL"] = _runtime_str(
+            self.assistant.desktop_url,
+        )
         os.environ["ASSISTANT_USER_DESKTOPS"] = _encode_user_desktops(
             self.assistant.user_desktops,
         )
         os.environ["ASSISTANT_IS_COORDINATOR"] = str(self.assistant.is_coordinator)
         self.export_contact_ids_to_env()
-        os.environ["USER_ID"] = self.user.id
-        os.environ["USER_FIRST_NAME"] = self.user.first_name
-        os.environ["USER_SURNAME"] = self.user.surname
-        os.environ["USER_NAME"] = self.user.name
-        os.environ["USER_NUMBER"] = self.user.number
-        os.environ["USER_EMAIL"] = self.user.email
-        os.environ["USER_WHATSAPP_NUMBER"] = self.user.whatsapp_number
+        os.environ["USER_ID"] = _runtime_str(self.user.id)
+        os.environ["USER_FIRST_NAME"] = _runtime_str(self.user.first_name)
+        os.environ["USER_SURNAME"] = _runtime_str(self.user.surname)
+        os.environ["USER_NAME"] = _runtime_str(self.user.name)
+        os.environ["USER_NUMBER"] = _runtime_str(self.user.number)
+        os.environ["USER_EMAIL"] = _runtime_str(self.user.email)
+        os.environ["USER_WHATSAPP_NUMBER"] = _runtime_str(self.user.whatsapp_number)
         os.environ["ORG_ID"] = str(self.org.id) if self.org.id is not None else ""
-        os.environ["ORG_NAME"] = self.org.name
+        os.environ["ORG_NAME"] = _runtime_str(self.org.name)
         self.export_team_ids_to_env()
         self.export_team_summaries_to_env()
-        os.environ["VOICE_PROVIDER"] = self.voice.provider
-        os.environ["VOICE_ID"] = self.voice.id
-        os.environ["VOICE_MODE"] = self.voice.mode
+        os.environ["VOICE_PROVIDER"] = _runtime_str(self.voice.provider)
+        os.environ["VOICE_ID"] = _runtime_str(self.voice.id)
+        os.environ["VOICE_MODE"] = _runtime_str(self.voice.mode)
         # Voice call config (for call agent subprocesses)
         os.environ["OUTBOUND"] = str(self.voice_call.outbound)
-        os.environ["CHANNEL"] = self.voice_call.channel
-        os.environ["CONTACT"] = self.voice_call.contact_json
-        os.environ["BOSS"] = self.voice_call.boss_json
+        os.environ["CHANNEL"] = _runtime_str(self.voice_call.channel)
+        os.environ["CONTACT"] = _runtime_str(self.voice_call.contact_json)
+        os.environ["BOSS"] = _runtime_str(self.voice_call.boss_json)
         os.environ["UNIFY_KEY"] = self.unify_key
 
     def export_team_ids_to_env(self) -> None:

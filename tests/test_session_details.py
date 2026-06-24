@@ -59,6 +59,52 @@ class TestEmailProvider:
         assert sd.assistant.email_provider == "google_workspace"
 
 
+class TestNullableRuntimeStrings:
+    def test_populate_and_export_coerce_none_strings(self, monkeypatch):
+        for key in (
+            "ASSISTANT_SURNAME",
+            "ASSISTANT_WHATSAPP_NUMBER",
+            "ASSISTANT_DISCORD_BOT_ID",
+            "ASSISTANT_SLACK_BOT_USER_ID",
+            "USER_NUMBER",
+            "USER_WHATSAPP_NUMBER",
+            "VOICE_PROVIDER",
+            "VOICE_ID",
+        ):
+            monkeypatch.delenv(key, raising=False)
+
+        sd = SessionDetails()
+        sd.populate(
+            assistant_first_name="T-W1N",
+            assistant_surname=None,
+            assistant_whatsapp_number=None,
+            assistant_discord_bot_id=None,
+            assistant_slack_bot_user_id=None,
+            user_number=None,
+            user_whatsapp_number=None,
+            voice_provider=None,
+            voice_id=None,
+        )
+
+        assert sd.assistant.surname == ""
+        assert sd.assistant.whatsapp_number == ""
+        assert sd.user.number == ""
+        assert sd.user.whatsapp_number == ""
+        assert sd.voice.provider == ""
+        assert sd.voice.id == ""
+
+        sd.export_to_env()
+
+        assert os.environ["ASSISTANT_SURNAME"] == ""
+        assert os.environ["ASSISTANT_WHATSAPP_NUMBER"] == ""
+        assert os.environ["ASSISTANT_DISCORD_BOT_ID"] == ""
+        assert os.environ["ASSISTANT_SLACK_BOT_USER_ID"] == ""
+        assert os.environ["USER_NUMBER"] == ""
+        assert os.environ["USER_WHATSAPP_NUMBER"] == ""
+        assert os.environ["VOICE_PROVIDER"] == ""
+        assert os.environ["VOICE_ID"] == ""
+
+
 class TestSpaceIds:
     def test_export_and_populate_from_env_round_trips(self, monkeypatch):
         monkeypatch.delenv("TEAM_IDS", raising=False)
