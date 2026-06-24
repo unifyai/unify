@@ -776,6 +776,10 @@ class _UserDesktopFactory:
         whose machines are available before calling ``session()`` or
         ``files.pull()``.  An empty list means no user has linked a desktop and
         only the assistant's own desktop is controllable.
+
+        This call is **synchronous** — do not ``await`` it::
+
+            linked = primitives.computer.user_desktop.list_linked()  # sync
         """
         from unity.session_details import SESSION_DETAILS
 
@@ -815,6 +819,14 @@ class _UserDesktopFactory:
             across multiple linked users).
         PermissionError
             If the user has revoked live remote-control consent.
+
+        Notes
+        -----
+        ``session()`` is **synchronous** and returns a handle immediately; the
+        handle's methods are **async** and must be awaited::
+
+            ud = primitives.computer.user_desktop.session(user_id=...)  # sync
+            shot = await ud.get_screenshot()                            # async
         """
         link = self._owner._resolve_user_desktop_link(user_id)
         target_uid = link.owner_user_id

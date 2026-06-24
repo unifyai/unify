@@ -166,11 +166,17 @@ async def query_llm(
     handles bounded unstructured-data work that would be brittle if implemented
     as keyword matching or canned templates.
 
+    **Text-only.** ``query_llm`` takes a string ``prompt`` and cannot accept
+    images — do not embed base64 or data-URIs in the prompt (the model cannot
+    see them). To reason about a screenshot or image, ``display()`` it (you can
+    then see it directly on your next turn) or use a computer session's
+    ``observe()`` for structured extraction.
+
     Good uses
     ---------
     - Unstructured -> structured work: classify, extract, score, route, decide,
-      summarize into fields, or choose an action from text, images, documents,
-      tickets, emails, transcripts, notes, lead records, or web pages.
+      summarize into fields, or choose an action from text such as documents,
+      tickets, emails, transcripts, notes, lead records, or web-page text.
     - Unstructured -> unstructured work: draft, respond, rewrite, synthesize,
       explain, personalize, compress, or adapt human-facing text.
     - Classifying emails, tickets, documents, notes, or leads into broad
