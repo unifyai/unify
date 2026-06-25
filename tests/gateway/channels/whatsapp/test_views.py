@@ -8,6 +8,7 @@ class-grouped Phase B.1 style.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -492,6 +493,7 @@ class TestSendCall:
         body = resp.json()
         assert body["success"] is True
         assert body["method"] == "direct"
+        assert body["pool_number"] == "+15555550111"
         assert body["conference_name"].startswith("Unity_WA_15555550111_")
         assert twilio_client.calls.create.call_count == 2
 
@@ -541,9 +543,160 @@ class TestSendCall:
             )
 
         assert resp.status_code == 200
-        assert resp.json() == {"success": True, "method": "invite"}
+        assert resp.json() == {
+            "success": True,
+            "method": "invite",
+            "pool_number": "+15555550111",
+        }
         kwargs = twilio_client.messages.create.call_args.kwargs
         assert kwargs["content_sid"] == VOICE_CALL_REQUEST_TEMPLATE_SID
+
+    def test_recent_pending_invite_is_not_resent(
+        self,
+        client: TestClient,
+        _wa_credentials: None,
+        _settings: None,
+    ) -> None:
+        twilio_client = MagicMock()
+        route_resp = _async_httpx_response(
+            status_code=200,
+            json_body={"pool_number": "+15555550111", "window_open": True},
+        )
+        perm_resp = _async_httpx_response(
+            status_code=200,
+            json_body={
+                "permitted": False,
+                "status": "pending",
+                "requested_at": datetime.now().isoformat(),
+            },
+        )
+        httpx_client = AsyncMock()
+        httpx_client.__aenter__.return_value = httpx_client
+        httpx_client.post.return_value = route_resp
+        httpx_client.get.return_value = perm_resp
+
+        with (
+            patch(
+                "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+                return_value=httpx_client,
+            ),
+            patch(
+                "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
+                return_value=twilio_client,
+            ),
+        ):
+            resp = client.post(
+                "/whatsapp/send-call",
+                json={
+                    "to": "+15555550000",
+                    "assistant_id": 42,
+                    "room_name": "unity_42_wa_call",
+                },
+            )
+
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "success": True,
+            "method": "invite_pending",
+            "pool_number": "+15555550111",
+        }
+        twilio_client.messages.create.assert_not_called()
+
+    def test_rejected_permission_does_not_send_invite_or_call(
+        self,
+        client: TestClient,
+        _wa_credentials: None,
+        _settings: None,
+    ) -> None:
+        twilio_client = MagicMock()
+        route_resp = _async_httpx_response(
+            status_code=200,
+            json_body={"pool_number": "+15555550111", "window_open": True},
+        )
+        perm_resp = _async_httpx_response(
+            status_code=200,
+            json_body={"permitted": False, "status": "rejected"},
+        )
+        httpx_client = AsyncMock()
+        httpx_client.__aenter__.return_value = httpx_client
+        httpx_client.post.return_value = route_resp
+        httpx_client.get.return_value = perm_resp
+
+        with (
+            patch(
+                "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+                return_value=httpx_client,
+            ),
+            patch(
+                "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
+                return_value=twilio_client,
+            ),
+        ):
+            resp = client.post(
+                "/whatsapp/send-call",
+                json={
+                    "to": "+15555550000",
+                    "assistant_id": 42,
+                    "room_name": "unity_42_wa_call",
+                },
+            )
+
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "success": True,
+            "method": "rejected",
+            "pool_number": "+15555550111",
+        }
+        twilio_client.messages.create.assert_not_called()
+        twilio_client.calls.create.assert_not_called()
+
+    def test_unknown_interaction_requires_reconciliation(
+        self,
+        client,
+        _wa_credentials,
+        _settings,
+    ):
+        twilio_client = MagicMock()
+        route_resp = _async_httpx_response(
+            status_code=200,
+            json_body={"pool_number": "+15555550111", "window_open": True},
+        )
+        perm_resp = _async_httpx_response(
+            status_code=200,
+            json_body={"permitted": False, "status": "unknown_interaction"},
+        )
+        httpx_client = AsyncMock()
+        httpx_client.__aenter__.return_value = httpx_client
+        httpx_client.post.return_value = route_resp
+        httpx_client.get.return_value = perm_resp
+
+        with (
+            patch(
+                "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+                return_value=httpx_client,
+            ),
+            patch(
+                "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
+                return_value=twilio_client,
+            ),
+        ):
+            resp = client.post(
+                "/whatsapp/send-call",
+                json={
+                    "to": "+15555550000",
+                    "assistant_id": 42,
+                    "room_name": "unity_42_wa_call",
+                },
+            )
+
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "success": True,
+            "method": "needs_reconciliation",
+            "pool_number": "+15555550111",
+        }
+        twilio_client.messages.create.assert_not_called()
+        twilio_client.calls.create.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

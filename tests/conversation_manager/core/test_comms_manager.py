@@ -488,6 +488,61 @@ class TestWhatsAppPermissionHandling:
             event = Event.from_json(msg["data"])
             assert isinstance(event, WhatsAppCallPermissionResponse)
             assert event.accepted is True
+            assert event.status == "accepted"
+            assert event.contact["contact_id"] == 1
+            assert message._acked
+
+    @pytest.mark.asyncio
+    async def test_permission_response_unknown_payload_is_not_rejected(
+        self,
+        broker,
+        mock_session_details,
+        mock_settings,
+    ):
+        from unity.conversation_manager.comms_manager import CommsManager
+
+        mock_session_details.boss_contact_id = 0
+        cm = CommsManager(broker)
+        cm.loop = asyncio.get_event_loop()
+
+        async with broker.pubsub() as pubsub:
+            await pubsub.psubscribe("app:comms:*")
+
+            contacts = [
+                {
+                    "contact_id": 1,
+                    "first_name": "Test",
+                    "surname": "Contact",
+                    "phone_number": "+15555551111",
+                    "email_address": "test@contact.com",
+                    "whatsapp_number": "+4915237826557",
+                },
+            ]
+            message = create_pubsub_message(
+                "whatsapp",
+                {
+                    "contacts": contacts,
+                    "from_number": "whatsapp:+4915237826557",
+                    "to_number": "whatsapp:+447414266034",
+                    "body": "VOICE_CALL_REQUEST",
+                    "type": "call_permission_response",
+                    "payload": "UNKNOWN",
+                },
+            )
+
+            cm.handle_message(message)
+            await _wait_for_condition(lambda: message._acked)
+
+            msg = await get_message_on_channel(
+                pubsub,
+                "app:comms:whatsapp_call_permission",
+            )
+            assert msg is not None
+
+            event = Event.from_json(msg["data"])
+            assert isinstance(event, WhatsAppCallPermissionResponse)
+            assert event.accepted is False
+            assert event.status == "unknown_interaction"
             assert event.contact["contact_id"] == 1
             assert message._acked
 

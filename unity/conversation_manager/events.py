@@ -529,6 +529,7 @@ class WhatsAppCallPermissionResponse(Event):
 
     contact: dict
     accepted: bool
+    status: str = ""
 
 
 @dataclass

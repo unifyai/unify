@@ -1124,6 +1124,63 @@ async def start_whatsapp_call(
             return await response.json()
 
 
+async def store_pending_whatsapp_call_intent(
+    *,
+    pool_number: str,
+    contact_number: str,
+    context: str,
+) -> None:
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/pending-call-intent",
+            headers=headers,
+            json={
+                "pool_number": pool_number,
+                "contact_number": contact_number,
+                "context": context,
+            },
+        ) as response:
+            response.raise_for_status()
+
+
+async def get_pending_whatsapp_call_intent(
+    *,
+    pool_number: str,
+    contact_number: str,
+) -> dict | None:
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/pending-call-intent",
+            headers=headers,
+            params={
+                "pool_number": pool_number,
+                "contact_number": contact_number,
+            },
+        ) as response:
+            if response.status == 404:
+                return None
+            response.raise_for_status()
+            return await response.json()
+
+
+async def clear_pending_whatsapp_call_intent(
+    *,
+    pool_number: str,
+    contact_number: str,
+) -> None:
+    async with aiohttp.ClientSession() as session:
+        async with session.delete(
+            f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/pending-call-intent",
+            headers=headers,
+            params={
+                "pool_number": pool_number,
+                "contact_number": contact_number,
+            },
+        ) as response:
+            if response.status != 404:
+                response.raise_for_status()
+
+
 async def add_email_attachments(
     attachments: list[dict[str, str]],
     receiver_email: str,

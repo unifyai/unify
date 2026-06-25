@@ -190,6 +190,7 @@ GREETING_TEMPLATE_SID = "HX002f6aeb3b4e5a79b693fa7190196612"
 NUMBER_CHANGE_TEMPLATE_SID = "HXd9c362371aefe97f10526f1c0974f7a2"
 VOICE_CALL_TEMPLATE_SID = "HX885d46e6ccb82e4313ef1a42181c142d"
 VOICE_CALL_REQUEST_TEMPLATE_SID = "HX67bc29b24fb597e6fad501ea68d2566e"
+CALL_PERMISSION_PENDING_SUPPRESSION = timedelta(minutes=10)
 
 
 def render_greeting_template_text(user_name: str, agent_name: str) -> str:
@@ -330,7 +331,7 @@ async def send(request: Request):
     return {"success": True, "method": method, "delivered_body": delivered_body}
 
 
-async def _check_call_permission(pool_number: str, contact_number: str) -> bool:
+async def _check_call_permission(pool_number: str, contact_number: str) -> dict:
     """Check with Orchestra whether outbound WhatsApp calling is permitted."""
     try:
         async with httpx.AsyncClient() as client:
@@ -344,11 +345,55 @@ async def _check_call_permission(pool_number: str, contact_number: str) -> bool:
                 timeout=10.0,
             )
         if resp.status_code >= 400:
-            return False
-        return resp.json().get("permitted", False)
+            return {"permitted": False, "status": "unknown"}
+        data = resp.json()
+        return {
+            "permitted": bool(data.get("permitted")),
+            "status": data.get("status") or "unknown",
+            "requested_at": data.get("requested_at"),
+            "expires_at": data.get("expires_at"),
+        }
     except Exception:
         logger.exception("error checking WhatsApp call permission")
+        return {"permitted": False, "status": "unknown"}
+
+
+async def _record_call_permission_pending(
+    pool_number: str,
+    contact_number: str,
+) -> None:
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/call-permission",
+            headers=_admin_headers(),
+            json={
+                "pool_number": pool_number,
+                "contact_number": contact_number,
+                "status": "pending",
+                "source": "send_call",
+            },
+            timeout=10.0,
+        )
+    response.raise_for_status()
+
+
+def _recent_pending_invite(permission: dict) -> bool:
+    if permission.get("status") != "pending":
         return False
+    requested_at = _parse_dt(permission.get("requested_at"))
+    if requested_at is None:
+        return False
+    now = datetime.now(requested_at.tzinfo)
+    return now - requested_at < CALL_PERMISSION_PENDING_SUPPRESSION
+
+
+def _parse_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 def _conference_twiml(conference_name: str) -> str:
@@ -385,10 +430,10 @@ async def send_call(request: Request):
     route = await _resolve_route(assistant_id, to)
     pool_number = route["pool_number"]
 
-    permitted = await _check_call_permission(pool_number, to)
+    permission = await _check_call_permission(pool_number, to)
     wa_client = build_twilio_wa_client(credentials)
 
-    if permitted:
+    if permission["permitted"]:
         sip_uri = make_sip_uri(pool_number, credentials)
         await ensure_phone_dispatch_rule(pool_number, room_name, credentials)
 
@@ -418,7 +463,28 @@ async def send_call(request: Request):
         return {
             "success": True,
             "method": "direct",
+            "pool_number": pool_number,
             "conference_name": conference_name,
+        }
+
+    permission_status = permission.get("status") or "unknown"
+    if permission_status == "rejected":
+        logger.info("WhatsApp call permission rejected for %s", to)
+        return {"success": True, "method": "rejected", "pool_number": pool_number}
+
+    if _recent_pending_invite(permission):
+        logger.info("WhatsApp call permission invite already pending for %s", to)
+        return {"success": True, "method": "invite_pending", "pool_number": pool_number}
+
+    if permission_status == "unknown_interaction":
+        logger.info(
+            "WhatsApp call permission state is unknown after interaction for %s",
+            to,
+        )
+        return {
+            "success": True,
+            "method": "needs_reconciliation",
+            "pool_number": pool_number,
         }
 
     wa_client.messages.create(
@@ -427,8 +493,9 @@ async def send_call(request: Request):
         from_=f"whatsapp:{pool_number}",
         status_callback=f"{SETTINGS.conversation.COMMS_URL}/whatsapp/status",
     )
+    await _record_call_permission_pending(pool_number, to)
     logger.info("WhatsApp call permission request sent to %s", to)
-    return {"success": True, "method": "invite"}
+    return {"success": True, "method": "invite", "pool_number": pool_number}
 
 
 # ---------------------------------------------------------------------------

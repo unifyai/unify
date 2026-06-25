@@ -4140,6 +4140,64 @@ class CommsPrimitives:
             else:
                 automatic_callback_available = True
 
+        pool_number = response.get("pool_number") or self._assistant_whatsapp_number()
+        if (
+            context
+            and pool_number
+            and method in {"invite", "invite_pending", "needs_reconciliation"}
+        ):
+            try:
+                await comms_utils.store_pending_whatsapp_call_intent(
+                    pool_number=pool_number,
+                    contact_number=to_number,
+                    context=context,
+                )
+            except Exception as exc:
+                LOGGER.error(
+                    f"{DEFAULT_ICON} Failed to persist pending WhatsApp call intent: {exc}",
+                )
+
+        if method == "invite_pending":
+            return {
+                "status": "ok",
+                "pending_callback": automatic_callback_available,
+                "note": (
+                    "A WhatsApp call-permission request is already pending. "
+                    "Do not send another request yet; wait for the contact to allow calls."
+                ),
+            }
+
+        if method == "rejected":
+            if isinstance(pending_contexts, dict):
+                pending_contexts.pop(contact_id, None)
+            if pool_number:
+                try:
+                    await comms_utils.clear_pending_whatsapp_call_intent(
+                        pool_number=pool_number,
+                        contact_number=to_number,
+                    )
+                except Exception as exc:
+                    LOGGER.error(
+                        f"{DEFAULT_ICON} Failed to clear pending WhatsApp call intent: {exc}",
+                    )
+            return {
+                "status": "blocked",
+                "note": (
+                    "The contact rejected WhatsApp call permission. Do not place or request "
+                    "another WhatsApp call unless they ask to try again."
+                ),
+            }
+
+        if method == "needs_reconciliation":
+            return {
+                "status": "needs_reconciliation",
+                "pending_callback": automatic_callback_available,
+                "note": (
+                    "WhatsApp reported a call-permission interaction without an accepted or "
+                    "rejected payload. Do not place a direct call until permission is reconciled."
+                ),
+            }
+
         event = WhatsAppCallInviteSent(contact=fresh_contact)
         await self._event_broker.publish(
             "app:comms:whatsapp_call_invite_sent",
