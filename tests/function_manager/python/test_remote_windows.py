@@ -130,7 +130,7 @@ def windows_local_root(tmp_path, monkeypatch):
     Inputs (wrapper script, venv pyproject) are staged here and the result
     file is read back from here after the (mocked) bisync.
     """
-    root = tmp_path / "Droid" / "Local"
+    root = tmp_path / "Unity" / "Local"
     root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(
         FunctionManager,
@@ -398,7 +398,7 @@ class TestPrepareVenvOnRemoteWindows:
         mock_aiohttp_session,
     ):
         """Venv preparation installs uv + runs uv sync over /exec, never /api/files."""
-        from droid.actor.execution.targets.assistant_desktop import (
+        from unity.actor.execution.targets.assistant_desktop import (
             AssistantDesktopTarget,
         )
 

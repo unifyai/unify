@@ -6,7 +6,7 @@ assistant's managed VM). This module pulls/pushes individual paths from a
 
 - Reads stage into ``~/Unity/Remote/<user-id>/`` (mirroring the remote tree).
 - Writebacks never overwrite the user's originals: edited content lands as a
-  timestamped copy under the remote ``/.droid-edits/`` mirror tree, which is in
+  timestamped copy under the remote ``/.unity-edits/`` mirror tree, which is in
   turn excluded from reads.
 
 The per-link private key is fetched on demand from the admin assistant read
@@ -24,15 +24,15 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Optional
 
-from droid.common.hierarchical_logger import ICONS
-from droid.logger import LOGGER
-from droid.session_details import UserDesktopLink
+from unity.common.hierarchical_logger import ICONS
+from unity.logger import LOGGER
+from unity.session_details import UserDesktopLink
 
 # Fixed handshake contract with the device-side ``rclone serve sftp``.
 SFTP_USER = "unity"
 # The directory (relative to the served home root) that receives versioned
 # writebacks. Excluded from reads so the assistant never pulls its own edits.
-EDITS_DIR = ".droid-edits"
+EDITS_DIR = ".unity-edits"
 
 
 def _utc_stamp() -> str:
@@ -163,7 +163,7 @@ class UserHomeSFTP:
         original is never touched. Returns the remote path of the versioned copy.
         """
         rel = _normalize_remote(dest_path)
-        stamped = f"{rel.stem}.droid-{_utc_stamp()}{rel.suffix}"
+        stamped = f"{rel.stem}.unity-{_utc_stamp()}{rel.suffix}"
         remote_rel = PurePosixPath(EDITS_DIR) / rel.parent / stamped
         src = Path(local_path).expanduser()
         if not src.is_file():
@@ -231,8 +231,8 @@ class UserHomeSFTP:
         """
         from unify.utils import http
 
-        from droid.session_details import SESSION_DETAILS
-        from droid.settings import SETTINGS
+        from unity.session_details import SESSION_DETAILS
+        from unity.settings import SETTINGS
 
         assistant_id = SESSION_DETAILS.assistant.agent_id
         base_url = SETTINGS.ORCHESTRA_URL

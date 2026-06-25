@@ -14,20 +14,20 @@ from typing import Any
 
 import pytest
 
-from droid.actor.code_act_actor import CodeActActor
-from droid.actor.execution.surface import (
+from unity.actor.code_act_actor import CodeActActor
+from unity.actor.execution.surface import (
     ExecutionSurface,
     resolve_all,
     resolve_surface,
 )
-from droid.actor.execution.targets import (
+from unity.actor.execution.targets import (
     ExecResult,
     LocalTarget,
     TargetUnavailableError,
     get_target,
 )
-from droid.actor.execution.targets.base import coerce_output
-from droid.session_details import SESSION_DETAILS
+from unity.actor.execution.targets.base import coerce_output
+from unity.session_details import SESSION_DETAILS
 
 # ---------------------------------------------------------------------------
 # Test doubles
@@ -343,7 +343,7 @@ async def test_execute_on_surface_gates_unavailable_user_desktop(
 
 
 def _assistant_target(fm: _FakeFM, os_name: str):
-    from droid.actor.execution.targets.assistant_desktop import AssistantDesktopTarget
+    from unity.actor.execution.targets.assistant_desktop import AssistantDesktopTarget
 
     return AssistantDesktopTarget(fm, api_url="https://vm.unify.ai", os=os_name)
 
@@ -353,9 +353,9 @@ async def test_assistant_desktop_run_shell_forwards_powershell_on_windows() -> N
     target = _assistant_target(_FakeFM(), "windows")
     fake = _FakeExecClient()
     target._client = fake
-    await target.run_shell("dir", cwd="C:\\Droid\\Local")
+    await target.run_shell("dir", cwd="C:\\Unity\\Local")
     assert fake.calls[-1]["shell_mode"] == "powershell"
-    assert fake.calls[-1]["cwd"] == "C:\\Droid\\Local"
+    assert fake.calls[-1]["cwd"] == "C:\\Unity\\Local"
 
 
 @pytest.mark.asyncio
@@ -422,7 +422,7 @@ async def test_assistant_desktop_put_get_file_roundtrip(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_assistant_desktop_ensure_ready_requires_api_url() -> None:
-    from droid.actor.execution.targets.assistant_desktop import AssistantDesktopTarget
+    from unity.actor.execution.targets.assistant_desktop import AssistantDesktopTarget
 
     target = AssistantDesktopTarget(_FakeFM(), api_url=None, os="windows")
     with pytest.raises(TargetUnavailableError):
@@ -431,7 +431,7 @@ async def test_assistant_desktop_ensure_ready_requires_api_url() -> None:
 
 @pytest.mark.asyncio
 async def test_assistant_desktop_ensure_ready_passes_when_vm_ready() -> None:
-    from droid.function_manager.primitives.runtime import _vm_ready
+    from unity.function_manager.primitives.runtime import _vm_ready
 
     was_set = _vm_ready.is_set()
     _vm_ready.set()

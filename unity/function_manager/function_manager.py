@@ -6509,7 +6509,7 @@ class FunctionManager(BaseFunctionManager):
         return SESSION_DETAILS.assistant.desktop_mode == "windows"
 
     def _windows_exec_local_root(self) -> Path:
-        """Local sync root that FileSync bisyncs to the VM's ``C:\\Droid\\Local``."""
+        """Local sync root that FileSync bisyncs to the VM's ``C:\\Unity\\Local``."""
         from unity.file_manager.settings import get_local_root
 
         return Path(get_local_root()).expanduser()
@@ -6518,7 +6518,7 @@ class FunctionManager(BaseFunctionManager):
         """Stage a venv's ``pyproject.toml`` in the local sync root.
 
         The file rides the pre-exec bisync to
-        ``C:\\Droid\\Local\\Local\\venvs\\venv_<id>\\pyproject.toml`` where
+        ``C:\\Unity\\Local\\Local\\venvs\\venv_<id>\\pyproject.toml`` where
         ``uv sync`` consumes it. Mirrors the relative path the remote VM
         expects (the extra ``Local`` segment matches ``venv_full_path``).
 
@@ -6644,7 +6644,7 @@ class FunctionManager(BaseFunctionManager):
 
         # FileSync (bisync) is the sole file-movement mechanism for Windows
         # exec: the wrapper script, venv pyproject, and result file all ride
-        # bisync between ~/Droid/Local and the VM's C:\Droid\Local. Without an
+        # bisync between ~/Unity/Local and the VM's C:\Unity\Local. Without an
         # active SyncManager there is no way to move files to/from the VM.
         if self._get_sync_manager() is None:
             raise RuntimeError(
