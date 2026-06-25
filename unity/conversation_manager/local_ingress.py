@@ -5,7 +5,7 @@ import json
 import secrets
 import time
 
-from aiohttp import web
+from aiohttp import ClientSession, web
 
 from unity.logger import LOGGER
 from unity.common.hierarchical_logger import DEFAULT_ICON, ICONS
@@ -16,6 +16,15 @@ from .domains.call_manager import make_room_name
 from .local_providers import email as local_email
 from .local_providers import livekit as local_livekit
 from .local_providers import twilio as local_twilio
+
+
+def _call_permission_status(button_payload: str) -> tuple[str, str]:
+    payload = (button_payload or "").strip()
+    if payload == "ACCEPTED":
+        return "accepted", "ACCEPTED"
+    if payload == "REJECTED":
+        return "rejected", "REJECTED"
+    return "unknown_interaction", "UNKNOWN"
 
 
 class LocalCommsIngress:
@@ -379,6 +388,16 @@ class LocalCommsIngress:
         from_number = form.get("From", "") or ""
         to_number = form.get("To", "") or ""
         if body == "VOICE_CALL_REQUEST":
+            contact_number = from_number.replace("whatsapp:", "").strip()
+            pool_number = to_number.replace("whatsapp:", "").strip()
+            permission_status, event_payload = _call_permission_status(
+                form.get("ButtonPayload", ""),
+            )
+            await self._record_whatsapp_call_permission(
+                pool_number=pool_number,
+                contact_number=contact_number,
+                status=permission_status,
+            )
             await self._dispatch_payload(
                 {
                     "thread": "whatsapp",
@@ -387,8 +406,8 @@ class LocalCommsIngress:
                         "assistant_id": self._current_assistant_id(),
                         "contacts": [],
                         "type": "call_permission_response",
-                        "contact_number": from_number.replace("whatsapp:", "").strip(),
-                        "payload": form.get("ButtonPayload", ""),
+                        "contact_number": contact_number,
+                        "payload": event_payload,
                     },
                 },
             )
@@ -412,6 +431,38 @@ class LocalCommsIngress:
             text=local_twilio.empty_message_response(),
             content_type="text/xml",
         )
+
+    async def _record_whatsapp_call_permission(
+        self,
+        *,
+        pool_number: str,
+        contact_number: str,
+        status: str,
+    ) -> None:
+        from unity.settings import SETTINGS
+
+        admin_key = SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()
+        if not admin_key:
+            return
+
+        try:
+            async with ClientSession() as session:
+                async with session.post(
+                    f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/call-permission",
+                    headers={"Authorization": f"Bearer {admin_key}"},
+                    json={
+                        "pool_number": pool_number,
+                        "contact_number": contact_number,
+                        "status": status,
+                        "source": "local_ingress",
+                    },
+                    timeout=10,
+                ) as response:
+                    response.raise_for_status()
+        except Exception as exc:
+            LOGGER.error(
+                f"{DEFAULT_ICON} Failed to record WhatsApp call permission: {exc}",
+            )
 
     async def _twilio_call(self, request: web.Request) -> web.Response:
         form = await self._validate_twilio(request, whatsapp=False)

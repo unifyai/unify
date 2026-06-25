@@ -1153,7 +1153,14 @@ class CommsManager:
                             "whatsapp:",
                             "",
                         ).strip()
-                        accepted = event.get("payload") == "ACCEPTED"
+                        payload = event.get("payload")
+                        if payload == "ACCEPTED":
+                            permission_status = "accepted"
+                        elif payload == "REJECTED":
+                            permission_status = "rejected"
+                        else:
+                            permission_status = "unknown_interaction"
+                        accepted = permission_status == "accepted"
                         contact = next(
                             (
                                 c
@@ -1183,6 +1190,7 @@ class CommsManager:
                             WhatsAppCallPermissionResponse(
                                 contact=contact,
                                 accepted=accepted,
+                                status=permission_status,
                             ).to_json(),
                         )
                         ack_now()
