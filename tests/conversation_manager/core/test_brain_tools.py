@@ -105,6 +105,8 @@ def mock_cm():
     cm.call_manager.has_teams_presenting = False
     cm.call_manager._meet_joining = False
     cm.call_manager._whatsapp_call_joining = False
+    cm.call_manager._call_channel = None
+    cm.in_voice_session = False
     cm.assistant_has_teams = False
     # Set up SimulatedContactManager (starts with system contacts 0 and 1)
     cm.contact_manager = _setup_mock_contacts(cm.contact_index, [])
@@ -671,6 +673,109 @@ class TestActionToolsAsTools:
         assert {"contact_id", "team_id", "channel_id", "chat_topic"}.issubset(
             teams_props,
         )
+
+
+class TestHangUpTool:
+    """Tests for the universal hang_up tool and its exposure in as_tools."""
+
+    def test_hang_up_exposed_only_during_voice_session(self, mock_cm):
+        """hang_up appears while in a voice session; call-starting tools do not,
+        and the standalone leave_* tools are gone."""
+        mock_cm.in_voice_session = True
+        mock_cm.call_manager._call_channel = "phone_call"
+        with patch(
+            "unity.conversation_manager.domains.brain_action_tools.get_event_broker",
+        ) as mock_broker:
+            mock_broker.return_value = MagicMock()
+            mock_broker.return_value.publish = AsyncMock()
+            tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
+
+        assert "hang_up" in tools
+        assert "make_call" not in tools
+        assert "join_google_meet" not in tools
+        assert "leave_google_meet" not in tools
+        assert "leave_teams_meet" not in tools
+
+    def test_hang_up_absent_when_not_in_voice_session(self, brain_action_tools):
+        """hang_up is not offered outside a live voice session."""
+        tools = brain_action_tools.as_tools()
+        assert "hang_up" not in tools
+        assert "make_call" in tools
+
+    @pytest.mark.asyncio
+    async def test_hang_up_routes_phone_to_end_call(self, brain_action_tools, mock_cm):
+        """A live phone call routes hang_up to call_manager.end_call()."""
+        mock_cm.in_voice_session = True
+        mock_cm.call_manager._call_channel = "phone_call"
+        mock_cm.call_manager.has_active_google_meet = False
+        mock_cm.call_manager.has_active_teams_meet = False
+        mock_cm.call_manager.end_call = AsyncMock()
+
+        result = await brain_action_tools.hang_up()
+
+        mock_cm.call_manager.end_call.assert_awaited_once()
+        assert result["status"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_hang_up_routes_unify_meet_to_end_call(
+        self,
+        brain_action_tools,
+        mock_cm,
+    ):
+        """A live Unify Meet also routes through call_manager.end_call()."""
+        mock_cm.in_voice_session = True
+        mock_cm.call_manager._call_channel = "unify_meet"
+        mock_cm.call_manager.end_call = AsyncMock()
+
+        result = await brain_action_tools.hang_up()
+
+        mock_cm.call_manager.end_call.assert_awaited_once()
+        assert result["status"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_hang_up_routes_google_meet_to_leave(
+        self,
+        brain_action_tools,
+        mock_cm,
+    ):
+        """A live Google Meet publishes GoogleMeetEnded (existing leave path)."""
+        from unity.conversation_manager.events import GoogleMeetEnded
+
+        mock_cm.in_voice_session = True
+        mock_cm.call_manager._call_channel = "google_meet"
+        mock_cm.call_manager.has_active_google_meet = True
+        mock_cm.call_manager._disconnect_contact = {}
+        mock_cm.call_manager.end_call = AsyncMock()
+        brain_action_tools._notify_browser_meet_leave = AsyncMock()
+
+        result = await brain_action_tools.hang_up()
+
+        brain_action_tools._notify_browser_meet_leave.assert_awaited_once_with(
+            "googlemeet",
+        )
+        mock_cm.call_manager.end_call.assert_not_awaited()
+        published_topics = [
+            call.args[0]
+            for call in brain_action_tools._event_broker.publish.await_args_list
+        ]
+        assert GoogleMeetEnded(contact={}).topic in published_topics
+        assert result["status"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_hang_up_no_active_session_returns_error(
+        self,
+        brain_action_tools,
+        mock_cm,
+    ):
+        """With nothing live, hang_up reports there is nothing to end."""
+        mock_cm.in_voice_session = False
+        mock_cm.call_manager._call_channel = None
+        mock_cm.call_manager.end_call = AsyncMock()
+
+        result = await brain_action_tools.hang_up()
+
+        assert result["status"] == "error"
+        mock_cm.call_manager.end_call.assert_not_awaited()
 
 
 class TestWaitTool:

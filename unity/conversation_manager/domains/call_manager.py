@@ -1011,6 +1011,39 @@ class LivekitCallManager:
             f"{ICONS['ipc']} [LivekitCallManager] Persistent worker terminated",
         )
 
+    async def end_call(self, reason: str = "assistant_hangup") -> None:
+        """Tear down an active phone / WhatsApp / Unify Meet voice session.
+
+        Best-effort drops the carrier leg for telephony (Twilio conference end
+        when the conference name is known), then signals the running voice agent
+        to stop via the IPC ``app:call:status`` channel. The agent shuts down,
+        deletes the LiveKit room (which also ends the user's Unify Meet window
+        since the Console tears down on ``RoomEvent.Disconnected``), and
+        publishes the channel-appropriate ``*Ended`` event that drives the
+        normal cleanup pipeline.
+
+        Browser meetings (Google Meet / Teams) are not handled here — they tear
+        down via ``_cleanup_meet`` instead.
+        """
+        channel = self._call_channel
+
+        if channel in ("phone_call", "whatsapp_call") and self.conference_name:
+            from unity.conversation_manager.domains import comms_utils
+
+            try:
+                await comms_utils.end_phone_conference(self.conference_name)
+            except Exception as exc:
+                LOGGER.warning(
+                    f"{ICONS['ipc']} [LivekitCallManager] end_phone_conference "
+                    f"failed: {exc}",
+                )
+
+        if self._event_broker is not None:
+            await self._event_broker.publish(
+                "app:call:status",
+                json.dumps({"type": "stop", "reason": reason}),
+            )
+
     async def cleanup_call_proc(self) -> None:
         """Stop any running voice agent job/subprocess and socket server."""
         proc = self._call_proc

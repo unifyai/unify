@@ -1124,6 +1124,40 @@ async def start_whatsapp_call(
             return await response.json()
 
 
+async def end_phone_conference(conference_name: str) -> dict:
+    """
+    End an active Twilio conference (clean carrier hangup).
+
+    Used to terminate the carrier leg of a phone or WhatsApp call (both use the
+    same Twilio conference model). Best-effort: the LiveKit room teardown remains
+    the universal session-end mechanism, this just drops the PSTN/WhatsApp leg
+    cleanly when the conference name is known.
+
+    Args:
+        conference_name: The Twilio conference friendly name.
+
+    Returns:
+        dict with 'success' and any provider response fields.
+    """
+    if not conference_name:
+        return {"success": False, "error": "no conference_name"}
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{_gateway_comms_base_url()}/phone/end-conference",
+            headers=headers,
+            json={"ConferenceName": conference_name},
+        ) as response:
+            try:
+                response.raise_for_status()
+            except Exception:
+                return {
+                    "success": False,
+                    "error": f"Failed to end conference {conference_name}",
+                }
+            return await response.json()
+
+
 async def store_pending_whatsapp_call_intent(
     *,
     pool_number: str,

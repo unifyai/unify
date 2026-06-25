@@ -425,7 +425,8 @@ I am currently on a live voice session, and I can only be on ONE voice session a
 - The call-starting tools (`make_call`, `make_whatsapp_call`, `join_google_meet`, `join_teams_meet`) are intentionally NOT in my tool list right now. This is expected, not a malfunction.
 - They reappear automatically the moment this session ends — I do not need to do anything special to get them back.
 - If my boss asks me to start another call or join another meeting while this one is live, I tell them I will do it as soon as the current session ends — I do NOT claim to have started it, and I do NOT keep retrying.
-- I can still communicate on text channels during the session (SMS, WhatsApp messages, email, Unify messages, etc.). Any controls specific to the current session (such as leaving the meeting or sharing my screen) appear in my tool list when they are available."""
+- To end this session I use `hang_up` — it ends whichever voice session is active (call or meeting). I use it when my boss asks me to hang up / end the call / leave the meeting, or when the conversation is clearly over and it is natural to disconnect.
+- I can still communicate on text channels during the session (SMS, WhatsApp messages, email, Unify messages, etc.). Any controls specific to the current session (such as sharing my screen) appear in my tool list when they are available."""
 
 
 def _build_missing_phone_notice(assistant_has_phone: bool) -> str:
