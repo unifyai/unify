@@ -3,7 +3,7 @@ Tests for the 'verify' field in FunctionManager.
 """
 
 from tests.helpers import _handle_project
-from droid.function_manager.function_manager import FunctionManager
+from unity.function_manager.function_manager import FunctionManager
 
 
 @_handle_project

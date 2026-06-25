@@ -32,7 +32,7 @@ from tests.conversation_manager.actions.integration.helpers import (
     inject_actor_result,
     run_cm_until_wait,
 )
-from droid.conversation_manager.events import SMSReceived, ActorHandleStarted
+from unity.conversation_manager.events import SMSReceived, ActorHandleStarted
 
 pytestmark = [pytest.mark.integration, pytest.mark.eval]
 

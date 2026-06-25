@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Droid Installer (public, hosted-backend path)
+# Unity Installer (public, hosted-backend path)
 # ============================================================================
-# Installs the Droid agent runtime locally on macOS / Linux / WSL2 and points
-# it at the hosted Orchestra backend (https://api.unify.ai). Droid runs on your
+# Installs the Unity agent runtime locally on macOS / Linux / WSL2 and points
+# it at the hosted Orchestra backend (https://api.unify.ai). Unity runs on your
 # machine; persistence, accounts, and your assistant live in the hosted product
 # at https://console.unify.ai.
 #
 # Quick install:
-#   curl -fsSL https://raw.githubusercontent.com/unifyai/droid/staging/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/unifyai/unity/staging/scripts/install.sh | bash
 #
 # Options:
-#   --dir PATH        Installation directory (default: ~/.droid)
+#   --dir PATH        Installation directory (default: ~/.unity)
 #   --branch NAME     Git branch to install (default: staging)
-#   --no-cli          Skip creating the `droid` command shim
+#   --no-cli          Skip creating the `unity` command shim
 #   --skip-deps       Skip system-dependency checks
 #   --reconfigure     Re-run the key/credential wizard only (no clone/sync)
 #   -h, --help        Show this help
 #
 # The full local self-host stack (local Orchestra + Console + Coordinator) is
-# an internal-only path and lives in the private droid-deploy repo.
+# an internal-only path and lives in the private unity-deploy repo.
 # ============================================================================
 
 set -e
@@ -42,8 +42,8 @@ log_success() { echo -e "${GREEN}✓${NC} $1"; }
 log_warn()    { echo -e "${YELLOW}⚠${NC} $1"; }
 log_error()   { echo -e "${RED}✗${NC} $1" >&2; }
 
-DROID_HOME="${DROID_HOME:-$HOME/.droid}"
-DROID_REPO="${DROID_REPO:-$DROID_HOME/droid}"
+UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
+UNITY_REPO="${UNITY_REPO:-$UNITY_HOME/unity}"
 BRANCH="${BRANCH:-staging}"
 SHALLOW_CLONE_DEPTH="${SHALLOW_CLONE_DEPTH:-1}"
 CREATE_CLI=true
@@ -56,7 +56,7 @@ HOSTED_ORCHESTRA_URL="${HOSTED_ORCHESTRA_URL:-https://api.unify.ai/v0}"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --dir) DROID_HOME="$2"; DROID_REPO="$DROID_HOME/droid"; shift 2 ;;
+        --dir) UNITY_HOME="$2"; UNITY_REPO="$UNITY_HOME/unity"; shift 2 ;;
         --branch) BRANCH="$2"; shift 2 ;;
         --no-cli) CREATE_CLI=false; shift ;;
         --skip-deps) CHECK_DEPS=false; shift ;;
@@ -95,35 +95,35 @@ ensure_prereqs() {
 }
 
 # ----------------------------------------------------------------------------
-# Clone (or update) the droid checkout. unify / unillm are cloned separately as
-# editable sibling checkouts (see clone_or_update_sibling): droid's
+# Clone (or update) the unity checkout. unify / unillm are cloned separately as
+# editable sibling checkouts (see clone_or_update_sibling): unity's
 # pyproject.toml references them via local relative paths (../unify, ../unillm),
-# so they must sit alongside the droid checkout under $DROID_HOME.
+# so they must sit alongside the unity checkout under $UNITY_HOME.
 # ----------------------------------------------------------------------------
-clone_or_update_droid() {
-    mkdir -p "$DROID_HOME"
-    if [ -d "$DROID_REPO/.git" ]; then
-        log_info "Updating droid checkout at $DROID_REPO..."
-        git -C "$DROID_REPO" fetch --depth "$SHALLOW_CLONE_DEPTH" origin "$BRANCH" 2>/dev/null || true
-        git -C "$DROID_REPO" checkout "$BRANCH" 2>/dev/null || true
-        git -C "$DROID_REPO" pull --rebase 2>/dev/null || true
+clone_or_update_unity() {
+    mkdir -p "$UNITY_HOME"
+    if [ -d "$UNITY_REPO/.git" ]; then
+        log_info "Updating unity checkout at $UNITY_REPO..."
+        git -C "$UNITY_REPO" fetch --depth "$SHALLOW_CLONE_DEPTH" origin "$BRANCH" 2>/dev/null || true
+        git -C "$UNITY_REPO" checkout "$BRANCH" 2>/dev/null || true
+        git -C "$UNITY_REPO" pull --rebase 2>/dev/null || true
     else
-        log_info "Cloning droid ($BRANCH) into $DROID_REPO..."
+        log_info "Cloning unity ($BRANCH) into $UNITY_REPO..."
         git clone --depth "$SHALLOW_CLONE_DEPTH" --branch "$BRANCH" \
-            "$REPO_BASE/droid.git" "$DROID_REPO"
+            "$REPO_BASE/unity.git" "$UNITY_REPO"
     fi
-    log_success "droid checkout ready"
+    log_success "unity checkout ready"
 }
 
 # ----------------------------------------------------------------------------
-# Clone (or update) a first-party SDK (unify / unillm) as a sibling of the droid
-# checkout. droid (and unillm) resolve these via editable relative paths, so
-# they live at $DROID_HOME/<name> == ../<name> relative to the droid repo. Falls
+# Clone (or update) a first-party SDK (unify / unillm) as a sibling of the unity
+# checkout. unity (and unillm) resolve these via editable relative paths, so
+# they live at $UNITY_HOME/<name> == ../<name> relative to the unity repo. Falls
 # back to the main branch when the requested branch is absent in the SDK repo.
 # ----------------------------------------------------------------------------
 clone_or_update_sibling() {
     local name="$1"
-    local dir="$DROID_HOME/$name"
+    local dir="$UNITY_HOME/$name"
     if [ -d "$dir/.git" ]; then
         log_info "Updating $name checkout at $dir..."
         git -C "$dir" fetch --depth "$SHALLOW_CLONE_DEPTH" origin "$BRANCH" 2>/dev/null || true
@@ -141,7 +141,7 @@ clone_or_update_sibling() {
 
 uv_sync() {
     log_info "Syncing Python dependencies (uv)..."
-    (cd "$DROID_REPO" && uv sync --all-groups)
+    (cd "$UNITY_REPO" && uv sync --all-groups)
     log_success "Dependencies synced"
 }
 
@@ -150,7 +150,7 @@ uv_sync() {
 # local file references in agent-service/package.json.
 # ----------------------------------------------------------------------------
 clone_or_update_magnitude() {
-    local magnitude_dir="$DROID_REPO/magnitude"
+    local magnitude_dir="$UNITY_REPO/magnitude"
     local magnitude_branch="unity-modifications"
     if [ -d "$magnitude_dir/.git" ]; then
         log_info "Updating magnitude checkout at $magnitude_dir..."
@@ -172,8 +172,8 @@ clone_or_update_magnitude() {
 # Install agent-service Node dependencies (requires magnitude to be present).
 # ----------------------------------------------------------------------------
 install_agent_service() {
-    local agent_service_dir="$DROID_REPO/agent-service"
-    local magnitude_dir="$DROID_REPO/magnitude"
+    local agent_service_dir="$UNITY_REPO/agent-service"
+    local magnitude_dir="$UNITY_REPO/magnitude"
     if [ ! -d "$agent_service_dir" ]; then
         log_warn "agent-service directory not found — skipping npm install"
         return 0
@@ -220,15 +220,15 @@ install_agent_service() {
 }
 
 scaffold_env() {
-    if [ ! -f "$DROID_REPO/.env" ] && [ -f "$DROID_REPO/.env.example" ]; then
-        cp "$DROID_REPO/.env.example" "$DROID_REPO/.env"
-        log_success "Created $DROID_REPO/.env"
+    if [ ! -f "$UNITY_REPO/.env" ] && [ -f "$UNITY_REPO/.env.example" ]; then
+        cp "$UNITY_REPO/.env.example" "$UNITY_REPO/.env"
+        log_success "Created $UNITY_REPO/.env"
     fi
 }
 
 upsert_env() {
     local key="$1" val="$2"
-    python3 - "$DROID_REPO/.env" "$key" "$val" <<'PY'
+    python3 - "$UNITY_REPO/.env" "$key" "$val" <<'PY'
 import re, sys
 from pathlib import Path
 path, key, val = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
@@ -249,8 +249,8 @@ PY
 
 env_value() {
     local key="$1"
-    [ -f "$DROID_REPO/.env" ] || return 0
-    grep -E "^${key}=" "$DROID_REPO/.env" | head -1 | cut -d= -f2- | tr -d '"' || true
+    [ -f "$UNITY_REPO/.env" ] || return 0
+    grep -E "^${key}=" "$UNITY_REPO/.env" | head -1 | cut -d= -f2- | tr -d '"' || true
 }
 
 # ----------------------------------------------------------------------------
@@ -265,7 +265,7 @@ configure_env() {
 
     # The local install has no Console front-end; suppress Console-UI knowledge
     # and onboarding prompts in the ConversationManager.
-    upsert_env "DROID_CONSOLE_UI" "false"
+    upsert_env "UNITY_CONSOLE_UI" "false"
 
     if [ "$NON_INTERACTIVE" = "true" ]; then
         [ -n "${UNIFY_KEY:-}" ] && upsert_env "UNIFY_KEY" "$UNIFY_KEY"
@@ -289,116 +289,116 @@ configure_env() {
     fi
 
     # LLM / voice / research BYOK keys.
-    if [ -x "$DROID_REPO/scripts/prompt_byok_keys.sh" ]; then
-        DROID_REPO="$DROID_REPO" NON_INTERACTIVE="$NON_INTERACTIVE" \
-            bash "$DROID_REPO/scripts/prompt_byok_keys.sh" || true
+    if [ -x "$UNITY_REPO/scripts/prompt_byok_keys.sh" ]; then
+        UNITY_REPO="$UNITY_REPO" NON_INTERACTIVE="$NON_INTERACTIVE" \
+            bash "$UNITY_REPO/scripts/prompt_byok_keys.sh" || true
     fi
-    log_success "Configuration written to $DROID_REPO/.env"
+    log_success "Configuration written to $UNITY_REPO/.env"
 }
 
 # ----------------------------------------------------------------------------
-# CLI shim at ~/.local/bin/droid
+# CLI shim at ~/.local/bin/unity
 # ----------------------------------------------------------------------------
 create_cli() {
     [ "$CREATE_CLI" = "false" ] && return 0
     mkdir -p "$CLI_DIR"
-    local shim="$CLI_DIR/droid"
+    local shim="$CLI_DIR/unity"
 
     cat > "$shim" <<EOF
 #!/usr/bin/env bash
-# Droid CLI shim — runs the local agent runtime against the hosted backend.
+# Unity CLI shim — runs the local agent runtime against the hosted backend.
 # Generated by install.sh; safe to edit.
 set -e
-DROID_HOME="${DROID_HOME}"
-DROID_REPO="${DROID_REPO}"
-export DROID_HOME
+UNITY_HOME="${UNITY_HOME}"
+UNITY_REPO="${UNITY_REPO}"
+export UNITY_HOME
 
-if [ ! -d "\$DROID_REPO" ]; then
-    echo "Droid is not installed at \$DROID_REPO. Re-run install.sh or set DROID_HOME." >&2
+if [ ! -d "\$UNITY_REPO" ]; then
+    echo "Unity is not installed at \$UNITY_REPO. Re-run install.sh or set UNITY_HOME." >&2
     exit 1
 fi
 
-PY="\$DROID_REPO/.venv/bin/python"
+PY="\$UNITY_REPO/.venv/bin/python"
 [ -x "\$PY" ] || PY="python3"
 
 case "\${1:-}" in
     ""|chat|sandbox)
         # Interactive local chat with the full ConversationManager.
         shift || true
-        cd "\$DROID_REPO"
+        cd "\$UNITY_REPO"
         exec "\$PY" -m sandboxes.conversation_manager.sandbox "\$@"
         ;;
     serve|run)
         # Headless: start the ConversationManager + gateway against hosted Orchestra.
         shift || true
-        exec bash "\$DROID_REPO/scripts/local.sh" start --full "\$@"
+        exec bash "\$UNITY_REPO/scripts/local.sh" start --full "\$@"
         ;;
     stop|down)
-        exec bash "\$DROID_REPO/scripts/local.sh" stop
+        exec bash "\$UNITY_REPO/scripts/local.sh" stop
         ;;
     status)
-        exec bash "\$DROID_REPO/scripts/local.sh" status
+        exec bash "\$UNITY_REPO/scripts/local.sh" status
         ;;
     logs|tail)
-        LOG_FILE="/tmp/droid-local.log"
+        LOG_FILE="/tmp/unity-local.log"
         touch "\$LOG_FILE" 2>/dev/null || true
         echo "📡 Tailing \$LOG_FILE (Ctrl-C to detach)" >&2
         exec tail -F "\$LOG_FILE"
         ;;
     doctor)
-        exec bash "\$DROID_REPO/scripts/local.sh" gateway-doctor
+        exec bash "\$UNITY_REPO/scripts/local.sh" gateway-doctor
         ;;
     voice)
         shift || true
-        exec bash "\$DROID_REPO/scripts/voice.sh" "\$@"
+        exec bash "\$UNITY_REPO/scripts/voice.sh" "\$@"
         ;;
     setup|reconfigure)
-        exec bash "\$DROID_REPO/scripts/install.sh" --reconfigure
+        exec bash "\$UNITY_REPO/scripts/install.sh" --reconfigure
         ;;
     update|pull)
-        echo "Updating droid checkout..."
-        git -C "\$DROID_REPO" pull --rebase || true
+        echo "Updating unity checkout..."
+        git -C "\$UNITY_REPO" pull --rebase || true
         for sib in unify unillm; do
-            if [ -d "\$DROID_HOME/\$sib/.git" ]; then
+            if [ -d "\$UNITY_HOME/\$sib/.git" ]; then
                 echo "Updating \$sib checkout..."
-                git -C "\$DROID_HOME/\$sib" pull --rebase || true
+                git -C "\$UNITY_HOME/\$sib" pull --rebase || true
             fi
         done
-        (cd "\$DROID_REPO" && uv sync --all-groups)
-        MAGNITUDE_DIR="\$DROID_REPO/magnitude"
+        (cd "\$UNITY_REPO" && uv sync --all-groups)
+        MAGNITUDE_DIR="\$UNITY_REPO/magnitude"
         if [ -d "\$MAGNITUDE_DIR/.git" ]; then
             echo "Updating magnitude checkout (unity-modifications)..."
             git -C "\$MAGNITUDE_DIR" fetch --depth 1 origin unity-modifications 2>/dev/null || true
             git -C "\$MAGNITUDE_DIR" checkout unity-modifications 2>/dev/null || true
             git -C "\$MAGNITUDE_DIR" pull --rebase || true
         fi
-        if command -v npm >/dev/null 2>&1 && [ -d "\$DROID_REPO/agent-service" ] && [ -d "\$MAGNITUDE_DIR" ]; then
+        if command -v npm >/dev/null 2>&1 && [ -d "\$UNITY_REPO/agent-service" ] && [ -d "\$MAGNITUDE_DIR" ]; then
             echo "Refreshing agent-service dependencies..."
-            (cd "\$DROID_REPO/agent-service" && npm ci --silent) || true
+            (cd "\$UNITY_REPO/agent-service" && npm ci --silent) || true
         fi
         ;;
     help|--help|-h)
         cat <<USAGE
-droid                  Interactive local chat (alias: droid chat)
-droid serve            Start CM + gateway headless against hosted Orchestra
-droid stop             Stop the local runtime
-droid status           Show runtime status
-droid logs             Follow the runtime log
-droid doctor           Gateway/config checks
-droid voice [...]      Local LiveKit setup for --live-voice
-droid setup            Re-run the key/credential wizard
-droid update           Update the checkout and re-sync deps
+unity                  Interactive local chat (alias: unity chat)
+unity serve            Start CM + gateway headless against hosted Orchestra
+unity stop             Stop the local runtime
+unity status           Show runtime status
+unity logs             Follow the runtime log
+unity doctor           Gateway/config checks
+unity voice [...]      Local LiveKit setup for --live-voice
+unity setup            Re-run the key/credential wizard
+unity update           Update the checkout and re-sync deps
 USAGE
         ;;
     *)
         # Forward unknown args to the sandbox.
-        cd "\$DROID_REPO"
+        cd "\$UNITY_REPO"
         exec "\$PY" -m sandboxes.conversation_manager.sandbox "\$@"
         ;;
 esac
 EOF
     chmod +x "$shim"
-    log_success "Installed droid CLI at $shim"
+    log_success "Installed unity CLI at $shim"
 }
 
 inject_path() {
@@ -412,12 +412,12 @@ inject_path() {
         bash) rc="$HOME/.bashrc" ;;
         *) rc="$HOME/.profile" ;;
     esac
-    if [ -n "$rc" ] && ! grep -q "# >>> droid PATH >>>" "$rc" 2>/dev/null; then
+    if [ -n "$rc" ] && ! grep -q "# >>> unity PATH >>>" "$rc" 2>/dev/null; then
         {
             echo ""
-            echo "# >>> droid PATH >>>"
+            echo "# >>> unity PATH >>>"
             echo "export PATH=\"$CLI_DIR:\$PATH\""
-            echo "# <<< droid PATH <<<"
+            echo "# <<< unity PATH <<<"
         } >> "$rc"
         log_info "Added $CLI_DIR to PATH in $rc (open a new terminal)"
     fi
@@ -425,13 +425,13 @@ inject_path() {
 
 print_done() {
     echo ""
-    echo -e "${BOLD}Droid installed.${NC}"
+    echo -e "${BOLD}Unity installed.${NC}"
     echo ""
-    echo "  droid            Start an interactive local chat"
-    echo "  droid serve      Run headless (CM + gateway)"
-    echo "  droid help       Command reference"
+    echo "  unity            Start an interactive local chat"
+    echo "  unity serve      Run headless (CM + gateway)"
+    echo "  unity help       Command reference"
     echo ""
-    echo "Keys live in $DROID_REPO/.env — edit and re-run 'droid setup' any time."
+    echo "Keys live in $UNITY_REPO/.env — edit and re-run 'unity setup' any time."
     echo "Manage your assistant and account at https://console.unify.ai"
     echo ""
 }
@@ -441,9 +441,9 @@ main() {
         configure_env
         exit 0
     fi
-    echo -e "${BOLD}Droid installer${NC} (branch: $BRANCH)"
+    echo -e "${BOLD}Unity installer${NC} (branch: $BRANCH)"
     ensure_prereqs
-    clone_or_update_droid
+    clone_or_update_unity
     clone_or_update_sibling unify
     clone_or_update_sibling unillm
     clone_or_update_magnitude

@@ -1,7 +1,7 @@
 Transcript Manager Sandbox
 ==========================
 
-This folder contains an **interactive playground** for the `TranscriptManager` component that lives in `droid/transcript_manager/`.  The goal of the sandbox is to let you experiment with the manager in isolation – seed imaginary multi-channel conversations, query them in natural-language, and observe how the underlying tool-loop behaves (including steerable tools and clarification requests) before you integrate the manager into a larger system.
+This folder contains an **interactive playground** for the `TranscriptManager` component that lives in `unity/transcript_manager/`.  The goal of the sandbox is to let you experiment with the manager in isolation – seed imaginary multi-channel conversations, query them in natural-language, and observe how the underlying tool-loop behaves (including steerable tools and clarification requests) before you integrate the manager into a larger system.
 
 ### Video walkthroughs
 - General overview (comprehensive, but older sandbox version): [Loom video](https://www.loom.com/share/d600aa86f59a41a3ba2f4f1cbc3089d1?sid=70e250ec-3e82-48b0-aa17-2da9024a2fff)

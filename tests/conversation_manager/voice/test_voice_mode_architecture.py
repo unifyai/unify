@@ -32,7 +32,7 @@ async def event_broker():
     This avoids starting a full ConversationManager instance (slow, requires env),
     while still exercising the same pub/sub API that voice mode uses.
     """
-    from droid.conversation_manager.event_broker import create_event_broker
+    from unity.conversation_manager.event_broker import create_event_broker
 
     broker = create_event_broker()
     yield broker
@@ -70,7 +70,7 @@ class TestVoiceCallFlowIntegration:
         """
         Verify phone call start event is properly published and captured.
         """
-        from droid.conversation_manager.events import Event, PhoneCallStarted
+        from unity.conversation_manager.events import Event, PhoneCallStarted
 
         async with event_broker.pubsub() as pubsub:
             await pubsub.psubscribe("app:comms:*")
@@ -98,7 +98,7 @@ class TestVoiceCallFlowIntegration:
         """
         Verify call guidance events flow through the system.
         """
-        from droid.conversation_manager.events import FastBrainNotification, Event
+        from unity.conversation_manager.events import FastBrainNotification, Event
 
         async with event_broker.pubsub() as pubsub:
             await pubsub.subscribe("app:call:notification")
@@ -214,11 +214,11 @@ async def test_event_broker_delivers_across_threads(event_broker):
 async def test_unify_llm_chat_returns_stream():
     """UnifyLLM.chat() returns a UnifyLLMStream instance."""
     from livekit.agents import llm
-    from droid.conversation_manager.livekit_unify_adapter import (
+    from unity.conversation_manager.livekit_unify_adapter import (
         UnifyLLM,
         UnifyLLMStream,
     )
-    from droid.settings import SETTINGS
+    from unity.settings import SETTINGS
 
     llm_instance = UnifyLLM(model=SETTINGS.conversation.FAST_BRAIN_MODEL)
 

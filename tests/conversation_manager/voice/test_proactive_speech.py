@@ -21,15 +21,15 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from droid.contact_manager.simulated import SimulatedContactManager
-from droid.common.prompt_helpers import PromptParts
-from droid.conversation_manager.domains.proactive_speech import (
+from unity.contact_manager.simulated import SimulatedContactManager
+from unity.common.prompt_helpers import PromptParts
+from unity.conversation_manager.domains.proactive_speech import (
     ProactiveDecision,
     ProactiveSpeech,
 )
 from datetime import datetime, timezone
 
-from droid.conversation_manager.cm_types import Medium, Mode, ScreenshotEntry
+from unity.conversation_manager.cm_types import Medium, Mode, ScreenshotEntry
 
 # =============================================================================
 # Mock Helpers
@@ -105,7 +105,7 @@ def sample_contacts():
 @pytest.fixture
 def mock_cm(mock_session_logger, mock_event_broker, sample_contacts):
     """Create a mock ConversationManager with minimal state for proactive speech tests."""
-    from droid.conversation_manager.domains.contact_index import ContactIndex
+    from unity.conversation_manager.domains.contact_index import ContactIndex
 
     cm = MagicMock()
     cm._session_logger = mock_session_logger
@@ -170,7 +170,7 @@ class TestScheduleProactiveSpeech:
 
     async def test_schedule_only_in_call_mode(self, mock_cm):
         """Proactive speech only schedules in 'call' mode."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         # Test call mode - should create task
         mock_cm.mode = Mode.CALL
@@ -194,7 +194,7 @@ class TestScheduleProactiveSpeech:
 
     async def test_schedule_only_in_unify_meet_mode(self, mock_cm):
         """Proactive speech schedules in 'meet' mode."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm.mode = Mode.MEET
         mock_cm.cancel_proactive_speech = AsyncMock()
@@ -214,7 +214,7 @@ class TestScheduleProactiveSpeech:
 
     async def test_schedule_skipped_in_text_mode(self, mock_cm):
         """Proactive speech does NOT schedule in 'text' mode."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm.mode = Mode.TEXT
         mock_cm.cancel_proactive_speech = AsyncMock()
@@ -228,7 +228,7 @@ class TestScheduleProactiveSpeech:
 
     async def test_schedule_skipped_when_proactive_speech_disabled(self, mock_cm):
         """Proactive speech does not schedule while externally disabled."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm.mode = Mode.CALL
         mock_cm._proactive_speech_enabled = False
@@ -241,7 +241,7 @@ class TestScheduleProactiveSpeech:
 
     async def test_fast_brain_generating_does_not_rearm_when_disabled(self, mock_cm):
         """Fast-brain activity cannot re-enable proactive speech implicitly."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm._proactive_speech_enabled = False
         mock_cm.schedule_proactive_speech = AsyncMock()
@@ -252,7 +252,7 @@ class TestScheduleProactiveSpeech:
 
     async def test_schedule_cancels_existing_task(self, mock_cm):
         """schedule_proactive_speech cancels any existing task first."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         # Create a fake existing task
         existing_task = MagicMock()
@@ -288,7 +288,7 @@ class TestCancelProactiveSpeech:
 
     async def test_cancel_does_nothing_if_no_task(self, mock_cm):
         """cancel_proactive_speech is a no-op if no task exists."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm._proactive_speech_task = None
 
@@ -299,7 +299,7 @@ class TestCancelProactiveSpeech:
 
     async def test_cancel_does_nothing_if_task_done(self, mock_cm):
         """cancel_proactive_speech is a no-op if task is already done."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         done_task = MagicMock()
         done_task.done = MagicMock(return_value=True)
@@ -312,7 +312,7 @@ class TestCancelProactiveSpeech:
 
     async def test_cancel_cancels_running_task(self, mock_cm):
         """cancel_proactive_speech cancels a running task."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         # Create a real async task that we can cancel
         async def slow_task():
@@ -327,10 +327,11 @@ class TestCancelProactiveSpeech:
         assert mock_cm._proactive_speech_task is None
 
     async def test_set_proactive_speech_enabled_false_cancels_pending_task(
-        self, mock_cm
+        self,
+        mock_cm,
     ):
         """Disabling proactive speech cancels the pending proactive task."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm.cancel_proactive_speech = AsyncMock()
 
@@ -340,10 +341,11 @@ class TestCancelProactiveSpeech:
         mock_cm.cancel_proactive_speech.assert_called_once()
 
     async def test_set_proactive_speech_enabled_true_does_not_schedule_immediately(
-        self, mock_cm
+        self,
+        mock_cm,
     ):
         """Re-enabling only opens the gate; callers choose whether to schedule."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm.cancel_proactive_speech = AsyncMock()
         mock_cm.schedule_proactive_speech = AsyncMock()
@@ -368,7 +370,7 @@ class TestProactiveSpeechLoop:
         """When the pipeline becomes non-quiescent during the debounce sleep,
         the loop exits without consulting the LLM.
         """
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm.mode = Mode.CALL
 
@@ -402,7 +404,7 @@ class TestProactiveSpeechLoop:
         """When the pipeline is not quiescent at the start, the loop waits
         for quiescence before beginning the debounce countdown.
         """
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm.mode = Mode.CALL
         mock_cm._voice_pipeline_quiescent.clear()
@@ -425,7 +427,7 @@ class TestProactiveSpeechLoop:
         with (
             patch("asyncio.sleep", new=AsyncMock()),
             patch(
-                "droid.conversation_manager.conversation_manager.build_brain_spec",
+                "unity.conversation_manager.conversation_manager.build_brain_spec",
                 return_value=MockBrainSpec(),
             ),
         ):
@@ -436,7 +438,7 @@ class TestProactiveSpeechLoop:
     async def test_loop_proceeds_when_pipeline_quiescent(self, mock_cm):
         """When the pipeline is quiescent, the loop proceeds to break the
         silence (proactive speech always speaks; only the delay varies)."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm.mode = Mode.CALL
 
@@ -448,7 +450,7 @@ class TestProactiveSpeechLoop:
         with (
             patch("asyncio.sleep", new=AsyncMock()),
             patch(
-                "droid.conversation_manager.conversation_manager.build_brain_spec",
+                "unity.conversation_manager.conversation_manager.build_brain_spec",
                 return_value=MockBrainSpec(),
             ),
         ):
@@ -459,7 +461,7 @@ class TestProactiveSpeechLoop:
     async def test_loop_returns_when_nothing_said_yet(self, mock_cm):
         """With an empty transcript there is no silence to break, so the loop
         exits without consulting the LLM. It re-arms on the next utterance."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm.mode = Mode.CALL
         mock_cm.get_recent_voice_transcript = MagicMock(return_value=([], None))
@@ -486,7 +488,7 @@ class TestProactiveSpeechLoop:
     async def test_loop_publishes_guidance(self, mock_cm):
         """The loop publishes a FastBrainNotification event with should_speak=True and
         message so the fast brain speaks it via session.say()."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm.mode = Mode.CALL
 
@@ -504,7 +506,7 @@ class TestProactiveSpeechLoop:
         with (
             patch("asyncio.sleep", new=AsyncMock()),
             patch(
-                "droid.conversation_manager.conversation_manager.build_brain_spec",
+                "unity.conversation_manager.conversation_manager.build_brain_spec",
                 return_value=MockBrainSpec(),
             ),
         ):
@@ -533,7 +535,7 @@ class TestProactiveSpeechLoop:
 
     async def test_loop_records_message_in_contact_index(self, mock_cm):
         """The loop records the proactive message in contact_index."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm.mode = Mode.CALL
 
@@ -551,7 +553,7 @@ class TestProactiveSpeechLoop:
         with (
             patch("asyncio.sleep", new=AsyncMock()),
             patch(
-                "droid.conversation_manager.conversation_manager.build_brain_spec",
+                "unity.conversation_manager.conversation_manager.build_brain_spec",
                 return_value=MockBrainSpec(),
             ),
         ):
@@ -609,7 +611,7 @@ class TestProactiveSpeechDecideIntegration:
         ps = ProactiveSpeech()
 
         with patch(
-            "droid.conversation_manager.domains.proactive_speech.new_llm_client",
+            "unity.conversation_manager.domains.proactive_speech.new_llm_client",
             side_effect=RuntimeError("connection failed"),
         ):
             with pytest.raises(RuntimeError):
@@ -642,8 +644,8 @@ class TestEventHandlerProactiveSpeechIntegration:
         should_speak=True, preventing stale proactive speech from queueing
         during TTS playback of substantive guidance.
         """
-        from droid.conversation_manager.events import FastBrainNotification
-        from droid.conversation_manager.domains.event_handlers import EventHandler
+        from unity.conversation_manager.events import FastBrainNotification
+        from unity.conversation_manager.domains.event_handlers import EventHandler
 
         mock_cm.schedule_proactive_speech = AsyncMock()
 
@@ -664,8 +666,8 @@ class TestEventHandlerProactiveSpeechIntegration:
         Notify-only guidance is silently injected into the fast brain's context.
         The user is still in silence, so proactive speech may still be warranted.
         """
-        from droid.conversation_manager.events import FastBrainNotification
-        from droid.conversation_manager.domains.event_handlers import EventHandler
+        from unity.conversation_manager.events import FastBrainNotification
+        from unity.conversation_manager.domains.event_handlers import EventHandler
 
         mock_cm.schedule_proactive_speech = AsyncMock()
 
@@ -682,8 +684,8 @@ class TestEventHandlerProactiveSpeechIntegration:
 
     async def test_inbound_phone_utterance_resets_proactive(self, mock_cm):
         """InboundPhoneUtterance event resets (reschedules) proactive speech."""
-        from droid.conversation_manager.events import InboundPhoneUtterance
-        from droid.conversation_manager.domains.event_handlers import EventHandler
+        from unity.conversation_manager.events import InboundPhoneUtterance
+        from unity.conversation_manager.domains.event_handlers import EventHandler
 
         mock_cm.schedule_proactive_speech = AsyncMock()
         mock_cm.interject_or_run = AsyncMock()
@@ -703,8 +705,8 @@ class TestEventHandlerProactiveSpeechIntegration:
         This is the indirect path that restarts the cycle after the fast brain
         speaks proactive content via TTS.
         """
-        from droid.conversation_manager.events import OutboundPhoneUtterance
-        from droid.conversation_manager.domains.event_handlers import EventHandler
+        from unity.conversation_manager.events import OutboundPhoneUtterance
+        from unity.conversation_manager.domains.event_handlers import EventHandler
 
         mock_cm.schedule_proactive_speech = AsyncMock()
 
@@ -719,8 +721,8 @@ class TestEventHandlerProactiveSpeechIntegration:
 
     async def test_phone_call_ended_cancels_proactive(self, mock_cm):
         """PhoneCallEnded event cancels proactive speech."""
-        from droid.conversation_manager.events import PhoneCallEnded
-        from droid.conversation_manager.domains.event_handlers import EventHandler
+        from unity.conversation_manager.events import PhoneCallEnded
+        from unity.conversation_manager.domains.event_handlers import EventHandler
 
         mock_cm.cancel_proactive_speech = AsyncMock()
         mock_cm.request_llm_run = AsyncMock()
@@ -754,8 +756,8 @@ class TestEventHandlerProactiveSpeechIntegration:
 
     async def test_unify_meet_ended_cancels_proactive(self, mock_cm):
         """UnifyMeetEnded event cancels proactive speech."""
-        from droid.conversation_manager.events import UnifyMeetEnded
-        from droid.conversation_manager.domains.event_handlers import EventHandler
+        from unity.conversation_manager.events import UnifyMeetEnded
+        from unity.conversation_manager.domains.event_handlers import EventHandler
 
         mock_cm.cancel_proactive_speech = AsyncMock()
         mock_cm.request_llm_run = AsyncMock()
@@ -783,9 +785,9 @@ class TestEventHandlerProactiveSpeechIntegration:
 
     async def test_sms_received_cancels_proactive(self, mock_cm):
         """SMSReceived event cancels proactive speech."""
-        from droid.conversation_manager.events import SMSReceived
-        from droid.conversation_manager.domains.event_handlers import EventHandler
-        from droid.conversation_manager.domains import managers_utils
+        from unity.conversation_manager.events import SMSReceived
+        from unity.conversation_manager.domains.event_handlers import EventHandler
+        from unity.conversation_manager.domains import managers_utils
 
         mock_cm.cancel_proactive_speech = AsyncMock()
         mock_cm.request_llm_run = AsyncMock()
@@ -821,7 +823,7 @@ class TestProactiveSpeechE2E:
         initialized_cm,
     ):
         """In text mode, proactive speech should not be scheduled."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         cm = initialized_cm.cm
 
@@ -844,7 +846,7 @@ class TestProactiveSpeechE2E:
         initialized_cm,
     ):
         """In call mode, proactive speech should be scheduled."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         cm = initialized_cm.cm
 
@@ -870,7 +872,7 @@ class TestProactiveSpeechE2E:
         initialized_cm,
     ):
         """cancel_proactive_speech should clear the task."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         cm = initialized_cm.cm
 
@@ -907,7 +909,7 @@ class TestProactiveSpeechBlindSpots:
 
     async def test_loop_records_message_with_unify_meet_medium(self, mock_cm):
         """In MEET mode, proactive messages should use Medium.UNIFY_MEET."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm.mode = Mode.MEET  # Key: test MEET mode specifically
 
@@ -925,7 +927,7 @@ class TestProactiveSpeechBlindSpots:
         with (
             patch("asyncio.sleep", new=AsyncMock()),
             patch(
-                "droid.conversation_manager.conversation_manager.build_brain_spec",
+                "unity.conversation_manager.conversation_manager.build_brain_spec",
                 return_value=MockBrainSpec(),
             ),
         ):
@@ -963,8 +965,8 @@ class TestProactiveSpeechBlindSpots:
 
     async def test_inbound_unify_meet_utterance_resets_proactive(self, mock_cm):
         """InboundUnifyMeetUtterance event resets (reschedules) proactive speech."""
-        from droid.conversation_manager.events import InboundUnifyMeetUtterance
-        from droid.conversation_manager.domains.event_handlers import EventHandler
+        from unity.conversation_manager.events import InboundUnifyMeetUtterance
+        from unity.conversation_manager.domains.event_handlers import EventHandler
 
         mock_cm.schedule_proactive_speech = AsyncMock()
         mock_cm.interject_or_run = AsyncMock()
@@ -984,9 +986,9 @@ class TestProactiveSpeechBlindSpots:
 
     async def test_email_received_cancels_proactive(self, mock_cm):
         """EmailReceived event cancels proactive speech."""
-        from droid.conversation_manager.events import EmailReceived
-        from droid.conversation_manager.domains.event_handlers import EventHandler
-        from droid.conversation_manager.domains import managers_utils
+        from unity.conversation_manager.events import EmailReceived
+        from unity.conversation_manager.domains.event_handlers import EventHandler
+        from unity.conversation_manager.domains import managers_utils
 
         mock_cm.cancel_proactive_speech = AsyncMock()
         mock_cm.request_llm_run = AsyncMock()
@@ -1015,7 +1017,7 @@ class TestProactiveSpeechBlindSpots:
 
     async def test_cancel_does_not_cancel_self_from_inside_task(self, mock_cm):
         """cancel_proactive_speech should not cancel if called from inside the task."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         cancel_actually_called = False
 
@@ -1049,7 +1051,7 @@ class TestProactiveSpeechBlindSpots:
         guidance, producing an OutboundUtterance event whose handler calls
         schedule_proactive_speech().
         """
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm.mode = Mode.CALL
 
@@ -1068,7 +1070,7 @@ class TestProactiveSpeechBlindSpots:
         with (
             patch("asyncio.sleep", new=AsyncMock()),
             patch(
-                "droid.conversation_manager.conversation_manager.build_brain_spec",
+                "unity.conversation_manager.conversation_manager.build_brain_spec",
                 return_value=MockBrainSpec(),
             ),
         ):
@@ -1220,7 +1222,7 @@ class TestProactiveSpeechConcurrentScheduling:
         new loop — but only one is tracked by ``_proactive_speech_task``. The
         orphaned loop runs to completion and publishes a duplicate guidance.
         """
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm.mode = Mode.CALL
 
@@ -1257,7 +1259,7 @@ class TestProactiveSpeechConcurrentScheduling:
         mock_cm._proactive_speech_task = asyncio.create_task(slow_existing_loop())
 
         with patch(
-            "droid.conversation_manager.conversation_manager.build_brain_spec",
+            "unity.conversation_manager.conversation_manager.build_brain_spec",
             return_value=MockBrainSpec(),
         ):
             # Fire two schedules concurrently. Both find the existing slow
@@ -1292,7 +1294,7 @@ class TestProactiveSpeechMediumScriptIntegration:
     def test_tts_call_subscribes_to_call_guidance(self):
         """call.py should subscribe to app:call:notification."""
         import inspect
-        from droid.conversation_manager.medium_scripts import call
+        from unity.conversation_manager.medium_scripts import call
 
         source = inspect.getsource(call)
         assert (
@@ -1312,7 +1314,7 @@ class TestProactiveSpeechMediumScriptIntegration:
 class TestProactiveSpeechActionAwareness:
     """Regression: proactive speech must not claim in-flight actions are done.
 
-    Reproduces the bug from droid-2026-02-28-15-10-22-staging where proactive
+    Reproduces the bug from unity-2026-02-28-15-10-22-staging where proactive
     speech said "the browser should be up now" while the CodeActActor was still
     in the discovery phase and hadn't yet opened anything.
 
@@ -1334,7 +1336,7 @@ class TestProactiveSpeechActionAwareness:
         explicit marker that an action is still executing (not just the
         query words, which already appear in the transcript).
         """
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm.mode = Mode.CALL
         mock_cm.in_flight_actions = {
@@ -1376,7 +1378,7 @@ class TestProactiveSpeechActionAwareness:
         with (
             patch("asyncio.sleep", new=AsyncMock()),
             patch(
-                "droid.conversation_manager.conversation_manager.build_brain_spec",
+                "unity.conversation_manager.conversation_manager.build_brain_spec",
                 return_value=MockBrainSpec(),
             ),
         ):
@@ -1422,7 +1424,7 @@ class TestProactiveSpeechActionAwareness:
         the natural LLM tendency is to say "it should be ready now".
         With action_context injected, the LLM must respect the ground truth.
         """
-        from droid.conversation_manager.conversation_manager import (
+        from unity.conversation_manager.conversation_manager import (
             _render_action_context,
         )
 
@@ -1521,7 +1523,7 @@ class TestProactiveSpeechVisualContext:
     async def test_loop_forwards_buffered_screenshots_to_decide(self, mock_cm):
         """The proactive loop should peek the screenshot buffer and forward
         the entries to decide() so the LLM can see what's on screen."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm.mode = Mode.CALL
         mock_cm.assistant_screen_share_active = True
@@ -1549,7 +1551,7 @@ class TestProactiveSpeechVisualContext:
         with (
             patch("asyncio.sleep", new=AsyncMock()),
             patch(
-                "droid.conversation_manager.conversation_manager.build_brain_spec",
+                "unity.conversation_manager.conversation_manager.build_brain_spec",
                 return_value=MockBrainSpec(),
             ),
         ):
@@ -1568,7 +1570,7 @@ class TestProactiveSpeechVisualContext:
         """When the assistant screen is shared, proactive speech should see
         the actual screenshot — not just text saying 'the assistant's desktop
         is being shared'."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm.mode = Mode.CALL
         mock_cm.assistant_screen_share_active = True
@@ -1595,7 +1597,7 @@ class TestProactiveSpeechVisualContext:
         with (
             patch("asyncio.sleep", new=AsyncMock()),
             patch(
-                "droid.conversation_manager.conversation_manager.build_brain_spec",
+                "unity.conversation_manager.conversation_manager.build_brain_spec",
                 return_value=MockBrainSpec(),
             ),
         ):
@@ -1618,7 +1620,7 @@ class TestProactiveSpeechVisualContext:
     async def test_all_three_visual_sources_in_decide_inputs(self, mock_cm):
         """When all three visual sources are active, all three screenshot
         images should reach the proactive speech LLM."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm.mode = Mode.CALL
         mock_cm.assistant_screen_share_active = True
@@ -1651,7 +1653,7 @@ class TestProactiveSpeechVisualContext:
         with (
             patch("asyncio.sleep", new=AsyncMock()),
             patch(
-                "droid.conversation_manager.conversation_manager.build_brain_spec",
+                "unity.conversation_manager.conversation_manager.build_brain_spec",
                 return_value=MockBrainSpec(),
             ),
         ):
@@ -1674,7 +1676,7 @@ class TestProactiveSpeechVisualContext:
     async def test_screenshot_source_labels_in_decide_inputs(self, mock_cm):
         """Each screenshot forwarded to proactive speech should carry its
         source label so the LLM knows which screen it's looking at."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm.mode = Mode.CALL
         mock_cm.assistant_screen_share_active = True
@@ -1703,7 +1705,7 @@ class TestProactiveSpeechVisualContext:
         with (
             patch("asyncio.sleep", new=AsyncMock()),
             patch(
-                "droid.conversation_manager.conversation_manager.build_brain_spec",
+                "unity.conversation_manager.conversation_manager.build_brain_spec",
                 return_value=MockBrainSpec(),
             ),
         ):
@@ -1726,8 +1728,8 @@ class TestProactiveSpeechVisualContext:
     async def test_proactive_and_main_brain_both_see_screenshots(self, mock_cm):
         """The main brain receives screenshots via BrainSpec.state_message().
         Proactive speech should receive the same visual context."""
-        from droid.conversation_manager.conversation_manager import ConversationManager
-        from droid.conversation_manager.domains.brain import BrainSpec
+        from unity.conversation_manager.conversation_manager import ConversationManager
+        from unity.conversation_manager.domains.brain import BrainSpec
 
         mock_cm.mode = Mode.CALL
         mock_cm.assistant_screen_share_active = True
@@ -1768,7 +1770,7 @@ class TestProactiveSpeechVisualContext:
         with (
             patch("asyncio.sleep", new=AsyncMock()),
             patch(
-                "droid.conversation_manager.conversation_manager.build_brain_spec",
+                "unity.conversation_manager.conversation_manager.build_brain_spec",
                 return_value=MockBrainSpec(),
             ),
         ):

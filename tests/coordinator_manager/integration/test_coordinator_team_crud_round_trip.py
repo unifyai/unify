@@ -11,9 +11,9 @@ from tests.coordinator_manager.integration.local_stack_harness import (
     delete_team,
     unique_org_name,
 )
-from droid.coordinator_manager.coordinator_manager import CoordinatorManager
-from droid.manager_registry import ManagerRegistry
-from droid.session_details import SESSION_DETAILS
+from unity.coordinator_manager.coordinator_manager import CoordinatorManager
+from unity.manager_registry import ManagerRegistry
+from unity.session_details import SESSION_DETAILS
 
 pytestmark = [
     pytest.mark.integration,

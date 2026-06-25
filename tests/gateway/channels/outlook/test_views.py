@@ -1,4 +1,4 @@
-"""Behavioural tests for ``droid.gateway.channels.outlook``.
+"""Behavioural tests for ``unity.gateway.channels.outlook``.
 
 No existing tests in ``communication/tests/outlook/`` to port
 (outlook was tested through integration only); these tests are
@@ -18,7 +18,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from droid.gateway.channels.outlook import router
+from unity.gateway.channels.outlook import router
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -37,7 +37,7 @@ def _outlook_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def _adapters_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pin SETTINGS.conversation.ADAPTERS_URL for default-webhook-URL assertions."""
-    from droid.gateway.channels.outlook import views as outlook_views
+    from unity.gateway.channels.outlook import views as outlook_views
 
     monkeypatch.setattr(
         outlook_views,
@@ -91,7 +91,7 @@ def test_router_exposes_expected_paths() -> None:
 
 
 def test_router_importable_from_package_root() -> None:
-    from droid.gateway.channels.outlook import router as exported
+    from unity.gateway.channels.outlook import router as exported
 
     assert exported is router
 
@@ -119,7 +119,7 @@ class TestDeleteOutlookUser:
         fake_graph = MagicMock()
         fake_graph.users.by_user_id.return_value.delete = AsyncMock()
         with patch(
-            "droid.gateway.channels.outlook.views.get_admin_graph_client",
+            "unity.gateway.channels.outlook.views.get_admin_graph_client",
             return_value=fake_graph,
         ):
             resp = client.request(
@@ -145,7 +145,7 @@ class TestDeleteOutlookUser:
             side_effect=Exception("Resource 'user@example.com' does not exist"),
         )
         with patch(
-            "droid.gateway.channels.outlook.views.get_admin_graph_client",
+            "unity.gateway.channels.outlook.views.get_admin_graph_client",
             return_value=fake_graph,
         ):
             resp = client.request(
@@ -170,7 +170,7 @@ class TestDeleteOutlookUser:
             side_effect=Exception("MS Graph 404: user not found"),
         )
         with patch(
-            "droid.gateway.channels.outlook.views.get_admin_graph_client",
+            "unity.gateway.channels.outlook.views.get_admin_graph_client",
             return_value=fake_graph,
         ):
             resp = client.request(
@@ -191,7 +191,7 @@ class TestDeleteOutlookUser:
             side_effect=Exception("internal server error"),
         )
         with patch(
-            "droid.gateway.channels.outlook.views.get_admin_graph_client",
+            "unity.gateway.channels.outlook.views.get_admin_graph_client",
             return_value=fake_graph,
         ):
             resp = client.request(
@@ -227,11 +227,11 @@ class TestSendOutlookEmail:
         fake_graph.me.send_mail.post = AsyncMock()
         with (
             patch(
-                "droid.gateway.channels.outlook.views.lookup_assistant",
+                "unity.gateway.channels.outlook.views.lookup_assistant",
                 new=AsyncMock(return_value=_byod_assistant()),
             ),
             patch(
-                "droid.gateway.channels.outlook.views.graph_client_from_assistant",
+                "unity.gateway.channels.outlook.views.graph_client_from_assistant",
                 return_value=fake_graph,
             ),
         ):
@@ -258,11 +258,11 @@ class TestSendOutlookEmail:
         fake_graph.users.by_user_id.return_value.send_mail.post = AsyncMock()
         with (
             patch(
-                "droid.gateway.channels.outlook.views.lookup_assistant",
+                "unity.gateway.channels.outlook.views.lookup_assistant",
                 new=AsyncMock(return_value=_admin_assistant()),
             ),
             patch(
-                "droid.gateway.channels.outlook.views.graph_client_from_assistant",
+                "unity.gateway.channels.outlook.views.graph_client_from_assistant",
                 return_value=fake_graph,
             ),
         ):
@@ -288,11 +288,11 @@ class TestSendOutlookEmail:
         fake_graph.me.messages.by_message_id.return_value.reply.post = AsyncMock()
         with (
             patch(
-                "droid.gateway.channels.outlook.views.lookup_assistant",
+                "unity.gateway.channels.outlook.views.lookup_assistant",
                 new=AsyncMock(return_value=_byod_assistant()),
             ),
             patch(
-                "droid.gateway.channels.outlook.views.graph_client_from_assistant",
+                "unity.gateway.channels.outlook.views.graph_client_from_assistant",
                 return_value=fake_graph,
             ),
         ):
@@ -326,11 +326,11 @@ class TestSendOutlookEmail:
         fake_graph.me.messages.by_message_id.return_value.send.post = AsyncMock()
         with (
             patch(
-                "droid.gateway.channels.outlook.views.lookup_assistant",
+                "unity.gateway.channels.outlook.views.lookup_assistant",
                 new=AsyncMock(return_value=_byod_assistant()),
             ),
             patch(
-                "droid.gateway.channels.outlook.views.graph_client_from_assistant",
+                "unity.gateway.channels.outlook.views.graph_client_from_assistant",
                 return_value=fake_graph,
             ),
         ):
@@ -364,11 +364,11 @@ class TestSendOutlookEmail:
         fake_graph.me.send_mail.post = AsyncMock(side_effect=Exception("graph down"))
         with (
             patch(
-                "droid.gateway.channels.outlook.views.lookup_assistant",
+                "unity.gateway.channels.outlook.views.lookup_assistant",
                 new=AsyncMock(return_value=_byod_assistant()),
             ),
             patch(
-                "droid.gateway.channels.outlook.views.graph_client_from_assistant",
+                "unity.gateway.channels.outlook.views.graph_client_from_assistant",
                 return_value=fake_graph,
             ),
         ):
@@ -413,7 +413,7 @@ class TestWatchOutlookEmail:
         fake_graph.subscriptions.post = AsyncMock(return_value=result)
 
         with patch(
-            "droid.gateway.channels.outlook.views.get_graph_client",
+            "unity.gateway.channels.outlook.views.get_graph_client",
             new=AsyncMock(return_value=fake_graph),
         ):
             resp = client.post(
@@ -443,7 +443,7 @@ class TestWatchOutlookEmail:
         fake_graph.subscriptions.post = AsyncMock(return_value=result)
 
         with patch(
-            "droid.gateway.channels.outlook.views.get_graph_client",
+            "unity.gateway.channels.outlook.views.get_graph_client",
             new=AsyncMock(return_value=fake_graph),
         ):
             client.post(
@@ -473,7 +473,7 @@ class TestWatchOutlookEmail:
         fake_graph.subscriptions.post = AsyncMock(return_value=result)
 
         with patch(
-            "droid.gateway.channels.outlook.views.get_graph_client",
+            "unity.gateway.channels.outlook.views.get_graph_client",
             new=AsyncMock(return_value=fake_graph),
         ):
             client.post(
@@ -510,7 +510,7 @@ class TestWatchOutlookEmail:
         fake_graph.subscriptions.post = AsyncMock(return_value=new_result)
 
         with patch(
-            "droid.gateway.channels.outlook.views.get_graph_client",
+            "unity.gateway.channels.outlook.views.get_graph_client",
             new=AsyncMock(return_value=fake_graph),
         ):
             resp = client.post(
@@ -544,7 +544,7 @@ class TestWatchOutlookEmail:
         )
 
         with patch(
-            "droid.gateway.channels.outlook.views.get_graph_client",
+            "unity.gateway.channels.outlook.views.get_graph_client",
             new=AsyncMock(return_value=fake_graph),
         ):
             resp = client.post(
@@ -568,7 +568,7 @@ class TestWatchOutlookEmail:
             side_effect=Exception("validation request timeout, again"),
         )
         with patch(
-            "droid.gateway.channels.outlook.views.get_graph_client",
+            "unity.gateway.channels.outlook.views.get_graph_client",
             new=AsyncMock(return_value=fake_graph),
         ):
             resp = client.post(
@@ -608,7 +608,7 @@ class TestDeleteOutlookWatch:
         fake_graph.subscriptions.by_subscription_id.return_value.delete = AsyncMock()
 
         with patch(
-            "droid.gateway.channels.outlook.views.get_graph_client",
+            "unity.gateway.channels.outlook.views.get_graph_client",
             new=AsyncMock(return_value=fake_graph),
         ):
             resp = client.request(
@@ -633,7 +633,7 @@ class TestDeleteOutlookWatch:
         fake_graph.subscriptions.get = AsyncMock(return_value=MagicMock(value=[]))
 
         with patch(
-            "droid.gateway.channels.outlook.views.get_graph_client",
+            "unity.gateway.channels.outlook.views.get_graph_client",
             new=AsyncMock(return_value=fake_graph),
         ):
             resp = client.request(
@@ -668,11 +668,11 @@ class TestGetOutlookAttachment:
 
         with (
             patch(
-                "droid.gateway.channels.outlook.views.lookup_assistant",
+                "unity.gateway.channels.outlook.views.lookup_assistant",
                 new=AsyncMock(return_value=_byod_assistant()),
             ),
             patch(
-                "droid.gateway.channels.outlook.views.graph_client_from_assistant",
+                "unity.gateway.channels.outlook.views.graph_client_from_assistant",
                 return_value=fake_graph,
             ),
         ):
@@ -708,11 +708,11 @@ class TestGetOutlookAttachment:
 
         with (
             patch(
-                "droid.gateway.channels.outlook.views.lookup_assistant",
+                "unity.gateway.channels.outlook.views.lookup_assistant",
                 new=AsyncMock(return_value=_byod_assistant()),
             ),
             patch(
-                "droid.gateway.channels.outlook.views.graph_client_from_assistant",
+                "unity.gateway.channels.outlook.views.graph_client_from_assistant",
                 return_value=fake_graph,
             ),
         ):
@@ -748,11 +748,11 @@ class TestGetOutlookAttachment:
 
         with (
             patch(
-                "droid.gateway.channels.outlook.views.lookup_assistant",
+                "unity.gateway.channels.outlook.views.lookup_assistant",
                 new=AsyncMock(return_value=_byod_assistant()),
             ),
             patch(
-                "droid.gateway.channels.outlook.views.graph_client_from_assistant",
+                "unity.gateway.channels.outlook.views.graph_client_from_assistant",
                 return_value=fake_graph,
             ),
         ):

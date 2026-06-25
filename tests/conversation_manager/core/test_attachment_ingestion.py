@@ -20,9 +20,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from tests.async_helpers import _wait_for_condition
-from droid.conversation_manager.domains import comms_utils
-from droid.file_manager.managers.local import LocalFileManager
-from droid.settings import SETTINGS
+from unity.conversation_manager.domains import comms_utils
+from unity.file_manager.managers.local import LocalFileManager
+from unity.settings import SETTINGS
 
 # Valid plain-text content that the parser can handle.
 SAMPLE_TEXT_CONTENT = (
@@ -54,7 +54,7 @@ def real_file_manager(tmp_path):
     """
     fm = LocalFileManager(root=str(tmp_path), enable_sync=False)
     with patch(
-        "droid.manager_registry.ManagerRegistry.get_file_manager",
+        "unity.manager_registry.ManagerRegistry.get_file_manager",
         return_value=fm,
     ):
         yield fm
@@ -141,7 +141,7 @@ class TestAttachmentIngestion:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "droid.conversation_manager.domains.comms_utils.SETTINGS",
+                "unity.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
             patch.object(SETTINGS.file, "IMPLICIT_INGESTION", True),
         ):

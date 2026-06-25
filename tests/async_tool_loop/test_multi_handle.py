@@ -11,16 +11,16 @@ import asyncio
 import pytest
 
 from tests.helpers import _handle_project
-from droid.common.llm_client import new_llm_client
-from droid.common.async_tool_loop import start_async_tool_loop
-from droid.common._async_tool.multi_handle import (
+from unity.common.llm_client import new_llm_client
+from unity.common.async_tool_loop import start_async_tool_loop
+from unity.common._async_tool.multi_handle import (
     MultiHandleCoordinator,
     MultiRequestHandle,
 )
-from droid.common._async_tool.request_state import (
+from unity.common._async_tool.request_state import (
     RequestRegistry,
 )
-from droid.common._async_tool.tagging import (
+from unity.common._async_tool.tagging import (
     tag_message_with_request,
     parse_request_tag,
     format_request_cancelled_notice,

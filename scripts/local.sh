@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
-# local.sh — Local Droid for chat testing
+# local.sh — Local Unity for chat testing
 # =============================================================================
 #
-# Starts either the full ConversationManager with Droid-owned local comms ingress
+# Starts either the full ConversationManager with Unity-owned local comms ingress
 # (if LLM keys are available) or a lightweight echo responder for simple
 # Pub/Sub plumbing checks.
 #
@@ -14,18 +14,18 @@
 #   ./scripts/local.sh start              # Auto-detect mode (CM or echo)
 #   ./scripts/local.sh start --echo       # Force echo responder
 #   ./scripts/local.sh start --full       # Force full CM (fails without keys)
-#   ./scripts/local.sh stop               # Stop Droid process
+#   ./scripts/local.sh stop               # Stop Unity process
 #   ./scripts/local.sh status             # Show status
 #   ./scripts/local.sh gateway-doctor     # Run gateway config checks
 #   ./scripts/local.sh check              # Quick check (returns 0 if running)
 #
 # Environment (all optional — sensible defaults for local testing):
-#   DROID_CONVERSATION_LOCAL_COMMS_ENABLED  Enable Droid-owned local comms ingress
-#   DROID_CONVERSATION_LOCAL_COMMS_MODE     local|hosted (default: local unless DROID_COMMS_URL is set)
-#   DROID_CONVERSATION_LOCAL_COMMS_HOST     Local ingress bind host (default: 127.0.0.1)
-#   DROID_CONVERSATION_LOCAL_COMMS_PORT     Local ingress bind port (default: 8787)
-#   DROID_CONVERSATION_LOCAL_COMMS_PUBLIC_URL Public URL for external webhooks
-#   DROID_COMMS_URL         Hosted communication service URL (optional)
+#   UNITY_CONVERSATION_LOCAL_COMMS_ENABLED  Enable Unity-owned local comms ingress
+#   UNITY_CONVERSATION_LOCAL_COMMS_MODE     local|hosted (default: local unless UNITY_COMMS_URL is set)
+#   UNITY_CONVERSATION_LOCAL_COMMS_HOST     Local ingress bind host (default: 127.0.0.1)
+#   UNITY_CONVERSATION_LOCAL_COMMS_PORT     Local ingress bind port (default: 8787)
+#   UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL Public URL for external webhooks
+#   UNITY_COMMS_URL         Hosted communication service URL (optional)
 #   PUBSUB_EMULATOR_HOST    Pub/Sub emulator (echo mode only; default: localhost:8085)
 #   GCP_PROJECT_ID          Project ID (echo mode / hosted comms only)
 #   ASSISTANT_ID            Test assistant ID (default: default-test-assistant)
@@ -43,7 +43,7 @@ set -euo pipefail
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-DROID_REPO_PATH="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+UNITY_REPO_PATH="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 
 PUBSUB_EMULATOR_HOST_EXPLICIT="${PUBSUB_EMULATOR_HOST+x}"
 PUBSUB_EMULATOR_HOST="${PUBSUB_EMULATOR_HOST:-localhost:8085}"
@@ -52,9 +52,9 @@ ASSISTANT_ID="${ASSISTANT_ID:-default-test-assistant}"
 DEPLOY_ENV="${DEPLOY_ENV:-staging}"
 ORCHESTRA_URL="${ORCHESTRA_URL:-http://127.0.0.1:8000/v0}"
 
-if [[ -n "${DROID_CONVERSATION_LOCAL_COMMS_MODE:-}" ]]; then
-  LOCAL_COMMS_MODE="$DROID_CONVERSATION_LOCAL_COMMS_MODE"
-elif [[ -n "${DROID_COMMS_URL:-}" ]]; then
+if [[ -n "${UNITY_CONVERSATION_LOCAL_COMMS_MODE:-}" ]]; then
+  LOCAL_COMMS_MODE="$UNITY_CONVERSATION_LOCAL_COMMS_MODE"
+elif [[ -n "${UNITY_COMMS_URL:-}" ]]; then
   LOCAL_COMMS_MODE="hosted"
 elif [[ -n "$PUBSUB_EMULATOR_HOST_EXPLICIT" ]]; then
   # Console --chat uses the Pub/Sub emulator end-to-end; local ingress outbox
@@ -64,26 +64,26 @@ else
   LOCAL_COMMS_MODE="local"
 fi
 
-if [[ -n "${DROID_CONVERSATION_LOCAL_COMMS_ENABLED:-}" ]]; then
-  LOCAL_COMMS_ENABLED="$DROID_CONVERSATION_LOCAL_COMMS_ENABLED"
+if [[ -n "${UNITY_CONVERSATION_LOCAL_COMMS_ENABLED:-}" ]]; then
+  LOCAL_COMMS_ENABLED="$UNITY_CONVERSATION_LOCAL_COMMS_ENABLED"
 elif [[ "$LOCAL_COMMS_MODE" == "local" ]]; then
   LOCAL_COMMS_ENABLED="true"
 else
   LOCAL_COMMS_ENABLED="false"
 fi
 
-LOCAL_COMMS_HOST="${DROID_CONVERSATION_LOCAL_COMMS_HOST:-127.0.0.1}"
-LOCAL_COMMS_PORT="${DROID_CONVERSATION_LOCAL_COMMS_PORT:-8787}"
-LOCAL_COMMS_PUBLIC_URL="${DROID_CONVERSATION_LOCAL_COMMS_PUBLIC_URL:-}"
-GATEWAY_HOST="${DROID_GATEWAY_HOST:-127.0.0.1}"
-GATEWAY_PORT="${DROID_GATEWAY_PORT:-8001}"
-GATEWAY_PUBLIC_URL="${DROID_GATEWAY_PUBLIC_URL:-$LOCAL_COMMS_PUBLIC_URL}"
+LOCAL_COMMS_HOST="${UNITY_CONVERSATION_LOCAL_COMMS_HOST:-127.0.0.1}"
+LOCAL_COMMS_PORT="${UNITY_CONVERSATION_LOCAL_COMMS_PORT:-8787}"
+LOCAL_COMMS_PUBLIC_URL="${UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL:-}"
+GATEWAY_HOST="${UNITY_GATEWAY_HOST:-127.0.0.1}"
+GATEWAY_PORT="${UNITY_GATEWAY_PORT:-8001}"
+GATEWAY_PUBLIC_URL="${UNITY_GATEWAY_PUBLIC_URL:-$LOCAL_COMMS_PUBLIC_URL}"
 
-PIDFILE="/tmp/droid-local.pid"
-LOGFILE="/tmp/droid-local.log"
-MODEFILE="/tmp/droid-local.mode"
-GATEWAY_PIDFILE="/tmp/droid-gateway.pid"
-GATEWAY_LOGFILE="/tmp/droid-gateway.log"
+PIDFILE="/tmp/unity-local.pid"
+LOGFILE="/tmp/unity-local.log"
+MODEFILE="/tmp/unity-local.mode"
+GATEWAY_PIDFILE="/tmp/unity-gateway.pid"
+GATEWAY_LOGFILE="/tmp/unity-gateway.log"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -97,7 +97,7 @@ log_warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $*"; }
 
 full_stack_state_file() {
-  printf '%s/full-stack-state.json' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
+  printf '%s/full-stack-state.json' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
 }
 
 port_is_listening() {
@@ -126,14 +126,14 @@ PY
 
 refuse_isolated_when_full_stack_active() {
   local action="$1"
-  if [[ "${DROID_ALLOW_ISOLATED:-0}" == "1" || -n "${DROID_STACK_ORCHESTRATOR:-}" ]]; then
+  if [[ "${UNITY_ALLOW_ISOLATED:-0}" == "1" || -n "${UNITY_STACK_ORCHESTRATOR:-}" ]]; then
     return 0
   fi
   if full_stack_source_is_active; then
-    log_error "Refusing isolated Droid $action while the full local stack is active."
-    log_info "Use droid-deploy/selfhost/stack.sh status or repair-console instead."
-    log_info "Override only for intentionally isolated Droid work:"
-    log_info "  DROID_ALLOW_ISOLATED=1 $0 $action"
+    log_error "Refusing isolated Unity $action while the full local stack is active."
+    log_info "Use unity-deploy/selfhost/stack.sh status or repair-console instead."
+    log_info "Override only for intentionally isolated Unity work:"
+    log_info "  UNITY_ALLOW_ISOLATED=1 $0 $action"
     return 1
   fi
 }
@@ -166,8 +166,8 @@ check_python() {
 
 get_python() {
   # Prefer the venv python if available.
-  if [[ -f "$DROID_REPO_PATH/.venv/bin/python" ]]; then
-    echo "$DROID_REPO_PATH/.venv/bin/python"
+  if [[ -f "$UNITY_REPO_PATH/.venv/bin/python" ]]; then
+    echo "$UNITY_REPO_PATH/.venv/bin/python"
   else
     echo "python3"
   fi
@@ -200,6 +200,10 @@ local_comms_base_url() {
   fi
 }
 
+local_comms_internal_url() {
+  echo "http://$LOCAL_COMMS_HOST:$LOCAL_COMMS_PORT"
+}
+
 gateway_base_url() {
   if [[ -n "$GATEWAY_PUBLIC_URL" ]]; then
     echo "$GATEWAY_PUBLIC_URL"
@@ -209,21 +213,21 @@ gateway_base_url() {
 }
 
 run_gateway_doctor() {
-  cd "$DROID_REPO_PATH"
+  cd "$UNITY_REPO_PATH"
   local python_cmd
   python_cmd="$(get_python)"
   if [[ -n "$GATEWAY_PUBLIC_URL" ]]; then
-    "$python_cmd" -m droid.gateway doctor --public-url "$GATEWAY_PUBLIC_URL"
+    "$python_cmd" -m unity.gateway doctor --public-url "$GATEWAY_PUBLIC_URL"
   else
-    "$python_cmd" -m droid.gateway doctor
+    "$python_cmd" -m unity.gateway doctor
   fi
 }
 
 describe_comms_backend() {
   if [[ "$LOCAL_COMMS_ENABLED" == "true" || "$LOCAL_COMMS_MODE" == "local" ]]; then
     echo "local gateway ($(gateway_base_url))"
-  elif [[ -n "${DROID_COMMS_URL:-}" ]]; then
-    echo "hosted service ($DROID_COMMS_URL)"
+  elif [[ -n "${UNITY_COMMS_URL:-}" ]]; then
+    echo "hosted service ($UNITY_COMMS_URL)"
   else
     echo "simulated / no external comms"
   fi
@@ -244,16 +248,16 @@ start_gateway() {
   refuse_isolated_when_full_stack_active start-gateway || return 1
 
   if is_gateway_running; then
-    log_success "Droid gateway already running (PID $(cat "$GATEWAY_PIDFILE"))"
+    log_success "Unity gateway already running (PID $(cat "$GATEWAY_PIDFILE"))"
     return 0
   fi
 
-  cd "$DROID_REPO_PATH"
+  cd "$UNITY_REPO_PATH"
   local python_cmd
   python_cmd="$(get_python)"
 
   local gateway_command=(
-    "$python_cmd" -m droid.gateway serve
+    "$python_cmd" -m unity.gateway serve
     --host "$GATEWAY_HOST"
     --port "$GATEWAY_PORT"
     --mode all
@@ -266,9 +270,9 @@ start_gateway() {
   env \
     ORCHESTRA_URL="$ORCHESTRA_URL" \
     ORCHESTRA_ADMIN_KEY="${ORCHESTRA_ADMIN_KEY:-}" \
-    DROID_COMMS_URL="$(gateway_base_url)" \
-    DROID_ADAPTERS_URL="$(gateway_base_url)" \
-    DROID_GATEWAY_LOCAL_INGRESS_URL="$(local_comms_base_url)" \
+    UNITY_COMMS_URL="$(gateway_base_url)" \
+    UNITY_ADAPTERS_URL="$(gateway_base_url)" \
+    UNITY_GATEWAY_LOCAL_INGRESS_URL="$(local_comms_internal_url)" \
     "${gateway_command[@]}" \
     > "$GATEWAY_LOGFILE" 2>&1 &
 
@@ -276,7 +280,7 @@ start_gateway() {
   echo "$pid" > "$GATEWAY_PIDFILE"
   sleep 2
   if ! kill -0 "$pid" 2>/dev/null; then
-    log_error "Droid gateway failed to start. Check log: $GATEWAY_LOGFILE"
+    log_error "Unity gateway failed to start. Check log: $GATEWAY_LOGFILE"
     tail -30 "$GATEWAY_LOGFILE" 2>/dev/null
     return 1
   fi
@@ -290,18 +294,18 @@ start_gateway() {
       ((attempt++)) || true
     done
     if ! curl -sf "$(gateway_base_url)/health" >/dev/null 2>&1; then
-      log_error "Droid gateway health check failed at $(gateway_base_url)/health"
+      log_error "Unity gateway health check failed at $(gateway_base_url)/health"
       tail -30 "$GATEWAY_LOGFILE" 2>/dev/null
       return 1
     fi
   fi
-  log_success "Droid gateway running (PID $pid)"
+  log_success "Unity gateway running (PID $pid)"
   log_info "Gateway URL: $(gateway_base_url)"
   log_info "Local ingress URL: $(local_comms_base_url)"
   if [[ -n "$GATEWAY_PUBLIC_URL" ]]; then
     log_info "Public callback URL: $GATEWAY_PUBLIC_URL"
   else
-    log_warn "Public callback URL not set. Use DROID_GATEWAY_PUBLIC_URL for provider webhooks."
+    log_warn "Public callback URL not set. Use UNITY_GATEWAY_PUBLIC_URL for provider webhooks."
   fi
 }
 
@@ -310,7 +314,7 @@ stop_gateway() {
     local gateway_pid
     gateway_pid=$(cat "$GATEWAY_PIDFILE")
     if kill -0 "$gateway_pid" 2>/dev/null; then
-      log_info "Stopping Droid gateway (PID $gateway_pid)..."
+      log_info "Stopping Unity gateway (PID $gateway_pid)..."
       kill "$gateway_pid" 2>/dev/null || true
       sleep 2
       kill -9 "$gateway_pid" 2>/dev/null || true
@@ -326,7 +330,7 @@ stop_gateway() {
 start_echo() {
   log_info "Starting echo responder (Pub/Sub plumbing check) ..."
 
-  cd "$DROID_REPO_PATH"
+  cd "$UNITY_REPO_PATH"
   local python_cmd
   python_cmd="$(get_python)"
 
@@ -349,7 +353,7 @@ start_echo() {
   fi
 
   log_success "Echo responder running (PID $pid)"
-  log_info "Auto-discovers all droid-* topics and echoes messages back."
+  log_info "Auto-discovers all unity-* topics and echoes messages back."
 }
 
 # =============================================================================
@@ -360,7 +364,7 @@ start_full_cm() {
   if is_running; then
     local mode
     mode="$(get_mode)"
-    log_success "Droid already running in $mode mode (PID $(cat "$PIDFILE"))"
+    log_success "Unity already running in $mode mode (PID $(cat "$PIDFILE"))"
     return 0
   fi
   __start_full_cm_impl
@@ -369,7 +373,7 @@ start_full_cm() {
 __start_full_cm_impl() {
   log_info "Starting ConversationManager for assistant=$ASSISTANT_ID ..."
 
-  cd "$DROID_REPO_PATH"
+  cd "$UNITY_REPO_PATH"
   local python_cmd
   python_cmd="$(get_python)"
 
@@ -388,22 +392,22 @@ __start_full_cm_impl() {
     "ASSISTANT_ID=$ASSISTANT_ID"
     "DEPLOY_ENV=$DEPLOY_ENV"
     "ORCHESTRA_URL=$ORCHESTRA_URL"
-    "DROID_CONVERSATION_LOCAL_COMMS_ENABLED=$LOCAL_COMMS_ENABLED"
-    "DROID_CONVERSATION_LOCAL_COMMS_MODE=$LOCAL_COMMS_MODE"
-    "DROID_CONVERSATION_LOCAL_COMMS_HOST=$LOCAL_COMMS_HOST"
-    "DROID_CONVERSATION_LOCAL_COMMS_PORT=$LOCAL_COMMS_PORT"
-    "DROID_COMMS_URL=${DROID_COMMS_URL:-$(gateway_base_url)}"
-    "DROID_ADAPTERS_URL=${DROID_ADAPTERS_URL:-$(gateway_base_url)}"
-    "DROID_VALIDATE_LLM_PROVIDERS=false"
+    "UNITY_CONVERSATION_LOCAL_COMMS_ENABLED=$LOCAL_COMMS_ENABLED"
+    "UNITY_CONVERSATION_LOCAL_COMMS_MODE=$LOCAL_COMMS_MODE"
+    "UNITY_CONVERSATION_LOCAL_COMMS_HOST=$LOCAL_COMMS_HOST"
+    "UNITY_CONVERSATION_LOCAL_COMMS_PORT=$LOCAL_COMMS_PORT"
+    "UNITY_COMMS_URL=${UNITY_COMMS_URL:-$(gateway_base_url)}"
+    "UNITY_ADAPTERS_URL=${UNITY_ADAPTERS_URL:-$(gateway_base_url)}"
+    "UNITY_VALIDATE_LLM_PROVIDERS=false"
     "EVENTBUS_PUBLISHING_ENABLED=$eventbus_publish"
     "EVENTBUS_PUBSUB_STREAMING=$eventbus_stream"
     "TEST=false"
-    "DROID_INACTIVITY_TIMEOUT_SECONDS=${DROID_INACTIVITY_TIMEOUT_SECONDS:-0}"
-    "DROID_CONSOLE_UI=${DROID_CONSOLE_UI:-false}"
+    "UNITY_INACTIVITY_TIMEOUT_SECONDS=${UNITY_INACTIVITY_TIMEOUT_SECONDS:-0}"
+    "UNITY_CONSOLE_UI=${UNITY_CONSOLE_UI:-false}"
   )
-  [[ -n "${DROID_LOCAL_ROOT:-}" ]] && env_vars+=("DROID_LOCAL_ROOT=$DROID_LOCAL_ROOT")
-  [[ -n "${DROID_LOCAL_SCHEDULER:-}" ]] && env_vars+=("DROID_LOCAL_SCHEDULER=$DROID_LOCAL_SCHEDULER")
-  [[ -n "$LOCAL_COMMS_PUBLIC_URL" ]] && env_vars+=("DROID_CONVERSATION_LOCAL_COMMS_PUBLIC_URL=$LOCAL_COMMS_PUBLIC_URL")
+  [[ -n "${UNITY_LOCAL_ROOT:-}" ]] && env_vars+=("UNITY_LOCAL_ROOT=$UNITY_LOCAL_ROOT")
+  [[ -n "${UNITY_LOCAL_SCHEDULER:-}" ]] && env_vars+=("UNITY_LOCAL_SCHEDULER=$UNITY_LOCAL_SCHEDULER")
+  [[ -n "$LOCAL_COMMS_PUBLIC_URL" ]] && env_vars+=("UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL=$LOCAL_COMMS_PUBLIC_URL")
 
   # Forward API keys if present.
   [[ -n "${OPENAI_API_KEY:-}" ]]       && env_vars+=("OPENAI_API_KEY=$OPENAI_API_KEY")
@@ -419,7 +423,7 @@ __start_full_cm_impl() {
   [[ -z "${USER_EMAIL:-}" ]]           && env_vars+=("USER_EMAIL=local@test.example.com")
   [[ -n "${USER_EMAIL:-}" ]]           && env_vars+=("USER_EMAIL=$USER_EMAIL")
 
-  env "${env_vars[@]}" $python_cmd -m droid.conversation_manager.main \
+  env "${env_vars[@]}" $python_cmd -m unity.conversation_manager.main \
     > "$LOGFILE" 2>&1 &
 
   local pid=$!
@@ -459,7 +463,7 @@ cmd_start() {
   if is_running; then
     local mode
     mode="$(get_mode)"
-    log_success "Droid already running in $mode mode (PID $(cat "$PIDFILE"))"
+    log_success "Unity already running in $mode mode (PID $(cat "$PIDFILE"))"
     return 0
   fi
 
@@ -468,7 +472,7 @@ cmd_start() {
   fi
 
   echo "=============================================="
-  echo "  Starting Local Droid"
+  echo "  Starting Local Unity"
   echo "=============================================="
   echo ""
 
@@ -486,7 +490,7 @@ cmd_start() {
 
   if [[ "$mode" == "echo" ]] && is_running; then
     mode="$(get_mode)"
-    log_success "Droid already running in $mode mode (PID $(cat "$PIDFILE"))"
+    log_success "Unity already running in $mode mode (PID $(cat "$PIDFILE"))"
     return 0
   fi
 
@@ -512,7 +516,7 @@ cmd_start() {
     if [[ -n "$GATEWAY_PUBLIC_URL" ]]; then
       echo "  Callbacks:  $GATEWAY_PUBLIC_URL"
     else
-      echo "  Callbacks:  not set (export DROID_GATEWAY_PUBLIC_URL)"
+      echo "  Callbacks:  not set (export UNITY_GATEWAY_PUBLIC_URL)"
     fi
   fi
   echo "  Log:        $LOGFILE"
@@ -526,7 +530,7 @@ cmd_stop() {
     if kill -0 "$pid" 2>/dev/null; then
       local mode
       mode="$(get_mode)"
-      log_info "Stopping Droid $mode (PID $pid)..."
+      log_info "Stopping Unity $mode (PID $pid)..."
       kill "$pid" 2>/dev/null || true
       sleep 2
       kill -9 "$pid" 2>/dev/null || true
@@ -534,12 +538,12 @@ cmd_stop() {
     rm -f "$PIDFILE" "$MODEFILE"
   fi
   stop_gateway
-  log_success "Droid stopped"
+  log_success "Unity stopped"
 }
 
 cmd_status() {
   echo ""
-  echo "Droid Local Status"
+  echo "Unity Local Status"
   echo "=================="
   echo ""
   echo -n "  Status:    "
@@ -565,7 +569,7 @@ cmd_status() {
     if [[ -n "$GATEWAY_PUBLIC_URL" ]]; then
       echo "  Callbacks: $GATEWAY_PUBLIC_URL"
     else
-      echo "  Callbacks: not set (export DROID_GATEWAY_PUBLIC_URL)"
+      echo "  Callbacks: not set (export UNITY_GATEWAY_PUBLIC_URL)"
     fi
     echo ""
     echo "Gateway Doctor"
@@ -603,15 +607,15 @@ cmd_help() {
   echo "Usage: $0 [command] [options]"
   echo ""
   echo "Commands:"
-  echo "  start     Start Droid locally (auto-detects mode)"
-  echo "  stop      Stop Droid"
+  echo "  start     Start Unity locally (auto-detects mode)"
+  echo "  stop      Stop Unity"
   echo "  status    Show status"
   echo "  gateway-doctor"
   echo "            Run gateway config checks"
   echo "  start-gateway"
-  echo "            Start droid.gateway (outbound + inbound HTTP)"
+  echo "            Start unity.gateway (outbound + inbound HTTP)"
   echo "  stop-gateway"
-  echo "            Stop droid.gateway"
+  echo "            Stop unity.gateway"
   echo "  gateway-url"
   echo "            Print the local gateway base URL"
   echo "  check     Quick check (exit 0 if running)"
@@ -628,12 +632,12 @@ cmd_help() {
   echo "are set, starts full CM. Otherwise falls back to echo responder."
   echo ""
   echo "Environment:"
-  echo "  DROID_CONVERSATION_LOCAL_COMMS_ENABLED  Enable local comms ingress"
-  echo "  DROID_CONVERSATION_LOCAL_COMMS_MODE     local|hosted"
-  echo "  DROID_CONVERSATION_LOCAL_COMMS_HOST     Local ingress bind host"
-  echo "  DROID_CONVERSATION_LOCAL_COMMS_PORT     Local ingress bind port"
-  echo "  DROID_GATEWAY_PUBLIC_URL                Public HTTPS callback URL"
-  echo "  DROID_COMMS_URL                         Hosted comms service URL"
+  echo "  UNITY_CONVERSATION_LOCAL_COMMS_ENABLED  Enable local comms ingress"
+  echo "  UNITY_CONVERSATION_LOCAL_COMMS_MODE     local|hosted"
+  echo "  UNITY_CONVERSATION_LOCAL_COMMS_HOST     Local ingress bind host"
+  echo "  UNITY_CONVERSATION_LOCAL_COMMS_PORT     Local ingress bind port"
+  echo "  UNITY_GATEWAY_PUBLIC_URL                Public HTTPS callback URL"
+  echo "  UNITY_COMMS_URL                         Hosted comms service URL"
   echo "  PUBSUB_EMULATOR_HOST                    Pub/Sub host for echo mode"
   echo "  GCP_PROJECT_ID                          Project ID for echo mode"
   echo "  ASSISTANT_ID            Assistant ID (default: default-test-assistant)"

@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import pytest
 
-from droid.conversation_manager.prompt_builders import (
+from unity.conversation_manager.prompt_builders import (
     build_system_prompt,
     build_voice_agent_prompt,
 )
-from droid.session_details import TeamSummary
+from unity.session_details import TeamSummary
 
 pytestmark = pytest.mark.no_unify_context
 
@@ -267,6 +267,8 @@ class TestCoordinatorPrompt:
             "send a message, draft a reply, place a call, or invite someone else on their behalf"
             in prompt
         )
+        assert "Direct tools never accept inline contact details" in prompt
+        assert "update the boss contact record first" in prompt
         assert "contact_id=5" not in prompt
         assert "Use the contact_id visible in active_conversations" not in prompt
         assert "send_slack_channel_message" not in prompt
@@ -691,7 +693,7 @@ class TestPerUserDesktopResolution:
 
     @staticmethod
     def _assistant_with_links() -> object:
-        from droid.session_details import AssistantDetails, UserDesktopLink
+        from unity.session_details import AssistantDetails, UserDesktopLink
 
         a = AssistantDetails()
         a.user_desktops = {

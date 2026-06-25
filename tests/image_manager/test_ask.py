@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from droid.image_manager.image_manager import ImageManager
+from unity.image_manager.image_manager import ImageManager
 from tests.helpers import _handle_project
 
 pytestmark = pytest.mark.llm_call

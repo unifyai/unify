@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from droid.function_manager.primitives.context_proxy import ContextForwardingProxy
+from unity.function_manager.primitives.context_proxy import ContextForwardingProxy
 
 # ────────────────────────────────────────────────────────────────────────────
 # Helpers: mock manager + primitives-like object

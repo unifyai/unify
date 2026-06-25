@@ -3,14 +3,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from droid.conversation_manager.cm_types import Medium
-from droid.conversation_manager.conversation_manager import (
+from unity.conversation_manager.cm_types import Medium
+from unity.conversation_manager.conversation_manager import (
     CREDIT_GATE_REPLY_THROTTLE_SECONDS,
     DEPLETED_CREDITS_EMAIL_SUBJECT,
     DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
     ConversationManager,
 )
-from droid.spending_limits import CreditGateState
+from unity.spending_limits import CreditGateState
 
 
 def _cm_for_queued_run(*, reply_context: dict | None):
@@ -75,7 +75,7 @@ async def test_flush_depleted_credits_sends_reply_and_skips_llm():
     cm = _cm_for_queued_run(reply_context=reply_context)
 
     with patch(
-        "droid.conversation_manager.conversation_manager.check_credit_gate_state",
+        "unity.conversation_manager.conversation_manager.check_credit_gate_state",
         AsyncMock(
             return_value=CreditGateState(
                 allowed=False,
@@ -102,7 +102,7 @@ async def test_flush_allowed_credits_submits_llm():
     cm = _cm_for_queued_run(reply_context=reply_context)
 
     with patch(
-        "droid.conversation_manager.conversation_manager.check_credit_gate_state",
+        "unity.conversation_manager.conversation_manager.check_credit_gate_state",
         AsyncMock(return_value=CreditGateState(allowed=True, credit_balance=10.0)),
     ):
         await ConversationManager.flush_llm_requests(cm)
@@ -160,7 +160,7 @@ async def test_credit_gate_reply_routes_unify_message_and_restores_suppression()
     tools.send_unify_message = AsyncMock(return_value={"status": "ok"})
 
     with patch(
-        "droid.conversation_manager.conversation_manager.ConversationManagerBrainActionTools",
+        "unity.conversation_manager.conversation_manager.ConversationManagerBrainActionTools",
         return_value=tools,
     ):
         sent = await ConversationManager._send_credit_gate_reply(
@@ -188,7 +188,7 @@ async def test_credit_gate_reply_routes_email_replies():
     tools.send_email = AsyncMock(return_value={"status": "ok"})
 
     with patch(
-        "droid.conversation_manager.conversation_manager.ConversationManagerBrainActionTools",
+        "unity.conversation_manager.conversation_manager.ConversationManagerBrainActionTools",
         return_value=tools,
     ):
         sent = await ConversationManager._send_credit_gate_reply(
@@ -197,6 +197,7 @@ async def test_credit_gate_reply_routes_email_replies():
                 "medium": Medium.EMAIL.value,
                 "contact_id": 1,
                 "email_id": "message-id",
+                "thread_id": "gmail-thread-id",
             },
         )
 
@@ -206,4 +207,5 @@ async def test_credit_gate_reply_routes_email_replies():
         body=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
         reply_all=True,
         email_id_to_reply_to="message-id",
+        thread_id="gmail-thread-id",
     )

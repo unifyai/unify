@@ -11,7 +11,7 @@ import asyncio
 
 import pytest
 
-from droid.settings import SETTINGS
+from unity.settings import SETTINGS
 
 pytestmark = pytest.mark.llm_call
 
@@ -23,7 +23,7 @@ pytestmark = pytest.mark.llm_call
 def _force_simulated(monkeypatch: pytest.MonkeyPatch) -> None:
     """Switch contact and transcript managers to simulated impl."""
     for name in ("CONTACT", "TRANSCRIPT"):
-        monkeypatch.setenv(f"DROID_{name}_IMPL", "simulated")
+        monkeypatch.setenv(f"UNITY_{name}_IMPL", "simulated")
         attr = name.lower()
         if hasattr(SETTINGS, attr):
             monkeypatch.setattr(
@@ -43,7 +43,7 @@ def _force_simulated(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_hold_completion_false_completes_normally(monkeypatch):
     """Default hold_completion=False: handle completes as soon as result() is awaited."""
     _force_simulated(monkeypatch)
-    from droid.contact_manager.simulated import SimulatedContactManager
+    from unity.contact_manager.simulated import SimulatedContactManager
 
     cm = SimulatedContactManager(hold_completion=False)
     handle = await cm.ask("Who is contact #1?")
@@ -58,7 +58,7 @@ async def test_hold_completion_blocks_done_until_triggered(monkeypatch):
     """With hold_completion=True, done() stays False and result() blocks
     until trigger_completion() is called."""
     _force_simulated(monkeypatch)
-    from droid.contact_manager.simulated import SimulatedContactManager
+    from unity.contact_manager.simulated import SimulatedContactManager
 
     cm = SimulatedContactManager(hold_completion=True)
     handle = await cm.ask("Who is contact #1?")
@@ -92,7 +92,7 @@ async def test_hold_completion_blocks_done_until_triggered(monkeypatch):
 async def test_stop_bypasses_gate(monkeypatch):
     """stop() should open the gate and allow result() to return immediately."""
     _force_simulated(monkeypatch)
-    from droid.contact_manager.simulated import SimulatedContactManager
+    from unity.contact_manager.simulated import SimulatedContactManager
 
     cm = SimulatedContactManager(hold_completion=True)
     handle = await cm.ask("Who is contact #1?")
@@ -118,7 +118,7 @@ async def test_actor_hold_completion_blocks_done(monkeypatch):
     """SimulatedActor with hold_completion=True: the handle stays alive
     after the background action finishes, until trigger_completion()."""
     _force_simulated(monkeypatch)
-    from droid.actor.simulated import SimulatedActor
+    from unity.actor.simulated import SimulatedActor
 
     actor = SimulatedActor(duration=0.5, hold_completion=True)
     handle = await actor.act("Simulate a quick task")
@@ -142,7 +142,7 @@ async def test_actor_hold_completion_blocks_done(monkeypatch):
 async def test_actor_trigger_completion_also_finishes_action():
     """trigger_completion() on the actor both completes the action and
     opens the gate in one call."""
-    from droid.actor.simulated import SimulatedActor
+    from unity.actor.simulated import SimulatedActor
 
     # No steps or duration → the action runs indefinitely until triggered.
     actor = SimulatedActor(hold_completion=True)
@@ -161,7 +161,7 @@ async def test_actor_trigger_completion_also_finishes_action():
 @pytest.mark.asyncio
 async def test_actor_stop_bypasses_gate():
     """stop() on the actor should open the gate and complete immediately."""
-    from droid.actor.simulated import SimulatedActor
+    from unity.actor.simulated import SimulatedActor
 
     actor = SimulatedActor(hold_completion=True)
     handle = await actor.act("Run forever")
@@ -186,8 +186,8 @@ async def test_multiple_handles_simultaneously_alive(monkeypatch):
     """Two simulated managers with hold_completion=True: both handles stay
     alive simultaneously, enabling deterministic observation."""
     _force_simulated(monkeypatch)
-    from droid.contact_manager.simulated import SimulatedContactManager
-    from droid.transcript_manager.simulated import SimulatedTranscriptManager
+    from unity.contact_manager.simulated import SimulatedContactManager
+    from unity.transcript_manager.simulated import SimulatedTranscriptManager
 
     cm = SimulatedContactManager(hold_completion=True)
     tm = SimulatedTranscriptManager(hold_completion=True)

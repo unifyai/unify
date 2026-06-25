@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from droid.integrations import builtins_catalog
+from unity.integrations import builtins_catalog
 
 
 def _seed_script_module():
@@ -440,7 +440,7 @@ prune_unlisted_apps = true
             }
         return {}
 
-    monkeypatch.setenv("DROID_INTEGRATION_BOOTSTRAP_EXECUTOR", "api")
+    monkeypatch.setenv("UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR", "api")
     monkeypatch.setattr(module, "_admin_request", fake_admin_request)
 
     assert module._sync_integration_bootstrap_manifest(
@@ -502,7 +502,7 @@ app_slugs = ["gmail"]
             },
         }
 
-    monkeypatch.setenv("DROID_INTEGRATION_BOOTSTRAP_EXECUTOR", "direct_worker")
+    monkeypatch.setenv("UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR", "direct_worker")
     monkeypatch.setattr(module, "_admin_request", fake_admin_request)
 
     assert (
@@ -539,8 +539,8 @@ def test_seed_builtins_script_full_composio_batches_seed_apps_once(monkeypatch) 
             "matched_app_slugs": ["gmail", "slack"],
         }
 
-    monkeypatch.setenv("DROID_INTEGRATION_BOOTSTRAP_BATCH_SIZE", "1")
-    monkeypatch.setenv("DROID_INTEGRATION_BOOTSTRAP_WORKERS", "3")
+    monkeypatch.setenv("UNITY_INTEGRATION_BOOTSTRAP_BATCH_SIZE", "1")
+    monkeypatch.setenv("UNITY_INTEGRATION_BOOTSTRAP_WORKERS", "3")
     monkeypatch.setattr(module, "_admin_request", fake_admin_request)
     plan = module.ProviderBootstrapPlan(
         backend_id="composio",
@@ -605,7 +605,7 @@ app_slugs = ["gmail"]
             return {"status": "success", "apps_upserted": 1, "tools_upserted": 1}
         return {}
 
-    monkeypatch.setenv("DROID_INTEGRATION_BOOTSTRAP_EXECUTOR", "api")
+    monkeypatch.setenv("UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR", "api")
     monkeypatch.setattr(module, "_admin_request", fake_admin_request)
 
     assert module._sync_integration_bootstrap_manifest(
@@ -651,7 +651,7 @@ app_slugs = ["gmail"]
         worker_payloads.append(payload)
         return {"status": "success", "apps_upserted": 0, "tools_upserted": 1}
 
-    monkeypatch.setenv("DROID_INTEGRATION_BOOTSTRAP_EXECUTOR", "direct_worker")
+    monkeypatch.setenv("UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR", "direct_worker")
     monkeypatch.setattr(module, "_admin_request", fake_admin_request)
     monkeypatch.setattr(module, "_run_direct_worker_executor", fake_worker)
 
@@ -691,10 +691,10 @@ app_slugs = ["gmail"]
         requests.append((method, path))
         return {}
 
-    monkeypatch.delenv("DROID_INTEGRATION_BOOTSTRAP_EXECUTOR", raising=False)
+    monkeypatch.delenv("UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR", raising=False)
     monkeypatch.setattr(module, "_admin_request", fake_admin_request)
 
-    with pytest.raises(ValueError, match="DROID_INTEGRATION_BOOTSTRAP_EXECUTOR"):
+    with pytest.raises(ValueError, match="UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR"):
         module._sync_integration_bootstrap_manifest(
             manifest_path=str(manifest),
             base_url="http://orchestra/v0",
@@ -735,7 +735,7 @@ app_slugs = ["gmail"]
     def failing_worker(_payload):
         raise RuntimeError("worker failed")
 
-    monkeypatch.setenv("DROID_INTEGRATION_BOOTSTRAP_EXECUTOR", "direct_worker")
+    monkeypatch.setenv("UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR", "direct_worker")
     monkeypatch.setattr(module, "_admin_request", fake_admin_request)
     monkeypatch.setattr(module, "_run_direct_worker_executor", failing_worker)
 
@@ -905,7 +905,7 @@ def test_run_api_executor_polls_until_terminal(monkeypatch) -> None:
 
 def test_run_api_executor_times_out_when_run_never_completes(monkeypatch) -> None:
     module = _seed_script_module()
-    monkeypatch.setenv("DROID_INTEGRATION_BOOTSTRAP_POLL_TIMEOUT", "0")
+    monkeypatch.setenv("UNITY_INTEGRATION_BOOTSTRAP_POLL_TIMEOUT", "0")
 
     def fake_admin_request(*, method, path, payload=None, **_kwargs):
         if method == "POST":

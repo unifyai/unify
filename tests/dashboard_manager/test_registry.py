@@ -1,13 +1,13 @@
 """Tests for DashboardManager registration in ManagerRegistry and primitives."""
 
-from droid.dashboard_manager.base import BaseDashboardManager
-from droid.dashboard_manager.types.tile import DASHBOARD_BRIDGE_MAX_ROW_LIMIT
-from droid.function_manager.primitives.registry import (
+from unity.dashboard_manager.base import BaseDashboardManager
+from unity.dashboard_manager.types.tile import DASHBOARD_BRIDGE_MAX_ROW_LIMIT
+from unity.function_manager.primitives.registry import (
     _EXAMPLE_GENERATORS,
     _MANAGER_SPECS,
     get_registry,
 )
-from droid.function_manager.primitives.scope import (
+from unity.function_manager.primitives.scope import (
     VALID_MANAGER_ALIASES,
     PrimitiveScope,
 )
@@ -15,13 +15,13 @@ from droid.function_manager.primitives.scope import (
 
 class TestManagerRegistration:
     def test_dashboard_manager_registered(self):
-        from droid.manager_registry import ManagerRegistry
+        from unity.manager_registry import ManagerRegistry
 
         dm = ManagerRegistry.get_dashboard_manager()
         assert isinstance(dm, BaseDashboardManager)
 
     def test_simulated_dashboard_manager(self):
-        from droid.dashboard_manager.simulated import SimulatedDashboardManager
+        from unity.dashboard_manager.simulated import SimulatedDashboardManager
 
         dm = SimulatedDashboardManager()
         assert isinstance(dm, BaseDashboardManager)
@@ -46,12 +46,12 @@ class TestPrimitivesRegistry:
         assert "get_primitives_dashboards_composition_example" in names
 
     def test_dashboards_in_alias_to_getter(self):
-        from droid.function_manager.primitives.runtime import _ALIAS_TO_GETTER
+        from unity.function_manager.primitives.runtime import _ALIAS_TO_GETTER
 
         assert "dashboards" in _ALIAS_TO_GETTER
 
     def test_dashboards_in_sync_managers(self):
-        from droid.function_manager.primitives.runtime import _SYNC_MANAGERS
+        from unity.function_manager.primitives.runtime import _SYNC_MANAGERS
 
         assert "dashboards" in _SYNC_MANAGERS
 
@@ -155,7 +155,7 @@ class TestPromptExampleFunctions:
     """Test that prompt example functions execute without errors."""
 
     def test_baked_in_example_returns_string(self):
-        from droid.actor.prompt_examples import (
+        from unity.actor.prompt_examples import (
             get_primitives_dashboards_baked_in_example,
         )
 
@@ -165,7 +165,7 @@ class TestPromptExampleFunctions:
         assert "include_plotlyjs" in result
 
     def test_live_data_example_returns_string(self):
-        from droid.actor.prompt_examples import (
+        from unity.actor.prompt_examples import (
             get_primitives_dashboards_live_data_example,
         )
 
@@ -176,7 +176,7 @@ class TestPromptExampleFunctions:
         assert "data.sales" in result
 
     def test_live_data_example_includes_query_params(self):
-        from droid.actor.prompt_examples import (
+        from unity.actor.prompt_examples import (
             get_primitives_dashboards_live_data_example,
         )
 
@@ -185,7 +185,7 @@ class TestPromptExampleFunctions:
         assert 'order_by="month"' in result
 
     def test_live_data_example_no_unifydata_calls(self):
-        from droid.actor.prompt_examples import (
+        from unity.actor.prompt_examples import (
             get_primitives_dashboards_live_data_example,
         )
 
@@ -194,7 +194,7 @@ class TestPromptExampleFunctions:
         assert "UnifyData.reduce(" not in result
 
     def test_rich_live_data_example_returns_string(self):
-        from droid.actor.prompt_examples import (
+        from unity.actor.prompt_examples import (
             get_primitives_dashboards_rich_live_data_example,
         )
 
@@ -207,7 +207,7 @@ class TestPromptExampleFunctions:
         assert "data.by_category" in result
 
     def test_rich_live_data_example_no_unifydata_calls(self):
-        from droid.actor.prompt_examples import (
+        from unity.actor.prompt_examples import (
             get_primitives_dashboards_rich_live_data_example,
         )
 
@@ -216,7 +216,7 @@ class TestPromptExampleFunctions:
         assert "UnifyData.joinReduce(" not in result
 
     def test_composition_example_returns_string(self):
-        from droid.actor.prompt_examples import (
+        from unity.actor.prompt_examples import (
             get_primitives_dashboards_composition_example,
         )
 

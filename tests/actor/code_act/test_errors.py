@@ -2,8 +2,8 @@ import asyncio
 
 import pytest
 
-from droid.actor.code_act_actor import CodeActActor
-from droid.actor.execution import parts_to_text
+from unity.actor.code_act_actor import CodeActActor
+from unity.actor.execution import parts_to_text
 
 
 @pytest.mark.asyncio

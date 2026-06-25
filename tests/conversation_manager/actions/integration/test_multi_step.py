@@ -22,7 +22,7 @@ from tests.conversation_manager.actions.integration.helpers import (
     verify_contact_in_db,
     verify_task_in_db,
 )
-from droid.conversation_manager.events import SMSReceived, SMSSent, EmailSent
+from unity.conversation_manager.events import SMSReceived, SMSSent, EmailSent
 
 pytestmark = [pytest.mark.integration, pytest.mark.eval]
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from droid.transcript_manager.transcript_manager import TranscriptManager
+from unity.transcript_manager.transcript_manager import TranscriptManager
 from tests.helpers import _handle_project, capture_events
 
 # All tests in this file require EventBus publishing to verify event behavior

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import logging
 
-from droid.conversation_manager.conversation_manager import (
+from unity.conversation_manager.conversation_manager import (
     _log_slow_brain_single_shot_failure,
 )
-from droid.logger import LOGGER
-from droid.settings import SETTINGS
+from unity.logger import LOGGER
+from unity.settings import SETTINGS
 
 
 def test_staging_slow_brain_single_shot_failure_logs_traceback(
@@ -15,7 +15,7 @@ def test_staging_slow_brain_single_shot_failure_logs_traceback(
 ) -> None:
     monkeypatch.setattr(SETTINGS, "DEPLOY_ENV", "staging")
     LOGGER.addHandler(caplog.handler)
-    caplog.set_level(logging.ERROR, logger="droid")
+    caplog.set_level(logging.ERROR, logger="unity")
 
     try:
         try:

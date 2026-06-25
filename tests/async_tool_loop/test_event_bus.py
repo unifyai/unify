@@ -14,14 +14,14 @@ import re
 
 import pytest
 
-from droid.common.async_tool_loop import (
+from unity.common.async_tool_loop import (
     start_async_tool_loop,
 )
-from droid.common._async_tool.loop import async_tool_loop_inner
+from unity.common._async_tool.loop import async_tool_loop_inner
 from tests.async_helpers import _wait_for_next_assistant_response_event
 from tests.helpers import _handle_project, capture_events
-from droid.common.llm_client import new_llm_client
-from droid.events.event_bus import EVENT_BUS
+from unity.common.llm_client import new_llm_client
+from unity.events.event_bus import EVENT_BUS
 
 _SUFFIX_RE = re.compile(r"\(([0-9a-f]{4})\)$")
 

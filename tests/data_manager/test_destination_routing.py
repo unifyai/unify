@@ -6,10 +6,10 @@ import pytest
 import unify
 
 from tests.helpers import _handle_project
-from droid.common.context_registry import ContextRegistry
-from droid.data_manager.data_manager import DataManager
-from droid.manager_registry import ManagerRegistry
-from droid.session_details import SESSION_DETAILS
+from unity.common.context_registry import ContextRegistry
+from unity.data_manager.data_manager import DataManager
+from unity.manager_registry import ManagerRegistry
+from unity.session_details import SESSION_DETAILS
 
 
 def _fresh_manager() -> DataManager:

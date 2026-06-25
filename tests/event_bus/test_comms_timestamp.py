@@ -11,9 +11,9 @@ import datetime as dt
 from typing import get_type_hints, get_origin, get_args, Union
 
 from tests.helpers import _handle_project
-from droid.events.event_bus import EventBus, Event as BusEvent
-from droid.events.types.comms import CommsPayload
-from droid.conversation_manager.events import (
+from unity.events.event_bus import EventBus, Event as BusEvent
+from unity.events.types.comms import CommsPayload
+from unity.conversation_manager.events import (
     SMSReceived,
     EmailReceived,
     UnifyMessageReceived,

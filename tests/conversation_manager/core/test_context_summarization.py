@@ -20,11 +20,11 @@ from __future__ import annotations
 
 import pytest
 
-from droid.conversation_manager.conversation_manager import (
+from unity.conversation_manager.conversation_manager import (
     ConversationManager,
     _append_context_to_state_message,
 )
-from droid.conversation_manager.events import (
+from unity.conversation_manager.events import (
     StoreChatHistory,
     UnifyMessageReceived,
 )
@@ -228,7 +228,7 @@ class TestStoreChatHistory:
             assert channel == "app:comms:chat_history"
 
             # Parse the event and check it contains last 2 messages
-            from droid.conversation_manager.events import Event
+            from unity.conversation_manager.events import Event
 
             event = Event.from_json(message)
             assert isinstance(event, StoreChatHistory)

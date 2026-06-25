@@ -1,9 +1,9 @@
 """Round-trip tests for canonical gateway envelope schemas.
 
 These tests pin the wire format defined in
-``droid/gateway/envelopes.py`` against representative payloads taken from
+``unity/gateway/envelopes.py`` against representative payloads taken from
 the existing ingress paths
-(``droid/conversation_manager/local_ingress.py``). Channel migrations in
+(``unity/conversation_manager/local_ingress.py``). Channel migrations in
 Phase B will extend the catalogue but the shapes covered here must remain
 backward-compatible.
 """
@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from droid.gateway.envelopes import (
+from unity.gateway.envelopes import (
     BaseEnvelope,
     EmailEnvelope,
     EmailReceivedEvent,
@@ -38,7 +38,7 @@ def test_known_threads_includes_every_thread_used_in_local_ingress() -> None:
         "unify_message",
         "api_message",
         "unify_meet",
-        "droid_system_event",
+        "unity_system_event",
         "log_pre_hire_chats",
         "call",
         "call_answered",
@@ -83,6 +83,7 @@ def test_email_envelope_preserves_from_alias() -> None:
             "subject": "hi",
             "body": "hello there",
             "email_id": "msg-1",
+            "thread_id": "gmail-thread-1",
             "to": ["assistant@example.com"],
             "cc": [],
             "bcc": [],
@@ -98,6 +99,7 @@ def test_email_envelope_preserves_from_alias() -> None:
     }
     env = EmailEnvelope.model_validate(raw)
     assert env.event.from_ == "sender@example.com"
+    assert env.event.thread_id == "gmail-thread-1"
     assert env.event.attachments[0].filename == "report.pdf"
 
     dumped = env.model_dump(by_alias=True)
@@ -127,7 +129,7 @@ def test_unify_message_envelope_requires_contact_id() -> None:
 
 def test_system_event_envelope_requires_event_type() -> None:
     raw = {
-        "thread": "droid_system_event",
+        "thread": "unity_system_event",
         "publish_timestamp": 1700000000.0,
         "event": {
             "assistant_id": "42",

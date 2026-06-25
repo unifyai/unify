@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the OpenClaw / Hermes / Droid comparison-family architecture PNGs.
+"""Generate the OpenClaw / Hermes / Unity comparison-family architecture PNGs.
 
 The three diagrams share a single locked visual grammar (off-white panel, white
 rounded boxes, thin gray rounded-orthogonal arrows, locked color semantics) so
@@ -8,7 +8,7 @@ difference. Re-run this script to regenerate the PNGs from prompt source.
 
 Run:
     .venv/bin/python scripts/draw_architecture_diagrams.py
-    .venv/bin/python scripts/draw_architecture_diagrams.py --only droid
+    .venv/bin/python scripts/draw_architecture_diagrams.py --only unity
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ in the diagram, no variations whatsoever):
   centered. Use generous vertical whitespace between rows.
 
 Reserved fill colors (semantic meaning is locked across the OpenClaw,
-Hermes Agent, and Droid diagrams in this family — every diagram uses the
+Hermes Agent, and Unity diagrams in this family — every diagram uses the
 same palette, every color means exactly one thing, do not use these colors
 for anything else):
 
@@ -155,8 +155,8 @@ Arrows (top to bottom):
 """
 
 
-DROID_PROMPT = SHARED_STYLE + "\n\n" + """
-Per-diagram spec — panel title: "Droid"
+UNITY_PROMPT = SHARED_STYLE + "\n\n" + """
+Per-diagram spec — panel title: "Unity"
 
 Render the following rows as a top-to-bottom vertical stack using the locked
 visual grammar above. The rows, top to bottom, are exactly:
@@ -209,7 +209,7 @@ Arrows (top to bottom):
 DIAGRAMS = {
     "openclaw": ("openclaw-architecture.png", OPENCLAW_PROMPT),
     "hermes": ("hermes-architecture.png", HERMES_PROMPT),
-    "droid": ("droid-architecture.png", DROID_PROMPT),
+    "unity": ("unity-architecture.png", UNITY_PROMPT),
 }
 
 

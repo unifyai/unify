@@ -21,7 +21,7 @@ exactly one executor; the script never falls back to another executor after
 failure:
 
     UNIFY_KEY=<admin-key> ORCHESTRA_ADMIN_KEY=<admin-key> ORCHESTRA_URL=<api-url> \
-        DROID_INTEGRATION_BOOTSTRAP_EXECUTOR=direct_worker \
+        UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR=direct_worker \
         .venv/bin/python scripts/seed_builtins_catalog.py \
         --integration-bootstrap-manifest <path-to-integration-bootstrap.toml>
 """
@@ -88,7 +88,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--integration-bootstrap-manifest",
-        default=os.environ.get("DROID_INTEGRATION_BOOTSTRAP_MANIFEST", ""),
+        default=os.environ.get("UNITY_INTEGRATION_BOOTSTRAP_MANIFEST", ""),
         help=(
             "Optional provider bootstrap manifest. When provided, this script "
             "fetches provider catalog artifacts and seeds the returned "
@@ -103,35 +103,35 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--skip-integrations",
         action="store_true",
-        default=os.environ.get("DROID_SKIP_BUILTINS_INTEGRATIONS", "").lower()
+        default=os.environ.get("UNITY_SKIP_BUILTINS_INTEGRATIONS", "").lower()
         in {"1", "true", "yes"},
         help="Seed only primitives and guidance; integration bootstrap is handled elsewhere.",
     )
     parser.add_argument(
         "--force",
         action="store_true",
-        default=os.environ.get("DROID_INTEGRATION_BOOTSTRAP_FORCE", "").lower()
+        default=os.environ.get("UNITY_INTEGRATION_BOOTSTRAP_FORCE", "").lower()
         in {"1", "true", "yes", "on"},
         help=(
             "Force a full integration resync: bypass the manifest-hash bootstrap-state "
             "skip and the server-side per-unit hash/checkpoint skips so every app and "
-            "tool row is rewritten. Defaults to DROID_INTEGRATION_BOOTSTRAP_FORCE."
+            "tool row is rewritten. Defaults to UNITY_INTEGRATION_BOOTSTRAP_FORCE."
         ),
     )
     return parser.parse_args(argv)
 
 
 def _integration_bootstrap_executor(environment: str) -> str:
-    executor = os.environ.get("DROID_INTEGRATION_BOOTSTRAP_EXECUTOR", "").strip()
+    executor = os.environ.get("UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR", "").strip()
     if not executor:
         raise ValueError(
-            "DROID_INTEGRATION_BOOTSTRAP_EXECUTOR is required when an integration "
+            "UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR is required when an integration "
             "bootstrap manifest is provided. Select exactly one of: "
             f"{', '.join(sorted(INTEGRATION_BOOTSTRAP_EXECUTORS))}",
         )
     if executor not in INTEGRATION_BOOTSTRAP_EXECUTORS:
         raise ValueError(
-            f"Invalid DROID_INTEGRATION_BOOTSTRAP_EXECUTOR={executor!r}; expected one "
+            f"Invalid UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR={executor!r}; expected one "
             f"of {', '.join(sorted(INTEGRATION_BOOTSTRAP_EXECUTORS))}",
         )
     return executor
@@ -433,7 +433,7 @@ def _seed_sync_result(
     result: dict[str, Any],
     sync_payload: dict[str, Any],
 ) -> bool:
-    from droid.integrations.builtins_catalog import seed_builtin_integrations
+    from unity.integrations.builtins_catalog import seed_builtin_integrations
 
     if result.get("status") == "failed":
         raise RuntimeError(
@@ -559,11 +559,11 @@ def _builtins_sync_request_payload(
         "force": force,
         "batch_size": int(
             os.environ.get(
-                "DROID_INTEGRATION_BOOTSTRAP_BATCH_SIZE",
+                "UNITY_INTEGRATION_BOOTSTRAP_BATCH_SIZE",
                 DEFAULT_COMPOSIO_BATCH_SIZE,
             ),
         ),
-        "workers": int(os.environ.get("DROID_INTEGRATION_BOOTSTRAP_WORKERS", "4")),
+        "workers": int(os.environ.get("UNITY_INTEGRATION_BOOTSTRAP_WORKERS", "4")),
     }
 
 
@@ -615,7 +615,7 @@ def _run_json_command(
 
 def _run_direct_worker_executor(payload: dict[str, Any]) -> dict[str, Any]:
     command = os.environ.get(
-        "DROID_INTEGRATION_BOOTSTRAP_DIRECT_WORKER_CMD",
+        "UNITY_INTEGRATION_BOOTSTRAP_DIRECT_WORKER_CMD",
         f"{sys.executable} -m orchestra.workers.builtins_artifacts_seed_job",
     )
     return _run_json_command(shlex.split(command), request_payload=payload)
@@ -707,7 +707,7 @@ def _run_api_executor(
         method="POST",
         path="/admin/integrations/builtins-sync/start",
         payload=payload,
-        timeout=float(os.environ.get("DROID_INTEGRATION_BOOTSTRAP_TIMEOUT", "300")),
+        timeout=float(os.environ.get("UNITY_INTEGRATION_BOOTSTRAP_TIMEOUT", "300")),
     )
     if start.get("status") in BOOTSTRAP_TERMINAL_STATUSES:
         return start
@@ -718,10 +718,10 @@ def _run_api_executor(
         backend_id=str(payload["backend_id"]),
         run_id=start.get("run_id"),
         timeout=float(
-            os.environ.get("DROID_INTEGRATION_BOOTSTRAP_POLL_TIMEOUT", "5400"),
+            os.environ.get("UNITY_INTEGRATION_BOOTSTRAP_POLL_TIMEOUT", "5400"),
         ),
         interval=float(
-            os.environ.get("DROID_INTEGRATION_BOOTSTRAP_POLL_INTERVAL", "15"),
+            os.environ.get("UNITY_INTEGRATION_BOOTSTRAP_POLL_INTERVAL", "15"),
         ),
     )
 
@@ -912,10 +912,10 @@ def _sync_integration_bootstrap_manifest(
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv or sys.argv[1:])
-    from droid.common.builtins import builtins_project
-    from droid.function_manager.builtins_catalog import seed_builtin_primitives
-    from droid.guidance_manager.builtins_catalog import seed_builtin_guidance
-    from droid.integrations.builtins_catalog import seed_builtin_integrations
+    from unity.common.builtins import builtins_project
+    from unity.function_manager.builtins_catalog import seed_builtin_primitives
+    from unity.guidance_manager.builtins_catalog import seed_builtin_guidance
+    from unity.integrations.builtins_catalog import seed_builtin_integrations
 
     project = builtins_project()
     logging.info(

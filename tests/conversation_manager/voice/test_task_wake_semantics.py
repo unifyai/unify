@@ -16,13 +16,13 @@ if not hasattr(llm, "Tool"):
     llm.Tool = object  # type: ignore[attr-defined]
 
 from tests.helpers import _handle_project
-from droid.common.llm_client import new_llm_client
-from droid.conversation_manager.livekit_unify_adapter import UnifyLLM
-from droid.conversation_manager.prompt_builders import (
+from unity.common.llm_client import new_llm_client
+from unity.conversation_manager.livekit_unify_adapter import UnifyLLM
+from unity.conversation_manager.prompt_builders import (
     build_opening_greeting_messages,
     build_voice_agent_prompt,
 )
-from droid.settings import SETTINGS
+from unity.settings import SETTINGS
 
 pytestmark = pytest.mark.eval
 

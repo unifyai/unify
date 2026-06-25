@@ -1,7 +1,7 @@
 Function Manager Sandbox
 =========================
 
-This folder contains an **interactive playground** for the `FunctionManager` component that lives in `droid/function_manager/function_manager.py`. The goal of this sandbox is to provide a direct, command-line interface for managing the agent's persistent "skill library" in isolation.
+This folder contains an **interactive playground** for the `FunctionManager` component that lives in `unity/function_manager/function_manager.py`. The goal of this sandbox is to provide a direct, command-line interface for managing the agent's persistent "skill library" in isolation.
 
 What is the `FunctionManager`?
 ------------------------------

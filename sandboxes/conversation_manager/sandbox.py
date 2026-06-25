@@ -75,14 +75,14 @@ def _redirect_voice_worker_output(log_path: Path) -> None:
     and ``⬥ Suppressed speech`` lines to spill into the terminal.
 
     We patch both module-level bindings of ``run_script`` that
-    ``call_manager`` and ``droid.helpers`` each hold before ``initialize_cm``
+    ``call_manager`` and ``unity.helpers`` each hold before ``initialize_cm``
     is called so the worker is spawned with the log file as its fd 1/2.
     The patch stays in place for the lifetime of the sandbox; subsequent
     ``_spawn_quiet`` calls in ``live_voice.py`` will temporarily override it
     during session spawning and then restore it.
     """
-    import droid.conversation_manager.domains.call_manager as _cm_mod
-    import droid.helpers as _helpers
+    import unity.conversation_manager.domains.call_manager as _cm_mod
+    import unity.helpers as _helpers
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_fh = log_path.open("a")
@@ -189,7 +189,7 @@ def _build_worker_config(*, args: Any, actor_config: ActorConfig) -> dict:
         # UX
         "debug": bool(getattr(args, "debug", False)),
         # Project
-        "project_name": getattr(args, "project_name", "droid"),
+        "project_name": getattr(args, "project_name", "unity"),
         "overwrite": bool(getattr(args, "overwrite", False)),
         # Worker-only flags (still part of the stable config contract)
         "agent_service_bootstrap": (
@@ -333,7 +333,7 @@ async def _main_async() -> None:
     inactivity_shutdown = False
 
     parser = build_cli_parser("ConversationManager sandbox")
-    # CM-specific override: `droid` is the install-and-live entrypoint, so its
+    # CM-specific override: `unity` is the install-and-live entrypoint, so its
     # default workspace is the fixed `Assistants` project rather than the
     # generic `Sandbox` default used by the per-manager dev sandboxes. The
     # `--project_name` flag itself stays available for dev/eval use.
@@ -385,8 +385,8 @@ async def _main_async() -> None:
         help="(CodeAct) auto-print execution trace after each code turn (REPL only)",
     )
     args = parser.parse_args()
-    os.environ.setdefault("DROID_SANDBOX_LAUNCH_CWD", str(Path.cwd().resolve()))
-    os.environ.setdefault("DROID_TERMINAL_LOG", "false")
+    os.environ.setdefault("UNITY_SANDBOX_LAUNCH_CWD", str(Path.cwd().resolve()))
+    os.environ.setdefault("UNITY_TERMINAL_LOG", "false")
     os.environ.setdefault("UNILLM_TERMINAL_LOG", "false")
     unillm_log_dir = _enable_unillm_boundary_logging()
 

@@ -1,10 +1,10 @@
 """
-Tests for shell script execution with access to Droid primitives via RPC bridge.
+Tests for shell script execution with access to Unity primitives via RPC bridge.
 
 Coverage
 ========
 ✓ Basic shell script execution
-✓ Shell scripts calling primitives via droid-primitive CLI
+✓ Shell scripts calling primitives via unity-primitive CLI
 ✓ Multiple primitive calls in a single script
 ✓ Various data types (JSON, lists, dicts)
 ✓ Error handling and propagation
@@ -24,8 +24,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from tests.helpers import _handle_project
-from droid.function_manager.function_manager import FunctionManager
-from droid.common.context_registry import ContextRegistry
+from unity.function_manager.function_manager import FunctionManager
+from unity.common.context_registry import ContextRegistry
 
 # ────────────────────────────────────────────────────────────────────────────
 # Sample Shell Scripts
@@ -45,27 +45,27 @@ exit 42
 
 SCRIPT_CALLS_PRIMITIVE = """#!/bin/sh
 # Call the contacts primitive
-result=$(droid-primitive contacts ask --text "Who is Alice?")
+result=$(unity-primitive contacts ask --text "Who is Alice?")
 echo "Primitive result: $result"
 """
 
 SCRIPT_CALLS_MULTIPLE_PRIMITIVES = """#!/bin/sh
 # Call multiple primitives
-contacts=$(droid-primitive contacts ask --text "Who is Alice?")
-knowledge=$(droid-primitive knowledge ask --text "What is 2+2?")
+contacts=$(unity-primitive contacts ask --text "Who is Alice?")
+knowledge=$(unity-primitive knowledge ask --text "What is 2+2?")
 echo "Contacts: $contacts"
 echo "Knowledge: $knowledge"
 """
 
 SCRIPT_WITH_JSON_ARG = """#!/bin/sh
 # Call primitive with JSON argument
-result=$(droid-primitive files search_files --references '{"query": "budget reports"}' --k 5)
+result=$(unity-primitive files search_files --references '{"query": "budget reports"}' --k 5)
 echo "Search result: $result"
 """
 
 SCRIPT_PARSES_JSON_RESULT = """#!/bin/sh
 # Call primitive and parse JSON result
-result=$(droid-primitive contacts ask --text "list all")
+result=$(unity-primitive contacts ask --text "list all")
 # Check if result is valid JSON by using a simple grep
 if echo "$result" | grep -q '^{\\|^\\['; then
     echo "Got JSON result"
@@ -76,7 +76,7 @@ fi
 
 SCRIPT_WITH_ERROR_HANDLING = """#!/bin/sh
 # Handle errors from primitives
-result=$(droid-primitive contacts ask --text "error please" 2>&1)
+result=$(unity-primitive contacts ask --text "error please" 2>&1)
 exit_code=$?
 if [ $exit_code -ne 0 ]; then
     echo "Primitive failed with code $exit_code"
@@ -111,12 +111,12 @@ echo "Bash map: ${map["key1"]}, ${map["key2"]}"
 
 SCRIPT_LIST_MANAGERS = """#!/bin/sh
 # List available managers
-droid-primitive --list-managers
+unity-primitive --list-managers
 """
 
 SCRIPT_LIST_METHODS = """#!/bin/sh
 # List methods for files manager
-droid-primitive files --list-methods
+unity-primitive files --list-methods
 """
 
 
@@ -279,7 +279,7 @@ async def test_shell_script_with_cwd(function_manager_factory):
 @_handle_project
 @pytest.mark.asyncio
 async def test_shell_calls_primitive(function_manager_factory, mock_primitives):
-    """Test shell script calling a primitive via droid-primitive CLI."""
+    """Test shell script calling a primitive via unity-primitive CLI."""
     fm = function_manager_factory()
 
     result = await fm.execute_shell_script(
@@ -483,7 +483,7 @@ async def test_primitive_returns_list(function_manager_factory, mock_primitives)
     fm = function_manager_factory()
 
     script = """#!/bin/sh
-result=$(droid-primitive tasks ask --text "list all")
+result=$(unity-primitive tasks ask --text "list all")
 echo "Tasks: $result"
 """
 
@@ -511,7 +511,7 @@ async def test_primitive_returns_dict(function_manager_factory):
     )
 
     script = """#!/bin/sh
-result=$(droid-primitive contacts ask --text "get Alice")
+result=$(unity-primitive contacts ask --text "get Alice")
 echo "Contact: $result"
 """
 
@@ -536,7 +536,7 @@ async def test_unicode_handling(function_manager_factory):
     mock_p.contacts.ask = AsyncMock(return_value="Hello 世界! 🌍 äöü")
 
     script = """#!/bin/sh
-result=$(droid-primitive contacts ask --text "unicode test")
+result=$(unity-primitive contacts ask --text "unicode test")
 echo "Result: $result"
 """
 
@@ -564,17 +564,17 @@ async def test_concurrent_shell_executions(function_manager_factory, mock_primit
     scripts = [
         """#!/bin/sh
 echo "Script 1"
-result=$(droid-primitive contacts ask --text "q1")
+result=$(unity-primitive contacts ask --text "q1")
 echo "Result: $result"
 """,
         """#!/bin/sh
 echo "Script 2"
-result=$(droid-primitive contacts ask --text "q2")
+result=$(unity-primitive contacts ask --text "q2")
 echo "Result: $result"
 """,
         """#!/bin/sh
 echo "Script 3"
-result=$(droid-primitive contacts ask --text "q3")
+result=$(unity-primitive contacts ask --text "q3")
 echo "Result: $result"
 """,
     ]

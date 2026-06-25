@@ -16,9 +16,9 @@ import unillm
 from unillm import LLMEvent
 
 from tests.helpers import _handle_project, capture_events
-from droid.events.event_bus import EventBus, Event, EVENT_BUS
-from droid.events.types.llm import LLMPayload
-from droid.events.llm_event_hook import _llm_event_to_eventbus, install_llm_event_hook
+from unity.events.event_bus import EventBus, Event, EVENT_BUS
+from unity.events.types.llm import LLMPayload
+from unity.events.llm_event_hook import _llm_event_to_eventbus, install_llm_event_hook
 
 # ---------------------------------------------------------------------------
 #  1. LLMPayload model tests
@@ -169,12 +169,12 @@ class TestLLMEventToEventBusConversion:
 class TestHookInstallation:
     """Tests for the hook installation mechanism."""
 
-    def test_hook_installed_during_droid_init(self):
-        """The hook should be installed during droid.init()."""
-        import droid
+    def test_hook_installed_during_unity_init(self):
+        """The hook should be installed during unity.init()."""
+        import unity
 
-        droid.init()
-        # Droid uses the global hook (works across threads)
+        unity.init()
+        # Unity uses the global hook (works across threads)
         hook = unillm.get_global_llm_event_hook()
         assert hook is _llm_event_to_eventbus
 
@@ -438,7 +438,7 @@ async def test_hook_works_when_installed_from_different_thread():
     """LLM events should be captured when hook is installed from a worker thread.
 
     This mimics the production scenario where:
-    - droid.init() is called from a thread pool worker (via asyncio.to_thread)
+    - unity.init() is called from a thread pool worker (via asyncio.to_thread)
     - LLM calls happen from the main async context
 
     The global hook mechanism ensures events are captured regardless of which
@@ -492,7 +492,7 @@ async def test_hook_works_when_installed_via_asyncio_to_thread():
     This directly mimics the production code path in managers_utils.py:
         await asyncio.to_thread(_init_managers, cm, loop)
 
-    Where _init_managers calls droid.init() which installs the LLM event hook.
+    Where _init_managers calls unity.init() which installs the LLM event hook.
     """
 
     # Clear any existing hook

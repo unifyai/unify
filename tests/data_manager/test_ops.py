@@ -11,7 +11,7 @@ import pytest
 import requests
 from unify.utils.http import RequestError
 
-from droid.data_manager.ops import ingest_ops, mutation_ops
+from unity.data_manager.ops import ingest_ops, mutation_ops
 
 
 def _duplicate_key_error() -> RequestError:

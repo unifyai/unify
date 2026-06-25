@@ -34,7 +34,7 @@ dump.rdb
 .venv
 .hypothesis
 .async_trace.html
-.droid_plans
+.unity_plans
 *.txt
 !requirements.txt
 !requirements-gateway.txt
@@ -61,7 +61,7 @@ assets/*
 !assets/nested-steering-sequence.png
 !assets/openclaw-architecture.png
 !assets/hermes-architecture.png
-!assets/droid-architecture.png
+!assets/unity-architecture.png
 !assets/demo-course-correct.png
 !assets/demo-live-introspection.png
 !assets/demo-pause-resume.png

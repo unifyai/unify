@@ -1,10 +1,10 @@
 # Architecture
 
-This document describes Droid's internal architecture for developers who want to understand how the system works, contribute, or evaluate the design decisions.
+This document describes Unity's internal architecture for developers who want to understand how the system works, contribute, or evaluate the design decisions.
 
 ## Mental model
 
-Droid implements an AI assistant's brain as a **distributed back office**. Rather than one monolithic agent loop, there are specialized **state managers** — each owning a slice of the assistant's persistent state (contacts, knowledge, tasks, transcripts, etc.) — coordinated by a central **Actor** that writes Python programs to compose them.
+Unity implements an AI assistant's brain as a **distributed back office**. Rather than one monolithic agent loop, there are specialized **state managers** — each owning a slice of the assistant's persistent state (contacts, knowledge, tasks, transcripts, etc.) — coordinated by a central **Actor** that writes Python programs to compose them.
 
 Every public operation in the system, from searching contacts to executing a multi-step task, runs inside its own **async LLM tool loop** and returns a **steerable handle**. These handles are the universal interface: you can pause, resume, interject into, ask questions about, or stop any operation — at any nesting depth — while it's running.
 
@@ -36,7 +36,7 @@ CodeActActor ── generates Python plans ──► primitives.* API
 Steering propagates through the full tree: stopping the Actor stops its inner manager loops; interjecting into the ConversationManager can reach a deeply nested knowledge query.
 
 Hosted deployment concerns are intentionally optional at this boundary. The
-public repo exposes a small `droid.deploy_runtime` SPI for session assignment,
+public repo exposes a small `unity.deploy_runtime` SPI for session assignment,
 job lifecycle hooks, metrics export, and shutdown log archival, with local/no-op
 defaults when no private hosted backend is installed.
 
@@ -44,7 +44,7 @@ defaults when no private hosted backend is installed.
 
 ## The async tool loop
 
-**Files:** `droid/common/async_tool_loop.py`, `droid/common/_async_tool/loop.py`
+**Files:** `unity/common/async_tool_loop.py`, `unity/common/_async_tool/loop.py`
 
 The async tool loop is the universal runtime. Nearly every public manager method is implemented as: create an LLM client, register domain-specific tools, start a loop, return a handle.
 
@@ -90,7 +90,7 @@ This is how the user can redirect an agent mid-task without the overhead of stop
 
 ## Steerable handles
 
-**File:** `droid/common/async_tool_loop.py`
+**File:** `unity/common/async_tool_loop.py`
 
 `SteerableToolHandle` is the abstract protocol. `AsyncToolLoopHandle` is the concrete implementation backed by an asyncio task. Every public manager method returns one.
 
@@ -139,7 +139,7 @@ Different handle implementations extend the base signature with domain-specific 
 
 ## The CodeAct Actor
 
-**File:** `droid/actor/code_act_actor.py`
+**File:** `unity/actor/code_act_actor.py`
 
 The Actor doesn't pick from a JSON tool menu. It generates Python programs that call typed primitives:
 
@@ -164,7 +164,7 @@ The Actor implements a **gating policy**: until the LLM has queried both `Functi
 
 ### Primitives registry
 
-**File:** `droid/function_manager/primitives/registry.py`
+**File:** `unity/function_manager/primitives/registry.py`
 
 `ToolSurfaceRegistry` is the single source of truth for how managers are exposed to the Actor. Each manager has a `ManagerSpec` that defines:
 
@@ -211,7 +211,7 @@ The `_as_caller_description` class attribute on each manager tells nested loops 
 
 ## The ConversationManager and dual-brain voice
 
-**File:** `droid/conversation_manager/conversation_manager.py`
+**File:** `unity/conversation_manager/conversation_manager.py`
 
 The ConversationManager is the top-level orchestrator for live conversations. It has a fundamentally different design from the other managers because it handles real-time interaction.
 
@@ -238,7 +238,7 @@ The ConversationManager uses a `Debouncer` that coalesces rapid-fire events (new
 
 ## The event bus
 
-**File:** `droid/events/event_bus.py`
+**File:** `unity/events/event_bus.py`
 
 The EventBus is an in-process, asyncio-friendly pub/sub system with:
 
@@ -264,9 +264,9 @@ This lineage is attached to every event the loop publishes, enabling full parent
 
 ## Context propagation
 
-**File:** `droid/common/_async_tool/propagation_mode.py`
+**File:** `unity/common/_async_tool/propagation_mode.py`
 
-When a tool loop calls a nested tool that starts its own loop, the parent conversation may need to be visible to the child (e.g., so the ContactManager knows what the user originally asked). Droid handles this with explicit role transformation:
+When a tool loop calls a nested tool that starts its own loop, the parent conversation may need to be visible to the child (e.g., so the ContactManager knows what the user originally asked). Unity handles this with explicit role transformation:
 
 - **`outer_user` / `outer_assistant`** — parent conversation roles, injected into child loops as system context
 - **`inner_user` / `inner_assistant`** — child conversation roles, visible when the parent inspects via `ask()`
@@ -283,7 +283,7 @@ This three-layer separation prevents prompt injection between nesting levels and
 
 ## Multi-request coordination
 
-**File:** `droid/common/_async_tool/multi_handle.py`
+**File:** `unity/common/_async_tool/multi_handle.py`
 
 A single tool loop can serve **multiple concurrent requests** through the `MultiHandleCoordinator`. Each request gets:
 
@@ -320,10 +320,10 @@ Tests fall on a spectrum between **symbolic** (infrastructure-focused: does stee
 
 ## System dependencies
 
-Droid persists state through **Orchestra** (a REST API backed by PostgreSQL) via the **Unify** Python SDK, and makes LLM calls through **UniLLM** (a caching/tracing/normalization layer).
+Unity persists state through **Orchestra** (a REST API backed by PostgreSQL) via the **Unify** Python SDK, and makes LLM calls through **UniLLM** (a caching/tracing/normalization layer).
 
 ```
-Droid ──► Unify SDK ──► Orchestra API ──► PostgreSQL
+Unity ──► Unify SDK ──► Orchestra API ──► PostgreSQL
   │
   └─────► UniLLM ──► OpenAI / Anthropic / etc.
 ```
@@ -335,8 +335,8 @@ For development and testing, the system runs against simulated backends. The cor
 ## Directory layout
 
 ```
-droid/
-├── droid/
+unity/
+├── unity/
 │   ├── common/
 │   │   ├── async_tool_loop.py          # SteerableToolHandle, start_async_tool_loop
 │   │   └── _async_tool/

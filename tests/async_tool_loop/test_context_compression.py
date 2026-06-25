@@ -8,8 +8,8 @@ import pytest
 import json
 
 from tests.helpers import _handle_project
-import droid.common._async_tool.context_compression as _cc_mod
-from droid.common._async_tool.context_compression import (
+import unity.common._async_tool.context_compression as _cc_mod
+from unity.common._async_tool.context_compression import (
     CompressedMessage,
     CompressedMessages,
     CompressionState,

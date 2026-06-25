@@ -24,28 +24,28 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from droid.common.llm_helpers import method_to_schema
-from droid.contact_manager.simulated import SimulatedContactManager
-from droid.conversation_manager.domains.brain_tools import (
+from unity.common.llm_helpers import method_to_schema
+from unity.contact_manager.simulated import SimulatedContactManager
+from unity.conversation_manager.domains.brain_tools import (
     ConversationManagerBrainTools,
 )
-from droid.conversation_manager.domains.brain_action_tools import (
+from unity.conversation_manager.domains.brain_action_tools import (
     ConversationManagerBrainActionTools,
 )
-from droid.file_manager.filesystem_adapters.local_adapter import (
+from unity.file_manager.filesystem_adapters.local_adapter import (
     LocalFileSystemAdapter,
 )
-from droid.conversation_manager.domains.notifications import (
+from unity.conversation_manager.domains.notifications import (
     NotificationBar,
 )
-from droid.conversation_manager.domains.contact_index import (
+from unity.conversation_manager.domains.contact_index import (
     ContactIndex,
 )
-from droid.conversation_manager.task_actions import (
+from unity.conversation_manager.task_actions import (
     STEERING_OPERATIONS,
     parse_action_name,
 )
-from droid.session_details import SESSION_DETAILS
+from unity.session_details import SESSION_DETAILS
 
 # =============================================================================
 # Fixtures
@@ -82,7 +82,7 @@ def _setup_mock_contacts(
 @pytest.fixture
 def mock_cm():
     """Create a minimal mock ConversationManager for testing."""
-    from droid.conversation_manager.cm_types.mode import Mode
+    from unity.conversation_manager.cm_types.mode import Mode
 
     cm = MagicMock()
     cm.mode = Mode.TEXT
@@ -122,7 +122,7 @@ def brain_action_tools(mock_cm):
     """Create ConversationManagerBrainActionTools instance."""
     # Patch the event broker to avoid actual pubsub
     with patch(
-        "droid.conversation_manager.domains.brain_action_tools.get_event_broker",
+        "unity.conversation_manager.domains.brain_action_tools.get_event_broker",
     ) as mock_broker:
         mock_broker.return_value = MagicMock()
         mock_broker.return_value.publish = AsyncMock()
@@ -174,21 +174,21 @@ class TestCmGetMode:
 
     def test_returns_text_mode(self, brain_tools, mock_cm):
         """Returns 'text' when CM is in text mode."""
-        from droid.conversation_manager.cm_types.mode import Mode
+        from unity.conversation_manager.cm_types.mode import Mode
 
         mock_cm.mode = Mode.TEXT
         assert brain_tools.cm_get_mode() == "text"
 
     def test_returns_call_mode(self, brain_tools, mock_cm):
         """Returns 'call' when CM is in call mode."""
-        from droid.conversation_manager.cm_types.mode import Mode
+        from unity.conversation_manager.cm_types.mode import Mode
 
         mock_cm.mode = Mode.CALL
         assert brain_tools.cm_get_mode() == "call"
 
     def test_returns_meet_mode(self, brain_tools, mock_cm):
         """Returns 'meet' when CM is in meet mode."""
-        from droid.conversation_manager.cm_types.mode import Mode
+        from unity.conversation_manager.cm_types.mode import Mode
 
         mock_cm.mode = Mode.MEET
         assert brain_tools.cm_get_mode() == "meet"
@@ -366,7 +366,7 @@ class TestActionToolsAsTools:
         """send_sms and make_call are excluded when assistant has no phone."""
         mock_cm.assistant_number = ""
         with patch(
-            "droid.conversation_manager.domains.brain_action_tools.get_event_broker",
+            "unity.conversation_manager.domains.brain_action_tools.get_event_broker",
         ) as mock_broker:
             mock_broker.return_value = MagicMock()
             mock_broker.return_value.publish = AsyncMock()
@@ -380,7 +380,7 @@ class TestActionToolsAsTools:
         """send_email is excluded when assistant has no email."""
         mock_cm.assistant_email = ""
         with patch(
-            "droid.conversation_manager.domains.brain_action_tools.get_event_broker",
+            "unity.conversation_manager.domains.brain_action_tools.get_event_broker",
         ) as mock_broker:
             mock_broker.return_value = MagicMock()
             mock_broker.return_value.publish = AsyncMock()
@@ -395,7 +395,7 @@ class TestActionToolsAsTools:
         mock_cm.assistant_number = ""
         mock_cm.assistant_email = ""
         with patch(
-            "droid.conversation_manager.domains.brain_action_tools.get_event_broker",
+            "unity.conversation_manager.domains.brain_action_tools.get_event_broker",
         ) as mock_broker:
             mock_broker.return_value = MagicMock()
             mock_broker.return_value.publish = AsyncMock()
@@ -411,7 +411,7 @@ class TestActionToolsAsTools:
         mock_cm.assistant_whatsapp_number = "+15555557777"
         mock_cm.assistant_discord_bot_id = "discord-bot-123"
         with patch(
-            "droid.conversation_manager.domains.brain_action_tools.get_event_broker",
+            "unity.conversation_manager.domains.brain_action_tools.get_event_broker",
         ) as mock_broker:
             mock_broker.return_value = MagicMock()
             mock_broker.return_value.publish = AsyncMock()
@@ -491,7 +491,7 @@ class TestActionToolsAsTools:
         )
         meet_props = meet_schema["function"]["parameters"]["properties"]
         assert "attendee_contact_ids" not in meet_props
-        assert "email_address" in meet_props
+        assert "email_address" not in meet_props
 
     @pytest.mark.asyncio
     async def test_coordinator_comms_wrappers_force_boss_recipient(
@@ -535,26 +535,23 @@ class TestActionToolsAsTools:
             return_value={"status": "ok"},
         )
 
-        await tools["send_sms"](content="hello", phone_number="+15550000001")
+        await tools["send_sms"](content="hello")
         brain_action_tools._comms.send_sms.assert_called_once_with(
             contact_id=SESSION_DETAILS.boss_contact_id,
             content="hello",
-            phone_number="+15550000001",
         )
 
         await tools["send_whatsapp"](content="hello")
         brain_action_tools._comms.send_whatsapp.assert_called_once_with(
             contact_id=SESSION_DETAILS.boss_contact_id,
             content="hello",
-            whatsapp_number=None,
             attachment_filepath=None,
         )
 
-        await tools["send_discord_message"](content="hello", discord_id="D1")
+        await tools["send_discord_message"](content="hello")
         brain_action_tools._comms.send_discord_message.assert_called_once_with(
             contact_id=SESSION_DETAILS.boss_contact_id,
             content="hello",
-            discord_id="D1",
         )
 
         await tools["send_slack_message"](content="hello", team_id="T1")
@@ -562,7 +559,6 @@ class TestActionToolsAsTools:
             contact_id=SESSION_DETAILS.boss_contact_id,
             content="hello",
             team_id="T1",
-            slack_user_id=None,
             thread_ts=None,
         )
 
@@ -585,44 +581,34 @@ class TestActionToolsAsTools:
         brain_action_tools._comms.make_call.assert_called_once_with(
             contact_id=SESSION_DETAILS.boss_contact_id,
             context="briefing",
-            phone_number=None,
         )
 
         await tools["make_whatsapp_call"](context="briefing")
         brain_action_tools._comms.make_whatsapp_call.assert_called_once_with(
             contact_id=SESSION_DETAILS.boss_contact_id,
             context="briefing",
-            whatsapp_number=None,
         )
 
         await tools["send_email"](
             subject="Hi",
             body="Body",
-            email_address="boss@example.com",
+            thread_id="gmail-thread-1",
         )
         brain_action_tools._comms.send_email.assert_called_once_with(
-            to=[
-                {
-                    "contact_id": SESSION_DETAILS.boss_contact_id,
-                    "email_address": "boss@example.com",
-                },
-            ],
+            to=[SESSION_DETAILS.boss_contact_id],
             subject="Hi",
             body="Body",
             email_id_to_reply_to=None,
+            thread_id="gmail-thread-1",
             attachment_filepath=None,
         )
 
         await tools["send_teams_message"](
             content="hello",
             chat_id="chat-1",
-            email_address="boss@example.com",
         )
         brain_action_tools._comms.send_teams_message.assert_called_once_with(
-            contact_id={
-                "contact_id": SESSION_DETAILS.boss_contact_id,
-                "email_address": "boss@example.com",
-            },
+            contact_id=SESSION_DETAILS.boss_contact_id,
             content="hello",
             chat_id="chat-1",
             attachment_filepath=None,
@@ -630,7 +616,6 @@ class TestActionToolsAsTools:
 
         await tools["create_teams_meet"](
             subject="Sync",
-            email_address="boss@example.com",
         )
         brain_action_tools._comms.create_teams_meet.assert_called_once_with(
             mode="scheduled",
@@ -638,12 +623,7 @@ class TestActionToolsAsTools:
             start=None,
             duration_minutes=30,
             timezone="UTC",
-            attendee_contact_ids=[
-                {
-                    "contact_id": SESSION_DETAILS.boss_contact_id,
-                    "email_address": "boss@example.com",
-                },
-            ],
+            attendee_contact_ids=[SESSION_DETAILS.boss_contact_id],
             body_html=None,
             location=None,
         )
@@ -854,7 +834,7 @@ class TestSendUnifyMessageTool:
             },
         )
         with patch(
-            "droid.file_manager.filesystem_adapters.local_adapter.LocalFileSystemAdapter",
+            "unity.file_manager.filesystem_adapters.local_adapter.LocalFileSystemAdapter",
             rooted,
         ):
             result = await brain_action_tools.send_unify_message(
@@ -885,14 +865,14 @@ class TestSendUnifyMessageTool:
         # Root the adapter at tmp_path so test files pass the subpath check
         with (
             patch(
-                "droid.file_manager.filesystem_adapters.local_adapter.LocalFileSystemAdapter",
+                "unity.file_manager.filesystem_adapters.local_adapter.LocalFileSystemAdapter",
                 lambda: LocalFileSystemAdapter(root=str(tmp_path)),
             ),
             patch(
-                "droid.comms.primitives.comms_utils.upload_unify_attachment",
+                "unity.comms.primitives.comms_utils.upload_unify_attachment",
             ) as mock_upload,
             patch(
-                "droid.comms.primitives.comms_utils.send_unify_message",
+                "unity.comms.primitives.comms_utils.send_unify_message",
             ) as mock_send,
         ):
             # Configure mocks
@@ -942,11 +922,11 @@ class TestSendUnifyMessageTool:
         # Root the adapter at tmp_path so test files pass the subpath check
         with (
             patch(
-                "droid.file_manager.filesystem_adapters.local_adapter.LocalFileSystemAdapter",
+                "unity.file_manager.filesystem_adapters.local_adapter.LocalFileSystemAdapter",
                 lambda: LocalFileSystemAdapter(root=str(tmp_path)),
             ),
             patch(
-                "droid.comms.primitives.comms_utils.upload_unify_attachment",
+                "unity.comms.primitives.comms_utils.upload_unify_attachment",
             ) as mock_upload,
         ):
             mock_upload.return_value = {
@@ -1017,7 +997,7 @@ class TestSendEmailTool:
         _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
 
         with patch(
-            "droid.comms.primitives.comms_utils.send_email_via_address",
+            "unity.comms.primitives.comms_utils.send_email_via_address",
         ) as mock_send:
             mock_send.return_value = {"success": True, "id": "sent-email-123"}
 
@@ -1031,6 +1011,35 @@ class TestSendEmailTool:
             mock_send.assert_called_once()
             # Should resolve contact_id 1 to alice@example.com
             assert mock_send.call_args.kwargs["to"] == ["alice@example.com"]
+
+    @pytest.mark.asyncio
+    async def test_forwards_thread_id_separately_from_reply_email_id(
+        self,
+        brain_action_tools,
+        mock_cm,
+        sample_contacts,
+    ):
+        """Forwards provider thread targeting separately from RFC reply headers."""
+        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
+
+        with patch(
+            "unity.comms.primitives.comms_utils.send_email_via_address",
+        ) as mock_send:
+            mock_send.return_value = {"success": True, "id": "sent-email-123"}
+
+            result = await brain_action_tools.send_email(
+                to=[1],
+                subject="Re: Budget Discussion",
+                body="Reply body",
+                email_id_to_reply_to="<rfc-message-id@example.com>",
+                thread_id="gmail-thread-123",
+            )
+
+            assert result["status"] == "ok"
+            assert (
+                mock_send.call_args.kwargs["email_id"] == "<rfc-message-id@example.com>"
+            )
+            assert mock_send.call_args.kwargs["thread_id"] == "gmail-thread-123"
 
     @pytest.mark.asyncio
     async def test_returns_error_for_file_not_found(
@@ -1070,7 +1079,7 @@ class TestSendEmailTool:
 
         # Root the adapter at tmp_path so test files pass the subpath check
         with patch(
-            "droid.file_manager.filesystem_adapters.local_adapter.LocalFileSystemAdapter",
+            "unity.file_manager.filesystem_adapters.local_adapter.LocalFileSystemAdapter",
             lambda: LocalFileSystemAdapter(root=str(tmp_path)),
         ):
             result = await brain_action_tools.send_email(
@@ -1102,11 +1111,11 @@ class TestSendEmailTool:
         # Root the adapter at tmp_path so test files pass the subpath check
         with (
             patch(
-                "droid.file_manager.filesystem_adapters.local_adapter.LocalFileSystemAdapter",
+                "unity.file_manager.filesystem_adapters.local_adapter.LocalFileSystemAdapter",
                 lambda: LocalFileSystemAdapter(root=str(tmp_path)),
             ),
             patch(
-                "droid.comms.primitives.comms_utils.send_email_via_address",
+                "unity.comms.primitives.comms_utils.send_email_via_address",
             ) as mock_send,
         ):
             mock_send.return_value = {"success": True, "id": "sent-email-123"}
@@ -1143,7 +1152,7 @@ class TestSendEmailTool:
         _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
 
         with patch(
-            "droid.comms.primitives.comms_utils.send_email_via_address",
+            "unity.comms.primitives.comms_utils.send_email_via_address",
         ) as mock_send:
             mock_send.return_value = {"success": True, "id": "sent-email-123"}
 
@@ -1169,7 +1178,7 @@ class TestSendEmailTool:
         _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
 
         with patch(
-            "droid.comms.primitives.comms_utils.send_email_via_address",
+            "unity.comms.primitives.comms_utils.send_email_via_address",
         ) as mock_send:
             mock_send.return_value = {"success": True, "id": "sent-email-123"}
 
@@ -1195,7 +1204,7 @@ class TestSendEmailTool:
         _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
 
         with patch(
-            "droid.comms.primitives.comms_utils.send_email_via_address",
+            "unity.comms.primitives.comms_utils.send_email_via_address",
         ) as mock_send:
             mock_send.return_value = {"success": True, "id": "sent-email-123"}
 
@@ -1222,7 +1231,7 @@ class TestSendEmailTool:
         _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
 
         with patch(
-            "droid.comms.primitives.comms_utils.send_email_via_address",
+            "unity.comms.primitives.comms_utils.send_email_via_address",
         ) as mock_send:
             mock_send.return_value = {"success": True, "id": "sent-email-123"}
 
@@ -1547,7 +1556,7 @@ class TestBuildActionSteeringTools:
         LLM would then call pause_* repeatedly while trying to resume,
         producing serial "Pause" events visible on the frontend.
         """
-        from droid.actor.code_act_actor import _StorageCheckHandle
+        from unity.actor.code_act_actor import _StorageCheckHandle
 
         inner_handle = MagicMock()
         inner_handle._pause_event = asyncio.Event()

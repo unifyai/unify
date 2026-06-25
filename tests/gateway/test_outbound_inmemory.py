@@ -6,8 +6,8 @@ import threading
 
 import pytest
 
-from droid.gateway.outbound import OutboundTransport
-from droid.gateway.outbound_inmemory import (
+from unity.gateway.outbound import OutboundTransport
+from unity.gateway.outbound_inmemory import (
     InMemoryOutboundTransport,
     PublishedEnvelope,
 )
@@ -20,14 +20,14 @@ def test_satisfies_outbound_transport_protocol() -> None:
 def test_publish_records_topic_message_and_thread() -> None:
     transport = InMemoryOutboundTransport()
     msg_id = transport.publish(
-        "droid-42-staging",
+        "unity-42-staging",
         b'{"thread":"msg","event":{}}',
         thread="msg",
     )
     assert msg_id == "inmemory-0"
     assert transport.published == [
         PublishedEnvelope(
-            topic="droid-42-staging",
+            topic="unity-42-staging",
             message=b'{"thread":"msg","event":{}}',
             thread="msg",
             message_id="inmemory-0",

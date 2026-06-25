@@ -9,7 +9,7 @@ to ``""`` so the runtime's ``SESSION_DETAILS`` (str-typed fields) and its
 
 from __future__ import annotations
 
-from droid.gateway.adapters.common import _assistant_payload
+from unity.gateway.adapters.common import _assistant_payload
 
 
 def _orchestra_assistant(**overrides):

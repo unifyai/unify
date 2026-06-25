@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import droid.common.prompt_helpers as prompt_helpers
-from droid.common.tool_spec import ToolSpec
+import unity.common.prompt_helpers as prompt_helpers
+from unity.common.tool_spec import ToolSpec
 
 pytestmark = pytest.mark.no_unify_context
 

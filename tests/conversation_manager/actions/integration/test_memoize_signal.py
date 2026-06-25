@@ -18,7 +18,7 @@ from tests.conversation_manager.actions.integration.helpers import (
     assert_no_errors,
     get_actor_started_event,
 )
-from droid.conversation_manager.events import SMSReceived
+from unity.conversation_manager.events import SMSReceived
 
 pytestmark = [pytest.mark.integration, pytest.mark.eval]
 

@@ -11,7 +11,7 @@ import dataclasses
 from dataclasses import dataclass
 from typing import Any
 
-from droid.conversation_manager.events import Event
+from unity.conversation_manager.events import Event
 
 # ── Exclusion list ────────────────────────────────────────────────────────
 # Events that should never appear in a generated scenario.  Maintained as a

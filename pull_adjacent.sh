@@ -24,7 +24,7 @@ pull_repo "$src" "$tmpdir/0.log" &
 pids+=($!)
 
 i=1
-for dir in "$parent"/droid_*/; do
+for dir in "$parent"/unity_*/; do
     [ "$dir" = "$src/" ] && continue
     [ -d "$dir/.git" ] || continue
     repos+=("$dir")

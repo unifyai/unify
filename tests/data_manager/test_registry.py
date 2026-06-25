@@ -6,10 +6,10 @@ from __future__ import annotations
 
 import pytest
 
-from droid.manager_registry import ManagerRegistry
-from droid.data_manager.base import BaseDataManager
-from droid.data_manager.data_manager import DataManager
-from droid.data_manager.simulated import SimulatedDataManager
+from unity.manager_registry import ManagerRegistry
+from unity.data_manager.base import BaseDataManager
+from unity.data_manager.data_manager import DataManager
+from unity.data_manager.simulated import SimulatedDataManager
 
 
 @pytest.fixture(autouse=True)

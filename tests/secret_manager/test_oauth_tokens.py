@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from threading import Lock
 
-from droid.secret_manager.secret_manager import SecretManager
+from unity.secret_manager.secret_manager import SecretManager
 
 
 def _unit_secret_manager() -> SecretManager:

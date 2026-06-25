@@ -31,7 +31,7 @@ from tests.conversation_manager.cm_helpers import (
     has_steering_tool_call,
 )
 from tests.conversation_manager.conftest import BOSS
-from droid.conversation_manager.events import (
+from unity.conversation_manager.events import (
     UnifyMessageReceived,
     ActorHandleStarted,
 )
@@ -248,7 +248,7 @@ async def test_persistent_session_stopped_when_tutorial_ends(initialized_cm):
     Phase 4: User signals the tutorial is done — the CM should call
     stop_* on the persistent action rather than leaving it alive.
     """
-    from droid.common.prompt_helpers import now as prompt_now
+    from unity.common.prompt_helpers import now as prompt_now
 
     cm = initialized_cm
     cm.cm.user_screen_share_active = True

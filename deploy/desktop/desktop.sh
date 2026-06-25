@@ -1,10 +1,10 @@
 #!/bin/bash
 # Virtual desktop: TigerVNC (display :99), XFCE4, noVNC proxy.
-# Runs as unityuser with HOME=/Droid so the session matches pool VM layout.
+# Runs as unityuser with HOME=/Unity so the session matches pool VM layout.
 
 set -euo pipefail
 
-export HOME="${HOME:-/Droid}"
+export HOME="${HOME:-/Unity}"
 export DISPLAY="${DISPLAY:-:99}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/runtime-unityuser}"
 
@@ -20,7 +20,7 @@ chmod 600 "$HOME/.vnc/passwd"
 
 Xtigervnc :99 -geometry 1920x1080 -depth 24 \
   -rfbport 5900 -rfbauth "$HOME/.vnc/passwd" \
-  -AlwaysShared -desktop "Droid Desktop" &
+  -AlwaysShared -desktop "Unity Desktop" &
 sleep 2
 
 eval "$(dbus-launch --sh-syntax)"

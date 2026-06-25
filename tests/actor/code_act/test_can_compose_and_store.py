@@ -4,8 +4,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from tests.actor.code_act.conftest import make_fm_mock
-from droid.actor.code_act_actor import CodeActActor
-from droid.function_manager.function_manager import FunctionManager
+from unity.actor.code_act_actor import CodeActActor
+from unity.function_manager.function_manager import FunctionManager
 
 # ---------------------------------------------------------------------------
 # can_compose=False — symbolic tests

@@ -2,13 +2,13 @@
 
 import json
 
-from droid.dashboard_manager.types.tile import (
+from unity.dashboard_manager.types.tile import (
     FilterBinding,
     JoinBinding,
     JoinReduceBinding,
     ReduceBinding,
 )
-from droid.dashboard_manager.types.dashboard import TilePosition
+from unity.dashboard_manager.types.dashboard import TilePosition
 
 
 class TestSimulatedTileCRUD:

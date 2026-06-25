@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from droid.conversation_manager.prompt_builders import build_voice_agent_prompt
+from unity.conversation_manager.prompt_builders import build_voice_agent_prompt
 
 from tests.conversation_manager.voice.test_fast_brain_deferral import (
     MODEL_TTS,

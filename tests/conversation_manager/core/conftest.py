@@ -13,7 +13,7 @@ import pytest
 def pytest_configure(config):
     """Enable blacklist checks for tests in this directory."""
     # Set before any tests run so SETTINGS picks it up
-    os.environ["DROID_CONVERSATION_BLACKLIST_CHECKS_ENABLED"] = "true"
+    os.environ["UNITY_CONVERSATION_BLACKLIST_CHECKS_ENABLED"] = "true"
 
 
 @pytest.fixture(autouse=True)
@@ -23,11 +23,11 @@ def ensure_blacklist_checks_enabled():
     This fixture runs for every test and ensures the environment variable
     is set, even if pytest_configure ran in a different order.
     """
-    original = os.environ.get("DROID_CONVERSATION_BLACKLIST_CHECKS_ENABLED")
-    os.environ["DROID_CONVERSATION_BLACKLIST_CHECKS_ENABLED"] = "true"
+    original = os.environ.get("UNITY_CONVERSATION_BLACKLIST_CHECKS_ENABLED")
+    os.environ["UNITY_CONVERSATION_BLACKLIST_CHECKS_ENABLED"] = "true"
     yield
     # Restore original value
     if original is None:
-        os.environ.pop("DROID_CONVERSATION_BLACKLIST_CHECKS_ENABLED", None)
+        os.environ.pop("UNITY_CONVERSATION_BLACKLIST_CHECKS_ENABLED", None)
     else:
-        os.environ["DROID_CONVERSATION_BLACKLIST_CHECKS_ENABLED"] = original
+        os.environ["UNITY_CONVERSATION_BLACKLIST_CHECKS_ENABLED"] = original

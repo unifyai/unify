@@ -1,4 +1,4 @@
-"""Behavioural tests for ``droid.gateway.channels.gmail``.
+"""Behavioural tests for ``unity.gateway.channels.gmail``.
 
 Includes all 13 scenarios faithfully ported from
 ``communication/tests/gmail/test_send_with_attachment.py`` (8) and
@@ -18,7 +18,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from googleapiclient.errors import HttpError
 
-from droid.gateway.channels.gmail import router
+from unity.gateway.channels.gmail import router
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -66,7 +66,7 @@ def client(
     _gmail_credentials: None,
 ) -> TestClient:
     with patch(
-        "droid.gateway.channels.gmail.views.get_gmail_service_async",
+        "unity.gateway.channels.gmail.views.get_gmail_service_async",
         new_callable=AsyncMock,
         return_value=mock_gmail_service,
     ):
@@ -93,7 +93,7 @@ def test_router_exposes_expected_paths() -> None:
 
 
 def test_router_importable_from_package_root() -> None:
-    from droid.gateway.channels.gmail import router as exported
+    from unity.gateway.channels.gmail import router as exported
 
     assert exported is router
 
@@ -140,10 +140,13 @@ class TestSendEmailWithoutAttachment:
                 "subject": "Re: Test Subject",
                 "body": "Reply content",
                 "in_reply_to": "<original-message-id@example.com>",
+                "thread_id": "gmail-thread-123",
             },
         )
         assert response.status_code == 200
         assert response.json()["success"] is True
+        send_body = mock_gmail_service.users().messages().send.call_args.kwargs["body"]
+        assert send_body["threadId"] == "gmail-thread-123"
 
 
 class TestSendEmailWithAttachment:
@@ -363,9 +366,9 @@ class TestDeleteGmailWatch:
 # test_missing_auth_returns_unauthorized was an aggregator-level test
 # (the admin-key dependency lives on the aggregator router mount, not
 # the channel module itself). Per the channel-isolated test shape
-# documented in droid/gateway/channels/README.md, auth integration
+# documented in unity/gateway/channels/README.md, auth integration
 # belongs in tests/gateway/test_app.py once the Phase B aggregator
-# (droid/gateway/app.py) lands. Tagged here so the scenario isn't lost.
+# (unity/gateway/app.py) lands. Tagged here so the scenario isn't lost.
 
 
 # ---------------------------------------------------------------------------
@@ -463,7 +466,7 @@ def test_delete_email_user_success(
     fake_admin_service.users().delete().execute.return_value = {}
 
     with patch(
-        "droid.gateway.channels.gmail.views.get_admin_service",
+        "unity.gateway.channels.gmail.views.get_admin_service",
         return_value=fake_admin_service,
     ):
         response = client.request(
@@ -487,7 +490,7 @@ def test_delete_email_user_404_treated_as_already_absent(
     fake_admin_service.users().delete().execute.side_effect = _http_error(404)
 
     with patch(
-        "droid.gateway.channels.gmail.views.get_admin_service",
+        "unity.gateway.channels.gmail.views.get_admin_service",
         return_value=fake_admin_service,
     ):
         response = client.request(
@@ -511,7 +514,7 @@ def test_delete_email_user_non_404_bubbles_up_as_500(
     fake_admin_service.users().delete().execute.side_effect = _http_error(500)
 
     with patch(
-        "droid.gateway.channels.gmail.views.get_admin_service",
+        "unity.gateway.channels.gmail.views.get_admin_service",
         return_value=fake_admin_service,
     ):
         response = client.request(

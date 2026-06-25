@@ -7,12 +7,12 @@ import pytest
 import unify
 
 from tests.helpers import _handle_project
-from droid.image_manager.image_manager import ImageManager
-from droid.image_manager.utils import make_solid_png_base64
-from droid.session_details import SESSION_DETAILS
-from droid.contact_manager.types.contact import Contact
-from droid.transcript_manager.transcript_manager import TranscriptManager
-from droid.transcript_manager.types.message import Message
+from unity.image_manager.image_manager import ImageManager
+from unity.image_manager.utils import make_solid_png_base64
+from unity.session_details import SESSION_DETAILS
+from unity.contact_manager.types.contact import Contact
+from unity.transcript_manager.transcript_manager import TranscriptManager
+from unity.transcript_manager.types.message import Message
 
 
 def _team_id() -> int:

@@ -5,12 +5,12 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from droid.conversation_manager.cm_types import ScreenshotEntry
-from droid.conversation_manager.cm_types.screenshot import (
+from unity.conversation_manager.cm_types import ScreenshotEntry
+from unity.conversation_manager.cm_types.screenshot import (
     generate_screenshot_path,
     write_screenshot_to_disk,
 )
-from droid.file_manager.settings import get_local_root
+from unity.file_manager.settings import get_local_root
 
 
 class TestWorkspaceBootstrap:
@@ -42,7 +42,7 @@ class TestWorkspaceBootstrap:
         (screenshots / "Assistant").mkdir(parents=True, exist_ok=True)
 
     def test_creates_workspace_directories(self, tmp_path):
-        root = tmp_path / "Droid" / "Local"
+        root = tmp_path / "Unity" / "Local"
         self._bootstrap(root)
 
         assert root.is_dir()
@@ -52,7 +52,7 @@ class TestWorkspaceBootstrap:
         assert (root / "Screenshots" / "Assistant").is_dir()
 
     def test_outputs_cleared_between_sessions(self, tmp_path):
-        root = tmp_path / "Droid" / "Local"
+        root = tmp_path / "Unity" / "Local"
         self._bootstrap(root)
 
         # Simulate a file generated during a previous session.
@@ -67,7 +67,7 @@ class TestWorkspaceBootstrap:
         assert (root / "Outputs").is_dir()
 
     def test_screenshots_cleared_between_sessions(self, tmp_path):
-        root = tmp_path / "Droid" / "Local"
+        root = tmp_path / "Unity" / "Local"
         self._bootstrap(root)
 
         # Simulate screenshots from a previous session.
@@ -87,7 +87,7 @@ class TestWorkspaceBootstrap:
         assert (root / "Screenshots" / "Assistant").is_dir()
 
     def test_attachments_preserved_between_sessions(self, tmp_path):
-        root = tmp_path / "Droid" / "Local"
+        root = tmp_path / "Unity" / "Local"
         self._bootstrap(root)
 
         # Simulate an attachment from a previous session.
@@ -99,10 +99,10 @@ class TestWorkspaceBootstrap:
 
         assert attachment.exists()
 
-    def test_get_local_root_returns_droid_local(self):
-        """get_local_root() should resolve to ~/Droid/Local by default."""
+    def test_get_local_root_returns_unity_local(self):
+        """get_local_root() should resolve to ~/Unity/Local by default."""
         root = get_local_root()
-        assert root.endswith(os.path.join("Droid", "Local"))
+        assert root.endswith(os.path.join("Unity", "Local"))
 
 
 class TestSaveScreenshot:
