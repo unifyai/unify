@@ -446,7 +446,7 @@ class TestSendCall:
         twilio_client = MagicMock()
         user_call = MagicMock(sid="CA_user")
         sip_call = MagicMock(sid="CA_sip")
-        twilio_client.calls.create.side_effect = [user_call, sip_call]
+        twilio_client.calls.create.side_effect = [sip_call, user_call]
 
         # Route + call-permission responses
         route_resp = _async_httpx_response(
@@ -459,7 +459,11 @@ class TestSendCall:
         )
         httpx_client = AsyncMock()
         httpx_client.__aenter__.return_value = httpx_client
-        httpx_client.post.return_value = route_resp
+        session_resp = _async_httpx_response(
+            status_code=200,
+            json_body={"id": 123},
+        )
+        httpx_client.post.side_effect = [route_resp, session_resp]
         httpx_client.get.return_value = perm_resp
 
         with (
@@ -496,6 +500,12 @@ class TestSendCall:
         assert body["pool_number"] == "+15555550111"
         assert body["conference_name"].startswith("Unity_WA_15555550111_")
         assert twilio_client.calls.create.call_count == 2
+        assert httpx_client.post.await_args_list[1].kwargs["json"][
+            "provider_call_sid"
+        ] == ("CA_user")
+        twiml = twilio_client.calls.create.call_args_list[1].kwargs["twiml"]
+        assert "ring-tone" not in twiml
+        assert "/whatsapp/conference-wait" in twiml
 
     def test_invite_template_when_not_permitted(
         self,
@@ -766,8 +776,8 @@ class TestSendCall:
         )
         twilio_client = MagicMock()
         twilio_client.calls.create.side_effect = [
-            MagicMock(sid="CA_user"),
             MagicMock(sid="CA_sip"),
+            MagicMock(sid="CA_user"),
         ]
         route_resp = _async_httpx_response(
             status_code=200,
@@ -794,7 +804,8 @@ class TestSendCall:
         )
         httpx_client = AsyncMock()
         httpx_client.__aenter__.return_value = httpx_client
-        httpx_client.post.side_effect = [route_resp, accepted_resp]
+        session_resp = _async_httpx_response(status_code=200, json_body={"id": 123})
+        httpx_client.post.side_effect = [route_resp, session_resp, accepted_resp]
         httpx_client.get.side_effect = [perm_resp, intent_resp]
 
         with (
@@ -831,7 +842,7 @@ class TestSendCall:
         assert body["method"] == "direct"
         assert body["permission_probe"] is True
         assert twilio_client.calls.create.call_count == 2
-        assert httpx_client.post.await_args_list[1].kwargs["json"] == {
+        assert httpx_client.post.await_args_list[2].kwargs["json"] == {
             "pool_number": "+15555550111",
             "contact_number": "+15555550000",
             "status": "accepted",

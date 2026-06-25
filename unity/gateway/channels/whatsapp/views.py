@@ -402,6 +402,44 @@ async def _record_call_permission_accepted(
     return response.json()
 
 
+async def _upsert_outbound_whatsapp_call_session(
+    *,
+    provider_call_sid: str,
+    assistant_id: int,
+    user_number: str,
+    pool_number: str,
+    conference_name: str,
+    room_name: str,
+    sip_uri: str,
+    sip_call_sid: str = "",
+) -> dict:
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/call-session",
+            headers=_admin_headers(),
+            json={
+                "provider": "twilio",
+                "provider_call_sid": provider_call_sid,
+                "channel": "whatsapp_call",
+                "assistant_id": assistant_id,
+                "from_number": user_number,
+                "to_number": pool_number,
+                "pool_number": pool_number,
+                "conference_name": conference_name,
+                "livekit_room": room_name,
+                "status": "created",
+                "metadata": {
+                    "sip_uri": sip_uri,
+                    "call_type": "outbound",
+                    "sip_call_sid": sip_call_sid,
+                },
+            },
+            timeout=10.0,
+        )
+    response.raise_for_status()
+    return response.json()
+
+
 async def _has_pending_call_intent(pool_number: str, contact_number: str) -> bool:
     async with httpx.AsyncClient() as client:
         response = await client.get(
@@ -502,6 +540,7 @@ def _is_permission_probe_failure(exc: Exception) -> bool:
 async def _place_direct_whatsapp_call(
     *,
     credentials: CredentialStore,
+    assistant_id: int,
     pool_number: str,
     to: str,
     room_name: str,
@@ -513,6 +552,11 @@ async def _place_direct_whatsapp_call(
     date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     conference_name = f"Unity_WA_{pool_number[1:]}_{date_time}"
 
+    sip_call = wa_client.calls.create(
+        to=sip_uri,
+        from_=pool_number,
+        twiml=_conference_twiml(conference_name),
+    )
     user_call = wa_client.calls.create(
         to=f"whatsapp:{to}",
         from_=f"whatsapp:{pool_number}",
@@ -522,15 +566,21 @@ async def _place_direct_whatsapp_call(
         ),
         status_callback_event=["initiated", "ringing", "answered", "completed"],
     )
-    wa_client.calls.create(
-        to=sip_uri,
-        from_=pool_number,
-        twiml=_conference_twiml(conference_name),
+    await _upsert_outbound_whatsapp_call_session(
+        provider_call_sid=user_call.sid,
+        assistant_id=assistant_id,
+        user_number=to,
+        pool_number=pool_number,
+        conference_name=conference_name,
+        room_name=room_name,
+        sip_uri=sip_uri,
+        sip_call_sid=sip_call.sid,
     )
     logger.info(
-        "outbound WhatsApp call placed to %s call_sid=%s conf=%s",
+        "outbound WhatsApp call placed to %s call_sid=%s sip_call_sid=%s conf=%s",
         to,
         user_call.sid,
+        sip_call.sid,
         conference_name,
     )
     return {
@@ -572,9 +622,18 @@ def _conference_twiml(conference_name: str) -> str:
         startConferenceOnEnter=True,
         endConferenceOnExit=True,
         muted=False,
-        wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
+        wait_url=f"{SETTINGS.conversation.COMMS_URL}/whatsapp/conference-wait",
     )
     return str(resp)
+
+
+@unauth_router.api_route("/conference-wait", methods=["GET", "POST"])
+async def conference_wait() -> Response:
+    from twilio.twiml.voice_response import VoiceResponse
+
+    resp = VoiceResponse()
+    resp.pause(length=60)
+    return Response(content=str(resp), media_type="text/xml")
 
 
 @auth_router.post("/send-call")
@@ -602,6 +661,7 @@ async def send_call(request: Request):
     if permission["permitted"]:
         return await _place_direct_whatsapp_call(
             credentials=credentials,
+            assistant_id=assistant_id,
             pool_number=pool_number,
             to=to,
             room_name=room_name,
@@ -622,6 +682,7 @@ async def send_call(request: Request):
         try:
             direct_response = await _place_direct_whatsapp_call(
                 credentials=credentials,
+                assistant_id=assistant_id,
                 pool_number=pool_number,
                 to=to,
                 room_name=room_name,

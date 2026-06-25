@@ -894,6 +894,11 @@ async def entrypoint(ctx: agents.JobContext):
 
     # Flag for call_answered that may arrive during initialization
     call_answered_flag = asyncio.Event()
+    user_joined_event = asyncio.Event()
+    joined_gate_required = channel in ("phone_call", "whatsapp_call")
+    speech_gate_open = not joined_gate_required
+    if speech_gate_open:
+        user_joined_event.set()
 
     # Start receiving events from parent (callbacks registered later)
     await start_event_broker_receive()
@@ -1261,9 +1266,13 @@ async def entrypoint(ctx: agents.JobContext):
     )
 
     user_is_speaking = False
-    _queued_speech: list[tuple[str, str, str, str, str]] = []
+    _queued_speech: list[tuple[str, str, str, str, str, str]] = []
     _say_meta_queue: list[dict] = []
     _dedup_in_flight = False
+    # Wall-clock of the most recent voice activity (spoken utterance or injected
+    # notification). Compared against a guidance's ``decided_after_ts`` to skip
+    # the dedup gate when nothing has happened since the slow brain decided.
+    _last_voice_activity_ts: "datetime | None" = None
     generation_seq = 0
     user_state_seq = 0
     mood_turn_index = 0
@@ -1837,6 +1846,10 @@ async def entrypoint(ctx: agents.JobContext):
         role = getattr(ev.item, "role", None)
         if role not in ("user", "assistant"):
             return
+        nonlocal _last_voice_activity_ts
+        from datetime import datetime, timezone
+
+        _last_voice_activity_ts = datetime.now(timezone.utc)
         text = ev.item.text_content or ""
         utterance_id = content_trace_id("utt", f"{role}:{text}")
         say_meta: dict | None = None
@@ -1992,25 +2005,39 @@ async def entrypoint(ctx: agents.JobContext):
     # Publish call started (shared helper)
     await publish_call_started(contact, channel, call_session_id=call_session_id)
 
-    pending_notifications: list[tuple[str, str, bool, str, str, str]] = (
+    pending_notifications: list[tuple[str, str, bool, str, str, str, str]] = (
         []
-    )  # (message, spoken_message, should_speak, notification_id, notification_source, llm_log_path)
+    )  # (message, spoken_message, should_speak, notification_id, notification_source, llm_log_path, decided_after_ts)
     session_ready = False
+
+    def _mark_user_joined(reason: str) -> None:
+        nonlocal speech_gate_open
+        if user_joined_event.is_set():
+            return
+        _log.call_status(f"user_joined:{reason}")
+        speech_gate_open = True
+        user_joined_event.set()
+        assistant.set_call_received()
 
     def on_status(data: dict) -> None:
         """Handle status events (call_answered, stop, meet_session_id)."""
-        nonlocal explicit_stop_requested, meet_session_id
+        nonlocal explicit_stop_requested, meet_session_id, speech_gate_open
         event_type = data.get("type", "")
         _log.call_status(event_type)
 
         if event_type == "call_answered":
             call_answered_flag.set()
-            assistant.set_call_received()
+            _mark_user_joined("call_answered")
         elif event_type in ("meet_session_id", "gmeet_session_id"):
             meet_session_id = data.get("session_id", "")
         elif event_type == "stop":
             explicit_stop_requested = True
             ctx.shutdown(reason="stopped")
+
+    @ctx.room.on("participant_connected")
+    def _on_room_participant_connected(participant):
+        if joined_gate_required and not outbound:
+            _mark_user_joined("participant_connected")
 
     def _is_pipeline_quiescent() -> bool:
         """True when the voice pipeline is completely idle (no speech in flight)."""
@@ -2210,6 +2237,7 @@ async def entrypoint(ctx: agents.JobContext):
         source: str = "",
         notification_source: str = "",
         llm_log_path: str = "",
+        decided_after_ts: str = "",
     ) -> None:
         # Awareness notifications (should_speak=False) are injected into the fast
         # brain's context so it can surface them in first person. should_speak=True
@@ -2221,6 +2249,10 @@ async def entrypoint(ctx: agents.JobContext):
         # it never updates context.
         speech_text = spoken_message or message
         if notification_source != "proactive_speech" and message and not should_speak:
+            nonlocal _last_voice_activity_ts
+            from datetime import datetime, timezone
+
+            _last_voice_activity_ts = datetime.now(timezone.utc)
             notification_message = f"[notification] {message}"
             assistant._chat_ctx.add_message(
                 role="system",
@@ -2255,6 +2287,7 @@ async def entrypoint(ctx: agents.JobContext):
                         notification_source,
                         message,
                         llm_log_path,
+                        decided_after_ts,
                     ),
                 )
                 maybe_speak_queued()
@@ -2305,12 +2338,37 @@ async def entrypoint(ctx: agents.JobContext):
         results.reverse()
         return results
 
+    def _voice_activity_since(decided_after_ts: str) -> bool:
+        """Whether any voice activity occurred since the slow brain's snapshot.
+
+        ``decided_after_ts`` is the ISO timestamp of the latest voice utterance
+        the slow brain saw when it produced this guidance. When there has been no
+        spoken utterance or injected notification since then, the dedup gate is
+        provably redundant (no race is possible) and can be skipped. Fails safe:
+        a missing/invalid marker, or unknown activity, returns True (run gate).
+        """
+        if not decided_after_ts or _last_voice_activity_ts is None:
+            return True
+        from datetime import datetime, timezone
+
+        try:
+            decided = datetime.fromisoformat(decided_after_ts)
+        except ValueError:
+            return True
+        if decided.tzinfo is None:
+            decided = decided.replace(tzinfo=timezone.utc)
+        last = _last_voice_activity_ts
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        return last > decided
+
     async def _dedup_and_speak(
         text: str,
         notification_id: str,
         notification_source: str,
         notification_content: str,
         llm_log_path: str,
+        decided_after_ts: str = "",
     ) -> None:
         nonlocal _dedup_in_flight
         _dedup_in_flight = True
@@ -2323,7 +2381,20 @@ async def entrypoint(ctx: agents.JobContext):
             # differ (spoken_message), so drop both forms.
             _self_texts = {text.strip(), (notification_content or "").strip()}
             notifications = [n for n in notifications if n.strip() not in _self_texts]
-            if recent and SETTINGS.conversation.SPEECH_DEDUP_ENABLED:
+            run_gate = bool(recent) and SETTINGS.conversation.SPEECH_DEDUP_ENABLED
+            if run_gate and not _voice_activity_since(decided_after_ts):
+                # Nothing has been spoken or notified on the call since the slow
+                # brain decided this guidance, so its context is identical to what
+                # the slow brain already accounted for - the gate cannot find a
+                # race. Skip it (saves a speak-path LLM call) and speak as-is.
+                from unity.logger import LOGGER
+
+                LOGGER.info(
+                    "⬥ [FastBrain] Dedup skipped: no voice activity since "
+                    "slow-brain decision.",
+                )
+                run_gate = False
+            if run_gate:
                 from unity.conversation_manager.domains.speech_dedup import (
                     SpeechDecision,
                     SpeechDeduplicationChecker,
@@ -2406,7 +2477,12 @@ async def entrypoint(ctx: agents.JobContext):
         redundancy).  The ``_dedup_in_flight`` guard prevents a second item from
         being dispatched while the first is still being checked.
         """
-        if _dedup_in_flight or not _queued_speech or not _is_pipeline_quiescent():
+        if (
+            _dedup_in_flight
+            or not speech_gate_open
+            or not _queued_speech
+            or not _is_pipeline_quiescent()
+        ):
             return
         (
             text,
@@ -2414,6 +2490,7 @@ async def entrypoint(ctx: agents.JobContext):
             notification_source,
             notification_content,
             llm_log_path,
+            decided_after_ts,
         ) = _queued_speech.pop(0)
         asyncio.ensure_future(
             _dedup_and_speak(
@@ -2422,6 +2499,7 @@ async def entrypoint(ctx: agents.JobContext):
                 notification_source,
                 notification_content,
                 llm_log_path,
+                decided_after_ts,
             ),
         )
 
@@ -2470,6 +2548,7 @@ async def entrypoint(ctx: agents.JobContext):
         should_speak = payload.get("should_speak", False)
         notification_source = payload.get("source", "")
         llm_log_path = payload.get("llm_log_path", "")
+        decided_after_ts = payload.get("decided_after_ts", "")
         notification_id = content_trace_id("guid", message or spoken_message)
         triggers_turn = notification_source not in (
             "meet_interaction",
@@ -2483,7 +2562,7 @@ async def entrypoint(ctx: agents.JobContext):
         )
 
         if message or (should_speak and spoken_message):
-            if not session_ready:
+            if not session_ready or (should_speak and not speech_gate_open):
                 pending_notifications.append(
                     (
                         message,
@@ -2492,6 +2571,7 @@ async def entrypoint(ctx: agents.JobContext):
                         notification_id,
                         notification_source,
                         llm_log_path,
+                        decided_after_ts,
                     ),
                 )
                 _log.notification_buffered(len(pending_notifications))
@@ -2504,6 +2584,7 @@ async def entrypoint(ctx: agents.JobContext):
                     source="socket_callback",
                     notification_source=notification_source,
                     llm_log_path=llm_log_path,
+                    decided_after_ts=decided_after_ts,
                 )
                 if triggers_turn:
                     _invalidate_current_generation(
@@ -2566,6 +2647,10 @@ async def entrypoint(ctx: agents.JobContext):
         ),
     )
     await session.start(room=ctx.room, agent=assistant, room_input_options=rio)
+    if joined_gate_required and not outbound and not user_joined_event.is_set():
+        remote_participants = getattr(ctx.room, "remote_participants", {}) or {}
+        if remote_participants:
+            _mark_user_joined("existing_participant")
     history_lines = await history_task
     if history_lines:
         history_block = (
@@ -2585,6 +2670,9 @@ async def entrypoint(ctx: agents.JobContext):
         _log.session_ready(
             f"Applying {len(pending_notifications)} buffered notification(s)",
         )
+        still_pending_notifications: list[tuple[str, str, bool, str, str, str, str]] = (
+            []
+        )
         for (
             message,
             spoken_message,
@@ -2592,7 +2680,21 @@ async def entrypoint(ctx: agents.JobContext):
             notification_id,
             notification_source,
             llm_log_path,
+            decided_after_ts,
         ) in pending_notifications:
+            if should_speak and not speech_gate_open:
+                still_pending_notifications.append(
+                    (
+                        message,
+                        spoken_message,
+                        should_speak,
+                        notification_id,
+                        notification_source,
+                        llm_log_path,
+                        decided_after_ts,
+                    ),
+                )
+                continue
             apply_notification(
                 message,
                 should_speak,
@@ -2601,19 +2703,9 @@ async def entrypoint(ctx: agents.JobContext):
                 source="pending_buffer_flush",
                 notification_source=notification_source,
                 llm_log_path=llm_log_path,
+                decided_after_ts=decided_after_ts,
             )
-        pending_notifications.clear()
-
-    # Pre-generate the opening greeting via a direct sidecar LLM call so that
-    # the full LLM latency is absorbed before audio playback begins.
-    # - Meet: hides the delay behind the "waiting for assistant" spinner, then
-    #   signals "ready_to_speak" so the avatar appears right before speech.
-    # - Phone (inbound): eliminates dead air after the call connects.
-    # - Phone (outbound): waits for the callee to answer first, then generates.
-    if outbound:
-        _log.info("Outbound call — waiting for callee to answer…")
-        await call_answered_flag.wait()
-        _log.call_status("call_answered — opening turn")
+        pending_notifications[:] = still_pending_notifications
 
     async def _publish_ready_to_speak() -> None:
         if channel == "phone":
@@ -2659,22 +2751,62 @@ async def entrypoint(ctx: agents.JobContext):
         session.history.add_message(role="system", content=[text])
 
     opening_mode = opening_config["mode"]
-    if opening_mode == "speak":
-        greeting_text = await _generate_opening_greeting(authoritative_briefing=False)
+
+    async def _prepare_opening() -> tuple[str, str | dict | None]:
+        if opening_mode == "speak":
+            return (
+                "speak",
+                await _generate_opening_greeting(authoritative_briefing=False),
+            )
+        if opening_mode == "briefed":
+            _inject_opening_system_context(opening_config["system_context"])
+            return (
+                "speak",
+                await _generate_opening_greeting(authoritative_briefing=True),
+            )
+        if opening_mode == "recorded":
+            return "recorded", opening_config
+        if opening_mode == "simulated":
+            simulated_utterance = opening_config.get("simulated_utterance", "").strip()
+            if not simulated_utterance:
+                raise ValueError("simulated opening requires simulated_utterance")
+            return "simulated", simulated_utterance
+        return "silent", None
+
+    opening_task = asyncio.create_task(_prepare_opening())
+    await event_broker.publish(
+        "app:call:status",
+        json.dumps(
+            {
+                "type": "agent_ready",
+                "room_name": ctx.room.name,
+                "channel": channel,
+            },
+        ),
+    )
+
+    if outbound:
+        _log.info("Outbound call — waiting for callee to answer…")
+        await call_answered_flag.wait()
+        _log.call_status("call_answered — opening turn")
+
+    await user_joined_event.wait()
+    speech_gate_open = True
+
+    try:
+        prepared_mode, prepared_payload = await opening_task
+    except Exception as exc:
+        _log.llm_error(f"opening preload failed: {exc}")
+        prepared_mode, prepared_payload = "speak", "Hello — I'm here."
+
+    if prepared_mode == "speak":
         await _publish_ready_to_speak()
-        _say_opening(greeting_text)
-    elif opening_mode == "briefed":
-        _inject_opening_system_context(opening_config["system_context"])
-        greeting_text = await _generate_opening_greeting(authoritative_briefing=True)
+        _say_opening(str(prepared_payload or "Hello — I'm here."))
+    elif prepared_mode == "recorded":
         await _publish_ready_to_speak()
-        _say_opening(greeting_text)
-    elif opening_mode == "recorded":
-        await _publish_ready_to_speak()
-        await _run_recorded_opening(opening_config)
-    elif opening_mode == "simulated":
-        simulated_utterance = opening_config.get("simulated_utterance", "").strip()
-        if not simulated_utterance:
-            raise ValueError("simulated opening requires simulated_utterance")
+        await _run_recorded_opening(prepared_payload or opening_config)
+    elif prepared_mode == "simulated":
+        simulated_utterance = str(prepared_payload or "")
         await _publish_ready_to_speak()
         assistant._chat_ctx.add_message(role="assistant", content=[simulated_utterance])
         session.history.add_message(role="assistant", content=[simulated_utterance])
@@ -2692,6 +2824,30 @@ async def entrypoint(ctx: agents.JobContext):
     else:
         _log.info("Opening turn suppressed by call opening config")
         await _publish_ready_to_speak()
+
+    if pending_notifications:
+        gated_notifications = list(pending_notifications)
+        pending_notifications.clear()
+        for (
+            message,
+            spoken_message,
+            should_speak,
+            notification_id,
+            notification_source,
+            llm_log_path,
+            decided_after_ts,
+        ) in gated_notifications:
+            apply_notification(
+                message,
+                should_speak,
+                spoken_message=spoken_message,
+                notification_id=notification_id,
+                source="user_joined_buffer_flush",
+                notification_source=notification_source,
+                llm_log_path=llm_log_path,
+                decided_after_ts=decided_after_ts,
+            )
+    maybe_speak_queued()
 
     # Inject the initializing-state system message *after* the greeting has
     # been generated and spoken.  Placing it before the greeting caused the
