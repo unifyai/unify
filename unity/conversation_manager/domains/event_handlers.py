@@ -3166,8 +3166,8 @@ async def _(
         f"Event: {event.__class__.__name__} user_id={user_id}",
     )
 
-    from droid.function_manager.primitives.runtime import ComputerPrimitives
-    from droid.manager_registry import ManagerRegistry
+    from unity.function_manager.primitives.runtime import ComputerPrimitives
+    from unity.manager_registry import ManagerRegistry
 
     cp = ManagerRegistry.get_instance(ComputerPrimitives)
     if cp is None:

@@ -2374,8 +2374,8 @@ class CodeActActor(BaseCodeActActor):
         """
         import time as _surface_time
 
-        from droid.actor.execution.surface import ExecutionSurface
-        from droid.actor.execution.targets import (
+        from unity.actor.execution.surface import ExecutionSurface
+        from unity.actor.execution.targets import (
             TargetUnavailableError,
             get_target,
         )
@@ -2554,7 +2554,7 @@ class CodeActActor(BaseCodeActActor):
             -----------
             - **language**: "python" | "bash" | "zsh" | "sh" | "powershell"
             - **surface**: which machine to run on.
-              - "local" (default): the droid host itself — the only surface that
+              - "local" (default): the local host itself — the only surface that
                 supports stateful sessions and venvs.
               - "assistant_desktop": the assistant's managed VM.
               - "user_desktop": the user's own linked machine, when the user has

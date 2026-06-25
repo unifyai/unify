@@ -4100,7 +4100,7 @@ class TestUserFilesysAccessHandler:
     async def test_started_grants_for_user(self, mock_cm):
         cp = MagicMock()
         with patch(
-            "droid.manager_registry.ManagerRegistry.get_instance",
+            "unity.manager_registry.ManagerRegistry.get_instance",
             return_value=cp,
         ):
             await EventHandler.handle_event(
@@ -4114,7 +4114,7 @@ class TestUserFilesysAccessHandler:
     async def test_stopped_revokes_with_conversation_context(self, mock_cm):
         cp = MagicMock()
         with patch(
-            "droid.manager_registry.ManagerRegistry.get_instance",
+            "unity.manager_registry.ManagerRegistry.get_instance",
             return_value=cp,
         ):
             await EventHandler.handle_event(
@@ -4131,7 +4131,7 @@ class TestUserFilesysAccessHandler:
     async def test_empty_user_id_is_ignored(self, mock_cm):
         cp = MagicMock()
         with patch(
-            "droid.manager_registry.ManagerRegistry.get_instance",
+            "unity.manager_registry.ManagerRegistry.get_instance",
             return_value=cp,
         ) as get_instance:
             await EventHandler.handle_event(
@@ -4145,7 +4145,7 @@ class TestUserFilesysAccessHandler:
     @pytest.mark.asyncio
     async def test_absent_primitive_does_not_crash(self, mock_cm):
         with patch(
-            "droid.manager_registry.ManagerRegistry.get_instance",
+            "unity.manager_registry.ManagerRegistry.get_instance",
             return_value=None,
         ):
             # Must return cleanly even when no ComputerPrimitives is registered.

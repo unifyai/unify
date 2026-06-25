@@ -1,7 +1,7 @@
 """The assistant's managed VM as an execution surface.
 
 Commands run over the VM's agent-service ``/api/exec``; file movement reuses the
-FileSync bisync (one root, ``~/Droid/Local`` ↔ the VM's workspace) so there is a
+FileSync bisync (one root, ``~/Unity/Local`` ↔ the VM's workspace) so there is a
 single file-transfer implementation shared with the function-manager flow.
 """
 

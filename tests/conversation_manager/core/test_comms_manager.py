@@ -1994,7 +1994,7 @@ class TestMeetInteractionSystemEvents:
 class TestUserFilesysAccessSystemEvents:
     """Test routing of live filesystem-access consent events through CommsManager.
 
-    Console publishes these as ``droid_system_event`` messages when the user
+    Console publishes these as ``unity_system_event`` messages when the user
     toggles per-link filesystem access. Unlike the meet events, they carry a
     ``user_id`` (the desktop owner) so the live grant/revoke targets the right
     link when several users' desktops are linked.
@@ -2029,7 +2029,7 @@ class TestUserFilesysAccessSystemEvents:
         message,
     ):
         """Filesys-access events route to app:comms:<event_type> with user_id intact."""
-        from droid.conversation_manager.comms_manager import CommsManager
+        from unity.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -2038,7 +2038,7 @@ class TestUserFilesysAccessSystemEvents:
             await pubsub.psubscribe("app:comms:*")
 
             msg = create_pubsub_message(
-                "droid_system_event",
+                "unity_system_event",
                 {"event_type": event_type, "user_id": "42", "message": message},
             )
 
@@ -2064,7 +2064,7 @@ class TestUserFilesysAccessSystemEvents:
         mock_settings,
     ):
         """A payload without user_id still maps, with user_id defaulting to ''."""
-        from droid.conversation_manager.comms_manager import CommsManager
+        from unity.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -2073,7 +2073,7 @@ class TestUserFilesysAccessSystemEvents:
             await pubsub.psubscribe("app:comms:*")
 
             msg = create_pubsub_message(
-                "droid_system_event",
+                "unity_system_event",
                 {"event_type": "user_filesys_access_started", "message": "x"},
             )
 
@@ -2096,7 +2096,7 @@ class TestUserFilesysAccessSystemEvents:
         mock_settings,
     ):
         """Filesys-access events use a default reason when message is None."""
-        from droid.conversation_manager.comms_manager import CommsManager
+        from unity.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -2105,7 +2105,7 @@ class TestUserFilesysAccessSystemEvents:
             await pubsub.psubscribe("app:comms:*")
 
             msg = create_pubsub_message(
-                "droid_system_event",
+                "unity_system_event",
                 {
                     "event_type": "user_filesys_access_stopped",
                     "user_id": "7",
