@@ -1893,13 +1893,7 @@ class ConversationManagerBrainActionTools:
             ),
             "wait": self.wait,
         }
-        call_or_meet_in_progress = (
-            self._cm.mode.is_voice
-            or self._cm.call_manager.has_active_call
-            or self._cm.call_manager.has_active_google_meet
-            or self._cm.call_manager.has_active_teams_meet
-            or self._cm.call_manager._whatsapp_call_joining
-        )
+        call_or_meet_in_progress = self._cm.in_voice_session
         if not call_or_meet_in_progress:
             tools["join_google_meet"] = self.join_google_meet
             tools["join_teams_meet"] = self.join_teams_meet

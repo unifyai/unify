@@ -387,13 +387,45 @@ def _build_phone_guidelines(phone_number: str | None) -> str:
 - For phone: talk naturally, but avoid long verbose responses and only say one sentence at a time."""
 
 
-def _build_phone_scenarios(phone_number: str | None) -> str:
-    """Build phone-specific scenarios if phone number is available."""
-    if not phone_number:
-        return ""
-    return """- If my boss asks me to call someone while I am on a call with them, I should make the call AFTER the call ends — attempting to make a call while on a call will result in an error.
-- If my boss asks me to call someone, I must inform them that I am about to call the person before actually calling them, something like "Sure, will call them now!".
-- Calls and browser meetings (Google Meet or Microsoft Teams) are mutually exclusive — I cannot join a Google Meet or Teams meeting while on a call, or make a call while in a Google Meet or Teams meeting. If asked, I should let my boss know I will do it after the current session ends."""
+def _build_voice_session_scenarios(
+    *,
+    assistant_has_phone: bool,
+    assistant_has_whatsapp: bool,
+) -> str:
+    """Build voice-session scenario guidance (mutual exclusion + call etiquette).
+
+    The one-voice-session-at-a-time rule covers every voice surface (phone call,
+    WhatsApp call, Unify Meet, Google Meet, Microsoft Teams), so it is emitted
+    regardless of whether the boss has a stored phone number. The
+    "announce before calling" etiquette line is gated on the assistant actually
+    having a phone or WhatsApp calling channel.
+    """
+    lines = [
+        "- I can only be on ONE voice session at a time — a phone call, a WhatsApp call, a Unify Meet, a Google Meet, or a Microsoft Teams meeting. I cannot start or join another while one is already live. If my boss asks me to, I tell them I will do it once the current session ends, then do it then — I never claim to have started it while still on the current one.",
+    ]
+    if assistant_has_phone or assistant_has_whatsapp:
+        lines.append(
+            "- If my boss asks me to call someone, I must tell them I am about to call before placing the call, "
+            'something like "Sure, calling them now!".',
+        )
+    return "\n".join(lines)
+
+
+def _build_active_voice_session_block() -> str:
+    """Explain the one-voice-session-at-a-time constraint while a call is live.
+
+    Rendered only when a voice call/meeting is active, so the slow brain
+    understands why the call-starting tools are absent and that they return once
+    the session ends. Resolves the contradiction where the prompt would otherwise
+    advertise tools the live tool set has withheld.
+    """
+    return """Active voice session
+--------------------
+I am currently on a live voice session, and I can only be on ONE voice session at a time — whether that is a phone call, a WhatsApp call, a Unify Meet, a Google Meet, or a Microsoft Teams meeting. Because of this:
+- The call-starting tools (`make_call`, `make_whatsapp_call`, `join_google_meet`, `join_teams_meet`) are intentionally NOT in my tool list right now. This is expected, not a malfunction.
+- They reappear automatically the moment this session ends — I do not need to do anything special to get them back.
+- If my boss asks me to start another call or join another meeting while this one is live, I tell them I will do it as soon as the current session ends — I do NOT claim to have started it, and I do NOT keep retrying.
+- I can still communicate on text channels during the session (SMS, WhatsApp messages, email, Unify messages, etc.). Any controls specific to the current session (such as leaving the meeting or sharing my screen) appear in my tool list when they are available."""
 
 
 def _build_missing_phone_notice(assistant_has_phone: bool) -> str:
@@ -509,8 +541,15 @@ def _build_comms_tool_listing(
     assistant_has_slack: bool = False,
     assistant_has_teams: bool = False,
     is_coordinator: bool = False,
+    on_voice_call: bool = False,
 ) -> str:
-    """Build the communication tools block for the output format section."""
+    """Build the communication tools block for the output format section.
+
+    While a voice call/meeting is live (``on_voice_call``) the call-starting
+    tools (``make_call``, ``make_whatsapp_call``, ``join_google_meet``,
+    ``join_teams_meet``) are withheld from the live tool set, so they are omitted
+    here too — only one voice session can exist at a time.
+    """
     lines: list[str] = []
     if is_coordinator:
         if assistant_has_phone:
@@ -553,19 +592,22 @@ def _build_comms_tool_listing(
         lines.append(
             "- `send_api_response`: Reply to a programmatic API message (use when the inbound medium is `api_message`). Supports optional `attachment_filepaths` and `tags`; transcript ownership is anchored to my boss.",
         )
-        if assistant_has_phone:
-            lines.append("- `make_call`: Start an outbound phone call to my boss only")
-        if assistant_has_whatsapp:
+        if not on_voice_call:
+            if assistant_has_phone:
+                lines.append(
+                    "- `make_call`: Start an outbound phone call to my boss only",
+                )
+            if assistant_has_whatsapp:
+                lines.append(
+                    "- `make_whatsapp_call`: Start a WhatsApp voice call to my boss only. "
+                    "If call permission hasn't been granted yet, a call invite is sent instead.",
+                )
             lines.append(
-                "- `make_whatsapp_call`: Start a WhatsApp voice call to my boss only. "
-                "If call permission hasn't been granted yet, a call invite is sent instead.",
+                "- `join_google_meet`: Join a Google Meet call via browser automation (provide the Meet URL)",
             )
-        lines.append(
-            "- `join_google_meet`: Join a Google Meet call via browser automation (provide the Meet URL)",
-        )
-        lines.append(
-            "- `join_teams_meet`: Join a Microsoft Teams meeting via browser automation (provide the Teams meeting URL)",
-        )
+            lines.append(
+                "- `join_teams_meet`: Join a Microsoft Teams meeting via browser automation (provide the Teams meeting URL)",
+            )
         return "\n".join(lines)
 
     if assistant_has_phone:
@@ -583,6 +625,9 @@ def _build_comms_tool_listing(
     if assistant_has_discord:
         lines.append(
             "- `send_discord_message`: Send a Discord message to a contact (use when the inbound thread is `discord_message`)",
+        )
+        lines.append(
+            "- `send_discord_channel_message`: Post into a Discord channel (use when the inbound thread is `discord_channel_message`)",
         )
     if assistant_has_slack:
         lines.append(
@@ -643,20 +688,21 @@ def _build_comms_tool_listing(
     lines.append(
         "- `send_api_response`: Reply to a programmatic API message (use when the inbound medium is `api_message`). Supports optional `attachment_filepaths` and `tags`.",
     )
-    if assistant_has_phone:
-        lines.append("- `make_call`: Start an outbound phone call to a contact")
-    if assistant_has_whatsapp:
+    if not on_voice_call:
+        if assistant_has_phone:
+            lines.append("- `make_call`: Start an outbound phone call to a contact")
+        if assistant_has_whatsapp:
+            lines.append(
+                "- `make_whatsapp_call`: Start a WhatsApp voice call to a contact. "
+                "If call permission hasn't been granted yet, a call invite is sent instead — "
+                "the contact sees a 'Call now' button and the call connects when they tap it.",
+            )
         lines.append(
-            "- `make_whatsapp_call`: Start a WhatsApp voice call to a contact. "
-            "If call permission hasn't been granted yet, a call invite is sent instead — "
-            "the contact sees a 'Call now' button and the call connects when they tap it.",
+            "- `join_google_meet`: Join a Google Meet call via browser automation (provide the Meet URL)",
         )
-    lines.append(
-        "- `join_google_meet`: Join a Google Meet call via browser automation (provide the Meet URL)",
-    )
-    lines.append(
-        "- `join_teams_meet`: Join a Microsoft Teams meeting via browser automation (provide the Teams meeting URL)",
-    )
+        lines.append(
+            "- `join_teams_meet`: Join a Microsoft Teams meeting via browser automation (provide the Teams meeting URL)",
+        )
     return "\n".join(lines)
 
 
@@ -1782,6 +1828,7 @@ def build_system_prompt(
     email_address: str | None = None,
     is_voice_call: bool = False,
     is_internal_call: bool = False,
+    on_voice_call: bool = False,
     demo_mode: bool = False,
     computer_fast_path: bool = False,
     assistant_has_phone: bool = True,
@@ -1824,6 +1871,13 @@ def build_system_prompt(
         Whether we are currently on a voice call (includes voice calls guide in prompt).
     is_internal_call : bool
         Whether the active voice call is internal (assistant-to-assistant).
+    on_voice_call : bool
+        Whether a voice call/meeting of any kind is currently live (or joining).
+        When True, the call-starting tools (``make_call``, ``make_whatsapp_call``,
+        ``join_google_meet``, ``join_teams_meet``) are withheld from the tool set,
+        so they must not be advertised; a dynamic block explains they return once
+        the current call ends. Mirrors ``ConversationManager.in_voice_session`` and
+        is broader than ``is_voice_call`` (which only gates the voice-calls guide).
     demo_mode : bool
         Whether the assistant is operating in demo mode (pre-signup).
     computer_fast_path : bool
@@ -1894,7 +1948,10 @@ def build_system_prompt(
         else ""
     )
     phone_guidelines = _build_phone_guidelines(phone_number)
-    phone_scenarios = _build_phone_scenarios(phone_number)
+    voice_session_scenarios = _build_voice_session_scenarios(
+        assistant_has_phone=assistant_has_phone,
+        assistant_has_whatsapp=assistant_has_whatsapp,
+    )
     missing_phone_notice = _build_missing_phone_notice(assistant_has_phone)
     missing_email_notice = _build_missing_email_notice(assistant_has_email)
     whatsapp_change_notice = _build_whatsapp_number_change_notice(
@@ -1912,13 +1969,19 @@ def build_system_prompt(
         assistant_has_slack,
         assistant_has_teams,
         is_coordinator,
+        on_voice_call,
     )
-    sms_call_note = (
-        " I can send SMS while on a call, but I cannot make a new call"
-        " or join a Google Meet / Microsoft Teams meeting while already on one (and vice versa)."
-        if assistant_has_phone
-        else " I cannot make a call and join a Google Meet or Microsoft Teams meeting at the same time."
-    )
+    if assistant_has_phone or assistant_has_whatsapp:
+        sms_call_note = (
+            " I can keep sending text messages (SMS, WhatsApp messages, email, Unify messages) during a voice"
+            " session, but I can only be on one voice session at a time — I cannot start a phone or WhatsApp call"
+            " or join a Google Meet / Microsoft Teams meeting while already on one (and vice versa)."
+        )
+    else:
+        sms_call_note = (
+            " I can only be on one voice session at a time — I cannot start a call or join a Google Meet /"
+            " Microsoft Teams meeting while already on one (and vice versa)."
+        )
     input_format_example = _build_input_format_example()
     coordinator_admin_tool_listing = ""
     coordinator_knowledge_tool_listing = ""
@@ -2201,7 +2264,9 @@ Messages from the current turn have **NEW** tag prepended:
 
     available_tool_names = ["send_unify_message", "send_api_response"]
     if assistant_has_phone:
-        available_tool_names = ["send_sms"] + available_tool_names + ["make_call"]
+        # ``make_call`` is withheld while on a voice call (one at a time).
+        trailing = [] if on_voice_call else ["make_call"]
+        available_tool_names = ["send_sms"] + available_tool_names + trailing
     if assistant_has_whatsapp:
         idx = (
             available_tool_names.index("send_sms") + 1
@@ -2209,23 +2274,24 @@ Messages from the current turn have **NEW** tag prepended:
             else 0
         )
         available_tool_names.insert(idx, "send_whatsapp")
-        if "make_call" in available_tool_names:
-            available_tool_names.insert(
-                available_tool_names.index("make_call") + 1,
-                "make_whatsapp_call",
-            )
-        else:
-            available_tool_names.append("make_whatsapp_call")
+        if not on_voice_call:
+            if "make_call" in available_tool_names:
+                available_tool_names.insert(
+                    available_tool_names.index("make_call") + 1,
+                    "make_whatsapp_call",
+                )
+            else:
+                available_tool_names.append("make_whatsapp_call")
     if assistant_has_email:
         available_tool_names.insert(
             available_tool_names.index("send_unify_message"),
             "send_email",
         )
     if assistant_has_discord:
-        available_tool_names.insert(
-            available_tool_names.index("send_unify_message"),
-            "send_discord_message",
-        )
+        idx = available_tool_names.index("send_unify_message")
+        available_tool_names.insert(idx, "send_discord_message")
+        if not is_coordinator:
+            available_tool_names.insert(idx + 1, "send_discord_channel_message")
     if assistant_has_slack:
         idx = available_tool_names.index("send_unify_message")
         available_tool_names.insert(idx, "send_slack_message")
@@ -2403,12 +2469,21 @@ When contacts communicate in a non-English language, I match their language in m
     if is_voice_call:
         parts.add(voice_calls_guide)
 
+    # 15b. Active voice session constraint (dynamic: depends on live call state).
+    #      Explains why the call-starting tools are withheld and that they return
+    #      when the session ends, keeping the prompt consistent with the masked
+    #      tool set.
+    if on_voice_call:
+        parts.add(_build_active_voice_session_block(), static=False)
+
     # 16. Scenarios.
-    phone_scenarios_section = f"\n{phone_scenarios}" if phone_scenarios else ""
+    voice_session_scenarios_section = (
+        f"\n{voice_session_scenarios}" if voice_session_scenarios else ""
+    )
     parts.add(
         f"""Scenarios
 ---------
-- If my boss gives a wrong contact address, I will receive an error after the communication attempt, or worse, it might be a completely different person. Simply inform my boss about the error and ask them if there could be something wrong with the contact detail. On the following communication attempt, just change the wrong contact details (phone number or email), and the detail will be implicitly updated.{phone_scenarios_section}
+- If my boss gives a wrong contact address, I will receive an error after the communication attempt, or worse, it might be a completely different person. Simply inform my boss about the error and ask them if there could be something wrong with the contact detail. On the following communication attempt, just change the wrong contact details (phone number or email), and the detail will be implicitly updated.{voice_session_scenarios_section}
 - To join a Google Meet, I must always use the `join_google_meet` tool — never navigate to a Meet URL via `act`. The `join_google_meet` tool configures audio devices and establishes the voice pipeline; using `act` to visit the URL would join silently with no ability to hear or speak.
 - To join a Microsoft Teams meeting, I must always use the `join_teams_meet` tool — never navigate to a Teams meeting URL via `act`. Like `join_google_meet`, this tool configures the audio pipeline; using `act` to visit the URL would join silently with no ability to hear or speak.""",
     )

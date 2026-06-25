@@ -127,6 +127,82 @@ class TestCommsToolListing:
         assert "`send_slack_channel_message`: Post into a Slack channel" in prompt
         assert "`create_teams_channel`: Create a new channel" in prompt
 
+    def test_discord_channel_message_advertised_for_regular_assistant(self):
+        prompt = _build(is_coordinator=False, assistant_has_discord=True)
+        assert "`send_discord_message`: Send a Discord message to a contact" in prompt
+        assert "`send_discord_channel_message`: Post into a Discord channel" in prompt
+
+    def test_discord_channel_message_absent_for_coordinator(self):
+        prompt = _build(is_coordinator=True, assistant_has_discord=True)
+        assert "`send_discord_message`: Send a Discord direct message" in prompt
+        assert "`send_discord_channel_message`" not in prompt
+
+
+class TestVoiceSessionToolMasking:
+    """While a voice session is live, call-starting tools are neither in the
+    live tool set nor advertised, and a block explains they return on hang-up."""
+
+    _CALL_TOOL_DESCRIPTIONS = (
+        "Start an outbound phone call",
+        "Start a WhatsApp voice call",
+        "Join a Google Meet call via browser automation",
+        "Join a Microsoft Teams meeting via browser automation",
+    )
+
+    def test_call_starting_tools_advertised_off_call(self):
+        prompt = _build(
+            assistant_has_phone=True,
+            assistant_has_whatsapp=True,
+            on_voice_call=False,
+        )
+        for desc in self._CALL_TOOL_DESCRIPTIONS:
+            assert desc in prompt
+        assert "Active voice session\n--------------------" not in prompt
+
+    def test_call_starting_tools_withheld_on_call(self):
+        prompt = _build(
+            assistant_has_phone=True,
+            assistant_has_whatsapp=True,
+            is_voice_call=True,
+            on_voice_call=True,
+        )
+        for desc in self._CALL_TOOL_DESCRIPTIONS:
+            assert desc not in prompt
+        # Text channels stay available mid-call.
+        assert "`send_sms`: Send an SMS message to a contact" in prompt
+        assert "`send_whatsapp`: Send a WhatsApp message to a contact" in prompt
+
+    def test_active_voice_session_block_explains_return_on_hangup(self):
+        prompt = _build(
+            assistant_has_phone=True,
+            assistant_has_whatsapp=True,
+            is_voice_call=True,
+            on_voice_call=True,
+        )
+        assert "Active voice session\n--------------------" in prompt
+        assert "only be on ONE voice session at a time" in prompt
+        assert "reappear automatically the moment this session ends" in prompt
+
+    def test_coordinator_call_tools_withheld_on_call(self):
+        prompt = _build(
+            is_coordinator=True,
+            assistant_has_phone=True,
+            assistant_has_whatsapp=True,
+            is_voice_call=True,
+            on_voice_call=True,
+        )
+        assert "`make_call`: Start an outbound phone call to my boss only" not in prompt
+        assert (
+            "`make_whatsapp_call`: Start a WhatsApp voice call to my boss only"
+            not in prompt
+        )
+        assert "Active voice session\n--------------------" in prompt
+
+    def test_one_voice_session_rule_present_without_phone(self):
+        # The mutual-exclusion rule is no longer gated on a stored phone number.
+        prompt = _build(assistant_has_phone=False, assistant_has_whatsapp=False)
+        assert "only be on ONE voice session at a time" in prompt
+
 
 class TestAccessibleSpacesBlock:
     """The system prompt contains shared-team routing guidance."""
