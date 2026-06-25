@@ -225,7 +225,7 @@ jobs:
 
     - name: Upload cache diff
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: protected-cache-diff-${{ github.run_id }}
         path: .cache_write.ndjson
@@ -240,7 +240,7 @@ jobs:
 
     - name: Upload test logs
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: protected-llm-test-logs-${{ github.run_id }}
         path: logs/
