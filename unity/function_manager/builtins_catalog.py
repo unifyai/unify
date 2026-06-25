@@ -18,6 +18,7 @@ import logging
 from typing import Any, Dict, List, Tuple
 
 import unify
+from unify.utils.http import RequestError
 
 from ..common.builtins import (
     builtins_project,
@@ -128,6 +129,52 @@ def _replace_rows(
     )
 
 
+def _compute_pending(
+    project: str,
+    registry: Any,
+    manager_aliases: List[str],
+) -> Tuple[List[Tuple[str, List[Dict[str, Any]], str]], List[Any], Dict[str, str]]:
+    """Read-only diff of the stored catalogue against the live registry.
+
+    Returns ``(pending, existing_rows, current_hashes)`` where *pending* lists
+    the managers whose rows must be (re)written. Performs only reads, so it runs
+    for any principal that can read the public Builtins project. Raises when the
+    catalogue storage is absent (fresh project), signalling that the owner seed
+    path must create it first.
+    """
+    current_hashes = read_seed_hashes(
+        project,
+        meta_context=BUILTINS_META_CONTEXT,
+        key=_HASH_MAP_KEY,
+    )
+    existing_rows = _read_existing_rows(project)
+    existing_by_id = {log.entries.get("function_id"): log for log in existing_rows}
+
+    pending: List[Tuple[str, List[Dict[str, Any]], str]] = []
+    for manager_alias in manager_aliases:
+        expected_hash = registry.compute_hash_for_manager(manager_alias)
+        rows = list(
+            registry.collect_primitives(PrimitiveScope.single(manager_alias)).values(),
+        )
+        # Re-materialize when the public surface changed (hash) OR when stored
+        # rows have drifted: missing, or stored under a stale ``primitive_class``
+        # (e.g. after a package rename). The hash omits ``primitive_class``, so
+        # class-path drift is detected here to keep the read-time scoping filter
+        # accurate.
+        needs_seed = current_hashes.get(manager_alias) != expected_hash
+        if not needs_seed:
+            for row in rows:
+                stored = existing_by_id.get(row["function_id"])
+                if stored is None or stored.entries.get("primitive_class") != row.get(
+                    "primitive_class",
+                ):
+                    needs_seed = True
+                    break
+        if needs_seed:
+            pending.append((manager_alias, rows, expected_hash))
+    return pending, existing_rows, current_hashes
+
+
 def seed_builtin_primitives(*, project: str | None = None) -> bool:
     """Seed the global builtins catalogue with every manager's primitives.
 
@@ -144,49 +191,42 @@ def seed_builtin_primitives(*, project: str | None = None) -> bool:
     """
     project = project or builtins_project()
     registry = get_registry()
+    manager_aliases = sorted(PrimitiveScope.all_managers().scoped_managers)
 
     logger.info("Starting builtins primitive catalogue seed project=%s", project)
-    _ensure_catalog_storage(project)
 
-    logger.info("Reading builtins primitive seed hashes project=%s", project)
-    current_hashes = read_seed_hashes(
-        project,
-        meta_context=BUILTINS_META_CONTEXT,
-        key=_HASH_MAP_KEY,
-    )
-    manager_aliases = sorted(PrimitiveScope.all_managers().scoped_managers)
-    logger.info(
-        "Computing builtins primitive hashes project=%s managers=%d stored_hashes=%d",
-        project,
-        len(manager_aliases),
-        len(current_hashes),
-    )
-    existing_rows = _read_existing_rows(project)
-    existing_by_id = {log.entries.get("function_id"): log for log in existing_rows}
-
-    pending: List[Tuple[str, List[Dict[str, Any]], str]] = []
-    for manager_alias in manager_aliases:
-        expected_hash = registry.compute_hash_for_manager(manager_alias)
-        rows = list(
-            registry.collect_primitives(PrimitiveScope.single(manager_alias)).values(),
+    # Read-only convergence probe. The Builtins catalogue is public-read, so any
+    # principal can verify convergence without write access; an already-seeded
+    # catalogue is a pure no-op and never attempts an owner-guarded write. A
+    # missing catalogue (fresh project) raises here and falls through to the
+    # owner seed path below, which creates the storage before writing.
+    try:
+        pending, existing_rows, current_hashes = _compute_pending(
+            project,
+            registry,
+            manager_aliases,
         )
-        # Re-materialize when the public surface changed (hash) OR when stored
-        # rows have drifted from the current shape: missing entirely, or stored
-        # under a stale ``primitive_class`` (e.g. after a package rename). The
-        # hash deliberately omits ``primitive_class`` (it tracks only the public
-        # name/argspec/docstring surface), so class-path drift is detected here
-        # to keep the read-time ``primitive_class`` scoping filter accurate.
-        needs_seed = current_hashes.get(manager_alias) != expected_hash
-        if not needs_seed:
-            for row in rows:
-                stored = existing_by_id.get(row["function_id"])
-                if stored is None or stored.entries.get("primitive_class") != row.get(
-                    "primitive_class",
-                ):
-                    needs_seed = True
-                    break
-        if needs_seed:
-            pending.append((manager_alias, rows, expected_hash))
+        storage_ready = True
+    except RequestError:
+        storage_ready = False
+        pending = None
+
+    if storage_ready and not pending:
+        logger.info(
+            "Builtins primitive catalogue already converged project=%s managers=%d; "
+            "read-only no-op",
+            project,
+            len(manager_aliases),
+        )
+        return False
+
+    _ensure_catalog_storage(project)
+    if not storage_ready:
+        pending, existing_rows, current_hashes = _compute_pending(
+            project,
+            registry,
+            manager_aliases,
+        )
 
     if pending:
         all_rows: List[Dict[str, Any]] = []
