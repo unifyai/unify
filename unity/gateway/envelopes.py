@@ -146,6 +146,7 @@ class EmailReceivedEvent(BaseInboundEvent):
     subject: str = ""
     body: str = ""
     email_id: str = ""
+    thread_id: str = ""
     to: list[str] = Field(default_factory=list)
     cc: list[str] = Field(default_factory=list)
     bcc: list[str] = Field(default_factory=list)

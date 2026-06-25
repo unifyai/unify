@@ -103,7 +103,7 @@ async def send_email(request: Request):
 
     Request body must include ``from`` (the assistant's email
     address). The remaining fields (``to``, ``subject``, ``body``,
-    ``cc``, ``bcc``, ``in_reply_to``, ``attachment``) are forwarded
+    ``cc``, ``bcc``, ``in_reply_to``, ``thread_id``, ``attachment``) are forwarded
     unchanged to the provider-specific handler.
     """
     body_bytes = await request.body()

@@ -1334,12 +1334,14 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 )
             elif medium == Medium.EMAIL.value:
                 email_id = reply_context.get("email_id")
+                thread_id = reply_context.get("thread_id")
                 if email_id:
                     await tools.send_email(
                         subject=DEPLETED_CREDITS_EMAIL_SUBJECT,
                         body=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
                         reply_all=True,
                         email_id_to_reply_to=email_id,
+                        thread_id=thread_id,
                     )
                 elif contact_id is not None:
                     await tools.send_email(

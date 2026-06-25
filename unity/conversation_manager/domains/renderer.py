@@ -1401,6 +1401,9 @@ class Renderer:
                 recipients_lines += f"Cc: {', '.join(message.cc)}\n"
             if message.bcc:
                 recipients_lines += f"Bcc: {', '.join(message.bcc)}\n"
+            thread_id_line = (
+                f"Thread ID: {message.thread_id}\n" if message.thread_id else ""
+            )
             # Show contact's role in this email for clarity in contact-specific threads
             # This helps the LLM understand the contact's relationship to the email
             contact_role_line = ""
@@ -1437,6 +1440,7 @@ class Renderer:
                 f"{assistant_role_line}"
                 f"Subject: {message.subject}\n"
                 f"Email ID: {message.email_id}\n"
+                f"{thread_id_line}"
                 f"{recipients_lines}"
                 f"{tz_block_line}"
                 f"{attachments_line}"

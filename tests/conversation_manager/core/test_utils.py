@@ -661,12 +661,14 @@ class TestRenderer:
             subject="Important Update",
             body="Please review the attached document.",
             email_id="email_456",
+            thread_id="gmail-thread-456",
             timestamp=static_now,
             role="user",
         )
         result = renderer.render_message(msg, old_snapshot)
         assert "Subject: Important Update" in result
         assert "Email ID: email_456" in result
+        assert "Thread ID: gmail-thread-456" in result
         assert "Please review" in result
 
     def test_render_contact(

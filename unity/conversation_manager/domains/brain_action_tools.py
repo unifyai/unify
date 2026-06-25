@@ -685,6 +685,7 @@ class ConversationManagerBrainActionTools:
         body: str,
         reply_all: bool = False,
         email_id_to_reply_to: str | None = None,
+        thread_id: str | None = None,
         attachment_filepath: str | None = None,
     ) -> dict[str, Any]:
         return await self._comms.send_email(
@@ -695,6 +696,7 @@ class ConversationManagerBrainActionTools:
             body=body,
             reply_all=reply_all,
             email_id_to_reply_to=email_id_to_reply_to,
+            thread_id=thread_id,
             attachment_filepath=attachment_filepath,
         )
 
@@ -704,6 +706,7 @@ class ConversationManagerBrainActionTools:
         subject: str,
         body: str,
         email_id_to_reply_to: str | None = None,
+        thread_id: str | None = None,
         attachment_filepath: str | None = None,
     ) -> dict[str, Any]:
         """Send an email directly to my boss only.
@@ -722,6 +725,8 @@ class ConversationManagerBrainActionTools:
             Email body content to send to my boss.
         email_id_to_reply_to : str | None, optional
             Existing boss email ID to reply to for threading.
+        thread_id : str | None, optional
+            Provider thread identifier shown on the inbound email.
         attachment_filepath : str | None, optional
             Workspace-relative path for one attachment.
         """
@@ -730,6 +735,7 @@ class ConversationManagerBrainActionTools:
             subject=subject,
             body=body,
             email_id_to_reply_to=email_id_to_reply_to,
+            thread_id=thread_id,
             attachment_filepath=attachment_filepath,
         )
 

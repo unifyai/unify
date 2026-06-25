@@ -241,7 +241,7 @@ async def send_email(request: Request):
     """Send an email via Gmail.
 
     Required body: ``from``, ``to`` (str or list), ``body``.
-    Optional: ``subject``, ``cc``, ``bcc``, ``in_reply_to``,
+    Optional: ``subject``, ``cc``, ``bcc``, ``in_reply_to``, ``thread_id``,
     ``attachment={filename, content_base64}``.
     """
     data = await request.json()
@@ -252,6 +252,7 @@ async def send_email(request: Request):
     subject = data.get("subject", "")
     body = data.get("body")
     in_reply_to = data.get("in_reply_to")
+    thread_id = data.get("thread_id")
     attachment = data.get("attachment")
 
     if not sender or not to or body is None:
@@ -298,7 +299,10 @@ async def send_email(request: Request):
 
     raw_msg = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     service = await get_gmail_service_async(sender)
-    sent = service.users().messages().send(userId="me", body={"raw": raw_msg}).execute()
+    send_body = {"raw": raw_msg}
+    if thread_id:
+        send_body["threadId"] = thread_id
+    sent = service.users().messages().send(userId="me", body=send_body).execute()
     return {"success": True, "id": sent.get("id")}
 
 

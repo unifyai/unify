@@ -520,7 +520,12 @@ def _build_comms_tool_listing(
                 "- `send_whatsapp`: Send a WhatsApp message to my boss only",
             )
         if assistant_has_email:
-            lines.append("- `send_email`: Send an email to my boss only")
+            lines.append(
+                "- `send_email`: Send an email to my boss only. When replying "
+                "to an existing email thread, pass the `thread_id` shown on "
+                "the inbound email's `Thread ID:` line; also pass "
+                "`email_id_to_reply_to` from its `Email ID:` line when present.",
+            )
         lines.append(
             "- `send_unify_message`: Send a Unify platform message to my boss only",
         )
@@ -568,7 +573,12 @@ def _build_comms_tool_listing(
     if assistant_has_whatsapp:
         lines.append("- `send_whatsapp`: Send a WhatsApp message to a contact")
     if assistant_has_email:
-        lines.append("- `send_email`: Send an email to a contact")
+        lines.append(
+            "- `send_email`: Send an email to a contact. When replying to an "
+            "existing email thread, pass the `thread_id` shown on the inbound "
+            "email's `Thread ID:` line; also pass `email_id_to_reply_to` from "
+            "its `Email ID:` line when present.",
+        )
     lines.append("- `send_unify_message`: Send a Unify platform message to a contact")
     if assistant_has_discord:
         lines.append(

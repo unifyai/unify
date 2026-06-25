@@ -1042,6 +1042,7 @@ class CommsManager:
                             body=event["body"],
                             contact=contact,
                             email_id=event["email_id"],
+                            thread_id=event.get("thread_id") or None,
                             attachments=attachments,
                             to=_normalize_recipients(event.get("to")),
                             cc=_normalize_recipients(event.get("cc")),
@@ -1143,7 +1144,15 @@ class CommsManager:
 
                 if thread == "whatsapp":
                     if event.get("type") == "call_permission_response":
-                        contact_number = event.get("contact_number", "")
+                        raw_contact_number = (
+                            event.get("contact_number")
+                            or event.get("from_number")
+                            or ""
+                        )
+                        contact_number = raw_contact_number.replace(
+                            "whatsapp:",
+                            "",
+                        ).strip()
                         accepted = event.get("payload") == "ACCEPTED"
                         contact = next(
                             (
