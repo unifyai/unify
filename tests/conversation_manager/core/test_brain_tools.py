@@ -592,12 +592,14 @@ class TestActionToolsAsTools:
         await tools["send_email"](
             subject="Hi",
             body="Body",
+            thread_id="gmail-thread-1",
         )
         brain_action_tools._comms.send_email.assert_called_once_with(
             to=[SESSION_DETAILS.boss_contact_id],
             subject="Hi",
             body="Body",
             email_id_to_reply_to=None,
+            thread_id="gmail-thread-1",
             attachment_filepath=None,
         )
 
@@ -1009,6 +1011,35 @@ class TestSendEmailTool:
             mock_send.assert_called_once()
             # Should resolve contact_id 1 to alice@example.com
             assert mock_send.call_args.kwargs["to"] == ["alice@example.com"]
+
+    @pytest.mark.asyncio
+    async def test_forwards_thread_id_separately_from_reply_email_id(
+        self,
+        brain_action_tools,
+        mock_cm,
+        sample_contacts,
+    ):
+        """Forwards provider thread targeting separately from RFC reply headers."""
+        _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
+
+        with patch(
+            "droid.comms.primitives.comms_utils.send_email_via_address",
+        ) as mock_send:
+            mock_send.return_value = {"success": True, "id": "sent-email-123"}
+
+            result = await brain_action_tools.send_email(
+                to=[1],
+                subject="Re: Budget Discussion",
+                body="Reply body",
+                email_id_to_reply_to="<rfc-message-id@example.com>",
+                thread_id="gmail-thread-123",
+            )
+
+            assert result["status"] == "ok"
+            assert (
+                mock_send.call_args.kwargs["email_id"] == "<rfc-message-id@example.com>"
+            )
+            assert mock_send.call_args.kwargs["thread_id"] == "gmail-thread-123"
 
     @pytest.mark.asyncio
     async def test_returns_error_for_file_not_found(

@@ -343,6 +343,7 @@ class LocalCommsIngress:
                     "subject": payload.get("subject", "") or "",
                     "body": payload.get("body", "") or "",
                     "email_id": payload.get("email_id", "") or "",
+                    "thread_id": payload.get("thread_id", "") or "",
                     "attachments": payload.get("attachments") or [],
                     "to": payload.get("to") or [],
                     "cc": payload.get("cc") or [],

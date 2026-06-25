@@ -986,6 +986,7 @@ async def send_email_via_address(
     cc: list[str] | None = None,
     bcc: list[str] | None = None,
     email_id: str | None = None,
+    thread_id: str | None = None,
     attachment: dict | None = None,
 ) -> dict:
     """
@@ -998,6 +999,7 @@ async def send_email_via_address(
         cc: Optional list of CC email addresses.
         bcc: Optional list of BCC email addresses.
         email_id: The email identifier of the message to reply to (threading id).
+        thread_id: Provider thread identifier to target.
         attachment: Optional attachment dict with keys:
             - filename: The name of the file
             - content_base64: Base64-encoded file contents
@@ -1016,6 +1018,8 @@ async def send_email_via_address(
         "body": body,
         "in_reply_to": email_id,
     }
+    if thread_id:
+        payload["thread_id"] = thread_id
     if cc:
         payload["cc"] = cc
     if bcc:

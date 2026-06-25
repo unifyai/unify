@@ -546,6 +546,7 @@ class TestTextMessageHandlers:
             subject="Important Update",
             body="Please review the attached.",
             email_id="msg_123",
+            thread_id="gmail-thread-123",
         )
 
         with patch(
@@ -558,6 +559,7 @@ class TestTextMessageHandlers:
         assert len(msgs) == 1
         assert msgs[0].subject == "Important Update"
         assert msgs[0].body == "Please review the attached."
+        assert msgs[0].thread_id == "gmail-thread-123"
 
     @pytest.mark.asyncio
     async def test_unify_message_received_updates_index(self, mock_cm):

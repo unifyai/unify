@@ -54,6 +54,7 @@ class EmailMessage(CommsMessage):
     email_id: str | None
     timestamp: datetime
     role: str  # "user" or "assistant"
+    thread_id: str | None = None
     attachments: list[dict] = field(default_factory=list)
     # Recipients (for reply-all functionality)
     to: list[str] = field(default_factory=list)
@@ -569,6 +570,7 @@ class ContactIndex:
                 subject=subject or "",
                 body=body or "",
                 email_id=email_id,
+                thread_id=thread_id,
                 timestamp=timestamp,
                 role=role,
                 attachments=attachments or [],

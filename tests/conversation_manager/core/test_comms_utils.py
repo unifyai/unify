@@ -473,6 +473,7 @@ class TestSendEmailViaAddress:
                 bcc=["bcc@example.com"],
                 subject="Team Update",
                 body="Here's the update.",
+                thread_id="gmail-thread-123",
             )
 
             assert result["success"] is True
@@ -484,6 +485,7 @@ class TestSendEmailViaAddress:
             assert payload["to"] == ["user@example.com"]
             assert payload["cc"] == ["cc1@example.com", "cc2@example.com"]
             assert payload["bcc"] == ["bcc@example.com"]
+            assert payload["thread_id"] == "gmail-thread-123"
 
     @pytest.mark.asyncio
     async def test_send_uses_provider_agnostic_endpoint(self):

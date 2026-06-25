@@ -924,6 +924,9 @@ class EmailReceived(Event):
     # Email provider identifier used for threading (e.g., RFC Message-ID header value).
     # This is *not* the TranscriptManager's auto-incremented message_id.
     email_id: Optional[str] = None
+    # Provider conversation identifier used for deterministic thread targeting
+    # (e.g., Gmail threadId).
+    thread_id: str | None = None
     # List of attachment dicts with metadata (files saved to Attachments/).
     attachments: list[dict] = field(default_factory=list)
     # Recipients from the original email (for reply-all functionality)
@@ -995,6 +998,8 @@ class EmailSent(Event):
     # Email provider identifier used for threading (e.g., RFC Message-ID header value).
     # This is *not* the TranscriptManager's auto-incremented message_id.
     email_id_replied_to: str | None = None
+    # Provider conversation identifier targeted by this send (e.g., Gmail threadId).
+    thread_id: str | None = None
     # List of attachment dicts with metadata.
     attachments: list[dict] = field(default_factory=list)
     # Recipients the email was sent to

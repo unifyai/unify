@@ -197,6 +197,7 @@ async def test_credit_gate_reply_routes_email_replies():
                 "medium": Medium.EMAIL.value,
                 "contact_id": 1,
                 "email_id": "message-id",
+                "thread_id": "gmail-thread-id",
             },
         )
 
@@ -206,4 +207,5 @@ async def test_credit_gate_reply_routes_email_replies():
         body=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
         reply_all=True,
         email_id_to_reply_to="message-id",
+        thread_id="gmail-thread-id",
     )

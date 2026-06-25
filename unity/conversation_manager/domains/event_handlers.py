@@ -1531,6 +1531,7 @@ def _push_email_to_all_contacts(
     subject: str,
     body: str,
     email_id: str | None,
+    thread_id: str | None,
     attachments: list[str] | None,
     email_to: list[str],
     email_cc: list[str],
@@ -1552,6 +1553,7 @@ def _push_email_to_all_contacts(
         subject: Email subject
         body: Email body
         email_id: Email ID for threading
+        thread_id: Provider thread ID for deterministic thread targeting
         attachments: List of attachment filenames
         email_to: List of TO recipient email addresses
         email_cc: List of CC recipient email addresses
@@ -1573,6 +1575,7 @@ def _push_email_to_all_contacts(
             subject=subject,
             body=body,
             email_id=email_id,
+            thread_id=thread_id,
             attachments=attachments,
             timestamp=event.timestamp,
             role=role,
@@ -1793,6 +1796,7 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
                 subject=event.subject,
                 body=event.body,
                 email_id=event.email_id_replied_to,
+                thread_id=event.thread_id,
                 attachments=event.attachments,
                 email_to=email_to,
                 email_cc=email_cc,
@@ -1827,6 +1831,7 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
                 subject=event.subject,
                 body=event.body,
                 email_id=event.email_id,
+                thread_id=event.thread_id,
                 attachments=event.attachments,
                 email_to=email_to,
                 email_cc=email_cc,
@@ -1850,6 +1855,7 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
                     medium=Medium.EMAIL,
                     contact_id=contact_id,
                     email_id=event.email_id,
+                    thread_id=event.thread_id,
                 ),
             )
             return  # Early return - email handling is complete

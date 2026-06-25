@@ -3047,6 +3047,7 @@ class CommsPrimitives:
         body: str,
         reply_all: bool = False,
         email_id_to_reply_to: str | None = None,
+        thread_id: str | None = None,
         attachment_filepath: str | None = None,
     ) -> dict[str, Any]:
         """Send an assistant-owned email to explicit recipients or a reply thread.
@@ -3087,6 +3088,8 @@ class CommsPrimitives:
         email_id_to_reply_to : str | None, optional
             Explicit email ID to reply to for threading. Required for
             deterministic reply behavior when multiple candidate emails exist.
+        thread_id : str | None, optional
+            Provider thread identifier to target (for example Gmail threadId).
         attachment_filepath : str | None, optional
             Workspace-relative file path for one attachment to include.
 
@@ -3184,6 +3187,7 @@ class CommsPrimitives:
                     "bcc": _raw_recipients_for_history(bcc),
                     "reply_all": reply_all,
                     "email_id_to_reply_to": email_id_to_reply_to or "",
+                    "thread_id": thread_id or "",
                     "attachment_filepath": attachment_filepath or "",
                 },
             )
@@ -3212,6 +3216,7 @@ class CommsPrimitives:
                     "bcc": _raw_recipients_for_history(bcc),
                     "reply_all": reply_all,
                     "email_id_to_reply_to": email_id_to_reply_to or "",
+                    "thread_id": thread_id or "",
                     "attachment_filepath": attachment_filepath or "",
                 },
             )
@@ -3232,6 +3237,7 @@ class CommsPrimitives:
                     "bcc": _raw_recipients_for_history(bcc),
                     "reply_all": reply_all,
                     "email_id_to_reply_to": email_id_to_reply_to or "",
+                    "thread_id": thread_id or "",
                     "attachment_filepath": attachment_filepath or "",
                 },
             )
@@ -3285,6 +3291,7 @@ class CommsPrimitives:
                     target_metadata={
                         "reply_all": True,
                         "email_id_to_reply_to": reply_email_id or "",
+                        "thread_id": thread_id or "",
                         "attachment_filepath": attachment_filepath or "",
                     },
                 )
@@ -3334,6 +3341,7 @@ class CommsPrimitives:
                     target_metadata={
                         "reply_all": True,
                         "email_id_to_reply_to": reply_email_id or "",
+                        "thread_id": thread_id or "",
                         "attachment_filepath": attachment_filepath or "",
                     },
                 )
@@ -3384,6 +3392,7 @@ class CommsPrimitives:
                         "bcc": _raw_recipients_for_history(bcc),
                         "reply_all": False,
                         "email_id_to_reply_to": reply_email_id or "",
+                        "thread_id": thread_id or "",
                         "attachment_filepath": attachment_filepath or "",
                     },
                 )
@@ -3406,6 +3415,7 @@ class CommsPrimitives:
                         "bcc": _raw_recipients_for_history(bcc),
                         "reply_all": False,
                         "email_id_to_reply_to": reply_email_id or "",
+                        "thread_id": thread_id or "",
                         "attachment_filepath": attachment_filepath or "",
                     },
                 )
@@ -3428,6 +3438,7 @@ class CommsPrimitives:
                         "bcc": _raw_recipients_for_history(bcc),
                         "reply_all": False,
                         "email_id_to_reply_to": reply_email_id or "",
+                        "thread_id": thread_id or "",
                         "attachment_filepath": attachment_filepath or "",
                     },
                 )
@@ -3460,6 +3471,7 @@ class CommsPrimitives:
                         "bcc": _raw_recipients_for_history(bcc),
                         "reply_all": False,
                         "email_id_to_reply_to": reply_email_id or "",
+                        "thread_id": thread_id or "",
                         "attachment_filepath": attachment_filepath or "",
                     },
                 )
@@ -3487,9 +3499,19 @@ class CommsPrimitives:
                 except Exception:
                     pass
 
+        if reply_email_id and not thread_id and self._cm is not None:
+            for entry in self._cm.contact_index.global_thread:
+                if entry.medium != Medium.EMAIL:
+                    continue
+                message = entry.message
+                if getattr(message, "email_id", None) != reply_email_id:
+                    continue
+                thread_id = getattr(message, "thread_id", None) or None
+                break
+
         final_subject = (
             f"Re: {subject}"
-            if reply_email_id and not subject.startswith("Re: ")
+            if (reply_email_id or thread_id) and not subject.startswith("Re: ")
             else subject
         )
         offline_reservation, offline_response = self._reserve_offline_operation(
@@ -3502,6 +3524,7 @@ class CommsPrimitives:
                 "bcc": final_bcc,
                 "reply_all": reply_all,
                 "email_id_to_reply_to": reply_email_id or "",
+                "thread_id": thread_id or "",
                 "attachment_filepath": attachment_filepath or "",
             },
             contact_id=(primary_contact or {}).get("contact_id") or error_contact_id,
@@ -3538,6 +3561,7 @@ class CommsPrimitives:
                             "bcc": final_bcc,
                             "reply_all": reply_all,
                             "email_id_to_reply_to": reply_email_id or "",
+                            "thread_id": thread_id or "",
                             "attachment_filepath": attachment_filepath or "",
                         },
                     )
@@ -3585,6 +3609,7 @@ class CommsPrimitives:
                         "bcc": final_bcc,
                         "reply_all": reply_all,
                         "email_id_to_reply_to": reply_email_id or "",
+                        "thread_id": thread_id or "",
                         "attachment_filepath": attachment_filepath or "",
                     },
                 )
@@ -3605,6 +3630,7 @@ class CommsPrimitives:
                         "bcc": final_bcc,
                         "reply_all": reply_all,
                         "email_id_to_reply_to": reply_email_id or "",
+                        "thread_id": thread_id or "",
                         "attachment_filepath": attachment_filepath or "",
                     },
                 )
@@ -3626,6 +3652,7 @@ class CommsPrimitives:
             cc=final_cc or None,
             bcc=final_bcc or None,
             email_id=reply_email_id,
+            thread_id=thread_id,
             attachment=attachment,
         )
         if response.get("success"):
@@ -3634,6 +3661,7 @@ class CommsPrimitives:
                 body=body,
                 subject=final_subject,
                 email_id_replied_to=reply_email_id,
+                thread_id=thread_id,
                 attachments=[attachment_meta] if attachment_meta else [],
                 to=final_to,
                 cc=final_cc,
@@ -3652,11 +3680,13 @@ class CommsPrimitives:
                     "bcc": final_bcc,
                     "reply_all": reply_all,
                     "email_id_to_reply_to": reply_email_id or "",
+                    "thread_id": thread_id or "",
                     "attachment_filepath": attachment_filepath or "",
                 },
                 history_metadata={
                     "contact_display_name": _get_contact_display_name(primary_contact),
                     "reply_to_email_id": reply_email_id or None,
+                    "thread_id": thread_id or None,
                 },
                 attachments=[attachment_meta] if attachment_meta else None,
                 provider_response=response,
@@ -3683,11 +3713,13 @@ class CommsPrimitives:
                 "bcc": final_bcc,
                 "reply_all": reply_all,
                 "email_id_to_reply_to": reply_email_id or "",
+                "thread_id": thread_id or "",
                 "attachment_filepath": attachment_filepath or "",
             },
             history_metadata={
                 "contact_display_name": _get_contact_display_name(primary_contact),
                 "reply_to_email_id": reply_email_id or None,
+                "thread_id": thread_id or None,
             },
             attachments=[attachment_meta] if attachment_meta else None,
         )

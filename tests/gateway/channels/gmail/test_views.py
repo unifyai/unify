@@ -140,10 +140,13 @@ class TestSendEmailWithoutAttachment:
                 "subject": "Re: Test Subject",
                 "body": "Reply content",
                 "in_reply_to": "<original-message-id@example.com>",
+                "thread_id": "gmail-thread-123",
             },
         )
         assert response.status_code == 200
         assert response.json()["success"] is True
+        send_body = mock_gmail_service.users().messages().send.call_args.kwargs["body"]
+        assert send_body["threadId"] == "gmail-thread-123"
 
 
 class TestSendEmailWithAttachment:

@@ -83,6 +83,7 @@ def test_email_envelope_preserves_from_alias() -> None:
             "subject": "hi",
             "body": "hello there",
             "email_id": "msg-1",
+            "thread_id": "gmail-thread-1",
             "to": ["assistant@example.com"],
             "cc": [],
             "bcc": [],
@@ -98,6 +99,7 @@ def test_email_envelope_preserves_from_alias() -> None:
     }
     env = EmailEnvelope.model_validate(raw)
     assert env.event.from_ == "sender@example.com"
+    assert env.event.thread_id == "gmail-thread-1"
     assert env.event.attachments[0].filename == "report.pdf"
 
     dumped = env.model_dump(by_alias=True)
