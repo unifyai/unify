@@ -1158,6 +1158,40 @@ async def end_phone_conference(conference_name: str) -> dict:
             return await response.json()
 
 
+async def hang_up_call(call_sid: str) -> dict:
+    """
+    End a single Twilio call by SID (clean carrier hangup, no conference).
+
+    Used for outbound calls, which are bridged via a direct ``<Dial>`` rather
+    than a Twilio conference: completing the parent SIP call leg collapses the
+    dial and disconnects the remote party deterministically (instead of relying
+    on the LiveKit room teardown propagating a SIP BYE).
+
+    Args:
+        call_sid: The Twilio call SID to terminate.
+
+    Returns:
+        dict with 'success' and any provider response fields.
+    """
+    if not call_sid:
+        return {"success": False, "error": "no call_sid"}
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{_gateway_comms_base_url()}/phone/hang-up-call",
+            headers=headers,
+            json={"CallSid": call_sid},
+        ) as response:
+            try:
+                response.raise_for_status()
+            except Exception:
+                return {
+                    "success": False,
+                    "error": f"Failed to hang up call {call_sid}",
+                }
+            return await response.json()
+
+
 async def store_pending_whatsapp_call_intent(
     *,
     pool_number: str,

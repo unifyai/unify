@@ -1014,9 +1014,10 @@ class LivekitCallManager:
     async def end_call(self, reason: str = "assistant_hangup") -> None:
         """Tear down an active phone / WhatsApp / Unify Meet voice session.
 
-        Best-effort drops the carrier leg for telephony (Twilio conference end
-        when the conference name is known), then signals the running voice agent
-        to stop via the IPC ``app:call:status`` channel. The agent shuts down,
+        Best-effort drops the carrier leg for telephony — ending the Twilio
+        conference for inbound calls, or completing the tracked call SID for
+        outbound calls — then signals the running voice agent to stop via the IPC
+        ``app:call:status`` channel. The agent shuts down,
         deletes the LiveKit room (which also ends the user's Unify Meet window
         since the Console tears down on ``RoomEvent.Disconnected``), and
         publishes the channel-appropriate ``*Ended`` event that drives the
@@ -1027,14 +1028,22 @@ class LivekitCallManager:
         """
         channel = self._call_channel
 
-        if channel in ("phone_call", "whatsapp_call") and self.conference_name:
+        if channel in ("phone_call", "whatsapp_call"):
             from unity.conversation_manager.domains import comms_utils
 
+            # Inbound calls bridge the remote party through a Twilio conference
+            # (``conference_name`` populated); ending the conference cleanly drops
+            # everyone. Outbound calls have no conference — they are a direct
+            # ``<Dial>`` off the SIP leg — so completing the tracked call SID
+            # collapses the dial and hangs up the remote party deterministically.
             try:
-                await comms_utils.end_phone_conference(self.conference_name)
+                if self.conference_name:
+                    await comms_utils.end_phone_conference(self.conference_name)
+                elif self.provider_call_sid:
+                    await comms_utils.hang_up_call(self.provider_call_sid)
             except Exception as exc:
                 LOGGER.warning(
-                    f"{ICONS['ipc']} [LivekitCallManager] end_phone_conference "
+                    f"{ICONS['ipc']} [LivekitCallManager] carrier hangup "
                     f"failed: {exc}",
                 )
 

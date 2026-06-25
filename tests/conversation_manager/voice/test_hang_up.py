@@ -90,6 +90,56 @@ async def test_end_phone_conference_noop_without_name():
 
 
 @pytest.mark.asyncio
+async def test_hang_up_call_posts_expected_request(monkeypatch):
+    """hang_up_call POSTs the CallSid to /phone/hang-up-call."""
+    posts: list = []
+
+    fake_resp = MagicMock()
+    fake_resp.raise_for_status = MagicMock()
+    fake_resp.json = AsyncMock(return_value={"success": True})
+
+    fake_post_ctx = MagicMock()
+    fake_post_ctx.__aenter__ = AsyncMock(return_value=fake_resp)
+    fake_post_ctx.__aexit__ = AsyncMock(return_value=False)
+
+    def _post(url, *, headers=None, json=None):
+        posts.append((url, headers, json))
+        return fake_post_ctx
+
+    fake_session = MagicMock()
+    fake_session.post = _post
+    fake_session.__aenter__ = AsyncMock(return_value=fake_session)
+    fake_session.__aexit__ = AsyncMock(return_value=False)
+
+    monkeypatch.setattr(
+        comms_utils.aiohttp,
+        "ClientSession",
+        lambda *a, **k: fake_session,
+    )
+    monkeypatch.setattr(
+        comms_utils,
+        "_gateway_comms_base_url",
+        lambda: "http://comms.test",
+    )
+
+    result = await comms_utils.hang_up_call("CA_outbound")
+
+    assert result == {"success": True}
+    assert len(posts) == 1
+    url, headers, body = posts[0]
+    assert url == "http://comms.test/phone/hang-up-call"
+    assert body == {"CallSid": "CA_outbound"}
+    assert "Authorization" in headers
+
+
+@pytest.mark.asyncio
+async def test_hang_up_call_noop_without_sid():
+    """No HTTP call is attempted when there is no call SID."""
+    result = await comms_utils.hang_up_call("")
+    assert result["success"] is False
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("channel", ["phone_call", "whatsapp_call"])
 async def test_end_call_phone_ends_conference_and_signals_stop(monkeypatch, channel):
     """Telephony hang-up drops the Twilio conference and signals agent stop."""
@@ -142,22 +192,64 @@ async def test_end_call_unify_meet_signals_stop_without_conference(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_end_call_phone_skips_conference_when_name_missing(monkeypatch):
-    """Outbound calls without a tracked conference still signal stop."""
+async def test_end_call_outbound_phone_hangs_up_by_sid(monkeypatch):
+    """Outbound phone (no conference, tracked call SID) completes the call SID."""
     broker = MagicMock()
     broker.publish = AsyncMock()
     cm = _build_call_manager(broker)
     cm._call_channel = "phone_call"
     cm.conference_name = ""
+    cm.provider_call_sid = "CA_outbound"
 
-    called: list = []
+    conf_ends: list = []
+    sid_hangups: list = []
     monkeypatch.setattr(
         comms_utils,
         "end_phone_conference",
-        lambda name: called.append(name),
+        AsyncMock(side_effect=lambda name: conf_ends.append(name)),
+    )
+    monkeypatch.setattr(
+        comms_utils,
+        "hang_up_call",
+        AsyncMock(side_effect=lambda sid: sid_hangups.append(sid)),
     )
 
     await cm.end_call()
 
-    assert called == []
+    assert conf_ends == []
+    assert sid_hangups == ["CA_outbound"]
+    broker.publish.assert_awaited_once()
+    channel_arg, payload = broker.publish.await_args.args
+    assert channel_arg == "app:call:status"
+    assert json.loads(payload)["type"] == "stop"
+
+
+@pytest.mark.asyncio
+async def test_end_call_phone_relies_on_room_delete_without_name_or_sid(monkeypatch):
+    """With neither conference nor tracked SID, only the stop signal is sent
+    (teardown then relies on LiveKit room deletion)."""
+    broker = MagicMock()
+    broker.publish = AsyncMock()
+    cm = _build_call_manager(broker)
+    cm._call_channel = "phone_call"
+    cm.conference_name = ""
+    cm.provider_call_sid = ""
+
+    conf_ends: list = []
+    sid_hangups: list = []
+    monkeypatch.setattr(
+        comms_utils,
+        "end_phone_conference",
+        AsyncMock(side_effect=lambda name: conf_ends.append(name)),
+    )
+    monkeypatch.setattr(
+        comms_utils,
+        "hang_up_call",
+        AsyncMock(side_effect=lambda sid: sid_hangups.append(sid)),
+    )
+
+    await cm.end_call()
+
+    assert conf_ends == []
+    assert sid_hangups == []
     broker.publish.assert_awaited_once()

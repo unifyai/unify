@@ -442,7 +442,8 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
             )
             message_content = "<Sending WhatsApp Call...>"
             notif_content = f"WhatsApp call sent to {sender_name}"
-        case PhoneCallSent():
+        case PhoneCallSent() as e:
+            cm.call_manager.provider_call_sid = e.provider_call_sid or ""
             await cm.call_manager.start_call(contact, boss, outbound=True)
             message_content = "<Sending Call...>"
             notif_content = f"Call sent to {sender_name}"

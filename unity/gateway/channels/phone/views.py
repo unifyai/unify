@@ -31,6 +31,7 @@ The endpoint set matches the original 1:1::
     POST /create                  -- purchases Twilio number + sets up webhooks + LK trunk
     DEL  /delete                  -- deletes phone + LK trunk (idempotent)
     POST /hang-up                 -- removes a participant from a Twilio conference
+    POST /hang-up-call            -- ends a single Twilio call by SID (no conference)
     POST /end-conference          -- terminates a Twilio conference
 
   unauth_router:
@@ -376,6 +377,26 @@ async def hang_up(request: Request):
     )
     twilio_client.conferences(conferences[0].sid).participants(call_sid).delete()
     return Response(status_code=200)
+
+
+@auth_router.post("/hang-up-call")
+async def hang_up_call(request: Request):
+    """End a single Twilio call by SID.
+
+    Used for outbound calls, which are bridged via a direct ``<Dial>`` rather
+    than a conference: completing the parent SIP call leg collapses the dial and
+    disconnects the remote party. The conference endpoints do not apply because
+    no conference exists for these calls.
+    """
+    credentials = EnvCredentialStore()
+    data = await request.json()
+    call_sid = data.get("CallSid")
+    if not call_sid:
+        raise HTTPException(status_code=400, detail="Missing CallSid")
+
+    twilio_client = build_twilio_client(credentials)
+    twilio_client.calls(call_sid).update(status="completed")
+    return {"success": True}
 
 
 @auth_router.post("/end-conference")
