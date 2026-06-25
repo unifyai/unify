@@ -372,6 +372,9 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # window). When the contact replies, the brain is notified so it can
         # resend or rework the original message.  Maps contact_id → content.
         self._pending_whatsapp_resends: dict[int, str] = {}
+        self._pending_whatsapp_resend_onboarding_metadata: dict[int, dict[str, str]] = (
+            {}
+        )
 
         # Outbound WhatsApp call contexts stashed while awaiting call permission.
         # When the contact grants permission (taps "Call now"), the context is
@@ -2521,6 +2524,22 @@ class ConversationManager(metaclass=SingletonABCMeta):
         ):
             return
         self._pending_onboarding_outbound = None
+
+    def stash_pending_whatsapp_resend_onboarding_metadata(
+        self,
+        contact_id: int,
+        metadata: dict[str, str],
+    ) -> None:
+        if metadata:
+            self._pending_whatsapp_resend_onboarding_metadata[contact_id] = dict(
+                metadata,
+            )
+
+    def consume_pending_whatsapp_resend_onboarding_metadata(
+        self,
+        contact_id: int,
+    ) -> dict[str, str] | None:
+        return self._pending_whatsapp_resend_onboarding_metadata.pop(contact_id, None)
 
     def consume_pending_onboarding_outbound(self, medium: str) -> dict[str, str] | None:
         pending = self._pending_onboarding_outbound

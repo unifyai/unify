@@ -166,6 +166,51 @@ class CommsPrimitives:
             return {}
         return consume(medium.value) or {}
 
+    def _stash_whatsapp_resend_onboarding_kwargs(
+        self,
+        contact_id: int | None,
+        metadata: dict[str, str],
+    ) -> None:
+        if self._cm is None or contact_id is None or not metadata:
+            return
+        stash = getattr(
+            self._cm,
+            "stash_pending_whatsapp_resend_onboarding_metadata",
+            None,
+        )
+        if callable(stash):
+            stash(contact_id, metadata)
+            return
+        pending = getattr(
+            self._cm,
+            "_pending_whatsapp_resend_onboarding_metadata",
+            None,
+        )
+        if isinstance(pending, dict):
+            pending[contact_id] = dict(metadata)
+
+    def _consume_whatsapp_resend_onboarding_kwargs(
+        self,
+        contact_id: int | None,
+    ) -> dict[str, str]:
+        if self._cm is None or contact_id is None:
+            return {}
+        consume = getattr(
+            self._cm,
+            "consume_pending_whatsapp_resend_onboarding_metadata",
+            None,
+        )
+        if callable(consume):
+            return consume(contact_id) or {}
+        pending = getattr(
+            self._cm,
+            "_pending_whatsapp_resend_onboarding_metadata",
+            None,
+        )
+        if isinstance(pending, dict):
+            return pending.pop(contact_id, {}) or {}
+        return {}
+
     def _contact_manager(self):
         if (
             self._cm is not None
@@ -961,26 +1006,45 @@ class CommsPrimitives:
                 self._get_contact(whatsapp_number=to_number) or contact or {}
             )
             attachments_for_event = [attachment] if attachment else []
+            resolved_contact_id = fresh_contact.get("contact_id") or contact_id
+            pending_resends = None
+            automatic_resend_available = False
+            if via_template and self._cm is not None:
+                pending_resends = getattr(self._cm, "_pending_whatsapp_resends", None)
+                automatic_resend_available = isinstance(pending_resends, dict)
+            onboarding_kwargs = {}
+            if via_template:
+                if automatic_resend_available:
+                    onboarding_kwargs = self._onboarding_event_kwargs(
+                        Medium.WHATSAPP_MESSAGE,
+                    )
+                    self._stash_whatsapp_resend_onboarding_kwargs(
+                        resolved_contact_id,
+                        onboarding_kwargs,
+                    )
+                event_onboarding_kwargs = {}
+            else:
+                event_onboarding_kwargs = (
+                    self._consume_whatsapp_resend_onboarding_kwargs(
+                        resolved_contact_id,
+                    )
+                    or self._onboarding_event_kwargs(Medium.WHATSAPP_MESSAGE)
+                )
             event = WhatsAppSent(
                 contact=fresh_contact,
                 content=content,
                 via_template=via_template,
                 delivered_content=delivered_content,
                 attachments=attachments_for_event or None,
-                **self._onboarding_event_kwargs(Medium.WHATSAPP_MESSAGE),
+                **event_onboarding_kwargs,
             )
             await self._event_broker.publish(topic, event.to_json())
-            pending_resends = None
-            automatic_resend_available = False
-            if via_template and self._cm is not None:
-                pending_resends = getattr(self._cm, "_pending_whatsapp_resends", None)
-                automatic_resend_available = isinstance(pending_resends, dict)
             self._record_offline_success(
                 offline_reservation,
                 attempted_content=content,
-                receiver_ids=[fresh_contact.get("contact_id") or contact_id],
+                receiver_ids=[resolved_contact_id],
                 target_metadata={
-                    "contact_id": fresh_contact.get("contact_id") or contact_id,
+                    "contact_id": resolved_contact_id,
                     "whatsapp_number": to_number or "",
                     "attachment_filepath": attachment_filepath or "",
                 },
@@ -998,8 +1062,12 @@ class CommsPrimitives:
                 ),
             )
             if via_template:
-                if automatic_resend_available and pending_resends is not None:
-                    pending_resends[contact_id] = content
+                if (
+                    automatic_resend_available
+                    and pending_resends is not None
+                    and resolved_contact_id is not None
+                ):
+                    pending_resends[resolved_contact_id] = content
                     return {
                         "status": "ok",
                         "pending_resend": True,

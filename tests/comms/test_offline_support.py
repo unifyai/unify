@@ -606,7 +606,24 @@ async def test_send_whatsapp_template_offline_does_not_claim_pending_resend(
 async def test_send_whatsapp_template_live_tracks_delivered_template_and_pending_resend(
     monkeypatch,
 ):
-    cm = SimpleNamespace(_pending_whatsapp_resends={})
+    pending_outbound = {
+        "metadata": {
+            "onboarding_trigger_step_id": "whatsapp-message-reference",
+            "onboarding_reply_step_id": "whatsapp-message",
+            "onboarding_request_id": "req-1",
+            "onboarding_origin_event_id": "evt-1",
+        },
+    }
+
+    def consume_pending_onboarding_outbound(medium):
+        assert medium == "whatsapp_message"
+        return pending_outbound.pop("metadata", None)
+
+    cm = SimpleNamespace(
+        _pending_whatsapp_resends={},
+        _pending_whatsapp_resend_onboarding_metadata={},
+        consume_pending_onboarding_outbound=consume_pending_onboarding_outbound,
+    )
     comms = CommsPrimitives(conversation_manager=cm)
     comms._get_contact = lambda **kwargs: {
         "contact_id": 5,
@@ -628,16 +645,25 @@ async def test_send_whatsapp_template_live_tracks_delivered_template_and_pending
         raising=False,
     )
 
-    async def _fake_send_whatsapp_message(**kwargs):
-        assert kwargs["content"] == "Original clue"
-        return {
+    responses = [
+        {
             "success": True,
             "method": "template",
             "delivered_body": (
                 "Hello Alice, this is T-W1N from Unify. I have a message for you. "
                 "Reply here and I'll share the details!"
             ),
-        }
+        },
+        {
+            "success": True,
+            "method": "freeform",
+            "delivered_body": "Original clue",
+        },
+    ]
+
+    async def _fake_send_whatsapp_message(**kwargs):
+        assert kwargs["content"] == "Original clue"
+        return responses.pop(0)
 
     monkeypatch.setattr(
         comms_utils,
@@ -656,6 +682,28 @@ async def test_send_whatsapp_template_live_tracks_delivered_template_and_pending
     assert published.via_template is True
     assert published.content == "Original clue"
     assert published.delivered_content.startswith("Hello Alice, this is T-W1N")
+    assert published.onboarding_trigger_step_id is None
+    assert cm._pending_whatsapp_resend_onboarding_metadata[5] == {
+        "onboarding_trigger_step_id": "whatsapp-message-reference",
+        "onboarding_reply_step_id": "whatsapp-message",
+        "onboarding_request_id": "req-1",
+        "onboarding_origin_event_id": "evt-1",
+    }
+
+    cm._pending_whatsapp_resends.pop(5)
+    result = await comms.send_whatsapp(contact_id=5, content="Original clue")
+
+    assert result["status"] == "ok"
+    published = Event.from_json(comms._event_broker.publish.await_args.args[1])
+    assert isinstance(published, WhatsAppSent)
+    assert published.via_template is False
+    assert published.content == "Original clue"
+    assert published.onboarding_trigger_step_id == "whatsapp-message-reference"
+    assert published.onboarding_reply_step_id == "whatsapp-message"
+    assert published.onboarding_request_id == "req-1"
+    assert published.onboarding_origin_event_id == "evt-1"
+    assert cm._pending_whatsapp_resend_onboarding_metadata == {}
+    assert pending_outbound == {}
 
 
 @pytest.mark.anyio
