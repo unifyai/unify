@@ -2322,6 +2322,27 @@ def get_code_act_pattern_examples() -> str:
     return "\n\n".join(examples)
 
 
+def get_user_desktop_files_example() -> str:
+    """Example: accessing/syncing a linked user's desktop files via files.*."""
+
+    return """
+# Example: read a linked user's desktop files (no shell copying)
+async def sync_user_desktop_files(user_id: str) -> str:
+    # Browse their home, then pull what you need into the local mirror
+    # (~/Unity/Remote/<user_id>/). Never cp/scp/rclone into your own workspace.
+    names = await primitives.computer.user_desktop.files.list("Documents", user_id=user_id)
+    staged = []
+    for name in names:
+        if not name.endswith("/"):
+            staged.append(
+                await primitives.computer.user_desktop.files.pull(
+                    f"Documents/{name}", user_id=user_id,
+                )
+            )
+    return f"Staged {len(staged)} files under the user's local mirror."
+"""
+
+
 def get_computer_examples() -> str:
     """Get all computer-specific examples."""
 
@@ -2333,6 +2354,7 @@ def get_computer_examples() -> str:
         get_computer_session_reattachment_example().strip(),
         get_computer_stateful_workflow_example().strip(),
         get_computer_interactive_workflow_example().strip(),
+        get_user_desktop_files_example().strip(),
     ]
     return "\n\n".join(examples)
 

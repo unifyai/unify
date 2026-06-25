@@ -678,12 +678,16 @@ class UserDesktopHandle:
 class _UserDesktopFilesNamespace:
     """On-demand access to a user's own home filesystem.
 
-    Accessed as ``primitives.computer.user_desktop.files``.  Unlike the live
-    remote-control methods on a desktop session, this reads and writes
+    Accessed as ``primitives.computer.user_desktop.files``.  This is the
+    supported way to read, fetch, or "sync" a user's desktop files — do **not**
+    copy their files in by hand with shell ``cp``/``scp``/``rclone``.  Unlike
+    the live remote-control methods on a desktop session, this reads and writes
     individual paths in the user's home directory over SFTP, pulled only when
-    asked.  Writebacks never overwrite the user's originals — edited content is
-    saved as a timestamped copy the user can review.  Requires the user to have
-    enabled filesystem access for this assistant in the Console.
+    asked.  Pulled files are staged under ``~/Unity/Remote/<user_id>/``, a
+    read-only mirror of their home.  Writebacks never overwrite the user's
+    originals — edited content is saved as a timestamped copy the user can
+    review.  Requires the user to have enabled filesystem access for this
+    assistant in the Console.
     """
 
     def __init__(self, owner: "ComputerPrimitives"):
@@ -706,7 +710,9 @@ class _UserDesktopFilesNamespace:
         """List entries under a home-relative directory on the user's machine.
 
         ``path`` is relative to the user's home (``""`` lists the home root).
-        Returns names (directories carry a trailing ``/``).
+        Returns names (directories carry a trailing ``/``).  Pair with
+        ``pull`` to bring entries into the local mirror under
+        ``~/Unity/Remote/<user_id>/``; do not shell out to copy them.
         """
         target_uid, client = await self._client(user_id)
         entries = await client.list_dir(path)
@@ -714,10 +720,14 @@ class _UserDesktopFilesNamespace:
         return entries
 
     async def pull(self, path: str, user_id: str | None = None) -> str:
-        """Fetch a file from the user's home into the local workspace.
+        """Fetch a file from the user's home into the local staging mirror.
 
-        ``path`` is relative to the user's home.  Returns the local path of the
-        staged copy, which can then be read or parsed like any local file.
+        This is the supported way to access or "sync" a user's desktop file —
+        do **not** copy it in by hand with shell ``cp``/``scp``/``rclone``.
+
+        ``path`` is relative to the user's home.  The file is staged at
+        ``~/Unity/Remote/<user_id>/<path>`` (a read-only mirror of their home)
+        and that absolute local path is returned, ready to read or parse.
         """
         target_uid, client = await self._client(user_id)
         local_path = await client.pull(path)
