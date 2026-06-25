@@ -520,7 +520,7 @@ class TestTextMessageHandlers:
         )
 
         with patch(
-            "droid.conversation_manager.domains.event_handlers.managers_utils",
+            "unity.conversation_manager.domains.event_handlers.managers_utils",
         ) as mock_utils:
             mock_utils.queue_operation = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
@@ -3263,7 +3263,7 @@ class TestAssistantUpdateEventHandler:
         )
 
         with patch(
-            "droid.conversation_manager.domains.event_handlers.managers_utils.queue_operation",
+            "unity.conversation_manager.domains.event_handlers.managers_utils.queue_operation",
             new_callable=AsyncMock,
         ):
             await EventHandler.handle_event(event, mock_cm)
