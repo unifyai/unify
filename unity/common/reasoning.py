@@ -134,6 +134,11 @@ def get_llm_model_selection_context() -> str:
           that downstream Python branches on.
         - In stored functions, record the model-choice rationale in the docstring
           or a short code comment.
+        - ``query_llm(...)`` accepts text prompts only. It cannot attach image
+          bytes or vision content blocks. For image, screenshot, or photo analysis,
+          use ``ImageHandle.ask(...)``, the ``ask_image`` tool, or
+          ``ask_about_file`` / ``primitives.files.ask_about_file`` on an image
+          path — not ``query_llm(...)``.
         """,
     ).strip()
 
@@ -262,6 +267,11 @@ async def query_llm(
     Anti-patterns
     -------------
     - Replacing exact deterministic substeps with ``query_llm(...)``.
+    - Using ``query_llm(...)`` for image, screenshot, or photo analysis. It only
+      accepts a text ``prompt`` and cannot pass image data to the model, even
+      when ``model=`` points at a vision-capable endpoint. Use
+      ``ImageHandle.ask(...)``, the ``ask_image`` tool, or ``ask_about_file`` /
+      ``primitives.files.ask_about_file`` on an image path instead.
     - Using substring checks as the whole classifier for semantic tasks, e.g.
       ``if "urgent" in subject.lower()`` for inbox triage. Exact lexical
       signals can help pre-filter, but they are not semantic judgment.
