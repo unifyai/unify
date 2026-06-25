@@ -60,7 +60,7 @@ from unity.common.federated_search import (
 from unity.common.filter_utils import normalize_filter_expr
 from unity.common.tool_outcome import ToolErrorException
 from unity.common.model_to_fields import model_to_fields
-from unity.common.llm_client import new_llm_client
+from unity.common.llm_client import new_llm_client, new_vision_llm_client
 from .utils.search import (
     resolve_table_ref as _srch_resolve_table_ref,
 )
@@ -2149,7 +2149,7 @@ class FileManager(BaseFileManager):
         async def _vision_call() -> str:
             from unity.image_manager.prompt_builders import build_image_ask_prompt
 
-            client = new_llm_client()
+            client = new_vision_llm_client(origin="FileManager.ask_about_image_file")
             client.set_system_message(
                 build_image_ask_prompt(caption=file_path, timestamp=None).to_list(),
             )
