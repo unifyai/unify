@@ -1934,24 +1934,62 @@ async def entrypoint(ctx: agents.JobContext):
         return True
 
     def _speak_now(
-        text: str,
+        text: "str | AsyncIterable[str]",
         notification_id: str,
         notification_source: str,
         notification_content: str,
         llm_log_path: str,
     ) -> None:
-        _say_meta_queue.append(
-            {
-                "notification_id": notification_id,
-                "source": notification_source,
-                "text": text,
-                "llm_log_path": llm_log_path,
-            },
-        )
         # Context injection is handled by apply_notification unconditionally
         # for non-proactive notifications. No injection here to avoid doubles.
-        _log.notification_say(text, notification_source=notification_source)
-        session.say(text, allow_interruptions=True, add_to_chat_ctx=True)
+        if isinstance(text, str):
+            _say_meta_queue.append(
+                {
+                    "notification_id": notification_id,
+                    "source": notification_source,
+                    "text": text,
+                    "llm_log_path": llm_log_path,
+                },
+            )
+            _log.notification_say(text, notification_source=notification_source)
+            session.say(text, allow_interruptions=True, add_to_chat_ctx=True)
+            return
+
+        # Streaming path: ``text`` is an async iterator of token chunks (rewritten
+        # speech). The chunks are forwarded to TTS as they arrive so playout starts
+        # on the first token. ``say_meta["text"]`` is kept in sync so the
+        # ``conversation_item_added`` handler (which fires at playout end) can match
+        # the assembled utterance via its prefix.
+        say_meta = {
+            "notification_id": notification_id,
+            "source": notification_source,
+            "text": "",
+            "llm_log_path": llm_log_path,
+        }
+        _say_meta_queue.append(say_meta)
+
+        async def _tracked_stream() -> "AsyncIterable[str]":
+            parts: list[str] = []
+            try:
+                async for chunk in text:
+                    if not chunk:
+                        continue
+                    parts.append(chunk)
+                    say_meta["text"] = "".join(parts)
+                    yield chunk
+            except Exception as e:
+                from unity.logger import LOGGER
+
+                LOGGER.error(f"⬥ Speech rewrite stream interrupted: {e}")
+            final = "".join(parts)
+            if final:
+                _log.notification_say(final, notification_source=notification_source)
+
+        session.say(
+            _tracked_stream(),
+            allow_interruptions=True,
+            add_to_chat_ctx=True,
+        )
 
     def _extract_chat_messages(
         ctx,
@@ -2128,19 +2166,64 @@ async def entrypoint(ctx: agents.JobContext):
             notifications = [n for n in notifications if n.strip() not in _self_texts]
             if recent and SETTINGS.conversation.SPEECH_DEDUP_ENABLED:
                 from unity.conversation_manager.domains.speech_dedup import (
+                    SpeechDecision,
                     SpeechDeduplicationChecker,
                 )
 
-                dedup = await SpeechDeduplicationChecker(
+                outcome = await SpeechDeduplicationChecker(
                     model=SETTINGS.conversation.FAST_BRAIN_MODEL,
                 ).evaluate(
                     proposed_speech=text,
                     recent_utterances=recent,
                     recent_notifications=notifications,
                 )
-                if dedup.should_suppress:
-                    _log.dedup_suppressed(text, dedup.reasoning)
+                if outcome.decision is SpeechDecision.SUPPRESS:
+                    _log.dedup_suppressed(text, outcome.reasoning)
                     return
+                if (
+                    outcome.decision is SpeechDecision.REWRITE
+                    and outcome.text_stream is not None
+                ):
+                    stream = outcome.text_stream
+                    # Peek the first token: an empty rewrite degrades to suppress,
+                    # while a stream failure before any token fails open (speak the
+                    # original proposal).
+                    first: str | None = None
+                    errored = False
+                    try:
+                        async for chunk in stream:
+                            if chunk:
+                                first = chunk
+                                break
+                    except Exception as e:
+                        from unity.logger import LOGGER
+
+                        LOGGER.error(
+                            f"⬥ Speech rewrite stream failed before first token: {e}",
+                        )
+                        errored = True
+                    if not errored:
+                        if first is None:
+                            _log.dedup_suppressed(
+                                text,
+                                "rewrite produced empty output",
+                            )
+                            return
+
+                        async def _rewritten() -> "AsyncIterable[str]":
+                            yield first
+                            async for chunk in stream:
+                                if chunk:
+                                    yield chunk
+
+                        _speak_now(
+                            _rewritten(),
+                            notification_id,
+                            notification_source,
+                            notification_content,
+                            llm_log_path,
+                        )
+                        return
             _speak_now(
                 text,
                 notification_id,

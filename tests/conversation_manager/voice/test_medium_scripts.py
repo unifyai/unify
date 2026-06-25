@@ -3049,6 +3049,43 @@ class TestFastBrainGuidanceFlow:
             SETTINGS.conversation.SPEECH_DEDUP_ENABLED = orig_dedup
 
 
+def _stream_dedup_client(header, *, captured=None, on_call=None):
+    """Fake unillm client mirroring the streaming speech-dedup gate surface.
+
+    ``header`` is either the full streamed verdict string (e.g. ``"SPEAK | ok"``
+    or ``"REWRITE\nbody"``) or a callable taking the messages list and returning
+    such a string.
+    """
+
+    class _Client:
+        def set_stream(self, _value: bool) -> None:
+            pass
+
+        async def generate(self, *, messages=None, **_kw):
+            if captured is not None:
+                captured["messages"] = messages
+            if on_call is not None:
+                on_call()
+            text = header(messages) if callable(header) else header
+
+            async def _gen():
+                yield text
+
+            return _gen()
+
+    return _Client()
+
+
+async def _drain_say(value):
+    """Resolve a session.say argument (string or token stream) to a string."""
+    if isinstance(value, str):
+        return value
+    parts = []
+    async for chunk in value:
+        parts.append(chunk)
+    return "".join(parts)
+
+
 @pytest.mark.asyncio
 class TestFastBrainSpeechDedup:
     """Tests for the fast brain speech deduplication gate.
@@ -3292,19 +3329,14 @@ class TestFastBrainSpeechDedup:
             content="Found three Italian restaurants near you.",
         )
 
-        class _FakeDedupClient:
-            def set_response_format(self, fmt):
-                pass
-
-            async def generate(self, *, messages=None, **_kw):
-                return '{"already_covered": true, "reasoning": "fast brain already said it"}'
-
         orig_dedup = SETTINGS.conversation.SPEECH_DEDUP_ENABLED
         SETTINGS.conversation.SPEECH_DEDUP_ENABLED = True
         env["monkeypatch"].setattr(
             _dedup_mod,
             "new_llm_client",
-            lambda *a, **kw: _FakeDedupClient(),
+            lambda *a, **kw: _stream_dedup_client(
+                "SUPPRESS | fast brain already said it",
+            ),
         )
         try:
             env["session"].agent_state = "thinking"
@@ -3347,19 +3379,12 @@ class TestFastBrainSpeechDedup:
             content="I've started the email check.",
         )
 
-        class _FakeDedupClient:
-            def set_response_format(self, fmt):
-                pass
-
-            async def generate(self, *, messages=None, **_kw):
-                return '{"already_covered": false, "reasoning": "different topic"}'
-
         orig_dedup = SETTINGS.conversation.SPEECH_DEDUP_ENABLED
         SETTINGS.conversation.SPEECH_DEDUP_ENABLED = True
         env["monkeypatch"].setattr(
             _dedup_mod,
             "new_llm_client",
-            lambda *a, **kw: _FakeDedupClient(),
+            lambda *a, **kw: _stream_dedup_client("SPEAK | different topic"),
         )
         try:
             env["session"].agent_state = "thinking"
@@ -3370,6 +3395,74 @@ class TestFastBrainSpeechDedup:
             await self._settle_and_drain(env)
             assert len(env["session"].say_calls) == 1, "Novel speech should be spoken."
             assert env["session"].say_calls[0] == "It's 22 degrees and sunny in London."
+        finally:
+            SETTINGS.conversation.SPEECH_DEDUP_ENABLED = orig_dedup
+
+    async def test_dedup_rewrites_partial_overlap(self, fast_brain_env):
+        """When the gate returns REWRITE, the trimmed body is streamed into
+        session.say and only the rewritten text reaches TTS."""
+        env = fast_brain_env
+        from unity.settings import SETTINGS
+        import unity.conversation_manager.domains.speech_dedup as _dedup_mod
+
+        env["assistant"]._chat_ctx.add_message(
+            role="assistant",
+            content="Yes - got it. The Matrix is the right reply.",
+        )
+
+        orig_dedup = SETTINGS.conversation.SPEECH_DEDUP_ENABLED
+        SETTINGS.conversation.SPEECH_DEDUP_ENABLED = True
+        env["monkeypatch"].setattr(
+            _dedup_mod,
+            "new_llm_client",
+            lambda *a, **kw: _stream_dedup_client(
+                "REWRITE\nConfirmed back on WhatsApp too, so that round's done.",
+            ),
+        )
+        try:
+            env["session"].agent_state = "thinking"
+            self._send_speak_guidance(
+                env,
+                "The Matrix - that's correct. I've confirmed back on WhatsApp "
+                "too, so that round is done.",
+            )
+            await self._settle_and_drain(env)
+            assert len(env["session"].say_calls) == 1, "Rewrite should be spoken."
+            spoken = await _drain_say(env["session"].say_calls[0])
+            assert spoken == (
+                "Confirmed back on WhatsApp too, so that round's done."
+            ), f"Only the rewritten body should reach TTS. Got: {spoken!r}"
+        finally:
+            SETTINGS.conversation.SPEECH_DEDUP_ENABLED = orig_dedup
+
+    async def test_dedup_empty_rewrite_degrades_to_suppress(self, fast_brain_env):
+        """A REWRITE verdict with an empty body suppresses (nothing reaches TTS)."""
+        env = fast_brain_env
+        from unity.settings import SETTINGS
+        import unity.conversation_manager.domains.speech_dedup as _dedup_mod
+
+        env["assistant"]._chat_ctx.add_message(
+            role="assistant",
+            content="Found three Italian restaurants near you.",
+        )
+
+        orig_dedup = SETTINGS.conversation.SPEECH_DEDUP_ENABLED
+        SETTINGS.conversation.SPEECH_DEDUP_ENABLED = True
+        env["monkeypatch"].setattr(
+            _dedup_mod,
+            "new_llm_client",
+            lambda *a, **kw: _stream_dedup_client("REWRITE\n"),
+        )
+        try:
+            env["session"].agent_state = "thinking"
+            self._send_speak_guidance(
+                env,
+                "I found three Italian restaurants nearby.",
+            )
+            await self._settle_and_drain(env)
+            assert (
+                len(env["session"].say_calls) == 0
+            ), "Empty rewrite should degrade to suppression."
         finally:
             SETTINGS.conversation.SPEECH_DEDUP_ENABLED = orig_dedup
 
@@ -3396,25 +3489,18 @@ class TestFastBrainSpeechDedup:
             content="Got it - I'm checking that now.",
         )
 
-        class _FakeDedupClient:
-            def set_response_format(self, fmt):
-                pass
-
-            async def generate(self, *, messages=None, **_kw):
-                system = messages[0]["content"]
-                if f"- {ack}" in system:
-                    return (
-                        '{"already_covered": true, '
-                        '"reasoning": "matches notification"}'
-                    )
-                return '{"already_covered": false, "reasoning": "not yet spoken"}'
+        def _verdict(messages):
+            system = messages[0]["content"]
+            if f"- {ack}" in system:
+                return "SUPPRESS | matches notification"
+            return "SPEAK | not yet spoken"
 
         orig_dedup = SETTINGS.conversation.SPEECH_DEDUP_ENABLED
         SETTINGS.conversation.SPEECH_DEDUP_ENABLED = True
         env["monkeypatch"].setattr(
             _dedup_mod,
             "new_llm_client",
-            lambda *a, **kw: _FakeDedupClient(),
+            lambda *a, **kw: _stream_dedup_client(_verdict),
         )
         try:
             env["session"].agent_state = "thinking"
@@ -3464,21 +3550,19 @@ class TestFastBrainSpeechDedup:
 
         dedup_called = False
 
-        class _TrackingDedupClient:
-            def set_response_format(self, fmt):
-                pass
-
-            async def generate(self, *, messages=None, **_kw):
-                nonlocal dedup_called
-                dedup_called = True
-                return '{"already_covered": true, "reasoning": "should never run"}'
+        def _mark_called():
+            nonlocal dedup_called
+            dedup_called = True
 
         orig_dedup = SETTINGS.conversation.SPEECH_DEDUP_ENABLED
         SETTINGS.conversation.SPEECH_DEDUP_ENABLED = True
         env["monkeypatch"].setattr(
             _dedup_mod,
             "new_llm_client",
-            lambda *a, **kw: _TrackingDedupClient(),
+            lambda *a, **kw: _stream_dedup_client(
+                "SUPPRESS | should never run",
+                on_call=_mark_called,
+            ),
         )
         try:
             env["session"].agent_state = "thinking"
@@ -3509,19 +3593,12 @@ class TestFastBrainSpeechDedup:
             content="I've started the check.",
         )
 
-        class _PassthroughDedupClient:
-            def set_response_format(self, fmt):
-                pass
-
-            async def generate(self, *, messages=None, **_kw):
-                return '{"already_covered": false, "reasoning": "allowed"}'
-
         orig_dedup = SETTINGS.conversation.SPEECH_DEDUP_ENABLED
         SETTINGS.conversation.SPEECH_DEDUP_ENABLED = True
         env["monkeypatch"].setattr(
             _dedup_mod,
             "new_llm_client",
-            lambda *a, **kw: _PassthroughDedupClient(),
+            lambda *a, **kw: _stream_dedup_client("SPEAK | allowed"),
         )
         try:
             env["session"].agent_state = "thinking"
