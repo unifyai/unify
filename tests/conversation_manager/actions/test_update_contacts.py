@@ -21,7 +21,7 @@ from tests.conversation_manager.cm_helpers import (
     assert_efficient,
 )
 from tests.conversation_manager.conftest import BOSS
-from droid.conversation_manager.events import (
+from unity.conversation_manager.events import (
     SMSReceived,
     ActorHandleStarted,
 )

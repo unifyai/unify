@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from droid.common.context_registry import ContextRegistry
-from droid.session_details import SESSION_DETAILS
+from unity.common.context_registry import ContextRegistry
+from unity.session_details import SESSION_DETAILS
 from tests.dashboard_manager.helpers import (
     active_read_root,
     context_titles,

@@ -1,4 +1,4 @@
-"""Behavioural tests for ``droid.gateway.channels.whatsapp``.
+"""Behavioural tests for ``unity.gateway.channels.whatsapp``.
 
 No existing tests in ``communication/tests/whatsapp/`` to port (this
 channel was tested through integration only); all greenfield in the
@@ -15,7 +15,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from droid.gateway.channels.whatsapp import auth_router, unauth_router
+from unity.gateway.channels.whatsapp import auth_router, unauth_router
+from unity.gateway.channels.whatsapp.views import render_greeting_template_text
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -40,7 +41,7 @@ def _settings(monkeypatch: pytest.MonkeyPatch) -> None:
     property; we wrap our stub value in the same shape so call sites
     that do `.get_secret_value()` keep working.
     """
-    from droid.gateway.channels.whatsapp import views as wa_views
+    from unity.gateway.channels.whatsapp import views as wa_views
 
     stub_secret = SimpleNamespace(get_secret_value=lambda: "test-admin-key")
     monkeypatch.setattr(
@@ -80,6 +81,83 @@ def _async_httpx_response(
     resp = MagicMock(status_code=status_code, text=text_body)
     resp.json.return_value = json_body or {}
     return resp
+
+
+def test_send_closed_window_returns_template_delivered_body(client: TestClient):
+    twilio_client = MagicMock()
+    twilio_client.messages.create.return_value = MagicMock(sid="SM_template")
+
+    with (
+        patch(
+            "unity.gateway.channels.whatsapp.views._resolve_route",
+            new=AsyncMock(
+                return_value={"pool_number": "+15550000001", "window_open": False},
+            ),
+        ),
+        patch(
+            "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
+            return_value=twilio_client,
+        ),
+    ):
+        response = client.post(
+            "/whatsapp/send",
+            json={
+                "to": "+4915237826557",
+                "body": "The clue is Blade Runner.",
+                "assistant_id": 110,
+                "user_name": "Daniel",
+                "agent_name": "T-W1N",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        "method": "template",
+        "delivered_body": render_greeting_template_text("Daniel", "T-W1N"),
+    }
+    create_kwargs = twilio_client.messages.create.call_args.kwargs
+    assert "body" not in create_kwargs
+    assert create_kwargs["content_sid"]
+
+
+def test_send_open_window_returns_freeform_delivered_body(client: TestClient):
+    twilio_client = MagicMock()
+    twilio_client.messages.create.return_value = MagicMock(sid="SM_freeform")
+
+    with (
+        patch(
+            "unity.gateway.channels.whatsapp.views._resolve_route",
+            new=AsyncMock(
+                return_value={"pool_number": "+15550000001", "window_open": True},
+            ),
+        ),
+        patch(
+            "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
+            return_value=twilio_client,
+        ),
+    ):
+        response = client.post(
+            "/whatsapp/send",
+            json={
+                "to": "+4915237826557",
+                "body": "The clue is Blade Runner.",
+                "assistant_id": 110,
+                "user_name": "Daniel",
+                "agent_name": "T-W1N",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        "method": "freeform",
+        "delivered_body": "The clue is Blade Runner.",
+    }
+    assert (
+        twilio_client.messages.create.call_args.kwargs["body"]
+        == "The clue is Blade Runner."
+    )
 
 
 def _async_client_returning(response_mock: MagicMock) -> MagicMock:
@@ -122,7 +200,7 @@ def test_unauth_router_exposes_expected_paths() -> None:
 
 
 def test_routers_importable_from_package_root() -> None:
-    from droid.gateway.channels.whatsapp import auth_router as a, unauth_router as u
+    from unity.gateway.channels.whatsapp import auth_router as a, unauth_router as u
 
     assert a is auth_router
     assert u is unauth_router
@@ -160,7 +238,7 @@ class TestStatus:
         client_mock.post = orchestra_post
 
         with patch(
-            "droid.gateway.channels.whatsapp.views.httpx.AsyncClient",
+            "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
             return_value=client_mock,
         ):
             resp = client.post(
@@ -188,7 +266,7 @@ class TestStatus:
     ) -> None:
         """No callback_id -> no Orchestra POST (forward is opt-in)."""
         with patch(
-            "droid.gateway.channels.whatsapp.views.httpx.AsyncClient",
+            "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
         ) as MockClient:
             resp = client.post(
                 "/whatsapp/status",
@@ -222,11 +300,11 @@ class TestSend:
         )
         with (
             patch(
-                "droid.gateway.channels.whatsapp.views.httpx.AsyncClient",
+                "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
                 return_value=_async_client_returning(route_response),
             ),
             patch(
-                "droid.gateway.channels.whatsapp.views.build_twilio_wa_client",
+                "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
                 return_value=twilio_client,
             ),
         ):
@@ -254,7 +332,7 @@ class TestSend:
         _settings: None,
     ) -> None:
         """Closed window -> GREETING template; freeform body is dropped."""
-        from droid.gateway.channels.whatsapp.views import GREETING_TEMPLATE_SID
+        from unity.gateway.channels.whatsapp.views import GREETING_TEMPLATE_SID
 
         twilio_client = MagicMock()
         route_response = _async_httpx_response(
@@ -263,11 +341,11 @@ class TestSend:
         )
         with (
             patch(
-                "droid.gateway.channels.whatsapp.views.httpx.AsyncClient",
+                "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
                 return_value=_async_client_returning(route_response),
             ),
             patch(
-                "droid.gateway.channels.whatsapp.views.build_twilio_wa_client",
+                "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
                 return_value=twilio_client,
             ),
         ):
@@ -278,7 +356,7 @@ class TestSend:
                     "body": "ignored when window is closed",
                     "assistant_id": 42,
                     "user_name": "Alice",
-                    "agent_name": "Droid",
+                    "agent_name": "Unity",
                 },
             )
 
@@ -288,7 +366,7 @@ class TestSend:
         assert kwargs["content_sid"] == GREETING_TEMPLATE_SID
         assert "body" not in kwargs
         variables = json.loads(kwargs["content_variables"])
-        assert variables == {"user_name": "Alice", "agent_name": "Droid"}
+        assert variables == {"user_name": "Alice", "agent_name": "Unity"}
 
     def test_freeform_media_url_passes_through_for_http_urls(
         self,
@@ -304,11 +382,11 @@ class TestSend:
         )
         with (
             patch(
-                "droid.gateway.channels.whatsapp.views.httpx.AsyncClient",
+                "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
                 return_value=_async_client_returning(route_response),
             ),
             patch(
-                "droid.gateway.channels.whatsapp.views.build_twilio_wa_client",
+                "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
                 return_value=twilio_client,
             ),
         ):
@@ -337,7 +415,7 @@ class TestSend:
             json_body={"detail": "Orchestra unavailable"},
         )
         with patch(
-            "droid.gateway.channels.whatsapp.views.httpx.AsyncClient",
+            "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
             return_value=_async_client_returning(route_response),
         ):
             resp = client.post(
@@ -385,19 +463,19 @@ class TestSendCall:
 
         with (
             patch(
-                "droid.gateway.channels.whatsapp.views.httpx.AsyncClient",
+                "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
                 return_value=httpx_client,
             ),
             patch(
-                "droid.gateway.channels.whatsapp.views.build_twilio_wa_client",
+                "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
                 return_value=twilio_client,
             ),
             patch(
-                "droid.gateway.channels.whatsapp.views.ensure_phone_dispatch_rule",
+                "unity.gateway.channels.whatsapp.views.ensure_phone_dispatch_rule",
                 new=AsyncMock(),
             ),
             patch(
-                "droid.gateway.channels.whatsapp.views.make_sip_uri",
+                "unity.gateway.channels.whatsapp.views.make_sip_uri",
                 return_value="sip:+15555550111@test.sip.livekit.cloud",
             ),
         ):
@@ -406,7 +484,7 @@ class TestSendCall:
                 json={
                     "to": "+15555550000",
                     "assistant_id": 42,
-                    "room_name": "droid_42_whatsapp_call",
+                    "room_name": "unity_42_whatsapp_call",
                 },
             )
 
@@ -414,7 +492,7 @@ class TestSendCall:
         body = resp.json()
         assert body["success"] is True
         assert body["method"] == "direct"
-        assert body["conference_name"].startswith("Droid_WA_15555550111_")
+        assert body["conference_name"].startswith("Unity_WA_15555550111_")
         assert twilio_client.calls.create.call_count == 2
 
     def test_invite_template_when_not_permitted(
@@ -424,7 +502,7 @@ class TestSendCall:
         _settings: None,
     ) -> None:
         """Not permitted -> VOICE_CALL_REQUEST template message."""
-        from droid.gateway.channels.whatsapp.views import (
+        from unity.gateway.channels.whatsapp.views import (
             VOICE_CALL_REQUEST_TEMPLATE_SID,
         )
 
@@ -445,11 +523,11 @@ class TestSendCall:
 
         with (
             patch(
-                "droid.gateway.channels.whatsapp.views.httpx.AsyncClient",
+                "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
                 return_value=httpx_client,
             ),
             patch(
-                "droid.gateway.channels.whatsapp.views.build_twilio_wa_client",
+                "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
                 return_value=twilio_client,
             ),
         ):
@@ -458,7 +536,7 @@ class TestSendCall:
                 json={
                     "to": "+15555550000",
                     "assistant_id": 42,
-                    "room_name": "droid_42_wa_call",
+                    "room_name": "unity_42_wa_call",
                 },
             )
 
@@ -480,7 +558,7 @@ class TestNotify:
         _wa_credentials: None,
         _settings: None,
     ) -> None:
-        from droid.gateway.channels.whatsapp.views import NUMBER_CHANGE_TEMPLATE_SID
+        from unity.gateway.channels.whatsapp.views import NUMBER_CHANGE_TEMPLATE_SID
 
         twilio_client = MagicMock()
         m1 = MagicMock(sid="SM_one")
@@ -488,7 +566,7 @@ class TestNotify:
         twilio_client.messages.create.side_effect = [m1, m2]
 
         with patch(
-            "droid.gateway.channels.whatsapp.views.build_twilio_wa_client",
+            "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
             return_value=twilio_client,
         ):
             resp = client.post(
@@ -501,12 +579,12 @@ class TestNotify:
                         {
                             "to": "+15555550000",
                             "user_name": "Alice",
-                            "agent_name": "Droid",
+                            "agent_name": "Unity",
                         },
                         {
                             "to": "+15555550001",
                             "user_name": "Bob",
-                            "agent_name": "Droid",
+                            "agent_name": "Unity",
                         },
                     ],
                 },
@@ -539,7 +617,7 @@ class TestDelete:
         httpx_client.delete.return_value = delete_resp
 
         with patch(
-            "droid.gateway.channels.whatsapp.views.httpx.AsyncClient",
+            "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
             return_value=httpx_client,
         ):
             resp = client.request(
@@ -568,7 +646,7 @@ class TestDelete:
         httpx_client.delete.return_value = delete_resp
 
         with patch(
-            "droid.gateway.channels.whatsapp.views.httpx.AsyncClient",
+            "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
             return_value=httpx_client,
         ):
             resp = client.request(
@@ -596,7 +674,7 @@ class TestAssign:
         httpx_client.post.return_value = assign_resp
 
         with patch(
-            "droid.gateway.channels.whatsapp.views.httpx.AsyncClient",
+            "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
             return_value=httpx_client,
         ):
             resp = client.post("/whatsapp/assign", json={"assistant_id": 42})
@@ -622,7 +700,7 @@ class TestAssign:
         httpx_client.post.return_value = assign_resp
 
         with patch(
-            "droid.gateway.channels.whatsapp.views.httpx.AsyncClient",
+            "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
             return_value=httpx_client,
         ):
             resp = client.post("/whatsapp/assign", json={"assistant_id": 42})
@@ -641,8 +719,8 @@ class TestVoiceAppSid:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from droid.gateway.channels.whatsapp.views import _whatsapp_voice_app_sid
-        from droid.gateway.credentials import EnvCredentialStore
+        from unity.gateway.channels.whatsapp.views import _whatsapp_voice_app_sid
+        from unity.gateway.credentials import EnvCredentialStore
 
         monkeypatch.setenv("DEPLOY_ENV", "staging")
         sid = _whatsapp_voice_app_sid(EnvCredentialStore())
@@ -652,8 +730,8 @@ class TestVoiceAppSid:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from droid.gateway.channels.whatsapp.views import _whatsapp_voice_app_sid
-        from droid.gateway.credentials import EnvCredentialStore
+        from unity.gateway.channels.whatsapp.views import _whatsapp_voice_app_sid
+        from unity.gateway.credentials import EnvCredentialStore
 
         monkeypatch.delenv("DEPLOY_ENV", raising=False)
         sid = _whatsapp_voice_app_sid(EnvCredentialStore())

@@ -21,8 +21,8 @@ from tests.assertion_helpers import (
 )
 from tests.helpers import _handle_project
 
-from droid.contact_manager.prompt_builders import build_ask_prompt, build_update_prompt
-from droid.session_details import UNASSIGNED_USER_CONTEXT, UNASSIGNED_ASSISTANT_CONTEXT
+from unity.contact_manager.prompt_builders import build_ask_prompt, build_update_prompt
+from unity.session_details import UNASSIGNED_USER_CONTEXT, UNASSIGNED_ASSISTANT_CONTEXT
 
 
 def test_ask_system_prompt_formatting(contact_manager_scenario):
@@ -175,13 +175,13 @@ def _build_prompt_in_subprocess(method: str, test_context: str) -> str:
         sys.path.insert(0, os.getcwd())
         import unify
         # Activate the test project before setting context
-        project_name = os.environ.get("DROID_TEST_PROJECT_NAME", "UnityTests")
+        project_name = os.environ.get("UNITY_TEST_PROJECT_NAME", "UnityTests")
         unify.activate(project_name, overwrite=False)
         # Set test-specific context before creating ContactManager to avoid races
         test_ctx = os.environ.get("_TEST_CONTEXT")
         if test_ctx:
             unify.set_context(test_ctx, relative=False)
-        import droid.common.prompt_helpers as _ph
+        import unity.common.prompt_helpers as _ph
         from datetime import datetime, timezone
         def _static_now(time_only: bool = False):
             dt = datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc)
@@ -190,8 +190,8 @@ def _build_prompt_in_subprocess(method: str, test_context: str) -> str:
                 return dt.strftime("%I:%M %p ") + label
             return dt.strftime("%A, %B %d, %Y at %I:%M %p ") + label
         _ph.now = _static_now
-        from droid.contact_manager.contact_manager import ContactManager
-        from droid.contact_manager.prompt_builders import build_ask_prompt, build_update_prompt
+        from unity.contact_manager.contact_manager import ContactManager
+        from unity.contact_manager.prompt_builders import build_ask_prompt, build_update_prompt
         cm = ContactManager()
         tools = dict(cm.get_tools("{method}"))
         prompt = build_{method}_prompt(tools=tools, num_contacts=cm._num_contacts(), columns=cm._list_columns()).flatten()

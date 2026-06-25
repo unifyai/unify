@@ -3,7 +3,7 @@ set -euo pipefail
 
 purpose="${1:?Usage: $0 <purpose>}"
 src="$(cd "$(dirname "$0")" && pwd)"
-dst="$src/../droid_${purpose}"
+dst="$src/../unity_${purpose}"
 
 [ -d "$dst" ] && { echo "Already exists: $dst" >&2; exit 1; }
 

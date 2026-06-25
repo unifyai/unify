@@ -41,12 +41,12 @@ from scripts.skill_migration.skill_to_guidance import (
     parse_skill_file,
     split_frontmatter,
 )
-from droid.guidance_manager.builtins_catalog import (
+from unity.guidance_manager.builtins_catalog import (
     entry_hash,
     load_snapshot,
     stable_guidance_id,
 )
-from droid.guidance_manager.guidance_manager import GuidanceManager
+from unity.guidance_manager.guidance_manager import GuidanceManager
 from tests.helpers import _handle_project
 
 # --------------------------------------------------------------------------- #

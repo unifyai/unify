@@ -4,9 +4,9 @@ import random
 from collections import deque
 from unittest.mock import patch, MagicMock
 
-from droid.events.event_bus import EventBus, Event
-from droid.transcript_manager.types.message import Message
-from droid.conversation_manager.cm_types import Medium
+from unity.events.event_bus import EventBus, Event
+from unity.transcript_manager.types.message import Message
+from unity.conversation_manager.cm_types import Medium
 from tests.helpers import _handle_project
 
 

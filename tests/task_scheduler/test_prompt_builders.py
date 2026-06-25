@@ -1,15 +1,15 @@
 from datetime import datetime, timezone
 
-from droid.task_scheduler.prompt_builders import (
+from unity.task_scheduler.prompt_builders import (
     build_task_execution_request,
     build_task_run_guidelines,
 )
-from droid.task_scheduler.types.activated_by import ActivatedBy
-from droid.task_scheduler.types.priority import Priority
-from droid.task_scheduler.types.repetition import Frequency, RepeatPattern
-from droid.task_scheduler.types.schedule import Schedule
-from droid.task_scheduler.types.status import Status
-from droid.task_scheduler.types.task import DeliveryMode, ExecutionStyle, Task
+from unity.task_scheduler.types.activated_by import ActivatedBy
+from unity.task_scheduler.types.priority import Priority
+from unity.task_scheduler.types.repetition import Frequency, RepeatPattern
+from unity.task_scheduler.types.schedule import Schedule
+from unity.task_scheduler.types.status import Status
+from unity.task_scheduler.types.task import DeliveryMode, ExecutionStyle, Task
 
 
 def test_task_derives_delivery_mode_and_execution_style_independently():

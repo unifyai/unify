@@ -26,7 +26,7 @@ class TestScreenshotUrlResolution:
     @pytest.mark.parametrize("desktop_url,expected", _TEST_CASES)
     def test_capture_screenshot_resolver(self, desktop_url, expected):
         """_resolve_agent_service_url returns the expected URL."""
-        from droid.conversation_manager.medium_scripts.common import (
+        from unity.conversation_manager.medium_scripts.common import (
             _resolve_agent_service_url,
         )
 
@@ -34,7 +34,7 @@ class TestScreenshotUrlResolution:
         mock_session.assistant.desktop_url = desktop_url
 
         with patch(
-            "droid.session_details.SESSION_DETAILS",
+            "unity.session_details.SESSION_DETAILS",
             mock_session,
         ):
             result = _resolve_agent_service_url()

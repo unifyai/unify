@@ -17,8 +17,8 @@ import uuid
 import pytest
 
 from tests.helpers import _handle_project
-from droid.events.event_bus import EventBus, Event
-from droid.events.types.manager_method import ManagerMethodPayload
+from unity.events.event_bus import EventBus, Event
+from unity.events.types.manager_method import ManagerMethodPayload
 
 
 # --------------------------------------------------------------------------- #

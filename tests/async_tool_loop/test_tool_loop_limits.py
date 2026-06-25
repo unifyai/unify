@@ -3,9 +3,9 @@ import pytest
 import unillm
 from typing import Dict, Callable
 
-from droid.common.async_tool_loop import start_async_tool_loop
-from droid.common.tool_spec import ToolSpec
-from droid.common.llm_client import new_llm_client
+from unity.common.async_tool_loop import start_async_tool_loop
+from unity.common.tool_spec import ToolSpec
+from unity.common.llm_client import new_llm_client
 
 pytestmark = pytest.mark.llm_call
 
@@ -94,7 +94,7 @@ async def test_llm_failure_exception_omits_full_client_messages(
     monkeypatch,
 ):
     """LLM failures should not embed full client.messages in exception text."""
-    from droid.common._async_tool import loop as _loop
+    from unity.common._async_tool import loop as _loop
 
     client = new_llm_client(**llm_config)
     huge_content = "x" * 20000

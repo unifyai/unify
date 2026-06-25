@@ -36,10 +36,10 @@ from sandboxes.conversation_manager.agent_service_bootstrap import (
 LG = logging.getLogger("conversation_manager_sandbox")
 
 _LIVEKIT_SETUP_HINT = (
-    "⚠️  Voice sessions require LiveKit. Run `droid voice` once to install the server,\n"
+    "⚠️  Voice sessions require LiveKit. Run `unity voice` once to install the server,\n"
     "    then restart the sandbox — it will start automatically on next launch.\n"
     "  • Or use LiveKit Cloud: set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET\n"
-    "    in ~/.droid/droid/.env  (sign up free at https://cloud.livekit.io)"
+    "    in ~/.unity/unity/.env  (sign up free at https://cloud.livekit.io)"
 )
 
 PromptFn = Callable[[str], Awaitable[str]]
@@ -329,7 +329,7 @@ class CommandRouter:
         except Exception:
             pass
         try:
-            from droid.conversation_manager.cm_types import Mode
+            from unity.conversation_manager.cm_types import Mode
 
             cm.mode = Mode.TEXT
         except Exception:

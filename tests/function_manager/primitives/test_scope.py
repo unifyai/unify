@@ -2,13 +2,13 @@
 
 import pytest
 
-from droid.function_manager.primitives.scope import (
+from unity.function_manager.primitives.scope import (
     PrimitiveScope,
     VALID_MANAGER_ALIASES,
     default_runtime_scope,
     scoped_managers_for_role,
 )
-from droid.session_details import SESSION_DETAILS
+from unity.session_details import SESSION_DETAILS
 
 # ────────────────────────────────────────────────────────────────────────────
 # PrimitiveScope validation tests

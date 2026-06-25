@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from droid.secret_manager.secret_manager import SecretManager
+from unity.secret_manager.secret_manager import SecretManager
 
 
 def test_list_secret_keys(secret_manager_context):

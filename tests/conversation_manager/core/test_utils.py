@@ -12,7 +12,7 @@ from datetime import timedelta
 
 import pytest
 
-from droid.conversation_manager.task_actions import (
+from unity.conversation_manager.task_actions import (
     OPERATION_MAP,
     STEERING_OPERATIONS,
     ParsedActionName,
@@ -25,18 +25,18 @@ from droid.conversation_manager.task_actions import (
     parse_action_name,
     safe_call_id_suffix,
 )
-from droid.conversation_manager.domains.notifications import (
+from unity.conversation_manager.domains.notifications import (
     Notification,
     NotificationBar,
 )
-from droid.conversation_manager.domains.renderer import Renderer
-from droid.conversation_manager.domains.contact_index import (
+from unity.conversation_manager.domains.renderer import Renderer
+from unity.conversation_manager.domains.contact_index import (
     ConversationState,
     ContactIndex,
     Message,
     EmailMessage,
 )
-from droid.conversation_manager.cm_types import Medium
+from unity.conversation_manager.cm_types import Medium
 
 # Alias for backward compatibility with tests
 Contact = ConversationState
@@ -661,12 +661,14 @@ class TestRenderer:
             subject="Important Update",
             body="Please review the attached document.",
             email_id="email_456",
+            thread_id="gmail-thread-456",
             timestamp=static_now,
             role="user",
         )
         result = renderer.render_message(msg, old_snapshot)
         assert "Subject: Important Update" in result
         assert "Email ID: email_456" in result
+        assert "Thread ID: gmail-thread-456" in result
         assert "Please review" in result
 
     def test_render_contact(
@@ -696,7 +698,7 @@ class TestRenderer:
         static_now,
     ):
         """Global thread appears before per-medium threads in rendered output."""
-        from droid.conversation_manager.domains.contact_index import GlobalThreadEntry
+        from unity.conversation_manager.domains.contact_index import GlobalThreadEntry
 
         contact_info = {
             "contact_id": 1,
@@ -740,7 +742,7 @@ class TestRenderer:
         static_now,
     ):
         """Global thread renders all messages while per-medium caps at max_contact_medium_messages."""
-        from droid.conversation_manager.domains.contact_index import GlobalThreadEntry
+        from unity.conversation_manager.domains.contact_index import GlobalThreadEntry
 
         contact_info = {
             "contact_id": 1,
@@ -1271,7 +1273,7 @@ class TestDispatchLivekitAgentCodeQuality:
         cause multiple retry attempts with backoff delays, defeating the purpose.
         """
         import inspect
-        from droid.conversation_manager.utils import dispatch_livekit_agent
+        from unity.conversation_manager.utils import dispatch_livekit_agent
 
         source = inspect.getsource(dispatch_livekit_agent)
 

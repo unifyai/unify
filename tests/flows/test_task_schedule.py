@@ -32,17 +32,17 @@ from typing import Any
 import pytest
 import unify
 
-from droid.common.context_registry import ContextRegistry
-from droid.manager_registry import ManagerRegistry
-from droid.session_details import SESSION_DETAILS
-from droid.task_scheduler.local_scheduler import LocalActivationScheduler
-from droid.task_scheduler.machine_state import (
+from unity.common.context_registry import ContextRegistry
+from unity.manager_registry import ManagerRegistry
+from unity.session_details import SESSION_DETAILS
+from unity.task_scheduler.local_scheduler import LocalActivationScheduler
+from unity.task_scheduler.machine_state import (
     TASK_MACHINE_STATE_PROJECT,
     list_scheduled_activations,
 )
-from droid.task_scheduler.task_scheduler import TaskScheduler
-from droid.task_scheduler.types.schedule import Schedule
-from droid.task_scheduler.types.status import Status
+from unity.task_scheduler.task_scheduler import TaskScheduler
+from unity.task_scheduler.types.schedule import Schedule
+from unity.task_scheduler.types.status import Status
 
 # Topic the LocalActivationScheduler publishes a live TaskDue on at fire time;
 # the hosted Cloud Tasks ingress path uses the same topic.

@@ -16,7 +16,7 @@ except Exception:
     pass
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Early Environment Setup (MUST be before any droid/unify imports)
+# Early Environment Setup (MUST be before any unity/unify imports)
 # ─────────────────────────────────────────────────────────────────────────────
 # Set UNILLM_CACHE_DIR to use the MAIN repo's cache, not the worktree's.
 # This ensures all worktrees share the same LLM cache (.cache.ndjson) for
@@ -40,7 +40,7 @@ if "UNILLM_CACHE_DIR" not in os.environ:
             pass  # Fall back to current repo root
     os.environ["UNILLM_CACHE_DIR"] = str(repo_root)
 
-from droid.settings import SETTINGS
+from unity.settings import SETTINGS
 
 _TEE_FILE_HANDLE: Optional[object] = None
 _TEE_ORIG_STREAM: Optional[object] = None
@@ -276,34 +276,34 @@ def _derive_socket_name() -> str:
     consistent naming whether tests are run via parallel_run.sh or directly via pytest.
 
     Returns:
-        - 'droid_dev_ttysXXX' if running in a TTY (e.g., terminal session)
-        - 'droid_pidXXX' if not running in a TTY (e.g., background process)
+        - 'unity_dev_ttysXXX' if running in a TTY (e.g., terminal session)
+        - 'unity_pidXXX' if not running in a TTY (e.g., background process)
     """
     try:
         # Try to get the TTY device path (e.g., '/dev/ttys042')
         tty_path = os.ttyname(sys.stdout.fileno())
-        # Sanitize: /dev/ttys042 -> droid_dev_ttys042
+        # Sanitize: /dev/ttys042 -> unity_dev_ttys042
         tty_id = tty_path.replace("/", "_")
-        return f"droid{tty_id}"
+        return f"unity{tty_id}"
     except (OSError, AttributeError):
         # Not a TTY (e.g., piped output, background process)
-        return f"droid_pid{os.getpid()}"
+        return f"unity_pid{os.getpid()}"
 
 
 def _get_log_subdir() -> str:
     """Determine the log subdirectory for pytest logs.
 
     Returns a datetime-prefixed directory name for natural time-based ordering:
-        - DROID_LOG_SUBDIR if set (e.g., '2025-12-05T14-30-45_droid_dev_ttys042')
-        - Falls back to DROID_TEST_SOCKET for legacy compatibility
+        - UNITY_LOG_SUBDIR if set (e.g., '2025-12-05T14-30-45_unity_dev_ttys042')
+        - Falls back to UNITY_TEST_SOCKET for legacy compatibility
         - Derives terminal ID for direct pytest invocations (same as parallel_run.sh would)
     """
     # Prefer the datetime-prefixed log subdir if available
-    log_subdir = os.environ.get("DROID_LOG_SUBDIR", "").strip()
+    log_subdir = os.environ.get("UNITY_LOG_SUBDIR", "").strip()
     if log_subdir:
         return log_subdir
     # Fallback to socket name for backward compatibility
-    socket = os.environ.get("DROID_TEST_SOCKET", "").strip()
+    socket = os.environ.get("UNITY_TEST_SOCKET", "").strip()
     if socket:
         return socket
     # Derive terminal ID (same logic as _shell_common.sh) for direct pytest invocations
@@ -314,7 +314,7 @@ def _get_log_subdir() -> str:
 def _get_log_root(config_rootpath: Path) -> Path:
     """Determine the root directory for pytest logs.
 
-    Prefers DROID_LOG_ROOT env var if set, allowing explicit worktree targeting.
+    Prefers UNITY_LOG_ROOT env var if set, allowing explicit worktree targeting.
     Otherwise derives from this file's location, which correctly resolves to
     the worktree when running from one.
 
@@ -322,7 +322,7 @@ def _get_log_root(config_rootpath: Path) -> Path:
     would have logs written to the main repo instead of their worktree.
     """
     # Allow explicit override for flexibility
-    log_root = os.environ.get("DROID_LOG_ROOT", "").strip()
+    log_root = os.environ.get("UNITY_LOG_ROOT", "").strip()
     if log_root:
         return Path(log_root)
 
@@ -468,15 +468,15 @@ def pytest_sessionstart(session):
     # Initialize OpenTelemetry tracing early (before any test imports)
     # This ensures httpx/aiohttp clients are instrumented before creation
     try:
-        from droid.common.test_tracing import _initialize_tracer
+        from unity.common.test_tracing import _initialize_tracer
 
         _initialize_tracer()
     except ImportError:
         pass  # OpenTelemetry not installed
 
     # Configure file-based logging directories for trace correlation.
-    # Droid LOGGER output goes to pytest stdout (captured in logs/pytest/),
-    # so we don't configure a separate logs/droid/ directory during tests.
+    # Unity LOGGER output goes to pytest stdout (captured in logs/pytest/),
+    # so we don't configure a separate logs/unity/ directory during tests.
     root_path = _get_log_root(Path(session.config.rootpath))
     subdir = _get_log_subdir()
 
@@ -654,10 +654,10 @@ def _trace_test(request):
     header to all HTTP calls (httpx and aiohttp), allowing Orchestra traces
     to be correlated with specific test runs.
 
-    Enable/disable via DROID_TEST_TRACING env var (default: true).
+    Enable/disable via UNITY_TEST_TRACING env var (default: true).
     """
     try:
-        from droid.common.test_tracing import trace_test
+        from unity.common.test_tracing import trace_test
 
         test_name = request.node.name
         with trace_test(test_name) as (trace_id, span):

@@ -16,8 +16,8 @@ import json
 import pytest
 from typing import Any, Dict, List
 
-from droid.function_manager.function_manager import FunctionManager
-from droid.common.context_registry import ContextRegistry
+from unity.function_manager.function_manager import FunctionManager
+from unity.common.context_registry import ContextRegistry
 from tests.helpers import _handle_project
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -70,7 +70,7 @@ def function_manager_factory():
 @pytest.fixture
 def mock_session_details_windows(monkeypatch):
     """Configure SESSION_DETAILS for Windows VM execution."""
-    from droid.session_details import SESSION_DETAILS
+    from unity.session_details import SESSION_DETAILS
 
     monkeypatch.setattr(SESSION_DETAILS.assistant, "desktop_mode", "windows")
     monkeypatch.setattr(SESSION_DETAILS.assistant, "agent_id", 999_001)
@@ -88,7 +88,7 @@ def mock_session_details_windows(monkeypatch):
     # times out after 5 min with
     # `RuntimeError: Managed VM did not become ready within 5 minutes`.
     # Pre-set the event so the wait returns immediately.
-    from droid.function_manager.primitives.runtime import _vm_ready as _runtime_vm_ready
+    from unity.function_manager.primitives.runtime import _vm_ready as _runtime_vm_ready
 
     _was_set = _runtime_vm_ready.is_set()
     _runtime_vm_ready.set()
@@ -102,14 +102,14 @@ def mock_session_details_windows(monkeypatch):
 @pytest.fixture
 def mock_session_details_ubuntu(monkeypatch):
     """Configure SESSION_DETAILS for Ubuntu VM execution (managed VM, not Windows)."""
-    from droid.session_details import SESSION_DETAILS
+    from unity.session_details import SESSION_DETAILS
 
     monkeypatch.setattr(SESSION_DETAILS.assistant, "desktop_mode", "ubuntu")
     monkeypatch.setattr(SESSION_DETAILS.assistant, "agent_id", 999_002)
 
     # Same _vm_ready pre-set rationale as in
     # mock_session_details_windows above.
-    from droid.function_manager.primitives.runtime import _vm_ready as _runtime_vm_ready
+    from unity.function_manager.primitives.runtime import _vm_ready as _runtime_vm_ready
 
     _runtime_vm_ready.set()
     monkeypatch.setattr(
@@ -566,7 +566,7 @@ class TestSyncIntegration:
         await fm._execute_python_function_on_remote_windows(
             func_data=func_data,
             implementation=SIMPLE_WINDOWS_FUNC,
-            call_kwargs={"input_path": "/Droid/data/file.txt"},
+            call_kwargs={"input_path": "/Unity/data/file.txt"},
         )
 
         # Verify sync order
@@ -593,7 +593,7 @@ class TestSyncIntegration:
         await fm._execute_python_function_on_remote_windows(
             func_data=func_data,
             implementation=SIMPLE_WINDOWS_FUNC,
-            call_kwargs={"input_path": "/Droid/data/file.txt"},
+            call_kwargs={"input_path": "/Unity/data/file.txt"},
         )
 
         # HTTP requests still made (script write + exec + result read)

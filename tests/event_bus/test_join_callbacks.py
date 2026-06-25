@@ -4,8 +4,8 @@ import time
 import pytest
 
 from tests.helpers import _handle_project
-from droid.events.event_bus import EventBus, Event
-from droid.events.types.comms import CommsPayload
+from unity.events.event_bus import EventBus, Event
+from unity.events.types.comms import CommsPayload
 
 
 @pytest.mark.asyncio
@@ -116,7 +116,7 @@ async def test_waits_for_cascade() -> None:
     Note: This test uses ManagerMethod for the derived event to have a
     different type for the second-level callback.
     """
-    from droid.events.types.manager_method import ManagerMethodPayload
+    from unity.events.types.manager_method import ManagerMethodPayload
 
     bus = EventBus()
 

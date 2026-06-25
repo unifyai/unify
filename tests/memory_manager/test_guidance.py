@@ -18,8 +18,8 @@ import json
 import functools
 import pytest
 
-from droid.memory_manager.simulated import SimulatedMemoryManager
-from droid.memory_manager import prompt_builders as pb
+from unity.memory_manager.simulated import SimulatedMemoryManager
+from unity.memory_manager import prompt_builders as pb
 
 # shared fixture from the existing test-suite
 from tests.helpers import _handle_project

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 from tests.helpers import _handle_project
-from droid.file_manager.types import (
+from unity.file_manager.types import (
     FilePipelineConfig,
     TableBusinessContextSpec,
     FileBusinessContextSpec,
@@ -75,7 +75,7 @@ async def test_csv_per_table_context(file_manager, tmp_path: Path):
         return "stub table summary"
 
     with patch(
-        "droid.file_manager.parse_adapter.lowering.content_rows.summarize_table_profile",
+        "unity.file_manager.parse_adapter.lowering.content_rows.summarize_table_profile",
         side_effect=_stub_summary,
     ):
         result = file_manager.ingest_files(display_name, config=cfg)
@@ -196,7 +196,7 @@ async def test_xlsx_multi_tab_per_table_context(file_manager, tmp_path: Path):
             display_name = str(path)
             # Use config with business context
             with patch(
-                "droid.file_manager.parse_adapter.lowering.content_rows.summarize_table_profile",
+                "unity.file_manager.parse_adapter.lowering.content_rows.summarize_table_profile",
                 return_value="stub table summary",
             ):
                 res = file_manager.ingest_files(display_name, config=cfg)
@@ -289,7 +289,7 @@ async def test_csv_with_business_context_from_file(file_manager, tmp_path: Path)
     from unittest.mock import patch
 
     with patch(
-        "droid.file_manager.parse_adapter.lowering.content_rows.summarize_table_profile",
+        "unity.file_manager.parse_adapter.lowering.content_rows.summarize_table_profile",
         return_value="stub table summary",
     ):
         result = file_manager.ingest_files(display_name, config=cfg)

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from sandboxes.display.formatting import draw_box, join_blocks, truncate
-from droid.events.types.manager_method import ManagerMethodPayload
+from unity.events.types.manager_method import ManagerMethodPayload
 
 LG = logging.getLogger("conversation_manager_sandbox")
 

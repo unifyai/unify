@@ -19,8 +19,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from tests.helpers import _handle_project
-from droid.function_manager.function_manager import FunctionManager
-from droid.common.context_registry import ContextRegistry
+from unity.function_manager.function_manager import FunctionManager
+from unity.common.context_registry import ContextRegistry
 
 # ────────────────────────────────────────────────────────────────────────────
 # Fixtures
@@ -108,7 +108,7 @@ async def test_execute_function_primitive_returns_handle(function_manager_factor
     fm = function_manager_factory()
 
     # Simulate a primitive that returns a SteerableToolHandle
-    from droid.common.async_tool_loop import SteerableToolHandle
+    from unity.common.async_tool_loop import SteerableToolHandle
 
     class FakeHandle(SteerableToolHandle):
         def __init__(self):
@@ -244,7 +244,7 @@ async def test_execute_function_primitive_callable_resolution_failure(
     fm = function_manager_factory()
 
     with patch(
-        "droid.function_manager.primitives.runtime.get_primitive_callable",
+        "unity.function_manager.primitives.runtime.get_primitive_callable",
         return_value=None,
     ):
         with pytest.raises(ValueError, match="Could not resolve primitive callable"):

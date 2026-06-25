@@ -10,13 +10,13 @@
     "**/.ruff_cache",
     "**/__pycache__",
     "**/logs",
-    "**/.droid_plans"
+    "**/.unity_plans"
   ],
   "venv": ".venv",
   "venvPath": ".",
   "typeCheckingMode": "off",
   "include": [
-    "droid",
+    "unity",
     "tests",
     "conftest.py"
   ],

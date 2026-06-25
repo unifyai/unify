@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from droid.conversation_manager.events import (
+from unity.conversation_manager.events import (
     Event,
     SMSReceived,
     UnifyMeetEnded,

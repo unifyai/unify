@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from droid.guidance_manager.guidance_manager import GuidanceManager
+from unity.guidance_manager.guidance_manager import GuidanceManager
 from tests.helpers import _handle_project
 
 # Reads federate over the tenant contexts plus the read-only builtins

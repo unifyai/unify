@@ -29,16 +29,16 @@ from tests.destination_routing_helpers import (
     assert_tool_destination,
     run_direct_routing_loop,
 )
-from droid.actor.code_act_actor import CodeActActor
-from droid.actor.environments import StateManagerEnvironment
-from droid.common.context_registry import ContextRegistry
-from droid.common.llm_helpers import methods_to_tool_dict
-from droid.coordinator_manager.coordinator_manager import CoordinatorManager
-from droid.function_manager.function_manager import FunctionManager
-from droid.function_manager.primitives import PrimitiveScope, Primitives
-from droid.guidance_manager.guidance_manager import GuidanceManager
-from droid.manager_registry import ManagerRegistry
-from droid.session_details import SESSION_DETAILS, AssistantDetails, TeamSummary
+from unity.actor.code_act_actor import CodeActActor
+from unity.actor.environments import StateManagerEnvironment
+from unity.common.context_registry import ContextRegistry
+from unity.common.llm_helpers import methods_to_tool_dict
+from unity.coordinator_manager.coordinator_manager import CoordinatorManager
+from unity.function_manager.function_manager import FunctionManager
+from unity.function_manager.primitives import PrimitiveScope, Primitives
+from unity.guidance_manager.guidance_manager import GuidanceManager
+from unity.manager_registry import ManagerRegistry
+from unity.session_details import SESSION_DETAILS, AssistantDetails, TeamSummary
 
 pytestmark = [
     pytest.mark.integration,

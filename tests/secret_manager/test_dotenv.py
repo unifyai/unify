@@ -5,8 +5,8 @@ import pathlib
 
 import unify
 
-from droid.settings import SETTINGS
-from droid.secret_manager.secret_manager import SecretManager
+from unity.settings import SETTINGS
+from unity.secret_manager.secret_manager import SecretManager
 
 
 def _read(path: str) -> str:

@@ -20,7 +20,7 @@ from unittest.mock import patch
 import pytest
 from livekit.agents import llm
 
-from droid.conversation_manager.events import (
+from unity.conversation_manager.events import (
     ActorHandleStarted,
     ActorNotification,
     ActorResult,
@@ -45,7 +45,7 @@ from droid.conversation_manager.events import (
     UnifyMessageSent,
     VoiceInterrupt,
 )
-from droid.conversation_manager.medium_scripts.common import (
+from unity.conversation_manager.medium_scripts.common import (
     hydrate_fast_brain_history,
     trim_fast_brain_context,
     _render_history_event,
@@ -381,7 +381,7 @@ class TestRenderHistoryEvent:
 # =============================================================================
 
 MOCK_GET_LOGS = "unify.get_logs"
-MOCK_SESSION = "droid.conversation_manager.medium_scripts.common.SESSION_DETAILS"
+MOCK_SESSION = "unity.conversation_manager.medium_scripts.common.SESSION_DETAILS"
 
 
 class TestHydrateFastBrainHistory:
@@ -609,9 +609,9 @@ class TestHydrateFastBrainHistory:
 
     @pytest.mark.asyncio
     async def test_works_without_event_bus_initialization(self):
-        """Subprocess scenario: history is returned even without droid.init().
+        """Subprocess scenario: history is returned even without unity.init().
 
-        The voice agent subprocess never calls droid.init(), so EVENT_BUS is
+        The voice agent subprocess never calls unity.init(), so EVENT_BUS is
         an uninitialized proxy.  Before the direct-backend change, this
         function called EVENT_BUS.search() which raised RuntimeError, causing
         every call to return [].  Now it queries the backend directly via

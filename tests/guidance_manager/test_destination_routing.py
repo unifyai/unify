@@ -5,7 +5,7 @@ import unify
 from tests.destination_routing_helpers import (
     manager_routing_context as manager_routing_context,  # noqa: F401
 )
-from droid.guidance_manager.guidance_manager import GuidanceManager
+from unity.guidance_manager.guidance_manager import GuidanceManager
 
 
 def test_guidance_writes_route_to_destination_and_reads_merge_roots(

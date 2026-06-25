@@ -12,17 +12,17 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from droid.conversation_manager.domains.contact_index import (
+from unity.conversation_manager.domains.contact_index import (
     ContactIndex,
     EmailMessage,
     Message,
     UnifyMessage,
 )
-from droid.conversation_manager.domains.notifications import (
+from unity.conversation_manager.domains.notifications import (
     NotificationBar,
     Notification,
 )
-from droid.conversation_manager.domains.renderer import (
+from unity.conversation_manager.domains.renderer import (
     Renderer,
     SnapshotState,
     MessageElement,
@@ -103,7 +103,7 @@ class TestGetAssistantEmailRole:
             bcc=[],
         )
         with patch(
-            "droid.conversation_manager.domains.renderer.SESSION_DETAILS",
+            "unity.conversation_manager.domains.renderer.SESSION_DETAILS",
         ) as mock_session:
             mock_session.assistant.email = "assistant@unify.ai"
             result = _get_assistant_email_role(email)
@@ -123,7 +123,7 @@ class TestGetAssistantEmailRole:
             bcc=[],
         )
         with patch(
-            "droid.conversation_manager.domains.renderer.SESSION_DETAILS",
+            "unity.conversation_manager.domains.renderer.SESSION_DETAILS",
         ) as mock_session:
             mock_session.assistant.email = "assistant@unify.ai"
             result = _get_assistant_email_role(email)
@@ -143,7 +143,7 @@ class TestGetAssistantEmailRole:
             bcc=["assistant@unify.ai"],
         )
         with patch(
-            "droid.conversation_manager.domains.renderer.SESSION_DETAILS",
+            "unity.conversation_manager.domains.renderer.SESSION_DETAILS",
         ) as mock_session:
             mock_session.assistant.email = "assistant@unify.ai"
             result = _get_assistant_email_role(email)
@@ -163,7 +163,7 @@ class TestGetAssistantEmailRole:
             bcc=[],
         )
         with patch(
-            "droid.conversation_manager.domains.renderer.SESSION_DETAILS",
+            "unity.conversation_manager.domains.renderer.SESSION_DETAILS",
         ) as mock_session:
             mock_session.assistant.email = "assistant@unify.ai"
             result = _get_assistant_email_role(email)
@@ -183,7 +183,7 @@ class TestGetAssistantEmailRole:
             bcc=[],
         )
         with patch(
-            "droid.conversation_manager.domains.renderer.SESSION_DETAILS",
+            "unity.conversation_manager.domains.renderer.SESSION_DETAILS",
         ) as mock_session:
             mock_session.assistant.email = "assistant@unify.ai"
             result = _get_assistant_email_role(email)
@@ -203,7 +203,7 @@ class TestGetAssistantEmailRole:
             bcc=[],
         )
         with patch(
-            "droid.conversation_manager.domains.renderer.SESSION_DETAILS",
+            "unity.conversation_manager.domains.renderer.SESSION_DETAILS",
         ) as mock_session:
             mock_session.assistant.email = "assistant@unify.ai"  # Lowercase
             result = _get_assistant_email_role(email)
@@ -223,7 +223,7 @@ class TestGetAssistantEmailRole:
             bcc=[],
         )
         with patch(
-            "droid.conversation_manager.domains.renderer.SESSION_DETAILS",
+            "unity.conversation_manager.domains.renderer.SESSION_DETAILS",
         ) as mock_session:
             mock_session.assistant.email = None
             result = _get_assistant_email_role(email)
@@ -253,7 +253,7 @@ class TestRendererEmailAssistantRole:
             contact_role="sender",
         )
         with patch(
-            "droid.conversation_manager.domains.renderer.SESSION_DETAILS",
+            "unity.conversation_manager.domains.renderer.SESSION_DETAILS",
         ) as mock_session:
             mock_session.assistant.email = "assistant@unify.ai"
             # Use a timestamp before the message to mark it as NEW
@@ -280,7 +280,7 @@ class TestRendererEmailAssistantRole:
             contact_role="to",
         )
         with patch(
-            "droid.conversation_manager.domains.renderer.SESSION_DETAILS",
+            "unity.conversation_manager.domains.renderer.SESSION_DETAILS",
         ) as mock_session:
             mock_session.assistant.email = "assistant@unify.ai"
             last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
@@ -304,7 +304,7 @@ class TestRendererEmailAssistantRole:
             contact_role="sender",
         )
         with patch(
-            "droid.conversation_manager.domains.renderer.SESSION_DETAILS",
+            "unity.conversation_manager.domains.renderer.SESSION_DETAILS",
         ) as mock_session:
             mock_session.assistant.email = "assistant@unify.ai"
             last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
@@ -762,7 +762,7 @@ class TestRenderStateWithTracking:
         notification_bar,
     ):
         """Messages in conversations are tracked with identity."""
-        from droid.conversation_manager.cm_types import Medium
+        from unity.conversation_manager.cm_types import Medium
 
         # Add a message to the conversation
         ts1 = datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc)
@@ -798,7 +798,7 @@ class TestRenderStateWithTracking:
         monkeypatch,
     ):
         """Active conversation rendering gets assistant timezone from common helper."""
-        from droid.conversation_manager.cm_types import Medium
+        from unity.conversation_manager.cm_types import Medium
 
         calls = []
 
@@ -807,7 +807,7 @@ class TestRenderStateWithTracking:
             return "America/New_York"
 
         monkeypatch.setattr(
-            "droid.conversation_manager.domains.renderer.get_assistant_timezone",
+            "unity.conversation_manager.domains.renderer.get_assistant_timezone",
             fake_get_assistant_timezone,
         )
         contact_index._fallback_contacts[1]["timezone"] = "America/Los_Angeles"
@@ -1150,8 +1150,8 @@ class TestRenderCompletedActions:
         renderer,
     ):
         """render_state includes completed_actions section."""
-        from droid.conversation_manager.domains.contact_index import ContactIndex
-        from droid.conversation_manager.domains.notifications import NotificationBar
+        from unity.conversation_manager.domains.contact_index import ContactIndex
+        from unity.conversation_manager.domains.notifications import NotificationBar
 
         contact_index = ContactIndex()
         notification_bar = NotificationBar()
@@ -1304,7 +1304,7 @@ class TestParticipantTimezones:
 
     def test_unify_message_shows_timezone_block(self, renderer):
         """UnifyMessage shows timezone block with contact and assistant timezones."""
-        from droid.conversation_manager.domains.contact_index import UnifyMessage
+        from unity.conversation_manager.domains.contact_index import UnifyMessage
 
         msg = UnifyMessage(
             name="Boss",
@@ -1350,7 +1350,7 @@ class TestParticipantTimezones:
             bcc=[],
         )
         with patch(
-            "droid.conversation_manager.domains.renderer.SESSION_DETAILS",
+            "unity.conversation_manager.domains.renderer.SESSION_DETAILS",
         ) as mock_session:
             mock_session.assistant.email = "assistant@unify.ai"
             last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
@@ -1386,7 +1386,7 @@ class TestParticipantTimezones:
             bcc=[],
         )
         with patch(
-            "droid.conversation_manager.domains.renderer.SESSION_DETAILS",
+            "unity.conversation_manager.domains.renderer.SESSION_DETAILS",
         ) as mock_session:
             mock_session.assistant.email = "assistant@unify.ai"
             last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
@@ -1420,7 +1420,7 @@ class TestParticipantTimezones:
             bcc=["dave@example.com"],  # Asia/Tokyo
         )
         with patch(
-            "droid.conversation_manager.domains.renderer.SESSION_DETAILS",
+            "unity.conversation_manager.domains.renderer.SESSION_DETAILS",
         ) as mock_session:
             mock_session.assistant.email = "assistant@unify.ai"
             last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
@@ -1457,7 +1457,7 @@ class TestParticipantTimezones:
             bcc=[],
         )
         with patch(
-            "droid.conversation_manager.domains.renderer.SESSION_DETAILS",
+            "unity.conversation_manager.domains.renderer.SESSION_DETAILS",
         ) as mock_session:
             mock_session.assistant.email = "assistant@unify.ai"
             last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
@@ -1486,7 +1486,7 @@ class TestParticipantTimezones:
             bcc=[],
         )
         with patch(
-            "droid.conversation_manager.domains.renderer.SESSION_DETAILS",
+            "unity.conversation_manager.domains.renderer.SESSION_DETAILS",
         ) as mock_session:
             mock_session.assistant.email = "assistant@unify.ai"
             last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
@@ -1517,7 +1517,7 @@ class TestParticipantTimezones:
             bcc=[],
         )
         with patch(
-            "droid.conversation_manager.domains.renderer.SESSION_DETAILS",
+            "unity.conversation_manager.domains.renderer.SESSION_DETAILS",
         ) as mock_session:
             mock_session.assistant.email = "assistant@unify.ai"
             last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)
@@ -1548,7 +1548,7 @@ class TestParticipantTimezones:
             bcc=[],
         )
         with patch(
-            "droid.conversation_manager.domains.renderer.SESSION_DETAILS",
+            "unity.conversation_manager.domains.renderer.SESSION_DETAILS",
         ) as mock_session:
             mock_session.assistant.email = "assistant@unify.ai"
             last_snapshot = datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc)

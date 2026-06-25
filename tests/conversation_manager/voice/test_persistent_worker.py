@@ -27,7 +27,7 @@ async def _wait_for_condition(predicate, *, timeout: float = 5.0, poll: float = 
     return False
 
 
-from droid.conversation_manager.domains.call_manager import (
+from unity.conversation_manager.domains.call_manager import (
     CallConfig,
     LivekitCallManager,
     make_room_name,
@@ -47,7 +47,7 @@ def config():
         assistant_number="+15551234567",
         voice_provider="elevenlabs",
         voice_id="test_voice_id",
-        job_name="droid-test-pod-abc123",
+        job_name="unity-test-pod-abc123",
     )
 
 
@@ -83,11 +83,11 @@ def boss_contact():
 
 class TestWorkerAgentName:
     def test_agent_name_uses_job_name(self, call_manager):
-        assert call_manager.worker_agent_name == "droid_droid-test-pod-abc123"
+        assert call_manager.worker_agent_name == "unity_unity-test-pod-abc123"
 
     def test_agent_name_updates_with_job_name(self, call_manager):
-        call_manager.job_name = "droid-other-pod-xyz"
-        assert call_manager.worker_agent_name == "droid_droid-other-pod-xyz"
+        call_manager.job_name = "unity-other-pod-xyz"
+        assert call_manager.worker_agent_name == "unity_unity-other-pod-xyz"
 
 
 # ---------------------------------------------------------------------------
@@ -113,7 +113,7 @@ class TestPersistentWorkerStartup:
     @pytest.mark.asyncio
     async def test_start_persistent_worker_spawns_process(self, call_manager):
         with patch(
-            "droid.conversation_manager.domains.call_manager.run_script",
+            "unity.conversation_manager.domains.call_manager.run_script",
         ) as mock_run:
             mock_proc = MagicMock()
             mock_proc.poll.return_value = None
@@ -125,13 +125,13 @@ class TestPersistentWorkerStartup:
             args = mock_run.call_args[0]
             assert "worker.py" in str(args[0])
             assert "dev" in args
-            assert "droid_droid-test-pod-abc123" in args
+            assert "unity_unity-test-pod-abc123" in args
             assert call_manager._worker_proc is mock_proc
 
     @pytest.mark.asyncio
     async def test_start_persistent_worker_idempotent(self, call_manager):
         with patch(
-            "droid.conversation_manager.domains.call_manager.run_script",
+            "unity.conversation_manager.domains.call_manager.run_script",
         ) as mock_run:
             mock_proc = MagicMock()
             mock_proc.poll.return_value = None
@@ -145,7 +145,7 @@ class TestPersistentWorkerStartup:
     @pytest.mark.asyncio
     async def test_start_persistent_worker_restarts_if_dead(self, call_manager):
         with patch(
-            "droid.conversation_manager.domains.call_manager.run_script",
+            "unity.conversation_manager.domains.call_manager.run_script",
         ) as mock_run:
             dead_proc = MagicMock()
             dead_proc.poll.return_value = 1
@@ -163,7 +163,7 @@ class TestPersistentWorkerStartup:
     @pytest.mark.asyncio
     async def test_refresh_restarts_worker_when_unify_key_changes(self, call_manager):
         with patch(
-            "droid.conversation_manager.domains.call_manager.run_script",
+            "unity.conversation_manager.domains.call_manager.run_script",
         ) as mock_run:
             mock_proc = MagicMock()
             mock_proc.poll.return_value = None
@@ -190,7 +190,7 @@ class TestPersistentWorkerStartup:
     async def test_refresh_skips_restart_when_key_unchanged(self, call_manager):
         with (
             patch(
-                "droid.conversation_manager.domains.call_manager.run_script",
+                "unity.conversation_manager.domains.call_manager.run_script",
             ) as mock_run,
             patch.object(
                 call_manager,
@@ -216,7 +216,7 @@ class TestPersistentWorkerStartup:
         call_manager._active_job = True
         with (
             patch(
-                "droid.conversation_manager.domains.call_manager.run_script",
+                "unity.conversation_manager.domains.call_manager.run_script",
             ) as mock_run,
             patch.object(
                 call_manager,
@@ -241,7 +241,7 @@ class TestPersistentWorkerStartup:
 class TestPersistentWorkerOptions:
     def test_worker_registers_for_publisher_jobs(self, monkeypatch):
         from livekit import agents
-        from droid.conversation_manager.medium_scripts import worker
+        from unity.conversation_manager.medium_scripts import worker
 
         captured = {}
 
@@ -251,13 +251,13 @@ class TestPersistentWorkerOptions:
             captured["devmode"] = devmode
             captured["register"] = register
 
-        monkeypatch.setattr(worker.sys, "argv", ["worker.py", "dev", "droid_test"])
+        monkeypatch.setattr(worker.sys, "argv", ["worker.py", "dev", "unity_test"])
         monkeypatch.setattr(worker, "clear_worker_signal_files", lambda: None)
         monkeypatch.setattr(worker, "_run_worker_with_registration_signal", capture_run)
 
         worker.main()
 
-        assert captured["opts"].agent_name == "droid_test"
+        assert captured["opts"].agent_name == "unity_test"
         assert captured["opts"].worker_type is agents.WorkerType.PUBLISHER
         assert captured["devmode"] is True
         assert captured["register"] is True
@@ -287,13 +287,13 @@ class TestJobDispatch:
         mock_lk.agent_dispatch.create_dispatch = AsyncMock(return_value=mock_dispatch)
         mock_lk.aclose = AsyncMock()
 
-        from droid.conversation_manager.medium_scripts.worker import (
+        from unity.conversation_manager.medium_scripts.worker import (
             WORKER_REGISTERED_PATH,
         )
 
         with (
             patch(
-                "droid.conversation_manager.domains.call_manager.LiveKitAPI",
+                "unity.conversation_manager.domains.call_manager.LiveKitAPI",
                 return_value=mock_lk,
             ),
             patch.object(
@@ -306,7 +306,7 @@ class TestJobDispatch:
             with open(WORKER_REGISTERED_PATH, "w", encoding="utf-8"):
                 pass
             await call_manager._dispatch_job(
-                "droid_42_phone",
+                "unity_42_phone",
                 "phone",
                 sample_contact,
                 boss_contact,
@@ -315,8 +315,8 @@ class TestJobDispatch:
 
         mock_lk.agent_dispatch.create_dispatch.assert_called_once()
         req = mock_lk.agent_dispatch.create_dispatch.call_args[0][0]
-        assert req.agent_name == "droid_droid-test-pod-abc123"
-        assert req.room == "droid_42_phone"
+        assert req.agent_name == "unity_unity-test-pod-abc123"
+        assert req.room == "unity_42_phone"
 
         meta = json.loads(req.metadata)
         assert meta["voice_provider"] == "elevenlabs"
@@ -374,11 +374,11 @@ class TestJobDispatch:
             await call_manager.start_unify_meet(
                 sample_contact,
                 boss_contact,
-                room_name="droid_42_meet",
+                room_name="unity_42_meet",
             )
 
             mock_dispatch.assert_called_once_with(
-                "droid_42_meet",
+                "unity_42_meet",
                 "unify_meet",
                 sample_contact,
                 boss_contact,
@@ -403,7 +403,7 @@ class TestLegacyFallback:
         assert call_manager._worker_proc is None
 
         with patch(
-            "droid.conversation_manager.domains.call_manager.run_script",
+            "unity.conversation_manager.domains.call_manager.run_script",
         ) as mock_run:
             mock_proc = MagicMock()
             mock_run.return_value = mock_proc
@@ -425,7 +425,7 @@ class TestLegacyFallback:
         call_manager._worker_proc = dead_worker
 
         with patch(
-            "droid.conversation_manager.domains.call_manager.run_script",
+            "unity.conversation_manager.domains.call_manager.run_script",
         ) as mock_run:
             mock_proc = MagicMock()
             mock_run.return_value = mock_proc
@@ -469,7 +469,7 @@ class TestActiveCallGuard:
         call_manager._call_proc = MagicMock()
 
         with patch(
-            "droid.conversation_manager.domains.call_manager.run_script",
+            "unity.conversation_manager.domains.call_manager.run_script",
         ) as mock_run:
             await call_manager.start_call(sample_contact, boss_contact)
             mock_run.assert_not_called()
@@ -487,9 +487,9 @@ class TestWorkerReadiness:
         call_manager,
         tmp_path,
     ):
-        from droid.conversation_manager.medium_scripts import worker as worker_mod
+        from unity.conversation_manager.medium_scripts import worker as worker_mod
 
-        registered_path = tmp_path / "droid_worker_registered"
+        registered_path = tmp_path / "unity_worker_registered"
         mock_worker = MagicMock()
         mock_worker.poll.return_value = None
         call_manager._worker_proc = mock_worker
@@ -522,11 +522,11 @@ class TestStaleDispatchClearing:
         sample_contact,
         boss_contact,
     ):
-        from droid.conversation_manager.medium_scripts.worker import (
+        from unity.conversation_manager.medium_scripts.worker import (
             WORKER_REGISTERED_PATH,
         )
 
-        from droid.conversation_manager.in_memory_event_broker import (
+        from unity.conversation_manager.in_memory_event_broker import (
             InMemoryEventBroker,
         )
 
@@ -544,7 +544,7 @@ class TestStaleDispatchClearing:
 
         with (
             patch(
-                "droid.conversation_manager.domains.call_manager.LiveKitAPI",
+                "unity.conversation_manager.domains.call_manager.LiveKitAPI",
                 return_value=mock_lk,
             ),
             patch.object(
@@ -566,7 +566,7 @@ class TestStaleDispatchClearing:
         self,
         call_manager,
     ):
-        from droid.conversation_manager.in_memory_event_broker import (
+        from unity.conversation_manager.in_memory_event_broker import (
             InMemoryEventBroker,
         )
 
@@ -578,7 +578,7 @@ class TestStaleDispatchClearing:
         socket_path = call_manager._socket_server.socket_path
         assert socket_path is not None
 
-        from droid.conversation_manager.domains.ipc_socket import (
+        from unity.conversation_manager.domains.ipc_socket import (
             CallEventSocketClient,
         )
 
@@ -630,7 +630,7 @@ class TestCleanup:
 
 class TestEntrypointMetadata:
     def test_load_config_from_metadata_valid(self):
-        from droid.conversation_manager.medium_scripts.call import (
+        from unity.conversation_manager.medium_scripts.call import (
             _load_config_from_metadata,
         )
 
@@ -656,7 +656,7 @@ class TestEntrypointMetadata:
         assert result["ipc_socket_path"] == "/tmp/sock.sock"
 
     def test_load_config_from_metadata_empty(self):
-        from droid.conversation_manager.medium_scripts.call import (
+        from unity.conversation_manager.medium_scripts.call import (
             _load_config_from_metadata,
         )
 
@@ -665,7 +665,7 @@ class TestEntrypointMetadata:
         assert _load_config_from_metadata(ctx) is None
 
     def test_load_config_from_metadata_invalid_json(self):
-        from droid.conversation_manager.medium_scripts.call import (
+        from unity.conversation_manager.medium_scripts.call import (
             _load_config_from_metadata,
         )
 
@@ -674,10 +674,10 @@ class TestEntrypointMetadata:
         assert _load_config_from_metadata(ctx) is None
 
     def test_hydrate_session_details_from_metadata_sets_coordinator_flag(self):
-        from droid.conversation_manager.medium_scripts.call import (
+        from unity.conversation_manager.medium_scripts.call import (
             _hydrate_session_details_from_metadata,
         )
-        from droid.session_details import SESSION_DETAILS
+        from unity.session_details import SESSION_DETAILS
 
         SESSION_DETAILS.reset()
         try:
@@ -707,7 +707,7 @@ class TestEntrypointMetadata:
 
 class TestIPCSocketInit:
     def test_init_socket_for_job_sets_env_and_singleton(self):
-        from droid.conversation_manager.domains.ipc_socket import (
+        from unity.conversation_manager.domains.ipc_socket import (
             CM_EVENT_SOCKET_ENV,
             init_socket_for_job,
         )

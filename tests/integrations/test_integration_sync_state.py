@@ -6,22 +6,22 @@ from types import SimpleNamespace
 
 import pytest
 
-from droid.function_manager.function_manager import FunctionManager
-from droid.conversation_manager.domains.integration_sync import (
+from unity.function_manager.function_manager import FunctionManager
+from unity.conversation_manager.domains.integration_sync import (
     _handle_integration_tools_sync_failed,
     _handle_integration_tools_sync_requested,
     _handle_integration_tools_sync_completed,
     _integration_tools_sync_requested_from_payload,
     _schedule_startup_integration_sync,
 )
-from droid.conversation_manager.domains.notifications import NotificationBar
-from droid.conversation_manager.events import (
+from unity.conversation_manager.domains.notifications import NotificationBar
+from unity.conversation_manager.events import (
     IntegrationToolsSyncCompleted,
     IntegrationToolsSyncFailed,
     IntegrationToolsSyncRequested,
 )
-from droid.integrations.sync_state import IntegrationSyncCoordinator
-from droid.integrations.primitives import integration_owner_scope_from_session
+from unity.integrations.sync_state import IntegrationSyncCoordinator
+from unity.integrations.primitives import integration_owner_scope_from_session
 
 
 class FakeIntegrationOps:
@@ -72,11 +72,11 @@ async def test_sync_coordinator_materializes_connected_apps(
     client = FakeIntegrationOps()
     function_manager = FakeFunctionManager()
     monkeypatch.setattr(
-        "droid.integrations.ops.list_connections",
+        "unity.integrations.ops.list_connections",
         client.list_connections,
     )
     monkeypatch.setattr(
-        "droid.manager_registry.ManagerRegistry.get_function_manager",
+        "unity.manager_registry.ManagerRegistry.get_function_manager",
         lambda **kwargs: function_manager,
     )
     coordinator = IntegrationSyncCoordinator(
@@ -106,7 +106,7 @@ def test_assistant_owner_scope_omits_unrelated_owner_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "droid.session_details.SESSION_DETAILS",
+        "unity.session_details.SESSION_DETAILS",
         SimpleNamespace(
             assistant=SimpleNamespace(agent_id=2103),
             user=SimpleNamespace(id="user-123"),
@@ -162,11 +162,11 @@ async def test_sync_requested_handler_schedules_domain_sync(
     function_manager = FakeFunctionManager()
     event_broker = FakeEventBroker()
     monkeypatch.setattr(
-        "droid.manager_registry.ManagerRegistry.get_function_manager",
+        "unity.manager_registry.ManagerRegistry.get_function_manager",
         lambda **kwargs: function_manager,
     )
     monkeypatch.setattr(
-        "droid.integrations.ops.list_connections",
+        "unity.integrations.ops.list_connections",
         FakeIntegrationOps().list_connections,
     )
     cm = SimpleNamespace(
@@ -215,11 +215,11 @@ async def test_cleanup_sync_maps_to_removed_state(
     }
     event_broker = FakeEventBroker()
     monkeypatch.setattr(
-        "droid.manager_registry.ManagerRegistry.get_function_manager",
+        "unity.manager_registry.ManagerRegistry.get_function_manager",
         lambda **kwargs: function_manager,
     )
     monkeypatch.setattr(
-        "droid.integrations.ops.list_connections",
+        "unity.integrations.ops.list_connections",
         FakeIntegrationOps().list_connections,
     )
     cm = SimpleNamespace(
@@ -285,11 +285,11 @@ async def test_startup_sync_schedules_connected_apps_without_brain_action_tools(
     function_manager = FakeFunctionManager()
     event_broker = FakeEventBroker()
     monkeypatch.setattr(
-        "droid.manager_registry.ManagerRegistry.get_function_manager",
+        "unity.manager_registry.ManagerRegistry.get_function_manager",
         lambda **kwargs: function_manager,
     )
     monkeypatch.setattr(
-        "droid.integrations.ops.list_connections",
+        "unity.integrations.ops.list_connections",
         FakeIntegrationOps().list_connections,
     )
     cm = SimpleNamespace(
@@ -350,7 +350,7 @@ def test_provider_tool_row_is_materialized_as_integration_namespace_primitive() 
     assert row["name"] == "primitives.integrations.salesforce.query_records"
     assert row["argspec"] == "(object_name: str, limit: int = None) -> dict"
     assert (
-        row["primitive_class"] == "droid.integrations.primitives.IntegrationPrimitives"
+        row["primitive_class"] == "unity.integrations.primitives.IntegrationPrimitives"
     )
     assert row["metadata"]["source"] == "provider_backed"
     assert (

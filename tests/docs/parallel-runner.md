@@ -12,7 +12,7 @@ Each terminal session automatically gets its own **isolated tmux server**. This 
 - **`tmux kill-server` is safe**: It only kills sessions from the terminal that ran it
 - **No configuration needed**: Isolation is automatic based on the terminal's TTY device
 
-**How it works:** The script derives a unique socket name from your terminal's TTY (e.g., `/dev/ttys042` → socket `droid_dev_ttys042`). All tmux commands use this socket automatically.
+**How it works:** The script derives a unique socket name from your terminal's TTY (e.g., `/dev/ttys042` → socket `unity_dev_ttys042`). All tmux commands use this socket automatically.
 
 **Monitoring your tests:**
 
@@ -34,17 +34,17 @@ attach '<session-name>'
 list_runs
 
 # Watch tests from a specific socket (orphaned run)
-watch_tests --socket droid_dev_ttys042
+watch_tests --socket unity_dev_ttys042
 
 # Attach to a session in a specific socket (two equivalent syntaxes)
-attach --socket droid_dev_ttys042 'f ❌ actor-test_code_act'
-attach 'droid_dev_ttys042:f ❌ actor-test_code_act'  # shorthand
+attach --socket unity_dev_ttys042 'f ❌ actor-test_code_act'
+attach 'unity_dev_ttys042:f ❌ actor-test_code_act'  # shorthand
 
 # Kill failed sessions in a specific socket
-kill_failed --socket droid_dev_ttys042
+kill_failed --socket unity_dev_ttys042
 
 # Kill a specific socket's server
-kill_server --socket droid_dev_ttys042
+kill_server --socket unity_dev_ttys042
 ```
 
 **Cleanup:**
@@ -59,7 +59,7 @@ kill_failed --all
 # Kill the entire tmux server for THIS terminal (+ orphaned processes)
 kill_server
 
-# Kill ALL droid* tmux servers (+ orphaned processes)
+# Kill ALL unity* tmux servers (+ orphaned processes)
 kill_server --all
 
 # Kill ALL tmux servers for this user (+ orphaned processes)
@@ -186,7 +186,7 @@ Do not use `UNILLM_CACHE=false` in normal cloud CI. GitHub Actions test runs use
 ### Available Variables
 
 Settings are organized in two classes with inheritance:
-- `ProductionSettings` (`droid/settings.py`) - used in deployed system AND tests
+- `ProductionSettings` (`unity/settings.py`) - used in deployed system AND tests
 - `TestingSettings` (`tests/settings.py`) - inherits production + adds test-only settings
 
 **Production Settings** (also used in tests):
@@ -196,10 +196,10 @@ Settings are organized in two classes with inheritance:
 | `UNIFY_MODEL` | str | `gpt-5.2@openai` | LLM model to use |
 | `UNILLM_CACHE` | bool/str | `true` | Enable/disable LLM response caching |
 | `LLM_IO_DEBUG` | bool | `true` | Log full LLM request/response payloads |
-| `DROID_TERMINAL_LOG` | bool | `true` | Enable/disable terminal (console) logging |
-| `DROID_ASYNCIO_DEBUG` | bool | `false` | Enable Python asyncio debug mode |
+| `UNITY_TERMINAL_LOG` | bool | `true` | Enable/disable terminal (console) logging |
+| `UNITY_ASYNCIO_DEBUG` | bool | `false` | Enable Python asyncio debug mode |
 | `PYTEST_LOG_TO_FILE` | bool | `true` | Log pytest output to files |
-| `DROID_READONLY_ASK_GUARD` | bool | `true` | Enable read-only ask guard |
+| `UNITY_READONLY_ASK_GUARD` | bool | `true` | Enable read-only ask guard |
 | `FIRST_ASK_TOOL_IS_SEARCH` | bool | `false` | Force semantic search on first `ask` step |
 | `FIRST_MUTATION_TOOL_IS_ASK` | bool | `false` | Force `ask` on first mutation step |
 
@@ -348,7 +348,7 @@ parallel_run --env UNILLM_CACHE=false --eval-only tests/contact_manager/test_ask
 
 - **High resource usage after tests (FDs, memory, swap)**
   - Run: `kill_server --global` to kill servers and purge orphaned processes
-  - Check manually: `ps aux | grep -E "droid.*pytest" | grep -v grep`
+  - Check manually: `ps aux | grep -E "unity.*pytest" | grep -v grep`
   - Use `monitor_resources` to check file descriptor counts
 
 - **"error connecting to ... (No such file or directory)"**
@@ -383,7 +383,7 @@ watch_tests         # Watch this terminal's tests
 attach '<name>'     # Attach to a session
 kill_failed         # Kill failed sessions
 kill_server         # Kill server + purge orphaned processes
-kill_server --all   # Kill all droid* servers + purge orphans
+kill_server --all   # Kill all unity* servers + purge orphans
 kill_server --global  # Kill ALL tmux servers + purge orphans
 ```
 

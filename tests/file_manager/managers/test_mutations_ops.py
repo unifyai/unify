@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 from tests.helpers import _handle_project
-from droid.file_manager.types import FilePipelineConfig
+from unity.file_manager.types import FilePipelineConfig
 
 
 @_handle_project

@@ -13,7 +13,7 @@ on the boss contact (contact_id=1) during demo session initialization:
 2. **Prospect details provided**: Boss contact is pre-populated with prospect
    details from the demo metadata fetched from Orchestra.
 
-These tests mock the Orchestra API but use real Droid initialization flow.
+These tests mock the Orchestra API but use real Unity initialization flow.
 """
 
 import os
@@ -35,11 +35,11 @@ async def demo_cm_factory():
     Returns a factory function that accepts demo_id and prospect_details parameters.
     This allows testing both with and without prospect details.
     """
-    from droid.settings import SETTINGS
-    from droid.conversation_manager.event_broker import reset_event_broker
-    from droid.conversation_manager import start_async, stop_async
-    from droid.conversation_manager.domains import managers_utils
-    from droid.actor.simulated import SimulatedActor
+    from unity.settings import SETTINGS
+    from unity.conversation_manager.event_broker import reset_event_broker
+    from unity.conversation_manager import start_async, stop_async
+    from unity.conversation_manager.domains import managers_utils
+    from unity.actor.simulated import SimulatedActor
 
     created_cms = []
 
@@ -107,7 +107,7 @@ async def demo_cm_factory():
             }
 
         # Mock the httpx client for Orchestra API call
-        with patch("droid.demo_meta.httpx.AsyncClient") as mock_client_class:
+        with patch("unity.demo_meta.httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
             mock_client.__aenter__.return_value = mock_client
             mock_client.__aexit__.return_value = None
@@ -325,11 +325,11 @@ class TestDemoProspectInitialization:
         If the Orchestra API call fails, initialization should still complete
         with the boss contact remaining sparse.
         """
-        from droid.settings import SETTINGS
-        from droid.conversation_manager.event_broker import reset_event_broker
-        from droid.conversation_manager import start_async, stop_async
-        from droid.conversation_manager.domains import managers_utils
-        from droid.actor.simulated import SimulatedActor
+        from unity.settings import SETTINGS
+        from unity.conversation_manager.event_broker import reset_event_broker
+        from unity.conversation_manager import start_async, stop_async
+        from unity.conversation_manager.domains import managers_utils
+        from unity.actor.simulated import SimulatedActor
 
         # Save and set demo mode
         original_demo_mode = SETTINGS.DEMO_MODE
@@ -357,7 +357,7 @@ class TestDemoProspectInitialization:
             mock_response = MagicMock()
             mock_response.status_code = 500
 
-            with patch("droid.demo_meta.httpx.AsyncClient") as mock_client_class:
+            with patch("unity.demo_meta.httpx.AsyncClient") as mock_client_class:
                 mock_client = AsyncMock()
                 mock_client.__aenter__.return_value = mock_client
                 mock_client.__aexit__.return_value = None

@@ -1,19 +1,19 @@
-# Contributing to Droid
+# Contributing to Unity
 
 ## Getting started
 
-Droid depends on two sibling repositories. Clone all three as siblings:
+Unity depends on two sibling repositories. Clone all three as siblings:
 
 ```bash
-git clone https://github.com/unifyai/droid.git
+git clone https://github.com/unifyai/unity.git
 git clone https://github.com/unifyai/unify.git
 git clone https://github.com/unifyai/unillm.git
 
-cd droid
+cd unity
 pip install uv && uv sync --all-groups
 ```
 
-This installs Droid and its sibling dependencies (linked via `[tool.uv.sources]` in `pyproject.toml`).
+This installs Unity and its sibling dependencies (linked via `[tool.uv.sources]` in `pyproject.toml`).
 
 ## Running tests
 
@@ -70,7 +70,7 @@ See [`VISION.md`](VISION.md) for the bets the project is making — including th
 
 ## Maintainers
 
-Droid is maintained by [Unify](https://unify.ai). The current maintainer team (in commit-count order, deduplicated via [`.mailmap`](.mailmap)):
+Unity is maintained by [Unify](https://unify.ai). The current maintainer team (in commit-count order, deduplicated via [`.mailmap`](.mailmap)):
 
 - **Daniel Lenton** ([@djl11](https://github.com/djl11)) — project lead
 - **Yusha Arif** ([@YushaArif99](https://github.com/YushaArif99))
@@ -89,20 +89,20 @@ For PRs that touch a specific subsystem, the table below is a rough guide to who
 
 | Area | Reviewers (rough) |
 |---|---|
-| `droid/actor/` (CodeAct Actor) | @YushaArif99, @djl11 |
-| `droid/conversation_manager/` (slow + fast brain) | @djl11, @vedpatwardhan, @juliagsy |
-| `droid/task_scheduler/` | @djl11 |
-| `droid/contact_manager/`, `droid/knowledge_manager/`, `droid/transcript_manager/` | @djl11 |
-| `droid/file_manager/` (parsing) | @hmahmood24, @djl11 |
-| `droid/function_manager/`, `droid/web_searcher/` | @djl11, @YushaArif99, @juliagsy |
-| `droid/secret_manager/` | @djl11 (high-blast-radius — see CODEOWNERS) |
-| `droid/gateway/`, `droid/comms/` | @djl11 |
+| `unity/actor/` (CodeAct Actor) | @YushaArif99, @djl11 |
+| `unity/conversation_manager/` (slow + fast brain) | @djl11, @vedpatwardhan, @juliagsy |
+| `unity/task_scheduler/` | @djl11 |
+| `unity/contact_manager/`, `unity/knowledge_manager/`, `unity/transcript_manager/` | @djl11 |
+| `unity/file_manager/` (parsing) | @hmahmood24, @djl11 |
+| `unity/function_manager/`, `unity/web_searcher/` | @djl11, @YushaArif99, @juliagsy |
+| `unity/secret_manager/` | @djl11 (high-blast-radius — see CODEOWNERS) |
+| `unity/gateway/`, `unity/comms/` | @djl11 |
 | `agent-service/` (TypeScript browser-use service) | @juliagsy, @YushaArif99 |
 | `scripts/install.sh`, `scripts/local.sh`, `scripts/voice.sh` | @djl11 |
 | `tests/conftest.py`, `tests/parallel_run.sh` | @djl11, @CatB1t |
 
 ## Questions?
 
-- **Architectural questions** — [GitHub Discussions](https://github.com/unifyai/droid/discussions)
+- **Architectural questions** — [GitHub Discussions](https://github.com/unifyai/unity/discussions)
 - **Quick questions / chat** — [Discord](https://discord.com/invite/sXyFF8tDtm)
 - **Security** — see [`SECURITY.md`](SECURITY.md); do not open public issues for security vulnerabilities.

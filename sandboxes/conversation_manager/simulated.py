@@ -1,5 +1,5 @@
 import asyncio
-from droid.common.llm_client import new_llm_client
+from unity.common.llm_client import new_llm_client
 from sandboxes.utils import (
     build_cli_parser,
     speak,
@@ -7,12 +7,12 @@ from sandboxes.utils import (
     transcribe_deepgram,
     activate_project,
 )
-from droid.conversation_manager.prompt_builders import (
+from unity.conversation_manager.prompt_builders import (
     build_call_sys_prompt,
     build_non_call_sys_prompt,
     build_user_agent_prompt,
 )
-from droid.conversation_manager.events import (
+from unity.conversation_manager.events import (
     InboundPhoneUtterance,
     OutboundPhoneUtterance,
     SMSReceived,

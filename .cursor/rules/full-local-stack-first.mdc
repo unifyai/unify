@@ -1,33 +1,33 @@
 ---
-description: Prefer the full local Droid stack for internal development
+description: Prefer the full local Unity stack for internal development
 alwaysApply: true
 ---
 
 # Full Local Stack First
 
 This is internal agent/developer guidance. It intentionally differs from the
-public `droid` README: the README is for open-source users who run `droid`
-against hosted Orchestra and do not have the private `droid-deploy` repo. For
+public `unity` README: the README is for open-source users who run `unity`
+against hosted Orchestra and do not have the private `unity-deploy` repo. For
 internal cross-repo work, default to the private full local stack in
-`droid-deploy/selfhost/`.
+`unity-deploy/selfhost/`.
 
 Before starting, stopping, rebuilding, or repairing any local service, assume the
 full stack may already be running and inspect it first:
 
 ```bash
-bash /Users/djl11/droid-deploy/selfhost/stack.sh status
+bash /Users/djl11/unity-deploy/selfhost/stack.sh status
 ```
 
 Default commands:
 
-- Start full source stack: `bash /Users/djl11/droid-deploy/selfhost/stack.sh up`
-- Repair only Console: `bash /Users/djl11/droid-deploy/selfhost/stack.sh repair-console`
-- Smoke test: `bash /Users/djl11/droid-deploy/selfhost/stack.sh smoke`
+- Start full source stack: `bash /Users/djl11/unity-deploy/selfhost/stack.sh up`
+- Repair only Console: `bash /Users/djl11/unity-deploy/selfhost/stack.sh repair-console`
+- Smoke test: `bash /Users/djl11/unity-deploy/selfhost/stack.sh smoke`
 
 Do not run isolated commands against a live stack unless the user explicitly asks
 for isolated mode: `npm run dev`, `next dev`, `next build`, `npm run ci`,
 `console/scripts/local.sh start`, `orchestra/scripts/local.sh start`, or
-`droid/scripts/local.sh start`.
+`unity/scripts/local.sh start`.
 
 If isolated mode is explicitly requested, use the relevant override env var and
 explain which full-stack guarantees are being bypassed.

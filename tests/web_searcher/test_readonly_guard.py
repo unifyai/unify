@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 
 from tests.helpers import _handle_project
-from droid.web_searcher.web_searcher import WebSearcher
-from droid.common.read_only_ask_guard import ReadOnlyAskGuardHandle
+from unity.web_searcher.web_searcher import WebSearcher
+from unity.common.read_only_ask_guard import ReadOnlyAskGuardHandle
 
 
 @pytest.mark.asyncio
@@ -12,12 +12,12 @@ from droid.common.read_only_ask_guard import ReadOnlyAskGuardHandle
 @_handle_project
 async def test_ask_guard_triggers_when_enabled(monkeypatch):
     """
-    When DROID_READONLY_ASK_GUARD is enabled, WebSearcher.ask should be guarded:
+    When UNITY_READONLY_ASK_GUARD is enabled, WebSearcher.ask should be guarded:
     mutation intent triggers an early stop and returns the early response.
     """
 
     # Ensure the env flag is on for this test only
-    monkeypatch.setenv("DROID_READONLY_ASK_GUARD", "true")
+    monkeypatch.setenv("UNITY_READONLY_ASK_GUARD", "true")
 
     ws = WebSearcher()
 

@@ -1381,7 +1381,7 @@ if _TEXTUAL_AVAILABLE:
             if channel.startswith("eventbus:"):
                 kind = channel.split(":", 1)[1]
                 if kind == "ManagerMethod":
-                    from droid.events.types.manager_method import ManagerMethodPayload
+                    from unity.events.types.manager_method import ManagerMethodPayload
 
                     try:
                         mm = ManagerMethodPayload.model_validate(
@@ -1488,7 +1488,7 @@ if _TEXTUAL_AVAILABLE:
             """
             Update log buffers from broker events so the GUI log panes stay populated.
 
-            `event` is expected to match `droid.conversation_manager.events.Event.to_dict()`.
+            `event` is expected to match `unity.conversation_manager.events.Event.to_dict()`.
             """
 
             rt = self.runtime

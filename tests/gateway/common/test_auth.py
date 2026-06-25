@@ -1,4 +1,4 @@
-"""Tests for ``droid.gateway.common.auth``.
+"""Tests for ``unity.gateway.common.auth``.
 
 Covers the admin-bearer dependency (matching
 ``communication/dependencies.py::auth_admin_key``) and the
@@ -14,7 +14,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 
-from droid.gateway.common.auth import (
+from unity.gateway.common.auth import (
     admin_auth_dependency,
     auth_admin_key,
     authenticate_user_api_key,
@@ -24,7 +24,7 @@ from droid.gateway.common.auth import (
 
 @pytest.fixture
 def _admin_settings(monkeypatch: pytest.MonkeyPatch) -> None:
-    from droid.gateway.common import auth
+    from unity.gateway.common import auth
 
     stub_secret = SimpleNamespace(get_secret_value=lambda: "test-admin-key")
     monkeypatch.setattr(
@@ -72,7 +72,7 @@ class TestAuthAdminKey:
         Important for safety: an empty expected key would otherwise
         match an empty presented key via secrets.compare_digest.
         """
-        from droid.gateway.common import auth
+        from unity.gateway.common import auth
 
         empty_secret = SimpleNamespace(get_secret_value=lambda: "")
         monkeypatch.setattr(
@@ -116,7 +116,7 @@ class TestAuthenticateUserApiKey:
         resp = MagicMock(status_code=200)
         resp.json.return_value = {"user_id": "u-1"}
         with patch(
-            "droid.gateway.common.auth.httpx.AsyncClient",
+            "unity.gateway.common.auth.httpx.AsyncClient",
             return_value=_async_client_returning(resp),
         ):
             result = await authenticate_user_api_key("sk-test")
@@ -126,7 +126,7 @@ class TestAuthenticateUserApiKey:
     async def test_401_raises_401(self, _admin_settings: None) -> None:
         resp = MagicMock(status_code=401)
         with patch(
-            "droid.gateway.common.auth.httpx.AsyncClient",
+            "unity.gateway.common.auth.httpx.AsyncClient",
             return_value=_async_client_returning(resp),
         ):
             with pytest.raises(HTTPException) as ctx:
@@ -141,7 +141,7 @@ class TestAuthenticateUserApiKey:
         """Deny-on-outage: any non-200 -> 401, including 5xx."""
         resp = MagicMock(status_code=503)
         with patch(
-            "droid.gateway.common.auth.httpx.AsyncClient",
+            "unity.gateway.common.auth.httpx.AsyncClient",
             return_value=_async_client_returning(resp),
         ):
             with pytest.raises(HTTPException) as ctx:

@@ -17,19 +17,19 @@ import pytest
 from tests.actor.state_managers.utils import (
     instrument_basic_primitives_calls,
 )
-from droid.actor.code_act_actor import CodeActActor
-from droid.actor.environments import StateManagerEnvironment
-from droid.function_manager.primitives import Primitives, PrimitiveScope
-from droid.manager_registry import ManagerRegistry
+from unity.actor.code_act_actor import CodeActActor
+from unity.actor.environments import StateManagerEnvironment
+from unity.function_manager.primitives import Primitives, PrimitiveScope
+from unity.manager_registry import ManagerRegistry
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
 
 def _force_simulated_contacts(monkeypatch: pytest.MonkeyPatch) -> None:
     """Switch contact manager to simulated impl (minimal scope)."""
-    from droid.settings import SETTINGS
+    from unity.settings import SETTINGS
 
-    monkeypatch.setenv("DROID_CONTACT_IMPL", "simulated")
+    monkeypatch.setenv("UNITY_CONTACT_IMPL", "simulated")
     monkeypatch.setattr(SETTINGS.contact, "IMPL", "simulated", raising=False)
     ManagerRegistry.clear()
 

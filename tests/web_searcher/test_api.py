@@ -3,7 +3,7 @@ import pytest
 pytestmark = pytest.mark.eval
 
 from tests.helpers import _handle_project
-from droid.web_searcher.web_searcher import WebSearcher
+from unity.web_searcher.web_searcher import WebSearcher
 
 
 @pytest.mark.asyncio

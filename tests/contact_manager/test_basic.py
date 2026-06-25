@@ -1,6 +1,7 @@
 import pytest
 
-from droid.contact_manager.contact_manager import ContactManager
+from unity.contact_manager.contact_manager import ContactManager
+from unity.contact_manager.types.contact import Contact
 from tests.helpers import _handle_project
 
 
@@ -328,3 +329,25 @@ def test_update_empty_string_unique_fields():
     assert d.first_name == "Delta-Updated"
     assert c.email_address is None
     assert d.email_address is None
+
+
+def test_contact_model_comm_identifier_validation_and_empty_normalization():
+    contact = Contact(
+        first_name="Comms",
+        whatsapp_number="+4915237826557",
+        discord_id="123456789012345678",
+        slack_user_id="U01ABC234",
+    )
+    assert contact.whatsapp_number == "+4915237826557"
+    assert contact.discord_id == "123456789012345678"
+    assert contact.slack_user_id == "U01ABC234"
+
+    empty = Contact(first_name="Empty", whatsapp_number="")
+    assert empty.whatsapp_number is None
+
+    with pytest.raises(ValueError, match="whatsapp_number"):
+        Contact(first_name="Comms", whatsapp_number="+49 1523")
+    with pytest.raises(ValueError, match="discord_id"):
+        Contact(first_name="Comms", discord_id="discord-user")
+    with pytest.raises(ValueError, match="slack_user_id"):
+        Contact(first_name="Comms", slack_user_id="u01abc234")

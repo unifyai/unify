@@ -24,7 +24,7 @@ async def test_full_table_dump_seeded_when_fits(
         return {"A": 100, "B": 120}
 
     monkeypatch.setattr(
-        "droid.knowledge_manager.knowledge_manager._tok.estimate_tables_tokens_parallel",
+        "unity.knowledge_manager.knowledge_manager._tok.estimate_tables_tokens_parallel",
         fake_estimate_tables_tokens_parallel,
         raising=True,
     )
@@ -36,7 +36,7 @@ async def test_full_table_dump_seeded_when_fits(
         return payload, per_tbl
 
     monkeypatch.setattr(
-        "droid.knowledge_manager.knowledge_manager.build_grouped_dump_payload",
+        "unity.knowledge_manager.knowledge_manager.build_grouped_dump_payload",
         fake_build_grouped_dump_payload,
         raising=True,
     )
@@ -73,7 +73,7 @@ async def test_per_table_dump_selects_only_small(
         return {"Big": 100000, "Small": 200}
 
     monkeypatch.setattr(
-        "droid.knowledge_manager.knowledge_manager._tok.estimate_tables_tokens_parallel",
+        "unity.knowledge_manager.knowledge_manager._tok.estimate_tables_tokens_parallel",
         fake_estimate_tables_tokens_parallel,
         raising=True,
     )
@@ -84,7 +84,7 @@ async def test_per_table_dump_selects_only_small(
         return payload, per_tbl
 
     monkeypatch.setattr(
-        "droid.knowledge_manager.knowledge_manager.build_grouped_dump_payload",
+        "unity.knowledge_manager.knowledge_manager.build_grouped_dump_payload",
         fake_build_grouped_dump_payload,
         raising=True,
     )
@@ -115,7 +115,7 @@ async def test_trimming_applies_when_payload_exceeds_budget(
         return {"T1": 100, "T2": 100, "T3": 100}
 
     monkeypatch.setattr(
-        "droid.knowledge_manager.knowledge_manager._tok.estimate_tables_tokens_parallel",
+        "unity.knowledge_manager.knowledge_manager._tok.estimate_tables_tokens_parallel",
         fake_estimate_tables_tokens_parallel,
         raising=True,
     )
@@ -127,7 +127,7 @@ async def test_trimming_applies_when_payload_exceeds_budget(
         return payload, per_tbl
 
     monkeypatch.setattr(
-        "droid.knowledge_manager.knowledge_manager.build_grouped_dump_payload",
+        "unity.knowledge_manager.knowledge_manager.build_grouped_dump_payload",
         fake_build_grouped_dump_payload,
         raising=True,
     )

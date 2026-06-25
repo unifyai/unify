@@ -5,9 +5,9 @@ import time
 import unify
 
 from tests.helpers import _handle_project
-from droid.common.context_registry import ContextRegistry
-from droid.contact_manager.contact_manager import ContactManager
-from droid.session_details import SESSION_DETAILS
+from unity.common.context_registry import ContextRegistry
+from unity.contact_manager.contact_manager import ContactManager
+from unity.session_details import SESSION_DETAILS
 
 
 @pytest.mark.requires_real_unify

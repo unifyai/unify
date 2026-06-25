@@ -1,4 +1,4 @@
-"""Behavioural tests for ``droid.gateway.channels.unillm``.
+"""Behavioural tests for ``unity.gateway.channels.unillm``.
 
 Smallest channel; one endpoint (POST /chat/completions). Tests
 cover router contract + the two inlined auth helpers + both code
@@ -15,7 +15,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from droid.gateway.channels.unillm import router
+from unity.gateway.channels.unillm import router
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -25,7 +25,7 @@ from droid.gateway.channels.unillm import router
 @pytest.fixture
 def _orchestra_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pin ORCHESTRA_URL for the inlined auth helper."""
-    from droid.gateway.channels.unillm import views as unillm_views
+    from unity.gateway.channels.unillm import views as unillm_views
 
     monkeypatch.setattr(
         unillm_views,
@@ -78,14 +78,14 @@ def test_router_exposes_expected_paths() -> None:
 
 
 def test_router_importable_from_package_root() -> None:
-    from droid.gateway.channels.unillm import router as exported
+    from unity.gateway.channels.unillm import router as exported
 
     assert exported is router
 
 
 def test_schema_re_exported_from_package() -> None:
     """The schema module is part of the channel and importable."""
-    from droid.gateway.channels.unillm.schema import (
+    from unity.gateway.channels.unillm.schema import (
         ChatCompletionRequest,
         ChatMessage,
         ContentPart,
@@ -103,7 +103,7 @@ def test_schema_re_exported_from_package() -> None:
 
 class TestExtractApiKey:
     def test_returns_bearer_token(self) -> None:
-        from droid.gateway.channels.unillm.views import _extract_api_key
+        from unity.gateway.channels.unillm.views import _extract_api_key
 
         request = MagicMock()
         request.headers.get.return_value = "Bearer sk-test-1234"
@@ -112,7 +112,7 @@ class TestExtractApiKey:
     def test_missing_authorization_raises_401(self) -> None:
         from fastapi import HTTPException
 
-        from droid.gateway.channels.unillm.views import _extract_api_key
+        from unity.gateway.channels.unillm.views import _extract_api_key
 
         request = MagicMock()
         request.headers.get.return_value = ""
@@ -123,7 +123,7 @@ class TestExtractApiKey:
     def test_wrong_scheme_raises_401(self) -> None:
         from fastapi import HTTPException
 
-        from droid.gateway.channels.unillm.views import _extract_api_key
+        from unity.gateway.channels.unillm.views import _extract_api_key
 
         request = MagicMock()
         request.headers.get.return_value = "Basic dXNlcjpwYXNz"
@@ -138,10 +138,10 @@ class TestAuthenticateUserApiKey:
         self,
         _orchestra_settings: None,
     ) -> None:
-        from droid.gateway.channels.unillm.views import _authenticate_user_api_key
+        from unity.gateway.channels.unillm.views import _authenticate_user_api_key
 
         with patch(
-            "droid.gateway.channels.unillm.views.httpx.AsyncClient",
+            "unity.gateway.channels.unillm.views.httpx.AsyncClient",
             return_value=_async_httpx_client(_ok_orchestra_response()),
         ):
             result = await _authenticate_user_api_key("sk-test")
@@ -154,10 +154,10 @@ class TestAuthenticateUserApiKey:
     ) -> None:
         from fastapi import HTTPException
 
-        from droid.gateway.channels.unillm.views import _authenticate_user_api_key
+        from unity.gateway.channels.unillm.views import _authenticate_user_api_key
 
         with patch(
-            "droid.gateway.channels.unillm.views.httpx.AsyncClient",
+            "unity.gateway.channels.unillm.views.httpx.AsyncClient",
             return_value=_async_httpx_client(_orchestra_failure_response(401)),
         ):
             with pytest.raises(HTTPException) as ctx:
@@ -174,10 +174,10 @@ class TestAuthenticateUserApiKey:
         """
         from fastapi import HTTPException
 
-        from droid.gateway.channels.unillm.views import _authenticate_user_api_key
+        from unity.gateway.channels.unillm.views import _authenticate_user_api_key
 
         with patch(
-            "droid.gateway.channels.unillm.views.httpx.AsyncClient",
+            "unity.gateway.channels.unillm.views.httpx.AsyncClient",
             return_value=_async_httpx_client(_orchestra_failure_response(500)),
         ):
             with pytest.raises(HTTPException) as ctx:
@@ -211,7 +211,7 @@ class TestChatCompletions:
         _orchestra_settings: None,
     ) -> None:
         with patch(
-            "droid.gateway.channels.unillm.views.httpx.AsyncClient",
+            "unity.gateway.channels.unillm.views.httpx.AsyncClient",
             return_value=_async_httpx_client(_orchestra_failure_response(401)),
         ):
             resp = client.post(
@@ -231,7 +231,7 @@ class TestChatCompletions:
     ) -> None:
         """Pydantic validation: model + messages are required."""
         with patch(
-            "droid.gateway.channels.unillm.views.httpx.AsyncClient",
+            "unity.gateway.channels.unillm.views.httpx.AsyncClient",
             return_value=_async_httpx_client(_ok_orchestra_response()),
         ):
             resp = client.post(
@@ -261,11 +261,11 @@ class TestChatCompletions:
 
         with (
             patch(
-                "droid.gateway.channels.unillm.views.httpx.AsyncClient",
+                "unity.gateway.channels.unillm.views.httpx.AsyncClient",
                 return_value=_async_httpx_client(_ok_orchestra_response()),
             ),
             patch(
-                "droid.gateway.channels.unillm.views.unillm.AsyncUnify",
+                "unity.gateway.channels.unillm.views.unillm.AsyncUnify",
                 return_value=fake_client,
             ) as MockAsync,
         ):
@@ -306,11 +306,11 @@ class TestChatCompletions:
 
         with (
             patch(
-                "droid.gateway.channels.unillm.views.httpx.AsyncClient",
+                "unity.gateway.channels.unillm.views.httpx.AsyncClient",
                 return_value=_async_httpx_client(_ok_orchestra_response()),
             ),
             patch(
-                "droid.gateway.channels.unillm.views.unillm.AsyncUnify",
+                "unity.gateway.channels.unillm.views.unillm.AsyncUnify",
                 return_value=fake_client,
             ),
         ):
@@ -344,11 +344,11 @@ class TestChatCompletions:
 
         with (
             patch(
-                "droid.gateway.channels.unillm.views.httpx.AsyncClient",
+                "unity.gateway.channels.unillm.views.httpx.AsyncClient",
                 return_value=_async_httpx_client(_ok_orchestra_response()),
             ),
             patch(
-                "droid.gateway.channels.unillm.views.unillm.AsyncUnify",
+                "unity.gateway.channels.unillm.views.unillm.AsyncUnify",
                 return_value=fake_client,
             ) as MockAsync,
         ):

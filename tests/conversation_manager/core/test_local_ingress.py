@@ -8,11 +8,11 @@ import aiohttp
 import pytest
 import pytest_asyncio
 
-from droid.conversation_manager.in_memory_event_broker import (
+from unity.conversation_manager.in_memory_event_broker import (
     create_in_memory_event_broker,
     reset_in_memory_event_broker,
 )
-from droid.settings import SETTINGS
+from unity.settings import SETTINGS
 
 
 async def _get_message_on_channel(pubsub, expected_channel: str, timeout: float = 2.0):
@@ -42,10 +42,10 @@ async def broker():
 def patched_local_session():
     with (
         patch(
-            "droid.conversation_manager.comms_manager.SESSION_DETAILS",
+            "unity.conversation_manager.comms_manager.SESSION_DETAILS",
         ) as comms_session,
         patch(
-            "droid.conversation_manager.local_ingress.SESSION_DETAILS",
+            "unity.conversation_manager.local_ingress.SESSION_DETAILS",
         ) as ingress_session,
     ):
         comms_session.assistant.agent_id = 42
@@ -70,14 +70,14 @@ class TestLocalIngress:
         broker,
         patched_local_session,
     ):
-        from droid.conversation_manager.comms_manager import CommsManager
-        from droid.conversation_manager.local_ingress import LocalCommsIngress
+        from unity.conversation_manager.comms_manager import CommsManager
+        from unity.conversation_manager.local_ingress import LocalCommsIngress
 
         with (
             patch.object(SETTINGS.conversation, "LOCAL_COMMS_HOST", "127.0.0.1"),
             patch.object(SETTINGS.conversation, "LOCAL_COMMS_PORT", 0),
             patch(
-                "droid.conversation_manager.local_ingress.local_email.is_email_configured",
+                "unity.conversation_manager.local_ingress.local_email.is_email_configured",
                 return_value=False,
             ),
         ):
@@ -131,14 +131,14 @@ class TestLocalIngress:
         broker,
         patched_local_session,
     ):
-        from droid.conversation_manager.comms_manager import CommsManager
-        from droid.conversation_manager.local_ingress import LocalCommsIngress
+        from unity.conversation_manager.comms_manager import CommsManager
+        from unity.conversation_manager.local_ingress import LocalCommsIngress
 
         with (
             patch.object(SETTINGS.conversation, "LOCAL_COMMS_HOST", "127.0.0.1"),
             patch.object(SETTINGS.conversation, "LOCAL_COMMS_PORT", 0),
             patch(
-                "droid.conversation_manager.local_ingress.local_email.is_email_configured",
+                "unity.conversation_manager.local_ingress.local_email.is_email_configured",
                 return_value=False,
             ),
         ):

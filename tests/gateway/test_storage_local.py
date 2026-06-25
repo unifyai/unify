@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from droid.gateway.storage import LocalDiskStorage, Storage, StorageError
+from unity.gateway.storage import LocalDiskStorage, Storage, StorageError
 
 
 def test_local_disk_storage_satisfies_storage_protocol(tmp_path: Path) -> None:
@@ -109,9 +109,9 @@ def test_default_base_dir_is_workspace_relative(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("DROID_GATEWAY_STORAGE_DIR", raising=False)
+    monkeypatch.delenv("UNITY_GATEWAY_STORAGE_DIR", raising=False)
     storage = LocalDiskStorage()
-    assert storage.base_dir == tmp_path / ".droid-gateway-storage"
+    assert storage.base_dir == tmp_path / ".unity-gateway-storage"
     assert storage.base_dir.exists()
 
 
@@ -120,7 +120,7 @@ def test_default_base_dir_honors_environment_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     target = tmp_path / "custom-storage"
-    monkeypatch.setenv("DROID_GATEWAY_STORAGE_DIR", str(target))
+    monkeypatch.setenv("UNITY_GATEWAY_STORAGE_DIR", str(target))
     storage = LocalDiskStorage()
     assert storage.base_dir == target
     assert target.exists()

@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from droid.conversation_manager.cm_types.screenshot import ScreenshotEntry
+from unity.conversation_manager.cm_types.screenshot import ScreenshotEntry
 
 
 def _make_screenshot(mid: int | None = None) -> ScreenshotEntry:
@@ -34,14 +34,14 @@ def _make_screenshot(mid: int | None = None) -> ScreenshotEntry:
 
 def _make_unify_message(content: str):
     from tests.conversation_manager.conftest import BOSS
-    from droid.conversation_manager.events import UnifyMessageReceived
+    from unity.conversation_manager.events import UnifyMessageReceived
 
     return UnifyMessageReceived(contact=BOSS, content=content)
 
 
 def _patch_single_shot():
     """Patch single_shot_tool_decision to return 'wait' without calling the LLM."""
-    from droid.common.single_shot import SingleShotResult, ToolExecution
+    from unity.common.single_shot import SingleShotResult, ToolExecution
 
     async def _fake_single_shot(client, message, tools, **kwargs):
         wait_fn = tools.get("wait")
@@ -59,7 +59,7 @@ def _patch_single_shot():
         )
 
     return patch(
-        "droid.conversation_manager.conversation_manager.single_shot_tool_decision",
+        "unity.conversation_manager.conversation_manager.single_shot_tool_decision",
         side_effect=_fake_single_shot,
     )
 
@@ -87,7 +87,7 @@ async def test_image_registration_deferred_to_background(initialized_cm):
     with (
         _patch_single_shot(),
         patch(
-            "droid.manager_registry.ManagerRegistry.get_image_manager",
+            "unity.manager_registry.ManagerRegistry.get_image_manager",
             return_value=mock_image_manager,
         ),
     ):
@@ -120,7 +120,7 @@ async def test_no_registration_when_no_screenshots(initialized_cm):
     with (
         _patch_single_shot(),
         patch(
-            "droid.manager_registry.ManagerRegistry.get_image_manager",
+            "unity.manager_registry.ManagerRegistry.get_image_manager",
             return_value=mock_image_manager,
         ),
     ):
@@ -150,7 +150,7 @@ async def test_failed_registration_does_not_affect_turn(initialized_cm):
     with (
         _patch_single_shot(),
         patch(
-            "droid.manager_registry.ManagerRegistry.get_image_manager",
+            "unity.manager_registry.ManagerRegistry.get_image_manager",
             return_value=mock_image_manager,
         ),
     ):

@@ -34,13 +34,13 @@ from tests.conversation_manager.cm_helpers import (
     filter_events_by_type,
 )
 from tests.conversation_manager.conftest import BOSS
-from droid.conversation_manager.events import (
+from unity.conversation_manager.events import (
     UnifyMessageReceived,
     UnifyMessageSent,
     ActorHandleStarted,
     UserScreenShareStarted,
 )
-from droid.conversation_manager.cm_types import ScreenshotEntry
+from unity.conversation_manager.cm_types import ScreenshotEntry
 
 pytestmark = pytest.mark.eval
 

@@ -55,8 +55,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from droid.transcript_manager.transcript_manager import TranscriptManager  # helper
-from droid.memory_manager.memory_manager import MemoryManager  # original manager
+from unity.transcript_manager.transcript_manager import TranscriptManager  # helper
+from unity.memory_manager.memory_manager import MemoryManager  # original manager
 from sandboxes.utils import (
     TranscriptGenerator,
     record_until_enter as _record_until_enter,
@@ -309,7 +309,7 @@ async def _main_async() -> None:
     tm = mm._transcript_manager  # use the TranscriptManager owned by MemoryManager
 
     # Helper: convert *TranscriptGenerator* dict → Message-schema dict ----------
-    from droid.contact_manager.types.contact import Contact
+    from unity.contact_manager.types.contact import Contact
 
     _name_to_contact: dict[str, Contact] = {}
     last_sender_contact: Contact | None = None
@@ -635,7 +635,7 @@ async def _main_async() -> None:
             print(f"[log] Ingesting {len(transcript)} messages …")
             last_transcript = transcript
 
-            from droid.events.event_bus import EVENT_BUS
+            from unity.events.event_bus import EVENT_BUS
 
             EVENT_BUS.join_published()
             EVENT_BUS.join_callbacks()
@@ -671,7 +671,7 @@ async def _main_async() -> None:
             print(f"[log] Ingesting {len(transcript)} messages …")
             last_transcript = transcript
 
-            from droid.events.event_bus import EVENT_BUS
+            from unity.events.event_bus import EVENT_BUS
 
             EVENT_BUS.join_published()
             EVENT_BUS.join_callbacks()

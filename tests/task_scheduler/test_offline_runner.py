@@ -5,13 +5,13 @@ import pytest
 
 def _seed_env(monkeypatch, *, source_type="dashboard_action"):
     monkeypatch.setenv("ASSISTANT_ID", "42")
-    monkeypatch.setenv("DROID_OFFLINE_TASK_RUN_KEY", "offline:scheduled:42:101:rev")
-    monkeypatch.setenv("DROID_OFFLINE_TASK_ID", "101")
-    monkeypatch.setenv("DROID_OFFLINE_TASK_FUNCTION_ID", "777")
-    monkeypatch.setenv("DROID_OFFLINE_TASK_REQUEST", "Send the daily summary email.")
-    monkeypatch.setenv("DROID_OFFLINE_TASK_SOURCE_TYPE", source_type)
-    monkeypatch.setenv("DROID_OFFLINE_TASK_SOURCE_TASK_LOG_ID", "555")
-    monkeypatch.setenv("DROID_OFFLINE_TASK_ACTIVATION_REVISION", "rev-123")
+    monkeypatch.setenv("UNITY_OFFLINE_TASK_RUN_KEY", "offline:scheduled:42:101:rev")
+    monkeypatch.setenv("UNITY_OFFLINE_TASK_ID", "101")
+    monkeypatch.setenv("UNITY_OFFLINE_TASK_FUNCTION_ID", "777")
+    monkeypatch.setenv("UNITY_OFFLINE_TASK_REQUEST", "Send the daily summary email.")
+    monkeypatch.setenv("UNITY_OFFLINE_TASK_SOURCE_TYPE", source_type)
+    monkeypatch.setenv("UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID", "555")
+    monkeypatch.setenv("UNITY_OFFLINE_TASK_ACTIVATION_REVISION", "rev-123")
     monkeypatch.setenv("ORCHESTRA_URL", "https://orchestra.test")
     monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin-key")
 
@@ -23,7 +23,7 @@ def _stub_runtime_initialization(monkeypatch, offline_runner):
         lambda: None,
     )
     monkeypatch.setattr(
-        offline_runner.droid,
+        offline_runner.unity,
         "ensure_initialised",
         lambda *, project_name: None,
     )
@@ -32,7 +32,7 @@ def _stub_runtime_initialization(monkeypatch, offline_runner):
 def test_offline_runner_rejects_non_scheduler_source_type(monkeypatch):
     """The offline task runner should not keep a direct function execution lane."""
 
-    from droid.task_scheduler import offline_runner
+    from unity.task_scheduler import offline_runner
 
     _seed_env(monkeypatch)
     updates = []
@@ -54,10 +54,10 @@ def test_offline_runner_rejects_non_scheduler_source_type(monkeypatch):
 
 
 def test_offline_runner_initializes_before_scheduler_delegate_execution(monkeypatch):
-    """Scheduler-owned offline tasks should initialize Droid before execution."""
+    """Scheduler-owned offline tasks should initialize Unity before execution."""
 
-    from droid.common.task_execution_context import current_task_execution_delegate
-    from droid.task_scheduler import offline_runner
+    from unity.common.task_execution_context import current_task_execution_delegate
+    from unity.task_scheduler import offline_runner
 
     _seed_env(monkeypatch, source_type="scheduled")
     events = []
@@ -90,7 +90,7 @@ def test_offline_runner_initializes_before_scheduler_delegate_execution(monkeypa
         lambda: events.append("populate_from_env"),
     )
     monkeypatch.setattr(
-        offline_runner.droid,
+        offline_runner.unity,
         "ensure_initialised",
         lambda *, project_name: events.append("ensure_initialised"),
     )
@@ -123,7 +123,7 @@ def test_offline_runner_initializes_before_scheduler_delegate_execution(monkeypa
 def test_offline_delegate_runs_agentic_task_through_actor(monkeypatch):
     """Agentic offline tasks should use the shared actor substrate."""
 
-    from droid.task_scheduler import offline_runner
+    from unity.task_scheduler import offline_runner
 
     captured = {}
 
@@ -178,7 +178,7 @@ def test_offline_delegate_runs_agentic_task_through_actor(monkeypatch):
 def test_load_config_from_env_canonicalizes_destination(monkeypatch):
     """Offline env destination labels are normalized before execution."""
 
-    from droid.task_scheduler import offline_runner
+    from unity.task_scheduler import offline_runner
 
     _seed_env(monkeypatch)
     monkeypatch.setenv("TASK_DESTINATION", "team:007")
@@ -191,7 +191,7 @@ def test_load_config_from_env_canonicalizes_destination(monkeypatch):
 def test_load_config_from_env_rejects_invalid_destination(monkeypatch):
     """Offline runner fails fast on invalid destination labels."""
 
-    from droid.task_scheduler import offline_runner
+    from unity.task_scheduler import offline_runner
 
     _seed_env(monkeypatch)
     monkeypatch.setenv("TASK_DESTINATION", "org_default")

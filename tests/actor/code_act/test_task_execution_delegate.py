@@ -7,21 +7,21 @@ from types import SimpleNamespace
 import pytest
 
 from tests.helpers import _handle_project
-from droid.actor.code_act_actor import (
+from unity.actor.code_act_actor import (
     CodeActActor,
     _CodeActTaskExecutionDelegate,
     _build_storage_tools,
 )
-from droid.actor.simulated import SimulatedActor
-from droid.common.task_execution_context import current_task_execution_delegate
-from droid.conversation_manager.domains.task_activation import (
+from unity.actor.simulated import SimulatedActor
+from unity.common.task_execution_context import current_task_execution_delegate
+from unity.conversation_manager.domains.task_activation import (
     _ConversationTaskExecutionDelegate,
 )
-from droid.function_manager.function_manager import FunctionManager
-from droid.function_manager.primitives import PrimitiveScope, Primitives
-from droid.manager_registry import ManagerRegistry
-from droid.task_scheduler.task_scheduler import TaskScheduler
-from droid.task_scheduler.types.status import Status
+from unity.function_manager.function_manager import FunctionManager
+from unity.function_manager.primitives import PrimitiveScope, Primitives
+from unity.manager_registry import ManagerRegistry
+from unity.task_scheduler.task_scheduler import TaskScheduler
+from unity.task_scheduler.types.status import Status
 
 
 def _certification_evidence():

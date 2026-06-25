@@ -12,8 +12,8 @@ then asserts on the `urgent` boolean returned by the model.
 
 import pytest
 
-from droid.conversation_manager.domains.speech_urgency import SpeechUrgencyEvaluator
-from droid.settings import SETTINGS
+from unity.conversation_manager.domains.speech_urgency import SpeechUrgencyEvaluator
+from unity.settings import SETTINGS
 
 pytestmark = pytest.mark.eval
 

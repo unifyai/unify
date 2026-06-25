@@ -1,15 +1,15 @@
 ConversationManager Sandbox
 ==========================
 
-Interactive playground for the `ConversationManager` component (`droid/conversation_manager/`). OSS users normally reach this through the **`droid`** CLI; developers can also run the module directly.
+Interactive playground for the `ConversationManager` component (`unity/conversation_manager/`). OSS users normally reach this through the **`unity`** CLI; developers can also run the module directly.
 
 ## Quick start (OSS)
 
 ```bash
-droid
+unity
 ```
 
-That opens the ConversationManager sandbox REPL against your hosted assistant (`UNIFY_KEY` + `ASSISTANT_ID` in `~/.droid/droid/.env`). Type `help` at the `>` prompt for the current command list.
+That opens the ConversationManager sandbox REPL against your hosted assistant (`UNIFY_KEY` + `ASSISTANT_ID` in `~/.unity/unity/.env`). Type `help` at the `>` prompt for the current command list.
 
 Developer entry point (same REPL, from a repo checkout):
 
@@ -80,7 +80,7 @@ See `deploy/desktop/README.md` and the main [README](../../README.md) for BYOK k
 
 ## Environment variables
 
-All env vars are read from `~/.droid/droid/.env` (OSS install) or `.env` at the repo root (developer checkout). See the main [README](../../README.md) for LLM, voice, and identity variables.
+All env vars are read from `~/.unity/unity/.env` (OSS install) or `.env` at the repo root (developer checkout). See the main [README](../../README.md) for LLM, voice, and identity variables.
 
 For Event Tree and Manager Logs in the GUI/REPL, set `EVENTBUS_PUBLISHING_ENABLED=true`.
 

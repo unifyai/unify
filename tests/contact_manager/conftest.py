@@ -6,10 +6,10 @@ from typing import List, Dict, Tuple, Any
 import os
 
 import unify
-from droid.contact_manager.contact_manager import ContactManager
-from droid.manager_registry import ManagerRegistry
-from droid.common.context_registry import ContextRegistry
-from droid.common.embed_utils import ensure_vector_column
+from unity.contact_manager.contact_manager import ContactManager
+from unity.manager_registry import ManagerRegistry
+from unity.common.context_registry import ContextRegistry
+from unity.common.embed_utils import ensure_vector_column
 from tests.helpers import (
     get_or_create_contact,
     rebuild_id_mapping,
