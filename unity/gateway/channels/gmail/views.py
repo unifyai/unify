@@ -72,6 +72,37 @@ def _is_google_not_found_error(exc: Exception) -> bool:
     return isinstance(exc, HttpError) and getattr(exc.resp, "status", None) == 404
 
 
+def _recipient_count(value: Any) -> int:
+    if not value:
+        return 0
+    if isinstance(value, str):
+        return 1
+    return len(value)
+
+
+def _gmail_send_log_context(
+    *,
+    sender: str,
+    to: Any,
+    cc: Any,
+    bcc: Any,
+    subject: str,
+    in_reply_to: str | None,
+    thread_id: str | None,
+    attachment: Any,
+) -> dict[str, Any]:
+    return {
+        "sender": sender,
+        "to_count": _recipient_count(to),
+        "cc_count": _recipient_count(cc),
+        "bcc_count": _recipient_count(bcc),
+        "subject": subject,
+        "has_in_reply_to": bool(in_reply_to),
+        "has_thread_id": bool(thread_id),
+        "has_attachment": bool(attachment),
+    }
+
+
 def _service_account_credentials(
     *,
     scopes: list[str],
@@ -302,7 +333,35 @@ async def send_email(request: Request):
     send_body = {"raw": raw_msg}
     if thread_id:
         send_body["threadId"] = thread_id
-    sent = service.users().messages().send(userId="me", body=send_body).execute()
+    log_context = _gmail_send_log_context(
+        sender=sender,
+        to=to,
+        cc=cc,
+        bcc=bcc,
+        subject=subject,
+        in_reply_to=in_reply_to,
+        thread_id=thread_id,
+        attachment=attachment,
+    )
+    try:
+        sent = service.users().messages().send(userId="me", body=send_body).execute()
+    except HttpError as exc:
+        logger.exception(
+            "gmail send failed with Google API error: status=%s reason=%s context=%s",
+            getattr(exc.resp, "status", None),
+            getattr(exc.resp, "reason", None),
+            log_context,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Gmail send failed; see gateway logs for traceback.",
+        ) from exc
+    except Exception as exc:
+        logger.exception("gmail send failed: context=%s", log_context)
+        raise HTTPException(
+            status_code=500,
+            detail="Gmail send failed; see gateway logs for traceback.",
+        ) from exc
     return {"success": True, "id": sent.get("id")}
 
 
