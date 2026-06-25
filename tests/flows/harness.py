@@ -57,6 +57,66 @@ def _runtime_user_context(context_path: str) -> str:
     return context_path.rsplit("/", 1)[0]
 
 
+def _manager_method_calls(events: list[Any]) -> list[tuple[str, str]]:
+    """Return ``(manager, method)`` pairs from captured ManagerMethod events.
+
+    Reads the incoming phase only — one entry per primitive invocation the brain
+    made — so callers see exactly which ``primitives.*`` surfaces were exercised.
+    """
+
+    calls: list[tuple[str, str]] = []
+    for event in events:
+        payload = getattr(event, "payload", None)
+        if not isinstance(payload, dict) or payload.get("phase") != "incoming":
+            continue
+        manager = payload.get("manager")
+        method = payload.get("method")
+        if manager and method:
+            calls.append((manager, method))
+    return calls
+
+
+def assert_primitive_invoked(
+    events: list[Any],
+    manager: str,
+    method: str | None = None,
+    *,
+    phase: str = "incoming",
+) -> None:
+    """Assert the brain invoked ``primitives.<manager>`` during a captured turn.
+
+    ``events`` is the list yielded by ``capture_events("ManagerMethod")`` around a
+    flow turn. The ManagerMethod telemetry is published by the real
+    ``@log_manager_call``/``@log_manager_result`` decorators on the production
+    manager methods, so a match proves the brain reached the result through the
+    intended primitive rather than an alternative path (a shell command, a direct
+    Orchestra write, or answering from memory). ``manager`` is the telemetry name
+    (``"ContactManager"``, ``"FileManager"``, ...); pass ``method=None`` to accept
+    any method on that manager.
+    """
+
+    for event in events:
+        payload = getattr(event, "payload", None)
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("manager") != manager:
+            continue
+        if method is not None and payload.get("method") != method:
+            continue
+        if phase is not None and payload.get("phase") != phase:
+            continue
+        return
+
+    observed = sorted({f"{mgr}.{meth}" for mgr, meth in _manager_method_calls(events)})
+    target = manager if method is None else f"{manager}.{method}"
+    raise AssertionError(
+        f"Expected the brain to invoke {target} during this turn, but it was not "
+        f"among the primitive calls it made: {observed or '(none)'}. The brain may "
+        "have reached the answer through an alternative path (e.g. a shell "
+        "command) instead of the primitive.",
+    )
+
+
 @dataclass
 class FlowHarness:
     """Drive a real CM turn and assert user-visible outcomes."""
