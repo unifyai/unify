@@ -752,3 +752,115 @@ async def test_make_whatsapp_call_invite_offline_does_not_claim_pending_callback
     assert transcript_calls
     assert updated_records
     assert updated_records[0][1]["status"] == "completed"
+
+
+@pytest.mark.anyio
+async def test_make_whatsapp_call_live_selfhost_requests_permission_probe(monkeypatch):
+    monkeypatch.setenv("SELF_HOST", "1")
+    monkeypatch.setattr(comms_utils.SESSION_DETAILS.assistant, "agent_id", 42)
+    monkeypatch.setattr(
+        comms_utils.SESSION_DETAILS.assistant,
+        "first_name",
+        "T-W1N",
+        raising=False,
+    )
+    seen_kwargs = {}
+    cm = SimpleNamespace(
+        call_manager=SimpleNamespace(
+            has_active_call=False,
+            has_active_google_meet=False,
+            has_active_teams_meet=False,
+            _whatsapp_call_joining=False,
+        ),
+        _pending_whatsapp_call_contexts={},
+        assistant_whatsapp_number="+15555550001",
+    )
+    comms = CommsPrimitives(conversation_manager=cm)
+    comms._get_contact = lambda **kwargs: {
+        "contact_id": 5,
+        "first_name": "Alice",
+        "surname": "Owner",
+        "whatsapp_number": "+15555550123",
+        "should_respond": True,
+    }
+    comms._event_broker.publish = AsyncMock()
+
+    async def _fake_start_whatsapp_call(**kwargs):
+        seen_kwargs.update(kwargs)
+        return {
+            "success": True,
+            "method": "invite_pending",
+            "pool_number": "+15555550001",
+        }
+
+    monkeypatch.setattr(comms_utils, "start_whatsapp_call", _fake_start_whatsapp_call)
+    monkeypatch.setattr(
+        comms_utils,
+        "store_pending_whatsapp_call_intent",
+        AsyncMock(),
+    )
+
+    result = await comms.make_whatsapp_call(contact_id=5, context="Call Alice.")
+
+    assert result["status"] == "ok"
+    assert seen_kwargs["allow_permission_probe"] is True
+
+
+@pytest.mark.anyio
+async def test_make_whatsapp_call_live_hosted_does_not_probe(monkeypatch):
+    for name in (
+        "SELF_HOST",
+        "NEXT_PUBLIC_SELF_HOST",
+        "WHATSAPP_CALL_PERMISSION_PROBE_ENABLED",
+        "ORCHESTRA_URL",
+        "COMMUNICATION_URL",
+        "UNITY_COMMS_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(comms_utils.SESSION_DETAILS.assistant, "agent_id", 42)
+    monkeypatch.setattr(
+        comms_utils.SESSION_DETAILS.assistant,
+        "first_name",
+        "T-W1N",
+        raising=False,
+    )
+    seen_kwargs = {}
+    cm = SimpleNamespace(
+        call_manager=SimpleNamespace(
+            has_active_call=False,
+            has_active_google_meet=False,
+            has_active_teams_meet=False,
+            _whatsapp_call_joining=False,
+        ),
+        _pending_whatsapp_call_contexts={},
+        assistant_whatsapp_number="+15555550001",
+    )
+    comms = CommsPrimitives(conversation_manager=cm)
+    comms._get_contact = lambda **kwargs: {
+        "contact_id": 5,
+        "first_name": "Alice",
+        "surname": "Owner",
+        "whatsapp_number": "+15555550123",
+        "should_respond": True,
+    }
+    comms._event_broker.publish = AsyncMock()
+
+    async def _fake_start_whatsapp_call(**kwargs):
+        seen_kwargs.update(kwargs)
+        return {
+            "success": True,
+            "method": "invite_pending",
+            "pool_number": "+15555550001",
+        }
+
+    monkeypatch.setattr(comms_utils, "start_whatsapp_call", _fake_start_whatsapp_call)
+    monkeypatch.setattr(
+        comms_utils,
+        "store_pending_whatsapp_call_intent",
+        AsyncMock(),
+    )
+
+    result = await comms.make_whatsapp_call(contact_id=5, context="Call Alice.")
+
+    assert result["status"] == "ok"
+    assert seen_kwargs["allow_permission_probe"] is False

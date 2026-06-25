@@ -158,6 +158,26 @@ class CommsPrimitives:
             getattr(SESSION_DETAILS.assistant, "email_provider", "") == "microsoft_365"
         )
 
+    def _allow_whatsapp_call_permission_probe(self) -> bool:
+        if self._cm is None:
+            return False
+        truthy = {"1", "true", "yes", "on"}
+        if (
+            os.environ.get("WHATSAPP_CALL_PERMISSION_PROBE_ENABLED", "").lower()
+            in truthy
+        ):
+            return True
+        if os.environ.get("SELF_HOST", "").lower() in truthy:
+            return True
+        if os.environ.get("NEXT_PUBLIC_SELF_HOST", "").lower() in truthy:
+            return True
+        local_urls = (
+            os.environ.get("ORCHESTRA_URL", ""),
+            os.environ.get("COMMUNICATION_URL", ""),
+            os.environ.get("UNITY_COMMS_URL", ""),
+        )
+        return any("127.0.0.1" in url or "localhost" in url for url in local_urls)
+
     def _onboarding_event_kwargs(self, medium: Medium) -> dict[str, str]:
         if self._cm is None:
             return {}
@@ -4072,6 +4092,7 @@ class CommsPrimitives:
             to_number=to_number,
             agent_name=SESSION_DETAILS.assistant.name or "",
             room_name=room_name,
+            allow_permission_probe=self._allow_whatsapp_call_permission_probe(),
         )
         if not response.get("success"):
             if self._cm is not None:
