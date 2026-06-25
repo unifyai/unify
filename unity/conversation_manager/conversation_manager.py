@@ -536,6 +536,26 @@ class ConversationManager(metaclass=SingletonABCMeta):
         return self.assistant_email_provider == "microsoft_365"
 
     @property
+    def in_voice_session(self) -> bool:
+        """True when a voice call or meeting of any kind is live (or joining).
+
+        A single predicate spanning every voice surface — phone calls, WhatsApp
+        calls, Unify Meet, and browser meetings (Google Meet / Microsoft Teams).
+        Only one such session can exist at a time, so the call-starting tools are
+        withheld whenever this is True. This is the single source of truth shared
+        by the tool set (`as_tools`) and the system prompt so the two can never
+        disagree on what is available mid-call.
+        """
+        call_state = self.call_manager
+        return (
+            self.mode.is_voice
+            or call_state.has_active_call
+            or call_state.has_active_google_meet
+            or call_state.has_active_teams_meet
+            or call_state._whatsapp_call_joining
+        )
+
+    @property
     def session_logger(self) -> SessionLogger:
         """The hierarchical session logger for this ConversationManager instance."""
         return self._session_logger

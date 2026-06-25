@@ -266,6 +266,7 @@ def build_brain_spec(
         email_address=boss_contact.get("email_address"),
         is_voice_call=cm.mode.is_voice,
         is_internal_call=is_internal_call,
+        on_voice_call=cm.in_voice_session,
         demo_mode=SETTINGS.DEMO_MODE,
         computer_fast_path=cm.computer_fast_path_eligible,
         assistant_has_phone=bool(cm.assistant_number),
