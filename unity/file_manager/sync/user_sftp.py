@@ -1,10 +1,10 @@
 """On-demand SFTP access to a user's own home directory.
 
-Distinct from :mod:`droid.file_manager.sync.manager` (continuous bisync with the
+Distinct from :mod:`unity.file_manager.sync.manager` (continuous bisync with the
 assistant's managed VM). This module pulls/pushes individual paths from a
 *user's* machine on request over the raw-TCP tunnel the device registered:
 
-- Reads stage into ``~/Droid/Remote/<user-id>/`` (mirroring the remote tree).
+- Reads stage into ``~/Unity/Remote/<user-id>/`` (mirroring the remote tree).
 - Writebacks never overwrite the user's originals: edited content lands as a
   timestamped copy under the remote ``/.droid-edits/`` mirror tree, which is in
   turn excluded from reads.
@@ -70,7 +70,7 @@ class UserHomeSFTP:
     @property
     def local_root(self) -> Path:
         """Local stage directory mirroring this user's remote home."""
-        return Path.home() / "Droid" / "Remote" / self._user_id
+        return Path.home() / "Unity" / "Remote" / self._user_id
 
     # ── setup ────────────────────────────────────────────────────────────
     async def setup(self) -> bool:

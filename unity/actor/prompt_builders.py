@@ -173,9 +173,12 @@ _EXECUTION_RULES = textwrap.dedent("""
       it when that user has linked it and has clearly asked you to act on it
       (pass `user_id` when more than one user desktop is linked). Treat it with
       care: confirm with the user and keep them informed before running anything
-      that changes their system, and prefer read-only inspection or
-      `primitives.computer.user_desktop.files` (pull/push/list) over mutating
-      shell commands. Access is separately gated by the user's Console consent
+      that changes their system. **To read, fetch, or "sync" their files,
+      always use `primitives.computer.user_desktop.files` (list/pull/push)** —
+      it mirrors their home into `~/Unity/Remote/<user_id>/`. Never copy their
+      files into your own workspace with shell `cp`/`scp`/`rclone`; reserve
+      `user_desktop` shell execution for commands the user explicitly wants run
+      on their machine. Access is separately gated by the user's Console consent
       and can be revoked mid-run, so prompt-level permission alone is never
       sufficient.
 
@@ -726,9 +729,12 @@ _FAST_PATH_AWARENESS = textwrap.dedent("""
 
 
 def _build_filesystem_context() -> str:
+    from pathlib import Path
+
     from unity.file_manager.settings import get_local_root
 
     resolved = get_local_root()
+    remote_mirror = Path(resolved).parent / "Remote"  # sibling of the workspace
     return textwrap.dedent(f"""
         ### Filesystem Context
 
@@ -745,6 +751,7 @@ def _build_filesystem_context() -> str:
         | `{resolved}/Screenshots/User/` | Auto-captured frames from the user's screen share. Read-only, cleared between sessions. |
         | `{resolved}/Screenshots/Assistant/` | Auto-captured frames from the assistant's desktop. Read-only, cleared between sessions. |
         | `{resolved}/Screenshots/Webcam/` | Auto-captured frames from the user's webcam. Read-only, cleared between sessions. |
+        | `{remote_mirror}/<user_id>/` | **Linked user-desktop mirror** — staged copy of a linked user's home directory, populated on demand by `primitives.computer.user_desktop.files.pull`. Read/parse files here. Never hand-copy a user's files in via shell `cp`/`scp`/`rclone`. |
         | `{resolved}/.env` | Environment secrets managed by SecretManager. |
         | Everything else | Your own persistent workspace — organize however makes sense for the work. |
 
@@ -760,9 +767,11 @@ def _build_filesystem_context() -> str:
           comparison, etc.) using full paths
           (e.g. `{resolved}/Screenshots/Assistant/2026-02-16T14-30-45.123456.jpg`).
         - **Stay inside the workspace**: Always use full absolute paths
-          rooted under `{resolved}/`.  Do not reference paths outside this
-          workspace (e.g. `/tmp`, `/var`).  Everything you need is inside
-          this workspace.
+          rooted under `{resolved}/`.  Do not reference unrelated system
+          paths (e.g. `/tmp`, `/var`).  The one workspace-adjacent location
+          you may read is `{remote_mirror}/<user_id>/` — the staged mirror of
+          a linked user's home, created by `user_desktop.files.pull` (see the
+          table above).
 
         **When to use the filesystem vs. primitives:**
         Most tasks will not require reading or writing local files.  The
