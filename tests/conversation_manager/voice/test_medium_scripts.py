@@ -1261,9 +1261,263 @@ async def test_recorded_opening_uses_interruptible_audio_say(monkeypatch):
     assert ready_index < say_index
 
 
-def test_recorded_opening_builtin_asset_resolves_redacted_transcript():
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interrupt_walkie", [True, False])
+async def test_walkie_opener_arms_bridge_only_on_early_interruption(
+    monkeypatch,
+    interrupt_walkie,
+):
+    from livekit.agents import llm
     from unity.conversation_manager.medium_scripts import call as call_script
 
+    sequence = []
+    audio_sources = []
+    fake_audio = object()
+    # Only the first (walkie) segment is interrupted when interrupt_walkie.
+    interrupt_flags = [True] if interrupt_walkie else []
+    contact = {"contact_id": 1, "first_name": "User", "surname": "Example"}
+    boss = {"contact_id": 1, "first_name": "User", "surname": "Example"}
+
+    class _ImmediateAwaitable:
+        def __await__(self):
+            async def _done():
+                return None
+
+            return _done().__await__()
+
+    class _FakeSpeechHandle:
+        def __init__(self, interrupted):
+            self.interrupted = interrupted
+
+        async def wait_for_playout(self):
+            return None
+
+    class _FakeLocalParticipant:
+        async def publish_data(self, payload, *, topic=None, reliable=False):
+            sequence.append(("data", json.loads(payload.decode()), topic, reliable))
+
+    class _FakeRoom:
+        name = "fake-room"
+        local_participant = _FakeLocalParticipant()
+
+        def on(self, *args, **kwargs):
+            return lambda fn: fn
+
+    class _FakeJobContext:
+        def __init__(self):
+            self.room = _FakeRoom()
+            self.job = SimpleNamespace(
+                metadata=json.dumps(
+                    {
+                        "voice_provider": "cartesia",
+                        "voice_id": "",
+                        "outbound": False,
+                        "channel": "unify_meet",
+                        "contact": contact,
+                        "boss": boss,
+                        "assistant_bio": "Assistant bio",
+                        "assistant_id": "123",
+                        "user_id": "user-123",
+                        "assistant_name": "Coordinator Unity",
+                        "is_coordinator": False,
+                        "opening_config": {
+                            "mode": "recorded",
+                            "recording_asset": "coordinator_onboarding_intro",
+                            "source": "coordinator_onboarding_intro",
+                        },
+                    },
+                ),
+            )
+
+        async def connect(self):
+            return None
+
+        def add_shutdown_callback(self, cb):
+            pass
+
+        def shutdown(self, reason=""):
+            pass
+
+    class _FakeEventBroker:
+        def set_logger(self, fb_logger):
+            pass
+
+        def register_callback(self, channel, handler):
+            pass
+
+        async def publish(self, channel, message):
+            sequence.append(("broker", channel, message))
+            return 1
+
+        def reinit_socket(self):
+            pass
+
+    class _FakeSession:
+        def __init__(self, *args, **kwargs):
+            self._chat_ctx = llm.ChatContext()
+            self.current_agent = None
+            self._events = {}
+            self.agent_state = "listening"
+            self.current_speech = None
+            self.say_calls = []
+            self.generate_reply_calls = []
+
+        @property
+        def history(self):
+            return self._chat_ctx
+
+        def on(self, event_name):
+            def _decorator(fn):
+                self._events[event_name] = fn
+                return fn
+
+            return _decorator
+
+        async def start(self, room, agent, room_input_options=None):
+            self.current_agent = agent
+
+        def generate_reply(self, **kwargs):
+            self.generate_reply_calls.append(kwargs)
+            return _ImmediateAwaitable()
+
+        def say(self, text, **kwargs):
+            sequence.append(("say", text, kwargs))
+            self.say_calls.append((text, kwargs))
+            interrupted = interrupt_flags.pop(0) if interrupt_flags else False
+            return _FakeSpeechHandle(interrupted)
+
+        def interrupt(self):
+            pass
+
+    class _FakeAssistant:
+        def __init__(self, *args, **kwargs):
+            self._chat_ctx = llm.ChatContext()
+            self.call_received = True
+            self.user_turn_generating = False
+            self._pending_opening_bridge = None
+
+        def set_call_received(self):
+            self.call_received = True
+
+        def set_credit_gate_state_provider(self, provider):
+            self.credit_gate_state_provider = provider
+
+    class _FakeCreditGateMonitor:
+        state = SimpleNamespace(allowed=True)
+
+        async def run(self):
+            return None
+
+    async def _noop_async(*args, **kwargs):
+        return None
+
+    async def _empty_history(*args, **kwargs):
+        return []
+
+    async def _noop_end_call():
+        return None
+
+    def _fake_recording_audio_frames(source):
+        audio_sources.append(source)
+        return fake_audio
+
+    fake_session_details = SimpleNamespace(
+        user=SimpleNamespace(id="user-123"),
+        assistant=SimpleNamespace(
+            about="Assistant bio",
+            is_coordinator=False,
+            agent_id=None,
+            name="Coordinator Unity",
+            first_name="",
+            surname="",
+            user_desktop_for=lambda user_id: None,
+        ),
+        voice=SimpleNamespace(provider="cartesia", id=""),
+        voice_call=SimpleNamespace(outbound=False, channel="unify_meet"),
+        is_coordinator=False,
+        org_id=None,
+        unify_key="",
+    )
+
+    session_holder = {}
+
+    def _fake_session_factory(*args, **kwargs):
+        session = _FakeSession(*args, **kwargs)
+        session_holder["session"] = session
+        return session
+
+    monkeypatch.setattr(call_script, "event_broker", _FakeEventBroker())
+    monkeypatch.setattr(call_script, "SESSION_DETAILS", fake_session_details)
+    monkeypatch.setattr(call_script, "AgentSession", _fake_session_factory)
+    monkeypatch.setattr(call_script, "Assistant", _FakeAssistant)
+    monkeypatch.setattr(call_script, "UnifyLLM", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        call_script,
+        "build_voice_agent_prompt",
+        lambda **kwargs: SimpleNamespace(flatten=lambda: "system prompt"),
+    )
+    monkeypatch.setattr(call_script, "start_event_broker_receive", _noop_async)
+    monkeypatch.setattr(call_script, "hydrate_fast_brain_history", _empty_history)
+    monkeypatch.setattr(call_script, "publish_call_started", _noop_async)
+    monkeypatch.setattr(call_script, "publish_call_ended", _noop_async)
+    monkeypatch.setattr(call_script, "delete_livekit_room", _noop_async)
+    monkeypatch.setattr(
+        call_script,
+        "FastBrainCreditGateMonitor",
+        _FakeCreditGateMonitor,
+    )
+    monkeypatch.setattr(
+        call_script,
+        "_recording_audio_frames",
+        _fake_recording_audio_frames,
+    )
+    monkeypatch.setattr(
+        call_script,
+        "create_end_call",
+        lambda *args, **kwargs: _noop_end_call,
+    )
+    monkeypatch.setattr(
+        call_script,
+        "setup_participant_disconnect_handler",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(call_script, "RoomInputOptions", lambda **kwargs: object())
+    monkeypatch.setattr(call_script, "EnglishModel", lambda: object())
+    monkeypatch.setattr(call_script.cartesia, "TTS", lambda **kwargs: object())
+    monkeypatch.setattr(call_script.elevenlabs, "TTS", lambda **kwargs: object())
+    if hasattr(call_script, "noise_cancellation"):
+        monkeypatch.setattr(call_script.noise_cancellation, "BVC", lambda: object())
+    monkeypatch.setattr(call_script, "STT", object())
+    monkeypatch.setattr(call_script, "VAD", object())
+
+    await call_script.entrypoint(_FakeJobContext())
+
+    session = session_holder["session"]
+    assert session.generate_reply_calls == []
+    assert session.say_calls[0][0].startswith("Hi, I'm T dash W 1 N.")
+
+    if interrupt_walkie:
+        # Only the staticky segment plays; the clean segment is skipped and the
+        # bridge is armed for the next turn.
+        assert audio_sources == ["asset://coordinator_onboarding_intro_walkie"]
+        assert len(session.say_calls) == 1
+        assert session.current_agent._pending_opening_bridge is not None
+    else:
+        # Both segments play in order and no bridge is armed.
+        assert audio_sources == [
+            "asset://coordinator_onboarding_intro_walkie",
+            "asset://coordinator_onboarding_intro_clean",
+        ]
+        assert len(session.say_calls) == 2
+        assert session.say_calls[1][0].startswith("Much better.")
+        assert session.current_agent._pending_opening_bridge is None
+
+
+def test_recorded_opening_builtin_asset_validates_without_single_transcript():
+    from unity.conversation_manager.medium_scripts import call as call_script
+
+    # The builtin onboarding opener is segmented, so it must validate without a
+    # single inline transcript or recording source.
     config = call_script._normalize_call_opening_config(
         {
             "mode": "recorded",
@@ -1271,20 +1525,86 @@ def test_recorded_opening_builtin_asset_resolves_redacted_transcript():
             "source": "coordinator_onboarding_intro",
         },
     )
+    assert config["recording_asset"] == "coordinator_onboarding_intro"
 
-    assert (
-        call_script._recorded_opening_source(
-            config,
-        )
-        == "asset://coordinator_onboarding_intro"
+
+def test_walkie_opener_segments_split_at_static_removal_transition():
+    from unity.conversation_manager.medium_scripts import call as call_script
+
+    spec = call_script._RECORDED_OPENINGS["coordinator_onboarding_intro"]
+    walkie, clean = spec["segments"]
+    bridge = spec["bridge"]
+
+    # The staticky segment carries the intro up to (and including) the spoken
+    # static-removal cue; the clean segment opens after the transition.
+    assert walkie["transcript"].startswith("Hi, I'm T dash W 1 N.")
+    walkie_text = walkie["transcript"].rstrip()
+    assert walkie_text.endswith("Also, let me remove this voice static.")
+    assert "Much better." not in walkie["transcript"]
+    assert clean["transcript"].startswith("Much better.")
+
+    # The bridge re-performs the static removal for callers who interrupted the
+    # walkie segment before the transition.
+    assert "remove this voice static" in bridge["transcript"]
+    assert "Much better." in bridge["transcript"]
+
+    # Each segment resolves to its own bundled asset.
+    for segment in (walkie, clean, bridge):
+        assert segment["asset"] in call_script._RECORDED_OPENING_ASSETS
+
+    # Older ad-lib lines stay redacted from the spoken transcripts.
+    combined = walkie["transcript"] + clean["transcript"] + bridge["transcript"]
+    assert "Krispy Kreme" not in combined
+    assert "Actually, first lets turn off this really annoying music." not in combined
+    assert "There we go, now I'll pull up the platform." not in combined
+
+
+@pytest.mark.asyncio
+async def test_on_user_turn_completed_plays_pending_opening_bridge():
+    from types import SimpleNamespace
+
+    from unity.conversation_manager.medium_scripts import call as call_script
+
+    played: list[bool] = []
+
+    async def _play_bridge() -> None:
+        played.append(True)
+
+    self = SimpleNamespace(
+        _pending_opening_bridge=_play_bridge,
+        _user_speech_logged=False,
     )
-    transcript = call_script._recorded_opening_transcript(config)
-    assert "Hi, I'm T dash W 1 N." in transcript
-    assert "Also, let me remove this voice static." in transcript
-    assert "Much better." in transcript
-    assert "Krispy Kreme" not in transcript
-    assert "Actually, first lets turn off this really annoying music." not in transcript
-    assert "There we go, now I'll pull up the platform." not in transcript
+    new_message = SimpleNamespace(text_content="hi there")
+
+    await call_script.Assistant.on_user_turn_completed(
+        self,
+        turn_ctx=None,
+        new_message=new_message,
+    )
+
+    # The bridge is played exactly once and disarmed so later turns are normal.
+    assert played == [True]
+    assert self._pending_opening_bridge is None
+    assert self._user_speech_logged is True
+
+
+@pytest.mark.asyncio
+async def test_on_user_turn_completed_without_bridge_is_normal():
+    from types import SimpleNamespace
+
+    from unity.conversation_manager.medium_scripts import call as call_script
+
+    self = SimpleNamespace(_pending_opening_bridge=None, _user_speech_logged=False)
+    new_message = SimpleNamespace(text_content="hello")
+
+    await call_script.Assistant.on_user_turn_completed(
+        self,
+        turn_ctx=None,
+        new_message=new_message,
+    )
+
+    assert self._pending_opening_bridge is None
+    assert self._user_speech_logged is True
 
 
 @pytest.mark.asyncio
