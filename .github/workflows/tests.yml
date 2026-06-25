@@ -336,6 +336,17 @@ jobs:
           cost_policy_fail "requested paths expand to ${#PATHS[@]} matrix jobs (limit: $MAX_NORMAL_MATRIX)"
         fi
 
+        # tests/flows are live-LLM smoke tests: their conftest forces the brain
+        # to run uncached (it flips UNILLM_CACHE off whenever UNILLM_CACHE_DIR is
+        # unset, as it is here), so they cannot honor this workflow's read-only
+        # cost guard and would make silent paid calls. They run instead on the
+        # dedicated, spend-acknowledged Flow Smoke workflow.
+        for _p in "${PATHS[@]}"; do
+          if [[ "$_p" == *tests/flows* ]]; then
+            cost_policy_fail "tests/flows run live LLM calls; use the Flow Smoke workflow (.github/workflows/flow-smoke.yml), not normal CI"
+          fi
+        done
+
         check_cost_sensitive_flags() {
           local -n _flags_ref=$1
           local i flag next_val

@@ -252,6 +252,14 @@ def expand_path(path_str):
     return paths
 
 
+# Directories that must never be auto-discovered into the normal CI matrix.
+# tests/flows are live-LLM end-to-end smoke tests that drive the real brain
+# uncached (their conftest forces UNILLM_CACHE off), so they cannot honor the
+# normal matrix's read-only cost guard. They run on the dedicated, spend-
+# acknowledged Flow Smoke workflow (.github/workflows/flow-smoke.yml) instead.
+AUTO_DISCOVERY_EXCLUDE = {"tests/flows"}
+
+
 def discover_all():
     """Discover all test paths from the tests/ root directory."""
     test_root = Path("tests")
@@ -265,7 +273,11 @@ def discover_all():
             and item.name.endswith(".py")
         ):
             paths.append(str(item))
-        elif item.is_dir() and item.name not in EXCLUDE_DIRS:
+        elif (
+            item.is_dir()
+            and item.name not in EXCLUDE_DIRS
+            and str(item) not in AUTO_DISCOVERY_EXCLUDE
+        ):
             # Recurse into every non-excluded directory; collect_paths is itself
             # gated by has_test_files / has_test_subdirs, so non-test dirs are
             # no-ops. The previous `startswith("test")` filter accidentally
