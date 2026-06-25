@@ -558,6 +558,7 @@ async def twilio_whatsapp_webhook(
                     "contacts": contacts,
                     "to_number": to_number,
                     "from_number": from_number,
+                    "contact_number": sender,
                     "body": body,
                     "role": route.get("role", "contact"),
                     "type": "call_permission_response",
