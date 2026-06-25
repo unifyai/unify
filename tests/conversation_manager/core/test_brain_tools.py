@@ -1023,7 +1023,7 @@ class TestSendEmailTool:
         _setup_mock_contacts(mock_cm.contact_index, sample_contacts)
 
         with patch(
-            "droid.comms.primitives.comms_utils.send_email_via_address",
+            "unity.comms.primitives.comms_utils.send_email_via_address",
         ) as mock_send:
             mock_send.return_value = {"success": True, "id": "sent-email-123"}
 

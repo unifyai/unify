@@ -172,7 +172,7 @@ class TestDebouncerCancelRunning:
         """
         Once a running slow-brain task enters tool commit, replacements wait.
         """
-        from droid.conversation_manager.domains.utils import Debouncer
+        from unity.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer(name="TestCM")
         execution_log = []
