@@ -3874,6 +3874,7 @@ class CommsPrimitives:
             fresh_contact = self._get_contact(phone_number=to_number) or contact or {}
             event = PhoneCallSent(
                 contact=fresh_contact,
+                provider_call_sid=response.get("call_sid", ""),
                 **self._onboarding_event_kwargs(Medium.PHONE_CALL),
             )
             await self._event_broker.publish("app:comms:make_call", event.to_json())

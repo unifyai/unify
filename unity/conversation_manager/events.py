@@ -812,6 +812,7 @@ class PhoneCallSent(Event):
 
     contact: dict
     content: str = "<Sending Call...>"
+    provider_call_sid: str = ""
     onboarding_trigger_step_id: str | None = None
     onboarding_reply_step_id: str | None = None
     onboarding_request_id: str | None = None
