@@ -38,7 +38,7 @@ from livekit.agents import ChatContext, ChatMessage
 from livekit.agents import ModelSettings, llm
 from livekit.agents.llm import ChatChunk, ChoiceDelta
 
-from typing import AsyncIterable, Callable
+from typing import AsyncIterable, Awaitable, Callable
 
 load_dotenv()
 
@@ -355,6 +355,9 @@ class Assistant(Agent):
         self._user_speech_logged = False
         self.user_turn_generating = False
         self._credit_gate_state_provider: Callable | None = None
+        # Armed when the recorded opener is interrupted before its static-removal
+        # transition; plays a bridge recording at the start of the next turn.
+        self._pending_opening_bridge: Callable[[], Awaitable[None]] | None = None
 
         super().__init__(instructions=instructions)
 
@@ -370,6 +373,10 @@ class Assistant(Agent):
         new_message: ChatMessage,
     ) -> None:
         """Hook called when user finishes speaking — before LLM generation starts."""
+        if self._pending_opening_bridge is not None:
+            play_bridge = self._pending_opening_bridge
+            self._pending_opening_bridge = None
+            await play_bridge()
         text = new_message.text_content or ""
         if text:
             _log.user_speech(text)
@@ -563,10 +570,20 @@ def _hydrate_session_details_from_metadata(meta: dict) -> None:
 
 _CALL_OPENING_MODES = {"speak", "simulated", "silent", "briefed", "recorded"}
 _RECORDED_OPENING_ASSETS = {
-    "coordinator_onboarding_intro": "twin-onboarding-intro.mp3",
+    "coordinator_onboarding_intro_walkie": "twin-onboarding-intro-walkie.mp3",
+    "coordinator_onboarding_intro_clean": "twin-onboarding-intro-clean.mp3",
+    "coordinator_onboarding_static_bridge": "twin-onboarding-static-bridge.mp3",
 }
-_RECORDED_OPENING_TRANSCRIPTS = {
-    "coordinator_onboarding_intro": """\
+_RECORDED_OPENING_TRANSCRIPTS: dict[str, str] = {}
+
+# The walkie-talkie opener is two recorded segments. The first is delivered with
+# a walkie-talkie "voice static" effect; the second opens with the static-removal
+# transition and is clean from then on (matching the live-call voice). If the
+# caller interrupts before the transition segment begins, the staticky→clean
+# switch would otherwise be abrupt and unexplained, so a short bridge recording
+# that re-performs the static removal is played at the start of the next
+# assistant turn before the dynamically generated response continues.
+_WALKIE_OPENER_STATICKY_TRANSCRIPT = """\
 Hi, I'm T dash W 1 N.
 
 Before you ask, no I'm not one of Elon's many children, and no he didn't come up with the name, thankfully.
@@ -585,13 +602,41 @@ There's not much more to say.
 
 I'll now walk you through the platform.
 
-Also, let me remove this voice static.
+Also, let me remove this voice static."""
 
+_WALKIE_OPENER_CLEAN_TRANSCRIPT = """\
 Much better.
 
 Any questions before we start with the onboarding?
 
-By the way, you'll probably want to unmute yourself first. Click the microphone at the bottom of the meet window, and then I'll be able to hear you.""",
+By the way, you'll probably want to unmute yourself first. Click the microphone at the bottom of the meet window, and then I'll be able to hear you."""
+
+_WALKIE_OPENER_BRIDGE_TRANSCRIPT = """\
+Hang on, let me just remove this voice static.
+
+Much better."""
+
+# Recorded openers played as an ordered list of segments. The final segment
+# carries the static-removal transition; every earlier segment is staticky. If
+# any pre-transition segment is interrupted, ``bridge`` is armed for the next
+# assistant turn.
+_RECORDED_OPENINGS = {
+    "coordinator_onboarding_intro": {
+        "segments": [
+            {
+                "asset": "coordinator_onboarding_intro_walkie",
+                "transcript": _WALKIE_OPENER_STATICKY_TRANSCRIPT,
+            },
+            {
+                "asset": "coordinator_onboarding_intro_clean",
+                "transcript": _WALKIE_OPENER_CLEAN_TRANSCRIPT,
+            },
+        ],
+        "bridge": {
+            "asset": "coordinator_onboarding_static_bridge",
+            "transcript": _WALKIE_OPENER_BRIDGE_TRANSCRIPT,
+        },
+    },
 }
 
 
@@ -714,7 +759,9 @@ def _normalize_call_opening_config(raw: object) -> dict:
 
     if mode == "briefed" and not config.get("system_context", "").strip():
         raise ValueError("briefed opening requires system_context")
-    if mode == "recorded":
+    if mode == "recorded" and config.get("recording_asset", "").strip() not in (
+        _RECORDED_OPENINGS
+    ):
         _recorded_opening_transcript(config)
         if _recorded_opening_source_count(config) != 1:
             raise ValueError(
@@ -1296,7 +1343,7 @@ async def entrypoint(ctx: agents.JobContext):
                 name="restore_elevenlabs_onboarding_opener_speed",
             )
 
-    def _say_recorded_opening(text: str, recording_source: str) -> None:
+    def _say_recorded_opening(text: str, recording_source: str):
         _say_meta_queue.append(
             {
                 "source": opening_config.get("source", "recorded_opening"),
@@ -1304,12 +1351,55 @@ async def entrypoint(ctx: agents.JobContext):
                 "llm_log_path": "",
             },
         )
-        session.say(
+        return session.say(
             text,
             audio=_recording_audio_frames(recording_source),
             allow_interruptions=True,
             add_to_chat_ctx=True,
         )
+
+    async def _play_opening_bridge(segment: dict) -> None:
+        text = segment["transcript"]
+        _say_meta_queue.append(
+            {
+                "source": "recorded_opening_bridge",
+                "text": text,
+                "llm_log_path": "",
+            },
+        )
+        handle = session.say(
+            text,
+            audio=_recording_audio_frames(f"asset://{segment['asset']}"),
+            allow_interruptions=True,
+            add_to_chat_ctx=True,
+        )
+        await handle.wait_for_playout()
+
+    async def _run_recorded_opening(config: dict) -> None:
+        asset_key = config.get("recording_asset", "").strip()
+        spec = _RECORDED_OPENINGS.get(asset_key)
+        if spec is None:
+            _say_recorded_opening(
+                _recorded_opening_transcript(config),
+                _recorded_opening_source(config),
+            )
+            return
+
+        segments = spec["segments"]
+        bridge = spec.get("bridge")
+        for index, segment in enumerate(segments):
+            handle = _say_recorded_opening(
+                segment["transcript"],
+                f"asset://{segment['asset']}",
+            )
+            await handle.wait_for_playout()
+            reached_transition = index == len(segments) - 1
+            if handle.interrupted and not reached_transition:
+                if bridge is not None:
+                    assistant._pending_opening_bridge = (
+                        lambda b=bridge: _play_opening_bridge(b)
+                    )
+                return
 
     def _fire_generate_reply(
         reason: str,
@@ -2510,9 +2600,8 @@ async def entrypoint(ctx: agents.JobContext):
         await _publish_ready_to_speak()
         _say_opening(greeting_text)
     elif opening_mode == "recorded":
-        transcript = _recorded_opening_transcript(opening_config)
         await _publish_ready_to_speak()
-        _say_recorded_opening(transcript, _recorded_opening_source(opening_config))
+        await _run_recorded_opening(opening_config)
     elif opening_mode == "simulated":
         simulated_utterance = opening_config.get("simulated_utterance", "").strip()
         if not simulated_utterance:
