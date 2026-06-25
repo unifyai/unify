@@ -1083,6 +1083,7 @@ async def start_whatsapp_call(
     to_number: str,
     agent_name: str,
     room_name: str,
+    allow_permission_probe: bool = False,
 ) -> dict:
     """
     Initiate a WhatsApp voice call via the Communication service.
@@ -1112,6 +1113,7 @@ async def start_whatsapp_call(
                 "assistant_id": agent_id,
                 "agent_name": agent_name,
                 "room_name": room_name,
+                "allow_permission_probe": allow_permission_probe,
             },
         ) as response:
             try:

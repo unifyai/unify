@@ -31,9 +31,11 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import httpx
 from fastapi import APIRouter, Form, HTTPException, Query, Request
@@ -191,6 +193,7 @@ NUMBER_CHANGE_TEMPLATE_SID = "HXd9c362371aefe97f10526f1c0974f7a2"
 VOICE_CALL_TEMPLATE_SID = "HX885d46e6ccb82e4313ef1a42181c142d"
 VOICE_CALL_REQUEST_TEMPLATE_SID = "HX67bc29b24fb597e6fad501ea68d2566e"
 CALL_PERMISSION_PENDING_SUPPRESSION = timedelta(minutes=10)
+CALL_PERMISSION_PROBE_STATUSES = {"pending", "unknown_interaction"}
 
 
 def render_greeting_template_text(user_name: str, agent_name: str) -> str:
@@ -377,9 +380,52 @@ async def _record_call_permission_pending(
     response.raise_for_status()
 
 
+async def _record_call_permission_accepted(
+    pool_number: str,
+    contact_number: str,
+    *,
+    source: str,
+) -> dict:
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/call-permission",
+            headers=_admin_headers(),
+            json={
+                "pool_number": pool_number,
+                "contact_number": contact_number,
+                "status": "accepted",
+                "source": source,
+            },
+            timeout=10.0,
+        )
+    response.raise_for_status()
+    return response.json()
+
+
+async def _has_pending_call_intent(pool_number: str, contact_number: str) -> bool:
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/pending-call-intent",
+            params={
+                "pool_number": pool_number,
+                "contact_number": contact_number,
+            },
+            headers=_admin_headers(),
+            timeout=10.0,
+        )
+    if response.status_code == 404:
+        return False
+    response.raise_for_status()
+    return True
+
+
 def _recent_pending_invite(permission: dict) -> bool:
     if permission.get("status") != "pending":
         return False
+    return _recent_permission_request(permission)
+
+
+def _recent_permission_request(permission: dict) -> bool:
     requested_at = _parse_dt(permission.get("requested_at"))
     if requested_at is None:
         return False
@@ -394,6 +440,125 @@ def _parse_dt(value: str | None) -> datetime | None:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+def _truthy_env(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_local_permission_probe_enabled() -> bool:
+    if _truthy_env("WHATSAPP_CALL_PERMISSION_PROBE_ENABLED"):
+        return True
+    if _truthy_env("SELF_HOST") or _truthy_env("NEXT_PUBLIC_SELF_HOST"):
+        return True
+    local_urls = (SETTINGS.ORCHESTRA_URL, SETTINGS.conversation.COMMS_URL)
+    return any("127.0.0.1" in url or "localhost" in url for url in local_urls)
+
+
+def _permission_cache_path() -> Path:
+    configured = os.environ.get("COMMS_BRIDGE_PERMISSION_CACHE", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".unity" / "whatsapp_call_permissions.json"
+
+
+def _cache_call_permission(
+    *,
+    pool_number: str,
+    contact_number: str,
+    response_payload: dict | None,
+) -> None:
+    path = _permission_cache_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        cache = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except Exception:
+        cache = {}
+    cache[f"{pool_number}|{contact_number}"] = {
+        "pool_number": pool_number,
+        "contact_number": contact_number,
+        "status": "accepted",
+        "expires_at": (response_payload or {}).get("expires_at"),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    tmp = path.with_suffix(f"{path.suffix}.tmp")
+    tmp.write_text(json.dumps(cache, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _is_permission_probe_failure(exc: Exception) -> bool:
+    code = str(getattr(exc, "code", "") or "")
+    status = str(getattr(exc, "status", "") or "")
+    text = str(exc).lower()
+    return (
+        code in {"21216", "21217", "21218", "63016", "63018", "63024"}
+        or status in {"400", "403"}
+        or "permission" in text
+        or "not approved" in text
+        or "not allowed" in text
+    )
+
+
+async def _place_direct_whatsapp_call(
+    *,
+    credentials: CredentialStore,
+    pool_number: str,
+    to: str,
+    room_name: str,
+    wa_client,
+) -> dict:
+    sip_uri = make_sip_uri(pool_number, credentials)
+    await ensure_phone_dispatch_rule(pool_number, room_name, credentials)
+
+    date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    conference_name = f"Unity_WA_{pool_number[1:]}_{date_time}"
+
+    user_call = wa_client.calls.create(
+        to=f"whatsapp:{to}",
+        from_=f"whatsapp:{pool_number}",
+        twiml=_conference_twiml(conference_name),
+        status_callback=(
+            SETTINGS.conversation.ADAPTERS_URL + "/twilio/whatsapp-call-status"
+        ),
+        status_callback_event=["initiated", "ringing", "answered", "completed"],
+    )
+    wa_client.calls.create(
+        to=sip_uri,
+        from_=pool_number,
+        twiml=_conference_twiml(conference_name),
+    )
+    logger.info(
+        "outbound WhatsApp call placed to %s call_sid=%s conf=%s",
+        to,
+        user_call.sid,
+        conference_name,
+    )
+    return {
+        "success": True,
+        "method": "direct",
+        "pool_number": pool_number,
+        "conference_name": conference_name,
+    }
+
+
+async def _can_probe_permission(
+    *,
+    permission: dict,
+    allow_permission_probe: bool,
+    pool_number: str,
+    contact_number: str,
+) -> bool:
+    if not allow_permission_probe or not _is_local_permission_probe_enabled():
+        return False
+    if (permission.get("status") or "unknown") not in CALL_PERMISSION_PROBE_STATUSES:
+        return False
+    if not _recent_permission_request(permission):
+        return False
+    try:
+        return await _has_pending_call_intent(pool_number, contact_number)
+    except Exception:
+        logger.exception("error checking pending WhatsApp call intent")
+        return False
 
 
 def _conference_twiml(conference_name: str) -> str:
@@ -426,6 +591,7 @@ async def send_call(request: Request):
     to = data["to"]
     assistant_id = data["assistant_id"]
     room_name = data["room_name"]
+    allow_permission_probe = bool(data.get("allow_permission_probe"))
 
     route = await _resolve_route(assistant_id, to)
     pool_number = route["pool_number"]
@@ -434,43 +600,65 @@ async def send_call(request: Request):
     wa_client = build_twilio_wa_client(credentials)
 
     if permission["permitted"]:
-        sip_uri = make_sip_uri(pool_number, credentials)
-        await ensure_phone_dispatch_rule(pool_number, room_name, credentials)
-
-        date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-        conference_name = f"Unity_WA_{pool_number[1:]}_{date_time}"
-
-        user_call = wa_client.calls.create(
-            to=f"whatsapp:{to}",
-            from_=f"whatsapp:{pool_number}",
-            twiml=_conference_twiml(conference_name),
-            status_callback=(
-                SETTINGS.conversation.ADAPTERS_URL + "/twilio/whatsapp-call-status"
-            ),
-            status_callback_event=["initiated", "ringing", "answered", "completed"],
+        return await _place_direct_whatsapp_call(
+            credentials=credentials,
+            pool_number=pool_number,
+            to=to,
+            room_name=room_name,
+            wa_client=wa_client,
         )
-        wa_client.calls.create(
-            to=sip_uri,
-            from_=pool_number,
-            twiml=_conference_twiml(conference_name),
-        )
-        logger.info(
-            "outbound WhatsApp call placed to %s call_sid=%s conf=%s",
-            to,
-            user_call.sid,
-            conference_name,
-        )
-        return {
-            "success": True,
-            "method": "direct",
-            "pool_number": pool_number,
-            "conference_name": conference_name,
-        }
 
     permission_status = permission.get("status") or "unknown"
     if permission_status == "rejected":
         logger.info("WhatsApp call permission rejected for %s", to)
         return {"success": True, "method": "rejected", "pool_number": pool_number}
+
+    if await _can_probe_permission(
+        permission=permission,
+        allow_permission_probe=allow_permission_probe,
+        pool_number=pool_number,
+        contact_number=to,
+    ):
+        try:
+            direct_response = await _place_direct_whatsapp_call(
+                credentials=credentials,
+                pool_number=pool_number,
+                to=to,
+                room_name=room_name,
+                wa_client=wa_client,
+            )
+        except Exception as exc:
+            if _is_permission_probe_failure(exc):
+                logger.info(
+                    "WhatsApp permission probe still requires approval for %s: %s",
+                    to,
+                    exc,
+                )
+                return {
+                    "success": True,
+                    "method": "needs_permission",
+                    "pool_number": pool_number,
+                }
+            logger.exception("WhatsApp permission probe failed for %s", to)
+            return {
+                "success": False,
+                "method": "probe_failed",
+                "pool_number": pool_number,
+                "error": f"Failed to probe WhatsApp call permission for {to}",
+            }
+
+        accepted = await _record_call_permission_accepted(
+            pool_number,
+            to,
+            source="local_permission_probe",
+        )
+        _cache_call_permission(
+            pool_number=pool_number,
+            contact_number=to,
+            response_payload=accepted,
+        )
+        direct_response["permission_probe"] = True
+        return direct_response
 
     if _recent_pending_invite(permission):
         logger.info("WhatsApp call permission invite already pending for %s", to)
