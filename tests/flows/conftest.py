@@ -70,11 +70,13 @@ os.environ.setdefault("UNITY_CONVERSATION_OUTBOUND_TRANSPORT", "inmemory")
 if not os.environ.get("UNILLM_CACHE_DIR"):
     os.environ["UNILLM_CACHE"] = "false"
 
+import contextlib
 import hashlib
 import re
 
 import pytest
 import pytest_asyncio
+from unillm.cost_tracker import capture_costs
 
 from unity.session_details import UNASSIGNED_ASSISTANT_CONTEXT, UNASSIGNED_USER_CONTEXT
 from tests.flows.harness import FlowHarness, build_flow_harness
@@ -161,31 +163,58 @@ async def _reset_litellm_logging_worker_per_test():
     yield
 
 
+@pytest.hookimpl(hookwrapper=True, tryfirst=True)
+def pytest_runtest_call(item):
+    """Attribute the brain's LLM cost to the flow test that drove it.
+
+    The shared cost meter (tests/conftest.py) records ``provider_cost`` via a
+    ``capture_costs()`` sink opened around the call phase, on the test-body
+    task. Flow tests drive the brain from the ConversationManager's
+    ``operations_listener_task``, which is spawned during fixture setup and so
+    inherits a context predating that sink -- its cost events are dropped,
+    reporting $0. The ``flow_harness`` fixture instead opens its own
+    ``capture_costs()`` before spawning that task and parks the live events on
+    the node; here (outermost wrapper, so this runs after the shared wrapper
+    has set its empty call-phase list) we promote those events into the slot
+    the shared meter reads, so per-test cost, the session total, and the
+    parallel_run cost file reflect real spend without double counting.
+    """
+
+    yield
+    flow_cost_events = getattr(item, "_flow_cost_events", None)
+    if flow_cost_events is not None:
+        item._unillm_cost_events = flow_cost_events
+
+
 @pytest_asyncio.fixture
 async def flow_harness(request: pytest.FixtureRequest) -> FlowHarness:
     """Function-scoped real CM: CodeAct tasks must share the test event loop."""
 
     context_path = _derive_flow_context(request)
 
-    async def _run_harness() -> FlowHarness:
-        harness = await build_flow_harness(
-            project_name=SETTINGS.test_project_name,
-            context_path=context_path,
-        )
-        return harness
-
     # parallel_run.sh runs one flow test per process; the file lock only serializes
     # sequential pytest workers that share in-process CM globals.
-    if os.environ.get("UNITY_TMUX_SESSION_ID"):
-        harness = await _run_harness()
-        yield harness
-        await harness.shutdown()
-        return
+    serialize = (
+        contextlib.nullcontext()
+        if os.environ.get("UNITY_TMUX_SESSION_ID")
+        else scenario_file_lock("flow_harness_cm")
+    )
 
-    with scenario_file_lock("flow_harness_cm"):
-        harness = await _run_harness()
-        yield harness
-        await harness.shutdown()
+    # Open the cost sink before build_flow_harness spawns the operations
+    # listener task, so that task (where the brain's LLM calls actually run)
+    # inherits it. pytest_runtest_call above promotes these events into the
+    # shared cost meter once the turn completes.
+    with capture_costs() as cost_events:
+        request.node._flow_cost_events = cost_events
+        with serialize:
+            harness = await build_flow_harness(
+                project_name=SETTINGS.test_project_name,
+                context_path=context_path,
+            )
+            try:
+                yield harness
+            finally:
+                await harness.shutdown()
 
 
 @pytest_asyncio.fixture
