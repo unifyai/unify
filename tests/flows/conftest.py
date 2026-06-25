@@ -90,6 +90,13 @@ _FLOW_MARKERS = (
     pytest.mark.requires_orchestra,
     pytest.mark.integration,
     pytest.mark.no_unify_context,
+    # Flow turns assert that the brain reached results through the real
+    # primitives.* surface by observing the ManagerMethod / DesktopPrimitiveInvoked
+    # telemetry the product publishes. That telemetry is the live Console action
+    # stream (EVENTBUS_PUBLISHING_ENABLED=true in production); enabling it here
+    # keeps the harness production-faithful and is restored after each test by the
+    # autouse _enable_eventbus_for_marked_tests fixture in tests/conftest.py.
+    pytest.mark.enable_eventbus,
 )
 
 
