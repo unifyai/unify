@@ -2023,6 +2023,65 @@ async def entrypoint(ctx: agents.JobContext):
             return False
         return True
 
+    def _spoken_text_from_handle(handle: object) -> str:
+        """Concatenate the assistant text actually persisted for a say handle.
+
+        On interruption LiveKit records only the synchronized (actually-spoken)
+        transcript, so this is the prefix the caller really heard.
+        """
+        items = getattr(handle, "chat_items", None) or []
+        texts: list[str] = []
+        for item in items:
+            if getattr(item, "role", None) != "assistant":
+                continue
+            content = getattr(item, "text_content", None)
+            if content:
+                texts.append(content)
+        return " ".join(texts)
+
+    def _reinject_unheard_remainder(
+        handle: object,
+        full_text_getter,
+        notification_source: str,
+    ) -> None:
+        """If a spoken guidance was interrupted, inject the unheard remainder.
+
+        should_speak guidance is no longer pre-injected, so an uninterrupted
+        utterance lands in context as its spoken assistant turn and needs nothing
+        further. When the caller barges in, only the spoken prefix is persisted;
+        the remainder would otherwise be lost from the fast brain's context, so we
+        re-inject it as an ``[unheard]`` system note the fast brain can re-surface.
+        """
+        if notification_source == "proactive_speech":
+            return
+
+        async def _after_playout() -> None:
+            try:
+                await handle.wait_for_playout()
+            except Exception:
+                return
+            if not getattr(handle, "interrupted", False):
+                return
+            full = (full_text_getter() or "").strip()
+            if not full:
+                return
+            spoken = _spoken_text_from_handle(handle).strip()
+            remainder = full
+            if spoken and full.startswith(spoken):
+                remainder = full[len(spoken) :].strip()
+            if not remainder:
+                return
+            note = f"[unheard] {remainder}"
+            assistant._chat_ctx.add_message(role="system", content=[note])
+            session.history.add_message(role="system", content=[note])
+            from unity.logger import LOGGER
+
+            LOGGER.info(
+                "⬥ [FastBrain] Re-injected unheard remainder after interruption.",
+            )
+
+        asyncio.ensure_future(_after_playout())
+
     def _speak_now(
         text: "str | AsyncIterable[str]",
         notification_id: str,
@@ -2030,8 +2089,6 @@ async def entrypoint(ctx: agents.JobContext):
         notification_content: str,
         llm_log_path: str,
     ) -> None:
-        # Context injection is handled by apply_notification unconditionally
-        # for non-proactive notifications. No injection here to avoid doubles.
         if isinstance(text, str):
             _say_meta_queue.append(
                 {
@@ -2042,7 +2099,8 @@ async def entrypoint(ctx: agents.JobContext):
                 },
             )
             _log.notification_say(text, notification_source=notification_source)
-            session.say(text, allow_interruptions=True, add_to_chat_ctx=True)
+            handle = session.say(text, allow_interruptions=True, add_to_chat_ctx=True)
+            _reinject_unheard_remainder(handle, lambda: text, notification_source)
             return
 
         # Streaming path: ``text`` is an async iterator of token chunks (rewritten
@@ -2057,9 +2115,9 @@ async def entrypoint(ctx: agents.JobContext):
             "llm_log_path": llm_log_path,
         }
         _say_meta_queue.append(say_meta)
+        parts: list[str] = []
 
         async def _tracked_stream() -> "AsyncIterable[str]":
-            parts: list[str] = []
             try:
                 async for chunk in text:
                     if not chunk:
@@ -2075,10 +2133,15 @@ async def entrypoint(ctx: agents.JobContext):
             if final:
                 _log.notification_say(final, notification_source=notification_source)
 
-        session.say(
+        handle = session.say(
             _tracked_stream(),
             allow_interruptions=True,
             add_to_chat_ctx=True,
+        )
+        _reinject_unheard_remainder(
+            handle,
+            lambda: "".join(parts),
+            notification_source,
         )
 
     def _extract_chat_messages(
@@ -2148,10 +2211,16 @@ async def entrypoint(ctx: agents.JobContext):
         notification_source: str = "",
         llm_log_path: str = "",
     ) -> None:
-        # Inject into chat context so the fast brain sees slow-brain guidance.
-        # Proactive speech is fire-and-forget filler — it never updates context.
+        # Awareness notifications (should_speak=False) are injected into the fast
+        # brain's context so it can surface them in first person. should_speak=True
+        # guidance is NOT pre-injected: the dedup gate voices it once and its spoken
+        # text then lands in context as an assistant turn, so the fast brain sees it
+        # as already said rather than as a notification to re-announce. Only the
+        # unheard remainder is injected back, after playout, if the utterance was
+        # interrupted (see _speak_now). Proactive speech is fire-and-forget filler —
+        # it never updates context.
         speech_text = spoken_message or message
-        if notification_source != "proactive_speech" and message:
+        if notification_source != "proactive_speech" and message and not should_speak:
             notification_message = f"[notification] {message}"
             assistant._chat_ctx.add_message(
                 role="system",

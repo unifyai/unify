@@ -2566,14 +2566,15 @@ class TestFastBrainGuidanceFlow:
             "acknowledge the sent message."
         )
 
-    async def test_should_speak_guidance_injected_into_chat_ctx_immediately(
+    async def test_should_speak_guidance_voiced_via_gate_not_preinjected(
         self,
         monkeypatch,
     ):
-        """Guidance with should_speak=True is injected into chat_ctx immediately
-        so the fast brain sees the latest slow brain state and can regenerate
-        an informed response.  The queued fallback speech is a safety net that
-        the dedup gate suppresses when the fast brain already covers the info.
+        """should_speak=True guidance is not pre-injected as a [notification].
+
+        The dedup gate voices it once via session.say(); the spoken text then
+        lands in the fast brain's context as an assistant turn, so the fast brain
+        sees it as already-said rather than as a notification to re-announce.
         """
         from livekit.agents import llm
         from unity.conversation_manager.medium_scripts import call as call_script
@@ -2763,7 +2764,23 @@ class TestFastBrainGuidanceFlow:
 
         session = fake_session_holder["session"]
         session.say_calls.clear()
+        # Mirror LiveKit: say persists the spoken text as an assistant turn.
+        session.say = lambda text, **kw: _fake_say(session, text, **kw)
         assistant = session.current_agent
+
+        def _system_texts():
+            return [
+                item.text_content or ""
+                for item in session._chat_ctx.items
+                if getattr(item, "role", None) == "system"
+            ]
+
+        def _assistant_texts():
+            return [
+                item.text_content or ""
+                for item in session._chat_ctx.items
+                if getattr(item, "role", None) == "assistant"
+            ]
 
         # User is speaking — guidance will be queued but not spoken yet
         state_cb = session._events["user_state_changed"]
@@ -2780,18 +2797,11 @@ class TestFastBrainGuidanceFlow:
             },
         )
 
-        # The notification IS in chat_ctx immediately so the fast brain sees it.
-        session_texts = [
-            item.text_content or ""
-            for item in session._chat_ctx.items
-            if getattr(item, "type", None) == "message"
-        ]
-        has_notification = any("no contact named Bob" in txt for txt in session_texts)
-        assert has_notification, (
-            f"should_speak=True guidance must inject [notification] into chat_ctx "
-            f"immediately so the fast brain regenerates with current state.\n"
-            f"Chat context messages: {session_texts}"
-        )
+        # should_speak=True guidance is NOT pre-injected as a [notification]: the
+        # gate voices it once, so the fast brain never sees a to-announce copy.
+        assert not any(
+            "no contact named Bob" in txt for txt in _system_texts()
+        ), "should_speak=True guidance must not be pre-injected as a [notification]."
 
         # Speech should NOT have fired yet (user is speaking)
         assert (
@@ -2811,26 +2821,19 @@ class TestFastBrainGuidanceFlow:
             agent_state_cb(SimpleNamespace(new_state="listening"))
 
             # _dedup_and_speak is async; yield to let the task complete.
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.05)
 
-            # Notification was already in chat_ctx from apply_notification.
-            # Verify it's still there after the speech fires.
-            session_texts_after = [
-                item.text_content or ""
-                for item in session._chat_ctx.items
-                if getattr(item, "type", None) == "message"
-            ]
-            has_notification_after = any(
-                "no contact named Bob" in txt for txt in session_texts_after
-            )
-            assert (
-                has_notification_after
-            ), "Notification should remain in chat_ctx after speech fires."
-
-            # The speech SHOULD have fired
+            # The guidance is voiced once via the gate ...
             assert (
                 len(session.say_calls) == 1
-            ), "should_speak=True guidance must queue speech via session.say()."
+            ), "should_speak=True guidance must be voiced via session.say()."
+            # ... and lands in context as an assistant turn, not a [notification].
+            assert any(
+                "no contact named Bob" in txt for txt in _assistant_texts()
+            ), "Spoken guidance should land in chat_ctx as an assistant turn."
+            assert not any(
+                "no contact named Bob" in txt for txt in _system_texts()
+            ), "Spoken guidance must not also appear as a [notification]."
         finally:
             SETTINGS.conversation.SPEECH_DEDUP_ENABLED = orig_dedup
 
@@ -3406,6 +3409,44 @@ async def _drain_say(value):
     return "".join(parts)
 
 
+class _FakeSpeechHandle:
+    """Minimal stand-in for a LiveKit ``SpeechHandle``.
+
+    Mirrors the surface ``_speak_now`` relies on: ``interrupted``, an awaitable
+    ``wait_for_playout``, and ``chat_items`` (the assistant turn LiveKit persists
+    for the actually-spoken text).
+    """
+
+    def __init__(self, chat_items=None, interrupted: bool = False):
+        self.chat_items = chat_items or []
+        self.interrupted = interrupted
+
+    async def wait_for_playout(self):
+        return None
+
+
+def _fake_say(self, text, **kwargs):
+    """``session.say`` replacement that mirrors LiveKit's chat-ctx behaviour.
+
+    On ``add_to_chat_ctx`` it appends an ``assistant`` turn with the spoken text
+    (the truncated prefix when ``self.say_interrupted`` is set) and returns a
+    ``_FakeSpeechHandle`` carrying that item, so ``_speak_now``'s post-playout
+    remainder logic can run. Streaming (async-iterator) text is recorded but not
+    consumed, matching how the gate's rewrite tests drain it themselves.
+    """
+    from livekit.agents import llm  # local import; mirrors test module usage
+
+    self.say_calls.append(text)
+    interrupted = getattr(self, "say_interrupted", False)
+    chat_items = []
+    if kwargs.get("add_to_chat_ctx", True) and isinstance(text, str):
+        spoken_prefix = getattr(self, "say_spoken_prefix", None)
+        content = spoken_prefix if (interrupted and spoken_prefix is not None) else text
+        msg = self._chat_ctx.add_message(role="assistant", content=content)
+        chat_items = [msg]
+    return _FakeSpeechHandle(chat_items=chat_items, interrupted=interrupted)
+
+
 @pytest.mark.asyncio
 class TestFastBrainSpeechDedup:
     """Tests for the fast brain speech deduplication gate.
@@ -3637,9 +3678,25 @@ class TestFastBrainSpeechDedup:
         # AsyncMock + ensure_future may need multiple event loop ticks.
         await asyncio.sleep(0.05)
 
+    @staticmethod
+    def _has_notification(ctx, needle):
+        for item in ctx.items:
+            raw = getattr(item, "content", None)
+            if raw is None:
+                continue
+            text = (
+                raw
+                if isinstance(raw, str)
+                else " ".join(c for c in raw if isinstance(c, str))
+            )
+            if "[notification]" in text and needle in text:
+                return True
+        return False
+
     async def test_dedup_suppresses_redundant_speech(self, fast_brain_env):
-        """When assistant has already said the same info, queued speech is
-        suppressed and downgraded to a silent notification."""
+        """When the assistant has already said the same info, the queued guidance
+        is suppressed: nothing is spoken and (since should_speak guidance is no
+        longer pre-injected) no ``[notification]`` is left behind."""
         env = fast_brain_env
         from unity.settings import SETTINGS
         import unity.conversation_manager.domains.speech_dedup as _dedup_mod
@@ -3669,22 +3726,14 @@ class TestFastBrainSpeechDedup:
             assert (
                 len(env["session"].say_calls) == 0
             ), "Redundant speech should be suppressed by dedup."
-            has_notification = False
-            for item in env["session"]._chat_ctx.items:
-                raw = getattr(item, "content", None)
-                if raw is None:
-                    continue
-                text = (
-                    raw
-                    if isinstance(raw, str)
-                    else " ".join(c for c in raw if isinstance(c, str))
-                )
-                if "[notification]" in text and "Italian restaurant" in text:
-                    has_notification = True
-                    break
-            assert (
-                has_notification
-            ), "Suppressed speech should still inject a [notification]."
+            assert not self._has_notification(
+                env["session"]._chat_ctx,
+                "Italian restaurant",
+            ), "Suppressed should_speak guidance must not be pre-injected."
+            assert not self._has_notification(
+                env["assistant"]._chat_ctx,
+                "Italian restaurant",
+            )
         finally:
             SETTINGS.conversation.SPEECH_DEDUP_ENABLED = orig_dedup
 
@@ -3717,6 +3766,147 @@ class TestFastBrainSpeechDedup:
             assert env["session"].say_calls[0] == "It's 22 degrees and sunny in London."
         finally:
             SETTINGS.conversation.SPEECH_DEDUP_ENABLED = orig_dedup
+
+    async def test_should_speak_guidance_not_preinjected(self, fast_brain_env):
+        """A fully-spoken should_speak guidance is not pre-injected as a
+        [notification]; it lands in context only as its spoken assistant turn."""
+        env = fast_brain_env
+        from unity.settings import SETTINGS
+        import unity.conversation_manager.domains.speech_dedup as _dedup_mod
+
+        session = env["session"]
+        session.say = lambda text, **kw: _fake_say(session, text, **kw)
+        env["assistant"]._chat_ctx.add_message(
+            role="assistant",
+            content="I've started the email check.",
+        )
+
+        orig_dedup = SETTINGS.conversation.SPEECH_DEDUP_ENABLED
+        SETTINGS.conversation.SPEECH_DEDUP_ENABLED = True
+        env["monkeypatch"].setattr(
+            _dedup_mod,
+            "new_llm_client",
+            lambda *a, **kw: _stream_dedup_client("SPEAK | novel"),
+        )
+        try:
+            session.agent_state = "thinking"
+            self._send_speak_guidance(env, "Your 3pm meeting moved to 4pm.")
+            await self._settle_and_drain(env)
+            assert session.say_calls == ["Your 3pm meeting moved to 4pm."]
+            # No [notification] pre-injection; only the spoken assistant turn.
+            assert not self._has_notification(session._chat_ctx, "3pm meeting")
+            assistant_texts = [
+                item.text_content or ""
+                for item in session._chat_ctx.items
+                if getattr(item, "role", None) == "assistant"
+            ]
+            assert any(
+                "3pm meeting moved to 4pm" in t for t in assistant_texts
+            ), "Spoken guidance should land in context as an assistant turn."
+        finally:
+            SETTINGS.conversation.SPEECH_DEDUP_ENABLED = orig_dedup
+
+    async def test_interrupted_guidance_injects_unheard_remainder(self, fast_brain_env):
+        """When a spoken guidance is interrupted, the unheard remainder is
+        re-injected as an [unheard] system note so it is not lost."""
+        env = fast_brain_env
+        from unity.settings import SETTINGS
+        import unity.conversation_manager.domains.speech_dedup as _dedup_mod
+
+        session = env["session"]
+        session.say = lambda text, **kw: _fake_say(session, text, **kw)
+        session.say_interrupted = True
+        session.say_spoken_prefix = "Check your inbox at dan@unify.ai"
+        env["assistant"]._chat_ctx.add_message(
+            role="assistant",
+            content="Working on it.",
+        )
+
+        orig_dedup = SETTINGS.conversation.SPEECH_DEDUP_ENABLED
+        SETTINGS.conversation.SPEECH_DEDUP_ENABLED = True
+        env["monkeypatch"].setattr(
+            _dedup_mod,
+            "new_llm_client",
+            lambda *a, **kw: _stream_dedup_client("SPEAK | novel"),
+        )
+        try:
+            session.agent_state = "thinking"
+            self._send_speak_guidance(
+                env,
+                "Check your inbox at dan@unify.ai and reply with your guess.",
+            )
+            await self._settle_and_drain(env)
+            unheard = [
+                item.text_content or ""
+                for item in env["assistant"]._chat_ctx.items
+                if getattr(item, "role", None) == "system"
+                and "[unheard]" in (item.text_content or "")
+            ]
+            assert unheard, "Interrupted guidance should inject an [unheard] note."
+            assert "reply with your guess" in unheard[-1]
+            assert (
+                "Check your inbox" not in unheard[-1]
+            ), "The already-heard prefix should not be re-injected."
+        finally:
+            SETTINGS.conversation.SPEECH_DEDUP_ENABLED = orig_dedup
+
+    async def test_full_guidance_injects_no_remainder(self, fast_brain_env):
+        """An uninterrupted guidance leaves no [unheard] note behind."""
+        env = fast_brain_env
+        from unity.settings import SETTINGS
+        import unity.conversation_manager.domains.speech_dedup as _dedup_mod
+
+        session = env["session"]
+        session.say = lambda text, **kw: _fake_say(session, text, **kw)
+        session.say_interrupted = False
+        env["assistant"]._chat_ctx.add_message(
+            role="assistant",
+            content="Working on it.",
+        )
+
+        orig_dedup = SETTINGS.conversation.SPEECH_DEDUP_ENABLED
+        SETTINGS.conversation.SPEECH_DEDUP_ENABLED = True
+        env["monkeypatch"].setattr(
+            _dedup_mod,
+            "new_llm_client",
+            lambda *a, **kw: _stream_dedup_client("SPEAK | novel"),
+        )
+        try:
+            session.agent_state = "thinking"
+            self._send_speak_guidance(env, "Your meeting moved to 4pm.")
+            await self._settle_and_drain(env)
+            for ctx in (env["assistant"]._chat_ctx, session._chat_ctx):
+                assert not any(
+                    "[unheard]" in (item.text_content or "") for item in ctx.items
+                ), "Uninterrupted guidance must not inject an [unheard] note."
+        finally:
+            SETTINGS.conversation.SPEECH_DEDUP_ENABLED = orig_dedup
+
+    async def test_should_speak_false_still_injected(self, fast_brain_env):
+        """should_speak=False awareness notifications keep their [notification]
+        injection and are not spoken."""
+        env = fast_brain_env
+
+        env["guidance_cb"](
+            {
+                "payload": {
+                    "message": "Email received from Alice.",
+                    "should_speak": False,
+                    "source": "slow_brain",
+                },
+            },
+        )
+        await asyncio.sleep(0.05)
+
+        assert env["session"].say_calls == [], "Awareness notes are not spoken."
+        assert self._has_notification(
+            env["session"]._chat_ctx,
+            "Email received from Alice",
+        ), "should_speak=False guidance must still inject a [notification]."
+        assert self._has_notification(
+            env["assistant"]._chat_ctx,
+            "Email received from Alice",
+        )
 
     async def test_dedup_rewrites_partial_overlap(self, fast_brain_env):
         """When the gate returns REWRITE, the trimmed body is streamed into
@@ -3787,14 +3977,14 @@ class TestFastBrainSpeechDedup:
             SETTINGS.conversation.SPEECH_DEDUP_ENABLED = orig_dedup
 
     async def test_self_notification_not_treated_as_spoken(self, fast_brain_env):
-        """Regression (email "The Matrix" ack): a should_speak guidance is
-        injected as a ``[notification]`` using the same text it proposes for
-        speech. The dedup gate must not see that self-copy and conclude the line
-        was "already spoken" - the user has not heard it yet.
+        """Regression (email "The Matrix" ack): should_speak guidance must not be
+        seen by the gate as its own already-spoken notification.
 
-        The fake dedup client mimics the old failure surface: it suppresses iff
-        the proposed text leaked into the notifications section as a bullet. With
-        the self-copy excluded, it sees no such bullet and the speech is spoken.
+        Now that should_speak guidance is no longer pre-injected as a
+        ``[notification]`` (the gate voices it once), the proposed text never
+        leaks into the notifications section, so the gate cannot falsely suppress
+        it. The fake client suppresses iff the ack appears as a notification
+        bullet; since it never does, the ack is spoken.
         """
         env = fast_brain_env
         from unity.settings import SETTINGS
