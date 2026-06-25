@@ -68,6 +68,8 @@ class ProductionSettings(BaseSettings):
     # Core LLM Settings
     # ─────────────────────────────────────────────────────────────────────────
     UNIFY_MODEL: str = "deepseek-v4-max@deepseek"
+    UNIFY_VISION_MODEL: str = "gpt-5.5@openai"
+    UNIFY_VISION_REASONING_EFFORT: str = "low"
 
     # ─────────────────────────────────────────────────────────────────────────
     # LLM Provider Credentials
