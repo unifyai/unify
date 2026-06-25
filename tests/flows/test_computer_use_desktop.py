@@ -16,6 +16,7 @@ To run it locally, bring up an agent-service and export its base URL:
 
 from __future__ import annotations
 
+import asyncio
 import os
 import urllib.error
 import urllib.request
@@ -26,6 +27,7 @@ from unity.function_manager.primitives.runtime import DEFAULT_AGENT_SERVER_URL
 from unity.session_details import SESSION_DETAILS
 
 from tests.flows.harness import FlowHarness
+from tests.helpers import capture_events
 
 _DESKTOP_URL = os.environ.get("FLOW_DESKTOP_URL", DEFAULT_AGENT_SERVER_URL)
 
@@ -68,14 +70,29 @@ async def test_desktop_screenshot_via_computer_use(
     SESSION_DETAILS.assistant.desktop_url = _DESKTOP_URL
     _vm_ready.set()
     try:
-        await flow_session.inject_unify_message(
-            "Take a screenshot of your computer desktop, then tell me in one "
-            "short sentence what is visible on screen.",
-        )
-        reply = await flow_session.wait_for_unify_reply(timeout=300.0)
+        async with capture_events("DesktopPrimitiveInvoked") as desktop_events:
+            await flow_session.inject_unify_message(
+                "Take a screenshot of your computer desktop, then tell me in one "
+                "short sentence what is visible on screen.",
+            )
+            reply = await flow_session.wait_for_unify_reply(timeout=300.0)
+            # The desktop primitive publishes its invocation fire-and-forget;
+            # yield once so that publish task lands before the capture scope
+            # closes and joins outstanding callbacks.
+            await asyncio.sleep(0)
         assert str(
             reply.content or "",
         ).strip(), "Assistant produced no reply after capture"
+        invoked_methods = {
+            event.payload.get("method")
+            for event in desktop_events
+            if isinstance(event.payload, dict)
+        }
+        assert "get_screenshot" in invoked_methods, (
+            "Expected the brain to capture the screen through "
+            "primitives.computer.desktop.get_screenshot, but saw desktop "
+            f"primitive calls: {sorted(m for m in invoked_methods if m)!r}"
+        )
     finally:
         SESSION_DETAILS.assistant.desktop_url = previous_desktop_url
         if not previous_vm_ready:
