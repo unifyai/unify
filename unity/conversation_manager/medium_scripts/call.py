@@ -565,6 +565,7 @@ _CALL_OPENING_MODES = {"speak", "simulated", "silent", "briefed", "recorded"}
 _RECORDED_OPENING_ASSETS = {
     "coordinator_onboarding_intro": "twin-onboarding-intro.mp3",
 }
+_COORDINATOR_ONBOARDING_INTRO_AUDIO_GAIN = 1.2
 _RECORDED_OPENING_TRANSCRIPTS = {
     "coordinator_onboarding_intro": """\
 Hi, I'm T dash W 1 N.
@@ -599,6 +600,7 @@ def _recording_audio_frames(
     source: str,
     *,
     frame_duration_ms: int = 20,
+    gain: float = 1.0,
 ) -> AsyncIterable[rtc.AudioFrame]:
     async def _frames() -> AsyncIterable[rtc.AudioFrame]:
         import io as _io
@@ -621,6 +623,12 @@ def _recording_audio_frames(
                     )
                     if len(block) == 0:
                         break
+                    if gain != 1.0:
+                        block = _np.clip(
+                            block.astype(_np.float32) * gain,
+                            _np.iinfo(_np.int16).min,
+                            _np.iinfo(_np.int16).max,
+                        ).astype(_np.int16)
                     pcm = _np.ascontiguousarray(block).tobytes()
                     yield rtc.AudioFrame(
                         data=pcm,
@@ -661,6 +669,12 @@ def _recorded_opening_source(config: dict) -> str:
     path = config.get("recording_path", "").strip()
     url = config.get("recording_url", "").strip()
     return path or url
+
+
+def _recorded_opening_audio_gain(recording_source: str) -> float:
+    if recording_source == "asset://coordinator_onboarding_intro":
+        return _COORDINATOR_ONBOARDING_INTRO_AUDIO_GAIN
+    return 1.0
 
 
 def _recorded_opening_transcript(config: dict) -> str:
@@ -1306,7 +1320,10 @@ async def entrypoint(ctx: agents.JobContext):
         )
         session.say(
             text,
-            audio=_recording_audio_frames(recording_source),
+            audio=_recording_audio_frames(
+                recording_source,
+                gain=_recorded_opening_audio_gain(recording_source),
+            ),
             allow_interruptions=True,
             add_to_chat_ctx=True,
         )
