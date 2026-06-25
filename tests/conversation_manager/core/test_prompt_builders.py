@@ -182,6 +182,7 @@ class TestVoiceSessionToolMasking:
         assert "Active voice session\n--------------------" in prompt
         assert "only be on ONE voice session at a time" in prompt
         assert "reappear automatically the moment this session ends" in prompt
+        assert "`hang_up`" in prompt
 
     def test_coordinator_call_tools_withheld_on_call(self):
         prompt = _build(
