@@ -35,87 +35,60 @@ class DedupOutcome:
 
 
 SPEECH_DEDUP_PROMPT = """\
-You are deciding how proposed speech from the slow brain should be delivered on a \
-live voice call.
+You are a gate on a live voice call. The slow brain has proposed a line to say, but it \
+is slow (10-25s), so by the time it is ready the fast brain may have already told the \
+user the same thing. Your job: stop the user hearing the same point twice, without \
+dropping anything they still need to hear.
 
-The system has two brains running in parallel:
-- **Fast brain**: handles real-time conversation, responds instantly to user speech.
-- **Slow brain**: processes events and decides what to say, but takes 10-25 seconds.
+## What the user has actually heard
 
-During the slow brain's thinking time, the fast brain may have already answered, \
-OR new notifications may have arrived that make the proposed speech stale or wrong.
-
-## Recent assistant utterances (the ONLY record of what the user has actually heard)
-
-These are the words that were genuinely spoken aloud on the call. This is the single \
-source of truth for what the user has heard.
+These lines were spoken aloud - the only record of what the user has heard:
 
 {recent_utterances}
 
-## Recent notifications (authoritative system *state* - NOT speech the user has heard)
-
-These describe what is true in the system. They are NOT things the user has been told. \
-A notification matching the proposed speech does NOT mean the user has heard it - the \
-slow brain routinely queues speech that also appears here as state. Never treat a \
-notification as evidence that something was already said.
+System state - what is currently true in the system. Use it to judge whether the \
+proposed line is still correct and still worth saying, but never as proof the user has \
+already heard it (the slow brain routinely queues a line that also shows up here):
 
 {recent_notifications}
 
-## Proposed speech from slow brain
+## The proposed line
 
 "{proposed_speech}"
 
-## Your decision
+## Decide
 
-Judge redundancy ONLY against the recent assistant utterances above - never against \
-notifications.
+First work out the *point* of the proposed line - what it is actually trying to tell the \
+user. Then weigh that point against what they have already heard, and pick one:
 
-Choose exactly one of three verdicts:
+- **SPEAK** - the point is new; nothing spoken above covers it (a match in system state \
+does not count). Say it unchanged.
+- **SUPPRESS** - the user has already heard the point; or the line no longer fits reality \
+- it offers or asks to do something the state shows is already done, repeats a step the \
+conversation has moved past, or contradicts the latest utterance. Say nothing. Also \
+suppress when the only thing still unsaid is an incidental scrap - a stray name, address, \
+number, or half-sentence that is not itself a message worth speaking.
+- **REWRITE** - the user has heard *part* of the point but a genuinely useful piece is \
+still missing, AND that piece is a complete, natural thing to say on its own. Speak only \
+that piece.
 
-### SUPPRESS - do not speak at all
+"New" means the user is missing meaning they need - not merely that some words have not \
+been spoken yet. Leftover words are not automatically worth saying. If trimming away what \
+was already heard leaves only a fragment or an incidental detail, that is SUPPRESS, not \
+REWRITE.
 
-- The recent *utterances* already convey the same core information or conclusion, and \
-the proposal adds nothing meaningfully new.
-- The proposal contradicts the current state: it offers to walk through, set up, or \
-redo steps that a recent notification or utterance confirms are already complete; or \
-it claims something is needed when a notification says it is done; or it gives a next \
-step for a workflow that has already progressed past it; or it contradicts the most \
-recent assistant utterance.
-- After stripping everything already said, nothing useful would remain.
-
-### REWRITE - speak only the genuinely new part
-
-Use this when the proposal *partially* overlaps with what was just said but still \
-carries new or important information. The redundant portion would feel like a glitchy \
-repeat if spoken in full (for example a second "Yes, ..." or restating a confirmation \
-the user already heard).
-
-Output a trimmed version that:
-- Contains ONLY the new/important information not already in the recent utterances.
-- Flows naturally as a continuation of the most recent assistant utterance (drop \
-acknowledgement openers like "Yes,"/"Got it,"/"Done -" that were already spoken).
-- NEVER introduces any fact, claim, name, number, or offer that is not present in the \
-proposed speech. You are trimming and re-joining, not inventing.
-- NEVER restates information already covered by the recent utterances.
-
-### SPEAK - speak the proposal unchanged
-
-- The proposal is meaningfully new and does not overlap with recent utterances.
-- No recent utterances or notifications address the same topic at all.
-- The overlap is only superficial (e.g., both mention the same person but discuss \
-different things), or the proposal only matches a notification (system state) and has \
-not been spoken in any recent utterance.
+A REWRITE must read as one natural line continuing the conversation: only the missing \
+point, no opener already spoken ("Yes,", "Got it,"), and no fact, name, or number that \
+was not in the proposed line.
 
 ## Output format (STRICT)
 
-Your output is parsed by a machine and the rewrite body is streamed straight to \
-text-to-speech, so follow this exactly:
+Machine-parsed; a REWRITE is streamed straight to text-to-speech. Follow exactly:
 
-- For SUPPRESS: a single line `SUPPRESS | <brief reason>` and nothing else.
-- For SPEAK: a single line `SPEAK | <brief reason>` and nothing else.
-- For REWRITE: the first line must be exactly `REWRITE`, then a newline, then the \
-rewritten speech itself (and nothing but the speech - no quotes, no labels, no \
-explanation).
+- SUPPRESS: one line - `SUPPRESS | <brief reason>`
+- SPEAK: one line - `SPEAK | <brief reason>`
+- REWRITE: first line exactly `REWRITE`, then a newline, then the line to speak and \
+nothing else - no quotes, labels, or explanation.
 """
 
 
