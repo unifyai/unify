@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import json
 import logging
+from urllib.parse import quote_plus
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from livekit.api import (
@@ -56,6 +57,7 @@ from livekit.protocol.sip import (
 from twilio.base.exceptions import TwilioRestException
 from twilio.twiml.voice_response import VoiceResponse
 
+from unity.gateway.common.callbacks import twilio_callback_url
 from unity.gateway.common.livekit import (
     create_room_and_dispatch_agent,
     ensure_phone_dispatch_rule,
@@ -200,9 +202,10 @@ async def send_call(request: Request):
     call = twilio_client.calls.create(
         to=sip_uri,
         from_=twilio_number,
-        url=(
-            f"{SETTINGS.conversation.COMMS_URL}/phone/twiml"
-            f"?phone_number={phone_number}"
+        url=twilio_callback_url(
+            local_path=f"/local/twilio/twiml?phone_number={quote_plus(phone_number)}",
+            hosted_base=SETTINGS.conversation.COMMS_URL,
+            hosted_path=f"/phone/twiml?phone_number={phone_number}",
         ),
     )
     return {"success": True, "call_sid": call.sid}
