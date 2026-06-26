@@ -405,7 +405,10 @@ class ImageHandle:
             data_str = cached.get("data") if cached is not None else self._image.data
         except Exception:
             data_str = self._image.data
-        content_block: dict
+        from unity.common.image_content import (
+            sniff_image_mime,
+            to_image_content_block,
+        )
 
         # Check if the data string is a GCS URL and convert to gs:// format
         gcs_uri = None
@@ -421,53 +424,31 @@ class ImageHandle:
 
         if gcs_uri:
             try:
-                # Generate a signed URL valid for 1 hour via unify
-                signed_url = unify.get_signed_url(gcs_uri, expiration_minutes=60)
-
-                content_block = {
-                    "type": "image_url",
-                    "image_url": {"url": signed_url},
-                }
-
+                content_block = to_image_content_block(gcs_uri)
             except Exception as e:
                 raise RuntimeError(
                     f"Failed to generate signed URL for GCS image: {e}",
                 ) from e
-
         elif isinstance(data_str, str) and (
-            data_str.startswith("http://") or data_str.startswith("https://")
+            data_str.startswith("http://")
+            or data_str.startswith("https://")
+            or data_str.startswith("data:image/")
         ):
-            # Pass the URL through directly; upstream must ensure it is fetchable
-            content_block = {
-                "type": "image_url",
-                "image_url": {"url": data_str},
-            }
-        elif isinstance(data_str, str) and data_str.startswith("data:image/"):
-            # Full data URL provided; pass as-is
-            content_block = {
-                "type": "image_url",
-                "image_url": {"url": data_str},
-            }
+            content_block = to_image_content_block(data_str)
         else:
-            # Expect a raw base64 payload – validate and infer mime from header
             try:
                 decoded = base64.b64decode(data_str, validate=True)
             except Exception as exc:
                 raise ValueError("Invalid base64 image data") from exc
 
-            head = decoded[:10]
-            if head.startswith(b"\xff\xd8"):
-                mime = "image/jpeg"
-            elif head.startswith(b"\x89PNG\r\n\x1a\n"):
-                mime = "image/png"
-            else:
+            mime = sniff_image_mime(decoded)
+            if mime == "application/octet-stream":
                 raise ValueError(
                     "Unsupported image format; only PNG and JPEG are supported.",
                 )
-            content_block = {
-                "type": "image_url",
-                "image_url": {"url": f"data:{mime};base64,{data_str}"},
-            }
+            content_block = to_image_content_block(
+                f"data:{mime};base64,{data_str}",
+            )
 
         # Build the messages list
         messages = []
