@@ -38,7 +38,7 @@ from livekit.agents import ChatContext, ChatMessage
 from livekit.agents import ModelSettings, llm
 from livekit.agents.llm import ChatChunk, ChoiceDelta
 
-from typing import AsyncIterable, Callable
+from typing import AsyncIterable, Awaitable, Callable
 
 load_dotenv()
 
@@ -355,11 +355,43 @@ class Assistant(Agent):
         self._user_speech_logged = False
         self.user_turn_generating = False
         self._credit_gate_state_provider: Callable | None = None
+        # Returns the texts of utterances currently being spoken but not yet
+        # committed to the chat context, so the fast brain sees them before it
+        # generates and does not re-voice them.
+        self._inflight_speech_provider: Callable[[], list[str]] | None = None
+        # Armed when the recorded opener is interrupted before its static-removal
+        # transition; plays a bridge recording at the start of the next turn.
+        self._pending_opening_bridge: Callable[[], Awaitable[None]] | None = None
 
         super().__init__(instructions=instructions)
 
     def set_credit_gate_state_provider(self, provider: Callable) -> None:
         self._credit_gate_state_provider = provider
+
+    @staticmethod
+    def _append_inflight_speech_context(
+        chat_ctx: "llm.ChatContext",
+        texts: list[str],
+    ) -> None:
+        """Append in-flight (currently-spoken, uncommitted) lines to a context.
+
+        Each is added as a self-describing ``system`` note so the fast brain
+        knows it is already saying the line and continues from it rather than
+        repeating it. Mutates the given context only - callers pass the
+        ephemeral per-generation copy, so nothing persists to real history.
+        """
+        for text in texts:
+            t = (text or "").strip()
+            if not t:
+                continue
+            chat_ctx.add_message(
+                role="system",
+                content=[
+                    "[system] I am in the middle of saying this aloud to the "
+                    f'caller right now: "{t}". I should not repeat it; I '
+                    "continue naturally from it if relevant.",
+                ],
+            )
 
     def set_call_received(self):
         self.call_received = True
@@ -370,6 +402,10 @@ class Assistant(Agent):
         new_message: ChatMessage,
     ) -> None:
         """Hook called when user finishes speaking — before LLM generation starts."""
+        if self._pending_opening_bridge is not None:
+            play_bridge = self._pending_opening_bridge
+            self._pending_opening_bridge = None
+            await play_bridge()
         text = new_message.text_content or ""
         if text:
             _log.user_speech(text)
@@ -421,6 +457,16 @@ class Assistant(Agent):
                     trimmed_ctx.items.append(item)
             else:
                 trimmed_ctx = chat_ctx
+
+            # Surface any line currently being spoken aloud (e.g. proactive
+            # speech mid-playout) that has not yet committed to history, so the
+            # fast brain does not re-voice it. Injected into the per-generation
+            # copy only, so it never persists (the real turn commits once at
+            # playout end).
+            if self._inflight_speech_provider is not None:
+                inflight = self._inflight_speech_provider() or []
+                if inflight:
+                    self._append_inflight_speech_context(trimmed_ctx, inflight)
 
             _log.info("LLM thinking… (llm_node_start)")
             async for chunk in super().llm_node(
@@ -563,11 +609,20 @@ def _hydrate_session_details_from_metadata(meta: dict) -> None:
 
 _CALL_OPENING_MODES = {"speak", "simulated", "silent", "briefed", "recorded"}
 _RECORDED_OPENING_ASSETS = {
-    "coordinator_onboarding_intro": "twin-onboarding-intro.mp3",
+    "coordinator_onboarding_intro_walkie": "twin-onboarding-intro-walkie.mp3",
+    "coordinator_onboarding_intro_clean": "twin-onboarding-intro-clean.mp3",
+    "coordinator_onboarding_static_bridge": "twin-onboarding-static-bridge.mp3",
 }
-_COORDINATOR_ONBOARDING_INTRO_AUDIO_GAIN = 1.2
-_RECORDED_OPENING_TRANSCRIPTS = {
-    "coordinator_onboarding_intro": """\
+_RECORDED_OPENING_TRANSCRIPTS: dict[str, str] = {}
+
+# The walkie-talkie opener is two recorded segments. The first is delivered with
+# a walkie-talkie "voice static" effect; the second opens with the static-removal
+# transition and is clean from then on (matching the live-call voice). If the
+# caller interrupts before the transition segment begins, the staticky→clean
+# switch would otherwise be abrupt and unexplained, so a short bridge recording
+# that re-performs the static removal is played at the start of the next
+# assistant turn before the dynamically generated response continues.
+_WALKIE_OPENER_STATICKY_TRANSCRIPT = """\
 Hi, I'm T dash W 1 N.
 
 Before you ask, no I'm not one of Elon's many children, and no he didn't come up with the name, thankfully.
@@ -586,13 +641,41 @@ There's not much more to say.
 
 I'll now walk you through the platform.
 
-Also, let me remove this voice static.
+Also, let me remove this voice static."""
 
+_WALKIE_OPENER_CLEAN_TRANSCRIPT = """\
 Much better.
 
 Any questions before we start with the onboarding?
 
-By the way, you'll probably want to unmute yourself first. Click the microphone at the bottom of the meet window, and then I'll be able to hear you.""",
+By the way, you'll probably want to unmute yourself first. Click the microphone at the bottom of the meet window, and then I'll be able to hear you."""
+
+_WALKIE_OPENER_BRIDGE_TRANSCRIPT = """\
+Hang on, let me just remove this voice static.
+
+Much better."""
+
+# Recorded openers played as an ordered list of segments. The final segment
+# carries the static-removal transition; every earlier segment is staticky. If
+# any pre-transition segment is interrupted, ``bridge`` is armed for the next
+# assistant turn.
+_RECORDED_OPENINGS = {
+    "coordinator_onboarding_intro": {
+        "segments": [
+            {
+                "asset": "coordinator_onboarding_intro_walkie",
+                "transcript": _WALKIE_OPENER_STATICKY_TRANSCRIPT,
+            },
+            {
+                "asset": "coordinator_onboarding_intro_clean",
+                "transcript": _WALKIE_OPENER_CLEAN_TRANSCRIPT,
+            },
+        ],
+        "bridge": {
+            "asset": "coordinator_onboarding_static_bridge",
+            "transcript": _WALKIE_OPENER_BRIDGE_TRANSCRIPT,
+        },
+    },
 }
 
 
@@ -600,7 +683,6 @@ def _recording_audio_frames(
     source: str,
     *,
     frame_duration_ms: int = 20,
-    gain: float = 1.0,
 ) -> AsyncIterable[rtc.AudioFrame]:
     async def _frames() -> AsyncIterable[rtc.AudioFrame]:
         import io as _io
@@ -623,12 +705,6 @@ def _recording_audio_frames(
                     )
                     if len(block) == 0:
                         break
-                    if gain != 1.0:
-                        block = _np.clip(
-                            block.astype(_np.float32) * gain,
-                            _np.iinfo(_np.int16).min,
-                            _np.iinfo(_np.int16).max,
-                        ).astype(_np.int16)
                     pcm = _np.ascontiguousarray(block).tobytes()
                     yield rtc.AudioFrame(
                         data=pcm,
@@ -669,12 +745,6 @@ def _recorded_opening_source(config: dict) -> str:
     path = config.get("recording_path", "").strip()
     url = config.get("recording_url", "").strip()
     return path or url
-
-
-def _recorded_opening_audio_gain(recording_source: str) -> float:
-    if recording_source == "asset://coordinator_onboarding_intro":
-        return _COORDINATOR_ONBOARDING_INTRO_AUDIO_GAIN
-    return 1.0
 
 
 def _recorded_opening_transcript(config: dict) -> str:
@@ -728,7 +798,9 @@ def _normalize_call_opening_config(raw: object) -> dict:
 
     if mode == "briefed" and not config.get("system_context", "").strip():
         raise ValueError("briefed opening requires system_context")
-    if mode == "recorded":
+    if mode == "recorded" and config.get("recording_asset", "").strip() not in (
+        _RECORDED_OPENINGS
+    ):
         _recorded_opening_transcript(config)
         if _recorded_opening_source_count(config) != 1:
             raise ValueError(
@@ -861,6 +933,11 @@ async def entrypoint(ctx: agents.JobContext):
 
     # Flag for call_answered that may arrive during initialization
     call_answered_flag = asyncio.Event()
+    user_joined_event = asyncio.Event()
+    joined_gate_required = channel in ("phone_call", "whatsapp_call")
+    speech_gate_open = not joined_gate_required
+    if speech_gate_open:
+        user_joined_event.set()
 
     # Start receiving events from parent (callbacks registered later)
     await start_event_broker_receive()
@@ -1228,9 +1305,13 @@ async def entrypoint(ctx: agents.JobContext):
     )
 
     user_is_speaking = False
-    _queued_speech: list[tuple[str, str, str, str, str]] = []
+    _queued_speech: list[tuple[str, str, str, str, str, str]] = []
     _say_meta_queue: list[dict] = []
     _dedup_in_flight = False
+    # Wall-clock of the most recent voice activity (spoken utterance or injected
+    # notification). Compared against a guidance's ``decided_after_ts`` to skip
+    # the dedup gate when nothing has happened since the slow brain decided.
+    _last_voice_activity_ts: "datetime | None" = None
     generation_seq = 0
     user_state_seq = 0
     mood_turn_index = 0
@@ -1310,7 +1391,7 @@ async def entrypoint(ctx: agents.JobContext):
                 name="restore_elevenlabs_onboarding_opener_speed",
             )
 
-    def _say_recorded_opening(text: str, recording_source: str) -> None:
+    def _say_recorded_opening(text: str, recording_source: str):
         _say_meta_queue.append(
             {
                 "source": opening_config.get("source", "recorded_opening"),
@@ -1318,15 +1399,55 @@ async def entrypoint(ctx: agents.JobContext):
                 "llm_log_path": "",
             },
         )
-        session.say(
+        return session.say(
             text,
-            audio=_recording_audio_frames(
-                recording_source,
-                gain=_recorded_opening_audio_gain(recording_source),
-            ),
+            audio=_recording_audio_frames(recording_source),
             allow_interruptions=True,
             add_to_chat_ctx=True,
         )
+
+    async def _play_opening_bridge(segment: dict) -> None:
+        text = segment["transcript"]
+        _say_meta_queue.append(
+            {
+                "source": "recorded_opening_bridge",
+                "text": text,
+                "llm_log_path": "",
+            },
+        )
+        handle = session.say(
+            text,
+            audio=_recording_audio_frames(f"asset://{segment['asset']}"),
+            allow_interruptions=True,
+            add_to_chat_ctx=True,
+        )
+        await handle.wait_for_playout()
+
+    async def _run_recorded_opening(config: dict) -> None:
+        asset_key = config.get("recording_asset", "").strip()
+        spec = _RECORDED_OPENINGS.get(asset_key)
+        if spec is None:
+            _say_recorded_opening(
+                _recorded_opening_transcript(config),
+                _recorded_opening_source(config),
+            )
+            return
+
+        segments = spec["segments"]
+        bridge = spec.get("bridge")
+        for index, segment in enumerate(segments):
+            handle = _say_recorded_opening(
+                segment["transcript"],
+                f"asset://{segment['asset']}",
+            )
+            await handle.wait_for_playout()
+            reached_transition = index == len(segments) - 1
+            if handle.interrupted and not reached_transition:
+                if bridge is not None:
+                    assistant._pending_opening_bridge = (
+                        lambda b=bridge: _play_opening_bridge(b)
+                    )
+                return
 
     def _fire_generate_reply(
         reason: str,
@@ -1764,6 +1885,10 @@ async def entrypoint(ctx: agents.JobContext):
         role = getattr(ev.item, "role", None)
         if role not in ("user", "assistant"):
             return
+        nonlocal _last_voice_activity_ts
+        from datetime import datetime, timezone
+
+        _last_voice_activity_ts = datetime.now(timezone.utc)
         text = ev.item.text_content or ""
         utterance_id = content_trace_id("utt", f"{role}:{text}")
         say_meta: dict | None = None
@@ -1868,6 +1993,13 @@ async def entrypoint(ctx: agents.JobContext):
     )
     credit_gate_monitor = FastBrainCreditGateMonitor()
     assistant.set_credit_gate_state_provider(lambda: credit_gate_monitor.state)
+    # In-flight says (proactive/guidance still playing, not yet committed) live
+    # in _say_meta_queue until their playout commits them to history. Set as a
+    # direct attribute so it works uniformly on the real Assistant and the test
+    # fakes without each needing a setter.
+    assistant._inflight_speech_provider = lambda: [
+        m["text"] for m in _say_meta_queue if (m.get("text") or "").strip()
+    ]
     credit_gate_task = asyncio.create_task(
         credit_gate_monitor.run(),
         name="fast_brain_credit_gate_monitor",
@@ -1919,25 +2051,39 @@ async def entrypoint(ctx: agents.JobContext):
     # Publish call started (shared helper)
     await publish_call_started(contact, channel, call_session_id=call_session_id)
 
-    pending_notifications: list[tuple[str, str, bool, str, str, str]] = (
+    pending_notifications: list[tuple[str, str, bool, str, str, str, str]] = (
         []
-    )  # (message, spoken_message, should_speak, notification_id, notification_source, llm_log_path)
+    )  # (message, spoken_message, should_speak, notification_id, notification_source, llm_log_path, decided_after_ts)
     session_ready = False
+
+    def _mark_user_joined(reason: str) -> None:
+        nonlocal speech_gate_open
+        if user_joined_event.is_set():
+            return
+        _log.call_status(f"user_joined:{reason}")
+        speech_gate_open = True
+        user_joined_event.set()
+        assistant.set_call_received()
 
     def on_status(data: dict) -> None:
         """Handle status events (call_answered, stop, meet_session_id)."""
-        nonlocal explicit_stop_requested, meet_session_id
+        nonlocal explicit_stop_requested, meet_session_id, speech_gate_open
         event_type = data.get("type", "")
         _log.call_status(event_type)
 
         if event_type == "call_answered":
             call_answered_flag.set()
-            assistant.set_call_received()
+            _mark_user_joined("call_answered")
         elif event_type in ("meet_session_id", "gmeet_session_id"):
             meet_session_id = data.get("session_id", "")
         elif event_type == "stop":
             explicit_stop_requested = True
             ctx.shutdown(reason="stopped")
+
+    @ctx.room.on("participant_connected")
+    def _on_room_participant_connected(participant):
+        if joined_gate_required and not outbound:
+            _mark_user_joined("participant_connected")
 
     def _is_pipeline_quiescent() -> bool:
         """True when the voice pipeline is completely idle (no speech in flight)."""
@@ -1950,25 +2096,126 @@ async def entrypoint(ctx: agents.JobContext):
             return False
         return True
 
+    def _spoken_text_from_handle(handle: object) -> str:
+        """Concatenate the assistant text actually persisted for a say handle.
+
+        On interruption LiveKit records only the synchronized (actually-spoken)
+        transcript, so this is the prefix the caller really heard.
+        """
+        items = getattr(handle, "chat_items", None) or []
+        texts: list[str] = []
+        for item in items:
+            if getattr(item, "role", None) != "assistant":
+                continue
+            content = getattr(item, "text_content", None)
+            if content:
+                texts.append(content)
+        return " ".join(texts)
+
+    def _reinject_unheard_remainder(
+        handle: object,
+        full_text_getter,
+        notification_source: str,
+    ) -> None:
+        """If a spoken guidance was interrupted, inject the unheard remainder.
+
+        should_speak guidance is no longer pre-injected, so an uninterrupted
+        utterance lands in context as its spoken assistant turn and needs nothing
+        further. When the caller barges in, only the spoken prefix is persisted;
+        the remainder would otherwise be lost from the fast brain's context, so we
+        re-inject it as an ``[unheard]`` system note the fast brain can re-surface.
+        """
+        if notification_source == "proactive_speech":
+            return
+
+        async def _after_playout() -> None:
+            try:
+                await handle.wait_for_playout()
+            except Exception:
+                return
+            if not getattr(handle, "interrupted", False):
+                return
+            full = (full_text_getter() or "").strip()
+            if not full:
+                return
+            spoken = _spoken_text_from_handle(handle).strip()
+            remainder = full
+            if spoken and full.startswith(spoken):
+                remainder = full[len(spoken) :].strip()
+            if not remainder:
+                return
+            note = f"[unheard] {remainder}"
+            assistant._chat_ctx.add_message(role="system", content=[note])
+            session.history.add_message(role="system", content=[note])
+            from unity.logger import LOGGER
+
+            LOGGER.info(
+                "⬥ [FastBrain] Re-injected unheard remainder after interruption.",
+            )
+
+        asyncio.ensure_future(_after_playout())
+
     def _speak_now(
-        text: str,
+        text: "str | AsyncIterable[str]",
         notification_id: str,
         notification_source: str,
         notification_content: str,
         llm_log_path: str,
     ) -> None:
-        _say_meta_queue.append(
-            {
-                "notification_id": notification_id,
-                "source": notification_source,
-                "text": text,
-                "llm_log_path": llm_log_path,
-            },
+        if isinstance(text, str):
+            _say_meta_queue.append(
+                {
+                    "notification_id": notification_id,
+                    "source": notification_source,
+                    "text": text,
+                    "llm_log_path": llm_log_path,
+                },
+            )
+            _log.notification_say(text, notification_source=notification_source)
+            handle = session.say(text, allow_interruptions=True, add_to_chat_ctx=True)
+            _reinject_unheard_remainder(handle, lambda: text, notification_source)
+            return
+
+        # Streaming path: ``text`` is an async iterator of token chunks (rewritten
+        # speech). The chunks are forwarded to TTS as they arrive so playout starts
+        # on the first token. ``say_meta["text"]`` is kept in sync so the
+        # ``conversation_item_added`` handler (which fires at playout end) can match
+        # the assembled utterance via its prefix.
+        say_meta = {
+            "notification_id": notification_id,
+            "source": notification_source,
+            "text": "",
+            "llm_log_path": llm_log_path,
+        }
+        _say_meta_queue.append(say_meta)
+        parts: list[str] = []
+
+        async def _tracked_stream() -> "AsyncIterable[str]":
+            try:
+                async for chunk in text:
+                    if not chunk:
+                        continue
+                    parts.append(chunk)
+                    say_meta["text"] = "".join(parts)
+                    yield chunk
+            except Exception as e:
+                from unity.logger import LOGGER
+
+                LOGGER.error(f"⬥ Speech rewrite stream interrupted: {e}")
+            final = "".join(parts)
+            if final:
+                _log.notification_say(final, notification_source=notification_source)
+
+        handle = session.say(
+            _tracked_stream(),
+            allow_interruptions=True,
+            add_to_chat_ctx=True,
         )
-        # Context injection is handled by apply_notification unconditionally
-        # for non-proactive notifications. No injection here to avoid doubles.
-        _log.notification_say(text, notification_source=notification_source)
-        session.say(text, allow_interruptions=True, add_to_chat_ctx=True)
+        _reinject_unheard_remainder(
+            handle,
+            lambda: "".join(parts),
+            notification_source,
+        )
 
     def _extract_chat_messages(
         ctx,
@@ -2036,11 +2283,22 @@ async def entrypoint(ctx: agents.JobContext):
         source: str = "",
         notification_source: str = "",
         llm_log_path: str = "",
+        decided_after_ts: str = "",
     ) -> None:
-        # Inject into chat context so the fast brain sees slow-brain guidance.
-        # Proactive speech is fire-and-forget filler — it never updates context.
+        # Awareness notifications (should_speak=False) are injected into the fast
+        # brain's context so it can surface them in first person. should_speak=True
+        # guidance is NOT pre-injected: the dedup gate voices it once and its spoken
+        # text then lands in context as an assistant turn, so the fast brain sees it
+        # as already said rather than as a notification to re-announce. Only the
+        # unheard remainder is injected back, after playout, if the utterance was
+        # interrupted (see _speak_now). Proactive speech is fire-and-forget filler —
+        # it never updates context.
         speech_text = spoken_message or message
-        if notification_source != "proactive_speech" and message:
+        if notification_source != "proactive_speech" and message and not should_speak:
+            nonlocal _last_voice_activity_ts
+            from datetime import datetime, timezone
+
+            _last_voice_activity_ts = datetime.now(timezone.utc)
             notification_message = f"[notification] {message}"
             assistant._chat_ctx.add_message(
                 role="system",
@@ -2075,6 +2333,7 @@ async def entrypoint(ctx: agents.JobContext):
                         notification_source,
                         message,
                         llm_log_path,
+                        decided_after_ts,
                     ),
                 )
                 maybe_speak_queued()
@@ -2125,12 +2384,37 @@ async def entrypoint(ctx: agents.JobContext):
         results.reverse()
         return results
 
+    def _voice_activity_since(decided_after_ts: str) -> bool:
+        """Whether any voice activity occurred since the slow brain's snapshot.
+
+        ``decided_after_ts`` is the ISO timestamp of the latest voice utterance
+        the slow brain saw when it produced this guidance. When there has been no
+        spoken utterance or injected notification since then, the dedup gate is
+        provably redundant (no race is possible) and can be skipped. Fails safe:
+        a missing/invalid marker, or unknown activity, returns True (run gate).
+        """
+        if not decided_after_ts or _last_voice_activity_ts is None:
+            return True
+        from datetime import datetime, timezone
+
+        try:
+            decided = datetime.fromisoformat(decided_after_ts)
+        except ValueError:
+            return True
+        if decided.tzinfo is None:
+            decided = decided.replace(tzinfo=timezone.utc)
+        last = _last_voice_activity_ts
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        return last > decided
+
     async def _dedup_and_speak(
         text: str,
         notification_id: str,
         notification_source: str,
         notification_content: str,
         llm_log_path: str,
+        decided_after_ts: str = "",
     ) -> None:
         nonlocal _dedup_in_flight
         _dedup_in_flight = True
@@ -2143,21 +2427,79 @@ async def entrypoint(ctx: agents.JobContext):
             # differ (spoken_message), so drop both forms.
             _self_texts = {text.strip(), (notification_content or "").strip()}
             notifications = [n for n in notifications if n.strip() not in _self_texts]
-            if recent and SETTINGS.conversation.SPEECH_DEDUP_ENABLED:
+            run_gate = bool(recent) and SETTINGS.conversation.SPEECH_DEDUP_ENABLED
+            if run_gate and not _voice_activity_since(decided_after_ts):
+                # Nothing has been spoken or notified on the call since the slow
+                # brain decided this guidance, so its context is identical to what
+                # the slow brain already accounted for - the gate cannot find a
+                # race. Skip it (saves a speak-path LLM call) and speak as-is.
+                from unity.logger import LOGGER
+
+                LOGGER.info(
+                    "⬥ [FastBrain] Dedup skipped: no voice activity since "
+                    "slow-brain decision.",
+                )
+                run_gate = False
+            if run_gate:
                 from unity.conversation_manager.domains.speech_dedup import (
+                    SpeechDecision,
                     SpeechDeduplicationChecker,
                 )
 
-                dedup = await SpeechDeduplicationChecker(
+                outcome = await SpeechDeduplicationChecker(
                     model=SETTINGS.conversation.FAST_BRAIN_MODEL,
                 ).evaluate(
                     proposed_speech=text,
                     recent_utterances=recent,
                     recent_notifications=notifications,
                 )
-                if dedup.should_suppress:
-                    _log.dedup_suppressed(text, dedup.reasoning)
+                if outcome.decision is SpeechDecision.SUPPRESS:
+                    _log.dedup_suppressed(text, outcome.reasoning)
                     return
+                if (
+                    outcome.decision is SpeechDecision.REWRITE
+                    and outcome.text_stream is not None
+                ):
+                    stream = outcome.text_stream
+                    # Peek the first token: an empty rewrite degrades to suppress,
+                    # while a stream failure before any token fails open (speak the
+                    # original proposal).
+                    first: str | None = None
+                    errored = False
+                    try:
+                        async for chunk in stream:
+                            if chunk:
+                                first = chunk
+                                break
+                    except Exception as e:
+                        from unity.logger import LOGGER
+
+                        LOGGER.error(
+                            f"⬥ Speech rewrite stream failed before first token: {e}",
+                        )
+                        errored = True
+                    if not errored:
+                        if first is None:
+                            _log.dedup_suppressed(
+                                text,
+                                "rewrite produced empty output",
+                            )
+                            return
+
+                        async def _rewritten() -> "AsyncIterable[str]":
+                            yield first
+                            async for chunk in stream:
+                                if chunk:
+                                    yield chunk
+
+                        _speak_now(
+                            _rewritten(),
+                            notification_id,
+                            notification_source,
+                            notification_content,
+                            llm_log_path,
+                        )
+                        return
             _speak_now(
                 text,
                 notification_id,
@@ -2181,7 +2523,12 @@ async def entrypoint(ctx: agents.JobContext):
         redundancy).  The ``_dedup_in_flight`` guard prevents a second item from
         being dispatched while the first is still being checked.
         """
-        if _dedup_in_flight or not _queued_speech or not _is_pipeline_quiescent():
+        if (
+            _dedup_in_flight
+            or not speech_gate_open
+            or not _queued_speech
+            or not _is_pipeline_quiescent()
+        ):
             return
         (
             text,
@@ -2189,6 +2536,7 @@ async def entrypoint(ctx: agents.JobContext):
             notification_source,
             notification_content,
             llm_log_path,
+            decided_after_ts,
         ) = _queued_speech.pop(0)
         asyncio.ensure_future(
             _dedup_and_speak(
@@ -2197,6 +2545,7 @@ async def entrypoint(ctx: agents.JobContext):
                 notification_source,
                 notification_content,
                 llm_log_path,
+                decided_after_ts,
             ),
         )
 
@@ -2245,6 +2594,7 @@ async def entrypoint(ctx: agents.JobContext):
         should_speak = payload.get("should_speak", False)
         notification_source = payload.get("source", "")
         llm_log_path = payload.get("llm_log_path", "")
+        decided_after_ts = payload.get("decided_after_ts", "")
         notification_id = content_trace_id("guid", message or spoken_message)
         triggers_turn = notification_source not in (
             "meet_interaction",
@@ -2258,7 +2608,7 @@ async def entrypoint(ctx: agents.JobContext):
         )
 
         if message or (should_speak and spoken_message):
-            if not session_ready:
+            if not session_ready or (should_speak and not speech_gate_open):
                 pending_notifications.append(
                     (
                         message,
@@ -2267,6 +2617,7 @@ async def entrypoint(ctx: agents.JobContext):
                         notification_id,
                         notification_source,
                         llm_log_path,
+                        decided_after_ts,
                     ),
                 )
                 _log.notification_buffered(len(pending_notifications))
@@ -2279,6 +2630,7 @@ async def entrypoint(ctx: agents.JobContext):
                     source="socket_callback",
                     notification_source=notification_source,
                     llm_log_path=llm_log_path,
+                    decided_after_ts=decided_after_ts,
                 )
                 if triggers_turn:
                     _invalidate_current_generation(
@@ -2341,6 +2693,10 @@ async def entrypoint(ctx: agents.JobContext):
         ),
     )
     await session.start(room=ctx.room, agent=assistant, room_input_options=rio)
+    if joined_gate_required and not outbound and not user_joined_event.is_set():
+        remote_participants = getattr(ctx.room, "remote_participants", {}) or {}
+        if remote_participants:
+            _mark_user_joined("existing_participant")
     history_lines = await history_task
     if history_lines:
         history_block = (
@@ -2360,6 +2716,9 @@ async def entrypoint(ctx: agents.JobContext):
         _log.session_ready(
             f"Applying {len(pending_notifications)} buffered notification(s)",
         )
+        still_pending_notifications: list[tuple[str, str, bool, str, str, str, str]] = (
+            []
+        )
         for (
             message,
             spoken_message,
@@ -2367,7 +2726,21 @@ async def entrypoint(ctx: agents.JobContext):
             notification_id,
             notification_source,
             llm_log_path,
+            decided_after_ts,
         ) in pending_notifications:
+            if should_speak and not speech_gate_open:
+                still_pending_notifications.append(
+                    (
+                        message,
+                        spoken_message,
+                        should_speak,
+                        notification_id,
+                        notification_source,
+                        llm_log_path,
+                        decided_after_ts,
+                    ),
+                )
+                continue
             apply_notification(
                 message,
                 should_speak,
@@ -2376,19 +2749,9 @@ async def entrypoint(ctx: agents.JobContext):
                 source="pending_buffer_flush",
                 notification_source=notification_source,
                 llm_log_path=llm_log_path,
+                decided_after_ts=decided_after_ts,
             )
-        pending_notifications.clear()
-
-    # Pre-generate the opening greeting via a direct sidecar LLM call so that
-    # the full LLM latency is absorbed before audio playback begins.
-    # - Meet: hides the delay behind the "waiting for assistant" spinner, then
-    #   signals "ready_to_speak" so the avatar appears right before speech.
-    # - Phone (inbound): eliminates dead air after the call connects.
-    # - Phone (outbound): waits for the callee to answer first, then generates.
-    if outbound:
-        _log.info("Outbound call — waiting for callee to answer…")
-        await call_answered_flag.wait()
-        _log.call_status("call_answered — opening turn")
+        pending_notifications[:] = still_pending_notifications
 
     async def _publish_ready_to_speak() -> None:
         if channel == "phone":
@@ -2434,23 +2797,62 @@ async def entrypoint(ctx: agents.JobContext):
         session.history.add_message(role="system", content=[text])
 
     opening_mode = opening_config["mode"]
-    if opening_mode == "speak":
-        greeting_text = await _generate_opening_greeting(authoritative_briefing=False)
+
+    async def _prepare_opening() -> tuple[str, str | dict | None]:
+        if opening_mode == "speak":
+            return (
+                "speak",
+                await _generate_opening_greeting(authoritative_briefing=False),
+            )
+        if opening_mode == "briefed":
+            _inject_opening_system_context(opening_config["system_context"])
+            return (
+                "speak",
+                await _generate_opening_greeting(authoritative_briefing=True),
+            )
+        if opening_mode == "recorded":
+            return "recorded", opening_config
+        if opening_mode == "simulated":
+            simulated_utterance = opening_config.get("simulated_utterance", "").strip()
+            if not simulated_utterance:
+                raise ValueError("simulated opening requires simulated_utterance")
+            return "simulated", simulated_utterance
+        return "silent", None
+
+    opening_task = asyncio.create_task(_prepare_opening())
+    await event_broker.publish(
+        "app:call:status",
+        json.dumps(
+            {
+                "type": "agent_ready",
+                "room_name": ctx.room.name,
+                "channel": channel,
+            },
+        ),
+    )
+
+    if outbound:
+        _log.info("Outbound call — waiting for callee to answer…")
+        await call_answered_flag.wait()
+        _log.call_status("call_answered — opening turn")
+
+    await user_joined_event.wait()
+    speech_gate_open = True
+
+    try:
+        prepared_mode, prepared_payload = await opening_task
+    except Exception as exc:
+        _log.llm_error(f"opening preload failed: {exc}")
+        prepared_mode, prepared_payload = "speak", "Hello — I'm here."
+
+    if prepared_mode == "speak":
         await _publish_ready_to_speak()
-        _say_opening(greeting_text)
-    elif opening_mode == "briefed":
-        _inject_opening_system_context(opening_config["system_context"])
-        greeting_text = await _generate_opening_greeting(authoritative_briefing=True)
+        _say_opening(str(prepared_payload or "Hello — I'm here."))
+    elif prepared_mode == "recorded":
         await _publish_ready_to_speak()
-        _say_opening(greeting_text)
-    elif opening_mode == "recorded":
-        transcript = _recorded_opening_transcript(opening_config)
-        await _publish_ready_to_speak()
-        _say_recorded_opening(transcript, _recorded_opening_source(opening_config))
-    elif opening_mode == "simulated":
-        simulated_utterance = opening_config.get("simulated_utterance", "").strip()
-        if not simulated_utterance:
-            raise ValueError("simulated opening requires simulated_utterance")
+        await _run_recorded_opening(prepared_payload or opening_config)
+    elif prepared_mode == "simulated":
+        simulated_utterance = str(prepared_payload or "")
         await _publish_ready_to_speak()
         assistant._chat_ctx.add_message(role="assistant", content=[simulated_utterance])
         session.history.add_message(role="assistant", content=[simulated_utterance])
@@ -2468,6 +2870,30 @@ async def entrypoint(ctx: agents.JobContext):
     else:
         _log.info("Opening turn suppressed by call opening config")
         await _publish_ready_to_speak()
+
+    if pending_notifications:
+        gated_notifications = list(pending_notifications)
+        pending_notifications.clear()
+        for (
+            message,
+            spoken_message,
+            should_speak,
+            notification_id,
+            notification_source,
+            llm_log_path,
+            decided_after_ts,
+        ) in gated_notifications:
+            apply_notification(
+                message,
+                should_speak,
+                spoken_message=spoken_message,
+                notification_id=notification_id,
+                source="user_joined_buffer_flush",
+                notification_source=notification_source,
+                llm_log_path=llm_log_path,
+                decided_after_ts=decided_after_ts,
+            )
+    maybe_speak_queued()
 
     # Inject the initializing-state system message *after* the greeting has
     # been generated and spoken.  Placing it before the greeting caused the

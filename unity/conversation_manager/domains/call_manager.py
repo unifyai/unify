@@ -1011,6 +1011,48 @@ class LivekitCallManager:
             f"{ICONS['ipc']} [LivekitCallManager] Persistent worker terminated",
         )
 
+    async def end_call(self, reason: str = "assistant_hangup") -> None:
+        """Tear down an active phone / WhatsApp / Unify Meet voice session.
+
+        Best-effort drops the carrier leg for telephony — ending the Twilio
+        conference for inbound calls, or completing the tracked call SID for
+        outbound calls — then signals the running voice agent to stop via the IPC
+        ``app:call:status`` channel. The agent shuts down,
+        deletes the LiveKit room (which also ends the user's Unify Meet window
+        since the Console tears down on ``RoomEvent.Disconnected``), and
+        publishes the channel-appropriate ``*Ended`` event that drives the
+        normal cleanup pipeline.
+
+        Browser meetings (Google Meet / Teams) are not handled here — they tear
+        down via ``_cleanup_meet`` instead.
+        """
+        channel = self._call_channel
+
+        if channel in ("phone_call", "whatsapp_call"):
+            from unity.conversation_manager.domains import comms_utils
+
+            # Inbound calls bridge the remote party through a Twilio conference
+            # (``conference_name`` populated); ending the conference cleanly drops
+            # everyone. Outbound calls have no conference — they are a direct
+            # ``<Dial>`` off the SIP leg — so completing the tracked call SID
+            # collapses the dial and hangs up the remote party deterministically.
+            try:
+                if self.conference_name:
+                    await comms_utils.end_phone_conference(self.conference_name)
+                elif self.provider_call_sid:
+                    await comms_utils.hang_up_call(self.provider_call_sid)
+            except Exception as exc:
+                LOGGER.warning(
+                    f"{ICONS['ipc']} [LivekitCallManager] carrier hangup "
+                    f"failed: {exc}",
+                )
+
+        if self._event_broker is not None:
+            await self._event_broker.publish(
+                "app:call:status",
+                json.dumps({"type": "stop", "reason": reason}),
+            )
+
     async def cleanup_call_proc(self) -> None:
         """Stop any running voice agent job/subprocess and socket server."""
         proc = self._call_proc

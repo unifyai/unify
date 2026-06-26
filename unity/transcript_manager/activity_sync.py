@@ -182,3 +182,79 @@ def opt_in_to_inactivity_followups_via_orchestra(
         "opt-in-followups",
         label="opt_in_to_inactivity_followups_via_orchestra",
     )
+
+
+# Mediums that already have first-class Console surfaces (live chat + the call
+# window), so they must NOT trigger the avatar's "working on a laptop" pose.
+COMMS_ACTIVITY_EXCLUDED_MEDIA = ("unify_message", "unify_meet")
+
+
+def comms_activity_payload(
+    medium: object,
+    sender_id: int | None,
+    self_contact_id: int | None,
+) -> Optional[dict]:
+    """Build the Console ``comms_activity`` event for a transcript message, or
+    ``None`` when the medium should not trigger the working pose.
+
+    Pure (no I/O) so the medium gate and inbound/outbound direction logic stay
+    unit-testable. ``unify_message`` / ``unify_meet`` are excluded — they already
+    have dedicated Console surfaces.
+    """
+    medium_str = str(medium or "")
+    if not medium_str or medium_str in COMMS_ACTIVITY_EXCLUDED_MEDIA:
+        return None
+    is_outbound = (
+        sender_id is not None
+        and self_contact_id is not None
+        and int(sender_id) == int(self_contact_id)
+    )
+    return {"medium": medium_str, "direction": "outbound" if is_outbound else "inbound"}
+
+
+def publish_comms_activity(message: object, agent_id: int | str | None) -> None:
+    """Notify Console that the assistant just sent or received a non-unify comms
+    message (email / SMS / WhatsApp / Slack / …) so its call-window avatar can
+    rotate into the "working on a laptop" pose.
+
+    Fully guarded, fire-and-forget: the publish runs on a daemon thread and any
+    failure is swallowed so the transcript log path never breaks.
+    """
+    try:
+        if agent_id is None:
+            return
+        from unity.session_details import SESSION_DETAILS
+
+        event = comms_activity_payload(
+            getattr(message, "medium", None),
+            getattr(message, "sender_id", None),
+            SESSION_DETAILS.self_contact_id,
+        )
+        if event is None:
+            return
+
+        def _publish() -> None:
+            try:
+                from unity.conversation_manager.domains.comms_utils import (
+                    _publish_to_assistant_topic,
+                )
+
+                _publish_to_assistant_topic(
+                    agent_id=agent_id,
+                    thread="comms_activity",
+                    event=event,
+                    timeout=10,
+                )
+            except Exception as exc:  # noqa: BLE001 – best-effort presence side channel
+                _log.debug("publish_comms_activity failed for %s: %s", agent_id, exc)
+
+        import threading
+
+        threading.Thread(
+            target=_publish,
+            daemon=True,
+            name="comms_activity_pub",
+        ).start()
+    except Exception:
+        # A presence side channel must never break transcript logging.
+        pass

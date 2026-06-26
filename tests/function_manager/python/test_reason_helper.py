@@ -56,8 +56,20 @@ async def test_venv_runner_query_llm_routes_through_runtime_rpc(
     assert sent_kwargs["prompt"] == "Classify this email."
     assert sent_kwargs["system"] == "Use the inbox rubric."
     assert sent_kwargs["temperature"] == 0.0
+    assert sent_kwargs["images"] is None
     assert sent_kwargs["response_format"]["type"] == "json_schema"
     assert sent_kwargs["response_format"]["json_schema"]["name"] == "Decision"
+
+    jpeg_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 8
+    await venv_runner.query_llm(
+        "What is in the image?",
+        images=[jpeg_bytes, "https://example.com/photo.jpg"],
+    )
+
+    assert calls[1][0] == "runtime.query_llm"
+    sent_images = calls[1][1]["images"]
+    assert sent_images[0].startswith("data:image/jpeg;base64,")
+    assert sent_images[1] == "https://example.com/photo.jpg"
 
 
 def test_venv_runner_list_llms_routes_through_runtime_rpc(

@@ -77,6 +77,8 @@ from unity.conversation_manager.events import (
     UserRemoteControlStopped,
     UserWebcamStarted,
     UserWebcamStopped,
+    UserFilesysAccessStarted,
+    UserFilesysAccessStopped,
 )
 from unity.contact_manager.types.contact import UNASSIGNED
 
@@ -488,6 +490,61 @@ class TestWhatsAppPermissionHandling:
             event = Event.from_json(msg["data"])
             assert isinstance(event, WhatsAppCallPermissionResponse)
             assert event.accepted is True
+            assert event.status == "accepted"
+            assert event.contact["contact_id"] == 1
+            assert message._acked
+
+    @pytest.mark.asyncio
+    async def test_permission_response_unknown_payload_is_not_rejected(
+        self,
+        broker,
+        mock_session_details,
+        mock_settings,
+    ):
+        from unity.conversation_manager.comms_manager import CommsManager
+
+        mock_session_details.boss_contact_id = 0
+        cm = CommsManager(broker)
+        cm.loop = asyncio.get_event_loop()
+
+        async with broker.pubsub() as pubsub:
+            await pubsub.psubscribe("app:comms:*")
+
+            contacts = [
+                {
+                    "contact_id": 1,
+                    "first_name": "Test",
+                    "surname": "Contact",
+                    "phone_number": "+15555551111",
+                    "email_address": "test@contact.com",
+                    "whatsapp_number": "+4915237826557",
+                },
+            ]
+            message = create_pubsub_message(
+                "whatsapp",
+                {
+                    "contacts": contacts,
+                    "from_number": "whatsapp:+4915237826557",
+                    "to_number": "whatsapp:+447414266034",
+                    "body": "VOICE_CALL_REQUEST",
+                    "type": "call_permission_response",
+                    "payload": "UNKNOWN",
+                },
+            )
+
+            cm.handle_message(message)
+            await _wait_for_condition(lambda: message._acked)
+
+            msg = await get_message_on_channel(
+                pubsub,
+                "app:comms:whatsapp_call_permission",
+            )
+            assert msg is not None
+
+            event = Event.from_json(msg["data"])
+            assert isinstance(event, WhatsAppCallPermissionResponse)
+            assert event.accepted is False
+            assert event.status == "unknown_interaction"
             assert event.contact["contact_id"] == 1
             assert message._acked
 
@@ -1927,6 +1984,145 @@ class TestMeetInteractionSystemEvents:
         cm.handle_message(msg)
         await _wait_for_condition(lambda: msg._acked)
         assert msg._acked
+
+
+# =============================================================================
+# Test: User Filesystem-Access System Events (live consent)
+# =============================================================================
+
+
+class TestUserFilesysAccessSystemEvents:
+    """Test routing of live filesystem-access consent events through CommsManager.
+
+    Console publishes these as ``unity_system_event`` messages when the user
+    toggles per-link filesystem access. Unlike the meet events, they carry a
+    ``user_id`` (the desktop owner) so the live grant/revoke targets the right
+    link when several users' desktops are linked.
+    """
+
+    _EVENT_CASES = [
+        (
+            "user_filesys_access_started",
+            UserFilesysAccessStarted,
+            "User enabled filesystem access",
+        ),
+        (
+            "user_filesys_access_stopped",
+            UserFilesysAccessStopped,
+            "User disabled filesystem access",
+        ),
+    ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "event_type,expected_cls,message",
+        _EVENT_CASES,
+        ids=[c[0] for c in _EVENT_CASES],
+    )
+    async def test_filesys_access_event_routing_carries_user_id(
+        self,
+        broker,
+        mock_session_details,
+        mock_settings,
+        event_type,
+        expected_cls,
+        message,
+    ):
+        """Filesys-access events route to app:comms:<event_type> with user_id intact."""
+        from unity.conversation_manager.comms_manager import CommsManager
+
+        cm = CommsManager(broker)
+        cm.loop = asyncio.get_event_loop()
+
+        async with broker.pubsub() as pubsub:
+            await pubsub.psubscribe("app:comms:*")
+
+            msg = create_pubsub_message(
+                "unity_system_event",
+                {"event_type": event_type, "user_id": "42", "message": message},
+            )
+
+            cm.handle_message(msg)
+            await _wait_for_condition(lambda: msg._acked)
+
+            received = await get_message_on_channel(
+                pubsub,
+                f"app:comms:{event_type}",
+            )
+            assert received is not None, f"Expected message on app:comms:{event_type}"
+
+            event = Event.from_json(received["data"])
+            assert isinstance(event, expected_cls)
+            assert event.user_id == "42"
+            assert event.reason == message
+
+    @pytest.mark.asyncio
+    async def test_filesys_access_event_missing_user_id_maps_to_empty(
+        self,
+        broker,
+        mock_session_details,
+        mock_settings,
+    ):
+        """A payload without user_id still maps, with user_id defaulting to ''."""
+        from unity.conversation_manager.comms_manager import CommsManager
+
+        cm = CommsManager(broker)
+        cm.loop = asyncio.get_event_loop()
+
+        async with broker.pubsub() as pubsub:
+            await pubsub.psubscribe("app:comms:*")
+
+            msg = create_pubsub_message(
+                "unity_system_event",
+                {"event_type": "user_filesys_access_started", "message": "x"},
+            )
+
+            cm.handle_message(msg)
+            await _wait_for_condition(lambda: msg._acked)
+
+            received = await get_message_on_channel(
+                pubsub,
+                "app:comms:user_filesys_access_started",
+            )
+            event = Event.from_json(received["data"])
+            assert isinstance(event, UserFilesysAccessStarted)
+            assert event.user_id == ""
+
+    @pytest.mark.asyncio
+    async def test_filesys_access_event_default_reason(
+        self,
+        broker,
+        mock_session_details,
+        mock_settings,
+    ):
+        """Filesys-access events use a default reason when message is None."""
+        from unity.conversation_manager.comms_manager import CommsManager
+
+        cm = CommsManager(broker)
+        cm.loop = asyncio.get_event_loop()
+
+        async with broker.pubsub() as pubsub:
+            await pubsub.psubscribe("app:comms:*")
+
+            msg = create_pubsub_message(
+                "unity_system_event",
+                {
+                    "event_type": "user_filesys_access_stopped",
+                    "user_id": "7",
+                    "message": None,
+                },
+            )
+
+            cm.handle_message(msg)
+            await _wait_for_condition(lambda: msg._acked)
+
+            received = await get_message_on_channel(
+                pubsub,
+                "app:comms:user_filesys_access_stopped",
+            )
+            event = Event.from_json(received["data"])
+            assert isinstance(event, UserFilesysAccessStopped)
+            assert "filesystem access" in event.reason.lower()
 
 
 # =============================================================================

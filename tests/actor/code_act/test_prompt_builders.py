@@ -217,6 +217,31 @@ def test_incremental_execution_present_and_execution_rules_not_duplicated():
 
 
 @pytest.mark.timeout(30)
+def test_code_act_prompt_teaches_execution_surfaces_with_user_desktop_caution():
+    """The surface section documents local/assistant/user desktops and cautions
+    that the user desktop is a personal machine requiring consent."""
+    actor = CodeActActor()
+    prompt = build_code_act_prompt(
+        environments=_real_envs_mixed(),
+        tools=dict(actor.get_tools("act")),
+    )
+
+    assert "### Execution Surface" in prompt
+    assert 'surface="local"' in prompt
+    assert 'surface="assistant_desktop"' in prompt
+    assert 'surface="user_desktop"' in prompt
+
+    # User-desktop caution / consent posture.
+    assert "personal machine" in prompt
+    assert "confirm with the user" in prompt
+    assert "Console consent" in prompt
+    assert "can be revoked mid-run" in prompt
+
+    # Remote surfaces remain stateless one-shots.
+    assert "stateless one-shots" in prompt
+
+
+@pytest.mark.timeout(30)
 def test_python_first_principle_present():
     """The Python-first principle is included in the execution rules."""
     actor = CodeActActor()

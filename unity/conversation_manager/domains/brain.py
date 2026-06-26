@@ -257,6 +257,7 @@ def build_brain_spec(
     _bio_ms = _mark_step()
     runtime_setup_note = deployment_runtime_reconcile_prompt_note(cm)
     _runtime_status_ms = _mark_step()
+    _user_desktop_link = SESSION_DETAILS.assistant.user_desktop_for(acting_user_id)
     system_prompt = build_system_prompt(
         bio=_bio_text,
         contact_id=boss_contact_id,
@@ -266,6 +267,7 @@ def build_brain_spec(
         email_address=boss_contact.get("email_address"),
         is_voice_call=cm.mode.is_voice,
         is_internal_call=is_internal_call,
+        on_voice_call=cm.in_voice_session,
         demo_mode=SETTINGS.DEMO_MODE,
         computer_fast_path=cm.computer_fast_path_eligible,
         assistant_has_phone=bool(cm.assistant_number),
@@ -274,10 +276,13 @@ def build_brain_spec(
         assistant_has_discord=bool(cm.assistant_discord_bot_id),
         assistant_has_slack=bool(cm.assistant_slack_bot_user_id),
         assistant_has_teams=bool(cm.assistant_has_teams),
-        has_linked_user_desktop=SESSION_DETAILS.assistant.user_desktop_for(
-            acting_user_id,
-        )
-        is not None,
+        has_linked_user_desktop=_user_desktop_link is not None,
+        user_filesys_consented=bool(
+            _user_desktop_link and _user_desktop_link.filesys_sync,
+        ),
+        user_filesys_available=bool(
+            _user_desktop_link and _user_desktop_link.filesys_available,
+        ),
         acting_user_id=acting_user_id,
         runtime_setup_note=runtime_setup_note,
         team_summaries=getattr(cm, "team_summaries", []),

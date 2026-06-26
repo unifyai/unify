@@ -56,6 +56,15 @@ def _admin_headers() -> dict[str, str]:
     }
 
 
+def _whatsapp_call_permission_status(button_payload: str) -> tuple[str, str]:
+    payload = (button_payload or "").strip()
+    if payload == "ACCEPTED":
+        return "accepted", "ACCEPTED"
+    if payload == "REJECTED":
+        return "rejected", "REJECTED"
+    return "unknown_interaction", "UNKNOWN"
+
+
 def _room_name(assistant_id: str, channel: str) -> str:
     suffix = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     safe_assistant_id = assistant_id.replace(":", "_").replace("/", "_")
@@ -267,8 +276,8 @@ async def _forward_whatsapp_call_permission(
     pool_number: str,
     sender: str,
     button_payload: str,
-) -> None:
-    status = "accepted" if button_payload == "ACCEPTED" else "rejected"
+) -> str:
+    status, event_payload = _whatsapp_call_permission_status(button_payload)
     async with httpx.AsyncClient(timeout=10.0) as client:
         await client.post(
             f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/call-permission",
@@ -277,8 +286,10 @@ async def _forward_whatsapp_call_permission(
                 "pool_number": pool_number,
                 "contact_number": sender,
                 "status": status,
+                "source": "twilio_webhook",
             },
         )
+    return event_payload
 
 
 async def _whatsapp_attachments(
@@ -538,7 +549,7 @@ async def twilio_whatsapp_webhook(
 
     if body == "VOICE_CALL_REQUEST":
         button_payload = str(form_data.get("ButtonPayload") or "")
-        await _forward_whatsapp_call_permission(
+        event_payload = await _forward_whatsapp_call_permission(
             pool_number=pool_number,
             sender=sender,
             button_payload=button_payload,
@@ -562,7 +573,7 @@ async def twilio_whatsapp_webhook(
                     "body": body,
                     "role": route.get("role", "contact"),
                     "type": "call_permission_response",
-                    "payload": button_payload,
+                    "payload": event_payload,
                 },
             )
         return Response(content=str(MessagingResponse()), media_type="text/xml")

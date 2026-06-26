@@ -954,6 +954,14 @@ class CommsManager:
                         reason=r
                         or "User released remote control of assistant desktop.",
                     ),
+                    "user_filesys_access_started": lambda r: UserFilesysAccessStarted(
+                        user_id=str(event.get("user_id") or ""),
+                        reason=r or "User enabled filesystem access.",
+                    ),
+                    "user_filesys_access_stopped": lambda r: UserFilesysAccessStopped(
+                        user_id=str(event.get("user_id") or ""),
+                        reason=r or "User disabled filesystem access.",
+                    ),
                     "assistant_desktop_ready": lambda r: AssistantDesktopReady(
                         binding_id=event.get("binding_id") or "",
                         desktop_url=event.get("desktop_url")
@@ -1153,7 +1161,14 @@ class CommsManager:
                             "whatsapp:",
                             "",
                         ).strip()
-                        accepted = event.get("payload") == "ACCEPTED"
+                        payload = event.get("payload")
+                        if payload == "ACCEPTED":
+                            permission_status = "accepted"
+                        elif payload == "REJECTED":
+                            permission_status = "rejected"
+                        else:
+                            permission_status = "unknown_interaction"
+                        accepted = permission_status == "accepted"
                         contact = next(
                             (
                                 c
@@ -1183,6 +1198,7 @@ class CommsManager:
                             WhatsAppCallPermissionResponse(
                                 contact=contact,
                                 accepted=accepted,
+                                status=permission_status,
                             ).to_json(),
                         )
                         ack_now()

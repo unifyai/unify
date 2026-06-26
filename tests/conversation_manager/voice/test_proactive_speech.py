@@ -533,8 +533,13 @@ class TestProactiveSpeechLoop:
         assert payload["message"] == "Still with you!"
         assert payload["should_speak"] is True
 
-    async def test_loop_records_message_in_contact_index(self, mock_cm):
-        """The loop records the proactive message in contact_index."""
+    async def test_loop_does_not_prewrite_to_contact_index(self, mock_cm):
+        """The loop no longer pre-writes its decision text to contact_index.
+
+        The spoken line is recorded exactly once, via the actually-spoken
+        Outbound utterance (and only if it is genuinely spoken), so the loop
+        just publishes the notification and leaves the transcript untouched.
+        """
         from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm.mode = Mode.CALL
@@ -559,21 +564,19 @@ class TestProactiveSpeechLoop:
         ):
             await ConversationManager._proactive_speech_loop(mock_cm)
 
-        # Should have recorded the message
+        # The notification is published for the fast brain to speak...
+        mock_cm.event_broker.publish.assert_called()
+
+        # ...but nothing is written to contact_index by the loop itself.
         contact = mock_cm.get_active_contact()
         contact_id = contact["contact_id"]
-
         voice_thread = mock_cm.contact_index.get_messages_for_contact(
             contact_id,
             Medium.PHONE_CALL,
         )
-        proactive_msg = None
-        for msg in voice_thread:
-            if "Are you still there?" in (msg.content or ""):
-                proactive_msg = msg
-                break
-
-        assert proactive_msg is not None
+        assert not any(
+            "Are you still there?" in (msg.content or "") for msg in voice_thread
+        )
 
 
 # =============================================================================
@@ -907,8 +910,13 @@ class TestProactiveSpeechBlindSpots:
     # Test: Medium.UNIFY_MEET in the loop
     # -------------------------------------------------------------------------
 
-    async def test_loop_records_message_with_unify_meet_medium(self, mock_cm):
-        """In MEET mode, proactive messages should use Medium.UNIFY_MEET."""
+    async def test_loop_does_not_prewrite_in_meet_mode(self, mock_cm):
+        """In MEET mode the loop also no longer pre-writes to contact_index.
+
+        The proactive line is recorded once via the spoken Outbound utterance,
+        not by the loop, so neither the meet nor phone thread gains the content
+        from running the loop; only the notification is published.
+        """
         from unity.conversation_manager.conversation_manager import ConversationManager
 
         mock_cm.mode = Mode.MEET  # Key: test MEET mode specifically
@@ -933,11 +941,10 @@ class TestProactiveSpeechBlindSpots:
         ):
             await ConversationManager._proactive_speech_loop(mock_cm)
 
-        # Verify the message was recorded with UNIFY_MEET medium
+        mock_cm.event_broker.publish.assert_called()
+
         contact = mock_cm.get_active_contact()
         contact_id = contact["contact_id"]
-
-        # Should use UNIFY_MEET, not PHONE_CALL
         meet_thread = mock_cm.contact_index.get_messages_for_contact(
             contact_id,
             Medium.UNIFY_MEET,
@@ -946,17 +953,9 @@ class TestProactiveSpeechBlindSpots:
             contact_id,
             Medium.PHONE_CALL,
         )
-
-        # Find the proactive message in the meet thread
-        proactive_msg = None
-        for msg in meet_thread:
-            if "Still here for the meeting!" in (msg.content or ""):
-                proactive_msg = msg
-                break
-
-        assert proactive_msg is not None, (
-            f"Expected proactive message in UNIFY_MEET thread. "
-            f"Meet thread: {meet_thread}, Phone thread: {phone_thread}"
+        assert not any(
+            "Still here for the meeting!" in (msg.content or "")
+            for msg in meet_thread + phone_thread
         )
 
     # -------------------------------------------------------------------------

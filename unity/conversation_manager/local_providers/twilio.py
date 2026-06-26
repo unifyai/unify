@@ -76,6 +76,14 @@ def empty_message_response() -> str:
     return str(MessagingResponse())
 
 
+def call_unavailable_response() -> str:
+    """Return TwiML for a temporarily unavailable call bridge."""
+    response = VoiceResponse()
+    response.say("This number cannot accept calls right now. Please try again later.")
+    response.hangup()
+    return str(response)
+
+
 def create_conference_response(
     conference_name: str,
     *,

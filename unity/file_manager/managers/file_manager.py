@@ -60,7 +60,7 @@ from unity.common.federated_search import (
 from unity.common.filter_utils import normalize_filter_expr
 from unity.common.tool_outcome import ToolErrorException
 from unity.common.model_to_fields import model_to_fields
-from unity.common.llm_client import new_llm_client
+from unity.common.llm_client import new_llm_client, new_vision_llm_client
 from .utils.search import (
     resolve_table_ref as _srch_resolve_table_ref,
 )
@@ -2125,31 +2125,17 @@ class FileManager(BaseFileManager):
         _parent_chat_context: Optional[List[Dict[str, Any]]] = None,
     ) -> SteerableToolHandle:
         """Single-shot vision LLM call for image files (JPEG/PNG)."""
-        import base64 as _b64
+        from unity.common.image_content import to_image_content_block
 
         if not self._adapter.exists(file_path):
             raise FileNotFoundError(file_path)
 
-        image_bytes = self._adapter.open_bytes(file_path)
-
-        head = image_bytes[:10]
-        if head.startswith(b"\xff\xd8"):
-            mime = "image/jpeg"
-        elif head.startswith(b"\x89PNG\r\n\x1a\n"):
-            mime = "image/png"
-        else:
-            mime = "application/octet-stream"
-
-        b64_data = _b64.b64encode(image_bytes).decode("ascii")
-        content_block = {
-            "type": "image_url",
-            "image_url": {"url": f"data:{mime};base64,{b64_data}"},
-        }
+        content_block = to_image_content_block(file_path, adapter=self._adapter)
 
         async def _vision_call() -> str:
             from unity.image_manager.prompt_builders import build_image_ask_prompt
 
-            client = new_llm_client()
+            client = new_vision_llm_client(origin="FileManager.ask_about_image_file")
             client.set_system_message(
                 build_image_ask_prompt(caption=file_path, timestamp=None).to_list(),
             )

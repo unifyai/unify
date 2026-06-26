@@ -1,20 +1,22 @@
 """
 Tests for remote Windows execution in FunctionManager.
 
-Tests the complete remote execution flow including:
+File movement runs entirely over FileSync bisync (no /api/files). These tests
+cover:
 - Routing logic (when to execute remotely)
-- FileSync integration (sync before/after execution)
-- Venv preparation (uv sync)
-- Script execution with arguments
-- Result capture and error handling
+- Local staging of the wrapper script + venv pyproject in the sync root
+- Venv installation on the VM (uv sync over /exec)
+- Bisync push/pull ordering and the hard SyncManager requirement
+- Result capture (read locally after the post-exec bisync) and error handling
 """
 
 from __future__ import annotations
 
-import base64
 import json
-import pytest
+from types import SimpleNamespace
 from typing import Any, Dict, List
+
+import pytest
 
 from unity.function_manager.function_manager import FunctionManager
 from unity.common.context_registry import ContextRegistry
@@ -121,6 +123,62 @@ def mock_session_details_ubuntu(monkeypatch):
     yield SESSION_DETAILS
 
 
+@pytest.fixture
+def windows_local_root(tmp_path, monkeypatch):
+    """Point the Windows-exec local sync root at a temp dir.
+
+    Inputs (wrapper script, venv pyproject) are staged here and the result
+    file is read back from here after the (mocked) bisync.
+    """
+    root = tmp_path / "Unity" / "Local"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        FunctionManager,
+        "_windows_exec_local_root",
+        lambda self: root,
+    )
+    return root
+
+
+@pytest.fixture
+def mock_bisync(monkeypatch):
+    """Simulate FileSync bisync for the Windows-exec flow.
+
+    The exec path now (a) hard-requires a non-None SyncManager and (b) relies
+    on the post-exec bisync to materialise the result file locally. We fake
+    both: ``_sync_to_remote`` is a no-op that records the call, and
+    ``_sync_from_remote`` writes a result file for each staged script,
+    mirroring the VM having run the wrapper. The result payload is
+    configurable via ``state.result_payload``.
+    """
+    calls: List[str] = []
+    state = SimpleNamespace(result_payload={"result": None, "error": None})
+
+    monkeypatch.setattr(FunctionManager, "_get_sync_manager", lambda self: object())
+
+    async def _to_remote(self):
+        calls.append("sync_to_remote")
+        return True
+
+    async def _from_remote(self):
+        calls.append("sync_from_remote")
+        root = self._windows_exec_local_root()
+        scripts_dir = root / "scripts"
+        if scripts_dir.is_dir():
+            for script in scripts_dir.glob("_exec_*.py"):
+                exec_id = script.stem[len("_exec_") :]
+                (root / f"_result_{exec_id}.json").write_text(
+                    json.dumps(state.result_payload),
+                    encoding="utf-8",
+                )
+        return True
+
+    monkeypatch.setattr(FunctionManager, "_sync_to_remote", _to_remote)
+    monkeypatch.setattr(FunctionManager, "_sync_from_remote", _from_remote)
+
+    return SimpleNamespace(calls=calls, state=state)
+
+
 class MockResponse:
     """Mock aiohttp response."""
 
@@ -128,6 +186,11 @@ class MockResponse:
         self._payload = payload
         self.status = status
         self.ok = status < 400
+
+    def raise_for_status(self):
+        # Mirrors aiohttp's response API, which the shared exec client invokes.
+        if self.status >= 400:
+            raise RuntimeError(f"HTTP {self.status}")
 
     async def json(self):
         return self._payload
@@ -147,7 +210,11 @@ class MockResponse:
 
 
 class MockClientSession:
-    """Mock aiohttp.ClientSession that records requests."""
+    """Mock aiohttp.ClientSession that records requests.
+
+    Only ``/api/exec`` is exercised now (venv install + script run); file
+    movement is handled by bisync, so ``/api/files`` is never called.
+    """
 
     def __init__(self):
         self.requests: List[Dict[str, Any]] = []
@@ -159,29 +226,11 @@ class MockClientSession:
 
     def _find_response(self, url: str, method: str, kwargs: Dict) -> MockResponse:
         """Find matching response or return default."""
-        # Check for exact match first
         for pattern, response in self._responses.items():
             if pattern in url:
                 return response
 
-        # Default responses based on endpoint
-        if "/api/files" in url:
-            action = kwargs.get("json", {}).get("action", "save")
-            if action == "save":
-                return MockResponse({"status": "saved", "files": ["test.txt"]})
-            elif action == "read":
-                return MockResponse(
-                    {
-                        "content": base64.b64encode(b"test content").decode(),
-                        "encoding": "base64",
-                        "filename": "test.txt",
-                    },
-                )
-            elif action == "list":
-                return MockResponse({"files": [], "path": "."})
-            elif action == "delete":
-                return MockResponse({"status": "deleted", "files": []})
-        elif "/api/exec" in url:
+        if "/api/exec" in url:
             return MockResponse(
                 {
                     "exitCode": 0,
@@ -223,6 +272,14 @@ def mock_aiohttp_session(monkeypatch):
     monkeypatch.setattr(aiohttp, "ClientSession", patched_client_session)
 
     yield mock_session
+
+
+def _files_requests(session: MockClientSession) -> List[Dict[str, Any]]:
+    return [r for r in session.requests if "/api/files" in r["url"]]
+
+
+def _exec_requests(session: MockClientSession) -> List[Dict[str, Any]]:
+    return [r for r in session.requests if "/api/exec" in r["url"]]
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -279,73 +336,95 @@ class TestRemoteWindowsRoutingLogic:
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 2. Wait Time Calculation Tests
+# 2. Venv Staging + Preparation Tests
 # ────────────────────────────────────────────────────────────────────────────
 
 
-# ────────────────────────────────────────────────────────────────────────────
-# 3. Venv Preparation Tests
-# ────────────────────────────────────────────────────────────────────────────
-
-
-class TestPrepareVenvOnRemoteWindows:
-    """Tests for _prepare_venv_on_remote_windows."""
+class TestWriteVenvPyprojectLocal:
+    """Tests for _write_venv_pyproject_local (local staging of pyproject.toml)."""
 
     @_handle_project
-    @pytest.mark.asyncio
-    async def test_raises_on_venv_not_found(
+    def test_raises_on_venv_not_found(
         self,
         function_manager_factory,
         mock_session_details_windows,
+        windows_local_root,
     ):
         """ValueError when venv_id doesn't exist."""
         fm = function_manager_factory()
 
         with pytest.raises(ValueError, match="not found"):
-            await fm._prepare_venv_on_remote_windows(
-                desktop_url="https://test-vm.unify.ai",
-                venv_id=99999,  # Non-existent
+            fm._write_venv_pyproject_local(venv_id=99999)
+
+    @_handle_project
+    def test_writes_pyproject_into_sync_root(
+        self,
+        function_manager_factory,
+        mock_session_details_windows,
+        windows_local_root,
+    ):
+        """pyproject.toml is staged at the VM-mirroring relative path."""
+        fm = function_manager_factory()
+        venv_id = fm.add_venv(venv=MINIMAL_VENV_CONTENT)
+
+        try:
+            fm._write_venv_pyproject_local(venv_id=venv_id)
+
+            dest = (
+                windows_local_root
+                / "Local"
+                / "venvs"
+                / f"venv_{venv_id}"
+                / "pyproject.toml"
             )
+            assert dest.is_file()
+            assert dest.read_text(encoding="utf-8") == MINIMAL_VENV_CONTENT
+        finally:
+            try:
+                fm.delete_venv(venv_id=venv_id)
+            except Exception:
+                pass
+
+
+class TestPrepareVenvOnRemoteWindows:
+    """Tests for _prepare_venv_on_remote_windows (remote install via uv sync)."""
 
     @_handle_project
     @pytest.mark.asyncio
-    async def test_writes_pyproject_and_runs_sync(
+    async def test_runs_uv_sync_without_files_api(
         self,
         function_manager_factory,
         mock_session_details_windows,
         mock_aiohttp_session,
     ):
-        """Venv preparation writes pyproject.toml and runs uv sync."""
-        fm = function_manager_factory()
+        """Venv preparation installs uv + runs uv sync over /exec, never /api/files."""
+        from unity.actor.execution.targets.assistant_desktop import (
+            AssistantDesktopTarget,
+        )
 
-        # Create a venv first
+        fm = function_manager_factory()
         venv_id = fm.add_venv(venv=MINIMAL_VENV_CONTENT)
+
+        target = AssistantDesktopTarget(
+            fm,
+            api_url="https://test-vm.unify.ai",
+            os="windows",
+        )
 
         try:
             result = await fm._prepare_venv_on_remote_windows(
-                desktop_url="https://test-vm.unify.ai",
+                target,
                 venv_id=venv_id,
             )
 
-            # Should return python path with new Local\venvs path
+            # Returns the venv's python.exe under the Local\venvs path.
             assert "Local\\venvs\\venv_" in result
             assert ".venv\\Scripts\\python.exe" in result
 
-            # Should have made requests for:
-            # 1. Write pyproject.toml (/api/files)
-            # 2. pip install uv (/api/exec)
-            # 3. uv sync (/api/exec)
-            files_requests = [
-                r for r in mock_aiohttp_session.requests if "/api/files" in r["url"]
-            ]
-            exec_requests = [
-                r for r in mock_aiohttp_session.requests if "/api/exec" in r["url"]
-            ]
-
-            assert len(files_requests) >= 1  # At least pyproject.toml write
-            assert len(exec_requests) >= 2  # pip install uv + uv sync
+            # pip install uv + uv sync, and no file-movement over HTTP.
+            assert len(_exec_requests(mock_aiohttp_session)) >= 2
+            assert _files_requests(mock_aiohttp_session) == []
         finally:
-            # Cleanup
             try:
                 fm.delete_venv(venv_id=venv_id)
             except Exception:
@@ -353,7 +432,7 @@ class TestPrepareVenvOnRemoteWindows:
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 4. Full Execution Flow Tests
+# 3. Full Execution Flow Tests
 # ────────────────────────────────────────────────────────────────────────────
 
 
@@ -367,27 +446,14 @@ class TestExecutePythonFunctionOnRemoteWindows:
         function_manager_factory,
         mock_session_details_windows,
         mock_aiohttp_session,
+        windows_local_root,
+        mock_bisync,
     ):
-        """Basic execution with result capture."""
+        """Result is captured from the locally-pulled result file."""
         fm = function_manager_factory()
+        mock_bisync.state.result_payload = {"result": 42, "error": None}
 
-        # Set up response for result file read
-        mock_aiohttp_session.set_response(
-            "read",
-            MockResponse(
-                {
-                    "content": base64.b64encode(
-                        json.dumps({"result": 42, "error": None}).encode(),
-                    ).decode(),
-                    "encoding": "base64",
-                },
-            ),
-        )
-
-        func_data = {
-            "name": "test_func",
-            "windows_os_required": True,
-        }
+        func_data = {"name": "test_func", "windows_os_required": True}
 
         result = await fm._execute_python_function_on_remote_windows(
             func_data=func_data,
@@ -395,22 +461,63 @@ class TestExecutePythonFunctionOnRemoteWindows:
             call_kwargs={"input_path": "/test/path"},
         )
 
-        # Should have made requests
-        assert len(mock_aiohttp_session.requests) > 0
+        assert result["result"] == 42
+        assert result["error"] is None
 
-        # Check that script was written
-        files_requests = [
-            r
-            for r in mock_aiohttp_session.requests
-            if "/api/files" in r["url"] and r.get("json", {}).get("action") == "save"
-        ]
-        assert len(files_requests) >= 1
+        # Script ran over /exec; file movement went through bisync, not /files.
+        assert len(_exec_requests(mock_aiohttp_session)) >= 1
+        assert _files_requests(mock_aiohttp_session) == []
+        assert mock_bisync.calls == ["sync_to_remote", "sync_from_remote"]
 
-        # Check that exec was called
-        exec_requests = [
-            r for r in mock_aiohttp_session.requests if "/api/exec" in r["url"]
-        ]
-        assert len(exec_requests) >= 1
+    @_handle_project
+    @pytest.mark.asyncio
+    async def test_stages_script_in_sync_root(
+        self,
+        function_manager_factory,
+        mock_session_details_windows,
+        mock_aiohttp_session,
+        windows_local_root,
+        monkeypatch,
+    ):
+        """The wrapper script is written into the local sync root before bisync."""
+        seen_scripts: List[str] = []
+
+        monkeypatch.setattr(FunctionManager, "_get_sync_manager", lambda self: object())
+
+        async def _to_remote(self):
+            # Capture what was staged at push time.
+            scripts_dir = self._windows_exec_local_root() / "scripts"
+            if scripts_dir.is_dir():
+                seen_scripts.extend(p.name for p in scripts_dir.glob("_exec_*.py"))
+            return True
+
+        async def _from_remote(self):
+            root = self._windows_exec_local_root()
+            for script in (root / "scripts").glob("_exec_*.py"):
+                exec_id = script.stem[len("_exec_") :]
+                (root / f"_result_{exec_id}.json").write_text(
+                    json.dumps({"result": None, "error": None}),
+                    encoding="utf-8",
+                )
+            return True
+
+        monkeypatch.setattr(FunctionManager, "_sync_to_remote", _to_remote)
+        monkeypatch.setattr(FunctionManager, "_sync_from_remote", _from_remote)
+
+        fm = function_manager_factory()
+        func_data = {"name": "test_func", "windows_os_required": True}
+
+        await fm._execute_python_function_on_remote_windows(
+            func_data=func_data,
+            implementation=SIMPLE_WINDOWS_FUNC,
+            call_kwargs={"input_path": "/test/path"},
+        )
+
+        # A wrapper script was staged before the push bisync ran.
+        assert len(seen_scripts) == 1
+        # Temp files are cleaned up locally after the result is read.
+        assert list((windows_local_root / "scripts").glob("_exec_*.py")) == []
+        assert list(windows_local_root.glob("_result_*.json")) == []
 
     @_handle_project
     @pytest.mark.asyncio
@@ -419,14 +526,13 @@ class TestExecutePythonFunctionOnRemoteWindows:
         function_manager_factory,
         mock_session_details_windows,
         mock_aiohttp_session,
+        windows_local_root,
+        mock_bisync,
     ):
         """Execution uses PowerShell shell mode."""
         fm = function_manager_factory()
 
-        func_data = {
-            "name": "test_func",
-            "windows_os_required": True,
-        }
+        func_data = {"name": "test_func", "windows_os_required": True}
 
         await fm._execute_python_function_on_remote_windows(
             func_data=func_data,
@@ -434,19 +540,13 @@ class TestExecutePythonFunctionOnRemoteWindows:
             call_kwargs={"input_path": "/test/path"},
         )
 
-        # Find exec request and check shell_mode
-        exec_requests = [
-            r for r in mock_aiohttp_session.requests if "/api/exec" in r["url"]
-        ]
+        exec_requests = _exec_requests(mock_aiohttp_session)
         assert len(exec_requests) >= 1
-
-        # Check that shell_mode is powershell
-        exec_json = exec_requests[-1].get("json", {})
-        assert exec_json.get("shell_mode") == "powershell"
+        assert exec_requests[-1].get("json", {}).get("shell_mode") == "powershell"
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 5. Integration Tests (execute_function routing)
+# 4. Integration Tests (execute_function routing)
 # ────────────────────────────────────────────────────────────────────────────
 
 
@@ -460,32 +560,32 @@ class TestExecuteFunctionRemoteRouting:
         function_manager_factory,
         mock_session_details_windows,
         mock_aiohttp_session,
+        windows_local_root,
+        mock_bisync,
         monkeypatch,
     ):
         """execute_function dispatches to remote execution when conditions met."""
         fm = function_manager_factory()
 
-        # Add a function
         fm.add_functions(
             implementations=SIMPLE_WINDOWS_FUNC,
             language="python",
         )
 
-        # Mock the routing check to return True (simulating windows_os_required=True)
         monkeypatch.setattr(
             fm,
             "_should_execute_python_function_on_remote_windows",
             lambda func_data: True,
         )
 
-        # Execute - should route to remote
-        result = await fm.execute_function(
+        await fm.execute_function(
             function_name="process_data",
             call_kwargs={"input_path": "/test/path"},
         )
 
-        # Should have made HTTP requests to the mock agent service
-        assert len(mock_aiohttp_session.requests) > 0
+        # Routed remotely: the script ran over /exec via bisync staging.
+        assert len(_exec_requests(mock_aiohttp_session)) >= 1
+        assert mock_bisync.calls == ["sync_to_remote", "sync_from_remote"]
 
     @_handle_project
     @pytest.mark.asyncio
@@ -498,31 +598,26 @@ class TestExecuteFunctionRemoteRouting:
         """execute_function stays local when windows_os_required=False."""
         fm = function_manager_factory()
 
-        # Add a function without windows_os_required
         fm.add_functions(
             implementations=SIMPLE_WINDOWS_FUNC,
             language="python",
         )
 
-        # Execute - should NOT route to remote
         result = await fm.execute_function(
             function_name="process_data",
             call_kwargs={"input_path": "/test/path"},
         )
 
-        # Should NOT have made HTTP requests to agent service
-        # (local execution doesn't use aiohttp)
+        # Local execution doesn't hit the agent service.
         agent_requests = [
             r for r in mock_aiohttp_session.requests if "test-vm.unify.ai" in r["url"]
         ]
         assert len(agent_requests) == 0
-
-        # Should have a result (local execution worked)
         assert "result" in result or "error" in result
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 6. FileSync Integration Tests
+# 5. FileSync Integration Tests
 # ────────────────────────────────────────────────────────────────────────────
 
 
@@ -536,30 +631,11 @@ class TestSyncIntegration:
         function_manager_factory,
         mock_session_details_windows,
         mock_aiohttp_session,
-        monkeypatch,
+        windows_local_root,
+        mock_bisync,
     ):
-        """Verify sync_to_remote and sync_from_remote are called."""
+        """Verify sync_to_remote and sync_from_remote are called, in order."""
         fm = function_manager_factory()
-        sync_calls = []
-
-        async def mock_sync_to_remote(self):
-            sync_calls.append("sync_to_remote")
-            return True
-
-        async def mock_sync_from_remote(self):
-            sync_calls.append("sync_from_remote")
-            return True
-
-        monkeypatch.setattr(
-            FunctionManager,
-            "_sync_to_remote",
-            mock_sync_to_remote,
-        )
-        monkeypatch.setattr(
-            FunctionManager,
-            "_sync_from_remote",
-            mock_sync_from_remote,
-        )
 
         func_data = {"name": "test_func", "windows_os_required": True}
 
@@ -569,35 +645,34 @@ class TestSyncIntegration:
             call_kwargs={"input_path": "/Unity/data/file.txt"},
         )
 
-        # Verify sync order
-        assert sync_calls == ["sync_to_remote", "sync_from_remote"]
+        assert mock_bisync.calls == ["sync_to_remote", "sync_from_remote"]
 
     @_handle_project
     @pytest.mark.asyncio
-    async def test_execution_continues_without_sync_manager(
+    async def test_execution_raises_without_sync_manager(
         self,
         function_manager_factory,
         mock_session_details_windows,
         mock_aiohttp_session,
+        windows_local_root,
         monkeypatch,
     ):
-        """Execution proceeds if no SyncManager available."""
+        """Windows exec hard-requires FileSync; absence raises before any work."""
         fm = function_manager_factory()
 
-        # Ensure no sync manager
         monkeypatch.setattr(fm, "_get_sync_manager", lambda: None)
 
         func_data = {"name": "test_func", "windows_os_required": True}
 
-        # Should not raise
-        await fm._execute_python_function_on_remote_windows(
-            func_data=func_data,
-            implementation=SIMPLE_WINDOWS_FUNC,
-            call_kwargs={"input_path": "/Unity/data/file.txt"},
-        )
+        with pytest.raises(RuntimeError, match="FileSync"):
+            await fm._execute_python_function_on_remote_windows(
+                func_data=func_data,
+                implementation=SIMPLE_WINDOWS_FUNC,
+                call_kwargs={"input_path": "/Unity/data/file.txt"},
+            )
 
-        # HTTP requests still made (script write + exec + result read)
-        assert len(mock_aiohttp_session.requests) > 0
+        # Bailed out before touching the agent service.
+        assert _exec_requests(mock_aiohttp_session) == []
 
     @_handle_project
     def test_get_sync_manager_returns_none_without_file_manager(

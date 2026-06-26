@@ -177,6 +177,19 @@ class UserDesktopLink:
     url: str
     os: str  # "ubuntu", "windows", or "macos"
     filesys_sync: bool = False
+    # Coordinates for on-demand SFTP access to the user's home over the raw-TCP
+    # tunnel. Populated only when the device has registered its SFTP tunnel; the
+    # private key never rides this struct (it is fetched on demand from the admin
+    # assistant read, keyed by owner_user_id).
+    sftp_tunnel_host: str | None = None
+    sftp_tunnel_port: int | None = None
+
+    @property
+    def filesys_available(self) -> bool:
+        """True when on-demand home filesystem access is usable for this link."""
+        return bool(
+            self.filesys_sync and self.sftp_tunnel_host and self.sftp_tunnel_port,
+        )
 
 
 def normalize_user_desktops(
@@ -200,11 +213,15 @@ def normalize_user_desktops(
                 raise ValueError(
                     "user_desktops entries require owner_user_id, url and os",
                 )
+            port = item.get("sftp_tunnel_port")
+            host = item.get("sftp_tunnel_host")
             link = UserDesktopLink(
                 owner_user_id=str(item["owner_user_id"]),
                 url=str(item["url"]),
                 os=str(item["os"]),
                 filesys_sync=bool(item.get("filesys_sync", False)),
+                sftp_tunnel_host=str(host) if host else None,
+                sftp_tunnel_port=int(port) if port else None,
             )
         desktops[link.owner_user_id] = link
     return desktops
@@ -222,6 +239,8 @@ def _encode_user_desktops(value: dict[str, UserDesktopLink]) -> str:
                 "url": link.url,
                 "os": link.os,
                 "filesys_sync": link.filesys_sync,
+                "sftp_tunnel_host": link.sftp_tunnel_host,
+                "sftp_tunnel_port": link.sftp_tunnel_port,
             }
             for link in value.values()
         ],

@@ -1083,6 +1083,8 @@ async def start_whatsapp_call(
     to_number: str,
     agent_name: str,
     room_name: str,
+    allow_permission_probe: bool = False,
+    pending_call_context: str = "",
 ) -> dict:
     """
     Initiate a WhatsApp voice call via the Communication service.
@@ -1112,6 +1114,8 @@ async def start_whatsapp_call(
                 "assistant_id": agent_id,
                 "agent_name": agent_name,
                 "room_name": room_name,
+                "allow_permission_probe": allow_permission_probe,
+                "pending_call_context": pending_call_context,
             },
         ) as response:
             try:
@@ -1122,6 +1126,131 @@ async def start_whatsapp_call(
                     "error": f"Failed to initiate WhatsApp call to {to_number}",
                 }
             return await response.json()
+
+
+async def end_phone_conference(conference_name: str) -> dict:
+    """
+    End an active Twilio conference (clean carrier hangup).
+
+    Used to terminate the carrier leg of a phone or WhatsApp call (both use the
+    same Twilio conference model). Best-effort: the LiveKit room teardown remains
+    the universal session-end mechanism, this just drops the PSTN/WhatsApp leg
+    cleanly when the conference name is known.
+
+    Args:
+        conference_name: The Twilio conference friendly name.
+
+    Returns:
+        dict with 'success' and any provider response fields.
+    """
+    if not conference_name:
+        return {"success": False, "error": "no conference_name"}
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{_gateway_comms_base_url()}/phone/end-conference",
+            headers=headers,
+            json={"ConferenceName": conference_name},
+        ) as response:
+            try:
+                response.raise_for_status()
+            except Exception:
+                return {
+                    "success": False,
+                    "error": f"Failed to end conference {conference_name}",
+                }
+            return await response.json()
+
+
+async def hang_up_call(call_sid: str) -> dict:
+    """
+    End a single Twilio call by SID (clean carrier hangup, no conference).
+
+    Used for outbound calls, which are bridged via a direct ``<Dial>`` rather
+    than a Twilio conference: completing the parent SIP call leg collapses the
+    dial and disconnects the remote party deterministically (instead of relying
+    on the LiveKit room teardown propagating a SIP BYE).
+
+    Args:
+        call_sid: The Twilio call SID to terminate.
+
+    Returns:
+        dict with 'success' and any provider response fields.
+    """
+    if not call_sid:
+        return {"success": False, "error": "no call_sid"}
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{_gateway_comms_base_url()}/phone/hang-up-call",
+            headers=headers,
+            json={"CallSid": call_sid},
+        ) as response:
+            try:
+                response.raise_for_status()
+            except Exception:
+                return {
+                    "success": False,
+                    "error": f"Failed to hang up call {call_sid}",
+                }
+            return await response.json()
+
+
+async def store_pending_whatsapp_call_intent(
+    *,
+    pool_number: str,
+    contact_number: str,
+    context: str,
+) -> None:
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/pending-call-intent",
+            headers=headers,
+            json={
+                "pool_number": pool_number,
+                "contact_number": contact_number,
+                "context": context,
+            },
+        ) as response:
+            response.raise_for_status()
+
+
+async def get_pending_whatsapp_call_intent(
+    *,
+    pool_number: str,
+    contact_number: str,
+) -> dict | None:
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/pending-call-intent",
+            headers=headers,
+            params={
+                "pool_number": pool_number,
+                "contact_number": contact_number,
+            },
+        ) as response:
+            if response.status == 404:
+                return None
+            response.raise_for_status()
+            return await response.json()
+
+
+async def clear_pending_whatsapp_call_intent(
+    *,
+    pool_number: str,
+    contact_number: str,
+) -> None:
+    async with aiohttp.ClientSession() as session:
+        async with session.delete(
+            f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/pending-call-intent",
+            headers=headers,
+            params={
+                "pool_number": pool_number,
+                "contact_number": contact_number,
+            },
+        ) as response:
+            if response.status != 404:
+                response.raise_for_status()
 
 
 async def add_email_attachments(

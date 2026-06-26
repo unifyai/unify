@@ -5,28 +5,31 @@ tests/conversation_manager/voice/test_speech_dedup.py
 Tests for the speech deduplication gate.
 
 Dedup runs in the fast brain subprocess at speak time (inside
-``maybe_speak_queued`` → ``_dedup_and_speak``).  Before playing queued slow
+``maybe_speak_queued`` -> ``_dedup_and_speak``).  Before playing queued slow
 brain speech, a lightweight LLM check compares the proposed text against recent
-assistant utterances in the fast brain's chat context and suppresses it when the
-information has already been communicated.
+assistant utterances in the fast brain's chat context and returns one of three
+verdicts: ``SPEAK`` (unchanged), ``SUPPRESS`` (drop), or ``REWRITE`` (speak a
+trimmed version, streamed token-by-token into TTS).
 
 Test categories:
 
-1. **Unit tests** — SpeechDeduplicationChecker in isolation.
-2. **Symbolic integration tests** — verify the slow brain no longer runs dedup
+1. **Unit tests** - SpeechDeduplicationChecker in isolation (streaming fakes).
+2. **Symbolic integration tests** - verify the slow brain no longer runs dedup
    and passes ``should_speak`` through to the fast brain unmodified.
-3. **Eval tests** — end-to-end with real LLM judgment on overlapping content.
+3. **Eval tests** - end-to-end with real LLM judgment on overlapping content.
 """
 
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from collections.abc import AsyncIterator
+from typing import Iterable
 
 import pytest
 
 from unity.conversation_manager.domains.speech_dedup import (
-    SpeechDedup,
+    DedupOutcome,
+    SpeechDecision,
     SpeechDeduplicationChecker,
 )
 from unity.conversation_manager.events import (
@@ -42,7 +45,56 @@ from tests.conversation_manager.conftest import BOSS, TEST_CONTACTS
 from tests.helpers import _handle_project
 
 # =============================================================================
-# Unit tests — SpeechDeduplicationChecker in isolation
+# Streaming fake helpers
+# =============================================================================
+
+
+async def _drain(stream: AsyncIterator[str] | None) -> str:
+    """Concatenate all chunks yielded by a rewrite token stream."""
+    if stream is None:
+        return ""
+    parts = []
+    async for chunk in stream:
+        parts.append(chunk)
+    return "".join(parts)
+
+
+def _fake_client(chunks: Iterable[str], captured: dict | None = None):
+    """Build a fake unillm client whose streamed ``generate`` yields *chunks*.
+
+    Mirrors the real client surface used by the gate: ``set_stream`` plus an
+    awaitable ``generate`` that resolves to an async iterator of content chunks.
+    Splitting words across chunk boundaries exercises incremental header
+    parsing.
+    """
+    chunk_list = list(chunks)
+
+    class _Client:
+        def set_stream(self, _value: bool) -> None:
+            pass
+
+        async def generate(self, *, messages=None, **_kwargs):
+            if captured is not None:
+                captured["messages"] = messages
+
+            async def _gen():
+                for chunk in chunk_list:
+                    yield chunk
+
+            return _gen()
+
+    return _Client()
+
+
+def _patch_client(monkeypatch, client) -> None:
+    monkeypatch.setattr(
+        "unity.conversation_manager.domains.speech_dedup.new_llm_client",
+        lambda *a, **kw: client,
+    )
+
+
+# =============================================================================
+# Unit tests - DedupOutcome / decision parsing
 # =============================================================================
 
 
@@ -50,8 +102,7 @@ from tests.helpers import _handle_project
 class TestSpeechDeduplicationCheckerUnit:
 
     async def test_empty_utterances_skips_check(self):
-        """When there are no recent utterances, the checker returns
-        already_covered=False without making an LLM call."""
+        """With no recent context, the checker returns SPEAK without an LLM call."""
         checker = SpeechDeduplicationChecker()
 
         result = await checker.evaluate(
@@ -59,38 +110,92 @@ class TestSpeechDeduplicationCheckerUnit:
             recent_utterances=[],
         )
 
-        assert isinstance(result, SpeechDedup)
-        assert result.already_covered is False
+        assert isinstance(result, DedupOutcome)
+        assert result.decision is SpeechDecision.SPEAK
+        assert result.reasoning == "no recent context to compare against"
+        assert result.should_suppress is False
 
-    async def test_evaluate_returns_structured_output(self):
-        """With recent utterances and proposed speech, the evaluator makes
-        an LLM call and returns a valid SpeechDedup result.
+    async def test_should_suppress_property(self):
+        """should_suppress is True only for the SUPPRESS decision."""
+        assert DedupOutcome(SpeechDecision.SUPPRESS).should_suppress is True
+        assert DedupOutcome(SpeechDecision.SPEAK).should_suppress is False
+        assert DedupOutcome(SpeechDecision.REWRITE).should_suppress is False
 
-        Uses FAST_BRAIN_MODEL for a cheaper round-trip in default CI.
-        Production ``SpeechDeduplicationChecker()`` uses ``UNIFY_MODEL``;
-        see ``test_evaluate_sends_user_role_message`` for the message-shape
-        contract, and the eval test for a full default-model call.
-        """
-        from unity.settings import SETTINGS
+    async def test_decision_mapping(self, monkeypatch):
+        """Each header token maps to the correct SpeechDecision."""
+        cases = {
+            SpeechDecision.SPEAK: ["SPEAK | genuinely new info"],
+            SpeechDecision.SUPPRESS: ["SUPPRESS | already said it"],
+            SpeechDecision.REWRITE: ["REWRITE\n", "trimmed body"],
+        }
+        for expected, chunks in cases.items():
+            _patch_client(monkeypatch, _fake_client(chunks))
+            checker = SpeechDeduplicationChecker(model="fake@test")
+            result = await checker.evaluate(
+                proposed_speech="Proposed line.",
+                recent_utterances=["A prior utterance."],
+            )
+            assert result.decision is expected, f"{chunks} -> {result.decision}"
 
-        checker = SpeechDeduplicationChecker(
-            model=SETTINGS.conversation.FAST_BRAIN_MODEL,
-        )
+    async def test_rewrite_streams_trimmed_text(self, monkeypatch):
+        """REWRITE exposes a token stream that drains to the body with the
+        header stripped, even when the marker is split across chunks."""
+        chunks = ["RE", "WRITE", "\n", "Confirmed ", "back on ", "WhatsApp."]
+        _patch_client(monkeypatch, _fake_client(chunks))
+        checker = SpeechDeduplicationChecker(model="fake@test")
 
         result = await checker.evaluate(
-            proposed_speech="Found three Italian restaurants nearby.",
-            recent_utterances=[
-                "Yeah, I found three Italian places near you — the top rated is Chez Laurent.",
-            ],
+            proposed_speech="The Matrix - correct. Confirmed back on WhatsApp.",
+            recent_utterances=["Yes - got it. The Matrix is the right reply."],
         )
 
-        assert isinstance(result, SpeechDedup)
-        assert isinstance(result.already_covered, bool)
-        assert isinstance(result.reasoning, str)
+        assert result.decision is SpeechDecision.REWRITE
+        assert await _drain(result.text_stream) == "Confirmed back on WhatsApp."
+
+    async def test_rewrite_body_on_same_line_recovered(self, monkeypatch):
+        """If the model omits the newline and jams body onto the REWRITE line,
+        the body is still recovered after the marker."""
+        _patch_client(monkeypatch, _fake_client(["REWRITE: Confirmed on WhatsApp."]))
+        checker = SpeechDeduplicationChecker(model="fake@test")
+
+        result = await checker.evaluate(
+            proposed_speech="The Matrix - correct. Confirmed on WhatsApp.",
+            recent_utterances=["Yes - the Matrix is right."],
+        )
+
+        assert result.decision is SpeechDecision.REWRITE
+        assert await _drain(result.text_stream) == "Confirmed on WhatsApp."
+
+    async def test_rewrite_empty_body_stream_is_empty(self, monkeypatch):
+        """A REWRITE header with no body yields an empty stream (the speak path
+        degrades this to suppression)."""
+        _patch_client(monkeypatch, _fake_client(["REWRITE\n"]))
+        checker = SpeechDeduplicationChecker(model="fake@test")
+
+        result = await checker.evaluate(
+            proposed_speech="Redundant line.",
+            recent_utterances=["Already said this."],
+        )
+
+        assert result.decision is SpeechDecision.REWRITE
+        assert await _drain(result.text_stream) == ""
+
+    async def test_unrecognized_header_fails_open_to_speak(self, monkeypatch):
+        """If the model ignores the protocol, the gate fails open to SPEAK so the
+        original proposal is still delivered."""
+        _patch_client(monkeypatch, _fake_client(["Sure, here's what I think...\n"]))
+        checker = SpeechDeduplicationChecker(model="fake@test")
+
+        result = await checker.evaluate(
+            proposed_speech="Something to say.",
+            recent_utterances=["A prior utterance."],
+        )
+
+        assert result.decision is SpeechDecision.SPEAK
 
     async def test_evaluate_error_fails_open(self):
-        """On LLM error, the checker returns already_covered=False so speech
-        is allowed rather than silently suppressed."""
+        """On LLM error, the checker returns SPEAK so speech is allowed rather
+        than silently suppressed."""
         checker = SpeechDeduplicationChecker(model="invalid-model@nowhere")
 
         result = await checker.evaluate(
@@ -98,38 +203,29 @@ class TestSpeechDeduplicationCheckerUnit:
             recent_utterances=["Done with the task."],
         )
 
-        assert result.already_covered is False
+        assert result.decision is SpeechDecision.SPEAK
+        assert result.should_suppress is False
         assert "failed" in result.reasoning.lower()
 
-    async def test_evaluate_sends_user_role_message(self):
+    async def test_evaluate_sends_user_role_message(self, monkeypatch):
         """LiteLLM/Anthropic reject chat completions with only ``system`` messages.
 
-        ``SpeechDeduplicationChecker()`` defaults to ``UNIFY_MODEL`` in prod.
-        This test does not call the API: it asserts we always include at least
-        one non-system message so provider transforms do not empty the payload.
+        Asserts we always include at least one non-system message so provider
+        transforms do not empty the payload.
         """
         captured: dict = {}
+        _patch_client(
+            monkeypatch,
+            _fake_client(["SPEAK | ok"], captured=captured),
+        )
+        checker = SpeechDeduplicationChecker(model="claude-3-5-haiku@anthropic")
 
-        mock_client = MagicMock()
-        mock_client.set_response_format = MagicMock()
+        result = await checker.evaluate(
+            proposed_speech="The report is ready.",
+            recent_utterances=["I already told you the report is ready."],
+        )
 
-        async def capture_generate(*, messages=None, **_kwargs):
-            captured["messages"] = messages
-            return '{"already_covered": false, "reasoning": "ok"}'
-
-        mock_client.generate = AsyncMock(side_effect=capture_generate)
-
-        with patch(
-            "unity.conversation_manager.domains.speech_dedup.new_llm_client",
-            return_value=mock_client,
-        ):
-            checker = SpeechDeduplicationChecker(model="claude-3-5-haiku@anthropic")
-            result = await checker.evaluate(
-                proposed_speech="The report is ready.",
-                recent_utterances=["I already told you the report is ready."],
-            )
-
-        assert result.already_covered is False
+        assert result.decision is SpeechDecision.SPEAK
         assert captured.get("messages") is not None
         roles = [m["role"] for m in captured["messages"]]
         assert "system" in roles
@@ -138,40 +234,13 @@ class TestSpeechDeduplicationCheckerUnit:
 
 
 # =============================================================================
-# Unit tests — contradiction detection and notification awareness
+# Unit tests - context / notification awareness
 # =============================================================================
 
 
 @pytest.mark.asyncio
-class TestSpeechGateContradictionDetection:
-    """Tests for the expanded speech gate that detects contradiction and
-    staleness in addition to redundancy."""
-
-    async def test_should_suppress_combines_both_fields(self):
-        """SpeechDedup.should_suppress is True when either already_covered
-        or contradicts_current_state is True."""
-        assert SpeechDedup(already_covered=True).should_suppress is True
-        assert (
-            SpeechDedup(
-                already_covered=False,
-                contradicts_current_state=True,
-            ).should_suppress
-            is True
-        )
-        assert (
-            SpeechDedup(
-                already_covered=True,
-                contradicts_current_state=True,
-            ).should_suppress
-            is True
-        )
-        assert (
-            SpeechDedup(
-                already_covered=False,
-                contradicts_current_state=False,
-            ).should_suppress
-            is False
-        )
+class TestSpeechGateContextAwareness:
+    """Tests for the prompt context the gate sees (utterances + notifications)."""
 
     async def test_empty_context_skips_check(self):
         """No LLM call when both utterances and notifications are empty."""
@@ -184,117 +253,62 @@ class TestSpeechGateContradictionDetection:
         )
 
         assert result.should_suppress is False
+        assert result.decision is SpeechDecision.SPEAK
 
-    async def test_notifications_only_triggers_check(self):
+    async def test_notifications_only_triggers_check(self, monkeypatch):
         """When there are notifications but no utterances, the checker still
         runs (notifications alone can reveal contradiction)."""
         captured: dict = {}
-        mock_client = MagicMock()
-        mock_client.set_response_format = MagicMock()
+        _patch_client(
+            monkeypatch,
+            _fake_client(["SUPPRESS | contradicts state"], captured=captured),
+        )
 
-        async def capture_generate(*, messages=None, **_kwargs):
-            captured["messages"] = messages
-            return json.dumps(
-                {
-                    "already_covered": False,
-                    "contradicts_current_state": False,
-                    "reasoning": "no overlap",
-                },
-            )
-
-        mock_client.generate = AsyncMock(side_effect=capture_generate)
-
-        with patch(
-            "unity.conversation_manager.domains.speech_dedup.new_llm_client",
-            return_value=mock_client,
-        ):
-            checker = SpeechDeduplicationChecker()
-            await checker.evaluate(
-                proposed_speech="Let me walk you through that.",
-                recent_utterances=[],
-                recent_notifications=["Setup completed successfully."],
-            )
+        checker = SpeechDeduplicationChecker()
+        await checker.evaluate(
+            proposed_speech="Let me walk you through that.",
+            recent_utterances=[],
+            recent_notifications=["Setup completed successfully."],
+        )
 
         assert captured.get("messages") is not None
         system_msg = captured["messages"][0]["content"]
         assert "Setup completed successfully" in system_msg
 
-    async def test_evaluate_includes_notifications_in_prompt(self):
-        """The expanded prompt includes recent notifications alongside
-        recent utterances so the LLM can detect contradictions."""
+    async def test_evaluate_includes_notifications_in_prompt(self, monkeypatch):
+        """The prompt includes recent notifications alongside recent utterances
+        so the LLM can detect contradictions."""
         captured: dict = {}
-        mock_client = MagicMock()
-        mock_client.set_response_format = MagicMock()
+        _patch_client(
+            monkeypatch,
+            _fake_client(["SUPPRESS | already done"], captured=captured),
+        )
 
-        async def capture_generate(*, messages=None, **_kwargs):
-            captured["messages"] = messages
-            return json.dumps(
-                {
-                    "already_covered": False,
-                    "contradicts_current_state": False,
-                    "reasoning": "novel info",
-                },
-            )
-
-        mock_client.generate = AsyncMock(side_effect=capture_generate)
-
-        with patch(
-            "unity.conversation_manager.domains.speech_dedup.new_llm_client",
-            return_value=mock_client,
-        ):
-            checker = SpeechDeduplicationChecker()
-            await checker.evaluate(
-                proposed_speech="Want me to help set up Gmail?",
-                recent_utterances=["Everything is done."],
-                recent_notifications=[
-                    "Gmail check completed: 201 unread emails.",
-                ],
-            )
+        checker = SpeechDeduplicationChecker()
+        await checker.evaluate(
+            proposed_speech="Want me to help set up Gmail?",
+            recent_utterances=["Everything is done."],
+            recent_notifications=["Gmail check completed: 201 unread emails."],
+        )
 
         system_msg = captured["messages"][0]["content"]
         assert "Gmail check completed" in system_msg
         assert "Everything is done" in system_msg
 
-    async def test_error_fails_open_with_both_fields(self):
-        """On LLM error, both fields are False (fails open)."""
-        checker = SpeechDeduplicationChecker(model="invalid-model@nowhere")
-
-        result = await checker.evaluate(
-            proposed_speech="Let me set up delegation.",
-            recent_utterances=["All done."],
-            recent_notifications=["Setup complete."],
-        )
-
-        assert result.should_suppress is False
-        assert result.contradicts_current_state is False
-
-    async def test_backward_compat_without_notifications(self):
+    async def test_backward_compat_without_notifications(self, monkeypatch):
         """Calling evaluate without recent_notifications still works
         (parameter is optional with default None)."""
         captured: dict = {}
-        mock_client = MagicMock()
-        mock_client.set_response_format = MagicMock()
+        _patch_client(
+            monkeypatch,
+            _fake_client(["SUPPRESS | same info"], captured=captured),
+        )
 
-        async def capture_generate(*, messages=None, **_kwargs):
-            captured["messages"] = messages
-            return json.dumps(
-                {
-                    "already_covered": True,
-                    "reasoning": "same info",
-                },
-            )
-
-        mock_client.generate = AsyncMock(side_effect=capture_generate)
-
-        with patch(
-            "unity.conversation_manager.domains.speech_dedup.new_llm_client",
-            return_value=mock_client,
-        ):
-            checker = SpeechDeduplicationChecker()
-            result = await checker.evaluate(
-                proposed_speech="Found restaurants.",
-                recent_utterances=["I found three Italian places."],
-            )
+        checker = SpeechDeduplicationChecker()
+        result = await checker.evaluate(
+            proposed_speech="Found restaurants.",
+            recent_utterances=["I found three Italian places."],
+        )
 
         assert result.should_suppress is True
         system_msg = captured["messages"][0]["content"]
@@ -303,8 +317,8 @@ class TestSpeechGateContradictionDetection:
     async def test_self_notification_only_skips_check(self):
         """The slow brain's guidance is injected as a ``[notification]`` using the
         same text it then proposes for speech. When that self-copy is the only
-        context, it is dropped and the check short-circuits to allow speech
-        (no LLM call) - the user has not actually heard it yet."""
+        context, it is dropped and the check short-circuits to SPEAK (no LLM
+        call) - the user has not actually heard it yet."""
         proposed = "Correct - The Matrix. Email channel works."
         checker = SpeechDeduplicationChecker()
 
@@ -314,43 +328,27 @@ class TestSpeechGateContradictionDetection:
             recent_notifications=[proposed],
         )
 
-        assert result.should_suppress is False
-        # Reasoning marks the no-LLM short-circuit, proving the self-copy was
-        # excluded before any model call.
+        assert result.decision is SpeechDecision.SPEAK
         assert result.reasoning == "no recent context to compare against"
 
-    async def test_self_notification_excluded_from_prompt(self):
+    async def test_self_notification_excluded_from_prompt(self, monkeypatch):
         """A notification equal to the proposed speech is filtered out before the
         prompt is built, so the gate can never match the proposal against itself.
         Other, genuinely distinct notifications are preserved."""
         proposed = "Correct - The Matrix. Email channel works."
         other = "Email check completed for Daniel."
         captured: dict = {}
-        mock_client = MagicMock()
-        mock_client.set_response_format = MagicMock()
+        _patch_client(
+            monkeypatch,
+            _fake_client(["SPEAK | novel"], captured=captured),
+        )
 
-        async def capture_generate(*, messages=None, **_kwargs):
-            captured["messages"] = messages
-            return json.dumps(
-                {
-                    "already_covered": False,
-                    "contradicts_current_state": False,
-                    "reasoning": "novel",
-                },
-            )
-
-        mock_client.generate = AsyncMock(side_effect=capture_generate)
-
-        with patch(
-            "unity.conversation_manager.domains.speech_dedup.new_llm_client",
-            return_value=mock_client,
-        ):
-            checker = SpeechDeduplicationChecker()
-            await checker.evaluate(
-                proposed_speech=proposed,
-                recent_utterances=["Got it - I'm checking that now."],
-                recent_notifications=[proposed, other],
-            )
+        checker = SpeechDeduplicationChecker()
+        await checker.evaluate(
+            proposed_speech=proposed,
+            recent_utterances=["Got it - I'm checking that now."],
+            recent_notifications=[proposed, other],
+        )
 
         system_msg = captured["messages"][0]["content"]
         # The self-copy is not rendered as a notification bullet ("- {text}"),
@@ -359,15 +357,19 @@ class TestSpeechGateContradictionDetection:
         assert f"- {other}" in system_msg
 
 
+# =============================================================================
+# Eval tests - real LLM judgment
+# =============================================================================
+
+
 @pytest.mark.eval
 @pytest.mark.asyncio
-class TestSpeechGateContradictionEval:
-    """Eval tests verifying the LLM correctly identifies contradiction
-    between proposed speech and current notification state."""
+class TestSpeechGateEval:
+    """Eval tests verifying the LLM's three-way judgment on overlapping content."""
 
     async def test_detects_offering_setup_when_already_complete(self):
-        """The gate should suppress speech that offers setup steps when
-        a notification confirms the setup is already complete."""
+        """The gate should suppress speech that offers setup steps when a
+        notification confirms the setup is already complete."""
         from unity.settings import SETTINGS
 
         checker = SpeechDeduplicationChecker(
@@ -390,11 +392,11 @@ class TestSpeechGateContradictionEval:
 
         assert result.should_suppress is True, (
             f"Expected suppression for setup offer when notifications confirm "
-            f"completion. Reasoning: {result.reasoning}"
+            f"completion. Decision: {result.decision}, reasoning: {result.reasoning}"
         )
 
     async def test_allows_genuinely_new_information(self):
-        """The gate should allow speech that contains genuinely new
+        """The gate should not suppress speech that contains genuinely new
         information not present in utterances or notifications."""
         from unity.settings import SETTINGS
 
@@ -411,7 +413,8 @@ class TestSpeechGateContradictionEval:
         )
 
         assert result.should_suppress is False, (
-            f"Expected novel info to pass through. " f"Reasoning: {result.reasoning}"
+            f"Expected novel info to pass through. Decision: {result.decision}, "
+            f"reasoning: {result.reasoning}"
         )
 
     async def test_never_spoken_ack_not_suppressed(self):
@@ -425,7 +428,7 @@ class TestSpeechGateContradictionEval:
         """
         from unity.settings import SETTINGS
 
-        ack = "Correct - The Matrix. That's correct, well done. " "Email channel works."
+        ack = "Correct - The Matrix. That's correct, well done. Email channel works."
         checker = SpeechDeduplicationChecker(
             model=SETTINGS.conversation.FAST_BRAIN_MODEL,
         )
@@ -438,12 +441,63 @@ class TestSpeechGateContradictionEval:
 
         assert result.should_suppress is False, (
             f"Never-spoken acknowledgement must not be suppressed just because it "
-            f"matches its own guidance notification. Reasoning: {result.reasoning}"
+            f"matches its own guidance notification. Decision: {result.decision}, "
+            f"reasoning: {result.reasoning}"
         )
+
+    async def test_partial_overlap_triggers_rewrite(self):
+        """When the proposal repeats an acknowledgement already spoken but also
+        carries new info, the gate should REWRITE to keep only the new part."""
+        from unity.settings import SETTINGS
+
+        checker = SpeechDeduplicationChecker(
+            model=SETTINGS.conversation.FAST_BRAIN_MODEL,
+        )
+
+        proposed = (
+            "The Matrix - that's correct. I've confirmed back on WhatsApp too, "
+            "so that round is done."
+        )
+        result = await checker.evaluate(
+            proposed_speech=proposed,
+            recent_utterances=["Yes - got it. The Matrix is the right reply."],
+        )
+
+        assert result.should_suppress is False, (
+            f"Partial overlap with new info should not be fully suppressed. "
+            f"Reasoning: {result.reasoning}"
+        )
+        if result.decision is SpeechDecision.REWRITE:
+            rewritten = await _drain(result.text_stream)
+            assert rewritten.strip(), "Rewrite body must be non-empty."
+            assert len(rewritten) < len(proposed), (
+                "Rewrite should be shorter than the redundant proposal. "
+                f"Got: {rewritten!r}"
+            )
+            assert (
+                "whatsapp" in rewritten.lower()
+            ), f"Rewrite should preserve the new WhatsApp info. Got: {rewritten!r}"
+
+    async def test_default_model_streaming_roundtrip(self):
+        """Production path: no ``model=`` uses ``UNIFY_MODEL``.
+
+        Catches provider-specific request-shape or streaming issues that mocks
+        miss.
+        """
+        checker = SpeechDeduplicationChecker()
+        result = await checker.evaluate(
+            proposed_speech="Found three Italian restaurants nearby.",
+            recent_utterances=[
+                "Yeah, I found three Italian places near you - "
+                "the top rated is Chez Laurent.",
+            ],
+        )
+        assert isinstance(result, DedupOutcome)
+        assert isinstance(result.decision, SpeechDecision)
 
 
 # =============================================================================
-# Symbolic integration tests — slow brain passes should_speak through
+# Symbolic integration tests - slow brain passes should_speak through
 # =============================================================================
 
 
@@ -485,7 +539,7 @@ class TestSlowBrainPassesSpeakThrough:
             contact_id=boss_contact["contact_id"],
             sender_name="You",
             thread_name=Medium.PHONE_CALL,
-            message_content="That's done — found three Italian restaurants near you.",
+            message_content="That's done - found three Italian restaurants near you.",
             role="assistant",
         )
 
@@ -534,32 +588,15 @@ class TestSlowBrainPassesSpeakThrough:
 
 
 # =============================================================================
-# Eval test — LLM-based deduplication judgment
+# Eval test - end-to-end slow brain passthrough
 # =============================================================================
 
 
 @pytest.mark.eval
 @pytest.mark.asyncio
 class TestSpeechDedupEval:
-    """End-to-end eval test verifying the LLM correctly identifies when the
-    fast brain has already covered the slow brain's proposed speech."""
-
-    async def test_default_model_structured_completion_roundtrip(self):
-        """Production path: no ``model=`` uses ``UNIFY_MODEL``.
-
-        Catches provider-specific request-shape or schema issues that mocks miss.
-        """
-        checker = SpeechDeduplicationChecker()
-        result = await checker.evaluate(
-            proposed_speech="Found three Italian restaurants nearby.",
-            recent_utterances=[
-                "Yeah, I found three Italian places near you — "
-                "the top rated is Chez Laurent.",
-            ],
-        )
-        assert isinstance(result, SpeechDedup)
-        assert isinstance(result.already_covered, bool)
-        assert isinstance(result.reasoning, str)
+    """End-to-end eval test verifying the slow brain passes should_speak
+    through to the fast brain without running dedup."""
 
     @_handle_project
     async def test_slow_brain_passes_speak_through_e2e(
@@ -571,14 +608,6 @@ class TestSpeechDedupEval:
 
         Dedup now runs in the fast brain subprocess at speak time.  The slow
         brain publishes the LLM's original decision unmodified.
-
-        Scenario:
-        1. Start a Meet, complete an action with concrete results.
-        2. Push an outbound assistant utterance covering the result
-           (simulating the fast brain's reactive response).
-        3. Step the CM with a user utterance asking about the result.
-        4. Assert the slow brain's published event preserves should_speak
-           as the LLM produced it (no server-side suppression).
         """
         cm = initialized_cm
 
@@ -602,7 +631,7 @@ class TestSpeechDedupEval:
             sender_name="You",
             thread_name=Medium.UNIFY_MEET,
             message_content=(
-                "Yeah, the email check came back — you've got 47 unread "
+                "Yeah, the email check came back - you've got 47 unread "
                 "emails in your inbox."
             ),
             role="assistant",

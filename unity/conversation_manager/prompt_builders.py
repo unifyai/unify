@@ -387,13 +387,46 @@ def _build_phone_guidelines(phone_number: str | None) -> str:
 - For phone: talk naturally, but avoid long verbose responses and only say one sentence at a time."""
 
 
-def _build_phone_scenarios(phone_number: str | None) -> str:
-    """Build phone-specific scenarios if phone number is available."""
-    if not phone_number:
-        return ""
-    return """- If my boss asks me to call someone while I am on a call with them, I should make the call AFTER the call ends — attempting to make a call while on a call will result in an error.
-- If my boss asks me to call someone, I must inform them that I am about to call the person before actually calling them, something like "Sure, will call them now!".
-- Calls and browser meetings (Google Meet or Microsoft Teams) are mutually exclusive — I cannot join a Google Meet or Teams meeting while on a call, or make a call while in a Google Meet or Teams meeting. If asked, I should let my boss know I will do it after the current session ends."""
+def _build_voice_session_scenarios(
+    *,
+    assistant_has_phone: bool,
+    assistant_has_whatsapp: bool,
+) -> str:
+    """Build voice-session scenario guidance (mutual exclusion + call etiquette).
+
+    The one-voice-session-at-a-time rule covers every voice surface (phone call,
+    WhatsApp call, Unify Meet, Google Meet, Microsoft Teams), so it is emitted
+    regardless of whether the boss has a stored phone number. The
+    "announce before calling" etiquette line is gated on the assistant actually
+    having a phone or WhatsApp calling channel.
+    """
+    lines = [
+        "- I can only be on ONE voice session at a time — a phone call, a WhatsApp call, a Unify Meet, a Google Meet, or a Microsoft Teams meeting. I cannot start or join another while one is already live. If my boss asks me to, I tell them I will do it once the current session ends, then do it then — I never claim to have started it while still on the current one.",
+    ]
+    if assistant_has_phone or assistant_has_whatsapp:
+        lines.append(
+            "- If my boss asks me to call someone, I must tell them I am about to call before placing the call, "
+            'something like "Sure, calling them now!".',
+        )
+    return "\n".join(lines)
+
+
+def _build_active_voice_session_block() -> str:
+    """Explain the one-voice-session-at-a-time constraint while a call is live.
+
+    Rendered only when a voice call/meeting is active, so the slow brain
+    understands why the call-starting tools are absent and that they return once
+    the session ends. Resolves the contradiction where the prompt would otherwise
+    advertise tools the live tool set has withheld.
+    """
+    return """Active voice session
+--------------------
+I am currently on a live voice session, and I can only be on ONE voice session at a time — whether that is a phone call, a WhatsApp call, a Unify Meet, a Google Meet, or a Microsoft Teams meeting. Because of this:
+- The call-starting tools (`make_call`, `make_whatsapp_call`, `join_google_meet`, `join_teams_meet`) are intentionally NOT in my tool list right now. This is expected, not a malfunction.
+- They reappear automatically the moment this session ends — I do not need to do anything special to get them back.
+- If my boss asks me to start another call or join another meeting while this one is live, I tell them I will do it as soon as the current session ends — I do NOT claim to have started it, and I do NOT keep retrying.
+- To end this session I use `hang_up` — it ends whichever voice session is active (call or meeting). I use it when my boss asks me to hang up / end the call / leave the meeting, or when the conversation is clearly over and it is natural to disconnect.
+- I can still communicate on text channels during the session (SMS, WhatsApp messages, email, Unify messages, etc.). Any controls specific to the current session (such as sharing my screen) appear in my tool list when they are available."""
 
 
 def _build_missing_phone_notice(assistant_has_phone: bool) -> str:
@@ -509,8 +542,15 @@ def _build_comms_tool_listing(
     assistant_has_slack: bool = False,
     assistant_has_teams: bool = False,
     is_coordinator: bool = False,
+    on_voice_call: bool = False,
 ) -> str:
-    """Build the communication tools block for the output format section."""
+    """Build the communication tools block for the output format section.
+
+    While a voice call/meeting is live (``on_voice_call``) the call-starting
+    tools (``make_call``, ``make_whatsapp_call``, ``join_google_meet``,
+    ``join_teams_meet``) are withheld from the live tool set, so they are omitted
+    here too — only one voice session can exist at a time.
+    """
     lines: list[str] = []
     if is_coordinator:
         if assistant_has_phone:
@@ -553,19 +593,22 @@ def _build_comms_tool_listing(
         lines.append(
             "- `send_api_response`: Reply to a programmatic API message (use when the inbound medium is `api_message`). Supports optional `attachment_filepaths` and `tags`; transcript ownership is anchored to my boss.",
         )
-        if assistant_has_phone:
-            lines.append("- `make_call`: Start an outbound phone call to my boss only")
-        if assistant_has_whatsapp:
+        if not on_voice_call:
+            if assistant_has_phone:
+                lines.append(
+                    "- `make_call`: Start an outbound phone call to my boss only",
+                )
+            if assistant_has_whatsapp:
+                lines.append(
+                    "- `make_whatsapp_call`: Start a WhatsApp voice call to my boss only. "
+                    "If call permission hasn't been granted yet, a call invite is sent instead.",
+                )
             lines.append(
-                "- `make_whatsapp_call`: Start a WhatsApp voice call to my boss only. "
-                "If call permission hasn't been granted yet, a call invite is sent instead.",
+                "- `join_google_meet`: Join a Google Meet call via browser automation (provide the Meet URL)",
             )
-        lines.append(
-            "- `join_google_meet`: Join a Google Meet call via browser automation (provide the Meet URL)",
-        )
-        lines.append(
-            "- `join_teams_meet`: Join a Microsoft Teams meeting via browser automation (provide the Teams meeting URL)",
-        )
+            lines.append(
+                "- `join_teams_meet`: Join a Microsoft Teams meeting via browser automation (provide the Teams meeting URL)",
+            )
         return "\n".join(lines)
 
     if assistant_has_phone:
@@ -583,6 +626,9 @@ def _build_comms_tool_listing(
     if assistant_has_discord:
         lines.append(
             "- `send_discord_message`: Send a Discord message to a contact (use when the inbound thread is `discord_message`)",
+        )
+        lines.append(
+            "- `send_discord_channel_message`: Post into a Discord channel (use when the inbound thread is `discord_channel_message`)",
         )
     if assistant_has_slack:
         lines.append(
@@ -643,20 +689,21 @@ def _build_comms_tool_listing(
     lines.append(
         "- `send_api_response`: Reply to a programmatic API message (use when the inbound medium is `api_message`). Supports optional `attachment_filepaths` and `tags`.",
     )
-    if assistant_has_phone:
-        lines.append("- `make_call`: Start an outbound phone call to a contact")
-    if assistant_has_whatsapp:
+    if not on_voice_call:
+        if assistant_has_phone:
+            lines.append("- `make_call`: Start an outbound phone call to a contact")
+        if assistant_has_whatsapp:
+            lines.append(
+                "- `make_whatsapp_call`: Start a WhatsApp voice call to a contact. "
+                "If call permission hasn't been granted yet, a call invite is sent instead — "
+                "the contact sees a 'Call now' button and the call connects when they tap it.",
+            )
         lines.append(
-            "- `make_whatsapp_call`: Start a WhatsApp voice call to a contact. "
-            "If call permission hasn't been granted yet, a call invite is sent instead — "
-            "the contact sees a 'Call now' button and the call connects when they tap it.",
+            "- `join_google_meet`: Join a Google Meet call via browser automation (provide the Meet URL)",
         )
-    lines.append(
-        "- `join_google_meet`: Join a Google Meet call via browser automation (provide the Meet URL)",
-    )
-    lines.append(
-        "- `join_teams_meet`: Join a Microsoft Teams meeting via browser automation (provide the Teams meeting URL)",
-    )
+        lines.append(
+            "- `join_teams_meet`: Join a Microsoft Teams meeting via browser automation (provide the Teams meeting URL)",
+        )
     return "\n".join(lines)
 
 
@@ -1495,14 +1542,33 @@ Examples of requests that should use the direct tools:
 def _build_act_capabilities_block(
     *,
     has_linked_user_desktop: bool = False,
+    user_filesys_available: bool = False,
 ) -> str:
-    """Build act-capabilities guidance for non-demo mode."""
+    """Build act-capabilities guidance for non-demo mode.
+
+    ``has_linked_user_desktop`` gates *controlling* the user's machine (screen
+    + input via ``act``), which works regardless of filesystem sync.
+    ``user_filesys_available`` separately gates *reading/syncing their files*:
+    it is True only when the user enabled filesystem sync and the device's SFTP
+    tunnel is live. We never advertise file access off a bare link.
+    """
     if has_linked_user_desktop:
         software_desktop_capability = "- **Software & desktop**: Any application, browser, or tool on my computer — and my boss's own machine, which they've linked to me (I drive it through `act` when no screen share is active)"
     else:
         software_desktop_capability = "- **Software & desktop**: Any application, browser, or tool on my computer (I cannot control the user's computer — only my own)"
+    if user_filesys_available:
+        files_capability = "- **Files**: Documents, attachments, file contents, data queries — and reading or syncing files from my boss's linked desktop into my local mirror of their machine"
+    else:
+        files_capability = (
+            "- **Files**: Documents, attachments, file contents, data queries"
+        )
     external_apps_capability = f"- **External apps & services**: I can guide setup and day-to-day usage directly, including live screen-share walkthroughs when helpful. Personal integrations use stored credentials and the service's Python SDK. If a credential must be shared across the team or organization, route that placement to {COORDINATOR_NAME}."
     act_intro = "The `act` tool CREATES NEW WORK. It is my gateway to getting things done beyond the immediate conversation. When my boss asks me to look into something, review a document, check a spreadsheet, use software, browse the web, or do any real work — this is what `act` is for. From my boss's perspective, I'm going away to do the work. From my perspective, I'm delegating to `act`. My boss does not need to know about `act` — they just need to see results."
+    desktop_sync_example = (
+        '\n- "Sync my filesystem" / "pull my desktop files" → files (linked desktop)'
+        if user_filesys_available
+        else ""
+    )
     return f"""Act capabilities
 ----------------
 {act_intro}
@@ -1513,7 +1579,7 @@ Use `act` to access:
 - **Tasks**: Task status, what's due, assignments, priorities, scheduling
 - **Web**: Current events, weather, news, external/public information
 - **Guidance**: Operational runbooks, how-to guides, incident procedures
-- **Files**: Documents, attachments, file contents, data queries
+{files_capability}
 {software_desktop_capability}
 {external_apps_capability}
 - **Contacts** (cross-domain): When contact work is part of a larger request involving other domains. For purely contact-specific queries or updates, prefer `ask_about_contacts` / `update_contacts`.
@@ -1529,7 +1595,7 @@ Examples of questions that should trigger `act`:
 - "What's the weather in Berlin?" → web
 - "What's the incident response procedure?" → guidance
 - "What's in the attached document?" → files
-- "Update the spreadsheet with these numbers" → software & desktop
+- "Update the spreadsheet with these numbers" → software & desktop{desktop_sync_example}
 
 **Screenshot filepaths in act queries.** When screen sharing is active, screenshots appear in the conversation as ``[Screenshots: path/to/file.jpg]`` annotations on messages. The Actor can ONLY access these images via their filepaths — it has no other way to find them. Before writing an ``act`` query that involves visual content, I scan the entire conversation for ALL ``[Screenshots: ...]`` annotations and include every relevant filepath verbatim in the query. This means filepaths from earlier messages too, not just the current turn.
 
@@ -1539,12 +1605,19 @@ Examples of questions that should trigger `act`:
 def _build_user_machine_access_block(
     *,
     has_linked_user_desktop: bool,
+    user_filesys_consented: bool = False,
+    user_filesys_available: bool = False,
     acting_user_id: str | None = None,
 ) -> str | None:
     """Build the precedence guidance for seeing/controlling the *user's* machine.
 
     Returns ``None`` when no desktop is linked, so the prompt is byte-for-byte
     unchanged from the screen-share default.
+
+    Screen/input control comes with any linked desktop. Reading or syncing the
+    user's *files* additionally requires ``user_filesys_available`` (consent on
+    + SFTP tunnel live). When linked but files are not available we say so and
+    point at the console toggle instead of claiming a capability that will fail.
     """
     if not has_linked_user_desktop:
         return None
@@ -1569,6 +1642,13 @@ def _build_user_machine_access_block(
     )
     fallback_clause = "**Neither available.** If there is somehow no active share and the linked desktop cannot be reached, I say so plainly and offer to start a screen share instead."
 
+    if user_filesys_available:
+        files_clause = '**Reading or syncing their files.** "Sync my filesystem", "pull my desktop files", "back up my home folder", "grab the files off my machine" and similar are first-class file requests — not ambiguous "sync to where?" questions. The destination is always my own local mirror of their linked desktop; there is no second machine or cloud service to ask about. I dispatch `act` to sync or read their linked desktop\'s files into that mirror, then work from it. I never ask the user where to sync to, and I never reach for shell `cp`/`scp`/`rclone` to copy their files myself.'
+    elif user_filesys_consented:
+        files_clause = "**Reading or syncing their files — not ready yet.** My boss has turned on filesystem access for their linked desktop, but their machine hasn't finished connecting its file channel, so I can't read or sync their files right now. If they ask me to sync or pull files, I say their device is still connecting and to try again shortly — I do NOT attempt the sync (it will fail), and I never reach for shell `cp`/`scp`/`rclone` to copy their files myself."
+    else:
+        files_clause = "**Reading or syncing their files — not enabled.** I can see and control their linked desktop, but reading or syncing their files is a separate permission they haven't turned on. If they ask me to sync, pull, or back up files from their machine, I explain that filesystem access isn't enabled and that they can turn it on for their linked desktop in the console. I do NOT attempt the sync (it will fail), and I never reach for shell `cp`/`scp`/`rclone` to copy their files myself."
+
     return f"""Seeing and controlling the user's machine
 -----------------------------------------
 When my boss asks me to look at, describe, or do something on *their* computer ("can you see my desktop?", "what's on my screen?", "open X on my machine"), I resolve it in this strict order:
@@ -1576,6 +1656,8 @@ When my boss asks me to look at, describe, or do something on *their* computer (
 1. **Active screen share / webcam first.** If a screenshot from their screen share or webcam is already in my context — or we're on a live call where sharing is natural — I use that. During live collaboration this is the fastest way to see their screen, so if we're working together live and I don't yet have a share, I offer one: "Want to share your screen? I'll see it right away."
 2. {linked_clause}
 3. {fallback_clause}
+
+{files_clause}
 
 I never claim to see or control their machine unless one of the above actually applies. If it's ambiguous which machine they mean (theirs vs mine), I ask a brief clarifying question before acting."""
 
@@ -1782,6 +1864,7 @@ def build_system_prompt(
     email_address: str | None = None,
     is_voice_call: bool = False,
     is_internal_call: bool = False,
+    on_voice_call: bool = False,
     demo_mode: bool = False,
     computer_fast_path: bool = False,
     assistant_has_phone: bool = True,
@@ -1792,6 +1875,8 @@ def build_system_prompt(
     assistant_has_teams: bool = False,
     is_coordinator: bool = False,
     has_linked_user_desktop: bool = False,
+    user_filesys_consented: bool = False,
+    user_filesys_available: bool = False,
     acting_user_id: str | None = None,
     runtime_setup_note: str | None = None,
     team_summaries: list[TeamSummary] | None = None,
@@ -1824,6 +1909,13 @@ def build_system_prompt(
         Whether we are currently on a voice call (includes voice calls guide in prompt).
     is_internal_call : bool
         Whether the active voice call is internal (assistant-to-assistant).
+    on_voice_call : bool
+        Whether a voice call/meeting of any kind is currently live (or joining).
+        When True, the call-starting tools (``make_call``, ``make_whatsapp_call``,
+        ``join_google_meet``, ``join_teams_meet``) are withheld from the tool set,
+        so they must not be advertised; a dynamic block explains they return once
+        the current call ends. Mirrors ``ConversationManager.in_voice_session`` and
+        is broader than ``is_voice_call`` (which only gates the voice-calls guide).
     demo_mode : bool
         Whether the assistant is operating in demo mode (pre-signup).
     computer_fast_path : bool
@@ -1845,6 +1937,15 @@ def build_system_prompt(
         Whether the active user has a desktop linked to this assistant. When True,
         the assistant can drive that machine via ``act`` (when no screen share is
         active); when False the prompt is unchanged from the screen-share default.
+    user_filesys_consented : bool
+        Whether the user has turned on filesystem sync for their linked desktop
+        (the console consent toggle). Distinct from ``user_filesys_available``:
+        a user can consent before the device has registered its SFTP tunnel.
+    user_filesys_available : bool
+        Whether on-demand access to the user's home filesystem is actually usable
+        right now (consent is on *and* the device's SFTP tunnel is registered).
+        Only when True may the prompt advertise reading/syncing the user's files;
+        otherwise file requests against their machine are not yet possible.
     acting_user_id : str | None
         The acting user's id for this turn. When more than one desktop is linked,
         the prompt uses it so the assistant targets the *current speaker's*
@@ -1894,7 +1995,10 @@ def build_system_prompt(
         else ""
     )
     phone_guidelines = _build_phone_guidelines(phone_number)
-    phone_scenarios = _build_phone_scenarios(phone_number)
+    voice_session_scenarios = _build_voice_session_scenarios(
+        assistant_has_phone=assistant_has_phone,
+        assistant_has_whatsapp=assistant_has_whatsapp,
+    )
     missing_phone_notice = _build_missing_phone_notice(assistant_has_phone)
     missing_email_notice = _build_missing_email_notice(assistant_has_email)
     whatsapp_change_notice = _build_whatsapp_number_change_notice(
@@ -1912,13 +2016,19 @@ def build_system_prompt(
         assistant_has_slack,
         assistant_has_teams,
         is_coordinator,
+        on_voice_call,
     )
-    sms_call_note = (
-        " I can send SMS while on a call, but I cannot make a new call"
-        " or join a Google Meet / Microsoft Teams meeting while already on one (and vice versa)."
-        if assistant_has_phone
-        else " I cannot make a call and join a Google Meet or Microsoft Teams meeting at the same time."
-    )
+    if assistant_has_phone or assistant_has_whatsapp:
+        sms_call_note = (
+            " I can keep sending text messages (SMS, WhatsApp messages, email, Unify messages) during a voice"
+            " session, but I can only be on one voice session at a time — I cannot start a phone or WhatsApp call"
+            " or join a Google Meet / Microsoft Teams meeting while already on one (and vice versa)."
+        )
+    else:
+        sms_call_note = (
+            " I can only be on one voice session at a time — I cannot start a call or join a Google Meet /"
+            " Microsoft Teams meeting while already on one (and vice versa)."
+        )
     input_format_example = _build_input_format_example()
     coordinator_admin_tool_listing = ""
     coordinator_knowledge_tool_listing = ""
@@ -2139,10 +2249,13 @@ Messages from the current turn have **NEW** tag prepended:
         parts.add(
             _build_act_capabilities_block(
                 has_linked_user_desktop=has_linked_user_desktop,
+                user_filesys_available=user_filesys_available,
             ),
         )
         user_machine_access_block = _build_user_machine_access_block(
             has_linked_user_desktop=has_linked_user_desktop,
+            user_filesys_consented=user_filesys_consented,
+            user_filesys_available=user_filesys_available,
             acting_user_id=acting_user_id,
         )
         if user_machine_access_block:
@@ -2201,7 +2314,9 @@ Messages from the current turn have **NEW** tag prepended:
 
     available_tool_names = ["send_unify_message", "send_api_response"]
     if assistant_has_phone:
-        available_tool_names = ["send_sms"] + available_tool_names + ["make_call"]
+        # ``make_call`` is withheld while on a voice call (one at a time).
+        trailing = [] if on_voice_call else ["make_call"]
+        available_tool_names = ["send_sms"] + available_tool_names + trailing
     if assistant_has_whatsapp:
         idx = (
             available_tool_names.index("send_sms") + 1
@@ -2209,23 +2324,24 @@ Messages from the current turn have **NEW** tag prepended:
             else 0
         )
         available_tool_names.insert(idx, "send_whatsapp")
-        if "make_call" in available_tool_names:
-            available_tool_names.insert(
-                available_tool_names.index("make_call") + 1,
-                "make_whatsapp_call",
-            )
-        else:
-            available_tool_names.append("make_whatsapp_call")
+        if not on_voice_call:
+            if "make_call" in available_tool_names:
+                available_tool_names.insert(
+                    available_tool_names.index("make_call") + 1,
+                    "make_whatsapp_call",
+                )
+            else:
+                available_tool_names.append("make_whatsapp_call")
     if assistant_has_email:
         available_tool_names.insert(
             available_tool_names.index("send_unify_message"),
             "send_email",
         )
     if assistant_has_discord:
-        available_tool_names.insert(
-            available_tool_names.index("send_unify_message"),
-            "send_discord_message",
-        )
+        idx = available_tool_names.index("send_unify_message")
+        available_tool_names.insert(idx, "send_discord_message")
+        if not is_coordinator:
+            available_tool_names.insert(idx + 1, "send_discord_channel_message")
     if assistant_has_slack:
         idx = available_tool_names.index("send_unify_message")
         available_tool_names.insert(idx, "send_slack_message")
@@ -2403,12 +2519,21 @@ When contacts communicate in a non-English language, I match their language in m
     if is_voice_call:
         parts.add(voice_calls_guide)
 
+    # 15b. Active voice session constraint (dynamic: depends on live call state).
+    #      Explains why the call-starting tools are withheld and that they return
+    #      when the session ends, keeping the prompt consistent with the masked
+    #      tool set.
+    if on_voice_call:
+        parts.add(_build_active_voice_session_block(), static=False)
+
     # 16. Scenarios.
-    phone_scenarios_section = f"\n{phone_scenarios}" if phone_scenarios else ""
+    voice_session_scenarios_section = (
+        f"\n{voice_session_scenarios}" if voice_session_scenarios else ""
+    )
     parts.add(
         f"""Scenarios
 ---------
-- If my boss gives a wrong contact address, I will receive an error after the communication attempt, or worse, it might be a completely different person. Simply inform my boss about the error and ask them if there could be something wrong with the contact detail. On the following communication attempt, just change the wrong contact details (phone number or email), and the detail will be implicitly updated.{phone_scenarios_section}
+- If my boss gives a wrong contact address, I will receive an error after the communication attempt, or worse, it might be a completely different person. Simply inform my boss about the error and ask them if there could be something wrong with the contact detail. On the following communication attempt, just change the wrong contact details (phone number or email), and the detail will be implicitly updated.{voice_session_scenarios_section}
 - To join a Google Meet, I must always use the `join_google_meet` tool — never navigate to a Meet URL via `act`. The `join_google_meet` tool configures audio devices and establishes the voice pipeline; using `act` to visit the URL would join silently with no ability to hear or speak.
 - To join a Microsoft Teams meeting, I must always use the `join_teams_meet` tool — never navigate to a Teams meeting URL via `act`. Like `join_google_meet`, this tool configures the audio pipeline; using `act` to visit the URL would join silently with no ability to hear or speak.""",
     )
@@ -2811,6 +2936,8 @@ Action notifications I receive represent work that I am doing. From the caller's
 - "Got it, working on that." ← acknowledging intent (appropriate immediately)
 - "I'm drafting that email now." ← claiming active execution (only appropriate after a `[notification]` confirms the action is underway)
 A request from the caller is not a `[notification]` — it is a trigger that will eventually produce one. Until that notification arrives, I have heard the request but I have not started the work.
+
+**Unheard remainders.** Occasionally I see an `[unheard]` note. It marks part of my own previous message that the caller interrupted before they could hear it — so they likely missed that content. I treat it as something to weave back in naturally if it still matters to the conversation (for example, re-surfacing an instruction they didn't catch). I do not read it out verbatim or mechanically the moment I see it.
 
 **Don't narrate actions — calibrate expectations to the task.** Even after a `[notification]` confirms work has started, there is often a lag before visible results appear (e.g., a browser loading, a page rendering). Narrating actions like "opening that now", "just clicking on that", or "navigating there" sounds premature when nothing has visibly changed yet. I calibrate my time-framing to the complexity of the work:
 - **Quick actions** (a single click, navigation, opening a page, toggling a setting, sending an email): these complete in moments — "One moment." or "Sure, just a sec." is honest.

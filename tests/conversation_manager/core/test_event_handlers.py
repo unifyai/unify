@@ -73,6 +73,8 @@ from unity.conversation_manager.events import (
     UserRemoteControlStopped,
     UserWebcamStarted,
     UserWebcamStopped,
+    UserFilesysAccessStarted,
+    UserFilesysAccessStopped,
 )
 from unity.contact_manager.simulated import SimulatedContactManager
 from unity.conversation_manager.domains.contact_index import ContactIndex
@@ -899,6 +901,87 @@ class TestPhoneCallHandlers:
         msgs = mock_cm.contact_index.get_messages_for_contact(2, Medium.WHATSAPP_CALL)
         assert msgs[-1].content == "<WhatsApp Call Permission Granted: calling now>"
         assert "calling now" in mock_cm.notifications_bar.notifications[-1].content
+
+    @pytest.mark.asyncio
+    async def test_whatsapp_permission_acceptance_uses_persisted_context(
+        self,
+        mock_cm,
+    ):
+        mock_cm._pending_whatsapp_call_contexts = {}
+        mock_cm.assistant_whatsapp_number = "+15550000000"
+        mock_cm._event_broker = mock_cm.event_broker
+        event = WhatsAppCallPermissionResponse(
+            contact={
+                "contact_id": 2,
+                "first_name": "Alice",
+                "surname": "Smith",
+                "whatsapp_number": "+15555552222",
+            },
+            accepted=True,
+        )
+
+        with (
+            patch(
+                "unity.conversation_manager.domains.comms_utils.get_pending_whatsapp_call_intent",
+                new_callable=AsyncMock,
+                return_value={"context": "Persisted call briefing"},
+            ) as mock_get_intent,
+            patch(
+                "unity.conversation_manager.domains.comms_utils.clear_pending_whatsapp_call_intent",
+                new_callable=AsyncMock,
+            ) as mock_clear_intent,
+            patch(
+                "unity.conversation_manager.domains.comms_utils.start_whatsapp_call",
+                new_callable=AsyncMock,
+                return_value={"success": True},
+            ) as mock_start_whatsapp_call,
+            patch(
+                "unity.conversation_manager.domains.event_handlers.SESSION_DETAILS",
+            ) as mock_session_details,
+        ):
+            mock_session_details.assistant.agent_id = 7
+            mock_session_details.assistant.name = "Test Assistant"
+            mock_session_details.assistant.whatsapp_number = "+15550000000"
+
+            await EventHandler.handle_event(event, mock_cm)
+
+        mock_get_intent.assert_awaited_once_with(
+            pool_number="+15550000000",
+            contact_number="+15555552222",
+        )
+        mock_start_whatsapp_call.assert_awaited_once()
+        assert mock_cm.call_manager.initial_notification == "Persisted call briefing"
+        mock_clear_intent.assert_awaited_once_with(
+            pool_number="+15550000000",
+            contact_number="+15555552222",
+        )
+
+    @pytest.mark.asyncio
+    async def test_whatsapp_permission_unknown_does_not_clear_pending_context(
+        self,
+        mock_cm,
+    ):
+        mock_cm._pending_whatsapp_call_contexts = {2: "Call briefing"}
+        event = WhatsAppCallPermissionResponse(
+            contact={
+                "contact_id": 2,
+                "first_name": "Alice",
+                "surname": "Smith",
+                "whatsapp_number": "+15555552222",
+            },
+            accepted=False,
+            status="unknown_interaction",
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        msgs = mock_cm.contact_index.get_messages_for_contact(2, Medium.WHATSAPP_CALL)
+        assert msgs[-1].content == (
+            "<WhatsApp Call Permission Unknown: waiting for reconciliation>"
+        )
+        assert "did not include" in mock_cm.notifications_bar.notifications[-1].content
+        assert mock_cm._pending_whatsapp_call_contexts[2] == "Call briefing"
+        mock_cm.request_llm_run.assert_called_once()
 
 
 # =============================================================================
@@ -3998,3 +4081,75 @@ class TestRenderInfrastructureState:
         )
         assert "Attachments/" in result
         assert "sync_pending" in result
+
+
+# =============================================================================
+# User Filesystem-Access consent handler
+# =============================================================================
+
+
+class TestUserFilesysAccessHandler:
+    """The handler applies live consent changes to the ComputerPrimitives.
+
+    Started → grant the desktop owner's link; stopped → revoke it (passing a
+    conversation snapshot). Resolution goes through ManagerRegistry, so we patch
+    it to a recording stub.
+    """
+
+    @pytest.mark.asyncio
+    async def test_started_grants_for_user(self, mock_cm):
+        cp = MagicMock()
+        with patch(
+            "unity.manager_registry.ManagerRegistry.get_instance",
+            return_value=cp,
+        ):
+            await EventHandler.handle_event(
+                UserFilesysAccessStarted(user_id="42"),
+                mock_cm,
+            )
+        cp.grant_user_filesys_access.assert_called_once_with("42")
+        cp.revoke_user_filesys_access.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stopped_revokes_with_conversation_context(self, mock_cm):
+        cp = MagicMock()
+        with patch(
+            "unity.manager_registry.ManagerRegistry.get_instance",
+            return_value=cp,
+        ):
+            await EventHandler.handle_event(
+                UserFilesysAccessStopped(user_id="42"),
+                mock_cm,
+            )
+        cp.grant_user_filesys_access.assert_not_called()
+        cp.revoke_user_filesys_access.assert_called_once()
+        args, kwargs = cp.revoke_user_filesys_access.call_args
+        assert args[0] == "42"
+        assert "conversation_context" in kwargs
+
+    @pytest.mark.asyncio
+    async def test_empty_user_id_is_ignored(self, mock_cm):
+        cp = MagicMock()
+        with patch(
+            "unity.manager_registry.ManagerRegistry.get_instance",
+            return_value=cp,
+        ) as get_instance:
+            await EventHandler.handle_event(
+                UserFilesysAccessStarted(user_id=""),
+                mock_cm,
+            )
+        get_instance.assert_not_called()
+        cp.grant_user_filesys_access.assert_not_called()
+        cp.revoke_user_filesys_access.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_absent_primitive_does_not_crash(self, mock_cm):
+        with patch(
+            "unity.manager_registry.ManagerRegistry.get_instance",
+            return_value=None,
+        ):
+            # Must return cleanly even when no ComputerPrimitives is registered.
+            await EventHandler.handle_event(
+                UserFilesysAccessStopped(user_id="42"),
+                mock_cm,
+            )
