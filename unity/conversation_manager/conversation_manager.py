@@ -2870,27 +2870,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
             if _superseded():
                 return
 
-            # Record in contact_index.
+            # Do not pre-write to contact_index here: the line is recorded once,
+            # via the actually-spoken Outbound utterance, only if it is genuinely
+            # spoken (the fast brain discards proactive speech when the pipeline
+            # is not quiescent). Pre-writing duplicated that record and logged
+            # lines that were never said.
             contact = self.get_active_contact()
-            if contact:
-                contact_id = contact.get("contact_id")
-                if self.call_manager.has_active_google_meet:
-                    voice_medium = Medium.GOOGLE_MEET
-                elif self.call_manager.has_active_teams_meet:
-                    voice_medium = Medium.TEAMS_MEET
-                elif self.mode == Mode.MEET:
-                    voice_medium = Medium.UNIFY_MEET
-                elif self.call_manager._call_channel == "whatsapp_call":
-                    voice_medium = Medium.WHATSAPP_CALL
-                else:
-                    voice_medium = Medium.PHONE_CALL
-                self.contact_index.push_message(
-                    contact_id=contact_id,
-                    sender_name="You",
-                    thread_name=voice_medium,
-                    message_content=decision.content,
-                    role="assistant",
-                )
 
             event = FastBrainNotification(
                 contact=contact or {},
