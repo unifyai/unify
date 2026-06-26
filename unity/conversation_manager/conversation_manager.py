@@ -341,7 +341,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         # proactive speech
         self.proactive_speech = ProactiveSpeech(
-            model=SETTINGS.conversation.FAST_BRAIN_MODEL,
+            model=SETTINGS.conversation.PROACTIVE_SPEECH_MODEL,
         )
         self._proactive_speech_task: asyncio.Task | None = None
         self._proactive_speech_gen: int = 0
