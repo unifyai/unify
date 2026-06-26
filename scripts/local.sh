@@ -267,12 +267,21 @@ start_gateway() {
     gateway_command+=(--public-url "$GATEWAY_PUBLIC_URL")
   fi
 
+  # Twilio-facing call callbacks (conference status, TwiML fetch) must be
+  # publicly reachable. In self-host the gateway resolves them onto the
+  # cloudflared tunnel fronting the local ingress, so it needs the same
+  # local-comms settings the CM has.
   env \
     ORCHESTRA_URL="$ORCHESTRA_URL" \
     ORCHESTRA_ADMIN_KEY="${ORCHESTRA_ADMIN_KEY:-}" \
     UNITY_COMMS_URL="$(gateway_base_url)" \
     UNITY_ADAPTERS_URL="$(gateway_base_url)" \
     UNITY_GATEWAY_LOCAL_INGRESS_URL="$(local_comms_internal_url)" \
+    UNITY_CONVERSATION_LOCAL_COMMS_ENABLED="$LOCAL_COMMS_ENABLED" \
+    UNITY_CONVERSATION_LOCAL_COMMS_MODE="$LOCAL_COMMS_MODE" \
+    UNITY_CONVERSATION_LOCAL_COMMS_HOST="$LOCAL_COMMS_HOST" \
+    UNITY_CONVERSATION_LOCAL_COMMS_PORT="$LOCAL_COMMS_PORT" \
+    UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$LOCAL_COMMS_PUBLIC_URL" \
     "${gateway_command[@]}" \
     > "$GATEWAY_LOGFILE" 2>&1 &
 
