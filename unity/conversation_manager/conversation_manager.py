@@ -376,6 +376,16 @@ class ConversationManager(metaclass=SingletonABCMeta):
             {}
         )
 
+        # Best-effort estimate of whether each contact's 24-hour WhatsApp
+        # free-form window is currently open, so the brain's send_whatsapp
+        # docstring can warn it up front when an out-of-window send will only
+        # deliver a generic template placeholder (not the verbatim body).
+        # Maps contact_id → bool (absent = unknown). Seeded best-effort at
+        # startup (Orchestra owns the authoritative window) and refreshed from
+        # observed traffic: an inbound opens it, a templated outbound proves it
+        # was closed, a free-form outbound proves it was open.
+        self._whatsapp_window_open: dict[int, bool] = {}
+
         # Outbound WhatsApp call contexts stashed while awaiting call permission.
         # When the contact grants permission (taps "Call now"), the context is
         # injected as call_manager.initial_notification.  Maps contact_id → context.
@@ -2555,6 +2565,53 @@ class ConversationManager(metaclass=SingletonABCMeta):
         ):
             return
         self._pending_onboarding_outbound = None
+
+    def note_whatsapp_window_open(self, contact_id: int | None, is_open: bool) -> None:
+        """Record the latest known WhatsApp free-form window state for a contact."""
+        if contact_id is None:
+            return
+        self._whatsapp_window_open[int(contact_id)] = bool(is_open)
+
+    def whatsapp_window_state(self, contact_id: int | None) -> bool | None:
+        """Return True/False for the contact's WhatsApp window, or None if unknown.
+
+        A pending template resend is authoritative proof the window is closed
+        (the last send fell back to a placeholder and no reply has reopened it).
+        Otherwise fall back to the last observed/seeded state.
+        """
+        if contact_id is None:
+            return None
+        cid = int(contact_id)
+        if cid in self._pending_whatsapp_resends:
+            return False
+        return self._whatsapp_window_open.get(cid)
+
+    async def seed_whatsapp_window(self, contact_id: int) -> None:
+        """Best-effort: ask the gateway whether a contact's window is open.
+
+        Used at startup so the brain knows up front whether a first send will
+        deliver verbatim or only a placeholder. Failures are swallowed — the
+        state simply stays unknown and the send_whatsapp docstring falls back to
+        its window-agnostic guidance.
+        """
+        contact = self._get_contact_safe(contact_id)
+        whatsapp_number = (contact or {}).get("whatsapp_number")
+        if not whatsapp_number:
+            return
+        try:
+            from unity.conversation_manager.domains import comms_utils
+
+            is_open = await comms_utils.get_whatsapp_window(whatsapp_number)
+        except Exception:
+            is_open = None
+        if is_open is not None:
+            self.note_whatsapp_window_open(contact_id, is_open)
+
+    def _get_contact_safe(self, contact_id: int) -> dict | None:
+        try:
+            return self.contact_index.get_contact(contact_id)
+        except Exception:
+            return None
 
     def stash_pending_whatsapp_resend_onboarding_metadata(
         self,

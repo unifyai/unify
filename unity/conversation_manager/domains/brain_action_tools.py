@@ -310,6 +310,18 @@ class ConversationManagerBrainActionTools:
         WhatsApp message on their behalf, route that work through ``act``
         instead.
 
+        Delivery is NOT confirmed in the turn I call this tool. If the
+        24-hour WhatsApp window is closed, my boss receives only a generic
+        template placeholder (not my verbatim text), and the real body is
+        queued to resend after they reply. I will not know which happened until
+        it surfaces as a ``[You WhatsApped <name>]`` row (delivered) or a
+        ``[You WhatsApped <name> (not delivered directly)]`` row (placeholder
+        only). So in the same turn I send, I say only that I am *sending* it —
+        never that it arrived, is waiting, or is in their inbox — and I confirm
+        receipt only once that proof row appears. If it is
+        ``(not delivered directly)``, I tell them a placeholder went out and
+        they must reply to it before I can deliver the real content.
+
         Parameters
         ----------
         content : str
@@ -1922,6 +1934,94 @@ class ConversationManagerBrainActionTools:
         """
         return {"status": "guidance_noted"}
 
+    def _whatsapp_contact_label(self, contact_id: int) -> str:
+        """Human-friendly name for a contact in the window-status appendix."""
+        contact = None
+        try:
+            contact = self._cm.contact_index.get_contact(contact_id)
+        except Exception:
+            contact = None
+        first = (contact or {}).get("first_name") if contact else None
+        if first:
+            return first
+        if SESSION_DETAILS.is_coordinator and contact_id == self._boss_contact_id():
+            return "my boss"
+        return f"contact {contact_id}"
+
+    def _whatsapp_window_doc_suffix(self) -> str:
+        """Window-status appendix for the ``send_whatsapp`` tool docstring.
+
+        Lists, by name, every contact whose 24-hour WhatsApp free-form window is
+        currently known to be CLOSED (a send delivers only a placeholder) or OPEN
+        (delivered verbatim). Returns ``""`` when nothing is known so the
+        window-agnostic docstring guidance stands on its own.
+        """
+        cm = self._cm
+        relevant: set[int] = set()
+        if SESSION_DETAILS.is_coordinator:
+            relevant.add(self._boss_contact_id())
+        relevant.update(cm._pending_whatsapp_resends.keys())
+        relevant.update(cm._whatsapp_window_open.keys())
+
+        closed: list[str] = []
+        open_: list[str] = []
+        for cid in relevant:
+            state = cm.whatsapp_window_state(cid)
+            if state is None:
+                continue
+            (open_ if state else closed).append(self._whatsapp_contact_label(cid))
+
+        if not closed and not open_:
+            return ""
+
+        lines = [
+            "",
+            "Current WhatsApp free-form window (decides whether a send arrives "
+            "verbatim or only as a placeholder):",
+        ]
+        if closed:
+            lines.append(
+                "- CLOSED for: "
+                + ", ".join(sorted(closed))
+                + ". A send now delivers only a generic placeholder; my real "
+                "text is queued to resend after they reply. I tell them to reply "
+                "to the placeholder first and I do NOT claim the actual "
+                "message/clue arrived.",
+            )
+        if open_:
+            lines.append(
+                "- OPEN for: "
+                + ", ".join(sorted(open_))
+                + ". A send now is delivered verbatim.",
+            )
+        return "\n".join(lines)
+
+    def _with_whatsapp_window_doc(
+        self,
+        base: "Callable[..., Any]",
+    ) -> "Callable[..., Any]":
+        """Return ``base`` with the live window status appended to its docstring.
+
+        Rebuilt per turn (``as_tools`` runs each turn), so the status reflects
+        the latest known window state. Returns ``base`` unchanged when nothing is
+        known, to avoid an empty appendix.
+        """
+        suffix = self._whatsapp_window_doc_suffix()
+        if not suffix:
+            return base
+
+        @wraps(base)
+        async def _send_whatsapp_window_aware(**kwargs: Any) -> Any:
+            return await base(**kwargs)
+
+        # Pin the schema signature to the bound method's (which already excludes
+        # ``self``); without this, ``inspect.signature`` would unwrap past the
+        # bound method to the underlying primitive and re-expose ``self``.
+        _send_whatsapp_window_aware.__signature__ = inspect.signature(base)
+        base_doc = inspect.getdoc(base) or ""
+        _send_whatsapp_window_aware.__doc__ = f"{base_doc}\n{suffix}"
+        return _send_whatsapp_window_aware
+
     def as_tools(self) -> dict[str, "Callable[..., Any]"]:
         """Return the static tools dict for start_async_tool_loop."""
         from unity.settings import SETTINGS
@@ -1977,9 +2077,10 @@ class ConversationManagerBrainActionTools:
                     self.make_call_to_boss if is_coordinator else self.make_call
                 )
         if self._cm.assistant_whatsapp_number:
-            tools["send_whatsapp"] = (
+            base_send_whatsapp = (
                 self.send_whatsapp_to_boss if is_coordinator else self.send_whatsapp
             )
+            tools["send_whatsapp"] = self._with_whatsapp_window_doc(base_send_whatsapp)
             if not call_or_meet_in_progress:
                 tools["make_whatsapp_call"] = (
                     self.make_whatsapp_call_to_boss

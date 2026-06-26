@@ -47,6 +47,7 @@ from livekit.api import (
     SIPInboundTrunkInfo,
 )
 
+from unity.gateway.common.callbacks import CONFERENCE_WAIT_URL, twilio_callback_url
 from unity.gateway.common.livekit import ensure_phone_dispatch_rule, make_sip_uri
 from unity.gateway.common.twilio import build_twilio_wa_client
 from unity.gateway.credentials import (
@@ -334,6 +335,22 @@ async def send(request: Request):
     return {"success": True, "method": method, "delivered_body": delivered_body}
 
 
+@auth_router.get("/window")
+async def window(
+    to: str = Query(..., description="Recipient WhatsApp number (E.164)."),
+    assistant_id: int = Query(..., description="Sending assistant id."),
+):
+    """Report whether the 24-hour free-form window is open for a contact.
+
+    Read-only convenience used by the live assistant session at startup to warn
+    the brain up front when an out-of-window send will only deliver a generic
+    template placeholder rather than the verbatim body. Orchestra owns the
+    authoritative window state; this just surfaces its routing answer.
+    """
+    route = await _resolve_route(assistant_id, to)
+    return {"window_open": route["window_open"]}
+
+
 async def _check_call_permission(pool_number: str, contact_number: str) -> dict:
     """Check with Orchestra whether outbound WhatsApp calling is permitted."""
     try:
@@ -581,8 +598,10 @@ async def _place_direct_whatsapp_call(
         to=f"whatsapp:{to}",
         from_=f"whatsapp:{pool_number}",
         twiml=_conference_twiml(conference_name),
-        status_callback=(
-            SETTINGS.conversation.ADAPTERS_URL + "/twilio/whatsapp-call-status"
+        status_callback=twilio_callback_url(
+            local_path="/local/twilio/whatsapp-call-status",
+            hosted_base=SETTINGS.conversation.ADAPTERS_URL,
+            hosted_path="/twilio/whatsapp-call-status",
         ),
         status_callback_event=["initiated", "ringing", "answered", "completed"],
     )
@@ -621,7 +640,11 @@ def _send_call_permission_invite(
         content_sid=VOICE_CALL_REQUEST_TEMPLATE_SID,
         to=f"whatsapp:{to}",
         from_=f"whatsapp:{pool_number}",
-        status_callback=f"{SETTINGS.conversation.COMMS_URL}/whatsapp/status",
+        status_callback=twilio_callback_url(
+            local_path="/local/twilio/whatsapp-status",
+            hosted_base=SETTINGS.conversation.COMMS_URL,
+            hosted_path="/whatsapp/status",
+        ),
     )
 
 
@@ -656,18 +679,9 @@ def _conference_twiml(conference_name: str) -> str:
         startConferenceOnEnter=True,
         endConferenceOnExit=True,
         muted=False,
-        wait_url=f"{SETTINGS.conversation.COMMS_URL}/whatsapp/conference-wait",
+        wait_url=CONFERENCE_WAIT_URL,
     )
     return str(resp)
-
-
-@unauth_router.api_route("/conference-wait", methods=["GET", "POST"])
-async def conference_wait() -> Response:
-    from twilio.twiml.voice_response import VoiceResponse
-
-    resp = VoiceResponse()
-    resp.pause(length=60)
-    return Response(content=str(resp), media_type="text/xml")
 
 
 @auth_router.post("/send-call")
