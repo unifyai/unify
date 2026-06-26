@@ -355,6 +355,10 @@ class Assistant(Agent):
         self._user_speech_logged = False
         self.user_turn_generating = False
         self._credit_gate_state_provider: Callable | None = None
+        # Returns the texts of utterances currently being spoken but not yet
+        # committed to the chat context, so the fast brain sees them before it
+        # generates and does not re-voice them.
+        self._inflight_speech_provider: Callable[[], list[str]] | None = None
         # Armed when the recorded opener is interrupted before its static-removal
         # transition; plays a bridge recording at the start of the next turn.
         self._pending_opening_bridge: Callable[[], Awaitable[None]] | None = None
@@ -363,6 +367,31 @@ class Assistant(Agent):
 
     def set_credit_gate_state_provider(self, provider: Callable) -> None:
         self._credit_gate_state_provider = provider
+
+    @staticmethod
+    def _append_inflight_speech_context(
+        chat_ctx: "llm.ChatContext",
+        texts: list[str],
+    ) -> None:
+        """Append in-flight (currently-spoken, uncommitted) lines to a context.
+
+        Each is added as a self-describing ``system`` note so the fast brain
+        knows it is already saying the line and continues from it rather than
+        repeating it. Mutates the given context only - callers pass the
+        ephemeral per-generation copy, so nothing persists to real history.
+        """
+        for text in texts:
+            t = (text or "").strip()
+            if not t:
+                continue
+            chat_ctx.add_message(
+                role="system",
+                content=[
+                    "[system] I am in the middle of saying this aloud to the "
+                    f'caller right now: "{t}". I should not repeat it; I '
+                    "continue naturally from it if relevant.",
+                ],
+            )
 
     def set_call_received(self):
         self.call_received = True
@@ -428,6 +457,16 @@ class Assistant(Agent):
                     trimmed_ctx.items.append(item)
             else:
                 trimmed_ctx = chat_ctx
+
+            # Surface any line currently being spoken aloud (e.g. proactive
+            # speech mid-playout) that has not yet committed to history, so the
+            # fast brain does not re-voice it. Injected into the per-generation
+            # copy only, so it never persists (the real turn commits once at
+            # playout end).
+            if self._inflight_speech_provider is not None:
+                inflight = self._inflight_speech_provider() or []
+                if inflight:
+                    self._append_inflight_speech_context(trimmed_ctx, inflight)
 
             _log.info("LLM thinking… (llm_node_start)")
             async for chunk in super().llm_node(
@@ -1954,6 +1993,13 @@ async def entrypoint(ctx: agents.JobContext):
     )
     credit_gate_monitor = FastBrainCreditGateMonitor()
     assistant.set_credit_gate_state_provider(lambda: credit_gate_monitor.state)
+    # In-flight says (proactive/guidance still playing, not yet committed) live
+    # in _say_meta_queue until their playout commits them to history. Set as a
+    # direct attribute so it works uniformly on the real Assistant and the test
+    # fakes without each needing a setter.
+    assistant._inflight_speech_provider = lambda: [
+        m["text"] for m in _say_meta_queue if (m.get("text") or "").strip()
+    ]
     credit_gate_task = asyncio.create_task(
         credit_gate_monitor.run(),
         name="fast_brain_credit_gate_monitor",
