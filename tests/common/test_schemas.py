@@ -368,6 +368,36 @@ def test_method_to_schema_preserves_wrapped_execute_code_signature():
     assert "Execute arbitrary code in a specified language and state mode." in desc
 
 
+@pytest.mark.asyncio
+async def test_real_execute_code_schema_keeps_thought_required_and_described():
+    """The production ``execute_code`` tool advertises ``thought`` as required
+    with a property-level description, and is marked soft-required so a model
+    omission is backfilled rather than crashing the loop.
+
+    Mirrors the loop's schema and dispatch paths, which both resolve the
+    registered ``ToolSpec`` to its underlying callable (``spec.fn``).
+    """
+    from unity.actor.code_act_actor import CodeActActor
+    from unity.common.tool_spec import LLM_SOFT_REQUIRED_DEFAULTS_ATTR
+
+    actor = CodeActActor()
+    try:
+        spec = actor.get_tools("act")["execute_code"]
+        fn = spec.fn if isinstance(spec, ToolSpec) else spec
+        schema = llmh.method_to_schema(fn, "execute_code")
+        params = schema["function"]["parameters"]
+
+        assert "thought" in params["required"]
+        assert params["properties"]["thought"]["type"] == "string"
+        assert params["properties"]["thought"]["description"].strip()
+
+        # The runtime safety net: declared soft-required with an empty default.
+        soft_required = getattr(fn, LLM_SOFT_REQUIRED_DEFAULTS_ATTR, None)
+        assert soft_required == {"thought": ""}
+    finally:
+        await actor.close()
+
+
 # --------------------------------------------------------------------------- #
 #  PRIVATE ARGUMENTS ARE NEVER EXPOSED                                        #
 # --------------------------------------------------------------------------- #
