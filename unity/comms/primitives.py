@@ -823,6 +823,21 @@ class CommsPrimitives:
         after the contact replies. Headless offline task runs cannot queue that
         follow-up, so they only report that a notification was sent.
 
+        Delivery is NOT confirmed in the turn I call this tool. The send is
+        handed off, not proven: WhatsApp either delivers the verbatim
+        ``content`` (free-form, when the 24-hour window is open) or, when the
+        window is closed, delivers only a generic template placeholder and the
+        real body is queued to resend after the contact next replies. Which one
+        happened is known only afterwards, when it surfaces as a
+        ``[You WhatsApped <name>]`` transcript row (delivered verbatim) or a
+        ``[You WhatsApped <name> (not delivered directly)]`` row (placeholder
+        only — the body did NOT arrive). Therefore, in the same turn I call this
+        tool, I say only that I am *sending* the message — never that it has
+        arrived, is waiting, or is in their inbox. I confirm receipt only after
+        the proof row appears; if it is marked ``(not delivered directly)`` I
+        tell the contact a placeholder went out and they must reply to it before
+        I can deliver the real content (clue, etc.).
+
         Parameters
         ----------
         contact_id : int | str

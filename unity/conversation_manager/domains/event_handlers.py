@@ -1798,6 +1798,9 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             medium = Medium.WHATSAPP_MESSAGE
             message_content = whatsapp_sent_history_content(event)
             attachments = event.attachments
+            # A verbatim free-form send proves the window was open; a template
+            # fallback proves it was closed.
+            cm.note_whatsapp_window_open(contact_id, not event.via_template)
             notif_content = (
                 f"WhatsApp template fallback sent to {sender_name}; original pending resend"
                 if event.via_template
@@ -1816,6 +1819,8 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             notif_content = f"WhatsApp received from {sender_name}"
             role = "user"
             event_trace = getattr(cm, "_current_event_trace", None) or {}
+            # An inbound reply (re)opens the 24-hour free-form window.
+            cm.note_whatsapp_window_open(contact_id, True)
             cm._session_logger.info(
                 "whatsapp_received",
                 f"WhatsApp from {sender_name}: {event.content}",

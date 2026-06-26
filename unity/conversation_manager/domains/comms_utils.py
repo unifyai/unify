@@ -244,6 +244,33 @@ async def send_whatsapp_message(
             return await response.json()
 
 
+async def get_whatsapp_window(to_number: str) -> bool | None:
+    """Best-effort read of a contact's WhatsApp free-form window state.
+
+    Returns ``True``/``False`` when the gateway answers, or ``None`` on any
+    failure (the caller then treats the window as unknown and lets the
+    window-agnostic guidance stand).
+    """
+    agent_id = SESSION_DETAILS.assistant.agent_id
+    if agent_id is None or not to_number:
+        return None
+    try:
+        timeout = aiohttp.ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(
+                f"{_gateway_comms_base_url()}/whatsapp/window",
+                headers=headers,
+                params={"to": to_number, "assistant_id": agent_id},
+            ) as response:
+                response.raise_for_status()
+                data = await response.json()
+                value = data.get("window_open")
+                return bool(value) if value is not None else None
+    except Exception as e:
+        LOGGER.debug(f"WhatsApp window check failed: {e}")
+        return None
+
+
 async def send_unify_message(
     content: str,
     contact_id: int = 1,
