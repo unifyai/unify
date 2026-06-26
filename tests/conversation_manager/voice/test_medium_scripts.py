@@ -3447,6 +3447,27 @@ def _fake_say(self, text, **kwargs):
     return _FakeSpeechHandle(chat_items=chat_items, interrupted=interrupted)
 
 
+def test_append_inflight_speech_context():
+    """The helper appends one self-describing system note per non-empty text and
+    is a no-op for empty input."""
+    from livekit.agents import llm
+    from unity.conversation_manager.medium_scripts.call import Assistant
+
+    ctx = llm.ChatContext()
+    Assistant._append_inflight_speech_context(ctx, ["I'm checking it now."])
+    system_texts = [
+        item.text_content or ""
+        for item in ctx.items
+        if getattr(item, "role", None) == "system"
+    ]
+    assert any("I'm checking it now." in t for t in system_texts), system_texts
+
+    before = len(ctx.items)
+    Assistant._append_inflight_speech_context(ctx, [])
+    Assistant._append_inflight_speech_context(ctx, ["", "   "])
+    assert len(ctx.items) == before, "Empty/blank texts must not add messages."
+
+
 @pytest.mark.asyncio
 async def test_publish_guidance_stamps_decided_after_ts():
     """_publish_slow_brain_fast_brain_guidance serializes decided_after_ts (ISO),
@@ -3971,6 +3992,39 @@ class TestFastBrainSpeechDedup:
             env["assistant"]._chat_ctx,
             "Email received from Alice",
         )
+
+    async def test_inflight_speech_provider_lifecycle(self, fast_brain_env):
+        """The in-flight provider returns a spoken line only while it is in flight
+        (in _say_meta_queue) and stops once it commits - guaranteeing it is never
+        both injected and committed, so no duplication is possible."""
+        env = fast_brain_env
+        from unity.settings import SETTINGS
+
+        assistant = env["assistant"]
+        assert assistant._inflight_speech_provider is not None, "provider wired"
+
+        text = "Checking your calendar now."
+        orig = SETTINGS.conversation.SPEECH_DEDUP_ENABLED
+        SETTINGS.conversation.SPEECH_DEDUP_ENABLED = False
+        try:
+            env["session"].agent_state = "thinking"
+            self._send_speak_guidance(env, text)
+            await self._settle_and_drain(env)
+            # Spoken via _speak_now; the fake say does not commit, so it stays
+            # in flight and the provider surfaces it.
+            assert text in assistant._inflight_speech_provider()
+
+            # Simulate playout completion -> conversation_item_added commits the
+            # turn and pops _say_meta_queue; the provider stops returning it.
+            env["session"]._events["conversation_item_added"](
+                SimpleNamespace(
+                    item=SimpleNamespace(role="assistant", text_content=text),
+                ),
+            )
+            await asyncio.sleep(0)
+            assert text not in assistant._inflight_speech_provider()
+        finally:
+            SETTINGS.conversation.SPEECH_DEDUP_ENABLED = orig
 
     async def test_dedup_skipped_when_no_activity_since_decision(self, fast_brain_env):
         """When nothing has been spoken/notified since the slow brain decided,
