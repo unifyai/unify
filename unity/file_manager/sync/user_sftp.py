@@ -86,22 +86,33 @@ class UserHomeSFTP:
                 )
                 return False
 
-            self._key_path = tempfile.mktemp(prefix="user_sftp_key_")
-            Path(self._key_path).write_text(key)
+            with tempfile.NamedTemporaryFile(
+                "w",
+                prefix="user_sftp_key_",
+                delete=False,
+            ) as key_file:
+                key_file.write(key)
+                self._key_path = key_file.name
             os.chmod(self._key_path, 0o600)
 
             self.local_root.mkdir(parents=True, exist_ok=True)
 
-            self._config_path = tempfile.mktemp(suffix=".conf", prefix="user_sftp_")
-            Path(self._config_path).write_text(
-                f"[{self.REMOTE_NAME}]\n"
-                "type = sftp\n"
-                f"host = {self._link.sftp_tunnel_host}\n"
-                f"port = {self._link.sftp_tunnel_port}\n"
-                f"user = {SFTP_USER}\n"
-                f"key_file = {self._key_path}\n"
-                "set_modtime = false\n",
-            )
+            with tempfile.NamedTemporaryFile(
+                "w",
+                suffix=".conf",
+                prefix="user_sftp_",
+                delete=False,
+            ) as config_file:
+                config_file.write(
+                    f"[{self.REMOTE_NAME}]\n"
+                    "type = sftp\n"
+                    f"host = {self._link.sftp_tunnel_host}\n"
+                    f"port = {self._link.sftp_tunnel_port}\n"
+                    f"user = {SFTP_USER}\n"
+                    f"key_file = {self._key_path}\n"
+                    "set_modtime = false\n",
+                )
+                self._config_path = config_file.name
 
             ok = await self._run(
                 ["lsf", f"{self.REMOTE_NAME}:/", "--max-depth", "1"],
