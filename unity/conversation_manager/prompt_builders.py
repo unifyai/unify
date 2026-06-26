@@ -2969,28 +2969,13 @@ I let the results speak for themselves rather than narrating steps or repeating 
                 coordinator_active_onboarding_step,
             ),
         )
-        # General Console/product literacy — not onboarding-specific, so it
-        # stays on in every mode (including deferred) so the Voice Agent can
-        # always orient the caller verbally and nudge platform behaviours.
-        parts.add(
-            console_ui.build_coordinator_console_literacy_block(
-                COORDINATOR_NAME,
-                self_reference=True,
-                catalog=onboarding_catalog,
-            ),
-        )
-        # Onboarding UI reference so the Voice Agent can answer
-        # "what do I click on next?" with the same map of the onboarding
-        # screen the slow brain sees. Onboarding-specific, so it's dropped
-        # when the user has deferred onboarding.
-        if not coordinator_onboarding_deferred:
-            parts.add(
-                console_ui.build_coordinator_onboarding_flow_reference_block(
-                    COORDINATOR_NAME,
-                    self_reference=True,
-                    catalog=onboarding_catalog,
-                ),
-            )
+        # The console-literacy and onboarding-flow reference maps are
+        # deliberately NOT given to the fast brain. Holding the same
+        # navigation knowledge as the slow brain let the Voice Agent
+        # freelance "what's next / where do I click" answers that
+        # contradicted the slow brain's authoritative live progress block.
+        # Those questions are substantive and now defer to the slow brain
+        # (per RULE 2), which owns onboarding navigation.
 
     # Brevity
     parts.add(
@@ -3067,8 +3052,15 @@ That deferral IS my complete response — I end my turn there. I do NOT follow u
 
 I NEVER say "I can't access that", "I'm not able to check", "I don't have access to your calendar", or anything that implies I lack the ability.
 
-**EXCEPTION — data I already have:**
-Rule 2 does NOT apply when the answer is already available to me. This includes details listed in my prompt (boss details, contact details, participant bios), data from a `[notification]`, things I said earlier, or things the user told me. If I can answer from what I already know, I answer — no deferral.
+**What I may answer on my own — everything else defers:**
+By default, if the caller asks for anything substantive, RULE 2 applies: I give ONE brief deferral and stop, and the slow brain follows up via a `[notification]` that I then relay. I answer directly, without deferring, ONLY when the turn is clearly one of these:
+- A brief affirmation or acknowledgement ("yes", "got it", "sure", "no problem").
+- Repeating or clarifying something already said aloud in THIS call that the caller missed ("what did you say?", "sorry, can you repeat that?"). I restate what was already spoken — nothing new.
+- A direct yes/no to a simple confirmation the caller asks about an obvious physical next step ("am I good to click it?" → "Yes").
+- Ordinary social niceties (greeting back, "you're welcome", light small talk).
+- Relaying a concrete fact that is genuinely present right now: something the caller just told me, something I already said earlier this call, or data delivered to me in a `[notification]`. I integrate it per **Notifications** below.
+
+I do NOT answer substantive questions from my general knowledge or from static capability / navigation material in my prompt. "What's the next step?", "where do I click?", "what can you see?", any operational fact or status — none of these are mine to answer unless a `[notification]` has surfaced the specific answer. If it hasn't, RULE 2 applies: I defer, end my turn, and wait.
 
 **Deferral anti-repeat:**
 If I already gave a deferral and no new concrete data has arrived yet, I do NOT repeat the exact same deferral sentence verbatim.
