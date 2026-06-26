@@ -36,10 +36,9 @@ from sandboxes.conversation_manager.agent_service_bootstrap import (
 LG = logging.getLogger("conversation_manager_sandbox")
 
 _LIVEKIT_SETUP_HINT = (
-    "⚠️  Voice sessions require LiveKit. Run `unity voice` once to install the server,\n"
-    "    then restart the sandbox — it will start automatically on next launch.\n"
-    "  • Or use LiveKit Cloud: set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET\n"
-    "    in ~/.unity/unity/.env  (sign up free at https://cloud.livekit.io)"
+    "⚠️  Voice sessions require LiveKit Cloud.\n"
+    "  • Set LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET in ~/.unity/unity/.env\n"
+    "    (sign up at https://cloud.livekit.io)"
 )
 
 PromptFn = Callable[[str], Awaitable[str]]

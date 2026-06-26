@@ -348,10 +348,6 @@ case "\${1:-}" in
     doctor)
         exec bash "\$UNITY_REPO/scripts/local.sh" gateway-doctor
         ;;
-    voice)
-        shift || true
-        exec bash "\$UNITY_REPO/scripts/voice.sh" "\$@"
-        ;;
     setup|reconfigure)
         exec bash "\$UNITY_REPO/scripts/install.sh" --reconfigure
         ;;
@@ -385,7 +381,6 @@ unity stop             Stop the local runtime
 unity status           Show runtime status
 unity logs             Follow the runtime log
 unity doctor           Gateway/config checks
-unity voice [...]      Local LiveKit setup for --live-voice
 unity setup            Re-run the key/credential wizard
 unity update           Update the checkout and re-sync deps
 USAGE

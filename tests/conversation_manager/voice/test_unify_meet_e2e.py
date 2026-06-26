@@ -14,7 +14,7 @@ This file tests the COMPLETE Unify Meet lifecycle as documented in INFRA.md:
 7. Meet ends and cleanup occurs
 
 These tests use REAL infrastructure where possible:
-- Real LiveKit server (auto-started if available)
+- Real LiveKit Cloud project
 - Real IPC socket communication
 - Real subprocess spawning
 - Real event broker
@@ -22,8 +22,7 @@ These tests use REAL infrastructure where possible:
 Only external APIs (OpenAI, Deepgram) are mocked/skipped.
 
 Prerequisites:
-    macOS: brew install livekit
-    Linux: ./scripts/install_livekit.sh
+    LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET for LiveKit Cloud.
 
 Related Ved fixes these tests would catch:
 - 81596d0e: Room name handling for Unify meets
@@ -36,10 +35,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import shutil
 import subprocess
 import sys
-import time
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -58,63 +55,12 @@ from unity.conversation_manager.cm_types import Medium, Mode
 
 from tests.conversation_manager.conftest import TEST_CONTACTS
 
-# Check if livekit-server is available
-LIVEKIT_SERVER_PATH = shutil.which("livekit-server")
-LIVEKIT_SERVER_AVAILABLE = LIVEKIT_SERVER_PATH is not None
-
 # Allow skipping LiveKit tests entirely via environment variable
 SKIP_LIVEKIT = os.environ.get("SKIP_LIVEKIT_E2E", "0") == "1"
-
-
-def start_livekit_server() -> subprocess.Popen | None:
-    """Start a local LiveKit server in dev mode. Returns the process or None."""
-    if not LIVEKIT_SERVER_AVAILABLE:
-        return None
-
-    import socket
-
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        sock.settimeout(1)
-        sock.connect(("localhost", 7880))
-        sock.close()
-        print("[LiveKit] Server already running on port 7880")
-        return None
-    except (ConnectionRefusedError, socket.timeout, OSError):
-        pass
-
-    print(f"[LiveKit] Starting server from {LIVEKIT_SERVER_PATH}")
-    proc = subprocess.Popen(
-        [LIVEKIT_SERVER_PATH, "--dev"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-
-    for _ in range(30):
-        time.sleep(0.1)
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(1)
-            sock.connect(("localhost", 7880))
-            sock.close()
-            print("[LiveKit] Server started successfully")
-            return proc
-        except (ConnectionRefusedError, socket.timeout, OSError):
-            continue
-
-    proc.terminate()
-    return None
-
-
-def stop_livekit_server(proc: subprocess.Popen | None) -> None:
-    """Stop the LiveKit server if we started it."""
-    if proc is not None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-        print("[LiveKit] Server stopped")
+LIVEKIT_CLOUD_CONFIGURED = all(
+    os.environ.get(key)
+    for key in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET")
+)
 
 
 @pytest.fixture
@@ -834,32 +780,20 @@ class TestFullUnifyMeetLifecycle:
 
 
 # =============================================================================
-# Test: Real LiveKit Integration (requires livekit-server)
+# Test: Real LiveKit Integration (requires LiveKit Cloud)
 # =============================================================================
 
 
 @pytest.mark.skipif(
-    SKIP_LIVEKIT or not LIVEKIT_SERVER_AVAILABLE,
-    reason=(
-        "livekit-server not installed. To run this test:\n"
-        "  macOS: brew install livekit\n"
-        "  Linux: ./scripts/install_livekit.sh\n"
-        "  Then re-run this test (server auto-starts)"
-    ),
+    SKIP_LIVEKIT or not LIVEKIT_CLOUD_CONFIGURED,
+    reason="Set LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET to run this LiveKit Cloud test",
 )
 class TestRealLiveKitUnifyMeet:
     """
     TRUE end-to-end tests for Unify Meet with real LiveKit.
 
-    These tests spawn real subprocesses and connect to a real LiveKit server.
+    These tests spawn real subprocesses and connect to LiveKit Cloud.
     """
-
-    @pytest.fixture(autouse=True)
-    def setup_livekit(self):
-        """Auto-start LiveKit server for tests in this class."""
-        self.livekit_proc = start_livekit_server()
-        yield
-        stop_livekit_server(self.livekit_proc)
 
     @pytest.mark.asyncio
     async def test_real_unify_meet_subprocess_spawn(
@@ -878,9 +812,9 @@ class TestRealLiveKitUnifyMeet:
         )
 
         livekit_env = {
-            "LIVEKIT_URL": os.environ.get("LIVEKIT_URL", "ws://localhost:7880"),
-            "LIVEKIT_API_KEY": os.environ.get("LIVEKIT_API_KEY", "devkey"),
-            "LIVEKIT_API_SECRET": os.environ.get("LIVEKIT_API_SECRET", "secret"),
+            "LIVEKIT_URL": os.environ["LIVEKIT_URL"],
+            "LIVEKIT_API_KEY": os.environ["LIVEKIT_API_KEY"],
+            "LIVEKIT_API_SECRET": os.environ["LIVEKIT_API_SECRET"],
         }
 
         events_from_subprocess = []

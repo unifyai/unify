@@ -12,13 +12,7 @@ This test exercises the REAL call flow:
 5. Events flow correctly between all components
 
 Requirements for full LiveKit test:
-- LiveKit server running (auto-started if livekit-server binary available)
-- Or set LIVEKIT_URL to an existing server
-
-To install LiveKit locally:
-    macOS: brew install livekit
-    Linux: See scripts/install_livekit.sh or download from GitHub releases
-    CI: Workflow installs automatically
+- LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET for a LiveKit Cloud project
 
 This test would catch:
 - Ved's IPC bidirectional fix (c34270dc)
@@ -33,76 +27,20 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import shutil
 import subprocess
 import sys
-import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 import pytest_asyncio
 
-# Check if livekit-server is available
-LIVEKIT_SERVER_PATH = shutil.which("livekit-server")
-LIVEKIT_SERVER_AVAILABLE = LIVEKIT_SERVER_PATH is not None
-
 # Allow skipping LiveKit tests entirely via environment variable
 SKIP_LIVEKIT = os.environ.get("SKIP_LIVEKIT_E2E", "0") == "1"
-
-
-def start_livekit_server() -> subprocess.Popen | None:
-    """Start a local LiveKit server in dev mode. Returns the process or None."""
-    if not LIVEKIT_SERVER_AVAILABLE:
-        return None
-
-    # Check if already running by trying to connect
-    import socket
-
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        sock.settimeout(1)
-        sock.connect(("localhost", 7880))
-        sock.close()
-        print("[LiveKit] Server already running on port 7880")
-        return None  # Already running, don't start new one
-    except (ConnectionRefusedError, socket.timeout, OSError):
-        pass  # Not running, start it
-
-    print(f"[LiveKit] Starting server from {LIVEKIT_SERVER_PATH}")
-    proc = subprocess.Popen(
-        [LIVEKIT_SERVER_PATH, "--dev"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-
-    # Wait for server to be ready
-    for _ in range(30):  # 3 second timeout
-        time.sleep(0.1)
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(1)
-            sock.connect(("localhost", 7880))
-            sock.close()
-            print("[LiveKit] Server started successfully")
-            return proc
-        except (ConnectionRefusedError, socket.timeout, OSError):
-            continue
-
-    # Failed to start
-    proc.terminate()
-    return None
-
-
-def stop_livekit_server(proc: subprocess.Popen | None) -> None:
-    """Stop the LiveKit server if we started it."""
-    if proc is not None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-        print("[LiveKit] Server stopped")
+LIVEKIT_CLOUD_CONFIGURED = all(
+    os.environ.get(key)
+    for key in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET")
+)
 
 
 @pytest.fixture
@@ -152,8 +90,8 @@ class TestEndToEndCallFlow:
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(
-        not LIVEKIT_SERVER_AVAILABLE and not SKIP_LIVEKIT,
-        reason="livekit-server not installed. Run: brew install livekit",
+        SKIP_LIVEKIT,
+        reason="SKIP_LIVEKIT_E2E=1",
     )
     async def test_full_call_flow_from_event_to_subprocess(
         self,
@@ -945,13 +883,8 @@ class TestIPCBidirectionalCommunication:
 
 
 @pytest.mark.skipif(
-    SKIP_LIVEKIT or not LIVEKIT_SERVER_AVAILABLE,
-    reason=(
-        "livekit-server not installed. To run this test:\n"
-        "  macOS: brew install livekit\n"
-        "  Linux: ./scripts/install_livekit.sh\n"
-        "  Then re-run this test (server auto-starts)"
-    ),
+    SKIP_LIVEKIT or not LIVEKIT_CLOUD_CONFIGURED,
+    reason="Set LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET to run this LiveKit Cloud test",
 )
 class TestRealLiveKitIntegration:
     """
@@ -960,19 +893,9 @@ class TestRealLiveKitIntegration:
     These tests spawn the REAL call.py voice agent and verify it can
     connect to LiveKit and handle the full call lifecycle.
 
-    The LiveKit server is automatically started if the binary is available.
-
     Prerequisites:
-        macOS: brew install livekit
-        Linux: ./scripts/install_livekit.sh
+        LiveKit Cloud credentials in LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET.
     """
-
-    @pytest.fixture(autouse=True)
-    def setup_livekit(self):
-        """Auto-start LiveKit server for tests in this class."""
-        self.livekit_proc = start_livekit_server()
-        yield
-        stop_livekit_server(self.livekit_proc)
 
     @pytest.mark.asyncio
     async def test_real_voice_agent_spawns_and_connects(
@@ -985,7 +908,7 @@ class TestRealLiveKitIntegration:
         Spawn the REAL call.py voice agent and verify it starts up.
 
         This test:
-        1. Auto-starts LiveKit server (if not running)
+        1. Uses configured LiveKit Cloud credentials
         2. Starts IPC socket server
         3. Spawns the actual call.py script
         4. Verifies the subprocess starts without crashing
@@ -999,11 +922,10 @@ class TestRealLiveKitIntegration:
             CM_EVENT_SOCKET_ENV,
         )
 
-        # LiveKit dev server defaults
         livekit_env = {
-            "LIVEKIT_URL": os.environ.get("LIVEKIT_URL", "ws://localhost:7880"),
-            "LIVEKIT_API_KEY": os.environ.get("LIVEKIT_API_KEY", "devkey"),
-            "LIVEKIT_API_SECRET": os.environ.get("LIVEKIT_API_SECRET", "secret"),
+            "LIVEKIT_URL": os.environ["LIVEKIT_URL"],
+            "LIVEKIT_API_KEY": os.environ["LIVEKIT_API_KEY"],
+            "LIVEKIT_API_SECRET": os.environ["LIVEKIT_API_SECRET"],
         }
 
         events_from_subprocess = []
