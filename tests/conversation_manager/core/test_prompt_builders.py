@@ -557,25 +557,38 @@ class TestCoordinatorVoicePrompt:
         assert "`delete_team`" not in prompt
         assert "`remove_team_member`" not in prompt
 
-    def test_coordinator_voice_prompt_includes_console_literacy(self):
+    def test_coordinator_voice_prompt_excludes_navigation_maps(self):
         prompt = _build_voice(is_coordinator=True)
 
+        # The identity block remains on the fast brain.
         assert "My identity" in prompt
         assert "I am T-W1N, Dana Owner's personal, private assistant" in prompt
         assert "T-W1N is Dana Owner's personal, private assistant" not in prompt
-        assert "My Console literacy" in prompt
-        assert "Left sidebar — selection drives everything" in prompt
-        assert "Shared workspaces (Teams in the left sidebar)" in prompt
-        assert "Console account & org administration" in prompt
-        assert "Two ways to accomplish org tasks" in prompt
-        assert "Invite org member (both paths)" in prompt
-        assert "mention **both in the same reply**" in prompt
-        assert "Unify internal operator tools only" in prompt
-        assert "My onboarding flow (UI reference)" in prompt
-        # Step titles now live in the render-driven progress block, not the
-        # catalog flow reference; the block must still speak first-person.
-        assert "Give T-W1N access to your workspace" not in prompt
+        # The console-literacy and onboarding-flow maps are deliberately NOT
+        # given to the fast brain: holding the same navigation knowledge as
+        # the slow brain let the Voice Agent freelance contradictory
+        # "what's next / where do I click" answers. Those questions now defer
+        # to the slow brain (RULE 2), which owns onboarding navigation.
+        assert "My Console literacy" not in prompt
+        assert "Left sidebar — selection drives everything" not in prompt
+        assert "Console account & org administration" not in prompt
+        assert "Two ways to accomplish org tasks" not in prompt
+        assert "My onboarding flow (UI reference)" not in prompt
         assert "Console knowledge\n-----------------" not in prompt
+
+    def test_voice_prompt_rule_2_is_allowlist(self):
+        prompt = _build_voice(is_coordinator=True)
+
+        # RULE 2 now defaults to deferral and only self-answers a small
+        # allowlist; the broad "answer from anything I already know" exception
+        # is gone.
+        assert "What I may answer on my own" in prompt
+        assert "everything else defers" in prompt
+        assert "EXCEPTION — data I already have" not in prompt
+        assert (
+            "If I can answer from what I already know, I answer — no deferral"
+            not in prompt
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1227,10 +1240,18 @@ class TestCoordinatorOnboardingDeferGate:
         )
         assert "Take the WhatsApp voice clue and guess out loud." in prompt
 
-    def test_voice_deferred_keeps_literacy_drops_flow_reference(self):
+    def test_voice_drops_literacy_and_flow_reference(self):
+        # The fast brain no longer receives either navigation map, in any
+        # onboarding mode, so it cannot freelance contradictory navigation.
         prompt = _build_voice(is_coordinator=True, coordinator_onboarding_deferred=True)
-        assert "My Console literacy" in prompt
+        assert "My Console literacy" not in prompt
         assert "My onboarding flow (UI reference)" not in prompt
+        prompt_active = _build_voice(
+            is_coordinator=True,
+            coordinator_onboarding_deferred=False,
+        )
+        assert "My Console literacy" not in prompt_active
+        assert "My onboarding flow (UI reference)" not in prompt_active
 
     def test_voice_opener_pitches_server_next_target(self):
         prompt = _build_voice(
@@ -1379,8 +1400,8 @@ class TestOnboardingCatalogDrivesFlowReference:
         prompt = _build(is_coordinator=True, onboarding_catalog=_CATALOG_HOSTED)
         assert "Onboarding phase 7 (My Computer) — tour hooks" not in prompt
 
-    def test_voice_flow_reference_uses_catalog(self):
+    def test_voice_omits_catalog_flow_reference(self):
+        # The flow-reference block is slow-brain-only; the fast brain never
+        # receives the catalog-driven navigation map.
         prompt = _build_voice(is_coordinator=True, onboarding_catalog=_CATALOG_HOSTED)
-        assert "My onboarding flow (UI reference)" in prompt
-        assert "My Computer" in prompt
-        assert "Workspace" in prompt
+        assert "My onboarding flow (UI reference)" not in prompt

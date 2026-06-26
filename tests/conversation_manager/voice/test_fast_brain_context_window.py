@@ -44,9 +44,11 @@ from unity.conversation_manager.events import (
     UnifyMessageReceived,
     UnifyMessageSent,
     VoiceInterrupt,
+    WhatsAppSent,
 )
 from unity.conversation_manager.medium_scripts.common import (
     hydrate_fast_brain_history,
+    render_participant_comms,
     trim_fast_brain_context,
     _render_history_event,
 )
@@ -639,3 +641,104 @@ class TestHydrateFastBrainHistory:
         with patch(MOCK_GET_LOGS, side_effect=ConnectionError("unreachable")):
             result = await hydrate_fast_brain_history({2}, False, ASSISTANT_NAME)
         assert result == []
+
+
+# =============================================================================
+# Onboarding-trigger outbound neutralization (reference-quiz spoiler guard)
+# =============================================================================
+
+
+_CLUE = 'Here\'s your next clue: "I am a leaf on the wind." Reply with your guess.'
+_QUIZ_STEP = "reference_quiz_whatsapp_1"
+
+
+class TestOnboardingOutboundNeutralization:
+    """Onboarding-trigger outbound bodies must never reach the fast brain.
+
+    The full body still goes to the user; only the fast brain's view is
+    neutralized so the Voice Agent cannot read out or solve clue content.
+    """
+
+    # -- Live render (render_participant_comms) --
+
+    def test_live_whatsapp_clue_body_withheld(self):
+        ev = WhatsAppSent(
+            contact=ALICE,
+            content=_CLUE,
+            onboarding_trigger_step_id=_QUIZ_STEP,
+        )
+        result = render_participant_comms(ev.to_json(), {2})
+        assert result is not None
+        assert "leaf on the wind" not in result
+        assert "onboarding message sent" in result
+        assert result.startswith("[You WhatsApped Alice Smith]")
+
+    def test_live_whatsapp_template_clue_preserves_marker(self):
+        ev = WhatsAppSent(
+            contact=ALICE,
+            content=_CLUE,
+            via_template=True,
+            onboarding_trigger_step_id=_QUIZ_STEP,
+        )
+        result = render_participant_comms(ev.to_json(), {2})
+        assert result is not None
+        assert "leaf on the wind" not in result
+        assert "(not delivered directly)" in result
+
+    def test_live_email_clue_body_withheld(self):
+        ev = EmailSent(
+            contact=ALICE,
+            subject="Re: clue",
+            body=_CLUE,
+            onboarding_trigger_step_id=_QUIZ_STEP,
+        )
+        result = render_participant_comms(ev.to_json(), {2})
+        assert result is not None
+        assert "leaf on the wind" not in result
+        assert "onboarding message sent" in result
+
+    def test_live_non_onboarding_whatsapp_still_verbatim(self):
+        ev = WhatsAppSent(contact=ALICE, content="See you at 5pm")
+        result = render_participant_comms(ev.to_json(), {2})
+        assert result == "[You WhatsApped Alice Smith] See you at 5pm"
+
+    # -- History render (_render_history_event) --
+
+    def test_history_whatsapp_clue_body_withheld(self):
+        ev = WhatsAppSent(
+            contact=ALICE,
+            content=_CLUE,
+            onboarding_trigger_step_id=_QUIZ_STEP,
+        )
+        result = _render_history_event(ev, {2}, False, ASSISTANT_NAME)
+        assert result is not None
+        assert "leaf on the wind" not in result
+        assert "onboarding message sent" in result
+        assert result.startswith("[WhatsApp to Alice Smith]")
+
+    def test_history_template_clue_preserves_marker(self):
+        ev = WhatsAppSent(
+            contact=ALICE,
+            content=_CLUE,
+            via_template=True,
+            onboarding_trigger_step_id=_QUIZ_STEP,
+        )
+        result = _render_history_event(ev, {2}, False, ASSISTANT_NAME)
+        assert result is not None
+        assert "leaf on the wind" not in result
+        assert "(not delivered directly)" in result
+
+    def test_history_non_onboarding_whatsapp_still_verbatim(self):
+        ev = WhatsAppSent(contact=ALICE, content="See you at 5pm")
+        result = _render_history_event(ev, {2}, False, ASSISTANT_NAME)
+        assert result == "[WhatsApp to Alice Smith] See you at 5pm"
+
+    def test_history_clue_skipped_for_non_participant(self):
+        ev = WhatsAppSent(
+            contact=BOB,
+            content=_CLUE,
+            onboarding_trigger_step_id=_QUIZ_STEP,
+        )
+        # Participant set excludes Bob (cid 3) -> not surfaced at all.
+        result = _render_history_event(ev, {2}, False, ASSISTANT_NAME)
+        assert result is None
