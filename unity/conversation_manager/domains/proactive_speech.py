@@ -121,6 +121,10 @@ class ProactiveSpeech:
         client = new_llm_client(
             self._model,
             origin="ProactiveSpeech",
+            # Runs on the deepseek slow-brain model but at "high", not the "max"
+            # system default: the extra max latency is not worth it for a silence
+            # filler that already sits behind a debounce and delay.
+            reasoning_effort="high",
         )
         client.set_response_format(ProactiveDecision)
         messages = [

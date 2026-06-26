@@ -1908,6 +1908,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
         client = new_llm_client(
             SETTINGS.UNIFY_MODEL,
             origin="ConversationManager",
+            # Slow brain stays at "high"; the system default is "max" (used by
+            # the CodeActActor). On deepseek-v4 "max" buys marginal gains on the
+            # hardest tasks at extra latency, which the live conversation loop
+            # cannot afford.
+            reasoning_effort="high",
         )
         _new_client_ms = (_rl_time.perf_counter() - _client_step_t0) * 1000
         _client_step_t0 = _rl_time.perf_counter()

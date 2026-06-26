@@ -63,7 +63,9 @@ def new_llm_client(
     Create a configured Unify client.
 
     If model is not specified, uses UNIFY_MODEL from settings.
-    Defaults to high reasoning_effort and priority service_tier where applicable.
+    Defaults to max reasoning_effort and priority service_tier where applicable.
+    Callers that want a lighter setting (e.g. the ConversationManager slow brain
+    at "high", or fast-path helpers) pass ``reasoning_effort`` explicitly.
     Caching is controlled by the UNILLM_CACHE env var (owned by unillm).
     Returns an AsyncUnify client by default, or a synchronous Unify client when
     async_client=False.
@@ -72,7 +74,7 @@ def new_llm_client(
         model = SETTINGS.UNIFY_MODEL
 
     config = {
-        "reasoning_effort": "high",
+        "reasoning_effort": "max",
         "service_tier": "priority",
         "stateful": stateful,
         "origin": origin,
