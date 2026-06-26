@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Unity voice setup — bring up the local stack for `--live-voice` calls
+# Unity voice setup — bring up standalone local LiveKit for `--live-voice`
 # ============================================================================
 # Sub-commands:
 #   setup    Install livekit-server (if missing), boot it in --dev mode,
@@ -21,6 +21,9 @@
 #   cm> call
 # opens a LiveKit Agents Playground in the browser (auto-bootstrapped on
 # first use; needs Node.js + npm/pnpm) and connects to the voice agent.
+#
+# The all-repo source stack in unity-deploy/selfhost does not use this local
+# server; it loads LiveKit Cloud credentials from the self-host state directory.
 # ============================================================================
 
 set -e
