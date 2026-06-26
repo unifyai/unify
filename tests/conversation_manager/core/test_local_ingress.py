@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import aiohttp
 import pytest
@@ -57,6 +57,7 @@ def patched_local_session():
         comms_session.user.email = "boss@example.com"
         comms_session.user.whatsapp_number = "+15555550000"
         comms_session.user.id = "user-1"
+        comms_session.boss_contact_id = 1
 
         ingress_session.assistant.agent_id = 42
         ingress_session.user.id = "user-1"
@@ -166,5 +167,260 @@ class TestLocalIngress:
                     assert body["items"][0]["thread"] == "system_error"
                     assert body["items"][0]["event"] == {"content": "boom"}
                     assert isinstance(body["items"][0]["publish_timestamp"], float)
+            finally:
+                await ingress.stop()
+
+    @pytest.mark.asyncio
+    async def test_twilio_call_uses_call_scoped_room_and_dispatch_rule(
+        self,
+        broker,
+        patched_local_session,
+    ):
+        from unity.conversation_manager.comms_manager import CommsManager
+        from unity.conversation_manager.local_ingress import LocalCommsIngress
+
+        with (
+            patch.object(SETTINGS.conversation, "LOCAL_COMMS_HOST", "127.0.0.1"),
+            patch.object(SETTINGS.conversation, "LOCAL_COMMS_PORT", 0),
+            patch(
+                "unity.conversation_manager.local_ingress.local_email.is_email_configured",
+                return_value=False,
+            ),
+            patch(
+                "unity.conversation_manager.local_ingress.local_twilio.validate_signature",
+                return_value=True,
+            ),
+            patch(
+                "unity.conversation_manager.local_ingress.local_livekit.make_call_scoped_sip_uri",
+                return_value=(
+                    "sip:16892256176-CA123@example.sip.livekit.cloud",
+                    "16892256176-CA123",
+                ),
+            ) as make_call_scoped_sip_uri,
+            patch(
+                "unity.conversation_manager.local_ingress.local_livekit.ensure_call_scoped_dispatch_rule",
+                new=AsyncMock(return_value="dispatch-rule-1"),
+            ) as ensure_call_scoped_dispatch_rule,
+            patch(
+                "unity.conversation_manager.local_ingress.local_twilio.add_sip_leg_to_conference",
+                new=AsyncMock(return_value="sip-leg-1"),
+            ) as add_sip_leg,
+            patch(
+                "unity.conversation_manager.local_ingress.local_livekit.start_room_egress",
+                new=AsyncMock(),
+            ),
+        ):
+            comms_manager = CommsManager(broker)
+            comms_manager.loop = asyncio.get_running_loop()
+            ingress = LocalCommsIngress(comms_manager)
+            await ingress.start()
+
+            try:
+                port = ingress._site._server.sockets[0].getsockname()[1]
+                async with broker.pubsub() as pubsub:
+                    await pubsub.subscribe("app:comms:call_received")
+                    async with aiohttp.ClientSession() as session:
+                        response = await session.post(
+                            f"http://127.0.0.1:{port}/local/twilio/call",
+                            data={
+                                "To": "+16892256176",
+                                "From": "+15555550000",
+                                "CallSid": "CA123",
+                            },
+                        )
+                        assert response.status == 200
+                        twiml = await response.text()
+                        assert "unity_phone_conf_CA123" in twiml
+
+                    message = await _get_message_on_channel(
+                        pubsub,
+                        "app:comms:call_received",
+                    )
+                    assert message is not None
+                    payload = json.loads(message["data"])
+                    assert payload["event_name"] == "PhoneCallReceived"
+                    assert (
+                        payload["payload"]["conference_name"]
+                        == "unity_phone_conf_CA123"
+                    )
+                    assert (
+                        payload["payload"]["room_name"] == "unity_phone_room_42_CA123"
+                    )
+                    assert payload["payload"]["call_session_id"] == "CA123"
+                    assert payload["payload"]["provider_call_sid"] == "CA123"
+
+                make_call_scoped_sip_uri.assert_called_once()
+                ensure_call_scoped_dispatch_rule.assert_awaited_once_with(
+                    base_phone_number="+16892256176",
+                    sip_target="16892256176-CA123",
+                    room_name="unity_phone_room_42_CA123",
+                    call_id="CA123",
+                    assistant_id="42",
+                )
+                add_sip_leg.assert_awaited_once_with(
+                    "unity_phone_conf_CA123",
+                    "+16892256176",
+                    to_uri="sip:16892256176-CA123@example.sip.livekit.cloud",
+                )
+            finally:
+                await ingress.stop()
+
+    @pytest.mark.asyncio
+    async def test_twilio_whatsapp_call_records_session_and_dispatches_metadata(
+        self,
+        broker,
+        patched_local_session,
+    ):
+        from unity.conversation_manager.comms_manager import CommsManager
+        from unity.conversation_manager.local_ingress import LocalCommsIngress
+
+        with (
+            patch.object(SETTINGS.conversation, "LOCAL_COMMS_HOST", "127.0.0.1"),
+            patch.object(SETTINGS.conversation, "LOCAL_COMMS_PORT", 0),
+            patch(
+                "unity.conversation_manager.local_ingress.local_email.is_email_configured",
+                return_value=False,
+            ),
+            patch(
+                "unity.conversation_manager.local_ingress.local_twilio.validate_signature",
+                return_value=True,
+            ),
+            patch(
+                "unity.conversation_manager.local_ingress.local_livekit.make_call_scoped_sip_uri",
+                return_value=(
+                    "sip:447414266034-CAWA123@example.sip.livekit.cloud",
+                    "447414266034-CAWA123",
+                ),
+            ),
+            patch(
+                "unity.conversation_manager.local_ingress.local_livekit.ensure_call_scoped_dispatch_rule",
+                new=AsyncMock(return_value="dispatch-rule-wa"),
+            ),
+            patch(
+                "unity.conversation_manager.local_ingress.local_twilio.add_sip_leg_to_conference",
+                new=AsyncMock(return_value="sip-leg-wa"),
+            ) as add_sip_leg,
+            patch(
+                "unity.conversation_manager.local_ingress.local_livekit.start_room_egress",
+                new=AsyncMock(),
+            ),
+        ):
+            comms_manager = CommsManager(broker)
+            comms_manager.loop = asyncio.get_running_loop()
+            ingress = LocalCommsIngress(comms_manager)
+            ingress._upsert_whatsapp_call_session = AsyncMock(
+                side_effect=lambda payload: payload,
+            )
+            await ingress.start()
+
+            try:
+                port = ingress._site._server.sockets[0].getsockname()[1]
+                async with broker.pubsub() as pubsub:
+                    await pubsub.subscribe("app:comms:whatsapp_call_received")
+                    async with aiohttp.ClientSession() as session:
+                        response = await session.post(
+                            f"http://127.0.0.1:{port}/local/twilio/whatsapp-call",
+                            data={
+                                "To": "whatsapp:+447414266034",
+                                "From": "whatsapp:+15555550000",
+                                "CallSid": "CAWA123",
+                            },
+                        )
+                        assert response.status == 200
+                        twiml = await response.text()
+                        assert "unity_wa_conf_CAWA123" in twiml
+
+                    message = await _get_message_on_channel(
+                        pubsub,
+                        "app:comms:whatsapp_call_received",
+                    )
+                    assert message is not None
+                    payload = json.loads(message["data"])
+                    assert payload["event_name"] == "WhatsAppCallReceived"
+                    assert (
+                        payload["payload"]["conference_name"] == "unity_wa_conf_CAWA123"
+                    )
+                    assert payload["payload"]["room_name"] == "unity_wa_room_42_CAWA123"
+                    assert payload["payload"]["call_session_id"] == "CAWA123"
+                    assert payload["payload"]["provider_call_sid"] == "CAWA123"
+
+                ingress._upsert_whatsapp_call_session.assert_awaited_once()
+                session_payload = ingress._upsert_whatsapp_call_session.await_args.args[
+                    0
+                ]
+                assert session_payload["provider_call_sid"] == "CAWA123"
+                assert (
+                    session_payload["metadata"]["sip_dispatch_rule_id"]
+                    == "dispatch-rule-wa"
+                )
+                add_sip_leg.assert_awaited_once_with(
+                    "unity_wa_conf_CAWA123",
+                    "+447414266034",
+                    to_uri="sip:447414266034-CAWA123@example.sip.livekit.cloud",
+                    whatsapp=True,
+                )
+            finally:
+                await ingress.stop()
+
+    @pytest.mark.asyncio
+    async def test_twilio_whatsapp_terminal_status_deletes_dispatch_rule(
+        self,
+        broker,
+        patched_local_session,
+    ):
+        from unity.conversation_manager.comms_manager import CommsManager
+        from unity.conversation_manager.local_ingress import LocalCommsIngress
+
+        with (
+            patch.object(SETTINGS.conversation, "LOCAL_COMMS_HOST", "127.0.0.1"),
+            patch.object(SETTINGS.conversation, "LOCAL_COMMS_PORT", 0),
+            patch(
+                "unity.conversation_manager.local_ingress.local_email.is_email_configured",
+                return_value=False,
+            ),
+            patch(
+                "unity.conversation_manager.local_ingress.local_twilio.validate_signature",
+                return_value=True,
+            ),
+            patch(
+                "unity.conversation_manager.local_ingress.local_livekit.delete_sip_dispatch_rule",
+                new=AsyncMock(),
+            ) as delete_dispatch_rule,
+        ):
+            ingress = LocalCommsIngress(CommsManager(broker))
+            ingress._get_whatsapp_call_session = AsyncMock(
+                return_value={
+                    "provider_call_sid": "CAWA123",
+                    "from_number": "+15551230001",
+                    "to_number": "+447414266034",
+                    "conference_name": "unity_wa_conf_CAWA123",
+                    "livekit_room": "unity_wa_room_42_CAWA123",
+                    "metadata": {"sip_dispatch_rule_id": "dispatch-rule-wa"},
+                },
+            )
+            ingress._update_whatsapp_call_session = AsyncMock()
+            await ingress.start()
+
+            try:
+                port = ingress._site._server.sockets[0].getsockname()[1]
+                async with aiohttp.ClientSession() as session:
+                    response = await session.post(
+                        f"http://127.0.0.1:{port}/local/twilio/whatsapp-call-status",
+                        data={
+                            "CallSid": "CAWA123",
+                            "CallStatus": "completed",
+                        },
+                    )
+                    assert response.status == 200
+
+                ingress._get_whatsapp_call_session.assert_awaited_once_with("CAWA123")
+                ingress._update_whatsapp_call_session.assert_awaited_once_with(
+                    {
+                        "provider": "twilio",
+                        "provider_call_sid": "CAWA123",
+                        "status": "completed",
+                    },
+                )
+                delete_dispatch_rule.assert_awaited_once_with("dispatch-rule-wa")
             finally:
                 await ingress.stop()
