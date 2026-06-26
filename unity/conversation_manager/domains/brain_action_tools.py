@@ -854,11 +854,11 @@ class ConversationManagerBrainActionTools:
         await self._event_broker.publish(event.topic, event.to_json())
         return {"status": "ok", "message": f"Joining Google Meet at {meet_url}"}
 
-    async def leave_google_meet(self) -> dict[str, Any]:
-        """Leave the current Google Meet call.
+    async def _leave_google_meet(self) -> dict[str, Any]:
+        """Disconnect the assistant from the active Google Meet session.
 
-        Disconnects the assistant from the active Google Meet session,
-        closing the browser and tearing down the audio bridge.
+        Internal helper routed through ``hang_up``; closes the browser and tears
+        down the audio bridge.
         """
         if not self._cm.call_manager.has_active_google_meet:
             return {
@@ -957,11 +957,11 @@ class ConversationManagerBrainActionTools:
         await self._event_broker.publish(event.topic, event.to_json())
         return {"status": "ok", "message": f"Joining Teams meeting at {meet_url}"}
 
-    async def leave_teams_meet(self) -> dict[str, Any]:
-        """Leave the current Microsoft Teams meeting.
+    async def _leave_teams_meet(self) -> dict[str, Any]:
+        """Disconnect the assistant from the active Teams meeting session.
 
-        Disconnects the assistant from the active Teams meeting session,
-        closing the browser and tearing down the audio bridge.
+        Internal helper routed through ``hang_up``; closes the browser and tears
+        down the audio bridge.
         """
         if not self._cm.call_manager.has_active_teams_meet:
             return {
@@ -977,6 +977,38 @@ class ConversationManagerBrainActionTools:
         event = TeamsMeetEnded(contact=contact)
         await self._event_broker.publish(event.topic, event.to_json())
         return {"status": "ok", "message": "Leaving Teams meeting"}
+
+    async def hang_up(self) -> dict[str, Any]:
+        """End the current call or meeting, whatever kind it is.
+
+        Hangs up / leaves the live voice session — a phone call, WhatsApp call,
+        Unify Meet, Google Meet, or Microsoft Teams meeting. Only one voice
+        session can be active at a time, so this always targets that session.
+        After it ends, the call-starting tools become available again.
+
+        Use this when my boss asks me to hang up, end the call, leave the
+        meeting, or when the conversation is clearly finished and it is natural
+        to disconnect.
+        """
+        channel = self._cm.call_manager._call_channel
+
+        if self._cm.call_manager.has_active_google_meet:
+            return await self._leave_google_meet()
+        if self._cm.call_manager.has_active_teams_meet:
+            return await self._leave_teams_meet()
+
+        if not self._cm.in_voice_session or channel not in (
+            "phone_call",
+            "whatsapp_call",
+            "unify_meet",
+        ):
+            return {
+                "status": "error",
+                "message": "No active voice session to end.",
+            }
+
+        await self._cm.call_manager.end_call()
+        return {"status": "ok", "message": "Ending the call."}
 
     async def start_teams_meet_screenshare(self) -> dict[str, Any]:
         """Share the assistant's desktop screen in the active Teams meeting.
@@ -1068,8 +1100,8 @@ class ConversationManagerBrainActionTools:
 
         **Excluded:** Do not use ``act`` for Google Meet or Microsoft Teams
         meeting operations — use the dedicated tools instead:
-        ``join_google_meet`` / ``join_teams_meet`` to join,
-        ``leave_google_meet`` / ``leave_teams_meet`` to leave,
+        ``join_google_meet`` / ``join_teams_meet`` to join, ``hang_up`` to leave
+        the current meeting or call,
         ``start_google_meet_screenshare`` / ``start_teams_meet_screenshare`` to
         present the assistant's desktop, and
         ``stop_google_meet_screenshare`` / ``stop_teams_meet_screenshare`` to
@@ -1153,6 +1185,21 @@ class ConversationManagerBrainActionTools:
                 expensive than the DeepSeek default: about 11.5x the
                 input-token rate and 34.5x the output-token rate before any
                 extra reasoning/output tokens from higher effort.
+
+                Escalate the profile when retrying an action that shows
+                concrete evidence of model/tool-use struggle, rather than
+                retrying the same default profile repeatedly. Good escalation
+                signals include a previous ``ActorResult`` ending in a
+                tool-schema or tool-call formatting error, the same failed
+                step recurring after a retry, repeated execution mistakes
+                without new information being gathered, clear user frustration,
+                or the user's explicit request for stronger/premium reasoning.
+                Do not escalate solely because an action has been running for
+                a long time; long-running data, coding, or browser work can be
+                normal. If restarting after one of the concrete failure
+                signals above, preserve the user's task and set
+                ``llm_profile`` to ``gpt_5_5_medium`` or ``gpt_5_5_high``
+                depending on difficulty and urgency.
         """
         global _next_handle_id
 
@@ -1893,18 +1940,15 @@ class ConversationManagerBrainActionTools:
             ),
             "wait": self.wait,
         }
-        call_or_meet_in_progress = (
-            self._cm.mode.is_voice
-            or self._cm.call_manager.has_active_call
-            or self._cm.call_manager.has_active_google_meet
-            or self._cm.call_manager.has_active_teams_meet
-            or self._cm.call_manager._whatsapp_call_joining
-        )
+        call_or_meet_in_progress = self._cm.in_voice_session
         if not call_or_meet_in_progress:
             tools["join_google_meet"] = self.join_google_meet
             tools["join_teams_meet"] = self.join_teams_meet
+        else:
+            # One voice session at a time; a single tool ends whichever is live
+            # (phone, WhatsApp, Unify Meet, Google Meet, or Teams).
+            tools["hang_up"] = self.hang_up
         if self._cm.call_manager.has_active_google_meet:
-            tools["leave_google_meet"] = self.leave_google_meet
             if SESSION_DETAILS.assistant.desktop_url:
                 if not self._cm.call_manager.has_gmeet_presenting:
                     tools["start_google_meet_screenshare"] = (
@@ -1915,7 +1959,6 @@ class ConversationManagerBrainActionTools:
                         self.stop_google_meet_screenshare
                     )
         if self._cm.call_manager.has_active_teams_meet:
-            tools["leave_teams_meet"] = self.leave_teams_meet
             if SESSION_DETAILS.assistant.desktop_url:
                 if not self._cm.call_manager.has_teams_presenting:
                     tools["start_teams_meet_screenshare"] = (

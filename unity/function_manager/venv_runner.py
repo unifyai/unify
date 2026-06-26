@@ -274,11 +274,13 @@ async def query_llm(
     model: str = None,
     origin: str = "CodeActActor.query_llm",
     temperature: float = 0.0,
+    images: list[str | bytes] | None = None,
     **generate_kwargs: Any,
 ) -> Any:
     """Proxy an LLM query to the parent Unity process."""
 
     rpc_response_format, response_model = _response_format_for_rpc(response_format)
+    rpc_images = _images_for_rpc(images)
     result = await rpc_call_async(
         "runtime.query_llm",
         {
@@ -288,12 +290,44 @@ async def query_llm(
             "model": model,
             "origin": origin,
             "temperature": temperature,
+            "images": rpc_images,
             **generate_kwargs,
         },
     )
     if response_model is not None:
         return response_model.model_validate(result)
     return result
+
+
+def _bytes_to_data_url(image_bytes: bytes) -> str:
+    """Encode image bytes as a data URL without importing unity."""
+
+    import base64
+
+    head = image_bytes[:10]
+    if head.startswith(b"\xff\xd8"):
+        mime = "image/jpeg"
+    elif head.startswith(b"\x89PNG\r\n\x1a\n"):
+        mime = "image/png"
+    else:
+        mime = "application/octet-stream"
+    b64_data = base64.b64encode(image_bytes).decode("ascii")
+    return f"data:{mime};base64,{b64_data}"
+
+
+def _images_for_rpc(images: list[str | bytes] | None) -> list[str] | None:
+    """Normalize image payloads so RPC kwargs stay JSON-serializable."""
+
+    if not images:
+        return None
+
+    rpc_images: list[str] = []
+    for image in images:
+        if isinstance(image, bytes):
+            rpc_images.append(_bytes_to_data_url(image))
+        else:
+            rpc_images.append(image)
+    return rpc_images
 
 
 def list_llms(provider: str = None) -> list[str]:

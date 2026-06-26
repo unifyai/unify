@@ -9,6 +9,8 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import unify
 
+from unify.utils.http import RequestError
+
 from unity.common.builtins import (
     builtins_project,
     ensure_builtins_project,
@@ -417,12 +419,32 @@ def seed_builtin_integrations(
         "omitted" if tools is None else len(tools),
         prune_unlisted_apps,
     )
-    _ensure_catalog_storage_once(project)
+    # Read-only probe: is the public-read catalogue storage already present? When
+    # it is, any principal can verify state without attempting owner-guarded
+    # writes. A missing catalogue raises and falls through to the owner path.
+    try:
+        current_hashes = read_seed_hashes(
+            project,
+            meta_context=BUILTINS_INTEGRATION_META_CONTEXT,
+            key=_HASH_MAP_KEY,
+        )
+        storage_ready = True
+    except RequestError:
+        storage_ready = False
+        current_hashes = {}
+
     reconcile_apps = apps is not None
     reconcile_tools = tools is not None
     if apps is None and tools is None:
+        # Nothing to reconcile — only guarantee storage + embedding columns
+        # exist. A pre-seeded catalogue needs no writes, so non-owners no-op.
+        if storage_ready:
+            return False
+        _ensure_catalog_storage_once(project)
         _ensure_catalog_embeddings_once(project)
         return False
+
+    _ensure_catalog_storage_once(project)
     apps = apps or []
     tools = tools or []
     seed_backend_id = str(backend_id) if backend_id else None
@@ -502,14 +524,8 @@ def seed_builtin_integrations(
             "backend_id or catalog rows are required for prune_unlisted_apps",
         )
 
-    logger.info("Reading integration catalogue seed hashes project=%s", project)
-    current_hashes = read_seed_hashes(
-        project,
-        meta_context=BUILTINS_INTEGRATION_META_CONTEXT,
-        key=_HASH_MAP_KEY,
-    )
     logger.info(
-        "Read integration catalogue seed hashes project=%s units=%d",
+        "Using integration catalogue seed hashes project=%s units=%d",
         project,
         len(current_hashes),
     )

@@ -117,6 +117,8 @@ def test_query_llm_docstring_contains_actor_usage_guidance():
     assert "draft, respond, rewrite" in doc
     assert "EmailDraftDecision" in doc
     assert "Anti-patterns" in doc
+    assert "images=[" in doc
+    assert "Vision reasoning over a local image path" in doc
     assert "billable UniLLM call" in doc
     assert "substring checks" in doc
     assert "label-specific canned prose or templates" in doc
@@ -141,6 +143,9 @@ def test_llm_query_prompt_context_includes_model_selection_guidance():
     assert "Supported UniLLM endpoints currently registered" not in context
     assert "gpt-5.5@openai, gpt-5.5" not in context
     assert "Do not put benchmark browsing or" in context
+    assert (
+        "Pass screenshots, photos, or image paths through ``images=[...]``" in context
+    )
 
 
 def test_list_llms_returns_registered_endpoint_strings():

@@ -4,18 +4,30 @@ import os
 import json
 import secrets
 import time
+import uuid
 
-from aiohttp import web
+from aiohttp import ClientSession, web
 
 from unity.logger import LOGGER
 from unity.common.hierarchical_logger import DEFAULT_ICON, ICONS
 from unity.session_details import SESSION_DETAILS
 
 from .comms_manager import CommsManager
-from .domains.call_manager import make_room_name
 from .local_providers import email as local_email
 from .local_providers import livekit as local_livekit
 from .local_providers import twilio as local_twilio
+
+_LOCAL_PHONE_CALL_SESSIONS: dict[str, dict] = {}
+_LOCAL_WHATSAPP_CALL_SESSIONS: dict[str, dict] = {}
+
+
+def _call_permission_status(button_payload: str) -> tuple[str, str]:
+    payload = (button_payload or "").strip()
+    if payload == "ACCEPTED":
+        return "accepted", "ACCEPTED"
+    if payload == "REJECTED":
+        return "rejected", "REJECTED"
+    return "unknown_interaction", "UNKNOWN"
 
 
 class LocalCommsIngress:
@@ -266,12 +278,29 @@ class LocalCommsIngress:
             opening_config = json.loads(opening_config)
         if isinstance(opening_config, dict):
             event["opening_config"] = opening_config
+        LOGGER.info(
+            "%s [LocalIngressDebug] unify_meet.received assistant_id=%s "
+            "current_assistant_id=%s room=%s call_session_id=%s opening_mode=%s",
+            ICONS["comms"],
+            payload.get("assistant_id"),
+            event["assistant_id"],
+            room_name,
+            payload.get("call_session_id") or "",
+            opening_config.get("mode") if isinstance(opening_config, dict) else None,
+        )
         await self._dispatch_payload(
             {
                 "thread": "unify_meet",
                 "publish_timestamp": time.time(),
                 "event": event,
             },
+        )
+        LOGGER.info(
+            "%s [LocalIngressDebug] unify_meet.dispatched assistant_id=%s room=%s call_session_id=%s",
+            ICONS["comms"],
+            event["assistant_id"],
+            room_name,
+            payload.get("call_session_id") or "",
         )
         return web.json_response({"success": True})
 
@@ -379,6 +408,16 @@ class LocalCommsIngress:
         from_number = form.get("From", "") or ""
         to_number = form.get("To", "") or ""
         if body == "VOICE_CALL_REQUEST":
+            contact_number = from_number.replace("whatsapp:", "").strip()
+            pool_number = to_number.replace("whatsapp:", "").strip()
+            permission_status, event_payload = _call_permission_status(
+                form.get("ButtonPayload", ""),
+            )
+            await self._record_whatsapp_call_permission(
+                pool_number=pool_number,
+                contact_number=contact_number,
+                status=permission_status,
+            )
             await self._dispatch_payload(
                 {
                     "thread": "whatsapp",
@@ -387,8 +426,8 @@ class LocalCommsIngress:
                         "assistant_id": self._current_assistant_id(),
                         "contacts": [],
                         "type": "call_permission_response",
-                        "contact_number": from_number.replace("whatsapp:", "").strip(),
-                        "payload": form.get("ButtonPayload", ""),
+                        "contact_number": contact_number,
+                        "payload": event_payload,
                     },
                 },
             )
@@ -413,17 +452,165 @@ class LocalCommsIngress:
             content_type="text/xml",
         )
 
+    async def _record_whatsapp_call_permission(
+        self,
+        *,
+        pool_number: str,
+        contact_number: str,
+        status: str,
+    ) -> None:
+        from unity.settings import SETTINGS
+
+        admin_key = SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()
+        if not admin_key:
+            return
+
+        try:
+            async with ClientSession() as session:
+                async with session.post(
+                    f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/call-permission",
+                    headers={"Authorization": f"Bearer {admin_key}"},
+                    json={
+                        "pool_number": pool_number,
+                        "contact_number": contact_number,
+                        "status": status,
+                        "source": "local_ingress",
+                    },
+                    timeout=10,
+                ) as response:
+                    response.raise_for_status()
+        except Exception as exc:
+            LOGGER.error(
+                f"{DEFAULT_ICON} Failed to record WhatsApp call permission: {exc}",
+            )
+
+    async def _upsert_whatsapp_call_session(self, payload: dict) -> dict:
+        from unity.settings import SETTINGS
+
+        provider_call_sid = payload["provider_call_sid"]
+        _LOCAL_WHATSAPP_CALL_SESSIONS[provider_call_sid] = payload
+        admin_key = SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()
+        if not admin_key:
+            return payload
+
+        try:
+            async with ClientSession() as session:
+                async with session.post(
+                    f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/call-session",
+                    headers={"Authorization": f"Bearer {admin_key}"},
+                    json=payload,
+                    timeout=10,
+                ) as response:
+                    if response.status == 404:
+                        return payload
+                    response.raise_for_status()
+                    data = await response.json()
+                    _LOCAL_WHATSAPP_CALL_SESSIONS[provider_call_sid] = data
+                    return data
+        except Exception as exc:
+            LOGGER.error(
+                f"{DEFAULT_ICON} Failed to upsert local WhatsApp call session: {exc}",
+            )
+            return payload
+
+    async def _get_whatsapp_call_session(self, provider_call_sid: str) -> dict | None:
+        from unity.settings import SETTINGS
+
+        admin_key = SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()
+        if not admin_key:
+            return _LOCAL_WHATSAPP_CALL_SESSIONS.get(provider_call_sid)
+
+        try:
+            async with ClientSession() as session:
+                async with session.get(
+                    f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/call-session/{provider_call_sid}",
+                    headers={"Authorization": f"Bearer {admin_key}"},
+                    params={"provider": "twilio"},
+                    timeout=10,
+                ) as response:
+                    if response.status == 404:
+                        return _LOCAL_WHATSAPP_CALL_SESSIONS.get(provider_call_sid)
+                    response.raise_for_status()
+                    return await response.json()
+        except Exception as exc:
+            LOGGER.error(
+                f"{DEFAULT_ICON} Failed to read local WhatsApp call session: {exc}",
+            )
+            return _LOCAL_WHATSAPP_CALL_SESSIONS.get(provider_call_sid)
+
+    async def _update_whatsapp_call_session(self, payload: dict) -> dict | None:
+        from unity.settings import SETTINGS
+
+        provider_call_sid = payload["provider_call_sid"]
+        existing = _LOCAL_WHATSAPP_CALL_SESSIONS.get(provider_call_sid)
+        if existing:
+            metadata = dict(existing.get("metadata") or {})
+            metadata.update(payload.get("metadata") or {})
+            existing.update({k: v for k, v in payload.items() if v is not None})
+            existing["metadata"] = metadata
+
+        admin_key = SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()
+        if not admin_key:
+            return existing
+
+        try:
+            async with ClientSession() as session:
+                async with session.patch(
+                    f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/call-session",
+                    headers={"Authorization": f"Bearer {admin_key}"},
+                    json=payload,
+                    timeout=10,
+                ) as response:
+                    if response.status == 404:
+                        return existing
+                    response.raise_for_status()
+                    data = await response.json()
+                    _LOCAL_WHATSAPP_CALL_SESSIONS[provider_call_sid] = data
+                    return data
+        except Exception as exc:
+            LOGGER.error(
+                f"{DEFAULT_ICON} Failed to update local WhatsApp call session: {exc}",
+            )
+            return existing
+
     async def _twilio_call(self, request: web.Request) -> web.Response:
         form = await self._validate_twilio(request, whatsapp=False)
         to_number = form.get("To", "") or ""
         from_number = form.get("From", "") or ""
+        provider_call_sid = form.get("CallSid", "") or f"missing-{uuid.uuid4()}"
         assistant_id = self._current_assistant_id()
-        conference_name = (
-            f"Unity_{to_number.removeprefix('+')}_{time.strftime('%Y_%m_%d_%H_%M_%S')}"
+        call_id = provider_call_sid.replace(":", "-")
+        conference_name = f"unity_phone_conf_{call_id}"
+        room_name = f"unity_phone_room_{assistant_id}_{call_id}"
+        sip_uri, sip_target = local_livekit.make_call_scoped_sip_uri(
+            to_number,
+            call_id,
+            headers={
+                "X-Unity-Call-Session": call_id,
+                "X-Unity-Provider-Call-Sid": provider_call_sid,
+                "X-Unity-Room": room_name,
+            },
         )
-        room_name = make_room_name(assistant_id, "phone")
-        sip_uri = local_livekit.make_sip_uri(to_number)
-        await local_livekit.ensure_phone_dispatch_rule(to_number, room_name)
+        sip_dispatch_rule_id = await local_livekit.ensure_call_scoped_dispatch_rule(
+            base_phone_number=to_number,
+            sip_target=sip_target,
+            room_name=room_name,
+            call_id=call_id,
+            assistant_id=assistant_id,
+        )
+        if not sip_dispatch_rule_id:
+            return web.Response(
+                text=local_twilio.call_unavailable_response(),
+                content_type="text/xml",
+            )
+        _LOCAL_PHONE_CALL_SESSIONS[provider_call_sid] = {
+            "provider_call_sid": provider_call_sid,
+            "from_number": from_number,
+            "to_number": to_number,
+            "conference_name": conference_name,
+            "livekit_room": room_name,
+            "metadata": {"sip_dispatch_rule_id": sip_dispatch_rule_id},
+        }
         await self._dispatch_payload(
             {
                 "thread": "call",
@@ -432,17 +619,26 @@ class LocalCommsIngress:
                     "assistant_id": assistant_id,
                     "contacts": [],
                     "conference_name": conference_name,
+                    "call_session_id": provider_call_sid,
+                    "provider_call_sid": provider_call_sid,
                     "caller_number": from_number,
                     "sip_uri": sip_uri,
                     "livekit_room": room_name,
                     "action": "start_worker",
                     "timestamp": int(time.time() * 1000),
+                    "call_metadata": {
+                        "twilio_number": to_number,
+                        "call_type": "inbound",
+                        "room_created": True,
+                        "bridge_established": True,
+                        "sip_dispatch_rule_id": sip_dispatch_rule_id,
+                    },
                 },
             },
         )
         await local_twilio.add_sip_leg_to_conference(
             conference_name,
-            from_number,
+            to_number,
             to_uri=sip_uri,
         )
         try:
@@ -461,32 +657,50 @@ class LocalCommsIngress:
     async def _twilio_call_status(self, request: web.Request) -> web.Response:
         form = await self._validate_twilio(request, whatsapp=False)
         call_status = form.get("CallStatus", "")
-        if call_status not in {
-            "in-progress",
-            "no-answer",
-            "busy",
-            "canceled",
-            "failed",
-        }:
+        provider_call_sid = form.get("CallSid", "") or ""
+        if call_status == "completed":
+            thread = None
+        else:
+            thread = (
+                "call_answered"
+                if call_status == "in-progress"
+                else (
+                    "call_not_answered"
+                    if call_status in {"no-answer", "busy", "canceled", "failed"}
+                    else None
+                )
+            )
+        if thread is None and call_status != "completed":
             return web.Response(status=200)
-        await self._dispatch_payload(
-            {
-                "thread": (
-                    "call_answered"
-                    if call_status == "in-progress"
-                    else "call_not_answered"
-                ),
-                "publish_timestamp": time.time(),
-                "event": {
-                    "assistant_id": self._current_assistant_id(),
-                    "contacts": [],
-                    "user_number": form.get("To", "") or "",
-                    "assistant_number": form.get("From", "") or "",
-                    "call_status": call_status,
-                    "timestamp": int(time.time() * 1000),
+        call_session = _LOCAL_PHONE_CALL_SESSIONS.get(provider_call_sid, {})
+        if call_status in {"no-answer", "busy", "canceled", "failed", "completed"}:
+            await local_livekit.delete_sip_dispatch_rule(
+                (call_session.get("metadata") or {}).get("sip_dispatch_rule_id"),
+            )
+            _LOCAL_PHONE_CALL_SESSIONS.pop(provider_call_sid, None)
+        if call_status != "completed":
+            await self._dispatch_payload(
+                {
+                    "thread": thread,
+                    "publish_timestamp": time.time(),
+                    "event": {
+                        "assistant_id": self._current_assistant_id(),
+                        "contacts": [],
+                        "user_number": call_session.get("from_number")
+                        or form.get("From", "")
+                        or "",
+                        "assistant_number": call_session.get("to_number")
+                        or form.get("To", "")
+                        or "",
+                        "call_status": call_status,
+                        "call_session_id": provider_call_sid,
+                        "provider_call_sid": provider_call_sid,
+                        "conference_name": call_session.get("conference_name", ""),
+                        "livekit_room": call_session.get("livekit_room", ""),
+                        "timestamp": int(time.time() * 1000),
+                    },
                 },
-            },
-        )
+            )
         return web.Response(status=200)
 
     async def _twilio_twiml(self, request: web.Request) -> web.Response:
@@ -504,11 +718,51 @@ class LocalCommsIngress:
         form = await self._validate_twilio(request, whatsapp=True)
         to_number = (form.get("To", "") or "").replace("whatsapp:", "").strip()
         from_number = (form.get("From", "") or "").replace("whatsapp:", "").strip()
+        provider_call_sid = form.get("CallSid", "") or f"missing-{uuid.uuid4()}"
         assistant_id = self._current_assistant_id()
-        conference_name = f"Unity_WA_{to_number.removeprefix('+')}_{time.strftime('%Y_%m_%d_%H_%M_%S')}"
-        room_name = make_room_name(assistant_id, "whatsapp_call")
-        sip_uri = local_livekit.make_sip_uri(to_number)
-        await local_livekit.ensure_phone_dispatch_rule(to_number, room_name)
+        call_id = provider_call_sid.replace(":", "-")
+        conference_name = f"unity_wa_conf_{call_id}"
+        room_name = f"unity_wa_room_{assistant_id}_{call_id}"
+        sip_uri, sip_target = local_livekit.make_call_scoped_sip_uri(
+            to_number,
+            call_id,
+            headers={
+                "X-Unity-Call-Session": call_id,
+                "X-Unity-Provider-Call-Sid": provider_call_sid,
+                "X-Unity-Room": room_name,
+            },
+        )
+        sip_dispatch_rule_id = await local_livekit.ensure_call_scoped_dispatch_rule(
+            base_phone_number=to_number,
+            sip_target=sip_target,
+            room_name=room_name,
+            call_id=call_id,
+            assistant_id=assistant_id,
+        )
+        if not sip_dispatch_rule_id:
+            return web.Response(
+                text=local_twilio.call_unavailable_response(),
+                content_type="text/xml",
+            )
+        await self._upsert_whatsapp_call_session(
+            {
+                "provider": "twilio",
+                "provider_call_sid": provider_call_sid,
+                "channel": "whatsapp_call",
+                "assistant_id": int(assistant_id),
+                "from_number": from_number,
+                "to_number": to_number,
+                "pool_number": to_number,
+                "conference_name": conference_name,
+                "livekit_room": room_name,
+                "status": "created",
+                "metadata": {
+                    "sip_uri": sip_uri,
+                    "sip_target": sip_target,
+                    "sip_dispatch_rule_id": sip_dispatch_rule_id,
+                },
+            },
+        )
         await self._dispatch_payload(
             {
                 "thread": "whatsapp_call",
@@ -517,11 +771,20 @@ class LocalCommsIngress:
                     "assistant_id": assistant_id,
                     "contacts": [],
                     "conference_name": conference_name,
+                    "call_session_id": provider_call_sid,
+                    "provider_call_sid": provider_call_sid,
                     "caller_number": from_number,
                     "sip_uri": sip_uri,
                     "livekit_room": room_name,
                     "action": "start_worker",
                     "timestamp": int(time.time() * 1000),
+                    "call_metadata": {
+                        "whatsapp_number": to_number,
+                        "call_type": "inbound",
+                        "room_created": True,
+                        "bridge_established": True,
+                        "sip_dispatch_rule_id": sip_dispatch_rule_id,
+                    },
                 },
             },
         )
@@ -547,36 +810,60 @@ class LocalCommsIngress:
     async def _twilio_whatsapp_call_status(self, request: web.Request) -> web.Response:
         form = await self._validate_twilio(request, whatsapp=True)
         call_status = form.get("CallStatus", "")
-        if call_status not in {
-            "in-progress",
-            "no-answer",
-            "busy",
-            "canceled",
-            "failed",
-        }:
+        provider_call_sid = form.get("CallSid", "") or ""
+        if call_status == "completed":
+            thread = None
+        else:
+            thread = (
+                "whatsapp_call_answered"
+                if call_status == "in-progress"
+                else (
+                    "whatsapp_call_not_answered"
+                    if call_status in {"no-answer", "busy", "canceled", "failed"}
+                    else None
+                )
+            )
+        if thread is None and call_status != "completed":
             return web.Response(status=200)
-        await self._dispatch_payload(
+        if not provider_call_sid:
+            return web.Response(status=200)
+
+        call_session = await self._get_whatsapp_call_session(provider_call_sid)
+        if not call_session:
+            return web.Response(status=200)
+
+        await self._update_whatsapp_call_session(
             {
-                "thread": (
-                    "whatsapp_call_answered"
-                    if call_status == "in-progress"
-                    else "whatsapp_call_not_answered"
-                ),
-                "publish_timestamp": time.time(),
-                "event": {
-                    "assistant_id": self._current_assistant_id(),
-                    "contacts": [],
-                    "user_number": (form.get("To", "") or "")
-                    .replace("whatsapp:", "")
-                    .strip(),
-                    "assistant_number": (form.get("From", "") or "")
-                    .replace("whatsapp:", "")
-                    .strip(),
-                    "call_status": call_status,
-                    "timestamp": int(time.time() * 1000),
-                },
+                "provider": "twilio",
+                "provider_call_sid": provider_call_sid,
+                "status": call_status,
             },
         )
+        metadata = call_session.get("metadata") or {}
+        if call_status in {"no-answer", "busy", "canceled", "failed", "completed"}:
+            await local_livekit.delete_sip_dispatch_rule(
+                metadata.get("sip_dispatch_rule_id"),
+            )
+            _LOCAL_WHATSAPP_CALL_SESSIONS.pop(provider_call_sid, None)
+        if call_status != "completed":
+            await self._dispatch_payload(
+                {
+                    "thread": thread,
+                    "publish_timestamp": time.time(),
+                    "event": {
+                        "assistant_id": self._current_assistant_id(),
+                        "contacts": [],
+                        "user_number": call_session.get("from_number", ""),
+                        "assistant_number": call_session.get("to_number", ""),
+                        "call_status": call_status,
+                        "call_session_id": provider_call_sid,
+                        "provider_call_sid": provider_call_sid,
+                        "conference_name": call_session.get("conference_name", ""),
+                        "livekit_room": call_session.get("livekit_room", ""),
+                        "timestamp": int(time.time() * 1000),
+                    },
+                },
+            )
         return web.Response(status=200)
 
     async def _livekit_recording_complete(self, request: web.Request) -> web.Response:

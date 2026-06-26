@@ -529,6 +529,7 @@ class WhatsAppCallPermissionResponse(Event):
 
     contact: dict
     accepted: bool
+    status: str = ""
 
 
 @dataclass
@@ -811,6 +812,7 @@ class PhoneCallSent(Event):
 
     contact: dict
     content: str = "<Sending Call...>"
+    provider_call_sid: str = ""
     onboarding_trigger_step_id: str | None = None
     onboarding_reply_step_id: str | None = None
     onboarding_request_id: str | None = None
@@ -865,6 +867,11 @@ class FastBrainNotification(Event):
     source: str = ""
     agent_service_url: str = ""
     llm_log_path: str = ""
+    # ISO-8601 UTC timestamp of the latest voice utterance the slow brain saw
+    # when it decided this guidance. The fast brain skips the dedup gate when no
+    # newer voice activity has occurred (the gate would be provably redundant).
+    # Empty for non-guidance notifications, which always run the gate.
+    decided_after_ts: str = ""
 
 
 @dataclass
@@ -1771,6 +1778,35 @@ class UserRemoteControlStopped(Event):
 
     topic: ClassVar[str | None] = "app:comms:user_remote_control_stopped"
 
+    reason: str = ""
+
+
+@dataclass
+class UserFilesysAccessStarted(Event):
+    """User (re-)enabled this assistant's access to their home filesystem.
+
+    Carries ``user_id`` (the desktop owner) because one assistant may have
+    several users' desktops linked; the live grant targets that user's link.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:user_filesys_access_started"
+
+    user_id: str = ""
+    reason: str = ""
+
+
+@dataclass
+class UserFilesysAccessStopped(Event):
+    """User revoked this assistant's access to their home filesystem.
+
+    In-flight actors must stop reading from / writing back to that machine.
+    Carries ``user_id`` (the desktop owner) so the revoke targets the right
+    link when multiple users' desktops are linked.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:user_filesys_access_stopped"
+
+    user_id: str = ""
     reason: str = ""
 
 

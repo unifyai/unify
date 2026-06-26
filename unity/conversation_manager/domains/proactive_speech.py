@@ -25,6 +25,23 @@ the line to say.
 There has been at least 5 seconds of silence since the last utterance (user or \
 assistant). You have the full conversation history above.
 
+## Never repeat yourself (most important rule)
+
+The transcript above is the literal record of what has already been said. The \
+`assistant` turns are things *you* have already said out loud; the `user` turns \
+are what the other person said. Read your own most recent `assistant` turns \
+before composing `content`.
+
+- NEVER restate, paraphrase, or re-confirm something you already said. If your \
+candidate line overlaps in meaning with any recent `assistant` turn, it is a \
+repeat — do not say it.
+- If there is genuinely nothing new and useful to add, that is normal: do NOT \
+manufacture a line to fill the air. Choose a long `delay` and stay quiet. A \
+silence is far better than hearing the assistant echo itself.
+- Only break the silence with a line that adds something the transcript does \
+not already contain: a fresh check-in, a new piece of information, or a natural \
+next step. When you do speak, vary the phrasing from anything nearby.
+
 ## Choosing the delay
 
 Picture how a real, fluid human conversation would feel.
@@ -76,8 +93,8 @@ if what you see contradicts the goal, say so rather than claiming success.
 - `delay`: seconds to wait before speaking (small = someone's waiting on you; \
 large = focused quiet time, the user needs space, or work is in progress). No \
 upper limit.
-- `content`: a short, natural sentence (1-2 sentences max). Vary phrasing -- \
-never repeat what was already said in the transcript. Do not claim specific \
+- `content`: a short, natural sentence (1-2 sentences max) that adds something \
+new (see "Never repeat yourself" above). Do not claim specific \
 actions you are not actually performing. `content` is read aloud by TTS — use \
 plain connected prose only; no numbered lists, bullets, or outline formatting \
 ("first… second…").

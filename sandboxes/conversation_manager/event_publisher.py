@@ -10,6 +10,7 @@ over LiveKit instead of injecting synthetic call events.
 
 from __future__ import annotations
 
+import base64
 import mimetypes
 import os
 import shutil
@@ -33,10 +34,18 @@ if TYPE_CHECKING:
 def build_unify_attachment_meta(attachments: list[Path] | None) -> list[dict]:
     """Stage attachment files under ``Downloads`` and build their metadata.
 
-    Returns the per-attachment dicts (id, filename, file URL, content type,
-    size) carried on an inbound ``unify_message`` event. Used both when
-    publishing synthetic chat events and when delivering the same payload
-    through the real ingress transport in the flow-test harness.
+    Returns the per-attachment dicts (id, filename, content type, size, and
+    inline base64 content) carried on an inbound ``unify_message`` event. Used
+    both when publishing synthetic chat events and when delivering the same
+    payload through the real ingress transport in the flow-test harness.
+
+    The bytes are carried inline via ``content_base64`` — the same inline
+    channel the production attachment downloader honours ahead of any URL —
+    so the real ``save_attachment`` + ingestion path runs locally. A bare
+    ``file://`` URL is not enough: the production downloader fetches over
+    ``aiohttp``, which cannot read the ``file`` scheme, so a URL-only envelope
+    would silently fail to ingest and the brain would never see the file
+    through ``primitives.files.*``.
     """
     if not attachments:
         return []
@@ -47,13 +56,15 @@ def build_unify_attachment_meta(attachments: list[Path] | None) -> list[dict]:
         dest = downloads_dir / src.name
         shutil.copy2(src, dest)
         content_type = mimetypes.guess_type(src.name)[0] or "application/octet-stream"
+        raw_bytes = src.read_bytes()
         attachment_meta.append(
             {
                 "id": str(uuid.uuid4()),
                 "filename": src.name,
                 "url": dest.resolve().as_uri(),
                 "content_type": content_type,
-                "size_bytes": src.stat().st_size,
+                "size_bytes": len(raw_bytes),
+                "content_base64": base64.b64encode(raw_bytes).decode("ascii"),
             },
         )
     return attachment_meta

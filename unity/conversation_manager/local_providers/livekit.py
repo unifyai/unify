@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
 
 from livekit.api import (
     CreateSIPDispatchRuleRequest,
@@ -48,6 +48,26 @@ def make_sip_uri(phone_number: str) -> str:
     return f"sip:{normalized}@{sip_domain}"
 
 
+def make_call_scoped_sip_uri(
+    phone_number: str,
+    call_id: str,
+    *,
+    headers: dict[str, str] | None = None,
+) -> tuple[str, str]:
+    sip_domain = _required_env("LIVEKIT_SIP_URI")
+    normalized = phone_number if phone_number.startswith("+") else f"+{phone_number}"
+    safe_call_id = "".join(ch if ch.isalnum() else "-" for ch in call_id).strip("-")
+    sip_target = f"{normalized[1:]}-{safe_call_id}"
+    uri = f"sip:{sip_target}@{sip_domain}"
+    if headers:
+        sip_headers = {
+            key if key.lower().startswith("x-") else f"X-{key}": value
+            for key, value in headers.items()
+        }
+        uri = f"{uri}?{urlencode(sip_headers)}"
+    return uri, sip_target
+
+
 async def ensure_phone_dispatch_rule(phone_number: str, room_name: str) -> None:
     """Ensure LiveKit routes calls for a phone number into the target room."""
     livekit_api = get_livekit_api()
@@ -90,6 +110,65 @@ async def ensure_phone_dispatch_rule(phone_number: str, room_name: str) -> None:
                 ),
             ),
         )
+    finally:
+        await livekit_api.aclose()
+
+
+async def ensure_call_scoped_dispatch_rule(
+    *,
+    base_phone_number: str,
+    sip_target: str,
+    room_name: str,
+    call_id: str,
+    assistant_id: str,
+) -> str | None:
+    """Create a one-call SIP dispatch rule and return its LiveKit rule id."""
+    livekit_api = get_livekit_api()
+    try:
+        normalized = (
+            base_phone_number
+            if base_phone_number.startswith("+")
+            else f"+{base_phone_number}"
+        )
+        trunks = await livekit_api.sip.list_sip_inbound_trunk(
+            ListSIPInboundTrunkRequest(),
+        )
+        trunk_id = None
+        for trunk in trunks.items:
+            if normalized in list(trunk.numbers):
+                trunk_id = trunk.sip_trunk_id
+                break
+        if trunk_id is None:
+            return None
+
+        dispatch = await livekit_api.sip.create_sip_dispatch_rule(
+            CreateSIPDispatchRuleRequest(
+                dispatch_rule=SIPDispatchRuleInfo(
+                    rule=SIPDispatchRule(
+                        dispatch_rule_direct=SIPDispatchRuleDirect(room_name=room_name),
+                    ),
+                    name=f"Unity_call_{call_id}",
+                    trunk_ids=[trunk_id],
+                    numbers=[sip_target],
+                    attributes={
+                        "call.id": call_id,
+                        "assistant.id": str(assistant_id),
+                    },
+                ),
+            ),
+        )
+        return dispatch.sip_dispatch_rule_id
+    finally:
+        await livekit_api.aclose()
+
+
+async def delete_sip_dispatch_rule(dispatch_rule_id: str | None) -> None:
+    """Delete a per-call SIP dispatch rule after the Twilio call terminates."""
+    if not dispatch_rule_id:
+        return
+    livekit_api = get_livekit_api()
+    try:
+        await livekit_api.sip.delete_sip_dispatch_rule(dispatch_rule_id)
     finally:
         await livekit_api.aclose()
 

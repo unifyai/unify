@@ -271,7 +271,46 @@ class ComputerEnvironment(BaseEnvironment):
             "ud = primitives.computer.user_desktop.session()\n"
             "display(await ud.get_screenshot())\n"
             "await ud.act('Open the Downloads folder')\n"
-            "```",
+            "```\n\n"
+            "For a pure 'look and tell me what's on my screen' request, stop "
+            "after `display(await ud.get_screenshot())` and describe the image "
+            "yourself -- you do not need `observe()` or `act()` for first-person "
+            "perception.\n\n"
+            "**Their files: use `user_desktop.files`, never shell.**  "
+            "`primitives.computer.user_desktop.files` is the canonical way to "
+            "read, fetch, or sync a user's files.  It reads/writes their home "
+            "over SFTP and mirrors what you pull into `~/Unity/Remote/"
+            "<user_id>/`, returning local paths you can parse -- this is a "
+            "*separate* capability from the screen-control session above, and "
+            "is what you reach for whenever the task is about file *content* "
+            "rather than driving their screen:\n"
+            "- `files.list(path='', user_id=...)` -- browse their home tree "
+            "(``''`` lists the home root; directories carry a trailing ``/``).\n"
+            "- `files.pull(path, user_id=...)` -- stage one home-relative file "
+            "into the mirror; returns its absolute local path.\n"
+            "- `files.sync(path='', user_id=...)` -- recursively mirror a whole "
+            "subtree (``''`` = their entire home); returns the staged absolute "
+            'paths.  This is the call for "sync my filesystem".\n'
+            "- `files.push(local_path, dest_path, user_id=...)` -- write a file "
+            "back (saved as a timestamped copy; never overwrites their "
+            "original).\n\n"
+            "```python\n"
+            "# Read/sync the user's files (NOT via shell):\n"
+            "names = await primitives.computer.user_desktop.files.list('Documents')\n"
+            "path = await primitives.computer.user_desktop.files.pull('Documents/report.pdf')\n"
+            "display(await primitives.files.parse(path))  # work from the staged mirror\n"
+            "```\n\n"
+            'Requests like "sync my filesystem", "pull my desktop files", '
+            '"back up my home folder", or "grab the files off my machine" '
+            'are first-class file requests -- not ambiguous "sync to where?" '
+            "questions.  Discover with `files.list`, then `files.pull` what you "
+            "need into the mirror and work from the returned paths; the "
+            "destination is always your local mirror, so never ask the user "
+            "where to sync to.  **Never** harvest their files by running shell "
+            "`find`/`cat`/`tar`/`base64`/`cp`/`scp`/`rclone` on "
+            '`surface="user_desktop"` -- that surface is only for commands the '
+            "user explicitly wants executed on their machine, not for retrieving "
+            "file content.",
         )
 
         parts.append(
@@ -284,6 +323,13 @@ class ComputerEnvironment(BaseEnvironment):
             "# Web session\n"
             "display(await session.get_screenshot())\n"
             "```\n\n"
+            "**A screenshot you `display()` is visible to you on the next turn "
+            "-- read it and answer directly.**  For 'what's on screen / describe "
+            "my desktop' questions, the screenshot *is* the answer: `display()` "
+            "it and describe what you see.  Do not call `observe()`/`act()` just "
+            "to obtain a textual description -- those add a round trip through "
+            "the remote extraction model and are for *structured* extraction or "
+            "*executing* actions, not first-person perception.\n\n"
             "**Coordinate spaces are NOT interchangeable.**  Desktop screenshots "
             "capture the full physical display (including browser chrome, address "
             "bar, taskbar, window decorations).  Web session screenshots capture "

@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import unify
+from unify.utils.http import RequestError
 
 from ..common.builtins import (
     builtins_project,
@@ -127,6 +128,30 @@ def _delete_rows_by_ids(project: str, guidance_ids: List[int]) -> None:
         )
 
 
+def _guidance_diff(
+    project: str,
+    desired: Dict[str, Dict[str, object]],
+) -> tuple[List[str], List[str], Dict[str, Dict[str, object]]]:
+    """Read-only diff of the stored guidance hashes against *desired*.
+
+    Returns ``(changed_keys, removed_keys, current)``. Reads only, so it runs
+    for any principal that can read the public Builtins project. Raises when the
+    catalogue storage is absent (fresh project).
+    """
+    current = read_seed_hashes(
+        project,
+        meta_context=BUILTINS_GUIDANCE_META_CONTEXT,
+        key=_HASH_MAP_KEY,
+    )
+    changed = [
+        skill_key
+        for skill_key, state in desired.items()
+        if (current.get(skill_key) or {}).get("hash") != state["hash"]
+    ]
+    removed = [skill_key for skill_key in current if skill_key not in desired]
+    return changed, removed, current
+
+
 def _insert_entries(project: str, entries: List[Dict[str, str]]) -> None:
     if not entries:
         return
@@ -166,26 +191,6 @@ def seed_builtin_guidance(
     """
     project = project or builtins_project()
     entries = entries if entries is not None else load_snapshot()
-
-    logger.info(
-        "Starting builtins guidance catalogue seed project=%s skills=%d",
-        project,
-        len(entries),
-    )
-    _ensure_catalog_storage(project)
-
-    logger.info("Reading builtins guidance seed hashes project=%s", project)
-    current = read_seed_hashes(
-        project,
-        meta_context=BUILTINS_GUIDANCE_META_CONTEXT,
-        key=_HASH_MAP_KEY,
-    )
-    logger.info(
-        "Computing builtins guidance hashes project=%s skills=%d stored_hashes=%d",
-        project,
-        len(entries),
-        len(current),
-    )
     desired = {
         skill_key: {
             "hash": entry_hash(entry["title"], entry["content"]),
@@ -194,12 +199,34 @@ def seed_builtin_guidance(
         for skill_key, entry in entries.items()
     }
 
-    changed_keys = [
-        skill_key
-        for skill_key, state in desired.items()
-        if (current.get(skill_key) or {}).get("hash") != state["hash"]
-    ]
-    removed_keys = [skill_key for skill_key in current if skill_key not in desired]
+    logger.info(
+        "Starting builtins guidance catalogue seed project=%s skills=%d",
+        project,
+        len(entries),
+    )
+
+    # Read-only convergence probe (see seed_builtin_primitives): public-read
+    # Builtins lets any principal verify convergence; an already-seeded
+    # catalogue is a no-op. A missing catalogue raises and falls through to the
+    # owner seed path.
+    try:
+        changed_keys, removed_keys, current = _guidance_diff(project, desired)
+        storage_ready = True
+    except RequestError:
+        storage_ready = False
+
+    if storage_ready and not changed_keys and not removed_keys:
+        logger.info(
+            "Builtins guidance catalogue already converged project=%s skills=%d; "
+            "read-only no-op",
+            project,
+            len(entries),
+        )
+        return False
+
+    _ensure_catalog_storage(project)
+    if not storage_ready:
+        changed_keys, removed_keys, current = _guidance_diff(project, desired)
 
     if changed_keys or removed_keys:
         stale_ids = [

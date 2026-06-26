@@ -80,6 +80,7 @@ def test_auth_router_exposes_expected_paths() -> None:
         ("/dispatch-livekit-agent", ["POST"]),
         ("/end-conference", ["POST"]),
         ("/hang-up", ["POST"]),
+        ("/hang-up-call", ["POST"]),
         ("/send-call", ["POST"]),
         ("/send-text", ["POST"]),
     ]
@@ -595,3 +596,34 @@ def test_hang_up_removes_participant_from_active_conference(
 
     assert resp.status_code == 200
     mock_twilio.conferences.return_value.participants.return_value.delete.assert_called_once()
+
+
+def test_hang_up_call_completes_call_by_sid(
+    client: TestClient,
+    _phone_credentials: None,
+    _settings: None,
+) -> None:
+    """/hang-up-call completes the given Twilio call SID (outbound teardown)."""
+    mock_twilio = MagicMock()
+    with patch(
+        "unity.gateway.channels.phone.views.build_twilio_client",
+        return_value=mock_twilio,
+    ):
+        resp = client.post(
+            "/phone/hang-up-call",
+            json={"CallSid": "CA_outbound"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"success": True}
+    mock_twilio.calls.assert_called_once_with("CA_outbound")
+    mock_twilio.calls.return_value.update.assert_called_once_with(status="completed")
+
+
+def test_hang_up_call_missing_sid_returns_400(
+    client: TestClient,
+    _phone_credentials: None,
+    _settings: None,
+) -> None:
+    resp = client.post("/phone/hang-up-call", json={})
+    assert resp.status_code == 400

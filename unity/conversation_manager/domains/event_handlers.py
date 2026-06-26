@@ -442,7 +442,8 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
             )
             message_content = "<Sending WhatsApp Call...>"
             notif_content = f"WhatsApp call sent to {sender_name}"
-        case PhoneCallSent():
+        case PhoneCallSent() as e:
+            cm.call_manager.provider_call_sid = e.provider_call_sid or ""
             await cm.call_manager.start_call(contact, boss, outbound=True)
             message_content = "<Sending Call...>"
             notif_content = f"Call sent to {sender_name}"
@@ -978,13 +979,43 @@ async def _(
     )
     sender_name = _get_sender_name(contact)
 
-    has_pending_context = contact_id in cm._pending_whatsapp_call_contexts
+    permission_status = event.status or ("accepted" if event.accepted else "rejected")
+    pending_contexts = getattr(cm, "_pending_whatsapp_call_contexts", None)
+    whatsapp_number = contact.get("whatsapp_number")
+    pool_number = (
+        getattr(cm, "assistant_whatsapp_number", "")
+        or getattr(SESSION_DETAILS.assistant, "whatsapp_number", "")
+        or ""
+    )
 
-    if event.accepted:
+    if permission_status == "accepted":
         notif_content = f"{sender_name} granted WhatsApp call permission; calling now"
-    else:
+        message_content = "<WhatsApp Call Permission Granted: calling now>"
+    elif permission_status == "rejected":
         notif_content = f"{sender_name} rejected WhatsApp call permission"
-        cm._pending_whatsapp_call_contexts.pop(contact_id, None)
+        if isinstance(pending_contexts, dict):
+            pending_contexts.pop(contact_id, None)
+        if pool_number and whatsapp_number:
+            from unity.conversation_manager.domains import comms_utils
+
+            try:
+                await comms_utils.clear_pending_whatsapp_call_intent(
+                    pool_number=pool_number,
+                    contact_number=whatsapp_number,
+                )
+            except Exception as exc:
+                LOGGER.error(
+                    f"{DEFAULT_ICON} Failed to clear pending WhatsApp call intent: {exc}",
+                )
+        message_content = "<WhatsApp Call Permission Rejected>"
+    else:
+        notif_content = (
+            f"{sender_name} interacted with WhatsApp call permission, but the "
+            "provider did not include an accepted/rejected payload"
+        )
+        message_content = (
+            "<WhatsApp Call Permission Unknown: waiting for reconciliation>"
+        )
 
     cm.notifications_bar.push_notif("Comms", notif_content, event.timestamp)
 
@@ -992,25 +1023,43 @@ async def _(
         contact_id=contact_id,
         sender_name=sender_name,
         thread_name=Medium.WHATSAPP_CALL,
-        message_content=(
-            "<WhatsApp Call Permission Granted: calling now>"
-            if event.accepted
-            else "<WhatsApp Call Permission Rejected>"
-        ),
+        message_content=message_content,
         role="user",
         timestamp=event.timestamp,
     )
 
-    if event.accepted and has_pending_context:
+    if permission_status == "accepted":
         # Permission granted after we sent a VOICE_CALL_REQUEST template.
         # Place the outbound call directly — no LLM round-trip needed.
         from unity.conversation_manager.domains import comms_utils
         from unity.conversation_manager.domains.call_manager import make_room_name
 
-        context = cm._pending_whatsapp_call_contexts.pop(contact_id)
+        context = None
+        if isinstance(pending_contexts, dict):
+            context = pending_contexts.pop(contact_id, None)
+        if context is None and pool_number and whatsapp_number:
+            try:
+                intent = await comms_utils.get_pending_whatsapp_call_intent(
+                    pool_number=pool_number,
+                    contact_number=whatsapp_number,
+                )
+            except Exception as exc:
+                LOGGER.error(
+                    f"{DEFAULT_ICON} Failed to load pending WhatsApp call intent: {exc}",
+                )
+                intent = None
+            context = (intent or {}).get("context")
+
+        if context is None:
+            await cm.request_llm_run(
+                delay=0,
+                cancel_running=True,
+                triggering_contact_id=contact_id,
+            )
+            return
+
         cm.call_manager.initial_notification = context
 
-        whatsapp_number = contact.get("whatsapp_number")
         assistant_id = str(SESSION_DETAILS.assistant.agent_id)
         agent_name = SESSION_DETAILS.assistant.name or ""
         room_name = make_room_name(assistant_id, "whatsapp_call")
@@ -1022,6 +1071,16 @@ async def _(
             room_name=room_name,
         )
         if response.get("success"):
+            if pool_number and whatsapp_number:
+                try:
+                    await comms_utils.clear_pending_whatsapp_call_intent(
+                        pool_number=pool_number,
+                        contact_number=whatsapp_number,
+                    )
+                except Exception as exc:
+                    LOGGER.error(
+                        f"{DEFAULT_ICON} Failed to clear pending WhatsApp call intent: {exc}",
+                    )
             call_event = WhatsAppCallSent(contact=contact)
             await cm._event_broker.publish(
                 "app:comms:whatsapp_call_sent",
@@ -1234,13 +1293,18 @@ async def _(
         contact = event.contact or {}
     sender_name = _get_sender_name(contact)
 
-    cm.contact_index.push_message(
-        contact_id=contact_id,
-        sender_name=sender_name,
-        thread_name=_active_voice_thread_medium(cm),
-        message_content=event.message,
-        role="guidance",
-    )
+    # Only record silent guidance here. should_speak guidance is spoken by the
+    # fast brain and recorded once via the actually-spoken Outbound utterance
+    # (with the real, possibly rewritten text); pre-writing it duplicated that
+    # record and surfaced a stray user-looking turn in the voice transcript.
+    if not event.should_speak:
+        cm.contact_index.push_message(
+            contact_id=contact_id,
+            sender_name=sender_name,
+            thread_name=_active_voice_thread_medium(cm),
+            message_content=event.message,
+            role="guidance",
+        )
 
     if event.should_speak:
         await cm.schedule_proactive_speech()
@@ -3077,6 +3141,49 @@ async def _(
     if isinstance(event, UserRemoteControlStopped):
         if cm.assistant_screen_share_active:
             await cm.capture_assistant_screenshot("", cached=False)
+
+
+@EventHandler.register((UserFilesysAccessStarted, UserFilesysAccessStopped))
+async def _(
+    event: UserFilesysAccessStarted | UserFilesysAccessStopped,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    """Apply a live filesystem-access consent change to in-flight actors.
+
+    The standing Console link already mutated server-side; this propagates the
+    change to a running session so reads/writebacks stop (or resume) at once
+    instead of waiting for the next session load. Targets the desktop owner's
+    link via ``user_id``; broadcasting is handled inside the primitive.
+    """
+    user_id = (event.user_id or "").strip()
+    if not user_id:
+        cm._session_logger.info(
+            "user_filesys_access",
+            f"Event: {event.__class__.__name__} with no user_id; ignoring",
+        )
+        return
+
+    started = isinstance(event, UserFilesysAccessStarted)
+    cm._session_logger.info(
+        "user_filesys_access",
+        f"Event: {event.__class__.__name__} user_id={user_id}",
+    )
+
+    from unity.function_manager.primitives.runtime import ComputerPrimitives
+    from unity.manager_registry import ManagerRegistry
+
+    cp = ManagerRegistry.get_instance(ComputerPrimitives)
+    if cp is None:
+        return
+    if started:
+        cp.grant_user_filesys_access(user_id)
+    else:
+        cp.revoke_user_filesys_access(
+            user_id,
+            conversation_context=_recent_conversation_snippet(cm),
+        )
 
 
 @EventHandler.register(LogMessageResponse)

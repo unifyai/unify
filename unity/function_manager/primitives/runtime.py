@@ -108,6 +108,33 @@ def _publish_desktop_invoked(method_name: str) -> None:
         pass
 
 
+def _publish_user_file_access(
+    user_id: str,
+    operation: str,
+    path: str,
+    dest: str = "",
+) -> None:
+    """Fire-and-forget audit publish for user-home filesystem access."""
+    try:
+        from unity.events.event_bus import EVENT_BUS, Event
+
+        asyncio.get_running_loop().create_task(
+            EVENT_BUS.publish(
+                Event(
+                    type="UserDesktopFileAccess",
+                    payload={
+                        "user_id": user_id,
+                        "operation": operation,
+                        "path": path,
+                        "dest": dest,
+                    },
+                ),
+            ),
+        )
+    except Exception:
+        pass
+
+
 def _publish_computer_act_completed(instruction: str, result: "ActResult") -> None:
     """Fire-and-forget EventBus publish when a visible session's act() completes."""
     try:
@@ -648,6 +675,100 @@ class UserDesktopHandle:
         return self._label
 
 
+class _UserDesktopFilesNamespace:
+    """On-demand access to a user's own home filesystem.
+
+    Accessed as ``primitives.computer.user_desktop.files``.  This is the
+    supported way to read, fetch, or "sync" a user's desktop files — do **not**
+    copy their files in by hand with shell ``cp``/``scp``/``rclone``.  Unlike
+    the live remote-control methods on a desktop session, this reads and writes
+    individual paths in the user's home directory over SFTP, pulled only when
+    asked.  Pulled files are staged under ``~/Unity/Remote/<user_id>/``, a
+    read-only mirror of their home.  Writebacks never overwrite the user's
+    originals — edited content is saved as a timestamped copy the user can
+    review.  Requires the user to have enabled filesystem access for this
+    assistant in the Console.
+    """
+
+    def __init__(self, owner: "ComputerPrimitives"):
+        self._owner = owner
+
+    async def _client(self, user_id: str | None) -> tuple[str, Any]:
+        link = self._owner._resolve_user_desktop_link(user_id)
+        target_uid = link.owner_user_id
+        self._owner._assert_user_filesys_allowed(target_uid)
+        if not getattr(link, "filesys_available", False):
+            raise ValueError(
+                f"Filesystem access is not enabled for user {target_uid!r}. "
+                "Ask them to turn on filesystem access for this assistant in "
+                "the Console.",
+            )
+        client = await self._owner._get_user_home_sftp(target_uid, link)
+        return target_uid, client
+
+    async def list(self, path: str = "", user_id: str | None = None) -> list[str]:
+        """List entries under a home-relative directory on the user's machine.
+
+        ``path`` is relative to the user's home (``""`` lists the home root).
+        Returns names (directories carry a trailing ``/``).  Pair with
+        ``pull`` to bring a single entry into the local mirror under
+        ``~/Unity/Remote/<user_id>/``, or ``sync`` to mirror a whole subtree at
+        once; do not shell out to copy them.
+        """
+        target_uid, client = await self._client(user_id)
+        entries = await client.list_dir(path)
+        _publish_user_file_access(target_uid, "list", path or "")
+        return entries
+
+    async def pull(self, path: str, user_id: str | None = None) -> str:
+        """Fetch a file from the user's home into the local staging mirror.
+
+        This is the supported way to access or "sync" a user's desktop file —
+        do **not** copy it in by hand with shell ``cp``/``scp``/``rclone``.
+
+        ``path`` is relative to the user's home.  The file is staged at
+        ``~/Unity/Remote/<user_id>/<path>`` (a read-only mirror of their home)
+        and that absolute local path is returned, ready to read or parse.
+        """
+        target_uid, client = await self._client(user_id)
+        local_path = await client.pull(path)
+        _publish_user_file_access(target_uid, "pull", path)
+        return local_path
+
+    async def sync(self, path: str = "", user_id: str | None = None) -> list[str]:
+        """Recursively pull a user's home subtree into the local mirror.
+
+        This is the canonical way to "sync" a user's filesystem — do **not**
+        shell out (``find``/``cat``/``tar``/``rclone``) to copy their files.
+
+        ``path`` is relative to the user's home (``""`` syncs the whole home).
+        Every file under it is staged under ``~/Unity/Remote/<user_id>/`` (a
+        read-only mirror of their home), and the list of absolute local paths
+        now staged is returned, ready to read or parse.
+        """
+        target_uid, client = await self._client(user_id)
+        staged = await client.sync(path)
+        _publish_user_file_access(target_uid, "sync", path or "")
+        return staged
+
+    async def push(
+        self,
+        local_path: str,
+        dest_path: str,
+        user_id: str | None = None,
+    ) -> str:
+        """Write a local file back to the user's home as a timestamped copy.
+
+        ``dest_path`` is the home-relative path the content corresponds to.  The
+        user's original is never overwritten; the new content is saved alongside
+        it under a review folder.  Returns the remote path of the saved copy.
+        """
+        target_uid, client = await self._client(user_id)
+        remote_dest = await client.push(local_path, dest_path)
+        _publish_user_file_access(target_uid, "push", dest_path, dest=remote_dest)
+        return remote_dest
+
+
 class _UserDesktopFactory:
     """Namespace for controlling users' own linked local desktops.
 
@@ -663,15 +784,29 @@ class _UserDesktopFactory:
 
     def __init__(self, owner: "ComputerPrimitives"):
         self._owner = owner
+        self._files: Optional[_UserDesktopFilesNamespace] = None
+
+    @property
+    def files(self) -> "_UserDesktopFilesNamespace":
+        """On-demand access to the user's home filesystem (pull/push/list)."""
+        if self._files is None:
+            self._files = _UserDesktopFilesNamespace(self._owner)
+        return self._files
 
     def list_linked(self) -> list[dict]:
         """List the user desktops linked to this assistant.
 
         Returns one dict per linked machine with keys ``user_id``, ``os``,
-        and ``filesys_sync``.  Use this to discover whose machines are
-        available before calling ``session()``.  An empty list means no user
-        has linked a desktop and only the assistant's own desktop is
-        controllable.
+        ``filesys_sync`` (whether the user enabled home filesystem access), and
+        ``filesys_available`` (whether that access is actually usable right now,
+        i.e. the device has registered its SFTP tunnel).  Use this to discover
+        whose machines are available before calling ``session()`` or
+        ``files.pull()``.  An empty list means no user has linked a desktop and
+        only the assistant's own desktop is controllable.
+
+        This call is **synchronous** — do not ``await`` it::
+
+            linked = primitives.computer.user_desktop.list_linked()  # sync
         """
         from unity.session_details import SESSION_DETAILS
 
@@ -680,6 +815,7 @@ class _UserDesktopFactory:
                 "user_id": uid,
                 "os": link.os,
                 "filesys_sync": link.filesys_sync,
+                "filesys_available": link.filesys_available,
             }
             for uid, link in SESSION_DETAILS.assistant.user_desktops.items()
         ]
@@ -710,6 +846,14 @@ class _UserDesktopFactory:
             across multiple linked users).
         PermissionError
             If the user has revoked live remote-control consent.
+
+        Notes
+        -----
+        ``session()`` is **synchronous** and returns a handle immediately; the
+        handle's methods are **async** and must be awaited::
+
+            ud = primitives.computer.user_desktop.session(user_id=...)  # sync
+            shot = await ud.get_screenshot()                            # async
         """
         link = self._owner._resolve_user_desktop_link(user_id)
         target_uid = link.owner_user_id
@@ -827,8 +971,14 @@ class ComputerPrimitives(metaclass=SingletonABCMeta):
         # Dedicated agent-service backends per linked user desktop, keyed by
         # the resolved ``scheme://netloc/api`` URL.
         self._user_desktop_backends: dict[str, Any] = {}
+        # On-demand SFTP clients for users' home filesystems, keyed by user_id.
+        self._user_home_sftp: dict[str, Any] = {}
         # Users who have revoked live remote-control of their own desktop.
         self._user_desktop_revoked: set[str] = set()
+        # Users who have revoked live access to their own home filesystem. This
+        # is a separate consent from remote-control: a user may permit one
+        # without the other, and either can be withdrawn mid-session.
+        self._user_filesys_revoked: set[str] = set()
         self._pending_url_mappings: dict[str, str] | None = None
 
         self._interject_queues: set[asyncio.Queue] = set()
@@ -1004,6 +1154,27 @@ class ComputerPrimitives(metaclass=SingletonABCMeta):
             self._user_desktop_backends[api_url] = backend
         return backend
 
+    async def _get_user_home_sftp(self, user_id: str, link: Any) -> Any:
+        """Lazily create and cache an on-demand SFTP client for a user's home.
+
+        Gated on the link's standing ``filesys_sync`` flag and registered tunnel
+        coordinates; the per-link private key is fetched on demand inside the
+        client so it never reaches the pod env via ``user_desktops``.
+        """
+        from unity.file_manager.sync.user_sftp import UserHomeSFTP
+
+        client = self._user_home_sftp.get(user_id)
+        if client is None:
+            client = UserHomeSFTP(user_id, link)
+            if not await client.setup():
+                raise RuntimeError(
+                    f"Could not open the home filesystem for user {user_id!r}. "
+                    "Ensure their device is online and filesystem access is "
+                    "enabled in the Console.",
+                )
+            self._user_home_sftp[user_id] = client
+        return client
+
     def _assert_user_desktop_allowed(self, user_id: str) -> None:
         """Raise if the user has revoked live remote-control of their desktop."""
         if user_id in self._user_desktop_revoked:
@@ -1011,6 +1182,15 @@ class ComputerPrimitives(metaclass=SingletonABCMeta):
                 f"User {user_id!r} has revoked live remote-control of their "
                 "desktop. Do not attempt further actions on it until they "
                 "re-enable control.",
+            )
+
+    def _assert_user_filesys_allowed(self, user_id: str) -> None:
+        """Raise if the user has revoked live access to their home filesystem."""
+        if user_id in self._user_filesys_revoked:
+            raise PermissionError(
+                f"User {user_id!r} has revoked access to their home "
+                "filesystem. Do not attempt further reads or writebacks on it "
+                "until they re-enable access.",
             )
 
     def _handle_user_desktop_error(self, user_id: str, e: Exception) -> None:
@@ -1022,6 +1202,9 @@ class ComputerPrimitives(metaclass=SingletonABCMeta):
         """
         if _is_dead_session_error(e):
             self._user_desktop_backends.clear()
+            for client in self._user_home_sftp.values():
+                client.cleanup()
+            self._user_home_sftp.clear()
 
     def revoke_user_desktop_control(
         self,
@@ -1046,6 +1229,42 @@ class ComputerPrimitives(metaclass=SingletonABCMeta):
     def grant_user_desktop_control(self, user_id: str) -> None:
         """Re-enable live remote-control of a user's desktop after a revoke."""
         self._user_desktop_revoked.discard(user_id)
+
+    _USER_FILESYS_REVOKED_MSG = (
+        "The user has revoked access to their home filesystem. Stop any reads "
+        "or writebacks targeting their files immediately. You may continue "
+        "other work. Do not retry filesystem actions on their machine until "
+        "the user explicitly re-enables access."
+    )
+
+    def revoke_user_filesys_access(
+        self,
+        user_id: str,
+        conversation_context: str | None = None,
+    ) -> None:
+        """Revoke live access to a user's home filesystem and notify actors.
+
+        Called when a user withdraws filesystem consent mid-session (e.g. via a
+        Console toggle).  Broadcasts an interjection so in-flight actors stop
+        reading from or writing back to that machine, and drops any cached SFTP
+        client so a later re-grant reconnects cleanly.  The standing Console
+        link is unaffected — access can be re-enabled with
+        ``grant_user_filesys_access``.
+        """
+        self._user_filesys_revoked.add(user_id)
+        client = self._user_home_sftp.pop(user_id, None)
+        if client is not None:
+            client.cleanup()
+        payload = self._build_interjection(
+            self._USER_FILESYS_REVOKED_MSG,
+            conversation_context,
+        )
+        for q in self._interject_queues:
+            q.put_nowait(payload)
+
+    def grant_user_filesys_access(self, user_id: str) -> None:
+        """Re-enable live access to a user's home filesystem after a revoke."""
+        self._user_filesys_revoked.discard(user_id)
 
     # ── Steering control (not exposed as actor tools) ────────────────────
 

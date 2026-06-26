@@ -341,7 +341,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         # proactive speech
         self.proactive_speech = ProactiveSpeech(
-            model=SETTINGS.conversation.FAST_BRAIN_MODEL,
+            model=SETTINGS.conversation.PROACTIVE_SPEECH_MODEL,
         )
         self._proactive_speech_task: asyncio.Task | None = None
         self._proactive_speech_gen: int = 0
@@ -534,6 +534,26 @@ class ConversationManager(metaclass=SingletonABCMeta):
         first-class Teams flag is ever introduced.
         """
         return self.assistant_email_provider == "microsoft_365"
+
+    @property
+    def in_voice_session(self) -> bool:
+        """True when a voice call or meeting of any kind is live (or joining).
+
+        A single predicate spanning every voice surface — phone calls, WhatsApp
+        calls, Unify Meet, and browser meetings (Google Meet / Microsoft Teams).
+        Only one such session can exist at a time, so the call-starting tools are
+        withheld whenever this is True. This is the single source of truth shared
+        by the tool set (`as_tools`) and the system prompt so the two can never
+        disagree on what is available mid-call.
+        """
+        call_state = self.call_manager
+        return (
+            self.mode.is_voice
+            or call_state.has_active_call
+            or call_state.has_active_google_meet
+            or call_state.has_active_teams_meet
+            or call_state._whatsapp_call_joining
+        )
 
     @property
     def session_logger(self) -> SessionLogger:
@@ -1223,6 +1243,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         message: str,
         should_speak: bool,
         slow_brain_log_path: str = "",
+        decided_after_ts: datetime | None = None,
     ) -> None:
         """Publish slow-brain ``guide_voice_agent`` output to the fast brain."""
         if not message:
@@ -1234,6 +1255,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             should_speak=should_speak,
             source="slow_brain",
             llm_log_path=slow_brain_log_path,
+            decided_after_ts=decided_after_ts.isoformat() if decided_after_ts else "",
         )
         self._session_logger.info(
             "call_notification",
@@ -1603,6 +1625,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
             return elapsed_ms
 
         trace_meta = trace_meta or {}
+
+        # Snapshot the latest voice-utterance timestamp this run's context is
+        # built from. Stamped onto any guide_voice_agent guidance so the fast
+        # brain can skip the dedup gate when no newer voice activity has occurred
+        # (no race is possible, so the gate would be redundant).
+        _, context_voice_ts = self.get_recent_voice_transcript()
 
         # Resolve per-turn org member attribution (only meaningful in org
         # context, where a cost can be attributed to a specific member).
@@ -2030,6 +2058,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     message=guidance_message,
                     should_speak=should_speak,
                     slow_brain_log_path=slow_brain_log_path,
+                    decided_after_ts=context_voice_ts,
                 )
 
         self._session_logger.debug(
@@ -2841,27 +2870,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
             if _superseded():
                 return
 
-            # Record in contact_index.
+            # Do not pre-write to contact_index here: the line is recorded once,
+            # via the actually-spoken Outbound utterance, only if it is genuinely
+            # spoken (the fast brain discards proactive speech when the pipeline
+            # is not quiescent). Pre-writing duplicated that record and logged
+            # lines that were never said.
             contact = self.get_active_contact()
-            if contact:
-                contact_id = contact.get("contact_id")
-                if self.call_manager.has_active_google_meet:
-                    voice_medium = Medium.GOOGLE_MEET
-                elif self.call_manager.has_active_teams_meet:
-                    voice_medium = Medium.TEAMS_MEET
-                elif self.mode == Mode.MEET:
-                    voice_medium = Medium.UNIFY_MEET
-                elif self.call_manager._call_channel == "whatsapp_call":
-                    voice_medium = Medium.WHATSAPP_CALL
-                else:
-                    voice_medium = Medium.PHONE_CALL
-                self.contact_index.push_message(
-                    contact_id=contact_id,
-                    sender_name="You",
-                    thread_name=voice_medium,
-                    message_content=decision.content,
-                    role="assistant",
-                )
 
             event = FastBrainNotification(
                 contact=contact or {},

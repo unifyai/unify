@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from unity.common.llm_client import new_llm_client
+from unity.common.llm_client import new_llm_client, new_vision_llm_client
 
 DEFAULT_LLM_QUERY_SYSTEM = (
     "You are a focused semantic LLM subroutine inside a larger Python "
@@ -134,6 +134,10 @@ def get_llm_model_selection_context() -> str:
           that downstream Python branches on.
         - In stored functions, record the model-choice rationale in the docstring
           or a short code comment.
+        - Pass screenshots, photos, or image paths through ``images=[...]`` when
+          the task needs vision reasoning. Omit ``model=`` to use the default
+          vision endpoint, or set ``model=`` to a vision-capable UniLLM endpoint
+          when you need a specific provider.
         """,
     ).strip()
 
@@ -149,6 +153,7 @@ async def query_llm(
     origin: str = "CodeActActor.query_llm",
     temperature: float = 0.0,
     client_kwargs: dict[str, Any] | None = None,
+    images: list[str | bytes] | None = None,
     **generate_kwargs: Any,
 ) -> str | BaseModel | dict[str, Any]:
     """Run a one-shot LLM query from generated Python code.
@@ -161,11 +166,17 @@ async def query_llm(
     handles bounded unstructured-data work that would be brittle if implemented
     as keyword matching or canned templates.
 
+    **Text-only.** ``query_llm`` takes a string ``prompt`` and cannot accept
+    images — do not embed base64 or data-URIs in the prompt (the model cannot
+    see them). To reason about a screenshot or image, ``display()`` it (you can
+    then see it directly on your next turn) or use a computer session's
+    ``observe()`` for structured extraction.
+
     Good uses
     ---------
     - Unstructured -> structured work: classify, extract, score, route, decide,
-      summarize into fields, or choose an action from text, images, documents,
-      tickets, emails, transcripts, notes, lead records, or web pages.
+      summarize into fields, or choose an action from text such as documents,
+      tickets, emails, transcripts, notes, lead records, or web-page text.
     - Unstructured -> unstructured work: draft, respond, rewrite, synthesize,
       explain, personalize, compress, or adapt human-facing text.
     - Classifying emails, tickets, documents, notes, or leads into broad
@@ -249,15 +260,24 @@ async def query_llm(
             response_format=EmailClassification,
         )
 
+    Vision reasoning over a local image path::
+
+        answer = await query_llm(
+            "What text is visible in this screenshot?",
+            images=["/path/to/screenshot.png"],
+        )
+
     Model and generation options
     ----------------------------
     By default this uses ``new_llm_client(model, async_client=True,
     stateful=False, origin='CodeActActor.query_llm')`` and calls
-    ``generate(..., temperature=0.0)`` for stable judgments. Override
-    ``model`` only when the task has a real capability or cost reason. Raise
-    ``temperature`` only when creative synthesis is more useful than stable
-    classification. Pass advanced UniLLM generation options through
-    ``generate_kwargs``; keep ordinary actor-written code simple.
+    ``generate(..., temperature=0.0)`` for stable judgments. When ``images``
+    is provided, the default switches to ``new_vision_llm_client(...)`` so
+    image reasoning uses the configured vision endpoint unless ``model=`` is
+    set explicitly. Override ``model`` only when the task has a real capability
+    or cost reason. Raise ``temperature`` only when creative synthesis is more
+    useful than stable classification. Pass advanced UniLLM generation options
+    through ``generate_kwargs``; keep ordinary actor-written code simple.
 
     Anti-patterns
     -------------
@@ -287,14 +307,41 @@ async def query_llm(
     if client_kwargs:
         client_config.update(client_kwargs)
 
-    client = new_llm_client(model, **client_config)
-    result = client.generate(
-        user_message=prompt,
-        system_message=system or DEFAULT_LLM_QUERY_SYSTEM,
-        response_format=response_format,
-        temperature=temperature,
-        **generate_kwargs,
-    )
+    if not images:
+        client = new_llm_client(model, **client_config)
+        result = client.generate(
+            user_message=prompt,
+            system_message=system or DEFAULT_LLM_QUERY_SYSTEM,
+            response_format=response_format,
+            temperature=temperature,
+            **generate_kwargs,
+        )
+    else:
+        from unity.common.image_content import to_image_content_block
+
+        if model is None:
+            client = new_vision_llm_client(**client_config)
+        else:
+            client = new_llm_client(model, **client_config)
+
+        client.set_system_message(system or DEFAULT_LLM_QUERY_SYSTEM)
+        image_blocks = [to_image_content_block(image) for image in images]
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    *image_blocks,
+                    {"type": "text", "text": prompt},
+                ],
+            },
+        ]
+        result = client.generate(
+            messages=messages,
+            response_format=response_format,
+            temperature=temperature,
+            **generate_kwargs,
+        )
+
     if inspect.isawaitable(result):
         result = await result
 

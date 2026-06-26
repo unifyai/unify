@@ -16,6 +16,7 @@ headless execution paths.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
 import uuid
@@ -67,6 +68,9 @@ _DETAIL_LABELS = {
     "discord_id": "Discord ID",
     "slack_user_id": "Slack user ID",
 }
+
+_VOICE_SESSION_CLEAR_TIMEOUT_SECONDS = 15.0
+_VOICE_SESSION_CLEAR_POLL_SECONDS = 0.5
 
 
 def _coerce_contact_id(value: Any) -> int:
@@ -157,6 +161,55 @@ class CommsPrimitives:
         return (
             getattr(SESSION_DETAILS.assistant, "email_provider", "") == "microsoft_365"
         )
+
+    def _allow_whatsapp_call_permission_probe(self) -> bool:
+        if self._cm is None:
+            return False
+        truthy = {"1", "true", "yes", "on"}
+        if (
+            os.environ.get("WHATSAPP_CALL_PERMISSION_PROBE_ENABLED", "").lower()
+            in truthy
+        ):
+            return True
+        if os.environ.get("SELF_HOST", "").lower() in truthy:
+            return True
+        if os.environ.get("NEXT_PUBLIC_SELF_HOST", "").lower() in truthy:
+            return True
+        local_urls = (
+            os.environ.get("ORCHESTRA_URL", ""),
+            os.environ.get("COMMUNICATION_URL", ""),
+            os.environ.get("UNITY_COMMS_URL", ""),
+        )
+        return any("127.0.0.1" in url or "localhost" in url for url in local_urls)
+
+    def _voice_session_active(self) -> bool:
+        if self._cm is None:
+            return False
+        call_manager = self._cm.call_manager
+        return bool(
+            call_manager.has_active_call
+            or call_manager.has_active_google_meet
+            or call_manager.has_active_teams_meet
+            or call_manager._whatsapp_call_joining,
+        )
+
+    async def _wait_for_voice_session_to_clear(self) -> bool:
+        if self._cm is None:
+            return True
+        call_manager = self._cm.call_manager
+        clear_stale = getattr(call_manager, "_clear_stale_dispatch_state", None)
+        deadline = (
+            asyncio.get_running_loop().time() + _VOICE_SESSION_CLEAR_TIMEOUT_SECONDS
+        )
+        while self._voice_session_active():
+            if callable(clear_stale):
+                clear_stale()
+            if not self._voice_session_active():
+                return True
+            if asyncio.get_running_loop().time() >= deadline:
+                return False
+            await asyncio.sleep(_VOICE_SESSION_CLEAR_POLL_SECONDS)
+        return True
 
     def _onboarding_event_kwargs(self, medium: Medium) -> dict[str, str]:
         if self._cm is None:
@@ -3874,6 +3927,7 @@ class CommsPrimitives:
             fresh_contact = self._get_contact(phone_number=to_number) or contact or {}
             event = PhoneCallSent(
                 contact=fresh_contact,
+                provider_call_sid=response.get("call_sid", ""),
                 **self._onboarding_event_kwargs(Medium.PHONE_CALL),
             )
             await self._event_broker.publish("app:comms:make_call", event.to_json())
@@ -3963,15 +4017,16 @@ class CommsPrimitives:
 
         contact_id = _coerce_contact_id(contact_id)
         offline_reservation = None
-        if self._cm is not None and (
-            self._cm.call_manager.has_active_call
-            or self._cm.call_manager.has_active_google_meet
-            or self._cm.call_manager.has_active_teams_meet
-            or self._cm.call_manager._whatsapp_call_joining
+        if (
+            self._voice_session_active()
+            and not await self._wait_for_voice_session_to_clear()
         ):
             return {
-                "status": "error",
-                "message": "A call or meeting is already active.",
+                "status": "retry_later_active_voice_session",
+                "message": (
+                    "The previous call or meeting is still closing. Retry shortly "
+                    "after the voice session clears."
+                ),
             }
 
         contact = self._get_contact(contact_id=contact_id)
@@ -4071,6 +4126,8 @@ class CommsPrimitives:
             to_number=to_number,
             agent_name=SESSION_DETAILS.assistant.name or "",
             room_name=room_name,
+            allow_permission_probe=self._allow_whatsapp_call_permission_probe(),
+            pending_call_context=context,
         )
         if not response.get("success"):
             if self._cm is not None:
@@ -4139,6 +4196,75 @@ class CommsPrimitives:
                     automatic_callback_available = True
             else:
                 automatic_callback_available = True
+
+        pool_number = response.get("pool_number") or self._assistant_whatsapp_number()
+        if (
+            context
+            and pool_number
+            and method in {"invite", "invite_pending", "needs_reconciliation"}
+        ):
+            try:
+                await comms_utils.store_pending_whatsapp_call_intent(
+                    pool_number=pool_number,
+                    contact_number=to_number,
+                    context=context,
+                )
+            except Exception as exc:
+                LOGGER.error(
+                    f"{DEFAULT_ICON} Failed to persist pending WhatsApp call intent: {exc}",
+                )
+
+        if method == "invite_pending":
+            return {
+                "status": "ok",
+                "pending_callback": automatic_callback_available,
+                "note": (
+                    "A WhatsApp call-permission request is already pending. "
+                    "Do not send another request yet; wait for the contact to allow calls."
+                ),
+            }
+
+        if method == "rejected":
+            if isinstance(pending_contexts, dict):
+                pending_contexts.pop(contact_id, None)
+            if pool_number:
+                try:
+                    await comms_utils.clear_pending_whatsapp_call_intent(
+                        pool_number=pool_number,
+                        contact_number=to_number,
+                    )
+                except Exception as exc:
+                    LOGGER.error(
+                        f"{DEFAULT_ICON} Failed to clear pending WhatsApp call intent: {exc}",
+                    )
+            return {
+                "status": "blocked",
+                "note": (
+                    "The contact rejected WhatsApp call permission. Do not place or request "
+                    "another WhatsApp call unless they ask to try again."
+                ),
+            }
+
+        if method == "needs_reconciliation":
+            return {
+                "status": "needs_reconciliation",
+                "pending_callback": automatic_callback_available,
+                "note": (
+                    "WhatsApp reported a call-permission interaction without an accepted or "
+                    "rejected payload. Do not place a direct call until permission is reconciled."
+                ),
+            }
+
+        if method == "needs_permission":
+            return {
+                "status": "needs_permission",
+                "pending_callback": automatic_callback_available,
+                "note": (
+                    "WhatsApp still requires the contact to approve calls from this business "
+                    "before the call can ring. Tell the user to tap Allow calls / Call now in "
+                    "WhatsApp, and do not claim that a call is ringing yet."
+                ),
+            }
 
         event = WhatsAppCallInviteSent(contact=fresh_contact)
         await self._event_broker.publish(

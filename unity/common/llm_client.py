@@ -92,6 +92,40 @@ def new_llm_client(
     return client
 
 
+def new_vision_llm_client(
+    *,
+    async_client: bool = True,
+    stateful: bool = False,
+    origin: str | None = None,
+    **kwargs: Any,
+) -> "unillm.AsyncUnify | unillm.Unify":
+    """Create an LLM client for single-shot image and vision analysis.
+
+    Uses UNIFY_VISION_MODEL and UNIFY_VISION_REASONING_EFFORT from settings so
+    image Q&A stays on a vision-capable endpoint even when UNIFY_MODEL is
+    text-only (for example deepseek-v4-max@deepseek).
+    """
+    config = {
+        "reasoning_effort": SETTINGS.UNIFY_VISION_REASONING_EFFORT,
+        "service_tier": "priority",
+        "stateful": stateful,
+        "origin": origin,
+    }
+    config.update(kwargs)
+
+    if async_client:
+        client = unillm.AsyncUnify(SETTINGS.UNIFY_VISION_MODEL, **config)
+    else:
+        client = unillm.Unify(SETTINGS.UNIFY_VISION_MODEL, **config)
+
+    if origin:
+        pending_log = PendingThinkingLog(origin)
+        client.set_on_log_file_pending(pending_log.on_pending_path)
+        client._pending_thinking_log = pending_log
+
+    return client
+
+
 def _make_openai_strict_json_schema_compatible(node: Any) -> None:
     """Mutate a JSON schema in-place to satisfy OpenAI strict requirements.
 

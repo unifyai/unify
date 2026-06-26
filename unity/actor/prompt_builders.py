@@ -160,6 +160,33 @@ _EXECUTION_RULES = textwrap.dedent("""
     `primitives.transcripts.ask`, etc. — every `primitives.*.ask` /
     `primitives.*.update` is a single primitive call.
 
+    ### Execution Surface: where code runs
+
+    `execute_code` runs on the **local** host by default. To run a shell
+    command or a self-contained Python snippet on another machine, pass
+    `surface`:
+
+    - `surface="local"` (default) — the only surface with stateful sessions
+      and venvs.
+    - `surface="assistant_desktop"` — your managed VM.
+    - `surface="user_desktop"` — the user's own **personal machine**. Only use
+      it when that user has linked it and has clearly asked you to act on it
+      (pass `user_id` when more than one user desktop is linked). Treat it with
+      care: confirm with the user and keep them informed before running anything
+      that changes their system. **To read, fetch, or "sync" their files,
+      always use `primitives.computer.user_desktop.files` (list/pull/push)** —
+      it mirrors their home into `~/Unity/Remote/<user_id>/` and returns local
+      paths you can parse. Never retrieve their file content by running shell
+      commands on this surface (no `cat`/`find`/`tar`/`base64`/`cp`/`scp`/
+      `rclone` to dump or copy files); `user_desktop` shell execution is only
+      for commands the user explicitly wants run on their machine, not for
+      harvesting files. Access is separately gated by the user's Console consent
+      and can be revoked mid-run, so prompt-level permission alone is never
+      sufficient.
+
+    Remote surfaces are **stateless one-shots**: do not pass a non-stateless
+    `state_mode`, `session_id`, `session_name`, or `venv_id`.
+
 ### Manager Primitive Scope
 
     `primitives.*` manager calls run as the current assistant. Their reads and
@@ -312,6 +339,9 @@ _EXECUTION_RULES = textwrap.dedent("""
        - `display(obj)` emits rich output (text or PIL images) to stdout.
        - Images are base64-encoded.
        - Use `display(...)` instead of `print(...)` for image output.
+       - Anything you `display()` (including screenshots) is returned to you
+         as visual input on your next turn — inspect and describe it directly
+         rather than routing through a separate vision/observe call.
 
     6. **Error Handling**: If your code produces an error, the traceback will be returned. Read it carefully, correct your code, and try again.
 
@@ -701,9 +731,12 @@ _FAST_PATH_AWARENESS = textwrap.dedent("""
 
 
 def _build_filesystem_context() -> str:
+    from pathlib import Path
+
     from unity.file_manager.settings import get_local_root
 
     resolved = get_local_root()
+    remote_mirror = Path(resolved).parent / "Remote"  # sibling of the workspace
     return textwrap.dedent(f"""
         ### Filesystem Context
 
@@ -720,6 +753,7 @@ def _build_filesystem_context() -> str:
         | `{resolved}/Screenshots/User/` | Auto-captured frames from the user's screen share. Read-only, cleared between sessions. |
         | `{resolved}/Screenshots/Assistant/` | Auto-captured frames from the assistant's desktop. Read-only, cleared between sessions. |
         | `{resolved}/Screenshots/Webcam/` | Auto-captured frames from the user's webcam. Read-only, cleared between sessions. |
+        | `{remote_mirror}/<user_id>/` | **Linked user-desktop mirror** — staged copy of a linked user's home directory, populated on demand by `primitives.computer.user_desktop.files.pull`. Read/parse files here. Never hand-copy a user's files in via shell `cp`/`scp`/`rclone`. |
         | `{resolved}/.env` | Environment secrets managed by SecretManager. |
         | Everything else | Your own persistent workspace — organize however makes sense for the work. |
 
@@ -735,9 +769,11 @@ def _build_filesystem_context() -> str:
           comparison, etc.) using full paths
           (e.g. `{resolved}/Screenshots/Assistant/2026-02-16T14-30-45.123456.jpg`).
         - **Stay inside the workspace**: Always use full absolute paths
-          rooted under `{resolved}/`.  Do not reference paths outside this
-          workspace (e.g. `/tmp`, `/var`).  Everything you need is inside
-          this workspace.
+          rooted under `{resolved}/`.  Do not reference unrelated system
+          paths (e.g. `/tmp`, `/var`).  The one workspace-adjacent location
+          you may read is `{remote_mirror}/<user_id>/` — the staged mirror of
+          a linked user's home, created by `user_desktop.files.pull` (see the
+          table above).
 
         **When to use the filesystem vs. primitives:**
         Most tasks will not require reading or writing local files.  The

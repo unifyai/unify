@@ -693,7 +693,10 @@ class TranscriptManager(BaseTranscriptManager):
         # swallowed inside ``touch_assistant_activity``.
         if not _skip_event_bus and created_messages:
             try:
-                from .activity_sync import touch_assistant_activity
+                from .activity_sync import (
+                    publish_comms_activity,
+                    touch_assistant_activity,
+                )
                 from unity.session_details import SESSION_DETAILS
 
                 agent_id = getattr(SESSION_DETAILS.assistant, "agent_id", None)
@@ -704,6 +707,10 @@ class TranscriptManager(BaseTranscriptManager):
                         daemon=True,
                         name="touch_assistant_activity",
                     ).start()
+                    # Surface non-unify comms (email/SMS/WhatsApp/…) to Console so
+                    # the call-window avatar can adopt its "working" pose.
+                    for _msg in created_messages:
+                        publish_comms_activity(_msg, agent_id)
             except Exception:
                 pass
 
@@ -1583,7 +1590,10 @@ class TranscriptManager(BaseTranscriptManager):
         try:
             import threading
 
-            from .activity_sync import touch_assistant_activity
+            from .activity_sync import (
+                publish_comms_activity,
+                touch_assistant_activity,
+            )
             from unity.session_details import SESSION_DETAILS
 
             agent_id = getattr(SESSION_DETAILS.assistant, "agent_id", None)
@@ -1594,6 +1604,9 @@ class TranscriptManager(BaseTranscriptManager):
                     daemon=True,
                     name="touch_assistant_activity",
                 ).start()
+                # First-in-exchange comms (e.g. a new email/SMS thread) also
+                # surface to Console for the call-window "working" pose.
+                publish_comms_activity(created_model, agent_id)
         except Exception:
             pass
 
