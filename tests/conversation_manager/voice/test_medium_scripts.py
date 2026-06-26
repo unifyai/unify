@@ -3448,6 +3448,48 @@ def _fake_say(self, text, **kwargs):
 
 
 @pytest.mark.asyncio
+async def test_publish_guidance_stamps_decided_after_ts():
+    """_publish_slow_brain_fast_brain_guidance serializes decided_after_ts (ISO),
+    and an absent marker becomes an empty string."""
+    from datetime import datetime, timezone
+    from unity.conversation_manager.conversation_manager import ConversationManager
+
+    captured: list[tuple[str, str]] = []
+
+    async def _publish(channel, message):
+        captured.append((channel, message))
+        return 1
+
+    fake_self = SimpleNamespace(
+        get_active_contact=lambda: {"contact_id": 1},
+        event_broker=SimpleNamespace(publish=_publish),
+        _session_logger=SimpleNamespace(info=lambda *a, **k: None),
+    )
+
+    dt = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    await ConversationManager._publish_slow_brain_fast_brain_guidance(
+        fake_self,
+        message="The email is on its way.",
+        should_speak=True,
+        decided_after_ts=dt,
+    )
+    data = json.loads(captured[0][1])
+    payload = data.get("payload", data)
+    assert payload["decided_after_ts"] == dt.isoformat()
+
+    captured.clear()
+    await ConversationManager._publish_slow_brain_fast_brain_guidance(
+        fake_self,
+        message="hi",
+        should_speak=True,
+        decided_after_ts=None,
+    )
+    data = json.loads(captured[0][1])
+    payload = data.get("payload", data)
+    assert payload["decided_after_ts"] == ""
+
+
+@pytest.mark.asyncio
 class TestFastBrainSpeechDedup:
     """Tests for the fast brain speech deduplication gate.
 
@@ -3659,7 +3701,14 @@ class TestFastBrainSpeechDedup:
             "monkeypatch": monkeypatch,
         }
 
-    def _send_speak_guidance(self, env, message, *, spoken_message: str = ""):
+    def _send_speak_guidance(
+        self,
+        env,
+        message,
+        *,
+        spoken_message: str = "",
+        decided_after_ts: str = "",
+    ):
         """Queue a should_speak=True notification."""
         payload = {
             "message": message,
@@ -3668,7 +3717,22 @@ class TestFastBrainSpeechDedup:
         }
         if spoken_message:
             payload["spoken_message"] = spoken_message
+        if decided_after_ts:
+            payload["decided_after_ts"] = decided_after_ts
         env["guidance_cb"]({"payload": payload})
+
+    @staticmethod
+    def _record_voice_activity(env):
+        """Bump the fast brain's last-voice-activity clock via a silent notification."""
+        env["guidance_cb"](
+            {
+                "payload": {
+                    "message": "Background state update.",
+                    "should_speak": False,
+                    "source": "slow_brain",
+                },
+            },
+        )
 
     async def _settle_and_drain(self, env):
         """Transition agent to listening and let async dedup task complete."""
@@ -3907,6 +3971,113 @@ class TestFastBrainSpeechDedup:
             env["assistant"]._chat_ctx,
             "Email received from Alice",
         )
+
+    async def test_dedup_skipped_when_no_activity_since_decision(self, fast_brain_env):
+        """When nothing has been spoken/notified since the slow brain decided,
+        the gate is provably redundant and is skipped (no LLM call)."""
+        env = fast_brain_env
+        from unity.settings import SETTINGS
+        from datetime import datetime, timezone, timedelta
+        import unity.conversation_manager.domains.speech_dedup as _dedup_mod
+
+        env["assistant"]._chat_ctx.add_message(
+            role="assistant",
+            content="Found three Italian restaurants near you.",
+        )
+        # Record some voice activity, then mark the slow brain's decision as
+        # happening AFTER it (so nothing has changed since the decision).
+        self._record_voice_activity(env)
+        await asyncio.sleep(0)
+        decided_after = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+
+        called = {"n": 0}
+
+        def _tracking_client(*a, **kw):
+            called["n"] += 1
+            return _stream_dedup_client("SUPPRESS | should not run")
+
+        orig = SETTINGS.conversation.SPEECH_DEDUP_ENABLED
+        SETTINGS.conversation.SPEECH_DEDUP_ENABLED = True
+        env["monkeypatch"].setattr(_dedup_mod, "new_llm_client", _tracking_client)
+        try:
+            env["session"].agent_state = "thinking"
+            self._send_speak_guidance(
+                env,
+                "Your meeting moved to 4pm.",
+                decided_after_ts=decided_after,
+            )
+            await self._settle_and_drain(env)
+            assert called["n"] == 0, "Gate must be skipped when nothing changed."
+            assert env["session"].say_calls == ["Your meeting moved to 4pm."]
+        finally:
+            SETTINGS.conversation.SPEECH_DEDUP_ENABLED = orig
+
+    async def test_dedup_runs_when_activity_since_decision(self, fast_brain_env):
+        """When voice activity occurred after the slow brain's decision, the gate
+        runs (a race is possible)."""
+        env = fast_brain_env
+        from unity.settings import SETTINGS
+        from datetime import datetime, timezone, timedelta
+        import unity.conversation_manager.domains.speech_dedup as _dedup_mod
+
+        env["assistant"]._chat_ctx.add_message(
+            role="assistant",
+            content="Found three Italian restaurants near you.",
+        )
+        # Decision happened in the past; activity then occurred after it.
+        decided_after = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        self._record_voice_activity(env)
+        await asyncio.sleep(0)
+
+        called = {"n": 0}
+
+        def _tracking_client(*a, **kw):
+            called["n"] += 1
+            return _stream_dedup_client("SUPPRESS | redundant")
+
+        orig = SETTINGS.conversation.SPEECH_DEDUP_ENABLED
+        SETTINGS.conversation.SPEECH_DEDUP_ENABLED = True
+        env["monkeypatch"].setattr(_dedup_mod, "new_llm_client", _tracking_client)
+        try:
+            env["session"].agent_state = "thinking"
+            self._send_speak_guidance(
+                env,
+                "Found three Italian restaurants nearby.",
+                decided_after_ts=decided_after,
+            )
+            await self._settle_and_drain(env)
+            assert called["n"] == 1, "Gate must run when activity occurred since."
+            assert env["session"].say_calls == [], "Gate suppressed the speech."
+        finally:
+            SETTINGS.conversation.SPEECH_DEDUP_ENABLED = orig
+
+    async def test_dedup_runs_when_no_marker(self, fast_brain_env):
+        """Without a decided_after_ts marker, the gate runs (backward compat)."""
+        env = fast_brain_env
+        from unity.settings import SETTINGS
+        import unity.conversation_manager.domains.speech_dedup as _dedup_mod
+
+        env["assistant"]._chat_ctx.add_message(
+            role="assistant",
+            content="Found three Italian restaurants near you.",
+        )
+        called = {"n": 0}
+
+        def _tracking_client(*a, **kw):
+            called["n"] += 1
+            return _stream_dedup_client("SUPPRESS | redundant")
+
+        orig = SETTINGS.conversation.SPEECH_DEDUP_ENABLED
+        SETTINGS.conversation.SPEECH_DEDUP_ENABLED = True
+        env["monkeypatch"].setattr(_dedup_mod, "new_llm_client", _tracking_client)
+        try:
+            env["session"].agent_state = "thinking"
+            self._send_speak_guidance(env, "Found three Italian restaurants nearby.")
+            await self._settle_and_drain(env)
+            assert called["n"] == 1, "Gate must run when no marker is present."
+            assert env["session"].say_calls == []
+        finally:
+            SETTINGS.conversation.SPEECH_DEDUP_ENABLED = orig
 
     async def test_dedup_rewrites_partial_overlap(self, fast_brain_env):
         """When the gate returns REWRITE, the trimmed body is streamed into
