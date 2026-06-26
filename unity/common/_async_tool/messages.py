@@ -484,6 +484,32 @@ def _normalise_kwargs_for_bound_method(bound_method, incoming_kw: dict) -> dict:
         return dict(incoming_kw or {})
 
 
+def apply_llm_soft_required_defaults(bound_method, kwargs: dict) -> dict:
+    """Backfill arguments advertised as required but optional at runtime.
+
+    See :func:`unity.common.tool_spec.llm_soft_required`. For each parameter a
+    tool declared as soft-required, if the model omitted it from *kwargs* the
+    configured default is filled in. Parameters not declared soft-required are
+    left untouched, so a genuine omission of a functional argument still raises
+    the usual error the model can self-correct against.
+
+    Mutates and returns *kwargs* for convenience.
+    """
+    from unity.common.tool_spec import LLM_SOFT_REQUIRED_DEFAULTS_ATTR
+
+    defaults = getattr(bound_method, LLM_SOFT_REQUIRED_DEFAULTS_ATTR, None)
+    if not defaults:
+        return kwargs
+
+    import inspect as _inspect
+
+    params = _inspect.signature(bound_method).parameters
+    for name, default in defaults.items():
+        if name in params and name not in kwargs:
+            kwargs[name] = default
+    return kwargs
+
+
 async def forward_handle_call(
     handle: Any,
     method_name: str,
