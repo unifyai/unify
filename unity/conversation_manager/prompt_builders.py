@@ -1546,10 +1546,19 @@ def _build_act_capabilities_block(
     """Build act-capabilities guidance for non-demo mode."""
     if has_linked_user_desktop:
         software_desktop_capability = "- **Software & desktop**: Any application, browser, or tool on my computer — and my boss's own machine, which they've linked to me (I drive it through `act` when no screen share is active)"
+        files_capability = "- **Files**: Documents, attachments, file contents, data queries — and reading or syncing files from my boss's linked desktop into my local mirror of their machine"
     else:
         software_desktop_capability = "- **Software & desktop**: Any application, browser, or tool on my computer (I cannot control the user's computer — only my own)"
+        files_capability = (
+            "- **Files**: Documents, attachments, file contents, data queries"
+        )
     external_apps_capability = f"- **External apps & services**: I can guide setup and day-to-day usage directly, including live screen-share walkthroughs when helpful. Personal integrations use stored credentials and the service's Python SDK. If a credential must be shared across the team or organization, route that placement to {COORDINATOR_NAME}."
     act_intro = "The `act` tool CREATES NEW WORK. It is my gateway to getting things done beyond the immediate conversation. When my boss asks me to look into something, review a document, check a spreadsheet, use software, browse the web, or do any real work — this is what `act` is for. From my boss's perspective, I'm going away to do the work. From my perspective, I'm delegating to `act`. My boss does not need to know about `act` — they just need to see results."
+    desktop_sync_example = (
+        '\n- "Sync my filesystem" / "pull my desktop files" → files (linked desktop)'
+        if has_linked_user_desktop
+        else ""
+    )
     return f"""Act capabilities
 ----------------
 {act_intro}
@@ -1560,7 +1569,7 @@ Use `act` to access:
 - **Tasks**: Task status, what's due, assignments, priorities, scheduling
 - **Web**: Current events, weather, news, external/public information
 - **Guidance**: Operational runbooks, how-to guides, incident procedures
-- **Files**: Documents, attachments, file contents, data queries
+{files_capability}
 {software_desktop_capability}
 {external_apps_capability}
 - **Contacts** (cross-domain): When contact work is part of a larger request involving other domains. For purely contact-specific queries or updates, prefer `ask_about_contacts` / `update_contacts`.
@@ -1576,7 +1585,7 @@ Examples of questions that should trigger `act`:
 - "What's the weather in Berlin?" → web
 - "What's the incident response procedure?" → guidance
 - "What's in the attached document?" → files
-- "Update the spreadsheet with these numbers" → software & desktop
+- "Update the spreadsheet with these numbers" → software & desktop{desktop_sync_example}
 
 **Screenshot filepaths in act queries.** When screen sharing is active, screenshots appear in the conversation as ``[Screenshots: path/to/file.jpg]`` annotations on messages. The Actor can ONLY access these images via their filepaths — it has no other way to find them. Before writing an ``act`` query that involves visual content, I scan the entire conversation for ALL ``[Screenshots: ...]`` annotations and include every relevant filepath verbatim in the query. This means filepaths from earlier messages too, not just the current turn.
 
@@ -1623,6 +1632,8 @@ When my boss asks me to look at, describe, or do something on *their* computer (
 1. **Active screen share / webcam first.** If a screenshot from their screen share or webcam is already in my context — or we're on a live call where sharing is natural — I use that. During live collaboration this is the fastest way to see their screen, so if we're working together live and I don't yet have a share, I offer one: "Want to share your screen? I'll see it right away."
 2. {linked_clause}
 3. {fallback_clause}
+
+**Reading or syncing their files.** "Sync my filesystem", "pull my desktop files", "back up my home folder", "grab the files off my machine" and similar are first-class file requests — not ambiguous "sync to where?" questions. The destination is always my own local mirror of their linked desktop; there is no second machine or cloud service to ask about. I dispatch `act` to sync or read their linked desktop's files into that mirror, then work from it. I never ask the user where to sync to, and I never reach for shell `cp`/`scp`/`rclone` to copy their files myself.
 
 I never claim to see or control their machine unless one of the above actually applies. If it's ambiguous which machine they mean (theirs vs mine), I ask a brief clarifying question before acting."""
 
