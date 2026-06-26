@@ -1497,19 +1497,20 @@ async def test_walkie_opener_arms_bridge_only_on_early_interruption(
     assert session.say_calls[0][0].startswith("Hi, I'm T dash W 1 N.")
 
     if interrupt_walkie:
-        # Only the staticky segment plays; the clean segment is skipped and the
-        # bridge is armed for the next turn.
-        assert audio_sources == ["asset://coordinator_onboarding_intro_walkie"]
+        # Interrupting the first staticky sentence stops the opener immediately;
+        # no later sentence (nor the clean transition) plays, and the bridge is
+        # armed for the next turn.
+        assert audio_sources == ["asset://coordinator_onboarding_intro_walkie_00"]
         assert len(session.say_calls) == 1
         assert session.current_agent._pending_opening_bridge is not None
     else:
-        # Both segments play in order and no bridge is armed.
-        assert audio_sources == [
-            "asset://coordinator_onboarding_intro_walkie",
-            "asset://coordinator_onboarding_intro_clean",
-        ]
-        assert len(session.say_calls) == 2
-        assert session.say_calls[1][0].startswith("Much better.")
+        # All 20 staticky sentence slices play in order, then the clean
+        # transition segment, and no bridge is armed.
+        assert len(session.say_calls) == 21
+        assert audio_sources[0] == "asset://coordinator_onboarding_intro_walkie_00"
+        assert audio_sources[19] == "asset://coordinator_onboarding_intro_walkie_19"
+        assert audio_sources[-1] == "asset://coordinator_onboarding_intro_clean"
+        assert session.say_calls[-1][0].startswith("Much better.")
         assert session.current_agent._pending_opening_bridge is None
 
 
@@ -1532,15 +1533,20 @@ def test_walkie_opener_segments_split_at_static_removal_transition():
     from unity.conversation_manager.medium_scripts import call as call_script
 
     spec = call_script._RECORDED_OPENINGS["coordinator_onboarding_intro"]
-    walkie, clean = spec["segments"]
+    segments = spec["segments"]
+    staticky = segments[:-1]
+    clean = segments[-1]
     bridge = spec["bridge"]
 
-    # The staticky segment carries the intro up to (and including) the spoken
-    # static-removal cue; the clean segment opens after the transition.
-    assert walkie["transcript"].startswith("Hi, I'm T dash W 1 N.")
-    walkie_text = walkie["transcript"].rstrip()
-    assert walkie_text.endswith("Also, let me remove this voice static.")
-    assert "Much better." not in walkie["transcript"]
+    # The staticky intro is split into per-sentence segments; the final one is
+    # the spoken static-removal cue. The clean segment opens after the transition.
+    assert len(staticky) == 20
+    assert staticky[0]["transcript"].startswith("Hi, I'm T dash W 1 N.")
+    assert (
+        staticky[-1]["transcript"].rstrip() == "Also, let me remove this voice static."
+    )
+    for seg in staticky:
+        assert "Much better." not in seg["transcript"]
     assert clean["transcript"].startswith("Much better.")
 
     # The bridge re-performs the static removal for callers who interrupted the
@@ -1549,11 +1555,15 @@ def test_walkie_opener_segments_split_at_static_removal_transition():
     assert "Much better." in bridge["transcript"]
 
     # Each segment resolves to its own bundled asset.
-    for segment in (walkie, clean, bridge):
+    for segment in (*staticky, clean, bridge):
         assert segment["asset"] in call_script._RECORDED_OPENING_ASSETS
 
     # Older ad-lib lines stay redacted from the spoken transcripts.
-    combined = walkie["transcript"] + clean["transcript"] + bridge["transcript"]
+    combined = (
+        "".join(seg["transcript"] for seg in staticky)
+        + clean["transcript"]
+        + bridge["transcript"]
+    )
     assert "Krispy Kreme" not in combined
     assert "Actually, first lets turn off this really annoying music." not in combined
     assert "There we go, now I'll pull up the platform." not in combined

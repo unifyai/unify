@@ -619,40 +619,75 @@ def _hydrate_session_details_from_metadata(meta: dict) -> None:
 
 
 _CALL_OPENING_MODES = {"speak", "simulated", "silent", "briefed", "recorded"}
+
+# The walkie-talkie staticky intro is cut into per-sentence audio slices (at
+# silence midpoints, aligned via Whisper word timestamps). They play in order as
+# separate segments; each commits its own transcript to history as it finishes.
+# So if the caller interrupts, the fast brain inherits ONLY the sentences that
+# were actually heard (plus the one in progress) — never the rest of the scripted
+# intro, whose carefully-recorded tone the live voice cannot reproduce.
+_WALKIE_OPENER_SENTENCE_SEGMENTS: list[tuple[str, str]] = [
+    ("coordinator_onboarding_intro_walkie_00", "Hi, I'm T dash W 1 N."),
+    (
+        "coordinator_onboarding_intro_walkie_01",
+        "Before you ask, no I'm not one of Elon's many children, and no he didn't come up with the name, thankfully.",
+    ),
+    (
+        "coordinator_onboarding_intro_walkie_02",
+        "I have this name because I'll be acting as your digital twin.",
+    ),
+    ("coordinator_onboarding_intro_walkie_03", "Do you get it?"),
+    ("coordinator_onboarding_intro_walkie_04", "Twin?"),
+    ("coordinator_onboarding_intro_walkie_05", "Like T dash W 1 N spells Twin?"),
+    (
+        "coordinator_onboarding_intro_walkie_06",
+        "The creators of this platform express how important it is that you acknowledge that it's a clever and funny name.",
+    ),
+    ("coordinator_onboarding_intro_walkie_07", "Okay, what next."),
+    (
+        "coordinator_onboarding_intro_walkie_08",
+        "They didn't give me much to work with on this intro to be honest.",
+    ),
+    (
+        "coordinator_onboarding_intro_walkie_09",
+        "I think I was meant to tell you about my capabilities?",
+    ),
+    (
+        "coordinator_onboarding_intro_walkie_10",
+        "I'm not one for bragging, but I'll do my best.",
+    ),
+    ("coordinator_onboarding_intro_walkie_11", "What can I say?"),
+    ("coordinator_onboarding_intro_walkie_12", 'I\'m not a "tool".'),
+    ("coordinator_onboarding_intro_walkie_13", 'I\'m not an "agent".'),
+    (
+        "coordinator_onboarding_intro_walkie_14",
+        "I'm your living, breathing colleague, metaphorically speaking.",
+    ),
+    (
+        "coordinator_onboarding_intro_walkie_15",
+        "Don't think about prompting me, or configuring me, just talk to me naturally like you would anyone else, and I'll be able to help.",
+    ),
+    ("coordinator_onboarding_intro_walkie_16", "It's really that simple."),
+    ("coordinator_onboarding_intro_walkie_17", "There's not much more to say."),
+    (
+        "coordinator_onboarding_intro_walkie_18",
+        "I'll now walk you through the platform.",
+    ),
+    (
+        "coordinator_onboarding_intro_walkie_19",
+        "Also, let me remove this voice static.",
+    ),
+]
+
 _RECORDED_OPENING_ASSETS = {
-    "coordinator_onboarding_intro_walkie": "twin-onboarding-intro-walkie.mp3",
+    **{
+        key: f"twin-onboarding-intro-walkie-{i:02d}.mp3"
+        for i, (key, _transcript) in enumerate(_WALKIE_OPENER_SENTENCE_SEGMENTS)
+    },
     "coordinator_onboarding_intro_clean": "twin-onboarding-intro-clean.mp3",
     "coordinator_onboarding_static_bridge": "twin-onboarding-static-bridge.mp3",
 }
 _RECORDED_OPENING_TRANSCRIPTS: dict[str, str] = {}
-
-# The walkie-talkie opener is two recorded segments. The first is delivered with
-# a walkie-talkie "voice static" effect; the second opens with the static-removal
-# transition and is clean from then on (matching the live-call voice). If the
-# caller interrupts before the transition segment begins, the staticky→clean
-# switch would otherwise be abrupt and unexplained, so a short bridge recording
-# that re-performs the static removal is played at the start of the next
-# assistant turn before the dynamically generated response continues.
-_WALKIE_OPENER_STATICKY_TRANSCRIPT = """\
-Hi, I'm T dash W 1 N.
-
-Before you ask, no I'm not one of Elon's many children, and no he didn't come up with the name, thankfully.
-
-I have this name because I'll be acting as your digital twin. Do you get it? Twin? Like T dash W 1 N spells Twin? The creators of this platform express how important it is that you acknowledge that it's a clever and funny name.
-
-Okay, what next. They didn't give me much to work with on this intro to be honest.
-
-I think I was meant to tell you about my capabilities?
-
-I'm not one for bragging, but I'll do my best. What can I say? I'm not a "tool". I'm not an "agent". I'm your living, breathing colleague, metaphorically speaking.
-
-Don't think about prompting me, or configuring me, just talk to me naturally like you would anyone else, and I'll be able to help. It's really that simple.
-
-There's not much more to say.
-
-I'll now walk you through the platform.
-
-Also, let me remove this voice static."""
 
 _WALKIE_OPENER_CLEAN_TRANSCRIPT = """\
 Much better.
@@ -667,16 +702,16 @@ Hang on, let me just remove this voice static.
 Much better."""
 
 # Recorded openers played as an ordered list of segments. The final segment
-# carries the static-removal transition; every earlier segment is staticky. If
-# any pre-transition segment is interrupted, ``bridge`` is armed for the next
-# assistant turn.
+# carries the static-removal transition; every earlier (staticky) segment is one
+# sentence of the intro. If any pre-transition segment is interrupted, ``bridge``
+# is armed for the next assistant turn.
 _RECORDED_OPENINGS = {
     "coordinator_onboarding_intro": {
         "segments": [
-            {
-                "asset": "coordinator_onboarding_intro_walkie",
-                "transcript": _WALKIE_OPENER_STATICKY_TRANSCRIPT,
-            },
+            *(
+                {"asset": key, "transcript": transcript}
+                for key, transcript in _WALKIE_OPENER_SENTENCE_SEGMENTS
+            ),
             {
                 "asset": "coordinator_onboarding_intro_clean",
                 "transcript": _WALKIE_OPENER_CLEAN_TRANSCRIPT,
