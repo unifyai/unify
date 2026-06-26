@@ -479,9 +479,39 @@ def _resolve_doc_with_mro_fallback(bound_method) -> str:
 
 
 def annotation_to_schema(ann: Any) -> Dict[str, Any]:
-    """Convert a Python annotation into a JSON Schema fragment (supports Pydantic)."""
+    """Convert a Python annotation into a JSON Schema fragment (supports Pydantic).
 
-    # Unwrap typing.Annotated
+    A string entry in ``typing.Annotated`` metadata is surfaced as the JSON
+    Schema ``description`` for the field, so tools can attach a property-level
+    description directly on a parameter, e.g.::
+
+        thought: Annotated[str, "One-sentence rationale shown to the user."]
+
+    This is a stronger, more reliable signal to the model than describing the
+    argument only in the function docstring.
+    """
+    description: Optional[str] = None
+    origin = get_origin(ann)
+    if origin is not None and getattr(origin, "__name__", "") == "Annotated":
+        args = get_args(ann)
+        ann = args[0]
+        for meta in args[1:]:
+            if isinstance(meta, str):
+                description = meta
+                break
+
+    schema = _annotation_to_schema(ann)
+    if description and isinstance(schema, dict) and "description" not in schema:
+        schema = {**schema, "description": description}
+    return schema
+
+
+def _annotation_to_schema(ann: Any) -> Dict[str, Any]:
+    """Inner type→schema conversion. Annotated-description handling lives in the
+    public :func:`annotation_to_schema` wrapper."""
+
+    # Unwrap typing.Annotated (defensive — the public wrapper already does this
+    # and captures any string description).
     origin = get_origin(ann)
     if origin is not None and getattr(origin, "__name__", "") == "Annotated":
         ann = get_args(ann)[0]
@@ -603,7 +633,10 @@ def method_to_schema(
     # annotations. If type-hint evaluation fails, fall back to an empty
     # mapping and infer JSON schema types from defaults.
     try:
-        hints = get_type_hints(bound_method)
+        # include_extras keeps typing.Annotated metadata intact so that a
+        # string description on a parameter (Annotated[str, "..."]) reaches
+        # annotation_to_schema and lands on the property schema.
+        hints = get_type_hints(bound_method, include_extras=True)
     except Exception:
         hints = {}
 

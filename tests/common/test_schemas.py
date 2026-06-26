@@ -262,6 +262,37 @@ def test_annotation_schema_conversion(t, checker):
 
 
 # --------------------------------------------------------------------------- #
+#  annotation_to_schema – Annotated[..., "description"] support              #
+# --------------------------------------------------------------------------- #
+def test_annotated_string_metadata_becomes_property_description():
+    """A string in Annotated metadata surfaces as the property ``description``,
+    including when nested inside Optional/list, while plain annotations and
+    non-string metadata stay bare."""
+    from typing import Annotated, Optional
+
+    described = llmh.annotation_to_schema(Annotated[str, "why you are calling"])
+    assert described["type"] == "string"
+    assert described["description"] == "why you are calling"
+
+    # Description is preserved through Optional[...] unwrapping.
+    optional = llmh.annotation_to_schema(Optional[Annotated[str, "opt rationale"]])
+    assert optional["type"] == "string"
+    assert optional["description"] == "opt rationale"
+
+    # And attaches to the item schema inside a list.
+    listed = llmh.annotation_to_schema(list[Annotated[str, "item rationale"]])
+    assert listed["type"] == "array"
+    assert listed["items"]["description"] == "item rationale"
+
+    # Non-string metadata is ignored (no description leaks in).
+    non_str = llmh.annotation_to_schema(Annotated[str, 42])
+    assert non_str == {"type": "string"}
+
+    # Plain annotations remain unchanged.
+    assert llmh.annotation_to_schema(str) == {"type": "string"}
+
+
+# --------------------------------------------------------------------------- #
 #  method_to_schema – enum round-trip                                         #
 # --------------------------------------------------------------------------- #
 def _demo_func(a: str, col: ColumnType):
