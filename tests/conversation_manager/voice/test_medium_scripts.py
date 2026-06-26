@@ -1560,18 +1560,21 @@ def test_walkie_opener_segments_split_at_static_removal_transition():
 
 
 @pytest.mark.asyncio
-async def test_on_user_turn_completed_plays_pending_opening_bridge():
+async def test_on_user_turn_completed_schedules_pending_opening_bridge():
     from types import SimpleNamespace
 
     from unity.conversation_manager.medium_scripts import call as call_script
 
-    played: list[bool] = []
+    scheduled: list[bool] = []
 
-    async def _play_bridge() -> None:
-        played.append(True)
+    # The bridge callable is synchronous: it enqueues the bridge say but does
+    # NOT await playout, so the hook returns immediately and the reply is
+    # generated concurrently (and queues behind the bridge).
+    def _schedule_bridge() -> None:
+        scheduled.append(True)
 
     self = SimpleNamespace(
-        _pending_opening_bridge=_play_bridge,
+        _pending_opening_bridge=_schedule_bridge,
         _user_speech_logged=False,
     )
     new_message = SimpleNamespace(text_content="hi there")
@@ -1582,8 +1585,9 @@ async def test_on_user_turn_completed_plays_pending_opening_bridge():
         new_message=new_message,
     )
 
-    # The bridge is played exactly once and disarmed so later turns are normal.
-    assert played == [True]
+    # The bridge is scheduled exactly once and disarmed so later turns are
+    # normal.
+    assert scheduled == [True]
     assert self._pending_opening_bridge is None
     assert self._user_speech_logged is True
 
