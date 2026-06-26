@@ -22,8 +22,9 @@ class ConversationSettings(BaseSettings):
         PROACTIVE_SPEECH_MODEL: LLM model that decides when and what to say to
             break a silence. Decoupled from the fast brain: this path is not
             latency-critical (it sits behind a debounce and a chosen delay), so
-            it runs on a stronger model to reliably honour the no-repeat
-            constraint. Override via UNITY_CONVERSATION_PROACTIVE_SPEECH_MODEL.
+            it runs on the deepseek slow-brain model at "high" reasoning effort
+            to reliably honour the no-repeat constraint. Override via
+            UNITY_CONVERSATION_PROACTIVE_SPEECH_MODEL.
         FAST_BRAIN_CONTEXT_WINDOW: Maximum number of conversation items
             (utterances, notifications, etc.) the fast brain keeps in its
             rolling context window. Also used as the limit when hydrating
@@ -62,7 +63,7 @@ class ConversationSettings(BaseSettings):
     """
 
     FAST_BRAIN_MODEL: str = "gpt-5.4-mini@openai"
-    PROACTIVE_SPEECH_MODEL: str = "gpt-5.5@openai"
+    PROACTIVE_SPEECH_MODEL: str = "deepseek-v4-max@deepseek"
     FAST_BRAIN_CONTEXT_WINDOW: int = 50
     FAST_BRAIN_MOOD_CLASSIFICATION_ENABLED: bool = False
     FAST_BRAIN_MOOD_CLASSIFICATION_MODEL: str = "gpt-5.5-mini@openai"
