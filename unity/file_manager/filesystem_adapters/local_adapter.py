@@ -23,6 +23,12 @@ class LocalFileSystemAdapter(BaseFileSystemAdapter):
     enabled and a managed VM is configured (via SESSION_DETAILS.desktop_url),
     the workspace directory is synchronized with the VM via rclone SFTP.
 
+    Reads are not confined to the workspace root: an absolute path anywhere on
+    the local filesystem resolves through, so files staged outside the
+    workspace -- e.g. a linked user's home mirror under
+    ~/Unity/Remote/<user_id>/ populated by user_desktop.files -- can be
+    listed, read, parsed, and ingested via their absolute paths.
+
     Sync lifecycle:
     - Job start: Bidirectional sync with --resync (start_sync → bisync)
     - File write: Push changed file to VM (notify_file_write)
@@ -106,15 +112,31 @@ class LocalFileSystemAdapter(BaseFileSystemAdapter):
             return q
         return q.resolve()
 
+    def _relativize(self, p: Path) -> str:
+        """Stable path identity for a resolved file.
+
+        Root-relative (``/<rel>``) when the file lives under this adapter's
+        workspace root; otherwise the absolute POSIX path.  The absolute form
+        round-trips through :meth:`_abspath` (which passes absolute paths
+        through), so files staged outside the workspace -- e.g. a linked user's
+        home mirror under ``~/Unity/Remote/<user_id>/`` -- remain addressable
+        instead of raising ``ValueError`` on ``relative_to``.
+        """
+        p = p.resolve()
+        try:
+            rel = str(p.relative_to(self._root)).replace("\\", "/")
+        except ValueError:
+            return p.as_posix()
+        return "/" + rel if not rel.startswith("/") else rel
+
     def iter_files(self, root: Optional[str] = None) -> Iterable[FileReference]:
         base = self._abspath(root or ".")
         if not base.exists():
             return []
         for p in base.rglob("*"):
             if p.is_file():
-                rel = str(p.relative_to(self._root)).replace("\\", "/")
                 yield FileReference(
-                    path=("/" + rel if not rel.startswith("/") else rel),
+                    path=self._relativize(p),
                     name=p.name,
                     provider=self.name,
                     uri=f"{self.uri_name}://{p.resolve().as_posix().lstrip('/')}",
@@ -127,9 +149,8 @@ class LocalFileSystemAdapter(BaseFileSystemAdapter):
         p = self._abspath(path)
         if not p.exists() or not p.is_file():
             raise FileNotFoundError(path)
-        rel = str(p.relative_to(self._root)).replace("\\", "/")
         return FileReference(
-            path=("/" + rel if not rel.startswith("/") else rel),
+            path=self._relativize(p),
             name=p.name,
             provider=self.name,
             uri=f"{self.uri_name}://{p.resolve().as_posix().lstrip('/')}",
