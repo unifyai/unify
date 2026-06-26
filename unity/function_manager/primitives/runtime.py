@@ -711,8 +711,9 @@ class _UserDesktopFilesNamespace:
 
         ``path`` is relative to the user's home (``""`` lists the home root).
         Returns names (directories carry a trailing ``/``).  Pair with
-        ``pull`` to bring entries into the local mirror under
-        ``~/Unity/Remote/<user_id>/``; do not shell out to copy them.
+        ``pull`` to bring a single entry into the local mirror under
+        ``~/Unity/Remote/<user_id>/``, or ``sync`` to mirror a whole subtree at
+        once; do not shell out to copy them.
         """
         target_uid, client = await self._client(user_id)
         entries = await client.list_dir(path)
@@ -733,6 +734,22 @@ class _UserDesktopFilesNamespace:
         local_path = await client.pull(path)
         _publish_user_file_access(target_uid, "pull", path)
         return local_path
+
+    async def sync(self, path: str = "", user_id: str | None = None) -> list[str]:
+        """Recursively pull a user's home subtree into the local mirror.
+
+        This is the canonical way to "sync" a user's filesystem — do **not**
+        shell out (``find``/``cat``/``tar``/``rclone``) to copy their files.
+
+        ``path`` is relative to the user's home (``""`` syncs the whole home).
+        Every file under it is staged under ``~/Unity/Remote/<user_id>/`` (a
+        read-only mirror of their home), and the list of absolute local paths
+        now staged is returned, ready to read or parse.
+        """
+        target_uid, client = await self._client(user_id)
+        staged = await client.sync(path)
+        _publish_user_file_access(target_uid, "sync", path or "")
+        return staged
 
     async def push(
         self,

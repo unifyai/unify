@@ -156,6 +156,34 @@ class UserHomeSFTP:
                 raise RuntimeError(f"Failed to pull {rel} from {self._user_id}'s home")
             return str(dest)
 
+    async def sync(self, remote_path: str = "") -> list[str]:
+        """Recursively mirror a home subtree into the local stage.
+
+        ``remote_path`` is home-relative (``""`` mirrors the whole home).
+        Copies every file under that subtree into ``local_root`` (excluding the
+        writeback edits dir) and returns the absolute local paths now staged.
+        """
+        rel = _normalize_remote(remote_path)
+        dest = self.local_root / rel
+        async with self._op_lock:
+            dest.mkdir(parents=True, exist_ok=True)
+            ok = await self._run(
+                [
+                    "copy",
+                    f"{self.REMOTE_NAME}:/{rel}",
+                    str(dest),
+                    "--exclude",
+                    f"/{EDITS_DIR}/**",
+                    "-v",
+                ],
+                operation=f"sync {rel}",
+            )
+            if not ok:
+                raise RuntimeError(
+                    f"Failed to sync {rel} from {self._user_id}'s home",
+                )
+            return [str(p) for p in sorted(dest.rglob("*")) if p.is_file()]
+
     async def push(self, local_path: str, dest_path: str) -> str:
         """Write a local file back as a timestamped copy under the edits dir.
 

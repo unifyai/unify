@@ -288,6 +288,9 @@ class ComputerEnvironment(BaseEnvironment):
             "(``''`` lists the home root; directories carry a trailing ``/``).\n"
             "- `files.pull(path, user_id=...)` -- stage one home-relative file "
             "into the mirror; returns its absolute local path.\n"
+            "- `files.sync(path='', user_id=...)` -- recursively mirror a whole "
+            "subtree (``''`` = their entire home); returns the staged absolute "
+            'paths.  This is the call for "sync my filesystem".\n'
             "- `files.push(local_path, dest_path, user_id=...)` -- write a file "
             "back (saved as a timestamped copy; never overwrites their "
             "original).\n\n"
