@@ -1243,6 +1243,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         message: str,
         should_speak: bool,
         slow_brain_log_path: str = "",
+        decided_after_ts: datetime | None = None,
     ) -> None:
         """Publish slow-brain ``guide_voice_agent`` output to the fast brain."""
         if not message:
@@ -1254,6 +1255,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             should_speak=should_speak,
             source="slow_brain",
             llm_log_path=slow_brain_log_path,
+            decided_after_ts=decided_after_ts.isoformat() if decided_after_ts else "",
         )
         self._session_logger.info(
             "call_notification",
@@ -1623,6 +1625,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
             return elapsed_ms
 
         trace_meta = trace_meta or {}
+
+        # Snapshot the latest voice-utterance timestamp this run's context is
+        # built from. Stamped onto any guide_voice_agent guidance so the fast
+        # brain can skip the dedup gate when no newer voice activity has occurred
+        # (no race is possible, so the gate would be redundant).
+        _, context_voice_ts = self.get_recent_voice_transcript()
 
         # Resolve per-turn org member attribution (only meaningful in org
         # context, where a cost can be attributed to a specific member).
@@ -2050,6 +2058,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     message=guidance_message,
                     should_speak=should_speak,
                     slow_brain_log_path=slow_brain_log_path,
+                    decided_after_ts=context_voice_ts,
                 )
 
         self._session_logger.debug(
