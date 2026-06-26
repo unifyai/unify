@@ -175,10 +175,12 @@ _EXECUTION_RULES = textwrap.dedent("""
       care: confirm with the user and keep them informed before running anything
       that changes their system. **To read, fetch, or "sync" their files,
       always use `primitives.computer.user_desktop.files` (list/pull/push)** —
-      it mirrors their home into `~/Unity/Remote/<user_id>/`. Never copy their
-      files into your own workspace with shell `cp`/`scp`/`rclone`; reserve
-      `user_desktop` shell execution for commands the user explicitly wants run
-      on their machine. Access is separately gated by the user's Console consent
+      it mirrors their home into `~/Unity/Remote/<user_id>/` and returns local
+      paths you can parse. Never retrieve their file content by running shell
+      commands on this surface (no `cat`/`find`/`tar`/`base64`/`cp`/`scp`/
+      `rclone` to dump or copy files); `user_desktop` shell execution is only
+      for commands the user explicitly wants run on their machine, not for
+      harvesting files. Access is separately gated by the user's Console consent
       and can be revoked mid-run, so prompt-level permission alone is never
       sufficient.
 

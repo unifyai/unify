@@ -2326,19 +2326,24 @@ def get_user_desktop_files_example() -> str:
     """Example: accessing/syncing a linked user's desktop files via files.*."""
 
     return """
-# Example: read a linked user's desktop files (no shell copying)
+# Example: read/sync a linked user's desktop files (no shell copying)
+# Triggers: "sync my filesystem", "pull my desktop files", "what's in my Documents?".
 async def sync_user_desktop_files(user_id: str) -> str:
     # Browse their home, then pull what you need into the local mirror
-    # (~/Unity/Remote/<user_id>/). Never cp/scp/rclone into your own workspace.
+    # (~/Unity/Remote/<user_id>/). Never cp/scp/rclone/find/cat over the
+    # user_desktop shell surface -- files.* is the canonical path.
     names = await primitives.computer.user_desktop.files.list("Documents", user_id=user_id)
     staged = []
     for name in names:
         if not name.endswith("/"):
-            staged.append(
-                await primitives.computer.user_desktop.files.pull(
-                    f"Documents/{name}", user_id=user_id,
-                )
+            # pull returns the absolute path in the mirror, ready to parse.
+            path = await primitives.computer.user_desktop.files.pull(
+                f"Documents/{name}", user_id=user_id,
             )
+            staged.append(path)
+    # Work directly from the staged mirror paths.
+    if staged:
+        display(await primitives.files.parse(staged[0]))
     return f"Staged {len(staged)} files under the user's local mirror."
 """
 
