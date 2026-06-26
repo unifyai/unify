@@ -136,7 +136,7 @@ class TasksStore:
         except _UnifyRequestError as e:
             status = getattr(getattr(e, "response", None), "status_code", None)
             if status == 404:
-                LOGGER.warning(
+                LOGGER.debug(
                     "TasksStore read returned 404; treating as empty. "
                     "project=%s context=%s filter=%r",
                     kwargs.get("project"),

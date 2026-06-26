@@ -1932,6 +1932,8 @@ class CommsManager:
                 "unify_message_outbound",
                 "system_error",
                 "assistant_desktop_ready",
+                "comms_activity",
+                "action_event",
             ):
                 ack_now()
                 return
