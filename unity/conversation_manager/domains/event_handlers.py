@@ -1293,13 +1293,18 @@ async def _(
         contact = event.contact or {}
     sender_name = _get_sender_name(contact)
 
-    cm.contact_index.push_message(
-        contact_id=contact_id,
-        sender_name=sender_name,
-        thread_name=_active_voice_thread_medium(cm),
-        message_content=event.message,
-        role="guidance",
-    )
+    # Only record silent guidance here. should_speak guidance is spoken by the
+    # fast brain and recorded once via the actually-spoken Outbound utterance
+    # (with the real, possibly rewritten text); pre-writing it duplicated that
+    # record and surfaced a stray user-looking turn in the voice transcript.
+    if not event.should_speak:
+        cm.contact_index.push_message(
+            contact_id=contact_id,
+            sender_name=sender_name,
+            thread_name=_active_voice_thread_medium(cm),
+            message_content=event.message,
+            role="guidance",
+        )
 
     if event.should_speak:
         await cm.schedule_proactive_speech()

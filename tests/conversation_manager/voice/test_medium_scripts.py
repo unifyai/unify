@@ -3511,6 +3511,65 @@ async def test_publish_guidance_stamps_decided_after_ts():
 
 
 @pytest.mark.asyncio
+async def test_fastbrain_notification_records_only_silent_guidance():
+    """should_speak guidance is no longer pre-written to contact_index (it is
+    recorded once via the actually-spoken Outbound utterance); silent
+    (should_speak=False) guidance is still recorded exactly once."""
+    from unittest.mock import AsyncMock, MagicMock
+    from unity.conversation_manager.cm_types import Mode
+    from unity.conversation_manager.domains.event_handlers import EventHandler
+    from unity.conversation_manager.events import FastBrainNotification
+
+    handler = EventHandler._registry[FastBrainNotification]
+    contact = {"contact_id": 1, "first_name": "Dan", "surname": "Lenton"}
+
+    def _make_cm():
+        return SimpleNamespace(
+            contact_index=SimpleNamespace(
+                get_contact=lambda contact_id=None: None,
+                push_message=MagicMock(return_value=1),
+            ),
+            call_manager=SimpleNamespace(
+                has_active_google_meet=False,
+                has_active_teams_meet=False,
+                _call_channel="phone_call",
+            ),
+            mode=Mode.CALL,
+            schedule_proactive_speech=AsyncMock(),
+        )
+
+    # should_speak=True -> no contact_index pre-write; still re-arms proactive.
+    cm = _make_cm()
+    await handler(
+        FastBrainNotification(
+            contact=contact,
+            message="Just sent the clue to your email.",
+            should_speak=True,
+            source="slow_brain",
+        ),
+        cm,
+    )
+    cm.contact_index.push_message.assert_not_called()
+    cm.schedule_proactive_speech.assert_awaited()
+
+    # should_speak=False -> recorded exactly once as guidance.
+    cm = _make_cm()
+    await handler(
+        FastBrainNotification(
+            contact=contact,
+            message="Email received from Alice.",
+            should_speak=False,
+            source="slow_brain",
+        ),
+        cm,
+    )
+    assert cm.contact_index.push_message.call_count == 1
+    _, kwargs = cm.contact_index.push_message.call_args
+    assert kwargs.get("role") == "guidance"
+    assert kwargs.get("message_content") == "Email received from Alice."
+
+
+@pytest.mark.asyncio
 class TestFastBrainSpeechDedup:
     """Tests for the fast brain speech deduplication gate.
 
