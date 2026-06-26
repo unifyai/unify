@@ -38,7 +38,7 @@ from livekit.agents import ChatContext, ChatMessage
 from livekit.agents import ModelSettings, llm
 from livekit.agents.llm import ChatChunk, ChoiceDelta
 
-from typing import AsyncIterable, Awaitable, Callable
+from typing import AsyncIterable, Callable
 
 load_dotenv()
 
@@ -360,8 +360,10 @@ class Assistant(Agent):
         # generates and does not re-voice them.
         self._inflight_speech_provider: Callable[[], list[str]] | None = None
         # Armed when the recorded opener is interrupted before its static-removal
-        # transition; plays a bridge recording at the start of the next turn.
-        self._pending_opening_bridge: Callable[[], Awaitable[None]] | None = None
+        # transition. Schedules a bridge recording at the start of the next turn.
+        # The callable enqueues the bridge synchronously (no playout await) so
+        # the fast-brain reply generates concurrently and queues behind it.
+        self._pending_opening_bridge: Callable[[], None] | None = None
 
         super().__init__(instructions=instructions)
 
@@ -401,11 +403,20 @@ class Assistant(Agent):
         turn_ctx: ChatContext,
         new_message: ChatMessage,
     ) -> None:
-        """Hook called when user finishes speaking — before LLM generation starts."""
+        """Hook called when user finishes speaking — before LLM generation starts.
+
+        The opener static-removal bridge (if armed) is *scheduled* here but not
+        awaited: enqueueing it synchronously, before this hook returns, keeps it
+        ahead of the reply the framework generates next (same speech priority,
+        FIFO), while letting the fast brain think during the bridge playout
+        instead of after it. The reply queues behind the bridge rather than
+        interrupting it, and the bridge text stays in the in-flight speech queue
+        so the concurrent generation sees it and continues naturally from it.
+        """
         if self._pending_opening_bridge is not None:
-            play_bridge = self._pending_opening_bridge
+            schedule_bridge = self._pending_opening_bridge
             self._pending_opening_bridge = None
-            await play_bridge()
+            schedule_bridge()
         text = new_message.text_content or ""
         if text:
             _log.user_speech(text)
@@ -1406,7 +1417,18 @@ async def entrypoint(ctx: agents.JobContext):
             add_to_chat_ctx=True,
         )
 
-    async def _play_opening_bridge(segment: dict) -> None:
+    def _schedule_opening_bridge(segment: dict) -> None:
+        """Enqueue the opener static-removal bridge without blocking on playout.
+
+        Scheduling (``session.say``) happens synchronously so the bridge is
+        queued ahead of the user-turn reply the framework generates next. We
+        deliberately do NOT await playout: the reply is generated concurrently
+        while the bridge plays, then plays after it (same speech priority,
+        FIFO — a newly scheduled reply does not interrupt in-progress speech).
+        The bridge text remains in ``_say_meta_queue`` until its playout
+        commits to history, so the concurrent generation sees it as in-flight
+        speech and continues naturally from it.
+        """
         text = segment["transcript"]
         _say_meta_queue.append(
             {
@@ -1415,13 +1437,12 @@ async def entrypoint(ctx: agents.JobContext):
                 "llm_log_path": "",
             },
         )
-        handle = session.say(
+        session.say(
             text,
             audio=_recording_audio_frames(f"asset://{segment['asset']}"),
             allow_interruptions=True,
             add_to_chat_ctx=True,
         )
-        await handle.wait_for_playout()
 
     async def _run_recorded_opening(config: dict) -> None:
         asset_key = config.get("recording_asset", "").strip()
@@ -1445,7 +1466,7 @@ async def entrypoint(ctx: agents.JobContext):
             if handle.interrupted and not reached_transition:
                 if bridge is not None:
                     assistant._pending_opening_bridge = (
-                        lambda b=bridge: _play_opening_bridge(b)
+                        lambda b=bridge: _schedule_opening_bridge(b)
                     )
                 return
 
