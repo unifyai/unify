@@ -1185,6 +1185,21 @@ class ConversationManagerBrainActionTools:
                 expensive than the DeepSeek default: about 11.5x the
                 input-token rate and 34.5x the output-token rate before any
                 extra reasoning/output tokens from higher effort.
+
+                Escalate the profile when retrying an action that shows
+                concrete evidence of model/tool-use struggle, rather than
+                retrying the same default profile repeatedly. Good escalation
+                signals include a previous ``ActorResult`` ending in a
+                tool-schema or tool-call formatting error, the same failed
+                step recurring after a retry, repeated execution mistakes
+                without new information being gathered, clear user frustration,
+                or the user's explicit request for stronger/premium reasoning.
+                Do not escalate solely because an action has been running for
+                a long time; long-running data, coding, or browser work can be
+                normal. If restarting after one of the concrete failure
+                signals above, preserve the user's task and set
+                ``llm_profile`` to ``gpt_5_5_medium`` or ``gpt_5_5_high``
+                depending on difficulty and urgency.
         """
         global _next_handle_id
 
