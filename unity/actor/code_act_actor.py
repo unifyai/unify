@@ -10,6 +10,7 @@ import uuid
 from secrets import token_hex as _token_hex
 import logging
 from typing import (
+    Annotated,
     Any,
     Callable,
     Awaitable,
@@ -54,7 +55,7 @@ from unity.common.act_llm_profiles import (
     resolve_act_llm_profile,
 )
 from unity.common.llm_helpers import methods_to_tool_dict
-from unity.common.tool_spec import ToolSpec
+from unity.common.tool_spec import ToolSpec, llm_soft_required
 from unity.function_manager.base import BaseFunctionManager
 from unity.function_manager.primitives import ComputerPrimitives
 from unity.actor.prompt_builders import build_code_act_prompt
@@ -2526,8 +2527,15 @@ class CodeActActor(BaseCodeActActor):
     def _build_tools(self) -> Dict[str, Callable[..., Awaitable[Any]]]:
         """Builds the dictionary of tools available to the LLM."""
 
+        @llm_soft_required(thought="")
         async def execute_code(
-            thought: str,
+            thought: Annotated[
+                str,
+                "A brief, first-person, one-sentence explanation of what this "
+                'code does and why you are running it right now (e.g. "Loading '
+                'the data and computing the summary the user asked for."). Shown '
+                "to the user as the rationale for this step; always provide it.",
+            ],
             code: Optional[str] = None,
             *,
             language: str,
