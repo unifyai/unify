@@ -380,6 +380,26 @@ async def _record_call_permission_pending(
     response.raise_for_status()
 
 
+async def _store_pending_call_intent(
+    *,
+    pool_number: str,
+    contact_number: str,
+    context: str,
+) -> None:
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/pending-call-intent",
+            headers=_admin_headers(),
+            json={
+                "pool_number": pool_number,
+                "contact_number": contact_number,
+                "context": context,
+            },
+            timeout=10.0,
+        )
+    response.raise_for_status()
+
+
 async def _record_call_permission_accepted(
     pool_number: str,
     contact_number: str,
@@ -591,6 +611,20 @@ async def _place_direct_whatsapp_call(
     }
 
 
+def _send_call_permission_invite(
+    *,
+    wa_client,
+    pool_number: str,
+    to: str,
+) -> None:
+    wa_client.messages.create(
+        content_sid=VOICE_CALL_REQUEST_TEMPLATE_SID,
+        to=f"whatsapp:{to}",
+        from_=f"whatsapp:{pool_number}",
+        status_callback=f"{SETTINGS.conversation.COMMS_URL}/whatsapp/status",
+    )
+
+
 async def _can_probe_permission(
     *,
     permission: dict,
@@ -651,6 +685,7 @@ async def send_call(request: Request):
     assistant_id = data["assistant_id"]
     room_name = data["room_name"]
     allow_permission_probe = bool(data.get("allow_permission_probe"))
+    pending_call_context = str(data.get("pending_call_context") or "")
 
     route = await _resolve_route(assistant_id, to)
     pool_number = route["pool_number"]
@@ -672,6 +707,21 @@ async def send_call(request: Request):
     if permission_status == "rejected":
         logger.info("WhatsApp call permission rejected for %s", to)
         return {"success": True, "method": "rejected", "pool_number": pool_number}
+
+    if (
+        allow_permission_probe
+        and _is_local_permission_probe_enabled()
+        and pending_call_context
+        and permission_status in {"unknown", "pending", "unknown_interaction"}
+    ):
+        await _record_call_permission_pending(pool_number, to)
+        await _store_pending_call_intent(
+            pool_number=pool_number,
+            contact_number=to,
+            context=pending_call_context,
+        )
+        permission = await _check_call_permission(pool_number, to)
+        permission_status = permission.get("status") or "unknown"
 
     if await _can_probe_permission(
         permission=permission,

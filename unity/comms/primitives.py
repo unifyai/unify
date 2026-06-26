@@ -16,6 +16,7 @@ headless execution paths.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
 import uuid
@@ -67,6 +68,9 @@ _DETAIL_LABELS = {
     "discord_id": "Discord ID",
     "slack_user_id": "Slack user ID",
 }
+
+_VOICE_SESSION_CLEAR_TIMEOUT_SECONDS = 15.0
+_VOICE_SESSION_CLEAR_POLL_SECONDS = 0.5
 
 
 def _coerce_contact_id(value: Any) -> int:
@@ -177,6 +181,35 @@ class CommsPrimitives:
             os.environ.get("UNITY_COMMS_URL", ""),
         )
         return any("127.0.0.1" in url or "localhost" in url for url in local_urls)
+
+    def _voice_session_active(self) -> bool:
+        if self._cm is None:
+            return False
+        call_manager = self._cm.call_manager
+        return bool(
+            call_manager.has_active_call
+            or call_manager.has_active_google_meet
+            or call_manager.has_active_teams_meet
+            or call_manager._whatsapp_call_joining,
+        )
+
+    async def _wait_for_voice_session_to_clear(self) -> bool:
+        if self._cm is None:
+            return True
+        call_manager = self._cm.call_manager
+        clear_stale = getattr(call_manager, "_clear_stale_dispatch_state", None)
+        deadline = (
+            asyncio.get_running_loop().time() + _VOICE_SESSION_CLEAR_TIMEOUT_SECONDS
+        )
+        while self._voice_session_active():
+            if callable(clear_stale):
+                clear_stale()
+            if not self._voice_session_active():
+                return True
+            if asyncio.get_running_loop().time() >= deadline:
+                return False
+            await asyncio.sleep(_VOICE_SESSION_CLEAR_POLL_SECONDS)
+        return True
 
     def _onboarding_event_kwargs(self, medium: Medium) -> dict[str, str]:
         if self._cm is None:
@@ -3984,15 +4017,16 @@ class CommsPrimitives:
 
         contact_id = _coerce_contact_id(contact_id)
         offline_reservation = None
-        if self._cm is not None and (
-            self._cm.call_manager.has_active_call
-            or self._cm.call_manager.has_active_google_meet
-            or self._cm.call_manager.has_active_teams_meet
-            or self._cm.call_manager._whatsapp_call_joining
+        if (
+            self._voice_session_active()
+            and not await self._wait_for_voice_session_to_clear()
         ):
             return {
-                "status": "error",
-                "message": "A call or meeting is already active.",
+                "status": "retry_later_active_voice_session",
+                "message": (
+                    "The previous call or meeting is still closing. Retry shortly "
+                    "after the voice session clears."
+                ),
             }
 
         contact = self._get_contact(contact_id=contact_id)
@@ -4093,6 +4127,7 @@ class CommsPrimitives:
             agent_name=SESSION_DETAILS.assistant.name or "",
             room_name=room_name,
             allow_permission_probe=self._allow_whatsapp_call_permission_probe(),
+            pending_call_context=context,
         )
         if not response.get("success"):
             if self._cm is not None:
@@ -4217,6 +4252,17 @@ class CommsPrimitives:
                 "note": (
                     "WhatsApp reported a call-permission interaction without an accepted or "
                     "rejected payload. Do not place a direct call until permission is reconciled."
+                ),
+            }
+
+        if method == "needs_permission":
+            return {
+                "status": "needs_permission",
+                "pending_callback": automatic_callback_available,
+                "note": (
+                    "WhatsApp still requires the contact to approve calls from this business "
+                    "before the call can ring. Tell the user to tap Allow calls / Call now in "
+                    "WhatsApp, and do not claim that a call is ringing yet."
                 ),
             }
 
