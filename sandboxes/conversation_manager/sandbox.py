@@ -42,10 +42,6 @@ from sandboxes.conversation_manager.gateway_bootstrap import (
     stop_gateway,
     try_start_gateway_direct,
 )
-from sandboxes.conversation_manager.livekit_bootstrap import (
-    stop_livekit,
-    try_start_livekit_direct,
-)
 from sandboxes.conversation_manager.live_voice import _voice_agent_log_path
 from sandboxes.conversation_manager.desktop_bootstrap import (
     bootstrap_desktop_container,
@@ -616,24 +612,6 @@ async def _main_async() -> None:
                 if getattr(selected, "actor_type", None) == "codeact_real":
                     raise SystemExit(1)
 
-        # Auto-start a local LiveKit server when LIVEKIT_URL is unset or
-        # points to localhost but nothing is listening yet.  Must happen before
-        # initialize_cm so call_manager.start_persistent_worker() picks up the
-        # env vars set by the bootstrap when it reads os.environ at runtime.
-        _lk_already_tracked = getattr(args, "_livekit_process", None) is not None
-        if not _lk_already_tracked:
-            _lk = await asyncio.to_thread(
-                try_start_livekit_direct,
-                repo_root=project_root,
-                progress=(lambda m: print(m)),
-            )
-            if _lk.ok:
-                setattr(args, "_livekit_process", _lk.process)
-            else:
-                setattr(args, "_livekit_process", None)
-                if _lk.summary and "non-local URL" not in _lk.summary:
-                    print(f"[livekit] {_lk.summary}")
-
         # Auto-start the desktop container before initialize_cm() so the computer
         # backend is configured with a live agent-service URL on port 3000.
         _container_url = getattr(args, "agent_server_url", "http://localhost:3000")
@@ -851,15 +829,6 @@ async def _main_async() -> None:
                     setattr(args, "_gateway_url", None)
             except Exception:
                 pass
-            # If we auto-started a local LiveKit server, stop it on exit.
-            try:
-                lk_proc = getattr(args, "_livekit_process", None)
-                if lk_proc is not None:
-                    await asyncio.to_thread(stop_livekit, lk_proc)
-                    setattr(args, "_livekit_process", None)
-            except Exception:
-                pass
-
         # Restart requested by REPL `config`.
         if bool(getattr(args, "_restart_requested", False)):
             nxt = getattr(args, "_restart_actor_config", None)
