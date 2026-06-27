@@ -1169,6 +1169,41 @@ class TestVoiceUtteranceHandlers:
         mock_cm.schedule_proactive_speech.assert_called()
 
     @pytest.mark.asyncio
+    async def test_outbound_utterance_clears_matching_inflight_overlay(self, mock_cm):
+        """When the real spoken utterance lands, the render-only in-flight overlay
+        for that line is cleared (full or truncated-prefix match)."""
+        mock_cm._inflight_voice_speech = "The next step is to click Trigger email."
+
+        # A truncated prefix (barge-in) still matches and clears it.
+        event = OutboundPhoneUtterance(
+            contact={"contact_id": 2},
+            content="The next step is to click",
+        )
+        with patch(
+            "unity.conversation_manager.domains.event_handlers.managers_utils",
+        ) as mock_utils:
+            mock_utils.queue_operation = AsyncMock()
+            await EventHandler.handle_event(event, mock_cm)
+
+        assert mock_cm._inflight_voice_speech == ""
+
+    @pytest.mark.asyncio
+    async def test_outbound_filler_does_not_clear_unrelated_inflight(self, mock_cm):
+        """A short buffer filler that is not this line must not clear the overlay."""
+        mock_cm._inflight_voice_speech = "The next step is to click Trigger email."
+
+        event = OutboundPhoneUtterance(content="One moment.", contact={"contact_id": 2})
+        with patch(
+            "unity.conversation_manager.domains.event_handlers.managers_utils",
+        ) as mock_utils:
+            mock_utils.queue_operation = AsyncMock()
+            await EventHandler.handle_event(event, mock_cm)
+
+        assert (
+            mock_cm._inflight_voice_speech == "The next step is to click Trigger email."
+        )
+
+    @pytest.mark.asyncio
     async def test_call_guidance_updates_contact_index(self, mock_cm):
         """FastBrainNotification adds guidance message to voice thread."""
         event = FastBrainNotification(

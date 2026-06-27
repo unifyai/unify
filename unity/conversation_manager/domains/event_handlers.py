@@ -1216,6 +1216,15 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
     # Reset proactive speech on any utterance (user or assistant).
     await cm.schedule_proactive_speech()
 
+    if role == "assistant":
+        # The real spoken utterance has now landed (verbatim, or a truncated
+        # prefix after a barge-in). Clear the render-only in-flight overlay for
+        # this line so future turns rely on the actually-spoken transcript only.
+        inflight = (getattr(cm, "_inflight_voice_speech", "") or "").strip()
+        spoken = (event.content or "").strip()
+        if inflight and spoken and inflight.startswith(spoken):
+            cm._inflight_voice_speech = ""
+
     if role == "user":
         # Link any pending user/webcam screenshot (forwarded from the fast
         # brain via IPC) to this message by stamping it with the message_id.
