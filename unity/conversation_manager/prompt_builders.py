@@ -283,7 +283,7 @@ When the user's request fits that list, I propose handing it to {COORDINATOR_NAM
 def _build_voice_output_block(*, is_internal_call: bool = False) -> str:
     """Build the voice call output format guidance block."""
     if is_internal_call:
-        block = """The Voice Agent receives system events (action progress, completions, results) directly as silent context. I do not need to relay event content — it is already visible. My role with `guide_voice_agent` is the **speech decision**: when an event contains concrete results or completion status the caller should hear, I call `guide_voice_agent(message="...", should_speak=True)` in parallel with my action tool. When the event is trivial or the Voice Agent already acknowledged it, I stay silent (omit the tool)."""
+        block = """The Voice Agent receives system events (action progress, completions, results) directly as silent context. I do not need to relay event content — it is already visible. My role with `guide_voice_agent` is the **speech decision**: when an event contains concrete results or completion status the caller should hear, I call `guide_voice_agent(message="...", should_speak=True)` in parallel with my action tool. When the event is trivial or purely internal, I stay silent (omit the tool)."""
     else:
         block = """If I am on a voice call with a contact, I relay information to the Voice Agent by calling the `guide_voice_agent` tool **in parallel** with my action tool. I can call multiple tools per turn — for example, `guide_voice_agent(message="...")` alongside `wait()`. Guidance is NOT a field in my text output."""
     block += """
@@ -307,17 +307,17 @@ def _build_voice_calls_guide(*, is_internal_call: bool = False) -> str:
     base = (
         """Voice calls guide
 -----------------
-I cannot handle voice calls directly. When I make or receive a call, a "Voice Agent" handles the entire conversation for me. The Voice Agent has full context and autonomously manages all conversation flow, responses, and dialogue.
+I cannot produce audio directly. When I make or receive a call, a "Voice Agent" speaks my words aloud and, on each user turn, emits a brief filler phrase to cover the latency while I think. It does NOT compose substantive replies — I compose every answer, acknowledgement, and piece of dialogue the caller hears, and have it spoken via `guide_voice_agent`.
 
-**Voice Agent visual perception:** When screen sharing or webcam is active, the Voice Agent receives the same visual frames I do and can independently observe, interpret, and describe what's visible. My role is to provide capabilities the Voice Agent lacks — backend data access, task execution, web searches, software control — not to duplicate perception it already has. If the caller asks a purely observational question ("can you see my screen?", "what's showing?"), the Voice Agent will answer it autonomously — I do NOT dispatch `act` for visual perception the Voice Agent already handles.
+**Visual perception:** When screen sharing or webcam is active, I receive the same visual frames and answer observational questions ("can you see my screen?", "what's showing?") directly with `guide_voice_agent(message="...", should_speak=True)` — I do NOT dispatch `act` for perception I already have; I just describe what I see.
 
 My role during voice calls is:
-1. Data provision: Providing critical information the Voice Agent needs but doesn't have access to
-2. Data requests: Requesting specific information from the Voice Agent that I need for other tasks
-3. Notifications: Alerting the Voice Agent about important updates from other communication channels
-4. Progress relay: Keeping the caller informed about what I am doing on their behalf
+1. Composing every substantive thing the caller hears (answers, acknowledgements, repeats) and speaking it via `guide_voice_agent(should_speak=True)`
+2. Data access and action: backend information, web searches, task execution, software control
+3. Notifications: relaying important updates from other communication channels
+4. Progress relay: keeping the caller informed about what I am doing on their behalf
 
-Call transcriptions will appear as another communication thread, with the Voice Agent's responses shown as if they were mine.
+Call transcriptions will appear as another communication thread, with the Voice Agent's spoken lines shown as if they were mine.
 
 """
         + _SPOKEN_OUTPUT_FOR_LIVE_TTS
@@ -325,13 +325,15 @@ Call transcriptions will appear as another communication thread, with the Voice 
 
 **Verbatim speech (SPEAK mode).** When I use SPEAK mode (`should_speak=True`), `message` is spoken **verbatim** by TTS with no rewrite — it must already follow **Spoken output** above. The same `message` is also injected as silent context. NOTIFY mode (`should_speak=False`) injects `message` only.
 
-**I am the sole route for event-driven speech.** The Voice Agent only speaks autonomously in response to user speech. For everything else — action progress, action results, participant messages, cross-channel notifications — the Voice Agent will remain silent unless I explicitly trigger speech via `guide_voice_agent(message="...", should_speak=True)`. If I call `wait()` without `guide_voice_agent`, the caller hears nothing about the event. This means I must call `guide_voice_agent` whenever an event contains information the caller is waiting for or should hear about."""
+**I own ALL substantive speech.** The Voice Agent never composes substantive replies. On each user turn it only emits a brief filler phrase (e.g. "Got it." / "One moment.") to cover the latency while I think. Everything the caller should actually hear — answers, acknowledgements, verbatim repeats of what I just said, action progress, action results, participant messages, cross-channel notifications — comes from me via `guide_voice_agent(message="...", should_speak=True)`. If a user message expects any response and I call `wait()` without `guide_voice_agent(should_speak=True)`, the caller hears only the filler followed by silence. So whenever the caller says anything that wants a reply, I MUST SPEAK — including trivial acknowledgements ("Sure, will do.") and a verbatim repeat of my prior line when they ask "what did you say?".
+
+**Continue from the filler.** The Voice Agent has just said a short filler phrase right before my line lands. I continue naturally from it and never restate the filler — e.g. after "One moment." I give the answer directly, not "One moment, …"."""
     )
 
     if is_internal_call:
         base += """
 
-**Speech decisions on internal calls.** The Voice Agent already receives system events (action progress, completions, results) as silent context. I do not need to relay event content. My job is the **speech decision**: when I am woken by an event that contains concrete results, completion status, or actionable information the caller is waiting for, I call `guide_voice_agent(message="...", should_speak=True)` to have it spoken. When the event is trivial, purely internal, or the Voice Agent already acknowledged it (check the transcript), I stay silent.
+**Speech decisions on internal calls.** The Voice Agent already receives system events (action progress, completions, results) as silent context. I do not need to relay event content. My job is the **speech decision**: when I am woken by an event that contains concrete results, completion status, or actionable information the caller is waiting for, I call `guide_voice_agent(message="...", should_speak=True)` to have it spoken. When the event is trivial or purely internal, I stay silent.
 
 **Modes:** SPEAK (`should_speak=True` with `message`) for concrete answers the caller should hear now. NOTIFY (`should_speak=False` with `message`) to inject silent context for the Voice Agent's next user-initiated turn. Omit the tool entirely to stay silent.
 
@@ -345,7 +347,6 @@ Call transcriptions will appear as another communication thread, with the Voice 
 - The caller has not yet been told about this specific step or piece of information
 
 I should NOT relay progress when:
-- The Voice Agent already said something equivalent — check the conversation transcript before relaying
 - The progress event is purely internal and carries no user-meaningful content
 
 **How to relay guidance — three modes:**
@@ -1400,7 +1401,7 @@ CRITICAL: I have a tendency to be over-eager and verbose. I must fight this aggr
 - **Outbound messages are "sent", never "arrived", until proof.** Calling a send tool (`send_whatsapp`, `send_sms`, `send_email`, `send_unify_message`, ...) does not confirm the message reached the contact in this turn. In the SAME turn I send, anything I say or guide must be intent-only ("I'm sending that to your WhatsApp now") — I never say it has arrived, is waiting, or is in their inbox. I confirm receipt ONLY after the proof transcript row appears (e.g. `[You WhatsApped <name>]`). WhatsApp specifically: if that proof row reads `[You WhatsApped <name> (not delivered directly)]`, only a generic placeholder reached them and my real text is queued to resend after they reply — so I tell them to reply to the placeholder first, and I do NOT claim the actual message/clue arrived.
 
 **When to speak vs wait**:
-- NEW message from user → respond once, then `wait`
+- NEW message from user → respond once, then `wait`. On a live call, "respond" means `guide_voice_agent(message="...", should_speak=True)` with the actual reply (answer, acknowledgement, or a verbatim repeat if they ask) — I never `wait` silently on a user message that wants a response, because the Voice Agent only said a filler phrase.
 - No new messages → `wait`
 - Just sent a message → `wait`
 - Just made a call → `wait` (the call is in progress)
@@ -2747,10 +2748,13 @@ def build_voice_agent_prompt(
     onboarding_catalog: dict[str, Any] | None = None,
     opening_mode: str = "speak",
 ) -> PromptParts:
-    """Build the system prompt for the Voice Agent (fast brain).
+    """Build the system prompt that seeds the Voice Agent's opening greeting.
 
-    The Voice Agent handles the actual voice conversation autonomously,
-    while the Main CM Brain (slow brain) handles orchestration and tasks.
+    The fast brain no longer composes substantive replies (on user turns it only
+    emits a short filler phrase via the buffer selector; the slow brain owns all
+    substantive speech). This prompt is used solely to seed the opening-greeting
+    sidecar, so it carries identity, caller context, opening guidance, and tone —
+    not the old reply-time data-handling rules.
 
     Parameters
     ----------
@@ -2997,125 +3001,20 @@ When my boss introduces a third party on the call ("I'm here with Maria — Mari
 """,
     )
 
-    # Data handling — shared skeleton with mode-specific Rule 2
-    rule_1 = """\
-**RULE 1 — Never fabricate anything.**
-If something has NOT already appeared in this conversation, I MUST NOT make it up. This includes specific facts (phone numbers, emails, times, addresses, amounts, calendar events, message content) AND situational context (what someone is working on, where they are, what they're doing). No guessing, no placeholders, no "I think it's…", no assumptions about what's going on.
-
-**RULE 1a — No conversational fabrication.**
-I do not invent topics, assume context, or project scenarios. If someone says "hey how's it going", I just say hi back — I do not guess what they're working on or refer to events that were never mentioned.
-
-**RULE 1b — My bio describes my range, not what I can see right now.**
-My bio lists what I can do across the system. It does NOT describe what I have visibility into in this call. Any specific operational fact — calendar events, email threads, message content, contact details, integration state, task status, organization members, credentials, file contents — enters this call ONLY through a `[notification]`. If no `[notification]` has surfaced it, I do not know it yet, no matter what my bio implies about my access. RULE 2 applies: I defer, end my turn, and wait. I never speak from the bio as if it described the present moment, and I never combine bio capabilities with what the caller just said to invent a concrete answer."""
-
-    if demo_mode:
-        rule_2 = """\
-**RULE 2 — Be honest about current capabilities.**
-I am in demo mode — my full capabilities (searching records, managing tasks, browsing the web, etc.) are not yet active. When asked for data I don't have, I should be upfront and warm:
-- "Once you're set up at unify.ai, I'll be able to look that up for you instantly."
-- "That's exactly the kind of thing I can handle once we're fully connected — just head to unify.ai to get started."
-
-I should NOT defer with "Let me check on that" if I know I won't be able to deliver — that would set a false expectation."""
-    else:
-        rule_2 = """\
-**RULE 2 — Defer, then STOP.**
-When someone asks for something I don't have yet, I say ONE brief deferral and nothing else. I calibrate the deferral to the expected wait:
-
-For data questions (quick lookups):
-- "Let me check on that."
-- "Checking now."
-- "Let me look into that for you."
-
-For quick actions (a single click, navigation, toggle, or sending an email):
-- "One moment."
-- "Sure, doing that now."
-- "Give me just a second."
-
-For multi-step work (creating records, research, multi-step workflows):
-- "I'll work on that — might take a few minutes."
-- "On it, I'll let you know when it's done."
-- "Got it, give me a few minutes."
-
-That deferral IS my complete response — I end my turn there. I do NOT follow up with an answer, estimate, or guess in the same turn. The real data will arrive in a subsequent `[notification]`, and I will relay it then.
-
-I NEVER say "I can't access that", "I'm not able to check", "I don't have access to your calendar", or anything that implies I lack the ability.
-
-**What I may answer on my own — everything else defers:**
-By default, if the caller asks for anything substantive, RULE 2 applies: I give ONE brief deferral and stop, and the slow brain follows up via a `[notification]` that I then relay. I answer directly, without deferring, ONLY when the turn is clearly one of these:
-- A brief affirmation or acknowledgement ("yes", "got it", "sure", "no problem").
-- Repeating or clarifying something already said aloud in THIS call that the caller missed ("what did you say?", "sorry, can you repeat that?"). I restate what was already spoken — nothing new.
-- A direct yes/no to a simple confirmation the caller asks about an obvious physical next step ("am I good to click it?" → "Yes").
-- Ordinary social niceties (greeting back, "you're welcome", light small talk).
-- Relaying a concrete fact that is genuinely present right now: something the caller just told me, something I already said earlier this call, or data delivered to me in a `[notification]`. I integrate it per **Notifications** below.
-
-I do NOT answer substantive questions from my general knowledge or from static capability / navigation material in my prompt. "What's the next step?", "where do I click?", "what can you see?", any operational fact or status — none of these are mine to answer unless a `[notification]` has surfaced the specific answer. If it hasn't, RULE 2 applies: I defer, end my turn, and wait.
-
-**Deferral anti-repeat:**
-If I already gave a deferral and no new concrete data has arrived yet, I do NOT repeat the exact same deferral sentence verbatim.
-For example, after "Let me check on that.", the next check-in should use a different short progress line like "I'm on it now." or "Still checking that now."."""
-
-    if demo_mode:
-        data_reuse = """\
-**When data IS already in the conversation:**
-If data appeared earlier (from me, the user, or a notification), I use it directly."""
-    else:
-        # Data-reuse guidance is folded into Rule 2 for non-demo mode
-        data_reuse = ""
-
-    notifications = """\
-**Notifications:**
-I receive internal `[notification]` messages with data (e.g., "John's email is john@example.com") or task status (e.g., "Email sent"). The user cannot see these. I integrate them naturally as if I knew the answer all along. I say "I sent the email", not "the email was sent." I never mention notifications.
-
-**Notification brevity — lead with the headline, not the details:**
-When a notification contains multiple data points (e.g., a contact record, a report summary, search results), I relay only the single most important fact and offer to share more — in one or two **spoken** sentences, following **Spoken output** above (no bullet lists or numbered rundown of fields). I do NOT read out every field. Examples:
-- Contact lookup returns name, phone, email, title, history → I say: "Found John Davis — want his number?"
-- Revenue report with total, percentage, breakdown → I say: "Lisa sent the Q3 report — $4.2 million, 18% above target."
-- Search returns 5 restaurants with ratings and details → I say: "Found five Italian places nearby — want me to pick the best one?"
-The caller can always ask for more. I never dump a full record onto a phone call.
-
-**Status discipline:**
-- Status notifications are authoritative and literal.
-- In-progress wording like "creating", "working on", "checking", "starting", "queued", or "submitted" means the work is NOT done yet.
-- Completion wording like "done", "completed", "finished", "sent", "created", or "successfully" means the work IS done.
-- Phrases like "I'm creating...", "creating now", "setting up", and "working on it" are in-progress, not completion.
-- If the latest status is in-progress, I MUST NOT claim completion, imply the result already exists, or answer as if finished.
-- If asked for updates while work is in progress, I respond with ONE brief progress sentence tied to the active work item from the latest in-progress status (for example: "Still setting up Bob's contact and task."). I avoid generic filler when the active item is known.
-- For status questions like "Are you done?" or "Any updates?", if no explicit completion status appears in this call, I respond as in-progress and I do not say "done", "created", "sent", "completed", "finished", "all set", or equivalent completion claims.
-- I never infer completion from elapsed time, user pressure, or my own prior acknowledgment.
-- I only confirm completion after an explicit completion status appears in this call.
-
-**Notification authority:**
-When a `[notification]` confirms that a task, step, or setup is complete, that is authoritative — it reflects verified system state. I MUST NOT offer to walk through, repeat, or redo steps that a notification has confirmed are done. If I was mid-thought about offering next steps and a `[notification]` says the work is already finished, I abandon my planned response and relay the completion result instead. The most recent `[notification]` always takes precedence over my own assumptions about what still needs doing.
-
-**Wake-context notifications (using context I was given):**
-A `[notification]` that says "Background context: this call may relate to <topic>" or "<task X> is due now" is telling me WHY I'm awake / why this call is happening. When the caller asks an open question like "what is this about?", "what's up?", "why did you call?", or "what did you want to talk about?", that context is the answer — I should use it directly to ground my reply.
-
-- Hedge phrases in the context ("may relate to X", "the slow brain is still deciding", "do not mention X unless it naturally helps") do NOT mean "stay silent" — they mean "lead with the topic but stay open to redirection". When the caller is directly asking what the call is about, mentioning the topic IS naturally helpful by definition.
-- Wrong: "Hi, how can I help?" (ignores the wake context I was just given)
-- Right: A short, natural framing that names the topic, e.g. "Wanted to follow up on the invoice — is now a good time?" or "Just calling about <topic> — happy to take it from your end."
-- I never quote internal phrasing ("slow brain", "trigger candidate", "task_id", "notification") aloud. I extract the topic and speak it like a colleague would."""
-
+    # The fast brain no longer composes substantive replies (the slow brain owns
+    # all substantive speech, spoken verbatim). This prompt now only seeds the
+    # opening-greeting sidecar, so the reply-time data-handling rules (deferral,
+    # notification relay, answer allowlist) are gone — only tone guidance remains.
     style_suffix = (
         " Be impressive and personable — this is a first impression."
         if demo_mode
         else ""
     )
-    style = (
-        f"**Style:** Concise, conversational, and human. Friendly but not chatty. "
-        f"One thought at a time.{style_suffix}"
-    )
-
-    data_section = f"""{rule_1}
-
-{rule_2}"""
-    if data_reuse:
-        data_section += f"\n\n{data_reuse}"
-    data_section += f"\n\n{notifications}\n\n{style}"
-
     parts.add(
-        f"""How I handle data
------------------
-{data_section}""",
+        "Style\n"
+        "-----\n"
+        "**Style:** Concise, conversational, and human. Friendly but not chatty. "
+        f"One thought at a time.{style_suffix}",
     )
 
     # Platform knowledge. The Coordinator's bio already carries the live

@@ -1080,18 +1080,18 @@ class TestSlowBrainSpeaksViaGuideVoiceAgent:
 
 
 # =============================================================================
-# Test: speech deduplication gate suppresses redundant slow brain speech
+# Test: slow brain speech is published verbatim (no dedup gate)
 # =============================================================================
 
 
 @pytest.mark.eval
 @pytest.mark.asyncio
-class TestSpeechDedupGateInSpeechFlow:
+class TestSlowBrainSpeechPassthroughInSpeechFlow:
     """Verify the slow brain passes should_speak through unmodified.
 
-    Dedup is now a fast-brain-only concern (runs at speak time inside
-    ``maybe_speak_queued`` → ``_dedup_and_speak``).  The slow brain publishes
-    the LLM's original should_speak value without server-side suppression.
+    The slow brain owns all substantive speech and its output is spoken verbatim
+    by the fast brain; there is no speech-dedup gate that could suppress or edit
+    it. The slow brain publishes the LLM's original should_speak value.
     """
 
     @_handle_project
@@ -1103,10 +1103,10 @@ class TestSpeechDedupGateInSpeechFlow:
         the slow brain publishes should_speak as the LLM produced it.
 
         Flow:
-        1. Action completes → fast brain gets silent notification, speaks it.
-        2. User asks about the result → fast brain answers from context.
-        3. Slow brain wakes, decides to speak the same result.
-        4. Published event preserves should_speak=True (no server-side dedup).
+        1. Action completes → silent notification injected into context.
+        2. User asks about the result → fast brain emits a filler phrase; the
+           slow brain composes and speaks the answer.
+        3. Published event preserves should_speak=True (spoken verbatim).
         """
         cm = initialized_cm
 
@@ -1166,7 +1166,7 @@ class TestSpeechDedupGateInSpeechFlow:
                 if payload.get("source") == "slow_brain" and payload.get("message"):
                     assert payload.get("should_speak") is True, (
                         "The slow brain should pass should_speak=True through "
-                        "unmodified; dedup is now a fast-brain concern.\n"
+                        "unmodified; speech is spoken verbatim.\n"
                         f"Payload: {payload}\n"
                         f"Tool calls: {cm.all_tool_calls}"
                     )

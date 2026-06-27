@@ -74,13 +74,13 @@ from unity.conversation_manager.medium_scripts.common import (
     publish_meet_interaction_from_track,
     FastBrainLogger,
     hydrate_fast_brain_history,
-    trim_fast_brain_context,
 )
 from unity.conversation_manager.cm_types.screenshot import (
     ScreenshotEntry,
     generate_screenshot_path,
     write_screenshot_to_disk,
 )
+from unity.conversation_manager.domains.fast_brain_buffer import select_buffer_phrase
 
 # Globals initialized lazily or via prewarm to avoid duplicate heavy init
 STT = None
@@ -355,10 +355,6 @@ class Assistant(Agent):
         self._user_speech_logged = False
         self.user_turn_generating = False
         self._credit_gate_state_provider: Callable | None = None
-        # Returns the texts of utterances currently being spoken but not yet
-        # committed to the chat context, so the fast brain sees them before it
-        # generates and does not re-voice them.
-        self._inflight_speech_provider: Callable[[], list[str]] | None = None
         # Armed when the recorded opener is interrupted before its static-removal
         # transition. Schedules a bridge recording at the start of the next turn.
         # The callable enqueues the bridge synchronously (no playout await) so
@@ -369,31 +365,6 @@ class Assistant(Agent):
 
     def set_credit_gate_state_provider(self, provider: Callable) -> None:
         self._credit_gate_state_provider = provider
-
-    @staticmethod
-    def _append_inflight_speech_context(
-        chat_ctx: "llm.ChatContext",
-        texts: list[str],
-    ) -> None:
-        """Append in-flight (currently-spoken, uncommitted) lines to a context.
-
-        Each is added as a self-describing ``system`` note so the fast brain
-        knows it is already saying the line and continues from it rather than
-        repeating it. Mutates the given context only - callers pass the
-        ephemeral per-generation copy, so nothing persists to real history.
-        """
-        for text in texts:
-            t = (text or "").strip()
-            if not t:
-                continue
-            chat_ctx.add_message(
-                role="system",
-                content=[
-                    "[system] I am in the middle of saying this aloud to the "
-                    f'caller right now: "{t}". I should not repeat it; I '
-                    "continue naturally from it if relevant.",
-                ],
-            )
 
     def set_call_received(self):
         self.call_received = True
@@ -428,7 +399,12 @@ class Assistant(Agent):
         tools: list[llm.FunctionTool | llm.RawFunctionTool],
         model_settings: ModelSettings,
     ) -> AsyncIterable[llm.ChatChunk]:
-        """Wait for call connection then delegate to parent LLM."""
+        """Wait for call connection, then emit a single buffer filler phrase.
+
+        The fast brain does not free-generate substantive replies; it selects one
+        short, safe filler phrase to cover latency while the slow brain composes
+        the real (verbatim-spoken) response.
+        """
         self.user_turn_generating = True
         try:
             _log.info("Waiting for call to be received…")
@@ -458,34 +434,21 @@ class Assistant(Agent):
                 event_broker.publish("app:comms:fast_brain_generating", "{}"),
             )
 
-            from unity.settings import SETTINGS
+            # The fast brain no longer free-generates a reply. It emits exactly
+            # one short, universally-safe filler phrase to cover latency; the
+            # slow brain owns all substantive speech and is spoken verbatim.
+            user_text = ""
+            for item in reversed(chat_ctx.items):
+                if getattr(item, "role", None) == "user":
+                    user_text = item.text_content or ""
+                    break
 
-            window = SETTINGS.conversation.FAST_BRAIN_CONTEXT_WINDOW
-            trimmed_items = trim_fast_brain_context(chat_ctx.items, window)
-            if len(trimmed_items) < len(chat_ctx.items):
-                trimmed_ctx = llm.ChatContext()
-                for item in trimmed_items:
-                    trimmed_ctx.items.append(item)
-            else:
-                trimmed_ctx = chat_ctx
-
-            # Surface any line currently being spoken aloud (e.g. proactive
-            # speech mid-playout) that has not yet committed to history, so the
-            # fast brain does not re-voice it. Injected into the per-generation
-            # copy only, so it never persists (the real turn commits once at
-            # playout end).
-            if self._inflight_speech_provider is not None:
-                inflight = self._inflight_speech_provider() or []
-                if inflight:
-                    self._append_inflight_speech_context(trimmed_ctx, inflight)
-
-            _log.info("LLM thinking… (llm_node_start)")
-            async for chunk in super().llm_node(
-                trimmed_ctx,
-                tools,
-                model_settings,
-            ):
-                yield chunk
+            _log.info("Selecting buffer phrase… (llm_node_start)")
+            phrase = await select_buffer_phrase(user_text)
+            yield ChatChunk(
+                id=f"fast-brain-buffer-{monotonic_ms()}",
+                delta=ChoiceDelta(role="assistant", content=phrase),
+            )
         finally:
             self.user_turn_generating = False
 
@@ -1352,13 +1315,8 @@ async def entrypoint(ctx: agents.JobContext):
     )
 
     user_is_speaking = False
-    _queued_speech: list[tuple[str, str, str, str, str, str]] = []
+    _queued_speech: list[tuple[str, str, str, str, str]] = []
     _say_meta_queue: list[dict] = []
-    _dedup_in_flight = False
-    # Wall-clock of the most recent voice activity (spoken utterance or injected
-    # notification). Compared against a guidance's ``decided_after_ts`` to skip
-    # the dedup gate when nothing has happened since the slow brain decided.
-    _last_voice_activity_ts: "datetime | None" = None
     generation_seq = 0
     user_state_seq = 0
     mood_turn_index = 0
@@ -1942,10 +1900,6 @@ async def entrypoint(ctx: agents.JobContext):
         role = getattr(ev.item, "role", None)
         if role not in ("user", "assistant"):
             return
-        nonlocal _last_voice_activity_ts
-        from datetime import datetime, timezone
-
-        _last_voice_activity_ts = datetime.now(timezone.utc)
         text = ev.item.text_content or ""
         utterance_id = content_trace_id("utt", f"{role}:{text}")
         say_meta: dict | None = None
@@ -2054,9 +2008,6 @@ async def entrypoint(ctx: agents.JobContext):
     # in _say_meta_queue until their playout commits them to history. Set as a
     # direct attribute so it works uniformly on the real Assistant and the test
     # fakes without each needing a setter.
-    assistant._inflight_speech_provider = lambda: [
-        m["text"] for m in _say_meta_queue if (m.get("text") or "").strip()
-    ]
     credit_gate_task = asyncio.create_task(
         credit_gate_monitor.run(),
         name="fast_brain_credit_gate_monitor",
@@ -2108,9 +2059,9 @@ async def entrypoint(ctx: agents.JobContext):
     # Publish call started (shared helper)
     await publish_call_started(contact, channel, call_session_id=call_session_id)
 
-    pending_notifications: list[tuple[str, str, bool, str, str, str, str]] = (
+    pending_notifications: list[tuple[str, str, bool, str, str, str]] = (
         []
-    )  # (message, spoken_message, should_speak, notification_id, notification_source, llm_log_path, decided_after_ts)
+    )  # (message, spoken_message, should_speak, notification_id, notification_source, llm_log_path)
     session_ready = False
 
     def _mark_user_joined(reason: str) -> None:
@@ -2340,22 +2291,16 @@ async def entrypoint(ctx: agents.JobContext):
         source: str = "",
         notification_source: str = "",
         llm_log_path: str = "",
-        decided_after_ts: str = "",
     ) -> None:
         # Awareness notifications (should_speak=False) are injected into the fast
         # brain's context so it can surface them in first person. should_speak=True
-        # guidance is NOT pre-injected: the dedup gate voices it once and its spoken
-        # text then lands in context as an assistant turn, so the fast brain sees it
-        # as already said rather than as a notification to re-announce. Only the
-        # unheard remainder is injected back, after playout, if the utterance was
-        # interrupted (see _speak_now). Proactive speech is fire-and-forget filler —
-        # it never updates context.
+        # guidance is spoken verbatim by the slow brain (the fast brain only emits
+        # a filler phrase), then its spoken text lands in context as an assistant
+        # turn. Only the unheard remainder is injected back, after playout, if the
+        # utterance was interrupted (see _speak_now). Proactive speech is
+        # fire-and-forget filler — it never updates context.
         speech_text = spoken_message or message
         if notification_source != "proactive_speech" and message and not should_speak:
-            nonlocal _last_voice_activity_ts
-            from datetime import datetime, timezone
-
-            _last_voice_activity_ts = datetime.now(timezone.utc)
             notification_message = f"[notification] {message}"
             assistant._chat_ctx.add_message(
                 role="system",
@@ -2390,7 +2335,6 @@ async def entrypoint(ctx: agents.JobContext):
                         notification_source,
                         message,
                         llm_log_path,
-                        decided_after_ts,
                     ),
                 )
                 maybe_speak_queued()
@@ -2401,191 +2345,16 @@ async def entrypoint(ctx: agents.JobContext):
         assistant._chat_ctx.add_message(role="assistant", content=[content])
         session.history.add_message(role="assistant", content=[content])
 
-    def _get_recent_assistant_utterances(n: int = 10) -> list[str]:
-        """Return the last *n* assistant utterances from the fast brain's chat context.
-
-        Walks ``assistant._chat_ctx.items`` in reverse, collecting up to *n*
-        text strings from items with ``role == "assistant"``.  Returns them in
-        chronological order (oldest first).
-        """
-        results: list[str] = []
-        for item in reversed(assistant._chat_ctx.items):
-            if getattr(item, "role", None) != "assistant":
-                continue
-            raw = getattr(item, "content", None)
-            if isinstance(raw, str) and raw:
-                results.append(raw)
-            elif isinstance(raw, list):
-                text = " ".join(c for c in raw if isinstance(c, str)).strip()
-                if text:
-                    results.append(text)
-            if len(results) >= n:
-                break
-        results.reverse()
-        return results
-
-    def _get_recent_notifications(n: int = 5) -> list[str]:
-        """Return the last *n* ``[notification]`` system messages from the chat context."""
-        results: list[str] = []
-        prefix = "[notification] "
-        for item in reversed(assistant._chat_ctx.items):
-            if getattr(item, "role", None) != "system":
-                continue
-            raw = getattr(item, "content", None)
-            if isinstance(raw, list):
-                raw = " ".join(c for c in raw if isinstance(c, str)).strip()
-            if isinstance(raw, str) and raw.startswith(prefix):
-                results.append(raw[len(prefix) :])
-            if len(results) >= n:
-                break
-        results.reverse()
-        return results
-
-    def _voice_activity_since(decided_after_ts: str) -> bool:
-        """Whether any voice activity occurred since the slow brain's snapshot.
-
-        ``decided_after_ts`` is the ISO timestamp of the latest voice utterance
-        the slow brain saw when it produced this guidance. When there has been no
-        spoken utterance or injected notification since then, the dedup gate is
-        provably redundant (no race is possible) and can be skipped. Fails safe:
-        a missing/invalid marker, or unknown activity, returns True (run gate).
-        """
-        if not decided_after_ts or _last_voice_activity_ts is None:
-            return True
-        from datetime import datetime, timezone
-
-        try:
-            decided = datetime.fromisoformat(decided_after_ts)
-        except ValueError:
-            return True
-        if decided.tzinfo is None:
-            decided = decided.replace(tzinfo=timezone.utc)
-        last = _last_voice_activity_ts
-        if last.tzinfo is None:
-            last = last.replace(tzinfo=timezone.utc)
-        return last > decided
-
-    async def _dedup_and_speak(
-        text: str,
-        notification_id: str,
-        notification_source: str,
-        notification_content: str,
-        llm_log_path: str,
-        decided_after_ts: str = "",
-    ) -> None:
-        nonlocal _dedup_in_flight
-        _dedup_in_flight = True
-        try:
-            recent = _get_recent_assistant_utterances()
-            notifications = _get_recent_notifications() if recent else []
-            # Exclude this guidance's own injected ``[notification]`` copy so the
-            # gate never compares the proposal against itself. apply_notification
-            # injects ``notification_content`` verbatim; the spoken ``text`` may
-            # differ (spoken_message), so drop both forms.
-            _self_texts = {text.strip(), (notification_content or "").strip()}
-            notifications = [n for n in notifications if n.strip() not in _self_texts]
-            run_gate = bool(recent) and SETTINGS.conversation.SPEECH_DEDUP_ENABLED
-            if run_gate and not _voice_activity_since(decided_after_ts):
-                # Nothing has been spoken or notified on the call since the slow
-                # brain decided this guidance, so its context is identical to what
-                # the slow brain already accounted for - the gate cannot find a
-                # race. Skip it (saves a speak-path LLM call) and speak as-is.
-                from unity.logger import LOGGER
-
-                LOGGER.info(
-                    "⬥ [FastBrain] Dedup skipped: no voice activity since "
-                    "slow-brain decision.",
-                )
-                run_gate = False
-            if run_gate:
-                from unity.conversation_manager.domains.speech_dedup import (
-                    SpeechDecision,
-                    SpeechDeduplicationChecker,
-                )
-
-                outcome = await SpeechDeduplicationChecker(
-                    model=SETTINGS.conversation.FAST_BRAIN_MODEL,
-                ).evaluate(
-                    proposed_speech=text,
-                    recent_utterances=recent,
-                    recent_notifications=notifications,
-                )
-                if outcome.decision is SpeechDecision.SUPPRESS:
-                    _log.dedup_suppressed(text, outcome.reasoning)
-                    return
-                if (
-                    outcome.decision is SpeechDecision.REWRITE
-                    and outcome.text_stream is not None
-                ):
-                    stream = outcome.text_stream
-                    # Peek the first token: an empty rewrite degrades to suppress,
-                    # while a stream failure before any token fails open (speak the
-                    # original proposal).
-                    first: str | None = None
-                    errored = False
-                    try:
-                        async for chunk in stream:
-                            if chunk:
-                                first = chunk
-                                break
-                    except Exception as e:
-                        from unity.logger import LOGGER
-
-                        LOGGER.error(
-                            f"⬥ Speech rewrite stream failed before first token: {e}",
-                        )
-                        errored = True
-                    if not errored:
-                        if first is None:
-                            _log.dedup_suppressed(
-                                text,
-                                "rewrite produced empty output",
-                            )
-                            return
-
-                        async def _rewritten() -> "AsyncIterable[str]":
-                            yield first
-                            async for chunk in stream:
-                                if chunk:
-                                    yield chunk
-
-                        _speak_now(
-                            _rewritten(),
-                            notification_id,
-                            notification_source,
-                            notification_content,
-                            llm_log_path,
-                        )
-                        return
-            _speak_now(
-                text,
-                notification_id,
-                notification_source,
-                notification_content,
-                llm_log_path,
-            )
-        finally:
-            _dedup_in_flight = False
-            maybe_speak_queued()
-
     def maybe_speak_queued() -> None:
-        """Speak the next queued response when user is silent and assistant is idle.
+        """Speak the next queued slow-brain response, verbatim, when quiescent.
 
-        Gates on agent_state to avoid racing with the fast brain's reply pipeline.
+        Gates on agent_state to avoid racing with the fast brain's buffer phrase.
         After the user stops speaking, the agent transitions through thinking →
         speaking → listening. We only speak queued text once the agent has settled
-        back to a quiescent state, guaranteeing the fast brain's reply comes first.
-
-        When dedup is enabled, the actual speak is async (LLM call to check for
-        redundancy).  The ``_dedup_in_flight`` guard prevents a second item from
-        being dispatched while the first is still being checked.
+        back to a quiescent state, guaranteeing the fast brain's filler comes
+        first. The slow brain owns all substantive speech and is spoken verbatim.
         """
-        if (
-            _dedup_in_flight
-            or not speech_gate_open
-            or not _queued_speech
-            or not _is_pipeline_quiescent()
-        ):
+        if not speech_gate_open or not _queued_speech or not _is_pipeline_quiescent():
             return
         (
             text,
@@ -2593,17 +2362,13 @@ async def entrypoint(ctx: agents.JobContext):
             notification_source,
             notification_content,
             llm_log_path,
-            decided_after_ts,
         ) = _queued_speech.pop(0)
-        asyncio.ensure_future(
-            _dedup_and_speak(
-                text,
-                notification_id,
-                notification_source,
-                notification_content,
-                llm_log_path,
-                decided_after_ts,
-            ),
+        _speak_now(
+            text,
+            notification_id,
+            notification_source,
+            notification_content,
+            llm_log_path,
         )
 
     def on_notification(data: dict) -> None:
@@ -2651,7 +2416,6 @@ async def entrypoint(ctx: agents.JobContext):
         should_speak = payload.get("should_speak", False)
         notification_source = payload.get("source", "")
         llm_log_path = payload.get("llm_log_path", "")
-        decided_after_ts = payload.get("decided_after_ts", "")
         notification_id = content_trace_id("guid", message or spoken_message)
         triggers_turn = notification_source not in (
             "meet_interaction",
@@ -2674,7 +2438,6 @@ async def entrypoint(ctx: agents.JobContext):
                         notification_id,
                         notification_source,
                         llm_log_path,
-                        decided_after_ts,
                     ),
                 )
                 _log.notification_buffered(len(pending_notifications))
@@ -2687,7 +2450,6 @@ async def entrypoint(ctx: agents.JobContext):
                     source="socket_callback",
                     notification_source=notification_source,
                     llm_log_path=llm_log_path,
-                    decided_after_ts=decided_after_ts,
                 )
                 if triggers_turn:
                     _invalidate_current_generation(
@@ -2773,9 +2535,7 @@ async def entrypoint(ctx: agents.JobContext):
         _log.session_ready(
             f"Applying {len(pending_notifications)} buffered notification(s)",
         )
-        still_pending_notifications: list[tuple[str, str, bool, str, str, str, str]] = (
-            []
-        )
+        still_pending_notifications: list[tuple[str, str, bool, str, str, str]] = []
         for (
             message,
             spoken_message,
@@ -2783,7 +2543,6 @@ async def entrypoint(ctx: agents.JobContext):
             notification_id,
             notification_source,
             llm_log_path,
-            decided_after_ts,
         ) in pending_notifications:
             if should_speak and not speech_gate_open:
                 still_pending_notifications.append(
@@ -2794,7 +2553,6 @@ async def entrypoint(ctx: agents.JobContext):
                         notification_id,
                         notification_source,
                         llm_log_path,
-                        decided_after_ts,
                     ),
                 )
                 continue
@@ -2806,7 +2564,6 @@ async def entrypoint(ctx: agents.JobContext):
                 source="pending_buffer_flush",
                 notification_source=notification_source,
                 llm_log_path=llm_log_path,
-                decided_after_ts=decided_after_ts,
             )
         pending_notifications[:] = still_pending_notifications
 
@@ -2938,7 +2695,6 @@ async def entrypoint(ctx: agents.JobContext):
             notification_id,
             notification_source,
             llm_log_path,
-            decided_after_ts,
         ) in gated_notifications:
             apply_notification(
                 message,
@@ -2948,7 +2704,6 @@ async def entrypoint(ctx: agents.JobContext):
                 source="user_joined_buffer_flush",
                 notification_source=notification_source,
                 llm_log_path=llm_log_path,
-                decided_after_ts=decided_after_ts,
             )
     maybe_speak_queued()
 
