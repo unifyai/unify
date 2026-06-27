@@ -1586,6 +1586,7 @@ async def test_on_user_turn_completed_schedules_pending_opening_bridge():
     self = SimpleNamespace(
         _pending_opening_bridge=_schedule_bridge,
         _user_speech_logged=False,
+        _user_turn_seq=0,
     )
     new_message = SimpleNamespace(text_content="hi there")
 
@@ -1600,6 +1601,7 @@ async def test_on_user_turn_completed_schedules_pending_opening_bridge():
     assert scheduled == [True]
     assert self._pending_opening_bridge is None
     assert self._user_speech_logged is True
+    assert self._user_turn_seq == 1
 
 
 @pytest.mark.asyncio
@@ -1608,7 +1610,11 @@ async def test_on_user_turn_completed_without_bridge_is_normal():
 
     from unity.conversation_manager.medium_scripts import call as call_script
 
-    self = SimpleNamespace(_pending_opening_bridge=None, _user_speech_logged=False)
+    self = SimpleNamespace(
+        _pending_opening_bridge=None,
+        _user_speech_logged=False,
+        _user_turn_seq=0,
+    )
     new_message = SimpleNamespace(text_content="hello")
 
     await call_script.Assistant.on_user_turn_completed(
@@ -2006,6 +2012,8 @@ class TestFastBrainGuidanceFlow:
                 self._chat_ctx = llm.ChatContext()
                 self.call_received = True
                 self.user_turn_generating = False
+                self._user_turn_seq = 0
+                self._slow_brain_responded_turn = -1
 
             def set_call_received(self):
                 self.call_received = True
@@ -2261,6 +2269,8 @@ class TestFastBrainGuidanceFlow:
                 self._chat_ctx = llm.ChatContext()
                 self.call_received = True
                 self.user_turn_generating = False
+                self._user_turn_seq = 0
+                self._slow_brain_responded_turn = -1
 
             def set_call_received(self):
                 self.call_received = True
@@ -2515,6 +2525,8 @@ class TestFastBrainGuidanceFlow:
                 self._chat_ctx = llm.ChatContext()
                 self.call_received = True
                 self.user_turn_generating = False
+                self._user_turn_seq = 0
+                self._slow_brain_responded_turn = -1
 
             def set_call_received(self):
                 self.call_received = True
@@ -2745,6 +2757,8 @@ class TestFastBrainGuidanceFlow:
                 self._chat_ctx = llm.ChatContext()
                 self.call_received = True
                 self.user_turn_generating = False
+                self._user_turn_seq = 0
+                self._slow_brain_responded_turn = -1
 
             def set_call_received(self):
                 self.call_received = True

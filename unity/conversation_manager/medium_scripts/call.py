@@ -355,6 +355,12 @@ class Assistant(Agent):
         self._user_speech_logged = False
         self.user_turn_generating = False
         self._credit_gate_state_provider: Callable | None = None
+        # Monotonic user-turn counter and the latest turn the slow brain has
+        # already produced spoken output for. A buffer filler is only useful as a
+        # lead-in: if the slow brain has already responded to this turn, the
+        # filler is dropped so it never plays AFTER the real answer.
+        self._user_turn_seq = 0
+        self._slow_brain_responded_turn = -1
         # Armed when the recorded opener is interrupted before its static-removal
         # transition. Schedules a bridge recording at the start of the next turn.
         # The callable enqueues the bridge synchronously (no playout await) so
@@ -384,6 +390,9 @@ class Assistant(Agent):
         interrupting it, and the bridge text stays in the in-flight speech queue
         so the concurrent generation sees it and continues naturally from it.
         """
+        # New user turn: a fresh buffer filler is now warranted (until the slow
+        # brain responds to this turn).
+        self._user_turn_seq += 1
         if self._pending_opening_bridge is not None:
             schedule_bridge = self._pending_opening_bridge
             self._pending_opening_bridge = None
@@ -428,6 +437,15 @@ class Assistant(Agent):
                 )
                 return
 
+            # The buffer is only useful as a lead-in. If the slow brain has
+            # already produced spoken output for this turn (e.g. this is a
+            # notification-triggered re-generation, or its answer landed first),
+            # emit nothing - a filler must never play AFTER the real answer.
+            my_turn = self._user_turn_seq
+            if self._slow_brain_responded_turn >= my_turn:
+                _log.info("Buffer suppressed: slow brain already responded this turn")
+                return
+
             await self._capture_screenshots_for_llm(chat_ctx)
 
             asyncio.create_task(
@@ -450,6 +468,13 @@ class Assistant(Agent):
 
             _log.info("Selecting buffer phrase… (llm_node_start)")
             phrase = await select_buffer_phrase(user_text, recent_assistant_text)
+
+            # Re-check: the slow brain may have answered during selection. If so,
+            # drop the now-stale filler so it does not trail the real answer.
+            if self._slow_brain_responded_turn >= my_turn:
+                _log.info("Buffer suppressed: slow brain responded during selection")
+                return
+
             yield ChatChunk(
                 id=f"fast-brain-buffer-{monotonic_ms()}",
                 delta=ChoiceDelta(role="assistant", content=phrase),
@@ -2331,6 +2356,10 @@ async def entrypoint(ctx: agents.JobContext):
                     llm_log_path,
                 )
             else:
+                # The slow brain has produced spoken output for the current
+                # turn; mark it so any in-flight / re-triggered buffer filler is
+                # suppressed rather than played after this real answer.
+                assistant._slow_brain_responded_turn = assistant._user_turn_seq
                 # Latest slow brain guidance supersedes older queued speech.
                 _queued_speech.clear()
                 _queued_speech.append(
