@@ -1023,7 +1023,26 @@ class ConversationManagerBrainActionTools:
             }
 
         await self._cm.call_manager.end_call()
-        return {"status": "ok", "message": "Ending the call."}
+        # Wait for the real resource — a freshly prewarmed idle worker process —
+        # before reporting back, so the brain only learns the call ended once a
+        # new call can actually be placed safely. This deliberately blocks the
+        # tool result for a few seconds rather than letting the brain believe it
+        # is free to dial straight into a worker that has not re-warmed.
+        ready = await self._cm.call_manager.await_ready_for_new_call()
+        if ready:
+            return {
+                "status": "ok",
+                "message": "Call ended; the line is clear and ready for a new call.",
+                "ready_for_new_call": True,
+            }
+        return {
+            "status": "ok",
+            "message": (
+                "Call ended, but the voice line is still being prepared and "
+                "cannot place a new call just yet — wait a moment before dialing."
+            ),
+            "ready_for_new_call": False,
+        }
 
     async def start_teams_meet_screenshare(self) -> dict[str, Any]:
         """Share the assistant's desktop screen in the active Teams meeting.
@@ -2044,6 +2063,14 @@ class ConversationManagerBrainActionTools:
             "wait": self.wait,
         }
         call_or_meet_in_progress = self._cm.in_voice_session
+        # Call-starting tools that dispatch the LiveKit voice worker are exposed
+        # only when a new call can actually be placed: no live session AND the
+        # worker has a freshly prewarmed idle process ready. This prevents the
+        # brain from dialing into a worker that has not re-warmed after a prior
+        # session (the Meet -> WhatsApp-call handoff race).
+        ready_to_start_call = (
+            not call_or_meet_in_progress and self._cm.call_manager.is_ready_for_new_call
+        )
         if not call_or_meet_in_progress:
             tools["join_google_meet"] = self.join_google_meet
             tools["join_teams_meet"] = self.join_teams_meet
@@ -2075,7 +2102,7 @@ class ConversationManagerBrainActionTools:
             tools["send_sms"] = (
                 self.send_sms_to_boss if is_coordinator else self.send_sms
             )
-            if not call_or_meet_in_progress:
+            if ready_to_start_call:
                 tools["make_call"] = (
                     self.make_call_to_boss if is_coordinator else self.make_call
                 )
@@ -2084,7 +2111,7 @@ class ConversationManagerBrainActionTools:
                 self.send_whatsapp_to_boss if is_coordinator else self.send_whatsapp
             )
             tools["send_whatsapp"] = self._with_whatsapp_window_doc(base_send_whatsapp)
-            if not call_or_meet_in_progress:
+            if ready_to_start_call:
                 tools["make_whatsapp_call"] = (
                     self.make_whatsapp_call_to_boss
                     if is_coordinator

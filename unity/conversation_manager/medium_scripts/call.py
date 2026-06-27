@@ -897,6 +897,13 @@ async def entrypoint(ctx: agents.JobContext):
 
     _configure_child_logging()
 
+    # This prewarmed process is now being consumed by a job, so clear the
+    # idle-ready marker. The worker re-creates it once a replacement idle
+    # process has finished warming, which is what gates starting the next call.
+    from unity.conversation_manager.medium_scripts.worker import mark_worker_busy
+
+    mark_worker_busy()
+
     # Wire the module-level logger into the shared event broker.
     event_broker.set_logger(_log)
 

@@ -71,6 +71,10 @@ _BASE_FORWARD_CHANNELS = [
 
 WORKER_POOL_REGISTERED_TIMEOUT_S = 120.0
 DISPATCH_ACTIVATION_TIMEOUT_S = 90.0
+# Upper bound on how long we await a freshly prewarmed idle worker process
+# before starting a new call. Prewarm normally completes in well under this;
+# the cap exists so a wedged worker surfaces as a failure rather than hanging.
+NEW_CALL_READINESS_TIMEOUT_S = 30.0
 
 
 class LivekitCallManager:
@@ -144,6 +148,63 @@ class LivekitCallManager:
     @property
     def has_active_call(self) -> bool:
         return self._active_job or self._call_proc is not None
+
+    @property
+    def is_ready_for_new_call(self) -> bool:
+        """Whether the voice worker can safely host a brand-new call right now.
+
+        True only when the persistent worker is alive with a freshly prewarmed
+        idle process available (``WORKER_READY_PATH``), the previous job — if
+        any — has fully disconnected from the IPC socket, and no dispatch is in
+        flight. When LiveKit is not configured / no persistent worker is in use,
+        the subprocess path spawns a fresh process per call, so a new call is
+        always safe.
+        """
+        if not os.environ.get("LIVEKIT_URL"):
+            return True
+        if self._worker_proc is None or self._worker_proc.poll() is not None:
+            return False
+        # One voice session at a time: any live call/meeting (or a WhatsApp call
+        # mid-setup) means a new call is not safe yet.
+        if (
+            self.has_active_call
+            or self.has_active_meet()
+            or self._whatsapp_call_joining
+        ):
+            return False
+        if (
+            self._socket_server is not None
+            and self._socket_server.has_connected_clients
+        ):
+            return False
+        from unity.conversation_manager.medium_scripts.worker import (
+            WORKER_READY_PATH,
+        )
+
+        return os.path.exists(WORKER_READY_PATH)
+
+    async def await_ready_for_new_call(
+        self,
+        timeout: float = NEW_CALL_READINESS_TIMEOUT_S,
+        poll_interval: float = 0.25,
+    ) -> bool:
+        """Await until a brand-new call can be safely started, or until timeout.
+
+        Polls the real resource signals (no fixed sleep): a freshly prewarmed
+        idle worker process, the IPC socket draining the previous job, and
+        dispatch state. A stale dispatch that LiveKit never activated is cleared
+        opportunistically so a genuinely-idle worker is not reported busy by a
+        leftover flag. Returns True once ready, False if the timeout elapses.
+        """
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while True:
+            if self._active_job and self._call_proc is None:
+                self._clear_stale_dispatch_state()
+            if self.is_ready_for_new_call:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(poll_interval)
 
     # ------------------------------------------------------------------
     # Persistent worker lifecycle
