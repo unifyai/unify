@@ -2015,7 +2015,6 @@ class TestFastBrainGuidanceFlow:
                 self._user_turn_seq = 0
                 self._slow_brain_responded_turn = -1
                 self._buffers_since_slow_reply = 0
-                self._used_wait_phrases = []
 
             def set_call_received(self):
                 self.call_received = True
@@ -2274,7 +2273,6 @@ class TestFastBrainGuidanceFlow:
                 self._user_turn_seq = 0
                 self._slow_brain_responded_turn = -1
                 self._buffers_since_slow_reply = 0
-                self._used_wait_phrases = []
 
             def set_call_received(self):
                 self.call_received = True
@@ -2532,7 +2530,6 @@ class TestFastBrainGuidanceFlow:
                 self._user_turn_seq = 0
                 self._slow_brain_responded_turn = -1
                 self._buffers_since_slow_reply = 0
-                self._used_wait_phrases = []
 
             def set_call_received(self):
                 self.call_received = True
@@ -2766,7 +2763,6 @@ class TestFastBrainGuidanceFlow:
                 self._user_turn_seq = 0
                 self._slow_brain_responded_turn = -1
                 self._buffers_since_slow_reply = 0
-                self._used_wait_phrases = []
 
             def set_call_received(self):
                 self.call_received = True

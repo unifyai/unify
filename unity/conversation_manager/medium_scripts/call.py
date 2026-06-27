@@ -80,10 +80,7 @@ from unity.conversation_manager.cm_types.screenshot import (
     generate_screenshot_path,
     write_screenshot_to_disk,
 )
-from unity.conversation_manager.domains.fast_brain_buffer import (
-    select_buffer_phrase,
-    select_wait_phrase,
-)
+from unity.conversation_manager.domains.fast_brain_buffer import select_fast_reply
 
 # Globals initialized lazily or via prewarm to avoid duplicate heavy init
 STT = None
@@ -364,13 +361,11 @@ class Assistant(Agent):
         # filler is dropped so it never plays AFTER the real answer.
         self._user_turn_seq = 0
         self._slow_brain_responded_turn = -1
-        # Count of consecutive fillers emitted since the slow brain last spoke,
-        # and the wait phrases already used in the current streak. After the
-        # first reaction, subsequent fillers switch to "still here, reply coming"
-        # phrasing (never a lookup) and never repeat within the streak. Reset
-        # when the slow brain delivers a real reply.
+        # Count of consecutive fast replies emitted since the slow brain last
+        # spoke. After the first reaction, subsequent ones are marked as repeated
+        # deferrals so they reassure ("bear with me") rather than starting a
+        # fresh lookup. Reset when the slow brain delivers a real reply.
         self._buffers_since_slow_reply = 0
-        self._used_wait_phrases: list[str] = []
         # Armed when the recorded opener is interrupted before its static-removal
         # transition. Schedules a bridge recording at the start of the next turn.
         # The callable enqueues the bridge synchronously (no playout await) so
@@ -460,40 +455,41 @@ class Assistant(Agent):
                 event_broker.publish("app:comms:fast_brain_generating", "{}"),
             )
 
-            # The fast brain no longer free-generates a reply. It emits one short
-            # filler phrase to cover latency; the slow brain owns all substantive
-            # speech and is spoken verbatim. The FIRST filler since the slow brain
-            # last spoke is a genuine reaction (full set); every subsequent filler
-            # (the caller spoke again before the real reply landed) just owns the
-            # lag with a "still here, reply coming" phrase — never a lookup, which
-            # would sound like it's re-reading its own speech.
-            if self._buffers_since_slow_reply >= 1:
-                phrase = select_wait_phrase(self._used_wait_phrases)
-                self._used_wait_phrases.append(phrase)
-                _log.info("Selecting wait phrase (subsequent filler)")
-            else:
+            # The fast brain does not compose the real answer (the slow brain
+            # does, spoken verbatim). It gives one brief, natural reaction to
+            # cover the gap. The first reply since the slow brain last spoke is a
+            # fresh reaction; subsequent ones (the caller spoke again before the
+            # real reply landed) are marked as repeated deferrals so they reassure
+            # rather than starting a fresh lookup.
+            already_deferred = self._buffers_since_slow_reply >= 1
+            user_text = ""
+            recent_assistant_text = ""
+            for item in reversed(chat_ctx.items):
+                role = getattr(item, "role", None)
+                if role == "user" and not user_text:
+                    user_text = item.text_content or ""
+                elif role == "assistant" and not recent_assistant_text:
+                    recent_assistant_text = item.text_content or ""
+                if user_text and recent_assistant_text:
+                    break
+
+            # Refresh screenshots only on the first reaction (also feeds the slow
+            # brain); repeated deferrals don't need it and should stay snappy.
+            if not already_deferred:
                 await self._capture_screenshots_for_llm(chat_ctx)
-                user_text = ""
-                recent_assistant_text = ""
-                for item in reversed(chat_ctx.items):
-                    role = getattr(item, "role", None)
-                    if role == "user" and not user_text:
-                        user_text = item.text_content or ""
-                    elif role == "assistant" and not recent_assistant_text:
-                        recent_assistant_text = item.text_content or ""
-                    if user_text and recent_assistant_text:
-                        break
 
-                _log.info("Selecting buffer phrase… (llm_node_start)")
-                phrase = await select_buffer_phrase(user_text, recent_assistant_text)
+            _log.info("Selecting fast reply… (llm_node_start)")
+            phrase = await select_fast_reply(
+                user_text,
+                recent_assistant_text,
+                already_deferred=already_deferred,
+            )
 
-                # Re-check: the slow brain may have answered during selection. If
-                # so, drop the now-stale filler so it does not trail the answer.
-                if self._slow_brain_responded_turn >= my_turn:
-                    _log.info(
-                        "Buffer suppressed: slow brain responded during selection",
-                    )
-                    return
+            # Re-check: the slow brain may have answered during selection. If so,
+            # drop the now-stale filler so it does not trail the real answer.
+            if self._slow_brain_responded_turn >= my_turn:
+                _log.info("Buffer suppressed: slow brain responded during selection")
+                return
 
             self._buffers_since_slow_reply += 1
             yield ChatChunk(
@@ -2394,7 +2390,6 @@ async def entrypoint(ctx: agents.JobContext):
                 # the filler streak so the next filler is a fresh first reaction.
                 assistant._slow_brain_responded_turn = assistant._user_turn_seq
                 assistant._buffers_since_slow_reply = 0
-                assistant._used_wait_phrases.clear()
                 # Latest slow brain guidance supersedes older queued speech.
                 _queued_speech.clear()
                 _queued_speech.append(
