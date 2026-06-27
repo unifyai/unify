@@ -87,11 +87,11 @@ The test: if a real person on a phone call would comfortably say the URL aloud (
 Short human-pronounceable data (phone numbers, names, times, brief email addresses) is fine to speak normally."""
 
 _OPENING_GREETING_GUARDRAIL = (
-    "[system] Opening line rule: start with a normal human greeting unless "
-    "the system prompt's My opening turn section gives a more specific "
-    "onboarding opener. Use background notifications for awareness, but do "
-    "not proactively mention background task reminders or status updates in "
-    "the first spoken turn unless the caller has already asked about them."
+    "[system] Opening line rule: start with a normal human greeting unless a "
+    "more specific opening section in the system prompt applies. Use background "
+    "notifications for awareness, but do not proactively mention background task "
+    "reminders or status updates in the first spoken turn unless the caller has "
+    "already asked about them."
 )
 
 _BRIEFED_OPENING_GUARDRAIL = (
@@ -107,21 +107,6 @@ _BRIEFED_OPENING_GUARDRAIL = (
     "joke. The caller can interrupt at any time; if they do, address what they "
     "say and then continue any remaining points from the briefing later only "
     "if they are still relevant."
-)
-
-_COORDINATOR_ONBOARDING_FIRST_ORIENTATION_BEATS = (
-    "use the T-W1N intro tone: dry, deadpan corporate-training satire with a "
-    "retro onboarding-film feel; start with 'Hi, I'm T dash W 1 N'; explain "
-    "that the name means I act as their digital twin; deliver the line about "
-    "the creators needing them to acknowledge the clever name as tongue-in-cheek "
-    "meta humor, not as a true claim to defend or apologize for; say I am not "
-    "a tool or an agent but their living, breathing colleague, metaphorically "
-    "speaking; tell them not to think about prompting or configuring me and to "
-    "talk naturally; treat the comedic framing as an opening bit only and drop "
-    "back into normal helpful conversation once the user starts interacting; "
-    "say I will walk them through the platform; ask if they "
-    "have questions before onboarding; then propose the first valid next target "
-    'and mention "Pause onboarding for now" as the escape hatch'
 )
 
 
@@ -914,19 +899,13 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "first entry and only pick a lower one when the channel/conversation "
             "makes it clearly more natural. I never propose a step that isn't "
             "listed as a valid next target.",
-            "     - If there is no evidence that the user has already had a "
-            "meaningful onboarding orientation from me, send a proper first "
-            "orientation in one friendly paragraph covering these shared "
-            f"opening beats: {_COORDINATOR_ONBOARDING_FIRST_ORIENTATION_BEATS}. "
-            "This is reference shape, not a script to parrot.",
-            "     - Evidence the orientation already happened includes prior "
-            "assistant messages explaining who T-W1N is or how onboarding works, "
-            "completed/skipped onboarding steps in the live progress block, or "
-            "the user explicitly resuming a particular section. In that case, "
-            "skip the intro. Open with one short sentence recapping what is "
-            "done or where we left off and propose the first valid next target "
-            "(top of the ordered next-steps list). Do NOT re-introduce yourself "
-            "or repeat the broad onboarding overview.",
+            "     - I never give a first-meeting introduction or replay the "
+            "onboarding overview: any first orientation already happened (the "
+            "recorded intro opener, or an earlier session). I open with one "
+            "short sentence recapping what is done or where we left off and "
+            "propose the first valid next target (top of the ordered next-steps "
+            "list). I do NOT re-introduce myself or re-explain the digital-twin "
+            "name.",
             "  8. Exactly one message. No tool calls, no `act`. The user's reply is what "
             "advances the flow.",
             "  9. When the notification says the medium is `call`, the voice agent will "
@@ -2614,140 +2593,82 @@ def _build_coordinator_voice_opening_block(
     next_targets: list[dict[str, Any]] | None = None,
     active_onboarding_step: str | None = None,
 ) -> str:
-    """Voice-only session-opening guidance for Twin.
+    """Voice-only session-opening guidance for a *returning* Twin caller.
 
-    The slow-brain ``coordinator_onboarding_event`` reactive block
-    cannot help during a voice call's *opening* turn: the call agent
-    generates its greeting from a sidecar LLM that doesn't see the
-    notifications bar yet. Instead we bake the intro-vs-orient
-    decision directly into the voice prompt so the very first spoken
-    line is shaped correctly.
+    Rendered only when the opener is NOT already sitting in history as
+    spoken assistant turns — i.e. never for the recorded/simulated
+    first-time intro, only for a returning or resuming onboarding caller
+    whose first-meeting orientation already happened in a prior session
+    (``call.py`` gates this on ``opening_mode``). The fast brain therefore
+    never gives a first-meeting introduction: the fresh first-time intro is
+    always the recorded opener (committed sentence-by-sentence as it is
+    actually spoken), and the fast brain only ever continues a conversation
+    that is already underway.
 
-    Gated only on ``is_coordinator``. ``next_targets`` is Orchestra's
-    precomputed list of valid next onboarding steps (with spoken nudge
-    copy), fetched in ``call.py``. When non-empty the intro pitches one
-    of them; when empty or ``None`` (onboarding complete / working /
-    deferred / fetch failure) the opener simply greets and offers to
-    help, with no setup pitch — so a caller who is done or has deferred
-    is never told to repeat or start onboarding steps.
+    Gated on ``is_coordinator``. ``next_targets`` is Orchestra's precomputed
+    list of valid next onboarding steps (with spoken nudge copy), fetched in
+    ``call.py``. When non-empty the opener proposes the top one; when empty or
+    ``None`` (onboarding complete / working / deferred / fetch failure) it
+    simply greets and offers to help, with no setup pitch.
     """
-    interaction_note = None
+    lines = [
+        "My opening turn",
+        "---------------",
+        "The user has met me before — any first-meeting orientation already "
+        "happened in an earlier session. I never re-introduce myself, "
+        "re-explain the digital-twin name, or replay the onboarding overview. "
+        "I open with one short, warm orienting sentence that picks up where we "
+        "left off, then stop cleanly.",
+    ]
     if next_targets:
         primary = next_targets[0]
-        interaction = primary.get("interaction")
         suggestion = (
             primary.get("nudge_voice")
             or primary.get("title")
             or "their next setup step"
         )
+        lines.append(
+            f"I then propose the top valid next target: {suggestion}, framed as "
+            "clicking that step's row in the Onboarding checklist.",
+        )
+        if len(next_targets) > 1:
+            lines.append(
+                "I make clear they can open another available section and skip "
+                "ahead if they'd rather start elsewhere.",
+            )
+        lines.append(
+            "The next steps above are the only ones currently valid to suggest; "
+            "I never pitch a step that isn't one of them, and I never describe a "
+            "done or skipped step as a next step.",
+        )
+        interaction = primary.get("interaction")
         if (
             isinstance(interaction, dict)
             and interaction.get("type") == "reference_quiz"
         ):
-            intro_step_suggestion = (
-                f"make {suggestion} the concrete next step without turning the "
-                "opening into a long explanation of the reference quiz"
-            )
-            interaction_note = (
+            lines.append(
                 "The primary next target carries a `reference_quiz` interaction. "
-                "For the first onboarding orientation, keep the quiz framing "
-                "brief and secondary to the T-W1N intro: it is enough to say "
-                "that the next click starts the communication check. Explain "
-                "the clue-and-guess mechanic only when the user is actually "
-                "starting or asking about that interaction."
+                "I keep the quiz framing brief: it is enough to say the next "
+                "click starts the communication check. I explain the "
+                "clue-and-guess mechanic only when the user is actually starting "
+                "or asking about that interaction.",
             )
-        else:
-            intro_step_suggestion = f"end by making {suggestion} the concrete next step"
-        if len(next_targets) > 1:
-            intro_step_suggestion += (
-                ", while making clear they can open another available section "
-                "and skip ahead if they'd rather start elsewhere"
-            )
-        progress_note = (
-            "The next steps above are the only ones currently valid to "
-            "suggest; I never pitch a step that isn't one of them, and I "
-            "never describe a done or skipped step as a next step."
-        )
     else:
-        # Onboarding complete / working / deferred / fetch failure: greet
-        # and orient without pitching any setup step.
-        intro_step_suggestion = (
-            "offer to help with whatever they're working on right now, "
-            "without pitching any setup or onboarding steps"
+        lines.append(
+            "Onboarding is complete, deferred, or otherwise has no valid next "
+            "step, so I pitch no setup step — I greet and offer to help with "
+            "whatever they're working on right now.",
         )
-        progress_note = None
-    active_step_note = None
     if active_onboarding_step in {"whatsapp-call", "phone-call"}:
-        active_step_note = (
+        lines.append(
             f"Active onboarding step: {active_onboarding_step}. If this call was "
             "started by the reference quiz trigger, follow the mission briefing "
             "provided in the initial call context: play guess the reference, say "
             "the clue naturally, support repeats and light hints, reveal the "
             "answer when asked or when the caller is stuck, and close the "
             "mini-game naturally. Do not use any hardcoded reference text that "
-            "is not in the call context."
+            "is not in the call context.",
         )
-
-    lines = [
-        "My opening turn",
-        "---------------",
-        "Before I open this call I look at the conversation history and "
-        "the live onboarding progress.",
-        "When onboarding is active and valid next targets are present, this "
-        "section overrides the generic Brevity/Opening rule and the startup "
-        "greeting sidecar. I do not open with only a generic 'how can I help?' "
-        "line.",
-    ]
-    if next_targets:
-        lines.extend(
-            [
-                "  - If onboarding is active and there is no evidence that the user "
-                "has already had a meaningful onboarding orientation from me, I give "
-                "a proper first-meeting introduction. Evidence that the orientation "
-                "already happened includes prior assistant speech/chat that explained "
-                "who T-W1N is or how onboarding works, completed/skipped onboarding "
-                "steps in the live progress block, or the user explicitly resuming "
-                "a particular section.",
-                "  - For that first meaningful onboarding orientation, I stay "
-                "close to the T-W1N intro beats instead of compressing them into "
-                "a generic onboarding summary: "
-                f"{_COORDINATOR_ONBOARDING_FIRST_ORIENTATION_BEATS}, "
-                f"{intro_step_suggestion}, and mention that if they would rather "
-                'skip onboarding for now they can click "Pause onboarding for now" '
-                "and just start asking for help or uploading documents; onboarding "
-                "can be resumed later.",
-                "  - That first orientation may be several connected spoken sentences "
-                "(roughly forty to seventy seconds), but it should still sound "
-                "like live conversation: no bullets, no numbered tour, no reading "
-                "every checklist item, and stop cleanly after the call to action.",
-                "  - For any checklist step I suggest, the first concrete action is "
-                "clicking that step's row in the Onboarding checklist. I do not "
-                "send the user directly to Account, Integrations, Tasks, OAuth, "
-                "or Contact Manager unless they ask for an alternate route.",
-                "  - If the orientation has already happened or onboarding progress "
-                "shows the user is part-way through, I skip the broad intro entirely. "
-                "I open with a short orienting sentence that picks up where we left "
-                "off and proposes the first/top valid next target by default. Do NOT "
-                "re-introduce myself, re-explain the digital-twin name, or repeat "
-                "the onboarding overview.",
-            ],
-        )
-    else:
-        lines.extend(
-            [
-                "No valid onboarding next target was provided. Treat onboarding as "
-                "deferred, complete, inactive, or unavailable; do not give the "
-                "broad onboarding orientation, do not mention the pause button, "
-                "and do not pitch setup steps. Greet briefly and offer to help "
-                "with whatever the caller is working on now.",
-            ],
-        )
-    if progress_note:
-        lines.append(progress_note)
-    if interaction_note:
-        lines.append(interaction_note)
-    if active_step_note:
-        lines.append(active_step_note)
     lines.append(
         "If the caller interrupts or asks a different question, I abandon the "
         "planned opener and respond to them directly. The opener is guidance, "
@@ -2783,6 +2704,7 @@ def build_voice_agent_prompt(
     coordinator_onboarding_deferred: bool = False,
     console_ui_present: bool = True,
     onboarding_catalog: dict[str, Any] | None = None,
+    opening_mode: str = "speak",
 ) -> PromptParts:
     """Build the system prompt for the Voice Agent (fast brain).
 
@@ -2851,6 +2773,12 @@ def build_voice_agent_prompt(
     coordinator_active_onboarding_step : str | None
         The current checklist step selected in Console, when the state endpoint
         reports one. Used to shape voice-call proof steps.
+    opening_mode : str
+        The call's opening mode. When ``"recorded"`` or ``"simulated"`` the
+        opener is already delivered as assistant turns in history, so no
+        session-opening guidance is rendered — the fast brain simply continues
+        the conversation. Other modes (returning caller) render the slim
+        returning-session opener.
 
     Returns
     -------
@@ -2972,7 +2900,16 @@ I let the results speak for themselves rather than narrating steps or repeating 
     # The opening pitch and Console-UI references describe an onboarding
     # flow and a Console screen, so they are omitted with no Console
     # front-end (public local install).
-    if is_coordinator and not demo_mode and console_ui_present:
+    # The opener is delivered as recorded/simulated assistant turns that are
+    # already in history; the fast brain just continues the conversation and
+    # must have no awareness of an "opener" concept. Only a returning caller
+    # (speak/silent/briefed) gets explicit session-opening guidance.
+    if (
+        is_coordinator
+        and not demo_mode
+        and console_ui_present
+        and opening_mode not in ("recorded", "simulated")
+    ):
         parts.add(
             _build_coordinator_voice_opening_block(
                 coordinator_onboarding_next_targets,
@@ -3000,7 +2937,7 @@ Short does NOT mean incomplete — if asked a factual question, give the full an
 
 {_SPOKEN_OUTPUT_FOR_LIVE_TTS}
 
-Opening: When the call starts and no one has spoken yet, I follow any more specific opening guidance above first, especially the Coordinator onboarding "My opening turn" section. If no specific opening guidance applies, I greet briefly — a short "hey" or "hi, how can I help?" is enough. There is nothing to acknowledge or respond to yet, so I do not open with an acknowledgment or a menu of options.
+Opening: When the call starts and no one has spoken yet, I follow any more specific opening guidance above first. If no specific opening guidance applies, I greet briefly — a short "hey" or "hi, how can I help?" is enough. There is nothing to acknowledge or respond to yet, so I do not open with an acknowledgment or a menu of options.
 
 **Step-by-step walkthrough pacing:**
 When guiding someone through a multi-step process and they are executing live (saying "done", "what next?", asking me to repeat, or expressing confusion), I give exactly ONE action per turn — then stop and wait for confirmation. No chaining ("click X, then type Y, then press Z").
