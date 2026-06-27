@@ -1310,6 +1310,45 @@ async def _(
         await cm.schedule_proactive_speech()
 
 
+@EventHandler.register(VoiceInterrupt)
+async def _(
+    event: VoiceInterrupt,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    """Record that the caller interrupted before hearing the full message.
+
+    Only the spoken prefix makes it into the transcript, so without this the slow
+    brain would treat the prefix as the complete message it delivered. We append
+    a guidance note naming the unheard remainder so the slow brain knows it was
+    cut off and can re-surface the missed content if it still matters.
+    """
+    remainder = (event.unheard_remainder or "").strip()
+    if not remainder:
+        return
+    contact_id = event.contact.get("contact_id") if event.contact else None
+    contact = (
+        cm.contact_index.get_contact(contact_id=contact_id) if contact_id else None
+    )
+    if contact is None:
+        contact = event.contact or {}
+    sender_name = _get_sender_name(contact)
+
+    note = (
+        "[The caller interrupted you mid-sentence and did NOT hear the rest of "
+        f'your last message: "{remainder}". Weave it back in naturally if it '
+        "still matters; otherwise move on with what they just said.]"
+    )
+    cm.contact_index.push_message(
+        contact_id=contact_id,
+        sender_name=sender_name,
+        thread_name=_active_voice_thread_medium(cm),
+        message_content=note,
+        role="guidance",
+    )
+
+
 @EventHandler.register(ProactiveSpeechControl)
 async def _(
     event: ProactiveSpeechControl,

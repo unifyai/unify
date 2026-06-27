@@ -249,12 +249,16 @@ class TestEventHandlerRegistry:
 
     def test_unregistered_event_returns_sleep(self):
         """Verify that unregistered events return a no-op coroutine."""
-        # VoiceInterrupt is a real event class that has no registered handler
-        from unity.conversation_manager.events import VoiceInterrupt
+        import uuid
 
-        # VoiceInterrupt should not have a handler registered
-        result = EventHandler._registry.get(VoiceInterrupt)
-        assert result is None, "VoiceInterrupt should not have a handler"
+        # A freshly-created event class has no registered handler.
+        unregistered_cls = type(
+            f"_UnregisteredEvent_{uuid.uuid4().hex[:8]}",
+            (Event,),
+            {},
+        )
+        result = EventHandler._registry.get(unregistered_cls)
+        assert result is None, "A fresh event class should have no handler"
 
     def test_register_decorator_single_event(self):
         """Verify @EventHandler.register works for single event class."""
@@ -1177,6 +1181,38 @@ class TestVoiceUtteranceHandlers:
         msgs = mock_cm.contact_index.get_messages_for_contact(2, Medium.PHONE_CALL)
         assert len(msgs) == 1
         # Guidance messages have role="guidance"
+
+    @pytest.mark.asyncio
+    async def test_voice_interrupt_records_unheard_remainder(self, mock_cm):
+        """VoiceInterrupt records a guidance note naming the unheard remainder so
+        the slow brain knows it was cut off."""
+        from unity.conversation_manager.events import VoiceInterrupt
+
+        event = VoiceInterrupt(
+            contact={"contact_id": 2},
+            spoken_prefix="I've sent the clue to your",
+            unheard_remainder="email — reply with your guess.",
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        msgs = mock_cm.contact_index.get_messages_for_contact(2, Medium.PHONE_CALL)
+        assert len(msgs) == 1
+        # Recorded as an internal GuidanceMessage (no role; content carries the note).
+        assert "email — reply with your guess." in msgs[0].content
+        assert "interrupted" in msgs[0].content.lower()
+
+    @pytest.mark.asyncio
+    async def test_voice_interrupt_without_remainder_is_noop(self, mock_cm):
+        """A VoiceInterrupt with no unheard remainder records nothing."""
+        from unity.conversation_manager.events import VoiceInterrupt
+
+        event = VoiceInterrupt(contact={"contact_id": 2})
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        msgs = mock_cm.contact_index.get_messages_for_contact(2, Medium.PHONE_CALL)
+        assert len(msgs) == 0
 
     @pytest.mark.asyncio
     async def test_assistant_turn_injection_updates_history_without_user_turn(
