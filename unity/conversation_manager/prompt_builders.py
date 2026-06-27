@@ -329,7 +329,7 @@ Call transcriptions will appear as another communication thread, with the Voice 
 
 **Continue from the filler.** The Voice Agent has just said a short filler phrase right before my line lands. I continue naturally from it and never restate the filler — e.g. after "One moment." I give the answer directly, not "One moment, …".
 
-**Interruptions.** If the caller barges in while I'm speaking, only the part they actually heard is recorded; the rest is lost to them. I'll then see a guidance note saying the caller interrupted me and did NOT hear a specific remainder. I treat that remainder as content they missed: I weave it back in naturally if it still matters (e.g. re-surfacing an instruction they didn't catch), or drop it if their new message moved on. I never assume they heard anything beyond what the transcript shows."""
+**Interruptions.** A barge-in is signalled to me ONLY by an explicit `[... interrupted ...]` note in the transcript naming the specific remainder the caller did not hear. When I see that note, I weave the named remainder back in naturally if it still matters, or drop it if their new message moved on. I must NOT infer a barge-in from anything else — not from a missing `[You @ ...]` confirmation, not from the caller replying to an earlier line, not from timing. No explicit note means no interruption: the guidance is being delivered normally and I do not re-deliver it."""
     )
 
     if is_internal_call:
@@ -1183,10 +1183,11 @@ def _build_input_action_recognition_block() -> str:
 - If I see one of these, the action is DONE — call `wait`, do NOT repeat the action.
 
 **What the user has actually heard on a voice call — `[You @ ...]` vs `[guidance @ ...]`:**
-- `[You @ ...]` rows are words confirmed spoken aloud. This is the source of truth for what the user has definitely heard.
-- `[guidance @ ...] (unconfirmed)` rows are speech I *just requested* via `guide_voice_agent`. There is no dedup or rewrite layer anymore: a recent unconfirmed guidance is being spoken verbatim right now — its matching `[You @ ...]` row simply has not landed yet (playout takes a few seconds).
-- **I never re-issue or restate a recent unconfirmed guidance just because its `[You @ ...]` confirmation has not appeared yet — doing so makes the user hear the same thing twice (the #1 cause of me repeating myself).** If a recent `[guidance]` row already covers what I would say, I treat it as already said: I move on to genuinely new content or I `wait`. I do NOT paraphrase or re-deliver it.
-- I only re-address that content when there is positive evidence it was missed: the user says they didn't catch it, an interruption note reports a specific unheard remainder, or the guidance is clearly stale (it is old, no `[You]` row ever appeared for it, and the conversation has since moved on)."""
+- `[You @ ...]` rows are words confirmed spoken aloud — the source of truth for what the user has definitely heard.
+- `[guidance @ ...] (unconfirmed)` rows are speech I *just requested* via `guide_voice_agent`. There is no dedup/rewrite layer: a recent unconfirmed guidance is being spoken verbatim right now; its `[You @ ...]` confirmation simply has not landed yet (playout lags a few seconds). **I assume it IS being delivered.**
+- **I never re-issue, restate, or paraphrase a recent unconfirmed guidance.** Repeating it is the #1 cause of me saying the same thing twice. If a recent `[guidance]` row already covers what I would say, it is handled: I move on to genuinely new content, or I `wait`.
+- **I never INFER that the user missed my guidance.** A user replying to an earlier line, asking about something else, or simply not having reacted to the guidance yet is NOT evidence they missed it — they just have not gotten to it. A missing `[You @ ...]` confirmation is NOT evidence either (it lags). I answer what they actually asked and let the in-flight guidance stand; I do not "weave it back in".
+- The ONLY two cases where I re-deliver that content: (1) an explicit `[... interrupted ...]` note in the transcript names a specific unheard remainder, or (2) the user explicitly says they did not hear it ("what did you say?", "say that again", "I missed that"). Absent one of those two explicit signals, I never re-deliver — even if it feels helpful."""
 
 
 def _build_input_format_example() -> str:
