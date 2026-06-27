@@ -28,6 +28,9 @@ from unity.comms import CommsPrimitives
 from unity.session_details import SESSION_DETAILS
 
 from unity.conversation_manager.domains import managers_utils
+from unity.conversation_manager.domains.onboarding_tool_gating import (
+    masked_reference_quiz_tools,
+)
 from unity.conversation_manager.event_broker import get_event_broker
 from unity.conversation_manager.events import (
     ActorHandleStarted,
@@ -2129,6 +2132,14 @@ class ConversationManagerBrainActionTools:
             tools["ask_about_contacts"] = self.ask_about_contacts
             tools["update_contacts"] = self.update_contacts
             tools["query_past_transcripts"] = self.query_past_transcripts
+        # During onboarding, withhold a reference-quiz channel's send tool until
+        # the user clicks its trigger row (this session) or the step durably
+        # completes — so T-W1N cannot send an untagged clue proactively.
+        for name in masked_reference_quiz_tools(
+            self._cm.coordinator_onboarding_render,
+            self._cm.onboarding_clicked_trigger_steps,
+        ):
+            tools.pop(name, None)
         return tools
 
     def build_action_steering_tools(self) -> dict[str, "Callable[..., Any]"]:

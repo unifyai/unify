@@ -10,6 +10,9 @@ from typing import Any, Sequence
 
 from unity.common import console_ui
 from unity.common.accessible_teams_block import build_accessible_teams_block
+from unity.conversation_manager.domains.onboarding_tool_gating import (
+    masked_reference_quiz_tools,
+)
 from unity.session_details import TeamSummary
 
 from ..common.prompt_helpers import now, PromptParts
@@ -528,6 +531,7 @@ def _build_comms_tool_listing(
     assistant_has_teams: bool = False,
     is_coordinator: bool = False,
     on_voice_call: bool = False,
+    masked_tools: set[str] | None = None,
 ) -> str:
     """Build the communication tools block for the output format section.
 
@@ -535,8 +539,31 @@ def _build_comms_tool_listing(
     tools (``make_call``, ``make_whatsapp_call``, ``join_google_meet``,
     ``join_teams_meet``) are withheld from the live tool set, so they are omitted
     here too — only one voice session can exist at a time.
+
+    ``masked_tools`` lists send-tool names withheld this turn (onboarding
+    reference-quiz gating); their lines are dropped and a note is added so the
+    model guides the user to click the trigger row instead of trying to send.
     """
     lines: list[str] = []
+
+    def _finalize(built: list[str]) -> str:
+        if not masked_tools:
+            return "\n".join(built)
+        kept = [
+            line
+            for line in built
+            if not any(line.startswith(f"- `{tool}`") for tool in masked_tools)
+        ]
+        if len(kept) != len(built):
+            kept.append(
+                "- NOTE: One or more channel send tools are intentionally "
+                "unavailable right now because this is an onboarding reference-"
+                "quiz step the user has not started yet. Tell them to click the "
+                'matching "Trigger ... from T-W1N" row in the Onboarding '
+                "checklist; do not attempt to send on that channel until then.",
+            )
+        return "\n".join(kept)
+
     if is_coordinator:
         if assistant_has_phone:
             lines.append("- `send_sms`: Send an SMS message to my boss only")
@@ -594,7 +621,7 @@ def _build_comms_tool_listing(
             lines.append(
                 "- `join_teams_meet`: Join a Microsoft Teams meeting via browser automation (provide the Teams meeting URL)",
             )
-        return "\n".join(lines)
+        return _finalize(lines)
 
     if assistant_has_phone:
         lines.append("- `send_sms`: Send an SMS message to a contact")
@@ -689,7 +716,7 @@ def _build_comms_tool_listing(
         lines.append(
             "- `join_teams_meet`: Join a Microsoft Teams meeting via browser automation (provide the Teams meeting URL)",
         )
-    return "\n".join(lines)
+    return _finalize(lines)
 
 
 def _build_coordinator_admin_tool_listing(*, is_org_workspace: bool) -> str:
@@ -1874,6 +1901,7 @@ def build_system_prompt(
     console_ui_present: bool = True,
     coordinator_onboarding_deferred: bool = False,
     coordinator_onboarding_render: dict[str, Any] | None = None,
+    coordinator_clicked_trigger_steps: set[str] | None = None,
     onboarding_catalog: dict[str, Any] | None = None,
 ) -> PromptParts:
     """Build the system prompt for the ConversationManager LLM.
@@ -1997,6 +2025,13 @@ def build_system_prompt(
         assistant_has_slack and not is_coordinator,
     )
     coordinator_guidelines = _build_coordinator_guidelines(is_coordinator)
+    # Reference-quiz comms tools withheld until the user clicks the channel's
+    # trigger row (this session) or the step durably completes. Kept consistent
+    # with the hard gate in ``BrainActionTools.as_tools``.
+    onboarding_masked_tools = masked_reference_quiz_tools(
+        coordinator_onboarding_render,
+        coordinator_clicked_trigger_steps,
+    )
     comms_tool_listing = _build_comms_tool_listing(
         assistant_has_phone,
         assistant_has_email,
@@ -2006,6 +2041,7 @@ def build_system_prompt(
         assistant_has_teams,
         is_coordinator,
         on_voice_call,
+        masked_tools=onboarding_masked_tools,
     )
     if assistant_has_phone or assistant_has_whatsapp:
         sms_call_note = (
@@ -2344,6 +2380,11 @@ Messages from the current turn have **NEW** tag prepended:
         else:
             available_tool_names.insert(idx + 1, "create_teams_channel")
             available_tool_names.insert(idx + 2, "create_teams_meet")
+
+    if onboarding_masked_tools:
+        available_tool_names = [
+            name for name in available_tool_names if name not in onboarding_masked_tools
+        ]
 
     if is_coordinator:
         direct_tool_names_str = ", ".join(available_tool_names)

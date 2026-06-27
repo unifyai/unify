@@ -237,6 +237,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # the slow brain reads a standing progress block instead of
         # deriving "what's next". None outside active onboarding.
         self.coordinator_onboarding_render: dict[str, Any] | None = None
+        # Trigger-step ids the user clicked in THIS session (ephemeral by
+        # design): unlocks the matching reference-quiz comms tool until the
+        # send durably completes the step. Lost on restart on purpose — the
+        # row stays re-clickable, so a tool can never be permanently masked.
+        self._onboarding_clicked_trigger_steps: set[str] = set()
         # Static, deployment-gated onboarding catalog (phases + steps + copy),
         # fetched once from Orchestra's canonical source of truth and reused for
         # every prompt build so console_ui never re-declares onboarding copy.
@@ -2526,6 +2531,24 @@ class ConversationManager(metaclass=SingletonABCMeta):
         """
         if isinstance(render, dict):
             self.coordinator_onboarding_render = render
+
+    @property
+    def onboarding_clicked_trigger_steps(self) -> set[str]:
+        """Trigger-step ids clicked in this session (reference-quiz gating)."""
+        return self._onboarding_clicked_trigger_steps
+
+    def record_onboarding_trigger_clicked(self, step_id: str) -> None:
+        """Mark a reference-quiz trigger row as clicked this session.
+
+        Unlocks the matching comms send tool until the send durably completes
+        the step. No-op for blank ids.
+        """
+        if isinstance(step_id, str) and step_id.strip():
+            self._onboarding_clicked_trigger_steps.add(step_id.strip())
+
+    def clear_onboarding_clicked_trigger_steps(self) -> None:
+        """Forget this session's clicked trigger rows (e.g. on onboarding reset)."""
+        self._onboarding_clicked_trigger_steps.clear()
 
     def set_pending_onboarding_outbound(
         self,

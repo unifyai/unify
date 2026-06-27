@@ -349,8 +349,15 @@ async def _handle_coordinator_onboarding_event(
     # immediately, without waiting for the TTL state fetch.
     if isinstance(event.details, dict):
         cm.set_coordinator_onboarding_render(event.details.get("onboarding"))
+        if event.subtype == _SUBTYPE_ONBOARDING_SESSION_STARTED:
+            # New session boundary: forget any prior in-session clicks so a
+            # stale click can't keep a re-gated channel's tool unlocked.
+            cm.clear_onboarding_clicked_trigger_steps()
         if event.subtype == _SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED:
             trace = getattr(cm, "_current_event_trace", None) or {}
+            # Unlock this channel's send tool for the session (the click is
+            # what tags the outbound so the step can auto-complete).
+            cm.record_onboarding_trigger_clicked(event.details.get("trigger_step_id"))
             cm.set_pending_onboarding_outbound(
                 event.details,
                 origin_event_id=trace.get("event_id", ""),

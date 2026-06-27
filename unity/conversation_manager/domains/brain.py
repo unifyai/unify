@@ -292,6 +292,7 @@ def build_brain_spec(
         console_ui_present=SETTINGS.UNITY_CONSOLE_UI,
         coordinator_onboarding_deferred=cm.coordinator_onboarding_deferred,
         coordinator_onboarding_render=cm.coordinator_onboarding_render,
+        coordinator_clicked_trigger_steps=cm.onboarding_clicked_trigger_steps,
         onboarding_catalog=cm.onboarding_catalog,
     )
     _system_prompt_ms = _mark_step()
