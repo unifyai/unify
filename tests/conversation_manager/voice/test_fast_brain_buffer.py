@@ -18,8 +18,10 @@ import pytest
 from unity.conversation_manager.domains import fast_brain_buffer
 from unity.conversation_manager.domains.fast_brain_buffer import (
     BUFFER_PHRASES,
+    WAIT_PHRASES,
     resolve_buffer_phrases,
     select_buffer_phrase,
+    select_wait_phrase,
 )
 
 _DEFAULT = fast_brain_buffer._DEFAULT_PHRASE
@@ -65,6 +67,51 @@ def test_buffer_phrases_are_nonempty_short_strings():
         assert isinstance(phrase, str)
         assert phrase.strip()
         assert len(phrase) <= 40, f"Buffer phrase unexpectedly long: {phrase!r}"
+
+
+def test_wait_phrases_are_eight_distinct_lag_acknowledgements():
+    assert len(WAIT_PHRASES) == 8
+    assert len(set(WAIT_PHRASES)) == 8, "Wait phrases must be distinct."
+    for phrase in WAIT_PHRASES:
+        assert isinstance(phrase, str) and phrase.strip()
+        # Must not imply a fresh lookup (the "amnesia" effect we're avoiding).
+        low = phrase.lower()
+        assert "check" not in low
+        assert "look" not in low
+
+
+# ---------------------------------------------------------------------------
+# select_wait_phrase (deterministic, no LLM)
+# ---------------------------------------------------------------------------
+
+
+def test_select_wait_phrase_returns_member():
+    for _ in range(20):
+        assert select_wait_phrase() in WAIT_PHRASES
+
+
+def test_select_wait_phrase_avoids_excluded():
+    # With all-but-one excluded, the remaining one must be chosen.
+    keep = WAIT_PHRASES[3]
+    exclude = [p for p in WAIT_PHRASES if p != keep]
+    for _ in range(10):
+        assert select_wait_phrase(exclude) == keep
+
+
+def test_select_wait_phrase_never_repeats_within_a_streak():
+    """Drawing a full streak (excluding everything used so far) yields no repeats
+    until the whole set is exhausted."""
+    used: list[str] = []
+    for _ in range(len(WAIT_PHRASES)):
+        choice = select_wait_phrase(used)
+        assert choice not in used
+        used.append(choice)
+    assert sorted(used) == sorted(WAIT_PHRASES)
+
+
+def test_select_wait_phrase_falls_back_when_all_excluded():
+    # Streak longer than the set: never raises, still returns a valid phrase.
+    assert select_wait_phrase(list(WAIT_PHRASES)) in WAIT_PHRASES
 
 
 # ---------------------------------------------------------------------------
