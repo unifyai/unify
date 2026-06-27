@@ -16,6 +16,7 @@ from livekit.api import (
     WebhookReceiver,
 )
 from livekit.protocol.sip import (
+    DeleteSIPDispatchRuleRequest,
     ListSIPDispatchRuleRequest,
     ListSIPInboundTrunkRequest,
     SIPDispatchRule,
@@ -97,7 +98,11 @@ async def ensure_phone_dispatch_rule(phone_number: str, room_name: str) -> None:
                 and rule.rule.dispatch_rule_direct.room_name == room_name
             ):
                 return
-            await livekit_api.sip.delete_sip_dispatch_rule(rule.sip_dispatch_rule_id)
+            await livekit_api.sip.delete_sip_dispatch_rule(
+                DeleteSIPDispatchRuleRequest(
+                    sip_dispatch_rule_id=rule.sip_dispatch_rule_id,
+                ),
+            )
 
         await livekit_api.sip.create_sip_dispatch_rule(
             CreateSIPDispatchRuleRequest(
@@ -168,7 +173,9 @@ async def delete_sip_dispatch_rule(dispatch_rule_id: str | None) -> None:
         return
     livekit_api = get_livekit_api()
     try:
-        await livekit_api.sip.delete_sip_dispatch_rule(dispatch_rule_id)
+        await livekit_api.sip.delete_sip_dispatch_rule(
+            DeleteSIPDispatchRuleRequest(sip_dispatch_rule_id=dispatch_rule_id),
+        )
     finally:
         await livekit_api.aclose()
 
