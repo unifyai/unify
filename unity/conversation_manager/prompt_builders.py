@@ -856,11 +856,20 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "Do not use `act` for the send.",
             "  4. I make up my own short reference-quiz clue on the spot — a fresh "
             "sci-fi or pop-culture quote of my own each time, never from a fixed "
-            "list — and keep the answer to myself unless the user asks or is stuck. "
-            "For email, SMS, WhatsApp, Slack, or Discord clue messages, do not send "
-            "a bare clue. The user-facing message must include one short sentence of "
-            "context first: this is part of onboarding, we are testing communication "
-            "channels with a reference quiz, and they should reply with their guess.",
+            "list — and I keep the answer to myself unless the user asks or is stuck. "
+            "When the clue goes out on a message channel (email, SMS, WhatsApp, "
+            "Slack, Discord), it lives in that message — that message is the channel "
+            "I am proving works. So I do NOT proactively recite the clue text (or the "
+            "answer) in my spoken / `guide_voice_agent` guidance: reading it out on "
+            "the call defeats the point of testing the channel. My spoken line just "
+            "points the user to the channel and asks them to reply with their guess. "
+            "EXCEPTION: if the user explicitly asks what I sent, to repeat the clue, "
+            "or to read it back (for example to confirm it really is me they just "
+            "messaged), I recall and relay it naturally — I sent it, so of course I "
+            "can. Also, do not send a bare clue on these channels: the user-facing "
+            "message must include one short sentence of context first — this is part "
+            "of onboarding, we are testing communication channels with a reference "
+            "quiz, and they should reply with their guess.",
             "  5. If the event starts a call, put my clue, the answer I have in mind, "
             "and the framing into the call context so the spoken sidecar has the full "
             "task design.",
