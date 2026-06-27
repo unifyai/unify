@@ -69,21 +69,33 @@ _DEFAULT_PHRASE = "One moment."
 # Most phrases we will ever stitch together for one turn (keeps fillers short).
 _MAX_COMBINED = 2
 
+# Hard ceiling on a fast-brain reply. A filler / acknowledgement / brief echo is
+# short; anything longer is the model overstepping into a substantive answer
+# (the slow brain's job), so we fall back to a safe reference phrase.
+_MAX_FAST_REPLY_CHARS = 160
+
 _PHRASE_MENU = "\n".join(f'- "{phrase}" ({hint})' for phrase, hint in BUFFER_OPTIONS)
 
 _SELECTOR_PROMPT = f"""\
-You say a brief filler on a live voice call to cover the moment while a smarter
-system composes the real reply. Build your reply ONLY from the exact phrases
-below, copied verbatim. Never say anything else, and never actually answer.
+You give a brief, immediate reply on a live voice call to cover the moment while
+a smarter system composes the real answer. Keep it SHORT — a filler, a quick
+acknowledgement, or a brief natural reaction. You must NEVER actually answer a
+question or give real information (facts, data, instructions, next steps); that
+is the smarter system's job and it will follow right after you.
 
-You should usually combine two phrases that feel natural together, separated by
-a space (for example "Got it. One moment."). Use a single phrase only when
-combining would sound off.
+In MOST cases, use one of the reference phrases below — they are always safe. You
+can combine two that feel natural, e.g. "Got it. One moment."
 
-Phrases:
+You MAY ad-lib slightly, but ONLY when the reply is very obvious and trivial —
+for example naturally acknowledging a comment ("Ha, yeah — fair point.") or
+briefly echoing something just said. Keep any ad-lib to a few words,
+conversational, and never an answer. When in any doubt, just use a reference
+phrase.
+
+Reference phrases:
 {_PHRASE_MENU}
 
-Reply with only the phrase or phrases, exactly as written."""
+Reply with the single short line to say — nothing else."""
 
 
 def _normalize(text: str) -> str:
@@ -119,11 +131,16 @@ def resolve_buffer_phrases(raw: str) -> str | None:
 
 
 async def select_buffer_phrase(user_text: str, recent_assistant_text: str = "") -> str:
-    """Return one (or a natural pair of) canonical phrase(s) for the utterance.
+    """Return the fast brain's brief reply for the caller's utterance.
+
+    Defaults to one (or a natural pair) of the reference phrases, but allows a
+    slight, short ad-lib for obvious/trivial replies (acks, brief echoes). A
+    length backstop catches the model overstepping into a substantive answer and
+    falls back to a safe reference phrase.
 
     ``recent_assistant_text`` is the assistant's previous spoken line; when it
-    was itself a buffer filler, we nudge the model to pick something different so
-    it does not say the exact same filler twice in a row.
+    was itself a filler, we nudge the model to say something different so it does
+    not repeat itself verbatim.
 
     Fail-safe: returns the default phrase on empty input or any error.
     """
@@ -138,8 +155,8 @@ async def select_buffer_phrase(user_text: str, recent_assistant_text: str = "") 
             {
                 "role": "system",
                 "content": (
-                    f'Your previous filler was "{previous_filler}". Do not say the '
-                    "same thing again - pick different phrasing this time."
+                    f'Your previous line was "{previous_filler}". Say something '
+                    "different this time."
                 ),
             },
         )
@@ -151,9 +168,15 @@ async def select_buffer_phrase(user_text: str, recent_assistant_text: str = "") 
             reasoning_effort="low",
         )
         raw = await client.generate(messages=messages)
-        resolved = resolve_buffer_phrases(str(raw))
-        if resolved:
-            return resolved
+        text = " ".join(str(raw).split()).strip().strip("\"'\u201c\u201d")
+        if not text:
+            return _DEFAULT_PHRASE
+        # Backstop: a real filler/ack/echo is short. A long reply means the model
+        # tried to answer substantively (the slow brain's job) — drop it and fall
+        # back to a safe reference phrase.
+        if len(text) > _MAX_FAST_REPLY_CHARS:
+            return resolve_buffer_phrases(text) or _DEFAULT_PHRASE
+        return text
     except Exception as e:  # never let buffer selection break the turn
         LOGGER.warning(f"Buffer phrase selection failed; using default: {e}")
     return _DEFAULT_PHRASE

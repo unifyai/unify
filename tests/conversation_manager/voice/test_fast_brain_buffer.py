@@ -196,9 +196,33 @@ async def test_select_returns_combination(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_select_novel_output_falls_back_to_default(monkeypatch):
-    _patch_client(monkeypatch, raw="Your meeting is at 3pm.")
-    assert await select_buffer_phrase("when is my meeting?") == _DEFAULT
+async def test_select_allows_short_adlib(monkeypatch):
+    """A short, natural ad-lib (not a reference phrase) is now returned as-is."""
+    _patch_client(monkeypatch, raw="Ha, yeah — fair point.")
+    assert (
+        await select_buffer_phrase("That name is a bit much.")
+        == "Ha, yeah — fair point."
+    )
+
+
+@pytest.mark.asyncio
+async def test_select_strips_wrapping_quotes_from_adlib(monkeypatch):
+    _patch_client(monkeypatch, raw='"Right, with you."')
+    assert await select_buffer_phrase("ok") == "Right, with you."
+
+
+@pytest.mark.asyncio
+async def test_select_overlong_reply_falls_back(monkeypatch):
+    """A long substantive answer (overstepping into the slow brain's job) is
+    dropped in favour of a safe reference phrase / default."""
+    long_answer = (
+        "Your meeting with Sarah was moved to 4pm tomorrow, and the room changed "
+        "to the downtown office on the third floor, and she also asked you to "
+        "bring the Q3 deck and the updated budget figures."
+    )
+    assert len(long_answer) > 160
+    _patch_client(monkeypatch, raw=long_answer)
+    assert await select_buffer_phrase("what's my schedule?") == _DEFAULT
 
 
 @pytest.mark.asyncio
@@ -218,7 +242,7 @@ async def test_anti_repeat_note_added_when_previous_was_filler(monkeypatch):
 
     system_msgs = [m["content"] for m in captured["messages"] if m["role"] == "system"]
     assert any(
-        "previous filler" in c and "One moment." in c for c in system_msgs
+        "previous line" in c and "One moment." in c for c in system_msgs
     ), f"Expected an anti-repeat system note. Got: {system_msgs}"
 
 
@@ -238,4 +262,4 @@ async def test_no_anti_repeat_note_when_previous_was_prose(monkeypatch):
     assert (
         len(system_msgs) == 1
     ), f"Expected only the selector prompt. Got: {system_msgs}"
-    assert not any("previous filler" in c for c in system_msgs)
+    assert not any("previous line" in c for c in system_msgs)
