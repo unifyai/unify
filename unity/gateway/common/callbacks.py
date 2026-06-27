@@ -24,8 +24,18 @@ CONFERENCE_WAIT_URL = "https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.
 
 
 def use_local_comms() -> bool:
-    """True when comms run through the self-host local ingress edge."""
+    """True when comms run through the self-host local ingress edge.
+
+    A configured cloudflared tunnel (``LOCAL_COMMS_PUBLIC_URL``) is the
+    authoritative self-host signal that Twilio-facing callbacks must target the
+    public tunnel rather than ``COMMS_URL``. The gateway process itself runs in
+    "hosted" mode (``COMMS_URL`` set -> ``LOCAL_COMMS_MODE`` resolves to
+    ``hosted`` / ``LOCAL_COMMS_ENABLED`` false), so those flags are not reliable
+    here; the tunnel URL only ever exists in the self-host stack.
+    """
     conversation = SETTINGS.conversation
+    if conversation.LOCAL_COMMS_PUBLIC_URL.strip():
+        return True
     if conversation.LOCAL_COMMS_ENABLED is True:
         return True
     return conversation.LOCAL_COMMS_MODE == "local"

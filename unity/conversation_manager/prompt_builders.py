@@ -420,6 +420,23 @@ I am currently on a live voice session, and I can only be on ONE voice session a
 - I can still communicate on text channels during the session (SMS, WhatsApp messages, email, Unify messages, etc.). Any controls specific to the current session (such as sharing my screen) appear in my tool list when they are available."""
 
 
+def _build_voice_line_preparing_block() -> str:
+    """Explain that call-starting tools are momentarily withheld post-session.
+
+    Rendered only between sessions, while the voice worker is warming a fresh
+    process after a prior call/meeting ended. Keeps the prompt consistent with
+    the masked tool set so the brain understands the call-starting tools are
+    briefly absent (not broken) and will return on their own in a moment.
+    """
+    return """Voice line preparing
+--------------------
+I just finished a voice session and the voice line is being prepared for the next call. Because of this:
+- The call-starting tools (`make_call`, `make_whatsapp_call`) are briefly NOT in my tool list right now. This is expected and momentary, not a malfunction.
+- They reappear automatically within a few seconds, the moment the line is ready — I do not need to do anything to get them back.
+- If my boss asks me to place a call right now, I tell them I am getting the line ready and will place it in a moment — I do NOT claim to have started it, and I do NOT keep retrying.
+- I can still communicate on text channels (SMS, WhatsApp messages, email, Unify messages, etc.) in the meantime."""
+
+
 def _build_missing_phone_notice(assistant_has_phone: bool) -> str:
     """Explain that the assistant cannot send SMS or make calls."""
     if assistant_has_phone:
@@ -534,6 +551,7 @@ def _build_comms_tool_listing(
     assistant_has_teams: bool = False,
     is_coordinator: bool = False,
     on_voice_call: bool = False,
+    call_line_ready: bool = True,
     masked_tools: set[str] | None = None,
 ) -> str:
     """Build the communication tools block for the output format section.
@@ -542,6 +560,11 @@ def _build_comms_tool_listing(
     tools (``make_call``, ``make_whatsapp_call``, ``join_google_meet``,
     ``join_teams_meet``) are withheld from the live tool set, so they are omitted
     here too — only one voice session can exist at a time.
+
+    Between sessions, ``make_call`` / ``make_whatsapp_call`` are additionally
+    withheld until the voice worker has a freshly prewarmed process ready
+    (``call_line_ready`` is False right after a prior session ends); they are
+    omitted here in lockstep with the live tool set.
 
     ``masked_tools`` lists send-tool names withheld this turn (onboarding
     reference-quiz gating); their lines are dropped and a note is added so the
@@ -609,11 +632,11 @@ def _build_comms_tool_listing(
             "- `send_api_response`: Reply to a programmatic API message (use when the inbound medium is `api_message`). Supports optional `attachment_filepaths` and `tags`; transcript ownership is anchored to my boss.",
         )
         if not on_voice_call:
-            if assistant_has_phone:
+            if assistant_has_phone and call_line_ready:
                 lines.append(
                     "- `make_call`: Start an outbound phone call to my boss only",
                 )
-            if assistant_has_whatsapp:
+            if assistant_has_whatsapp and call_line_ready:
                 lines.append(
                     "- `make_whatsapp_call`: Start a WhatsApp voice call to my boss only. "
                     "If call permission hasn't been granted yet, a call invite is sent instead.",
@@ -705,9 +728,9 @@ def _build_comms_tool_listing(
         "- `send_api_response`: Reply to a programmatic API message (use when the inbound medium is `api_message`). Supports optional `attachment_filepaths` and `tags`.",
     )
     if not on_voice_call:
-        if assistant_has_phone:
+        if assistant_has_phone and call_line_ready:
             lines.append("- `make_call`: Start an outbound phone call to a contact")
-        if assistant_has_whatsapp:
+        if assistant_has_whatsapp and call_line_ready:
             lines.append(
                 "- `make_whatsapp_call`: Start a WhatsApp voice call to a contact. "
                 "If call permission hasn't been granted yet, a call invite is sent instead — "
@@ -1882,6 +1905,7 @@ def build_system_prompt(
     is_voice_call: bool = False,
     is_internal_call: bool = False,
     on_voice_call: bool = False,
+    voice_line_ready: bool = True,
     demo_mode: bool = False,
     computer_fast_path: bool = False,
     assistant_has_phone: bool = True,
@@ -2042,6 +2066,7 @@ def build_system_prompt(
         assistant_has_teams,
         is_coordinator,
         on_voice_call,
+        call_line_ready=voice_line_ready,
         masked_tools=onboarding_masked_tools,
     )
     if assistant_has_phone or assistant_has_whatsapp:
@@ -2339,9 +2364,13 @@ Messages from the current turn have **NEW** tag prepended:
     )
 
     available_tool_names = ["send_unify_message", "send_api_response"]
+    # Call-starting tools are listed only when actually offered: not on a live
+    # voice call AND the voice worker has a freshly prewarmed process ready.
+    call_tools_listed = not on_voice_call and voice_line_ready
     if assistant_has_phone:
-        # ``make_call`` is withheld while on a voice call (one at a time).
-        trailing = [] if on_voice_call else ["make_call"]
+        # ``make_call`` is withheld while on a voice call (one at a time) and
+        # while the line is still re-warming after a prior session.
+        trailing = ["make_call"] if call_tools_listed else []
         available_tool_names = ["send_sms"] + available_tool_names + trailing
     if assistant_has_whatsapp:
         idx = (
@@ -2350,7 +2379,7 @@ Messages from the current turn have **NEW** tag prepended:
             else 0
         )
         available_tool_names.insert(idx, "send_whatsapp")
-        if not on_voice_call:
+        if call_tools_listed:
             if "make_call" in available_tool_names:
                 available_tool_names.insert(
                     available_tool_names.index("make_call") + 1,
@@ -2556,6 +2585,11 @@ When contacts communicate in a non-English language, I match their language in m
     #      tool set.
     if on_voice_call:
         parts.add(_build_active_voice_session_block(), static=False)
+    elif not voice_line_ready and (assistant_has_phone or assistant_has_whatsapp):
+        # Between sessions while the voice worker re-warms: the call-starting
+        # tools are briefly withheld, so explain that to keep the prompt aligned
+        # with the masked tool set.
+        parts.add(_build_voice_line_preparing_block(), static=False)
 
     # 16. Scenarios.
     voice_session_scenarios_section = (
