@@ -2150,18 +2150,19 @@ async def entrypoint(ctx: agents.JobContext):
                 texts.append(content)
         return " ".join(texts)
 
-    def _reinject_unheard_remainder(
+    def _notify_slow_brain_of_interruption(
         handle: object,
         full_text_getter,
         notification_source: str,
     ) -> None:
-        """If a spoken guidance was interrupted, inject the unheard remainder.
+        """Tell the slow brain when the caller barges in mid-utterance.
 
-        should_speak guidance is no longer pre-injected, so an uninterrupted
-        utterance lands in context as its spoken assistant turn and needs nothing
-        further. When the caller barges in, only the spoken prefix is persisted;
-        the remainder would otherwise be lost from the fast brain's context, so we
-        re-inject it as an ``[unheard]`` system note the fast brain can re-surface.
+        The slow brain owns all substantive speech; when the caller interrupts,
+        only the spoken prefix lands in the transcript, so the slow brain would
+        otherwise believe the prefix was the whole message. We publish a
+        ``VoiceInterrupt`` carrying the unheard remainder so the slow brain knows
+        it was cut off and can re-surface the missed content if it still matters.
+        The fast brain (now a buffer-only selector) is deliberately NOT informed.
         """
         if notification_source == "proactive_speech":
             return
@@ -2182,13 +2183,18 @@ async def entrypoint(ctx: agents.JobContext):
                 remainder = full[len(spoken) :].strip()
             if not remainder:
                 return
-            note = f"[unheard] {remainder}"
-            assistant._chat_ctx.add_message(role="system", content=[note])
-            session.history.add_message(role="system", content=[note])
+            await event_broker.publish(
+                VoiceInterrupt.topic,
+                VoiceInterrupt(
+                    contact=contact,
+                    spoken_prefix=spoken,
+                    unheard_remainder=remainder,
+                ).to_json(),
+            )
             from unity.logger import LOGGER
 
             LOGGER.info(
-                "⬥ [FastBrain] Re-injected unheard remainder after interruption.",
+                "⬥ [FastBrain] Reported unheard remainder to the slow brain.",
             )
 
         asyncio.ensure_future(_after_playout())
@@ -2211,7 +2217,11 @@ async def entrypoint(ctx: agents.JobContext):
             )
             _log.notification_say(text, notification_source=notification_source)
             handle = session.say(text, allow_interruptions=True, add_to_chat_ctx=True)
-            _reinject_unheard_remainder(handle, lambda: text, notification_source)
+            _notify_slow_brain_of_interruption(
+                handle,
+                lambda: text,
+                notification_source,
+            )
             return
 
         # Streaming path: ``text`` is an async iterator of token chunks (rewritten
@@ -2249,7 +2259,7 @@ async def entrypoint(ctx: agents.JobContext):
             allow_interruptions=True,
             add_to_chat_ctx=True,
         )
-        _reinject_unheard_remainder(
+        _notify_slow_brain_of_interruption(
             handle,
             lambda: "".join(parts),
             notification_source,
@@ -2326,9 +2336,10 @@ async def entrypoint(ctx: agents.JobContext):
         # brain's context so it can surface them in first person. should_speak=True
         # guidance is spoken verbatim by the slow brain (the fast brain only emits
         # a filler phrase), then its spoken text lands in context as an assistant
-        # turn. Only the unheard remainder is injected back, after playout, if the
-        # utterance was interrupted (see _speak_now). Proactive speech is
-        # fire-and-forget filler — it never updates context.
+        # turn. If the caller interrupts mid-utterance, the unheard remainder is
+        # reported to the slow brain via VoiceInterrupt (see _speak_now), not the
+        # fast brain. Proactive speech is fire-and-forget filler — it never
+        # updates context.
         speech_text = spoken_message or message
         if notification_source != "proactive_speech" and message and not should_speak:
             notification_message = f"[notification] {message}"

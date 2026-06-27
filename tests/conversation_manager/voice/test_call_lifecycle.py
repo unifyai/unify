@@ -807,10 +807,10 @@ class TestVoiceUtteranceHandlers:
 class TestVoiceInterruptHandler:
     """Integration tests for VoiceInterrupt event handling.
 
-    VoiceInterrupt is sent when the user interrupts the assistant during speech.
-    This should:
-    1. Cancel any pending proactive speech
-    2. Allow the new user input to be processed
+    VoiceInterrupt is published when the caller barges in before hearing the
+    assistant's full line. Its handler records a guidance note naming the unheard
+    remainder so the slow brain knows it was cut off; an interrupt with no
+    remainder is a no-op.
     """
 
     @pytest.fixture
@@ -825,11 +825,8 @@ class TestVoiceInterruptHandler:
         assert hasattr(event, "timestamp")
 
     async def test_voice_interrupt_during_call(self, initialized_cm, alice_contact):
-        """VoiceInterrupt during a call should be handled without error.
-
-        NOTE: VoiceInterrupt is currently NOT handled by any registered handler.
-        This test documents the expected behavior once implemented.
-        """
+        """A VoiceInterrupt with no remainder during a call is handled without
+        error (and records nothing)."""
         # Start a call first
         started_event = PhoneCallStarted(contact=alice_contact)
         await initialized_cm.step(started_event)
@@ -839,7 +836,7 @@ class TestVoiceInterruptHandler:
         interrupt_event = VoiceInterrupt(contact=alice_contact)
         result = await initialized_cm.step(interrupt_event)
 
-        # Event should be processed (even if handler does nothing)
+        # Event should be processed
         assert result.input_event == interrupt_event
 
 

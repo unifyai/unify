@@ -233,11 +233,17 @@ class InboundWhatsAppCallUtterance(Event):
 
 @dataclass
 class VoiceInterrupt(Event):
-    """User interrupted the assistant during a voice call."""
+    """The caller barged in before the assistant finished its spoken line.
+
+    Carries the part of the assistant's message that was NOT heard so the slow
+    brain knows it was cut off and can decide whether to re-deliver it.
+    """
 
     topic: ClassVar[str | None] = "app:comms:voice_interrupt"
 
     contact: dict
+    spoken_prefix: str = ""
+    unheard_remainder: str = ""
 
 
 @dataclass
