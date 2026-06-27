@@ -15,6 +15,7 @@ we return a safe default and never free-generate text.
 
 from __future__ import annotations
 
+import random
 import re
 
 from unity.common.llm_client import new_llm_client
@@ -45,6 +46,22 @@ BUFFER_OPTIONS: list[tuple[str, str]] = [
 
 # Spoken text the selector may return.
 BUFFER_PHRASES: list[str] = [phrase for phrase, _hint in BUFFER_OPTIONS]
+
+# "Still here, reply coming" fillers for the 2nd+ consecutive buffer in a row
+# without a slow-brain reply yet. Unlike the first-reaction set above, these
+# never imply a fresh lookup ("let me check") — after the assistant has already
+# deferred once, a lookup-flavored line sounds like it's re-reading its own
+# speech. These just own the lag honestly without explaining why.
+WAIT_PHRASES: list[str] = [
+    "Bear with me, I'll reply in a moment.",
+    "Sorry, just a moment — I'll be with you in a second.",
+    "Sorry, hang on — reply's coming.",
+    "One sec, I'll be right with you.",
+    "Still with you — won't be long.",
+    "Give me just a beat, I'll reply shortly.",
+    "Almost there — thanks for your patience.",
+    "Hang tight, I'll be right back to you.",
+]
 
 # Returned on empty input or any failure - safe after almost any utterance.
 _DEFAULT_PHRASE = "One moment."
@@ -140,3 +157,16 @@ async def select_buffer_phrase(user_text: str, recent_assistant_text: str = "") 
     except Exception as e:  # never let buffer selection break the turn
         LOGGER.warning(f"Buffer phrase selection failed; using default: {e}")
     return _DEFAULT_PHRASE
+
+
+def select_wait_phrase(exclude: list[str] | None = None) -> str:
+    """Pick a 'still here, reply coming' filler for a 2nd+ consecutive buffer.
+
+    Deterministic (no LLM) so a repeated filler is near-instant — exactly when the
+    caller is visibly waiting. ``exclude`` is the set of wait phrases already used
+    in the current wait streak, so a phrase is never repeated within a streak;
+    once the whole set is exhausted it falls back to the full set.
+    """
+    excluded = set(exclude or ())
+    options = [p for p in WAIT_PHRASES if p not in excluded] or WAIT_PHRASES
+    return random.choice(options)
