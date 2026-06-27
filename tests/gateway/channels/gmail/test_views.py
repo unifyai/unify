@@ -33,6 +33,25 @@ def _http_error(status_code: int) -> HttpError:
     return HttpError(resp=resp, content=b"")
 
 
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("CAJ123@mail.gmail.com", "<CAJ123@mail.gmail.com>"),
+        ("<CAJ123@mail.gmail.com>", "<CAJ123@mail.gmail.com>"),
+        ("  CAJ123@mail.gmail.com  ", "<CAJ123@mail.gmail.com>"),
+        ("<CAJ123@mail.gmail.com", "<CAJ123@mail.gmail.com>"),
+        ("CAJ123@mail.gmail.com>", "<CAJ123@mail.gmail.com>"),
+        ("", ""),
+    ],
+)
+def test_as_message_id_normalizes_brackets(raw, expected):
+    """In-Reply-To / References must carry an angle-bracketed Message-ID so the
+    recipient threads the reply, regardless of how the caller passed it."""
+    from unity.gateway.channels.gmail.views import _as_message_id
+
+    assert _as_message_id(raw) == expected
+
+
 @pytest.fixture
 def _gmail_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GCP_SA_KEY", "{}")
