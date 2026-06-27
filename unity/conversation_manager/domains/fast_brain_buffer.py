@@ -21,33 +21,30 @@ from unity.common.llm_client import new_llm_client
 from unity.logger import LOGGER
 from unity.settings import SETTINGS
 
-# Fixed, universally-safe filler phrases, each with a "when to use" hint and a
-# group. This list is the SINGLE SOURCE OF TRUTH: the prompt's phrase menu and
-# the validation lookup are both derived from it, so extending the set is a
-# one-line addition here. Each phrase works standalone, and - crucially - a
-# "reaction" pairs naturally with a "moment" phrase to form one spoken reply
-# ("Sure. One moment.", "I don't think so. Let me have a think.").
-#
-# Groups:
-#   "reaction" - affirm or decline, confident or tentative
-#   "moment"   - buy a beat while the real answer is composed
-BUFFER_OPTIONS: list[tuple[str, str, str]] = [
-    ("Got it.", "acknowledging what the caller just said", "reaction"),
-    ("Okay.", "neutral acknowledgement", "reaction"),
-    ("Sure.", "agreeing to do something simple", "reaction"),
-    ("On it.", "confidently agreeing to perform the action", "reaction"),
-    ("I'll give it a try.", "agreeing, but tentatively", "reaction"),
-    ("I don't think so.", "a confident no", "reaction"),
-    ("I'm not sure.", "a tentative / uncertain no", "reaction"),
-    ("Let me check on that.", "you'll look something up", "moment"),
-    ("Let me take a look.", "you'll inspect or look into it", "moment"),
-    ("Let me have a think.", "you need a beat to consider it", "moment"),
-    ("One moment.", "a short pause for something that needs a beat", "moment"),
-    ("Hang on.", "asking them to wait a beat", "moment"),
+# Fixed, universally-safe filler phrases, each with a short "when to use" hint.
+# This list is the SINGLE SOURCE OF TRUTH: the prompt menu and the validation
+# lookup are both derived from it, so extending the set is a one-line addition
+# here. Each phrase works standalone, and any two read naturally when spoken
+# together - the model decides what pairs well.
+BUFFER_OPTIONS: list[tuple[str, str]] = [
+    ("Got it.", "acknowledging what they just told you"),
+    ("Okay.", "neutral acknowledgement"),
+    ("Sure.", "agreeing to something simple"),
+    ("Sounds good.", "you're happy with what they told you"),
+    ("Nice.", "a warm reaction to good news"),
+    ("On it.", "you'll do the action now"),
+    ("I'll give it a try.", "agreeing, tentatively"),
+    ("I don't think so.", "a confident no"),
+    ("I'm not sure.", "a tentative, uncertain no"),
+    ("Let me check on that.", "you'll look something up"),
+    ("Let me take a look.", "you'll inspect or look into it"),
+    ("Let me have a think.", "you need a beat to consider it"),
+    ("One moment.", "a short pause"),
+    ("Hang on.", "asking them to wait a beat"),
 ]
 
 # Spoken text the selector may return.
-BUFFER_PHRASES: list[str] = [phrase for phrase, _hint, _group in BUFFER_OPTIONS]
+BUFFER_PHRASES: list[str] = [phrase for phrase, _hint in BUFFER_OPTIONS]
 
 # Returned on empty input or any failure - safe after almost any utterance.
 _DEFAULT_PHRASE = "One moment."
@@ -55,32 +52,19 @@ _DEFAULT_PHRASE = "One moment."
 # Most phrases we will ever stitch together for one turn (keeps fillers short).
 _MAX_COMBINED = 2
 
-
-def _menu_for(group: str) -> str:
-    return "\n".join(
-        f'- "{phrase}" ({hint})' for phrase, hint, grp in BUFFER_OPTIONS if grp == group
-    )
-
+_PHRASE_MENU = "\n".join(f'- "{phrase}" ({hint})' for phrase, hint in BUFFER_OPTIONS)
 
 _SELECTOR_PROMPT = f"""\
 You say a brief filler on a live voice call to cover the moment while a smarter
-system composes the real reply. Your reply MUST be built only from the exact
-phrases below, copied verbatim (including the trailing period). Never say
-anything that is not one of these phrases, and never answer the caller.
+system composes the real reply. Build your reply ONLY from the exact phrases
+below, copied verbatim. Never say anything else, and never actually answer.
 
-Combining two phrases is usually best - it sounds the most natural. The natural
-pattern is one REACTION followed by one BUYING-A-MOMENT phrase, for example:
-  "Sure. One moment."
-  "Got it. Let me take a look."
-  "I'm not sure. Let me check on that."
-  "I don't think so. Let me have a think."
-Use a single phrase only when a combination would sound unnatural.
+You should usually combine two phrases that feel natural together, separated by
+a space (for example "Got it. One moment."). Use a single phrase only when
+combining would sound off.
 
-REACTIONS (affirm or decline; confident or tentative):
-{_menu_for("reaction")}
-
-BUYING A MOMENT:
-{_menu_for("moment")}
+Phrases:
+{_PHRASE_MENU}
 
 Reply with only the phrase or phrases, exactly as written."""
 
@@ -117,25 +101,39 @@ def resolve_buffer_phrases(raw: str) -> str | None:
     return " ".join(matched) if matched else None
 
 
-async def select_buffer_phrase(user_text: str) -> str:
+async def select_buffer_phrase(user_text: str, recent_assistant_text: str = "") -> str:
     """Return one (or a natural pair of) canonical phrase(s) for the utterance.
+
+    ``recent_assistant_text`` is the assistant's previous spoken line; when it
+    was itself a buffer filler, we nudge the model to pick something different so
+    it does not say the exact same filler twice in a row.
 
     Fail-safe: returns the default phrase on empty input or any error.
     """
     if not (user_text or "").strip():
         return _DEFAULT_PHRASE
+    messages = [{"role": "system", "content": _SELECTOR_PROMPT}]
+    # Only nudge when the previous line was itself a filler (resolves to a known
+    # phrase); slow-brain prose resolves to None and needs no anti-repeat.
+    previous_filler = resolve_buffer_phrases(recent_assistant_text or "")
+    if previous_filler:
+        messages.append(
+            {
+                "role": "system",
+                "content": (
+                    f'Your previous filler was "{previous_filler}". Do not say the '
+                    "same thing again - pick different phrasing this time."
+                ),
+            },
+        )
+    messages.append({"role": "user", "content": user_text.strip()})
     try:
         client = new_llm_client(
             SETTINGS.conversation.FAST_BRAIN_MODEL,
             origin="FastBrain.buffer",
             reasoning_effort="low",
         )
-        raw = await client.generate(
-            messages=[
-                {"role": "system", "content": _SELECTOR_PROMPT},
-                {"role": "user", "content": user_text.strip()},
-            ],
-        )
+        raw = await client.generate(messages=messages)
         resolved = resolve_buffer_phrases(str(raw))
         if resolved:
             return resolved

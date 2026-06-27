@@ -438,13 +438,18 @@ class Assistant(Agent):
             # one short, universally-safe filler phrase to cover latency; the
             # slow brain owns all substantive speech and is spoken verbatim.
             user_text = ""
+            recent_assistant_text = ""
             for item in reversed(chat_ctx.items):
-                if getattr(item, "role", None) == "user":
+                role = getattr(item, "role", None)
+                if role == "user" and not user_text:
                     user_text = item.text_content or ""
+                elif role == "assistant" and not recent_assistant_text:
+                    recent_assistant_text = item.text_content or ""
+                if user_text and recent_assistant_text:
                     break
 
             _log.info("Selecting buffer phrase… (llm_node_start)")
-            phrase = await select_buffer_phrase(user_text)
+            phrase = await select_buffer_phrase(user_text, recent_assistant_text)
             yield ChatChunk(
                 id=f"fast-brain-buffer-{monotonic_ms()}",
                 delta=ChoiceDelta(role="assistant", content=phrase),

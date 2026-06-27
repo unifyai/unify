@@ -25,11 +25,23 @@ from unity.conversation_manager.domains.fast_brain_buffer import (
 _DEFAULT = fast_brain_buffer._DEFAULT_PHRASE
 
 
-def _patch_client(monkeypatch, raw=None, *, raises: bool = False):
-    """Patch ``new_llm_client`` with a fake whose ``generate`` returns *raw*."""
+def _patch_client(
+    monkeypatch,
+    raw=None,
+    *,
+    raises: bool = False,
+    captured: dict | None = None,
+):
+    """Patch ``new_llm_client`` with a fake whose ``generate`` returns *raw*.
+
+    When ``captured`` is given, the messages passed to ``generate`` are stored
+    under ``captured["messages"]`` for assertion.
+    """
 
     class _Client:
         async def generate(self, *, messages=None, **_kw):
+            if captured is not None:
+                captured["messages"] = messages
             if raises:
                 raise RuntimeError("boom")
             return raw
@@ -146,3 +158,37 @@ async def test_select_novel_output_falls_back_to_default(monkeypatch):
 async def test_select_llm_error_falls_back_to_default(monkeypatch):
     _patch_client(monkeypatch, raises=True)
     assert await select_buffer_phrase("anything at all") == _DEFAULT
+
+
+@pytest.mark.asyncio
+async def test_anti_repeat_note_added_when_previous_was_filler(monkeypatch):
+    """When the previous line was itself a filler, the model is nudged not to
+    repeat it verbatim."""
+    captured: dict = {}
+    _patch_client(monkeypatch, raw="Got it.", captured=captured)
+
+    await select_buffer_phrase("Thanks for that.", recent_assistant_text="One moment.")
+
+    system_msgs = [m["content"] for m in captured["messages"] if m["role"] == "system"]
+    assert any(
+        "previous filler" in c and "One moment." in c for c in system_msgs
+    ), f"Expected an anti-repeat system note. Got: {system_msgs}"
+
+
+@pytest.mark.asyncio
+async def test_no_anti_repeat_note_when_previous_was_prose(monkeypatch):
+    """Slow-brain prose does not resolve to a phrase, so no anti-repeat note is
+    added (only the selector prompt + the user message)."""
+    captured: dict = {}
+    _patch_client(monkeypatch, raw="Sure.", captured=captured)
+
+    await select_buffer_phrase(
+        "Okay.",
+        recent_assistant_text="Your meeting with Sarah is at 3pm tomorrow.",
+    )
+
+    system_msgs = [m["content"] for m in captured["messages"] if m["role"] == "system"]
+    assert (
+        len(system_msgs) == 1
+    ), f"Expected only the selector prompt. Got: {system_msgs}"
+    assert not any("previous filler" in c for c in system_msgs)
