@@ -202,6 +202,24 @@ class LocalEmailPoller:
                 mail.logout()
 
 
+def _as_message_id(mid: str) -> str:
+    """Return *mid* as a canonical RFC 5322 Message-ID wrapped in ``<...>``.
+
+    The slow brain may pass the reply target's Message-ID with or without the
+    surrounding angle brackets. A bare id makes the ``In-Reply-To`` /
+    ``References`` headers malformed, so the recipient's mail client cannot
+    match the reply to the original and shows it as a new thread.
+    """
+    mid = (mid or "").strip()
+    if not mid:
+        return mid
+    if not mid.startswith("<"):
+        mid = f"<{mid}"
+    if not mid.endswith(">"):
+        mid = f"{mid}>"
+    return mid
+
+
 async def send_email(
     *,
     to: list[str],
@@ -226,8 +244,9 @@ async def send_email(
     if bcc:
         message["Bcc"] = ", ".join(bcc)
     if email_id:
-        message["In-Reply-To"] = email_id
-        message["References"] = email_id
+        reply_id = _as_message_id(email_id)
+        message["In-Reply-To"] = reply_id
+        message["References"] = reply_id
     message["Subject"] = subject
     message["Message-ID"] = make_msgid()
     message.set_content(body)

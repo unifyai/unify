@@ -72,6 +72,25 @@ def _is_google_not_found_error(exc: Exception) -> bool:
     return isinstance(exc, HttpError) and getattr(exc.resp, "status", None) == 404
 
 
+def _as_message_id(mid: str) -> str:
+    """Return *mid* as a canonical RFC 5322 Message-ID wrapped in ``<...>``.
+
+    The caller may pass the reply target's Message-ID with or without the
+    surrounding angle brackets. A bare id makes the ``In-Reply-To`` /
+    ``References`` headers malformed, so the recipient's mail client cannot
+    match the reply to the original and shows it as a new thread (Gmail's own
+    ``threadId`` only fixes the sender's mailbox view, not the recipient's).
+    """
+    mid = (mid or "").strip()
+    if not mid:
+        return mid
+    if not mid.startswith("<"):
+        mid = f"<{mid}"
+    if not mid.endswith(">"):
+        mid = f"{mid}>"
+    return mid
+
+
 def _recipient_count(value: Any) -> int:
     if not value:
         return 0
@@ -325,8 +344,9 @@ async def send_email(request: Request):
             )
 
     if in_reply_to:
-        msg["In-Reply-To"] = in_reply_to
-        msg["References"] = in_reply_to
+        reply_id = _as_message_id(in_reply_to)
+        msg["In-Reply-To"] = reply_id
+        msg["References"] = reply_id
 
     raw_msg = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     service = await get_gmail_service_async(sender)
