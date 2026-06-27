@@ -105,6 +105,10 @@ class LivekitCallManager:
         self.on_screenshot: Callable[[str], None] | None = None
         self.on_fast_brain_generating: Callable[[], None] | None = None
         self.on_pipeline_quiescent: Callable[[bool], None] | None = None
+        # Pulled at the top of every dispatch so a call always carries the
+        # assistant's current voice/config rather than a snapshot taken at
+        # construction time (which can go stale, e.g. self-host bootstrap).
+        self._config_provider: Callable[[], CallConfig] | None = None
         self._call_channel: str | None = None
         self._disconnect_contact: dict | None = None
         self._boss_notification_task: asyncio.Task | None = None
@@ -136,6 +140,21 @@ class LivekitCallManager:
         self.is_coordinator = config.is_coordinator
         if config.job_name:
             self.job_name = config.job_name
+
+    def set_config_provider(
+        self,
+        provider: "Callable[[], CallConfig]",
+    ) -> None:
+        """Register a callback that yields the current call config.
+
+        Invoked just before each dispatch so voice/config reflect the latest
+        runtime state instead of the value captured at construction time.
+        """
+        self._config_provider = provider
+
+    def _refresh_config(self) -> None:
+        if self._config_provider is not None:
+            self.set_config(self._config_provider())
 
     def set_event_broker(self, event_broker: "InMemoryEventBroker") -> None:
         """Set the event broker for socket server to publish to."""
@@ -382,6 +401,7 @@ class LivekitCallManager:
         extra_metadata: dict | None = None,
     ) -> None:
         """Dispatch a LiveKit job to the persistent worker."""
+        self._refresh_config()
         async with self._dispatch_lock:
             await self._wait_for_worker_registered()
             socket_path = await self._ensure_socket_server()
@@ -977,6 +997,7 @@ class LivekitCallManager:
         extra_env: dict | None = None,
     ) -> None:
         """Legacy path: spawn a fresh subprocess per call."""
+        self._refresh_config()
         socket_path = await self._ensure_socket_server()
         if extra_env:
             for k, v in extra_env.items():

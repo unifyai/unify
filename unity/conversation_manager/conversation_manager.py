@@ -282,6 +282,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         # call manager - pass event_broker for socket IPC with voice agent subprocess
         self.call_manager = LivekitCallManager(self.get_call_config(), event_broker)
+        self.call_manager.set_config_provider(self.get_call_config)
         self.call_manager.on_screenshot = self._buffer_screenshot
         self.call_manager.on_fast_brain_generating = self._on_fast_brain_generating
         self.call_manager.on_pipeline_quiescent = self._on_pipeline_quiescent
@@ -2422,8 +2423,13 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.user_number = payload["user_number"]
         self.user_email = payload["user_email"]
         self.user_whatsapp_number = payload.get("user_whatsapp_number", "")
-        self.voice_provider = payload["voice_provider"]
-        self.voice_id = payload["voice_id"]
+        # Only adopt voice from the payload when it carries a real value. A
+        # sparse AssistantUpdateEvent (voice omitted / coerced None -> "") must
+        # not wipe the assistant's current voice back to the provider default.
+        if payload.get("voice_provider"):
+            self.voice_provider = payload["voice_provider"]
+        if payload.get("voice_id"):
+            self.voice_id = payload["voice_id"]
         self.binding_id = payload.get("binding_id", "")
         self.desktop_mode = payload.get("desktop_mode", "ubuntu")
         self.user_desktops = payload.get("user_desktops") or []
@@ -2491,13 +2497,22 @@ class ConversationManager(metaclass=SingletonABCMeta):
         }
 
     def get_call_config(self) -> CallConfig:
+        # Resolve the voice from the live runtime source rather than a frozen
+        # snapshot: the CM's own fields take precedence, but fall back to
+        # SESSION_DETAILS.voice (populated from the OS env at boot in self-host,
+        # where no StartupEvent ever arrives). Without this fallback an empty
+        # CM voice field silently sends the provider default to the call agent.
+        voice_provider = (
+            self.voice_provider or SESSION_DETAILS.voice.provider or "cartesia"
+        )
+        voice_id = self.voice_id or SESSION_DETAILS.voice.id or ""
         return CallConfig(
             assistant_id=self.assistant_id,
             user_id=self.user_id,
             assistant_bio=self.assistant_about,
             assistant_number=self.assistant_number,
-            voice_provider=self.voice_provider,
-            voice_id=self.voice_id,
+            voice_provider=voice_provider,
+            voice_id=voice_id,
             assistant_name=f"{self.assistant_first_name} {self.assistant_surname}".strip(),
             job_name=self.job_name,
             is_coordinator=SESSION_DETAILS.is_coordinator,
