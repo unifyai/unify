@@ -22,6 +22,7 @@ from unity.conversation_manager.events import (
     UnifyMeetStarted,
 )
 from unity.conversation_manager.cm_types import Medium, Mode
+from unity.conversation_manager.domains.contact_index import GuidanceMessage
 
 from tests.conversation_manager.conftest import BOSS, TEST_CONTACTS
 from tests.helpers import _handle_project
@@ -43,6 +44,54 @@ class TestSlowBrainPassesSpeakThrough:
         """ConversationManager carries no speech-dedup checker."""
         cm = initialized_cm.cm
         assert not hasattr(cm, "_speech_dedup_checker")
+
+    async def test_emitted_guidance_recorded_as_unconfirmed_row(
+        self,
+        initialized_cm,
+        boss_contact,
+    ):
+        """The in-flight-speech overlay: SPEAK guidance is recorded as an
+        unconfirmed voice-thread row so the next slow-brain run sees what this
+        turn just decided to say and does not repeat it."""
+        cm = initialized_cm.cm
+        await initialized_cm.step(PhoneCallStarted(contact=boss_contact))
+        assert cm.mode == Mode.CALL
+
+        line = "The next step is to click Trigger email from T-W1N."
+        cm._record_unconfirmed_voice_guidance(line)
+
+        msgs = cm.contact_index.get_messages_for_contact(
+            boss_contact["contact_id"],
+            Medium.PHONE_CALL,
+        )
+        guidance = [m for m in msgs if isinstance(m, GuidanceMessage)]
+        assert any(line in g.content for g in guidance), (
+            "Emitted SPEAK guidance must appear as an unconfirmed guidance row "
+            f"in the voice thread. Got: {[m.content for m in msgs]}"
+        )
+
+    async def test_record_unconfirmed_guidance_ignores_empty(
+        self,
+        initialized_cm,
+        boss_contact,
+    ):
+        """Empty guidance records nothing."""
+        cm = initialized_cm.cm
+        await initialized_cm.step(PhoneCallStarted(contact=boss_contact))
+        before = len(
+            cm.contact_index.get_messages_for_contact(
+                boss_contact["contact_id"],
+                Medium.PHONE_CALL,
+            ),
+        )
+        cm._record_unconfirmed_voice_guidance("   ")
+        after = len(
+            cm.contact_index.get_messages_for_contact(
+                boss_contact["contact_id"],
+                Medium.PHONE_CALL,
+            ),
+        )
+        assert after == before
 
     async def test_should_speak_passed_through_with_recent_utterances(
         self,

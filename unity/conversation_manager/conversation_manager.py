@@ -873,6 +873,41 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 f"Error buffering screenshot: {e}",
             )
 
+    def _active_voice_medium(self) -> Medium:
+        """The Medium for the currently-active voice thread."""
+        if self.call_manager.has_active_google_meet:
+            return Medium.GOOGLE_MEET
+        if self.call_manager.has_active_teams_meet:
+            return Medium.TEAMS_MEET
+        if self.mode == Mode.MEET:
+            return Medium.UNIFY_MEET
+        if self.call_manager._call_channel == "whatsapp_call":
+            return Medium.WHATSAPP_CALL
+        return Medium.PHONE_CALL
+
+    def _record_unconfirmed_voice_guidance(self, message: str) -> None:
+        """Record ``should_speak`` guidance as an unconfirmed voice-thread row.
+
+        This is the slow brain's in-flight-speech overlay: it makes the line this
+        turn just decided to speak visible to the very next run, so consecutive
+        runs never repeat each other while the spoken ``[You]`` utterance is still
+        in flight. The row is in-memory only (not persisted to Orchestra) and
+        renders as ``[guidance @ ...] (unconfirmed)``; the prompt tells the slow
+        brain these are requested-but-not-yet-confirmed lines.
+        """
+        if not (message or "").strip():
+            return
+        contact = self.get_active_contact()
+        if not contact:
+            return
+        self.contact_index.push_message(
+            contact_id=contact.get("contact_id"),
+            sender_name="You",
+            thread_name=self._active_voice_medium(),
+            message_content=message,
+            role="guidance",
+        )
+
     def get_recent_voice_transcript(
         self,
         contact: dict | None = None,
@@ -903,16 +938,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         if not conv_state:
             return conversation_turns, last_message_timestamp
 
-        if self.call_manager.has_active_google_meet:
-            voice_medium = Medium.GOOGLE_MEET
-        elif self.call_manager.has_active_teams_meet:
-            voice_medium = Medium.TEAMS_MEET
-        elif self.mode == Mode.MEET:
-            voice_medium = Medium.UNIFY_MEET
-        elif self.call_manager._call_channel == "whatsapp_call":
-            voice_medium = Medium.WHATSAPP_CALL
-        else:
-            voice_medium = Medium.PHONE_CALL
+        voice_medium = self._active_voice_medium()
         voice_thread = self.contact_index.get_messages_for_contact(
             contact_id,
             voice_medium,
@@ -2072,6 +2098,15 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     should_speak=should_speak,
                     slow_brain_log_path=slow_brain_log_path,
                 )
+                # Record SPEAK guidance as an unconfirmed row *synchronously* so the
+                # next slow-brain run (which may start the instant this one ends,
+                # before the spoken `[You]` utterance is recorded) sees what this
+                # turn just decided to say and does not repeat it. The row renders
+                # as `[guidance @ ...] (unconfirmed)`; the real `[You]` utterance
+                # confirms what was actually heard (and VoiceInterrupt reports any
+                # unheard remainder on a barge-in).
+                if should_speak:
+                    self._record_unconfirmed_voice_guidance(guidance_message)
 
         self._session_logger.debug(
             "llm_response",
