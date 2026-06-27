@@ -1324,6 +1324,7 @@ async def entrypoint(ctx: agents.JobContext):
         coordinator_onboarding_deferred=coordinator_onboarding_deferred,
         console_ui_present=SETTINGS.UNITY_CONSOLE_UI,
         onboarding_catalog=onboarding_catalog,
+        opening_mode=opening_config["mode"],
     ).flatten()
     _log.config(f"System prompt ({len(system_prompt)} chars)")
 
