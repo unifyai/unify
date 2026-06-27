@@ -5,10 +5,10 @@ tests/conversation_manager/voice/test_fast_brain_buffer.py
 Deterministic tests for the fast-brain buffer-phrase selector.
 
 The fast brain no longer free-generates replies; on each user turn it emits one
-short, universally-safe filler phrase from a fixed set while the slow brain
-composes the real answer. These tests lock the contract: the selector always
-returns a phrase from ``BUFFER_PHRASES`` and fails safe to the default on empty
-input or any error - it never free-generates text.
+short filler phrase (or a natural pair) copied from a fixed set while the slow
+brain composes the real answer. These tests lock the contract: the model's raw
+output is validated against the allowed set and re-emitted as canonical phrases,
+never echoed; anything unrecognized falls back to the safe default.
 """
 
 from __future__ import annotations
@@ -18,10 +18,11 @@ import pytest
 from unity.conversation_manager.domains import fast_brain_buffer
 from unity.conversation_manager.domains.fast_brain_buffer import (
     BUFFER_PHRASES,
+    resolve_buffer_phrases,
     select_buffer_phrase,
 )
 
-_DEFAULT = BUFFER_PHRASES[fast_brain_buffer._DEFAULT_INDEX]
+_DEFAULT = fast_brain_buffer._DEFAULT_PHRASE
 
 
 def _patch_client(monkeypatch, raw=None, *, raises: bool = False):
@@ -40,12 +41,74 @@ def _patch_client(monkeypatch, raw=None, *, raises: bool = False):
     )
 
 
+# ---------------------------------------------------------------------------
+# Phrase set sanity
+# ---------------------------------------------------------------------------
+
+
 def test_buffer_phrases_are_nonempty_short_strings():
     assert BUFFER_PHRASES, "There must be at least one buffer phrase."
+    assert _DEFAULT in BUFFER_PHRASES
     for phrase in BUFFER_PHRASES:
         assert isinstance(phrase, str)
         assert phrase.strip()
         assert len(phrase) <= 40, f"Buffer phrase unexpectedly long: {phrase!r}"
+
+
+# ---------------------------------------------------------------------------
+# resolve_buffer_phrases (pure, deterministic)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("phrase", BUFFER_PHRASES)
+def test_resolve_exact_single_phrase(phrase):
+    assert resolve_buffer_phrases(phrase) == phrase
+
+
+def test_resolve_combination():
+    assert resolve_buffer_phrases("Sure. One moment.") == "Sure. One moment."
+
+
+def test_resolve_normalizes_casing_and_whitespace():
+    # Lowercased, extra spaces, missing trailing period -> canonical form.
+    assert resolve_buffer_phrases("  got it ") == "Got it."
+    assert resolve_buffer_phrases("sure.   one moment") == "Sure. One moment."
+
+
+def test_resolve_strips_wrapping_quotes():
+    assert resolve_buffer_phrases('"Got it."') == "Got it."
+    assert resolve_buffer_phrases("\u201cOn it.\u201d") == "On it."
+
+
+def test_resolve_drops_novel_chunks_but_keeps_known_lead_in():
+    assert resolve_buffer_phrases("Got it. I'll check your calendar.") == "Got it."
+
+
+def test_resolve_pure_novel_returns_none():
+    assert resolve_buffer_phrases("I'll check your calendar now.") is None
+    assert resolve_buffer_phrases("") is None
+
+
+def test_resolve_caps_at_two():
+    assert resolve_buffer_phrases("Got it. Okay. Sure.") == "Got it. Okay."
+
+
+def test_resolve_dedupes_consecutive_repeats():
+    assert resolve_buffer_phrases("One moment. One moment.") == "One moment."
+
+
+def test_resolve_always_returns_known_phrases_or_none():
+    for raw in ["Sure.", "garbage", "", "On it. On it.", "Okay! Got it?"]:
+        result = resolve_buffer_phrases(raw)
+        if result is not None:
+            for part in result.split(". "):
+                token = part if part.endswith(".") else part + "."
+                assert token in BUFFER_PHRASES
+
+
+# ---------------------------------------------------------------------------
+# select_buffer_phrase (LLM-backed, monkeypatched)
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -62,45 +125,24 @@ async def test_empty_input_returns_default_without_llm(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("index", list(range(len(BUFFER_PHRASES))))
-async def test_selects_phrase_by_index(monkeypatch, index):
-    """A clean digit response maps to the corresponding phrase."""
-    _patch_client(monkeypatch, raw=str(index))
-    assert (
-        await select_buffer_phrase("Can you check my calendar?")
-        == BUFFER_PHRASES[index]
-    )
+async def test_select_returns_single_phrase(monkeypatch):
+    _patch_client(monkeypatch, raw="Let me check on that.")
+    assert await select_buffer_phrase("What's my schedule?") == "Let me check on that."
 
 
 @pytest.mark.asyncio
-async def test_extracts_first_digit_from_noisy_output(monkeypatch):
-    """A non-bare response still resolves to the first digit's phrase."""
-    _patch_client(monkeypatch, raw="I'd pick option 3 here.")
-    assert await select_buffer_phrase("What's the weather?") == BUFFER_PHRASES[3]
+async def test_select_returns_combination(monkeypatch):
+    _patch_client(monkeypatch, raw="Sure. One moment.")
+    assert await select_buffer_phrase("Can you call them?") == "Sure. One moment."
 
 
 @pytest.mark.asyncio
-async def test_out_of_range_index_falls_back_to_default(monkeypatch):
-    _patch_client(monkeypatch, raw="99")
-    assert await select_buffer_phrase("hello") == _DEFAULT
+async def test_select_novel_output_falls_back_to_default(monkeypatch):
+    _patch_client(monkeypatch, raw="Your meeting is at 3pm.")
+    assert await select_buffer_phrase("when is my meeting?") == _DEFAULT
 
 
 @pytest.mark.asyncio
-async def test_no_digit_falls_back_to_default(monkeypatch):
-    _patch_client(monkeypatch, raw="sure thing")
-    assert await select_buffer_phrase("hello") == _DEFAULT
-
-
-@pytest.mark.asyncio
-async def test_llm_error_falls_back_to_default(monkeypatch):
+async def test_select_llm_error_falls_back_to_default(monkeypatch):
     _patch_client(monkeypatch, raises=True)
     assert await select_buffer_phrase("anything at all") == _DEFAULT
-
-
-@pytest.mark.asyncio
-async def test_always_returns_a_known_phrase(monkeypatch):
-    """Whatever the model emits, the result is always a member of the fixed set."""
-    for raw in ["0", "5", "-1", "", "garbage", "3.5", "10"]:
-        _patch_client(monkeypatch, raw=raw)
-        result = await select_buffer_phrase("some user turn")
-        assert result in BUFFER_PHRASES
