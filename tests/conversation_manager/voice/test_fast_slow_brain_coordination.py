@@ -845,7 +845,7 @@ class TestSlowBrainGuidanceDeliveryPrompt:
     omissions are caught later via an explicit interruption note.
     """
 
-    def test_prompt_treats_recent_guidance_as_already_said(self):
+    def test_prompt_treats_recent_spoken_lines_as_already_said(self):
         from unity.conversation_manager.prompt_builders import build_system_prompt
 
         prompt = build_system_prompt(
@@ -856,7 +856,9 @@ class TestSlowBrainGuidanceDeliveryPrompt:
             is_voice_call=True,
         ).flatten()
 
-        assert "[guidance @ ...]" in prompt
+        # The rule keys off `[You @ ...]` rows (which now include the render-only
+        # in-flight overlay), not a distinct guidance marker.
+        assert "[You @ ...]" in prompt
         assert "definitely spoken" in prompt
         assert "never repeat" in prompt.lower()
         # Re-asking is explicitly not a reason to answer again.

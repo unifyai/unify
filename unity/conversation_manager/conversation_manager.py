@@ -294,6 +294,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # such that you can never modify state while the LLM is running (so actions do not break)
         self.mode: Mode = Mode.TEXT
         self.chat_history = []
+        # Line this turn just decided to speak, not yet confirmed spoken. Injected
+        # render-only into the next run's prompt (as a transient [You] row) so it
+        # is not repeated; cleared once the real Outbound utterance lands. Never
+        # written to the stored transcript.
+        self._inflight_voice_speech: str = ""
         self.contact_index = ContactIndex()
         self.notifications_bar = NotificationBar()
         self.integration_sync_coordinator = IntegrationSyncCoordinator()
@@ -885,28 +890,23 @@ class ConversationManager(metaclass=SingletonABCMeta):
             return Medium.WHATSAPP_CALL
         return Medium.PHONE_CALL
 
-    def _record_unconfirmed_voice_guidance(self, message: str) -> None:
-        """Record ``should_speak`` guidance as an unconfirmed voice-thread row.
+    def _stash_inflight_voice_speech(self, message: str) -> None:
+        """Stash the line this turn just decided to speak, for a render-only overlay.
 
-        This is the slow brain's in-flight-speech overlay: it makes the line this
-        turn just decided to speak visible to the very next run, so consecutive
-        runs never repeat each other while the spoken ``[You]`` utterance is still
-        in flight. The row is in-memory only (not persisted to Orchestra) and
-        renders as ``[guidance @ ...] (unconfirmed)``; the prompt tells the slow
-        brain these are requested-but-not-yet-confirmed lines.
+        This is the slow brain's in-flight-speech overlay. The next run may start
+        before the real spoken ``[You]`` utterance is recorded; without seeing
+        this line it would re-derive "was that actually spoken?" and repeat it.
+        So we stash it here and inject it into the NEXT render as a transient
+        ``[You @ ...]`` row (see ``_run_llm``) - indistinguishable from confirmed
+        speech for that one call, so the model treats it as already said.
+
+        Crucially this is NEVER written to the stored transcript: it is a
+        one-shot, render-only mutation. Once the real utterance lands (the
+        ``Outbound*Utterance`` event), this stash is cleared so future turns see
+        only what was *actually* spoken (e.g. the truncated prefix after a
+        barge-in, with the ``VoiceInterrupt`` note carrying the remainder).
         """
-        if not (message or "").strip():
-            return
-        contact = self.get_active_contact()
-        if not contact:
-            return
-        self.contact_index.push_message(
-            contact_id=contact.get("contact_id"),
-            sender_name="You",
-            thread_name=self._active_voice_medium(),
-            message_content=message,
-            role="guidance",
-        )
+        self._inflight_voice_speech = (message or "").strip()
 
     def get_recent_voice_transcript(
         self,
@@ -1796,26 +1796,54 @@ class ConversationManager(metaclass=SingletonABCMeta):
             self.assistant_screen_share_active,
         )
 
+        # Render-only overlay: inject the line we just decided to speak (not yet
+        # confirmed spoken) as a transient `[You]` row so this render treats it as
+        # already said and never repeats it, then remove it immediately. It is
+        # never persisted, so future turns see only the actually-spoken transcript.
+        _inflight_entry = None
+        if self._inflight_voice_speech and self.mode.is_voice:
+            _inflight_contact = self.get_active_contact()
+            if _inflight_contact:
+                _inflight_entry = self.contact_index.build_message(
+                    contact_id=_inflight_contact.get("contact_id"),
+                    sender_name="You",
+                    thread_name=self._active_voice_medium(),
+                    message_content=self._inflight_voice_speech,
+                    role="assistant",
+                )
+                self.contact_index.global_thread.append(_inflight_entry)
+
         _t0 = _rl_time.perf_counter()
-        snapshot_state = self.prompt_renderer.render_state(
-            self.contact_index,
-            self.notifications_bar,
-            self.in_flight_actions,
-            self.completed_actions,
-            self.last_snapshot,
-            recent_tool_executions=self._recent_tool_executions,
-            assistant_screen_share_active=self.assistant_screen_share_active,
-            user_screen_share_active=self.user_screen_share_active,
-            user_webcam_active=self.user_webcam_active,
-            user_remote_control_active=self.user_remote_control_active,
-            google_meet_active=self.call_manager.has_active_google_meet,
-            teams_meet_active=self.call_manager.has_active_teams_meet,
-            active_web_sessions=web_sessions,
-            managers_initialized=self.initialized,
-            vm_ready=self.vm_ready,
-            file_sync_complete=self.file_sync_complete,
-            has_desktop=SESSION_DETAILS.assistant.has_managed_desktop,
-        )
+        try:
+            snapshot_state = self.prompt_renderer.render_state(
+                self.contact_index,
+                self.notifications_bar,
+                self.in_flight_actions,
+                self.completed_actions,
+                self.last_snapshot,
+                recent_tool_executions=self._recent_tool_executions,
+                assistant_screen_share_active=self.assistant_screen_share_active,
+                user_screen_share_active=self.user_screen_share_active,
+                user_webcam_active=self.user_webcam_active,
+                user_remote_control_active=self.user_remote_control_active,
+                google_meet_active=self.call_manager.has_active_google_meet,
+                teams_meet_active=self.call_manager.has_active_teams_meet,
+                active_web_sessions=web_sessions,
+                managers_initialized=self.initialized,
+                vm_ready=self.vm_ready,
+                file_sync_complete=self.file_sync_complete,
+                has_desktop=SESSION_DETAILS.assistant.has_managed_desktop,
+            )
+        finally:
+            # render_state is synchronous, so the transient row is always the
+            # last entry here; remove it so it never persists.
+            if _inflight_entry is not None:
+                gt = self.contact_index.global_thread
+                if gt and gt[-1] is _inflight_entry:
+                    gt.pop()
+                else:
+                    with contextlib.suppress(ValueError):
+                        gt.remove(_inflight_entry)
         _render_ms = (_rl_time.perf_counter() - _t0) * 1000
 
         # Mirror the Coordinator's onboarding state (defer switch + the
@@ -2098,15 +2126,13 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     should_speak=should_speak,
                     slow_brain_log_path=slow_brain_log_path,
                 )
-                # Record SPEAK guidance as an unconfirmed row *synchronously* so the
-                # next slow-brain run (which may start the instant this one ends,
-                # before the spoken `[You]` utterance is recorded) sees what this
-                # turn just decided to say and does not repeat it. The row renders
-                # as `[guidance @ ...] (unconfirmed)`; the real `[You]` utterance
-                # confirms what was actually heard (and VoiceInterrupt reports any
-                # unheard remainder on a barge-in).
+                # Stash SPEAK guidance for a render-only overlay so the next run
+                # (which may start before the real `[You]` utterance is recorded)
+                # sees what this turn just decided to say, treats it as already
+                # said, and does not repeat it. Cleared once the real utterance
+                # lands so future turns see only what was actually spoken.
                 if should_speak:
-                    self._record_unconfirmed_voice_guidance(guidance_message)
+                    self._stash_inflight_voice_speech(guidance_message)
 
         self._session_logger.debug(
             "llm_response",
