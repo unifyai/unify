@@ -41,11 +41,6 @@ class ConversationSettings(BaseSettings):
             evaluator for voice mode. When a user speaks while the slow brain is
             mid-run, a sidecar LLM call classifies the utterance as urgent
             (preempt) or not (let the queue proceed). Default False.
-        SPEECH_DEDUP_ENABLED: Enable pre-speak deduplication gate in the fast
-            brain subprocess during voice calls. Before playing queued slow brain
-            speech, a lightweight LLM check compares the proposed speech against
-            recent fast brain utterances and suppresses it when the information
-            has already been communicated. Default True.
         INGRESS_TRANSPORT: Selector for the inbound transport
             (``unity.gateway.IngressTransport`` implementation) that
             CommsManager consumes. ``""`` (default) and ``"legacy"`` both
@@ -74,7 +69,6 @@ class ConversationSettings(BaseSettings):
     CONTACT_ID: str = "1"
     BLACKLIST_CHECKS_ENABLED: bool = False
     SPEECH_URGENCY_PREEMPT_ENABLED: bool = True
-    SPEECH_DEDUP_ENABLED: bool = True
     ASSISTANT_SESSION_GROUP: str = "infra.unify.ai"
     ASSISTANT_SESSION_VERSION: str = "v1alpha1"
     ASSISTANT_SESSION_PLURAL: str = "assistantsessions"

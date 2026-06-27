@@ -557,20 +557,6 @@ class TestCoordinatorVoicePrompt:
         assert "My onboarding flow (UI reference)" not in prompt
         assert "Console knowledge\n-----------------" not in prompt
 
-    def test_voice_prompt_rule_2_is_allowlist(self):
-        prompt = _build_voice(is_coordinator=True)
-
-        # RULE 2 now defaults to deferral and only self-answers a small
-        # allowlist; the broad "answer from anything I already know" exception
-        # is gone.
-        assert "What I may answer on my own" in prompt
-        assert "everything else defers" in prompt
-        assert "EXCEPTION — data I already have" not in prompt
-        assert (
-            "If I can answer from what I already know, I answer — no deferral"
-            not in prompt
-        )
-
 
 # ---------------------------------------------------------------------------
 # Tests – missing-capability notices

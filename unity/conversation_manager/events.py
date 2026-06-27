@@ -867,11 +867,6 @@ class FastBrainNotification(Event):
     source: str = ""
     agent_service_url: str = ""
     llm_log_path: str = ""
-    # ISO-8601 UTC timestamp of the latest voice utterance the slow brain saw
-    # when it decided this guidance. The fast brain skips the dedup gate when no
-    # newer voice activity has occurred (the gate would be provably redundant).
-    # Empty for non-guidance notifications, which always run the gate.
-    decided_after_ts: str = ""
 
 
 @dataclass
