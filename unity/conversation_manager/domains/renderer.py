@@ -1802,13 +1802,10 @@ class Renderer:
             return f"{new_marker}[{message.name} @ {timestamp_str}]: {message.content}{attachments_line}{tags_line}{tz_block_line}"
 
         if isinstance(message, GuidanceMessage):
-            # "(unconfirmed)" flags that this is speech the slow brain *requested*
-            # via guide_voice_agent, not a confirmed spoken utterance. The user has
-            # only heard it if a corresponding [You @ ...] utterance appears.
-            return (
-                f"{new_marker}[{message.name} @ {timestamp_str}] (unconfirmed): "
-                f"{message.content}"
-            )
+            # A line I delivered to the caller via guide_voice_agent. Treated as
+            # already spoken; if a barge-in cut it off, an explicit
+            # [... interrupted ...] note reports the unheard remainder.
+            return f"{new_marker}[{message.name} @ {timestamp_str}]: {message.content}"
 
         # Simple Message (SMS, phone call utterances)
         # Show timezone info for the contact

@@ -835,16 +835,17 @@ class TestSlowBrainTextAcknowledgmentPrompt:
 
 
 class TestSlowBrainGuidanceDeliveryPrompt:
-    """Verify the slow brain prompt distinguishes confirmed-spoken `[You @ ...]`
-    utterances from unconfirmed `[guidance @ ...]` intent.
+    """The slow brain prompt instructs it to treat its own recent lines (both
+    `[You @ ...]` and `[guidance @ ...]`) as already spoken, and never to repeat
+    or re-answer them — even when the caller re-asks before reacting.
 
-    Regression: the slow brain treated its own `guide_voice_agent` guidance as if
-    the user had heard it (it reasoned "already confirmed" and called `wait`),
-    even when the speech was suppressed/dropped before being spoken. The prompt
-    must instruct it that only `[You @ ...]` rows prove delivery.
+    This is the fix for the slow brain duplicating its own in-flight guidance:
+    rather than reasoning about whether the caller "heard" it (which it kept
+    getting wrong), it treats a recent line as definitely delivered. Genuine
+    omissions are caught later via an explicit interruption note.
     """
 
-    def test_prompt_marks_guidance_as_unconfirmed(self):
+    def test_prompt_treats_recent_guidance_as_already_said(self):
         from unity.conversation_manager.prompt_builders import build_system_prompt
 
         prompt = build_system_prompt(
@@ -855,12 +856,14 @@ class TestSlowBrainGuidanceDeliveryPrompt:
             is_voice_call=True,
         ).flatten()
 
-        # Guidance rows are explicitly marked as not-yet-delivered.
-        assert "(unconfirmed)" in prompt
-        # Spoken utterances are the single source of truth for what was heard.
-        assert "source of truth for what they have heard" in prompt
-        # The model is told not to wait as if guidance was already heard.
-        assert "NOT proof the user heard it" in prompt
+        assert "[guidance @ ...]" in prompt
+        assert "definitely spoken" in prompt
+        assert "never repeat" in prompt.lower()
+        # Re-asking is explicitly not a reason to answer again.
+        assert "re-asking" in prompt.lower()
+        # The legacy "unconfirmed / not proof" framing is gone.
+        assert "(unconfirmed)" not in prompt
+        assert "NOT proof the user heard it" not in prompt
 
 
 # =============================================================================
