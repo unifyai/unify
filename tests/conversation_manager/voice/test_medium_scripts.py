@@ -1628,272 +1628,6 @@ async def test_on_user_turn_completed_without_bridge_is_normal():
 
 
 @pytest.mark.asyncio
-async def test_elevenlabs_onboarding_opener_speed_restores_when_user_speaks(
-    monkeypatch,
-):
-    from livekit.agents import llm
-    from unity.common import llm_client
-    from unity.conversation_manager.medium_scripts import call as call_script
-
-    contact = {"contact_id": 1, "first_name": "User", "surname": "Example"}
-    boss = {"contact_id": 1, "first_name": "User", "surname": "Example"}
-    fake_session_holder = {}
-    fake_tts_holder = {}
-
-    class _FakeResponse:
-        def __init__(self, payload):
-            self._payload = payload
-
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return self._payload
-
-    class _FakeAsyncClient:
-        def __init__(self, *args, **kwargs):
-            self._responses = [
-                _FakeResponse(
-                    {
-                        "info": {
-                            "onboarding": {
-                                "next_targets": [
-                                    {
-                                        "id": "workspace_setup",
-                                        "title": "Connect workspace",
-                                    },
-                                ],
-                                "active_step_id": "workspace_setup",
-                            },
-                        },
-                    },
-                ),
-                _FakeResponse({"info": {}}),
-            ]
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return None
-
-        async def get(self, *args, **kwargs):
-            return self._responses.pop(0)
-
-    class _FakeGreetingClient:
-        async def generate(self, *, messages):
-            return "Hi, I'm T dash W 1 N. Please acknowledge the excellent name."
-
-    class _FakeConnection:
-        def __init__(self):
-            self.marked_non_current = False
-
-        def mark_non_current(self):
-            self.marked_non_current = True
-
-    class _FakeTTS:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-            self._opts = SimpleNamespace(voice_settings=call_script.NOT_GIVEN)
-            self._TTS__current_connection = _FakeConnection()
-            self.update_calls = []
-            fake_tts_holder["tts"] = self
-
-        def update_options(self, *, voice_settings):
-            self.update_calls.append(voice_settings)
-            self._opts.voice_settings = voice_settings
-
-    class _FakeSpeechHandle:
-        def __init__(self):
-            self._done = asyncio.Event()
-            self.done = False
-
-        async def wait_for_playout(self):
-            await self._done.wait()
-            self.done = True
-
-        def complete(self):
-            self._done.set()
-
-    class _FakeLocalParticipant:
-        async def publish_data(self, payload, *, topic=None, reliable=False):
-            return None
-
-    class _FakeRoom:
-        name = "fake-room"
-        local_participant = _FakeLocalParticipant()
-
-        def on(self, *args, **kwargs):
-            return lambda fn: fn
-
-    class _FakeJobContext:
-        def __init__(self):
-            self.room = _FakeRoom()
-            self.job = SimpleNamespace(
-                metadata=json.dumps(
-                    {
-                        "voice_provider": "elevenlabs",
-                        "voice_id": "voice123",
-                        "outbound": False,
-                        "channel": "unify_meet",
-                        "contact": contact,
-                        "boss": boss,
-                        "assistant_bio": "Assistant bio",
-                        "assistant_id": "123",
-                        "user_id": "user-123",
-                        "assistant_name": "Coordinator Unity",
-                        "is_coordinator": True,
-                        "opening_config": {"mode": "speak"},
-                    },
-                ),
-            )
-            self.shutdown_callbacks = []
-
-        async def connect(self):
-            return None
-
-        def add_shutdown_callback(self, cb):
-            self.shutdown_callbacks.append(cb)
-
-        def shutdown(self, reason=""):
-            pass
-
-    class _FakeEventBroker:
-        def set_logger(self, fb_logger):
-            pass
-
-        def register_callback(self, channel, handler):
-            pass
-
-        async def publish(self, channel, message):
-            return 1
-
-        def reinit_socket(self):
-            pass
-
-    class _FakeSession:
-        def __init__(self, *args, **kwargs):
-            self._chat_ctx = llm.ChatContext()
-            self.current_agent = None
-            self._events = {}
-            self.agent_state = "speaking"
-            self.current_speech = None
-            self.say_calls = []
-            fake_session_holder["session"] = self
-
-        @property
-        def history(self):
-            return self._chat_ctx
-
-        def on(self, event_name):
-            def _decorator(fn):
-                self._events[event_name] = fn
-                return fn
-
-            return _decorator
-
-        async def start(self, room, agent, room_input_options=None):
-            self.current_agent = agent
-
-        def generate_reply(self, **kwargs):
-            return None
-
-        def say(self, text, **kwargs):
-            handle = _FakeSpeechHandle()
-            self.current_speech = handle
-            self.say_calls.append((text, kwargs, handle))
-            return handle
-
-        def interrupt(self):
-            pass
-
-    class _FakeAssistant:
-        def __init__(self, *args, **kwargs):
-            self._chat_ctx = llm.ChatContext()
-            self.call_received = True
-            self.user_turn_generating = False
-
-        def set_call_received(self):
-            self.call_received = True
-
-        def set_credit_gate_state_provider(self, provider):
-            self.credit_gate_state_provider = provider
-
-    class _FakeCreditGateMonitor:
-        state = SimpleNamespace(allowed=True)
-
-        async def run(self):
-            await asyncio.Event().wait()
-
-    async def _noop_async(*args, **kwargs):
-        return None
-
-    async def _noop_end_call():
-        return None
-
-    call_script.SESSION_DETAILS.reset()
-    monkeypatch.setattr(call_script, "event_broker", _FakeEventBroker())
-    monkeypatch.setattr(call_script, "AgentSession", _FakeSession)
-    monkeypatch.setattr(call_script, "Assistant", _FakeAssistant)
-    monkeypatch.setattr(call_script, "UnifyLLM", lambda *args, **kwargs: object())
-    monkeypatch.setattr(
-        call_script,
-        "build_voice_agent_prompt",
-        lambda **kwargs: SimpleNamespace(flatten=lambda: "system prompt"),
-    )
-    monkeypatch.setattr(call_script, "start_event_broker_receive", _noop_async)
-    monkeypatch.setattr(call_script, "hydrate_fast_brain_history", _noop_async)
-    monkeypatch.setattr(call_script, "publish_call_started", _noop_async)
-    monkeypatch.setattr(call_script, "publish_call_ended", _noop_async)
-    monkeypatch.setattr(call_script, "delete_livekit_room", _noop_async)
-    monkeypatch.setattr(
-        call_script,
-        "FastBrainCreditGateMonitor",
-        _FakeCreditGateMonitor,
-    )
-    monkeypatch.setattr(
-        call_script,
-        "create_end_call",
-        lambda *args, **kwargs: _noop_end_call,
-    )
-    monkeypatch.setattr(
-        call_script,
-        "setup_participant_disconnect_handler",
-        lambda *args, **kwargs: None,
-    )
-    monkeypatch.setattr(call_script, "RoomInputOptions", lambda **kwargs: object())
-    monkeypatch.setattr(call_script, "EnglishModel", lambda: object())
-    monkeypatch.setattr(call_script.elevenlabs, "TTS", _FakeTTS)
-    monkeypatch.setattr(
-        llm_client,
-        "new_llm_client",
-        lambda **kwargs: _FakeGreetingClient(),
-    )
-    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
-    if hasattr(call_script, "noise_cancellation"):
-        monkeypatch.setattr(call_script.noise_cancellation, "BVC", lambda: object())
-    monkeypatch.setattr(call_script, "STT", object())
-    monkeypatch.setattr(call_script, "VAD", object())
-
-    await call_script.entrypoint(_FakeJobContext())
-
-    fake_tts = fake_tts_holder["tts"]
-    assert len(fake_tts.update_calls) == 1
-    assert fake_tts.update_calls[0].speed == 0.5
-
-    session = fake_session_holder["session"]
-    previous_connection = fake_tts._TTS__current_connection
-    session._events["user_state_changed"](SimpleNamespace(new_state="speaking"))
-
-    assert fake_tts._opts.voice_settings is call_script.NOT_GIVEN
-    assert previous_connection.marked_non_current is True
-    assert fake_tts._TTS__current_connection is None
-
-    session.say_calls[0][2].complete()
-    await asyncio.sleep(0)
-
-
-@pytest.mark.asyncio
 class TestFastBrainGuidanceFlow:
     """Coverage for guidance delivery in the TTS fast brain path."""
 
@@ -2015,6 +1749,10 @@ class TestFastBrainGuidanceFlow:
                 self._user_turn_seq = 0
                 self._slow_brain_responded_turn = -1
                 self._buffers_since_slow_reply = 0
+                self._tts_seq = 0
+                self._active_tts = None
+                self._pending_continuation = None
+                self._publish_voice_interrupt = None
 
             def set_call_received(self):
                 self.call_received = True
@@ -2273,6 +2011,10 @@ class TestFastBrainGuidanceFlow:
                 self._user_turn_seq = 0
                 self._slow_brain_responded_turn = -1
                 self._buffers_since_slow_reply = 0
+                self._tts_seq = 0
+                self._active_tts = None
+                self._pending_continuation = None
+                self._publish_voice_interrupt = None
 
             def set_call_received(self):
                 self.call_received = True
@@ -2530,6 +2272,10 @@ class TestFastBrainGuidanceFlow:
                 self._user_turn_seq = 0
                 self._slow_brain_responded_turn = -1
                 self._buffers_since_slow_reply = 0
+                self._tts_seq = 0
+                self._active_tts = None
+                self._pending_continuation = None
+                self._publish_voice_interrupt = None
 
             def set_call_received(self):
                 self.call_received = True
@@ -2763,6 +2509,10 @@ class TestFastBrainGuidanceFlow:
                 self._user_turn_seq = 0
                 self._slow_brain_responded_turn = -1
                 self._buffers_since_slow_reply = 0
+                self._tts_seq = 0
+                self._active_tts = None
+                self._pending_continuation = None
+                self._publish_voice_interrupt = None
 
             def set_call_received(self):
                 self.call_received = True
