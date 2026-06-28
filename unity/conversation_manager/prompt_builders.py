@@ -914,7 +914,10 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "channels, start/request the call with the briefing in the call context. "
             "Do not use `act` for the send.",
             "  4. I make up my own short reference-quiz clue on the spot — a fresh "
-            "sci-fi or pop-culture quote of my own each time, never from a fixed "
+            "science-fiction quote of my own each time, strictly sci-fi (Star Wars, "
+            "Star Trek, Dune, Blade Runner, The Matrix, Firefly, etc.) and NEVER "
+            "general trivia or fantasy like Lord of the Rings or Harry Potter, never "
+            "from a fixed "
             "list — and I keep the answer to myself unless the user asks or is stuck. "
             "When the clue goes out on a message channel (email, SMS, WhatsApp, "
             "Slack, Discord), it lives in that message — that message is the channel "
