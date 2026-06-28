@@ -3149,6 +3149,84 @@ class TestFastBrainContinuation:
         a._publish_fast_brain_continued.assert_awaited_once()
 
 
+class TestFastBrainSmalltalk:
+    """``llm_node`` small-talk branch: the fast brain fully answers a pure social
+    turn and cancels the slow brain; otherwise it defers with a filler."""
+
+    def _assistant(self, boss_contact):
+        from unity.conversation_manager.medium_scripts.call import Assistant
+
+        return Assistant(
+            contact=boss_contact,
+            boss=boss_contact,
+            channel="phone_call",
+            instructions="x",
+            outbound=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_smalltalk_answers_and_cancels_slow_brain(
+        self,
+        boss_contact,
+        monkeypatch,
+    ):
+        from unittest.mock import AsyncMock
+
+        from livekit.agents import llm
+
+        from unity.conversation_manager.medium_scripts import call as call_mod
+
+        a = self._assistant(boss_contact)
+        a.call_received = True
+        a._capture_screenshots_for_llm = AsyncMock()
+        reply = "Doing great, thanks for asking! How are you?"
+        a._generate_smalltalk_reply = AsyncMock(return_value=reply)
+        a._publish_fast_brain_continued = AsyncMock()
+
+        async def _filler(*args, **kwargs):
+            return "One moment."
+
+        monkeypatch.setattr(call_mod, "select_fast_reply", _filler)
+
+        chunks = [chunk async for chunk in a.llm_node(llm.ChatContext(), [], None)]
+
+        # The smalltalk reply is spoken (no filler), and the slow brain is cancelled.
+        assert len(chunks) == 1
+        assert chunks[0].delta.content == reply
+        a._publish_fast_brain_continued.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_defer_falls_back_to_filler_without_cancelling(
+        self,
+        boss_contact,
+        monkeypatch,
+    ):
+        from unittest.mock import AsyncMock
+
+        from livekit.agents import llm
+
+        from unity.conversation_manager.medium_scripts import call as call_mod
+
+        a = self._assistant(boss_contact)
+        a.call_received = True
+        a._capture_screenshots_for_llm = AsyncMock()
+        # Not small talk -> defer; the filler covers the gap, slow brain proceeds.
+        a._generate_smalltalk_reply = AsyncMock(return_value=None)
+        a._publish_fast_brain_continued = AsyncMock()
+
+        async def _filler(*args, **kwargs):
+            return "One sec — pulling that up."
+
+        monkeypatch.setattr(call_mod, "select_fast_reply", _filler)
+
+        chunks = [chunk async for chunk in a.llm_node(llm.ChatContext(), [], None)]
+
+        assert len(chunks) == 1
+        assert chunks[0].delta.content == "One sec — pulling that up."
+        # Slow brain must NOT be cancelled - it produces the real answer.
+        a._publish_fast_brain_continued.assert_not_awaited()
+
+
 # =============================================================================
 # Outbound opener: held until the callee's first utterance (or fallback)
 # =============================================================================

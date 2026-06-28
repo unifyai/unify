@@ -881,3 +881,58 @@ class TestConsoleUIGate:
     def test_voice_platform_knowledge_absent_in_local_mode(self):
         prompt = _build_voice(is_coordinator=False, console_ui_present=False)
         assert "Platform knowledge" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# Tests - small-talk sidecar prompt
+# ---------------------------------------------------------------------------
+
+
+class TestSmalltalkMessages:
+    """The small-talk sidecar lets the fast brain fully answer pure social /
+    biographical / self-context / repeat turns, and DEFERs everything else."""
+
+    def test_build_smalltalk_messages_structure(self):
+        from unity.conversation_manager.prompt_builders import build_smalltalk_messages
+
+        history = [
+            {"role": "assistant", "content": "Hi there!"},
+            {"role": "user", "content": "what did you just say?"},
+        ]
+        msgs = build_smalltalk_messages(
+            system_prompt="PERSONA",
+            history_messages=history,
+            user_text="what did you just say?",
+        )
+        # Persona first, guardrail near the end, caller's latest line last.
+        assert msgs[0] == {"role": "system", "content": "PERSONA"}
+        assert msgs[-1] == {"role": "user", "content": "what did you just say?"}
+        assert msgs[-2]["role"] == "system"
+        # History is preserved between persona and guardrail.
+        assert {"role": "assistant", "content": "Hi there!"} in msgs
+
+    def test_smalltalk_guardrail_allows_social_bio_selfcontext_repeat(self):
+        from unity.conversation_manager.prompt_builders import _SMALLTALK_GUARDRAIL
+
+        g = _SMALLTALK_GUARDRAIL.lower()
+        assert "tell me about yourself" in g
+        assert "repeat" in g
+        # Self-context is allowed but only when actually known.
+        assert "local time" in g or "where you are" in g
+        assert "do not guess" in g or "do not actually know" in g
+
+    def test_smalltalk_guardrail_defers_substantive_and_mixed(self):
+        from unity.conversation_manager.prompt_builders import (
+            SMALLTALK_DEFER_SENTINEL,
+            _SMALLTALK_GUARDRAIL,
+        )
+
+        assert SMALLTALK_DEFER_SENTINEL == "DEFER"
+        g = _SMALLTALK_GUARDRAIL
+        assert "DEFER" in g
+        low = g.lower()
+        # Data / tools / actions and mixed turns must defer.
+        assert "calendar" in low and "inbox" in low
+        assert "tool" in low
+        assert "mixed" in low
+        assert "when unsure" in low

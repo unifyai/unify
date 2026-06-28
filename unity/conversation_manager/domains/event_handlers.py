@@ -1373,10 +1373,11 @@ async def _(
     *args,
     **kwargs,
 ):
-    """Cancel the eagerly-started slow-brain run when the fast brain resumed.
+    """Cancel the eagerly-started slow-brain run when the fast brain answered.
 
-    The fast brain resumed the interrupted line itself, so the slow-brain run
-    triggered for this turn must not also re-deliver it.
+    The fast brain resolved this turn itself (resumed the interrupted line or
+    answered small talk), so the slow-brain run triggered for this turn must not
+    also answer it.
     """
     await cm.cancel_inflight_slow_brain()
 

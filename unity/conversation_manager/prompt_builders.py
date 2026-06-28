@@ -149,6 +149,63 @@ def build_opening_greeting_messages(
     return messages
 
 
+# Sentinel the small-talk sidecar emits when the turn is NOT pure small talk and
+# must be handled by the slow brain instead.
+SMALLTALK_DEFER_SENTINEL = "DEFER"
+
+_SMALLTALK_GUARDRAIL = (
+    "[system] Small-talk rule. You are the fast, in-the-moment voice; a slower, "
+    "smarter version of you is also about to answer this same turn. Decide: can "
+    "you fully and safely answer THIS turn yourself, right now, from who you are "
+    "(the persona above) and what was just said in this conversation - with NO "
+    "lookups, tools, data, or actions?\n\n"
+    "Answer it yourself ONLY when the whole turn is one of these:\n"
+    "- Social pleasantries: greetings, 'how are you', 'nice to meet you', "
+    "'thanks', 'have a good one', light chit-chat.\n"
+    "- About you: who you are, your name/role, 'tell me about yourself', what "
+    "you can help with in general - drawn from the persona above.\n"
+    "- Simple self-context you ACTUALLY know from the persona: e.g. where you are "
+    "based or the local time where you are, ONLY if the persona actually tells "
+    "you. If you do not actually know it, do not guess.\n"
+    "- Repeat or clarify the immediately preceding line: 'what did you just "
+    "say?', 'sorry, can you repeat that?', 'what do you mean?' - restate or "
+    "lightly rephrase what was just said.\n\n"
+    f"Otherwise, output EXACTLY the single word {SMALLTALK_DEFER_SENTINEL} and "
+    "nothing else. In particular, "
+    f"{SMALLTALK_DEFER_SENTINEL} for ANYTHING that needs the user's data, inbox, "
+    "calendar, files, tasks, history, settings, an action, a tool, an "
+    "integration, a real-world fact, or anything not already in your persona or "
+    "this conversation - and for any MIXED turn that contains even one such "
+    "part. When unsure, "
+    f"{SMALLTALK_DEFER_SENTINEL}. Never invent facts or self-context you do not "
+    "actually know.\n\n"
+    "If you do answer: reply as one natural person (never mention any other "
+    "system, model, or 'version' of you), stay in persona, and keep it to one or "
+    "two short sentences."
+)
+
+
+def build_smalltalk_messages(
+    *,
+    system_prompt: str,
+    history_messages: Sequence[dict[str, Any]],
+    user_text: str,
+) -> list[dict[str, Any]]:
+    """Build the sidecar prompt for the small-talk fast reply.
+
+    Mirrors ``build_opening_greeting_messages``: the assistant persona, then the
+    recent conversation, then the small-talk guardrail, then the caller's latest
+    line. The model either answers a pure social / biographical / self-context /
+    repeat turn directly, or emits ``SMALLTALK_DEFER_SENTINEL`` to leave it to
+    the slow brain.
+    """
+    messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+    messages.extend(dict(message) for message in history_messages)
+    messages.append({"role": "system", "content": _SMALLTALK_GUARDRAIL})
+    messages.append({"role": "user", "content": user_text})
+    return messages
+
+
 def _build_boss_details_block(
     *,
     contact_id: int,
