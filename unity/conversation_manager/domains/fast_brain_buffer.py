@@ -69,6 +69,101 @@ def _clean(raw: object) -> str:
     return " ".join(str(raw).split()).strip().strip("\"'\u201c\u201d\u2018\u2019")
 
 
+# Resumption (fast brain picking up an interrupted slow-brain line) ----------
+
+# Sentinel the continuation model returns when the caller's barge-in redirected
+# or asked something new, so resuming the old line would be wrong.
+_DEFER_SENTINEL = "DEFER"
+
+# A resume lead-in is a few words ("Sorry - as I was saying,"). Anything longer
+# means the model tried to re-compose the remainder itself; we defer instead.
+_MAX_LEAD_IN_CHARS = 120
+
+_CONTINUATION_PROMPT = """\
+You were speaking on a live call and the caller cut you off mid-sentence. You are
+about to resume the EXACT words you had left to say (they are appended verbatim
+by the system — you do NOT write them). Your only job is a SHORT, natural lead-in
+that bridges back into them, reacting to whatever the caller just said.
+
+Decide first: did the caller's interjection redirect you, ask something new, or
+make resuming the old line pointless? If so, reply with exactly:
+DEFER
+
+Otherwise (they just acked, talked over you, or said something minor) reply with
+ONLY a brief lead-in to glide back in, e.g.:
+- "Sorry — as I was saying,"
+- "Right, let me finish that thought —"
+- "Yeah — so, continuing,"
+- "Mhm — anyway,"
+
+A few words only. Never include the remaining content itself, never answer
+anything, never add new information."""
+
+
+def compute_resume_text(full: str, spoken: str) -> str:
+    """Return the unheard tail of ``full``, backed up to a clean resume point.
+
+    ``spoken`` is the prefix the caller actually heard before barging in (usually
+    cutting a sentence mid-way). We return the remainder, but rewound to the start
+    of the sentence that was cut, so resuming repeats the partial sentence cleanly
+    rather than starting mid-word. Falls back to the raw remainder when ``spoken``
+    is not a prefix of ``full`` or no sentence boundary precedes the cut.
+    """
+    full = (full or "").strip()
+    spoken = (spoken or "").strip()
+    if not full:
+        return ""
+    if not spoken or not full.startswith(spoken):
+        return full
+    # Rewind to just after the last sentence terminator inside the spoken prefix,
+    # so the partially-spoken sentence is resumed from its beginning.
+    boundary = max(spoken.rfind(c) for c in ".!?")
+    if boundary == -1:
+        return full[len(spoken) :].strip()
+    return full[boundary + 1 :].strip()
+
+
+async def select_continuation(resume_text: str, user_text: str) -> str | None:
+    """Return a short lead-in to resume an interrupted line, or ``None`` to defer.
+
+    ``resume_text`` is the slow brain's own verbatim remaining content (appended
+    by the caller, never composed here); ``user_text`` is the caller's barge-in.
+    Returns ``None`` (let the slow brain handle it) when the model judges the
+    interjection a redirect, on empty input, an over-long lead-in (the model
+    overreached), or any error.
+    """
+    if not (resume_text or "").strip() or not (user_text or "").strip():
+        return None
+    messages = [
+        {"role": "system", "content": _CONTINUATION_PROMPT},
+        {
+            "role": "user",
+            "content": (
+                f"The words you still have left to say: {resume_text.strip()}\n\n"
+                f"What the caller just said: {user_text.strip()}"
+            ),
+        },
+    ]
+    try:
+        client = new_llm_client(
+            SETTINGS.conversation.FAST_BRAIN_MODEL,
+            origin="FastBrain.continuation",
+            reasoning_effort="low",
+        )
+        raw = await client.generate(messages=messages)
+        text = _clean(raw)
+        if not text or text.upper() == _DEFER_SENTINEL:
+            return None
+        # A genuine lead-in is short; an over-long reply means the model tried to
+        # re-say the remainder itself — defer to be safe.
+        if len(text) > _MAX_LEAD_IN_CHARS:
+            return None
+        return text
+    except Exception as e:  # never let continuation selection break the turn
+        LOGGER.warning(f"Continuation selection failed; deferring: {e}")
+    return None
+
+
 async def select_fast_reply(
     user_text: str,
     recent_assistant_text: str = "",

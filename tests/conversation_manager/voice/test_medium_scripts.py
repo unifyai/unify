@@ -3245,3 +3245,110 @@ class TestChildProcessLogging:
             root.setLevel(root_level)
             LOGGER.propagate = original_propagate
             LOGGER.handlers = original_handlers
+
+
+# =============================================================================
+# Fast brain resuming an interrupted slow-brain line
+# =============================================================================
+
+
+class TestFastBrainContinuation:
+    """``Assistant._claim_interrupted_continuation`` exactly-once semantics."""
+
+    def _assistant(self, boss_contact):
+        from unity.conversation_manager.medium_scripts.call import Assistant
+
+        return Assistant(
+            contact=boss_contact,
+            boss=boss_contact,
+            channel="phone_call",
+            instructions="x",
+            outbound=False,
+        )
+
+    def _pending(self):
+        return {
+            "resume_text": "Next, click Connect Slack.",
+            "remainder": "Next, click Connect Slack.",
+            "spoken_prefix": "Your number is saved.",
+            "seq": 1,
+            "consumed": False,
+        }
+
+    @pytest.mark.asyncio
+    async def test_claims_and_resumes_with_verbatim_remainder(
+        self,
+        boss_contact,
+        monkeypatch,
+    ):
+        from unity.conversation_manager.medium_scripts import call as call_mod
+
+        a = self._assistant(boss_contact)
+        a._pending_continuation = self._pending()
+
+        async def _fake(resume_text, user_text):
+            return "Sorry — as I was saying,"
+
+        monkeypatch.setattr(call_mod, "select_continuation", _fake)
+
+        out = await a._claim_interrupted_continuation("okay")
+        # Lead-in from the model + the slow brain's verbatim remainder.
+        assert out == "Sorry — as I was saying, Next, click Connect Slack."
+        # Claimed: cleared so the VoiceInterrupt handoff becomes a no-op.
+        assert a._pending_continuation is None
+
+    @pytest.mark.asyncio
+    async def test_defer_hands_off_to_slow_brain(self, boss_contact, monkeypatch):
+        from unity.conversation_manager.medium_scripts import call as call_mod
+
+        a = self._assistant(boss_contact)
+        a._pending_continuation = self._pending()
+        published: dict = {}
+
+        async def _pub(spoken, remainder):
+            published["args"] = (spoken, remainder)
+
+        a._publish_voice_interrupt = _pub
+
+        async def _defer(resume_text, user_text):
+            return None
+
+        monkeypatch.setattr(call_mod, "select_continuation", _defer)
+
+        out = await a._claim_interrupted_continuation("wait, stop")
+        assert out is None
+        # The remainder is handed to the slow brain instead (delivered once).
+        assert published["args"] == (
+            "Your number is saved.",
+            "Next, click Connect Slack.",
+        )
+        assert a._pending_continuation is None
+
+    @pytest.mark.asyncio
+    async def test_no_pending_returns_none(self, boss_contact):
+        a = self._assistant(boss_contact)
+        assert a._pending_continuation is None
+        assert await a._claim_interrupted_continuation("okay") is None
+
+    @pytest.mark.asyncio
+    async def test_already_consumed_returns_none(self, boss_contact, monkeypatch):
+        from unity.conversation_manager.medium_scripts import call as call_mod
+
+        a = self._assistant(boss_contact)
+        pending = self._pending()
+        pending["consumed"] = True
+        a._pending_continuation = pending
+
+        def _boom(*args, **kwargs):
+            raise AssertionError(
+                "must not select a continuation for a consumed candidate",
+            )
+
+        monkeypatch.setattr(call_mod, "select_continuation", _boom)
+        assert await a._claim_interrupted_continuation("okay") is None
+
+    @pytest.mark.asyncio
+    async def test_empty_user_text_returns_none(self, boss_contact):
+        a = self._assistant(boss_contact)
+        a._pending_continuation = self._pending()
+        assert await a._claim_interrupted_continuation("   ") is None

@@ -15,7 +15,11 @@ from __future__ import annotations
 import pytest
 
 from unity.conversation_manager.domains import fast_brain_buffer
-from unity.conversation_manager.domains.fast_brain_buffer import select_fast_reply
+from unity.conversation_manager.domains.fast_brain_buffer import (
+    compute_resume_text,
+    select_continuation,
+    select_fast_reply,
+)
 
 _DEFAULT = fast_brain_buffer._DEFAULT_PHRASE
 
@@ -175,3 +179,78 @@ async def test_recent_assistant_line_passed_as_context_with_antirepeat(monkeypat
     assert any(
         m["role"] == "system" and "do not repeat" in m["content"].lower() for m in msgs
     )
+
+
+# ---------------------------------------------------------------------------
+# compute_resume_text - rewind the unheard tail to a clean sentence start
+# ---------------------------------------------------------------------------
+
+
+def test_resume_text_rewinds_to_cut_sentence_start():
+    full = "Your number is saved. Next, click Trigger email and I'll fire it off."
+    spoken = "Your number is saved. Next, click Trigger"
+    # Resumes from the start of the sentence that was cut, not mid-word.
+    assert compute_resume_text(full, spoken) == (
+        "Next, click Trigger email and I'll fire it off."
+    )
+
+
+def test_resume_text_no_boundary_returns_raw_remainder():
+    full = "click Trigger email and I'll fire it off"
+    spoken = "click Trigger"
+    assert compute_resume_text(full, spoken) == "email and I'll fire it off"
+
+
+def test_resume_text_spoken_not_a_prefix_returns_full():
+    full = "The spice must flow, Daniel."
+    assert compute_resume_text(full, "something unrelated") == full
+
+
+def test_resume_text_empty_full_is_empty():
+    assert compute_resume_text("", "anything") == ""
+
+
+# ---------------------------------------------------------------------------
+# select_continuation - resume lead-in or defer
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_continuation_returns_lead_in(monkeypatch):
+    _patch_client(monkeypatch, raw="Sorry — as I was saying,")
+    out = await select_continuation("the next step is to click Connect Slack.", "okay")
+    assert out == "Sorry — as I was saying,"
+
+
+@pytest.mark.asyncio
+async def test_continuation_defer_sentinel_returns_none(monkeypatch):
+    _patch_client(monkeypatch, raw="DEFER")
+    out = await select_continuation(
+        "the next step is to click Connect Slack.",
+        "wait, stop",
+    )
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_continuation_empty_inputs_skip_llm(monkeypatch):
+    def _boom(*a, **kw):
+        raise AssertionError("new_llm_client must not be called for empty input")
+
+    monkeypatch.setattr(fast_brain_buffer, "new_llm_client", _boom)
+
+    assert await select_continuation("", "okay") is None
+    assert await select_continuation("some remainder", "   ") is None
+
+
+@pytest.mark.asyncio
+async def test_continuation_overlong_lead_in_defers(monkeypatch):
+    long_lead_in = "x" * (fast_brain_buffer._MAX_LEAD_IN_CHARS + 1)
+    _patch_client(monkeypatch, raw=long_lead_in)
+    assert await select_continuation("remainder text", "okay") is None
+
+
+@pytest.mark.asyncio
+async def test_continuation_llm_error_defers(monkeypatch):
+    _patch_client(monkeypatch, raises=True)
+    assert await select_continuation("remainder text", "okay") is None
