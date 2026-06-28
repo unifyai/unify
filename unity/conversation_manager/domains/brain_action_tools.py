@@ -993,6 +993,42 @@ class ConversationManagerBrainActionTools:
         await self._event_broker.publish(event.topic, event.to_json())
         return {"status": "ok", "message": "Leaving Teams meeting"}
 
+    async def start_unify_meet(self, context: str = "") -> dict[str, Any]:
+        """Ring my boss on Unify Meet (the in-app live call) and ask them to answer.
+
+        Unify Meet is the in-app live call inside the Console - the canonical
+        place to talk face to face (no phone credits, nothing to hold). Use this
+        to move the conversation onto that call, e.g. to continue onboarding on
+        the live call after verifying another channel.
+
+        I cannot join my boss's browser for them: this rings them, and a pinned
+        incoming-call window with an Answer button appears in their Console. When
+        they answer, the call connects and I join automatically. If they do not
+        answer shortly, I will be told to continue with them over text instead.
+
+        Only one voice session can be active at a time, so if I am currently on a
+        phone or WhatsApp call I must ``hang_up`` first, then ring the Meet.
+
+        Args:
+            context: A short briefing for how I should open the call once it is
+                answered (why I'm calling / what we're continuing), spoken as a
+                purposeful greeting. Same guidance principles as make_call's
+                context parameter.
+        """
+        if (
+            self._cm.call_manager.has_active_call
+            or self._cm.call_manager.has_active_google_meet
+            or self._cm.call_manager.has_active_teams_meet
+        ):
+            return {
+                "status": "error",
+                "message": (
+                    "A call or meeting is already active. Hang up first, then "
+                    "ring the Unify Meet."
+                ),
+            }
+        return await self._cm.ring_unify_meet(context=context)
+
     async def hang_up(self) -> dict[str, Any]:
         """End the current call or meeting, whatever kind it is.
 
@@ -2074,6 +2110,10 @@ class ConversationManagerBrainActionTools:
         if not call_or_meet_in_progress:
             tools["join_google_meet"] = self.join_google_meet
             tools["join_teams_meet"] = self.join_teams_meet
+            # Ringing the in-app Meet only signals the Console (the owner answers
+            # in-browser), so unlike telephony call-start it needs no prewarmed
+            # worker; expose it whenever no other voice session is live.
+            tools["start_unify_meet"] = self.start_unify_meet
         else:
             # One voice session at a time; a single tool ends whichever is live
             # (phone, WhatsApp, Unify Meet, Google Meet, or Teams).

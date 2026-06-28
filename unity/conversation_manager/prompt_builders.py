@@ -642,6 +642,13 @@ def _build_comms_tool_listing(
                     "If call permission hasn't been granted yet, a call invite is sent instead.",
                 )
             lines.append(
+                "- `start_unify_meet`: Ring my boss on Unify Meet (the in-app "
+                "live call). A pinned incoming-call window with an Answer button "
+                "appears in their Console; I join when they answer. Use this to "
+                "move us onto the live call (e.g. the home base for onboarding). "
+                "Pass `context` to brief how I open once answered.",
+            )
+            lines.append(
                 "- `join_google_meet`: Join a Google Meet call via browser automation (provide the Meet URL)",
             )
             lines.append(
@@ -736,6 +743,12 @@ def _build_comms_tool_listing(
                 "If call permission hasn't been granted yet, a call invite is sent instead — "
                 "the contact sees a 'Call now' button and the call connects when they tap it.",
             )
+        lines.append(
+            "- `start_unify_meet`: Ring a contact on Unify Meet (the in-app live "
+            "call). A pinned incoming-call window with an Answer button appears in "
+            "their Console; I join when they answer. Pass `context` to brief how I "
+            "open once answered.",
+        )
         lines.append(
             "- `join_google_meet`: Join a Google Meet call via browser automation (provide the Meet URL)",
         )
@@ -916,6 +929,16 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "appears in the transcript.",
             "  7. Do not hardcode onboarding game design here. If the framing changes in "
             "Orchestra, follow the new framing from the notification/live progress block.",
+            "  8. Unify Meet is the home base for onboarding. The WhatsApp-call and "
+            "phone-call steps are short excursions purely to prove those voice "
+            "channels work. Once the clue has gone out on that call, the user has "
+            "guessed, and I have told them whether they were right, I do NOT keep "
+            "rolling into the next step on that call: I tell them I'll hop back onto "
+            "the Unify Meet, then `hang_up` and `start_unify_meet` (with a short "
+            "`context` so I open by continuing onboarding). This keeps everything on "
+            "the in-app live call so the user isn't stuck holding a phone. (Message "
+            "channels — email, SMS, WhatsApp message — never leave the call, so this "
+            "return-to-Meet only applies after the WhatsApp-call and phone-call steps.)",
             "Rules for milestone subtypes (`workspace_connected`, `integration_connected`, `step_skipped`):",
             "  1. Acknowledge in one short sentence — name the thing that just happened, "
             "stay warm, do not re-list every onboarding step. For `step_skipped`, say "
