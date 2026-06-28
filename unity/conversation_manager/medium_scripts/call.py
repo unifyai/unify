@@ -702,6 +702,15 @@ OUTBOUND_OPENING_TRIGGER_TIMEOUT_S = 5.0
 # remainder to the slow brain via VoiceInterrupt.
 _CONTINUATION_HANDOFF_S = 0.5
 
+# When the assistant ends a Unify Meet, we first tell the Console to leave the
+# room itself (so its WebRTC peer connection and SCTP data channels close
+# cleanly) before the agent shuts down and the room is deleted server-side.
+# Without this lead time the server-side DeleteRoom force-evicts the still-
+# connected browser, which surfaces as benign but noisy "Unknown DataChannel
+# error" logs in the Next.js console. This is the grace given for the client to
+# disconnect gracefully on its own.
+MEET_GRACEFUL_LEAVE_GRACE_S = 0.6
+
 # The walkie-talkie staticky intro is cut into per-sentence audio slices (at
 # silence midpoints, aligned via Whisper word timestamps). They play in order as
 # separate segments; each commits its own transcript to history as it finishes.
@@ -2153,6 +2162,26 @@ async def entrypoint(ctx: agents.JobContext):
         user_joined_event.set()
         assistant.set_call_received()
 
+    async def _graceful_meet_stop() -> None:
+        """End a Unify Meet by letting the Console disconnect itself first.
+
+        Publishing ``call_ended`` prompts the browser to call ``room.disconnect()``
+        — a clean, client-initiated WebRTC teardown that closes its data channels
+        via ``onclose`` — before the agent shuts down and the room is deleted.
+        That avoids the abrupt server-side eviction that otherwise fires the
+        browser's ``RTCDataChannel.onerror`` ("Unknown DataChannel error").
+        """
+        try:
+            await ctx.room.local_participant.publish_data(
+                json.dumps({"type": "call_ended"}).encode(),
+                topic="agent_status",
+                reliable=True,
+            )
+        except Exception as exc:
+            _log.call_status(f"call_ended publish failed: {exc}")
+        await asyncio.sleep(MEET_GRACEFUL_LEAVE_GRACE_S)
+        ctx.shutdown(reason="stopped")
+
     def on_status(data: dict) -> None:
         """Handle status events (call_answered, stop, meet_session_id)."""
         nonlocal explicit_stop_requested, meet_session_id, speech_gate_open
@@ -2166,7 +2195,10 @@ async def entrypoint(ctx: agents.JobContext):
             meet_session_id = data.get("session_id", "")
         elif event_type == "stop":
             explicit_stop_requested = True
-            ctx.shutdown(reason="stopped")
+            if channel == "unify_meet":
+                asyncio.create_task(_graceful_meet_stop())
+            else:
+                ctx.shutdown(reason="stopped")
 
     @ctx.room.on("participant_connected")
     def _on_room_participant_connected(participant):
