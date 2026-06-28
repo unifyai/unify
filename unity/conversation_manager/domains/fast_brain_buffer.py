@@ -14,6 +14,8 @@ context-aware — e.g. answering "take your time" with "Thanks", not a lookup.
 
 from __future__ import annotations
 
+import random
+
 from unity.common.llm_client import new_llm_client
 from unity.logger import LOGGER
 from unity.settings import SETTINGS
@@ -93,45 +95,47 @@ def _clean(raw: object) -> str:
 
 # Resumption (fast brain picking up an interrupted slow-brain line) ----------
 
-# Sentinel the continuation model returns when the caller's barge-in redirected
-# or asked something new, so resuming the old line would be wrong.
+# Sentinels the continuation classifier returns. CONTINUE = resume the unheard
+# remainder; DEFER = the barge-in redirected, so leave it to the slow brain.
 _DEFER_SENTINEL = "DEFER"
+_CONTINUE_SENTINEL = "CONTINUE"
 
-# A resume lead-in is a few words ("Sorry - as I was saying,"). Anything longer
-# means the model tried to re-compose the remainder itself; we defer instead.
-_MAX_LEAD_IN_CHARS = 120
+# Fixed bridge phrases prepended to a resumed line. Authored HERE, never by the
+# model, so they can never overlap/duplicate the resumed content (the weak model
+# used to copy the remainder's first sentence as its "lead-in", producing
+# back-to-back duplication). Rotated for variety so resumes don't sound robotic.
+_RESUME_LEAD_INS = (
+    "Sorry — as I was saying,",
+    "Right, where was I —",
+    "Okay, picking up where I left off —",
+    "So, to finish that thought —",
+    "Anyway, as I was saying —",
+    "Right, continuing —",
+    "Sorry about that — so,",
+)
 
 _CONTINUATION_PROMPT = """\
-You were speaking on a live call and the caller cut you off mid-sentence. You are
-about to resume the EXACT words you had left to say (they are appended verbatim
-by the system — you do NOT write them). Your only job is a SHORT, natural lead-in
-that bridges back into them, reacting to whatever the caller just said.
+You were speaking on a live call and the caller cut you off mid-sentence. The
+EXACT words you had left to say will be resumed automatically — you do NOT write
+them. Your ONLY job is to decide whether resuming them now is right, given what
+the caller just said.
 
-Default to RESUMING. The words you have left are usually exactly what the caller
-needs, so bridge back into them. Only reply with exactly:
-DEFER
-when continuing would clearly be wrong — the caller changed the subject, declined
-or objected, told you to stop or wait, or asked something the remaining words do
-NOT address.
+Reply with exactly one word:
+- CONTINUE — resume the remaining words now (this is the default; the words you
+  have left are usually exactly what the caller needs).
+- DEFER — only when continuing would clearly be wrong: the caller changed the
+  subject, declined or objected, told you to stop or wait, or asked something the
+  remaining words do NOT address.
 
 CRUCIAL — these are NOT reasons to defer; they are the caller inviting you to say
-your piece, so you MUST resume (the words you have left are precisely the answer):
-- They just answered the call/message with a greeting: "Hello?", "Hello, can you
-  hear me?", "Hi", "Hey".
+your piece, so reply CONTINUE:
+- They just answered with a greeting: "Hello?", "Hello, can you hear me?", "Hi".
 - They asked what this is / why you're contacting them: "Why are you calling?",
-  "Hello, why are you calling?", "What's this about?", "What did you need?",
-  "What's up?".
+  "What's this about?", "What did you need?".
 Answering a call and asking "why are you calling?" is the single most obvious case
-where you resume — do not treat it as a new question.
+to CONTINUE — do not treat it as a new question.
 
-When you resume, reply with ONLY a brief lead-in to glide back in, e.g.:
-- "Sorry — as I was saying,"
-- "Right, let me finish that thought —"
-- "Yeah — so, continuing,"
-- "Hey — glad you picked up. So,"
-
-A few words only. Never include the remaining content itself, never answer
-anything, never add new information."""
+Output ONLY the single word CONTINUE or DEFER — nothing else."""
 
 
 def compute_resume_text(full: str, spoken: str) -> str:
@@ -158,13 +162,15 @@ def compute_resume_text(full: str, spoken: str) -> str:
 
 
 async def select_continuation(resume_text: str, user_text: str) -> str | None:
-    """Return a short lead-in to resume an interrupted line, or ``None`` to defer.
+    """Return a fixed lead-in to resume an interrupted line, or ``None`` to defer.
 
-    ``resume_text`` is the slow brain's own verbatim remaining content (appended
-    by the caller, never composed here); ``user_text`` is the caller's barge-in.
-    Returns ``None`` (let the slow brain handle it) when the model judges the
-    interjection a redirect, on empty input, an over-long lead-in (the model
-    overreached), or any error.
+    The model ONLY classifies CONTINUE vs DEFER given the caller's barge-in; the
+    lead-in itself is drawn from a fixed bank (`_RESUME_LEAD_INS`) so it can never
+    duplicate the resumed content — the caller then hears "{fixed lead-in}
+    {verbatim remainder}". ``resume_text`` is the slow brain's own remaining
+    content (appended by the caller, never composed here); ``user_text`` is the
+    barge-in. Returns ``None`` (let the slow brain handle it) when the model
+    classifies a redirect, on empty input, or any error.
     """
     if not (resume_text or "").strip() or not (user_text or "").strip():
         return None
@@ -185,14 +191,13 @@ async def select_continuation(resume_text: str, user_text: str) -> str | None:
             reasoning_effort="low",
         )
         raw = await client.generate(messages=messages)
-        text = _clean(raw)
-        if not text or text.upper() == _DEFER_SENTINEL:
+        decision = _clean(raw).upper()
+        # Defer on an explicit DEFER, empty output, or anything unexpected that is
+        # not a clear CONTINUE; otherwise resume with a fixed, non-overlapping
+        # lead-in. (Default-to-continue is preserved for a clear CONTINUE.)
+        if not decision or decision == _DEFER_SENTINEL:
             return None
-        # A genuine lead-in is short; an over-long reply means the model tried to
-        # re-say the remainder itself — defer to be safe.
-        if len(text) > _MAX_LEAD_IN_CHARS:
-            return None
-        return text
+        return random.choice(_RESUME_LEAD_INS)
     except Exception as e:  # never let continuation selection break the turn
         LOGGER.warning(f"Continuation selection failed; deferring: {e}")
     return None
