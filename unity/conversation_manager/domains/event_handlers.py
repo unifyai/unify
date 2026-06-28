@@ -1248,6 +1248,7 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
         await cm.interject_or_run(
             event.content,
             triggering_contact_id=contact_id,
+            turn_id=getattr(event, "turn_id", None),
         )
 
 
@@ -1373,13 +1374,13 @@ async def _(
     *args,
     **kwargs,
 ):
-    """Cancel the eagerly-started slow-brain run when the fast brain answered.
+    """Cancel the slow-brain run for the turn the fast brain answered.
 
     The fast brain resolved this turn itself (resumed the interrupted line or
-    answered small talk), so the slow-brain run triggered for this turn must not
-    also answer it.
+    answered small talk), so the slow-brain run that turn spawned must not also
+    answer it. Targets exactly that turn's run (no-op if already gone).
     """
-    await cm.cancel_inflight_slow_brain()
+    await cm.cancel_slow_brain_run(event.turn_id)
 
 
 @EventHandler.register(ProactiveSpeechControl)

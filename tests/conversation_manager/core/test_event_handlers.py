@@ -1139,6 +1139,7 @@ class TestVoiceUtteranceHandlers:
         event = InboundPhoneUtterance(
             contact={"contact_id": 2},
             content="What's the weather?",
+            turn_id=3,
         )
 
         with patch(
@@ -1150,6 +1151,7 @@ class TestVoiceUtteranceHandlers:
         mock_cm.interject_or_run.assert_called_once_with(
             "What's the weather?",
             triggering_contact_id=2,
+            turn_id=3,
         )
 
     @pytest.mark.asyncio
@@ -1255,16 +1257,16 @@ class TestVoiceUtteranceHandlers:
         assert len(msgs) == 0
 
     @pytest.mark.asyncio
-    async def test_fast_brain_continued_cancels_inflight_slow_brain(self, mock_cm):
-        """The fast brain resuming a line itself cancels the eager slow-brain run."""
+    async def test_fast_brain_continued_cancels_run_for_its_turn(self, mock_cm):
+        """The fast brain resolving a turn cancels exactly that turn's run."""
         from unity.conversation_manager.events import FastBrainContinued
 
-        mock_cm.cancel_inflight_slow_brain = AsyncMock()
-        event = FastBrainContinued(contact={"contact_id": 2})
+        mock_cm.cancel_slow_brain_run = AsyncMock()
+        event = FastBrainContinued(contact={"contact_id": 2}, turn_id=7)
 
         await EventHandler.handle_event(event, mock_cm)
 
-        mock_cm.cancel_inflight_slow_brain.assert_awaited_once()
+        mock_cm.cancel_slow_brain_run.assert_awaited_once_with(7)
 
     @pytest.mark.asyncio
     async def test_assistant_turn_injection_updates_history_without_user_turn(

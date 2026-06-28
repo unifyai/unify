@@ -3145,8 +3145,9 @@ class TestFastBrainContinuation:
         assert chunks[0].delta.content == resumed
         # Marked so the speech_created observer registers the reply (recursion).
         assert a._continuation_full_text == resumed
-        # The eagerly-started slow-brain run is cancelled so it cannot re-deliver.
-        a._publish_fast_brain_continued.assert_awaited_once()
+        # Cancels exactly this turn's slow-brain run (by turn id) so it cannot
+        # re-deliver.
+        a._publish_fast_brain_continued.assert_awaited_once_with(a._user_turn_seq)
 
 
 class TestFastBrainSmalltalk:
@@ -3190,10 +3191,11 @@ class TestFastBrainSmalltalk:
 
         chunks = [chunk async for chunk in a.llm_node(llm.ChatContext(), [], None)]
 
-        # The smalltalk reply is spoken (no filler), and the slow brain is cancelled.
+        # The smalltalk reply is spoken (no filler), and this turn's slow-brain
+        # run is cancelled by turn id.
         assert len(chunks) == 1
         assert chunks[0].delta.content == reply
-        a._publish_fast_brain_continued.assert_awaited_once()
+        a._publish_fast_brain_continued.assert_awaited_once_with(a._user_turn_seq)
 
     @pytest.mark.asyncio
     async def test_defer_falls_back_to_filler_without_cancelling(
