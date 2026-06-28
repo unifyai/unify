@@ -114,18 +114,38 @@ _RESUME_LEAD_INS = (
     "Sorry about that — so,",
 )
 
+
+def pick_resume_lead_in() -> str:
+    """A fixed, non-overlapping bridge phrase to prepend to a resumed line.
+
+    Authored here (never by the model) so it can never duplicate the resumed
+    content; rotated for variety. Shared by the classifier (CONTINUE) and the
+    speechless auto-resume path.
+    """
+    return random.choice(_RESUME_LEAD_INS)
+
+
 _CONTINUATION_PROMPT = """\
 You were speaking on a live call and the caller cut you off mid-sentence. The
 EXACT words you had left to say will be resumed automatically — you do NOT write
-them. Your ONLY job is to decide whether resuming them now is right, given what
-the caller just said.
+them. Your ONLY job: decide whether resuming them now is right, given what the
+caller just said.
 
-Reply with exactly one word:
-- CONTINUE — resume the remaining words now (this is the default; the words you
-  have left are usually exactly what the caller needs).
-- DEFER — only when continuing would clearly be wrong: the caller changed the
-  subject, declined or objected, told you to stop or wait, or asked something the
-  remaining words do NOT address.
+Reply with exactly one word. CONTINUE is the strong default — resume unless there
+is a clear, explicit reason not to.
+
+- CONTINUE — the remaining words are almost always exactly what the caller needs.
+  Choose this for anything that is not an explicit redirect: greetings, "go on",
+  filler, thinking aloud, agreeing, partial overlap, talking over you, or simply
+  continuing to speak. If unsure, CONTINUE.
+- DEFER — ONLY when continuing would plainly be wrong because the caller
+  EXPLICITLY: changed the subject to something else, declined/objected, told you
+  to stop or wait, or asked a specific question the remaining words clearly do
+  not answer.
+
+It is fine if a genuine redirect later needs its own turn — the caller keeps
+talking anyway. The costly mistake is failing to resume content that was right
+there, forcing a long silence. So lean hard toward CONTINUE.
 
 CRUCIAL — these are NOT reasons to defer; they are the caller inviting you to say
 your piece, so reply CONTINUE:
@@ -197,7 +217,7 @@ async def select_continuation(resume_text: str, user_text: str) -> str | None:
         # lead-in. (Default-to-continue is preserved for a clear CONTINUE.)
         if not decision or decision == _DEFER_SENTINEL:
             return None
-        return random.choice(_RESUME_LEAD_INS)
+        return pick_resume_lead_in()
     except Exception as e:  # never let continuation selection break the turn
         LOGGER.warning(f"Continuation selection failed; deferring: {e}")
     return None

@@ -3102,10 +3102,51 @@ class TestFastBrainContinuation:
         assert await a._claim_interrupted_continuation("okay") is None
 
     @pytest.mark.asyncio
-    async def test_empty_user_text_returns_none(self, boss_contact):
+    async def test_speechless_barge_in_auto_continues(self, boss_contact, monkeypatch):
+        """A barge-in with no transcript (noise/echo) resumes the remainder
+        verbatim WITHOUT consulting the classifier - the only sensible action."""
+        from unity.conversation_manager.medium_scripts import call as call_mod
+
         a = self._assistant(boss_contact)
         a._pending_continuation = self._pending()
-        assert await a._claim_interrupted_continuation("   ") is None
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("speechless barge-in must not consult the classifier")
+
+        monkeypatch.setattr(call_mod, "select_continuation", _boom)
+
+        out = await a._claim_interrupted_continuation("   ")
+        assert out is not None
+        assert out.endswith("Next, click Connect Slack.")
+        # Claimed exactly once.
+        assert a._pending_continuation is None
+
+    @pytest.mark.asyncio
+    async def test_llm_node_continue_marks_text_and_cancels_slow_brain(
+        self,
+        boss_contact,
+        monkeypatch,
+    ):
+        """On CONTINUE, llm_node yields the verbatim remainder as the reply, marks
+        it for interruption-stashing, and cancels the eager slow-brain run."""
+        from unittest.mock import AsyncMock
+
+        from livekit.agents import llm
+
+        a = self._assistant(boss_contact)
+        a.call_received = True
+        resumed = "Sorry — as I was saying, Next, click Connect Slack."
+        a._claim_interrupted_continuation = AsyncMock(return_value=resumed)
+        a._publish_fast_brain_continued = AsyncMock()
+
+        chunks = [chunk async for chunk in a.llm_node(llm.ChatContext(), [], None)]
+
+        assert len(chunks) == 1
+        assert chunks[0].delta.content == resumed
+        # Marked so the speech_created observer registers the reply (recursion).
+        assert a._continuation_full_text == resumed
+        # The eagerly-started slow-brain run is cancelled so it cannot re-deliver.
+        a._publish_fast_brain_continued.assert_awaited_once()
 
 
 # =============================================================================

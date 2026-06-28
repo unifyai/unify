@@ -81,6 +81,7 @@ from unity.conversation_manager.cm_types.screenshot import (
 )
 from unity.conversation_manager.domains.fast_brain_buffer import (
     compute_resume_text,
+    pick_resume_lead_in,
     select_continuation,
     select_fast_reply,
 )
@@ -356,6 +357,16 @@ class Assistant(Agent):
         self._pending_continuation: dict | None = None
         self._tts_seq = 0
         self._publish_voice_interrupt: Callable | None = None
+        # Full text of a continuation reply the fast brain is about to yield this
+        # turn. Read once by the ``speech_created`` observer to register the reply
+        # handle as interruptible (so a resumed line is itself recursively
+        # resumable), then cleared. ``None`` for ordinary buffer fillers, which
+        # carry no substantive content worth re-surfacing.
+        self._continuation_full_text: str | None = None
+        # Cancels the speculatively-started slow-brain run for this turn the
+        # instant the fast brain resumes a line itself (CONTINUE), so the slow
+        # brain cannot also re-deliver the same content.
+        self._publish_fast_brain_continued: Callable | None = None
 
         super().__init__(instructions=instructions)
 
@@ -410,6 +421,9 @@ class Assistant(Agent):
         the real (verbatim-spoken) response.
         """
         self.user_turn_generating = True
+        # Stale-guard: only a continuation set below should be registered for
+        # resumption; clear any leftover so an ordinary buffer reply is not.
+        self._continuation_full_text = None
         try:
             _log.info("Waiting for call to be received…")
             while not self.call_received:
@@ -480,6 +494,14 @@ class Assistant(Agent):
                     _log.info("Continuation suppressed: slow brain already responded")
                     return
                 self._buffers_since_slow_reply += 1
+                # Resume the slow brain's verbatim remainder AS the reply. Mark the
+                # full text so the ``speech_created`` observer registers this reply
+                # for interruption-stashing -> a barge-in mid-resume re-stashes a
+                # fresh candidate, making continuation recursive. Cancel the
+                # speculatively-started slow-brain run so it cannot re-deliver it.
+                self._continuation_full_text = continuation
+                if self._publish_fast_brain_continued is not None:
+                    await self._publish_fast_brain_continued()
                 yield ChatChunk(
                     id=f"fast-brain-continuation-{monotonic_ms()}",
                     delta=ChoiceDelta(role="assistant", content=continuation),
@@ -514,16 +536,20 @@ class Assistant(Agent):
             self.user_turn_generating = False
 
     async def _claim_interrupted_continuation(self, user_text: str) -> str | None:
-        """Resume an interrupted slow-brain line, or return None to leave it.
+        """Decide the fate of an interrupted line - the fast brain's front-door job.
 
-        Returns the spoken continuation ("{lead-in} {verbatim remainder}") when
-        the caller barged in benignly, else None (normal buffer / slow brain).
-        Enforces exactly-once delivery: a claim marks the candidate consumed so
-        the VoiceInterrupt handoff is cancelled; a defer publishes VoiceInterrupt
-        itself so the slow brain still re-surfaces the missed content.
+        Every turn after a barge-in routes through here:
+        - No pending candidate -> None (ordinary buffer path).
+        - A barge-in that produced no transcript (speechless noise/echo) ->
+          auto-CONTINUE: resume the remainder verbatim, since there is no spoken
+          content that could possibly justify deferring.
+        - A barge-in with speech -> classify (heavily biased to CONTINUE); on a
+          DEFER, hand the remainder to the slow brain via ``VoiceInterrupt``.
+
+        Returns "{lead-in} {verbatim remainder}" to resume, else None. Claiming
+        marks the candidate consumed so it is delivered exactly once.
         """
-        if not (user_text or "").strip():
-            return None
+        text = (user_text or "").strip()
 
         # Barge-in vs user-turn race: if a line was just interrupted but its
         # remainder hasn't been computed yet, wait briefly for it.
@@ -542,7 +568,7 @@ class Assistant(Agent):
         if not pending or pending.get("consumed"):
             return None
 
-        # Claim synchronously so the handoff timer becomes a no-op.
+        # Claim synchronously so no other path can double-deliver it.
         pending["consumed"] = True
         resume_text = (pending.get("resume_text") or "").strip()
         remainder = (pending.get("remainder") or "").strip()
@@ -551,6 +577,11 @@ class Assistant(Agent):
         self._active_tts = None
         if not resume_text:
             return None
+
+        # Speechless barge-in: the only sensible action is to continue, so resume
+        # directly without consulting the classifier.
+        if not text:
+            return f"{pick_resume_lead_in()} {resume_text}".strip()
 
         lead_in = await select_continuation(resume_text, user_text)
         if lead_in is None:
@@ -696,11 +727,6 @@ _CALL_OPENING_MODES = {"speak", "simulated", "silent", "briefed", "recorded"}
 # their speech ensures the opener lands when they are actually listening, instead
 # of into dead air right after the line connects.
 OUTBOUND_OPENING_TRIGGER_TIMEOUT_S = 5.0
-
-# Grace window after an interrupted TTS line for the fast brain to claim and
-# resume the unheard remainder. If it does not, we fall back to handing the
-# remainder to the slow brain via VoiceInterrupt.
-_CONTINUATION_HANDOFF_S = 0.5
 
 # When the assistant ends a Unify Meet, we first tell the Console to leave the
 # room itself (so its WebRTC peer connection and SCTP data channels close
@@ -2268,6 +2294,22 @@ async def entrypoint(ctx: agents.JobContext):
     # can hand off when it decides not to resume an interrupted line itself.
     assistant._publish_voice_interrupt = _publish_voice_interrupt
 
+    async def _publish_fast_brain_continued() -> None:
+        """Cancel the eagerly-started slow-brain run when the fast brain resumes.
+
+        The slow brain is triggered the moment the user's utterance lands; if the
+        fast brain then resumes the interrupted line itself, that run would
+        re-deliver the same content, so we cancel it. The fast classifier (~1s)
+        always beats the slow brain (~8-12s), so the run is still mid-flight and
+        is dropped before producing speech.
+        """
+        await event_broker.publish(
+            FastBrainContinued.topic,
+            FastBrainContinued(contact=contact).to_json(),
+        )
+
+    assistant._publish_fast_brain_continued = _publish_fast_brain_continued
+
     def _register_interruptible_tts(
         handle: object,
         full_text_getter,
@@ -2278,11 +2320,16 @@ async def entrypoint(ctx: agents.JobContext):
         The slow brain owns all substantive speech; when the caller interrupts,
         only the spoken prefix lands in the transcript, so the missed remainder
         would otherwise be lost. On interruption we stash the remainder as a
-        claimable continuation candidate that the fast brain may resume
-        immediately (via ``llm_node``). If it does not claim it within
-        ``_CONTINUATION_HANDOFF_S``, we fall back to the original behavior:
-        publish a ``VoiceInterrupt`` so the slow brain re-surfaces the content on
-        its next turn. The remainder is therefore delivered exactly once.
+        claimable continuation candidate. The fast brain is the single front
+        door: the next ``llm_node`` turn always decides what happens to it -
+        resume it verbatim (CONTINUE, the heavy default), or hand it to the slow
+        brain (DEFER -> ``VoiceInterrupt``). A barge-in that produced no
+        transcript is resumed automatically. There is no timer: the candidate
+        simply waits for that decision, so the fast brain can never lose the race.
+
+        Because continuations are themselves spoken through this same path (see
+        ``_speak_continuation``), interrupting a resumed line re-stashes a fresh
+        candidate, making continuation recursive to arbitrary depth.
 
         Pre-recorded openings are never passed here, so their hand-crafted tone
         is never continued by the live voice. Proactive silence-filler is never
@@ -2325,18 +2372,29 @@ async def entrypoint(ctx: agents.JobContext):
                 "consumed": False,
             }
 
-            async def _handoff_to_slow_brain() -> None:
-                await asyncio.sleep(_CONTINUATION_HANDOFF_S)
-                pending = assistant._pending_continuation
-                if not pending or pending.get("seq") != seq or pending.get("consumed"):
-                    return
-                assistant._pending_continuation = None
-                assistant._active_tts = None
-                await _publish_voice_interrupt(spoken, remainder)
-
-            asyncio.ensure_future(_handoff_to_slow_brain())
-
         asyncio.ensure_future(_after_playout())
+
+    @session.on("speech_created")
+    def _on_speech_created(ev) -> None:
+        """Register a fast-brain continuation reply for interruption-stashing.
+
+        Slow-brain lines and live openings register themselves at ``session.say``
+        time. A fast-brain continuation is delivered as a ``generate_reply``
+        reply (yielded from ``llm_node``), so it is registered here instead, using
+        the full text the turn stashed on ``_continuation_full_text``. Ordinary
+        buffer fillers leave that ``None`` and are never registered.
+        """
+        if getattr(ev, "source", "") != "generate_reply":
+            return
+        full_text = assistant._continuation_full_text
+        assistant._continuation_full_text = None
+        if not full_text:
+            return
+        _register_interruptible_tts(
+            ev.speech_handle,
+            lambda t=full_text: t,
+            "continuation",
+        )
 
     def _speak_now(
         text: "str | AsyncIterable[str]",

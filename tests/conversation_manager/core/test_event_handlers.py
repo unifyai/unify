@@ -1255,6 +1255,18 @@ class TestVoiceUtteranceHandlers:
         assert len(msgs) == 0
 
     @pytest.mark.asyncio
+    async def test_fast_brain_continued_cancels_inflight_slow_brain(self, mock_cm):
+        """The fast brain resuming a line itself cancels the eager slow-brain run."""
+        from unity.conversation_manager.events import FastBrainContinued
+
+        mock_cm.cancel_inflight_slow_brain = AsyncMock()
+        event = FastBrainContinued(contact={"contact_id": 2})
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.cancel_inflight_slow_brain.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_assistant_turn_injection_updates_history_without_user_turn(
         self,
         mock_cm,
