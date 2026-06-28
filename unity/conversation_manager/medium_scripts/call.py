@@ -328,6 +328,10 @@ class Assistant(Agent):
         # suppressed for it. Cleared once the opener has been dispatched.
         self._opening_pending = outbound
         self._first_user_turn = asyncio.Event()
+        # Optional short note the slow brain bundles with a spoken line for the
+        # fast brain to use on the caller's next message (e.g. confirm a fact).
+        # Replaced/cleared on each slow-brain spoken turn; never spoken aloud.
+        self._fast_brain_guidance = ""
         # Monotonic user-turn counter and the latest turn the slow brain has
         # already produced spoken output for. A buffer filler is only useful as a
         # lead-in: if the slow brain has already responded to this turn, the
@@ -492,6 +496,7 @@ class Assistant(Agent):
                 user_text,
                 recent_assistant_text,
                 already_deferred=already_deferred,
+                guidance=self._fast_brain_guidance,
             )
 
             # Re-check: the slow brain may have answered during selection. If so,
@@ -2569,6 +2574,11 @@ async def entrypoint(ctx: agents.JobContext):
         should_speak = payload.get("should_speak", False)
         notification_source = payload.get("source", "")
         llm_log_path = payload.get("llm_log_path", "")
+        # A slow-brain spoken turn carries (possibly empty) fast-brain guidance
+        # bundled with it; set it so the fast brain can use it on the next message
+        # — and so a spoken turn without guidance clears any stale note.
+        if notification_source == "slow_brain" and should_speak:
+            assistant._fast_brain_guidance = payload.get("fast_brain_guidance", "")
         notification_id = content_trace_id("guid", message or spoken_message)
         triggers_turn = notification_source not in (
             "meet_interaction",

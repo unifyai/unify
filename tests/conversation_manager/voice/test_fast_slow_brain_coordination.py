@@ -285,13 +285,14 @@ class TestSlowBrainDecisionBoundaries:
         assert (
             "message" in guide_sig.parameters
         ), "guide_voice_agent() must accept a message parameter"
-        # guide_voice_agent is now speak-only: no silent-guidance / delegation params.
+        # Speak-only: no silent-guidance mode, but it may bundle a one-shot
+        # fast_brain_guidance note alongside the spoken message.
         assert (
             "should_speak" not in guide_sig.parameters
         ), "guide_voice_agent() must be speak-only (no should_speak)"
         assert (
-            "fast_brain_note" not in guide_sig.parameters
-        ), "guide_voice_agent() must not support delegation (no fast_brain_note)"
+            "fast_brain_guidance" in guide_sig.parameters
+        ), "guide_voice_agent() must accept bundled fast_brain_guidance"
 
         # wait() should NOT have call_guidance params (moved to standalone tool)
         wait_sig = inspect.signature(ConversationManagerBrainActionTools.wait)
@@ -907,6 +908,11 @@ class TestSlowBrainGuidanceDeliveryPrompt:
         assert "fast_brain_note" not in prompt
         # No silent NOTIFY mode; the slow brain SPEAKs or WAITs.
         assert "NOTIFY" not in prompt
+        # The general bundled-guidance capability IS described (general, no quiz).
+        assert "fast_brain_guidance" in prompt
+        # No onboarding/quiz concepts may leak into the general voice prompt.
+        assert "clue" not in prompt
+        assert "quiz" not in prompt
 
 
 # =============================================================================

@@ -277,3 +277,49 @@ async def test_continuation_overlong_lead_in_defers(monkeypatch):
 async def test_continuation_llm_error_defers(monkeypatch):
     _patch_client(monkeypatch, raises=True)
     assert await select_continuation("remainder text", "okay") is None
+
+
+# ---------------------------------------------------------------------------
+# Bundled guidance - one-shot, scoped, and fully general (no quiz concepts)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_guidance_adds_scoped_block(monkeypatch):
+    captured: dict = {}
+    _patch_client(monkeypatch, raw="Yes, exactly!", captured=captured)
+
+    note = "The answer is Blade Runner. Confirm if they guess it; never reveal early."
+    await select_fast_reply("is it Blade Runner?", guidance=note)
+
+    system_msgs = [m["content"] for m in captured["messages"] if m["role"] == "system"]
+    joined = "\n".join(system_msgs)
+    assert note in joined
+    flat = " ".join(joined.lower().split())
+    assert "handed you a short note" in flat
+    assert "never volunteer" in flat
+
+
+@pytest.mark.asyncio
+async def test_no_guidance_keeps_prompt_clean(monkeypatch):
+    captured: dict = {}
+    _patch_client(monkeypatch, raw="Got it — on it now.", captured=captured)
+
+    await select_fast_reply("I clicked it")
+
+    system_msgs = [m["content"] for m in captured["messages"] if m["role"] == "system"]
+    joined = "\n".join(system_msgs)
+    assert "handed you a short note" not in joined
+
+
+def test_general_fast_brain_prompts_have_no_domain_concepts():
+    """The fast brain's general prompts must never bake in onboarding/quiz terms."""
+    for text in (
+        fast_brain_buffer._FAST_REPLY_PROMPT,
+        fast_brain_buffer._GUIDANCE_NOTE,
+    ):
+        low = text.lower()
+        assert "quiz" not in low
+        assert "clue" not in low
+        assert "guess" not in low
+        assert "onboard" not in low

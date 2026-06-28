@@ -1365,11 +1365,15 @@ class ConversationManager(metaclass=SingletonABCMeta):
         *,
         message: str,
         slow_brain_log_path: str = "",
+        fast_brain_guidance: str = "",
     ) -> None:
         """Publish a slow-brain spoken line (``guide_voice_agent``) to the fast brain.
 
         ``guide_voice_agent`` is speak-only, so this always publishes a spoken
         line (``should_speak=True``); there is no silent-guidance path.
+        ``fast_brain_guidance`` rides bundled with the spoken line (a short note
+        the fast brain may use for a basic direct reply to the next message); it
+        is always sent so an empty value clears any stale note.
         """
         if not message:
             return
@@ -1380,6 +1384,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             should_speak=True,
             source="slow_brain",
             llm_log_path=slow_brain_log_path,
+            fast_brain_guidance=fast_brain_guidance,
         )
         self._session_logger.info(
             "call_notification",
@@ -2213,17 +2218,20 @@ class ConversationManager(metaclass=SingletonABCMeta):
         if structured is not None:
             thoughts = getattr(structured, "thoughts", "")
 
-        # Handle guide_voice_agent tool calls for voice modes.
-        # The slow brain decides BLOCK (omit the tool), NOTIFY (default),
-        # or SPEAK (should_speak=True + message) by calling guide_voice_agent
-        # in parallel with its action tool. SPEAK output is spoken verbatim by
-        # the fast brain subprocess (no dedup gate).
+        # Handle guide_voice_agent tool calls for voice modes. The slow brain
+        # either SPEAKs (guide_voice_agent with a message, spoken verbatim by the
+        # fast brain subprocess) or WAITs (omits the tool). It may bundle an
+        # optional fast_brain_guidance note alongside a spoken message — never on
+        # its own — which the fast brain may use for a basic direct reply to the
+        # caller's next message.
         if self.mode.is_voice:
             guidance_message = ""
+            fast_brain_guidance = ""
             for tool_exec in result.tools:
                 if tool_exec.name == "guide_voice_agent":
                     args = tool_exec.args or {}
                     guidance_message = args.get("message", "")
+                    fast_brain_guidance = args.get("fast_brain_guidance", "")
                     break
 
             # A pending hang-up (recorded by the hang_up tool this turn) must not
@@ -2238,10 +2246,13 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 slow_brain_log_path = (
                     pending.last_path or "" if pending is not None else ""
                 )
-                # guide_voice_agent is now speak-only: every call is spoken.
+                # guide_voice_agent is speak-only: every call is spoken. Guidance
+                # rides bundled with the spoken line (never alone); a spoken turn
+                # without guidance clears any stale note on the fast brain.
                 await self._publish_slow_brain_fast_brain_guidance(
                     message=guidance_message,
                     slow_brain_log_path=slow_brain_log_path,
+                    fast_brain_guidance=fast_brain_guidance,
                 )
                 # Stash the spoken line for a render-only overlay so the next run
                 # (which may start before the real `[You]` utterance is recorded)

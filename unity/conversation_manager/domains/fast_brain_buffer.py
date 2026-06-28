@@ -69,6 +69,22 @@ reassure them it's coming, anchored to what they're waiting on ("Bear with me,
 almost there with your {thing}.") or, if they just gave you space, simply thank
 them."""
 
+# Present ONLY when the smarter system bundled a note for this exact moment. It
+# is the single, deliberate exception to the no-real-information HARD RULE. Kept
+# general (no domain-specific concepts) — the note itself carries any specifics.
+_GUIDANCE_NOTE = """\
+The smarter system has handed you a short note to help with THIS moment:
+
+{guidance}
+
+Use it ONLY to directly respond to what the caller JUST said (e.g. confirm or
+answer the specific thing they just asked). This is the one case where you may
+give that piece of real information. Follow any instruction in the note exactly —
+especially any "do not reveal / only confirm if…" constraint. NEVER volunteer it,
+bring it up unprompted, or use it for anything they did not just ask about. If
+their message is unrelated to the note, ignore the note and reply as normal. Keep
+it to one short line."""
+
 
 def _clean(raw: object) -> str:
     """Normalize whitespace and strip wrapping quotes from the model output."""
@@ -186,6 +202,7 @@ async def select_fast_reply(
     user_text: str,
     recent_assistant_text: str = "",
     already_deferred: bool = False,
+    guidance: str = "",
 ) -> str:
     """Return the fast brain's brief, in-the-moment reply for the utterance.
 
@@ -193,7 +210,10 @@ async def select_fast_reply(
     a substantive answer. ``recent_assistant_text`` is the assistant's previous
     spoken line (given as context + an anti-repeat nudge). ``already_deferred``
     marks a repeated deferral in the same wait streak, so the reply reassures
-    rather than starting a fresh lookup.
+    rather than starting a fresh lookup. ``guidance`` is an optional short note
+    the smarter system bundled for this moment; when present it adds a scoped
+    block letting the reply directly answer the caller's just-said point (the one
+    exception to the no-real-information rule).
 
     Fail-safe: returns the default phrase on empty input, an over-long reply
     (model overreaching into a real answer), or any error.
@@ -201,6 +221,11 @@ async def select_fast_reply(
     if not (user_text or "").strip():
         return _DEFAULT_PHRASE
     messages = [{"role": "system", "content": _FAST_REPLY_PROMPT}]
+    note = (guidance or "").strip()
+    if note:
+        messages.append(
+            {"role": "system", "content": _GUIDANCE_NOTE.format(guidance=note)},
+        )
     if already_deferred:
         messages.append({"role": "system", "content": _ALREADY_DEFERRED_NOTE})
     prev = (recent_assistant_text or "").strip()
