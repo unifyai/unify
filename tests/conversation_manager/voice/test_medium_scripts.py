@@ -1587,6 +1587,8 @@ async def test_on_user_turn_completed_schedules_pending_opening_bridge():
         _pending_opening_bridge=_schedule_bridge,
         _user_speech_logged=False,
         _user_turn_seq=0,
+        _opening_pending=False,
+        _first_user_turn=asyncio.Event(),
     )
     new_message = SimpleNamespace(text_content="hi there")
 
@@ -1614,6 +1616,8 @@ async def test_on_user_turn_completed_without_bridge_is_normal():
         _pending_opening_bridge=None,
         _user_speech_logged=False,
         _user_turn_seq=0,
+        _opening_pending=False,
+        _first_user_turn=asyncio.Event(),
     )
     new_message = SimpleNamespace(text_content="hello")
 
@@ -3102,3 +3106,55 @@ class TestFastBrainContinuation:
         a = self._assistant(boss_contact)
         a._pending_continuation = self._pending()
         assert await a._claim_interrupted_continuation("   ") is None
+
+
+# =============================================================================
+# Outbound opener: held until the callee's first utterance (or fallback)
+# =============================================================================
+
+
+class TestOutboundOpenerTrigger:
+    """The outbound opener is held until the callee speaks; the first turn is
+    consumed by the opener (no competing fast-brain filler)."""
+
+    def _assistant(self, boss_contact, *, outbound: bool):
+        from unity.conversation_manager.medium_scripts.call import Assistant
+
+        return Assistant(
+            contact=boss_contact,
+            boss=boss_contact,
+            channel="phone_call",
+            instructions="x",
+            outbound=outbound,
+        )
+
+    def test_opening_pending_only_for_outbound(self, boss_contact):
+        assert self._assistant(boss_contact, outbound=True)._opening_pending is True
+        assert self._assistant(boss_contact, outbound=False)._opening_pending is False
+
+    @pytest.mark.asyncio
+    async def test_first_user_turn_signalled_while_opening_pending(self, boss_contact):
+        a = self._assistant(boss_contact, outbound=True)
+        assert not a._first_user_turn.is_set()
+
+        await a.on_user_turn_completed(None, SimpleNamespace(text_content="Hello?"))
+        assert a._first_user_turn.is_set()
+
+    @pytest.mark.asyncio
+    async def test_first_user_turn_not_signalled_when_not_pending(self, boss_contact):
+        a = self._assistant(boss_contact, outbound=False)  # _opening_pending False
+
+        await a.on_user_turn_completed(None, SimpleNamespace(text_content="Hi"))
+        assert not a._first_user_turn.is_set()
+
+    @pytest.mark.asyncio
+    async def test_llm_node_suppresses_filler_while_opening_pending(self, boss_contact):
+        from livekit.agents import llm
+
+        a = self._assistant(boss_contact, outbound=True)
+        a.call_received = True  # past the connection wait
+        assert a._opening_pending is True
+
+        chunks = [chunk async for chunk in a.llm_node(llm.ChatContext(), [], None)]
+        # The opener is the reply to the triggering turn; no filler is emitted.
+        assert chunks == []

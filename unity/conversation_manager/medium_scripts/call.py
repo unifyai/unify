@@ -322,6 +322,12 @@ class Assistant(Agent):
         self._user_speech_logged = False
         self.user_turn_generating = False
         self._credit_gate_state_provider: Callable | None = None
+        # On outbound calls the opener is held until the callee's first utterance
+        # (or a fallback timeout). While pending, the opener is the sole response
+        # to that first turn: the fast-brain filler and the slow-brain turn are
+        # suppressed for it. Cleared once the opener has been dispatched.
+        self._opening_pending = outbound
+        self._first_user_turn = asyncio.Event()
         # Monotonic user-turn counter and the latest turn the slow brain has
         # already produced spoken output for. A buffer filler is only useful as a
         # lead-in: if the slow brain has already responded to this turn, the
@@ -373,6 +379,11 @@ class Assistant(Agent):
         # New user turn: a fresh buffer filler is now warranted (until the slow
         # brain responds to this turn).
         self._user_turn_seq += 1
+        # On an outbound call, the callee's first completed utterance triggers the
+        # held opener (the opener answers it). Signalling on turn-completed means
+        # we respond after their "Hello?", never over it.
+        if self._opening_pending and not self._first_user_turn.is_set():
+            self._first_user_turn.set()
         if self._pending_opening_bridge is not None:
             schedule_bridge = self._pending_opening_bridge
             self._pending_opening_bridge = None
@@ -400,6 +411,13 @@ class Assistant(Agent):
             while not self.call_received:
                 await asyncio.sleep(0.1)
             _log.call_status("call_received")
+
+            # While the outbound opener is still pending, the callee's first turn
+            # triggers the opener itself (the opener is the reply). Emit no filler
+            # so it does not precede or race the opener.
+            if self._opening_pending:
+                _log.info("Filler suppressed: outbound opener still pending")
+                return
 
             credit_gate_state = (
                 self._credit_gate_state_provider()
@@ -668,10 +686,11 @@ def _hydrate_session_details_from_metadata(meta: dict) -> None:
 
 _CALL_OPENING_MODES = {"speak", "simulated", "silent", "briefed", "recorded"}
 
-# Spacing between the callee accepting an outbound call and the agent's opener,
-# so the opener never lands on top of the callee's own "hello" in the instant
-# they tap answer.
-OUTBOUND_OPENING_DELAY_S = 0.5
+# On an outbound call, hold the opener until the earliest of the callee's first
+# completed utterance (their "Hello?") or this fallback timeout. Triggering on
+# their speech ensures the opener lands when they are actually listening, instead
+# of into dead air right after the line connects.
+OUTBOUND_OPENING_TRIGGER_TIMEOUT_S = 5.0
 
 # Grace window after an interrupted TTS line for the fast brain to claim and
 # resume the unheard remainder. If it does not, we fall back to handing the
@@ -2032,9 +2051,14 @@ async def entrypoint(ctx: agents.JobContext):
                     event.to_json(),
                 )
 
-            asyncio.create_task(
-                _publish_user_utterance(text),
-            )
+            # While the outbound opener is pending, the callee's first utterance
+            # (their "Hello?") only triggers the opener — do not publish it as a
+            # turn to the slow brain, which would otherwise compose a competing
+            # reply alongside the opener. It carries no content the opener needs.
+            if not assistant._opening_pending:
+                asyncio.create_task(
+                    _publish_user_utterance(text),
+                )
         else:
             asyncio.create_task(_publish_assistant_utterance(text))
         _enqueue_mood_classification(role, text, utterance_id)
@@ -2782,12 +2806,26 @@ async def entrypoint(ctx: agents.JobContext):
         _log.info("Outbound call — waiting for callee to answer…")
         await call_answered_flag.wait()
         _log.call_status("call_answered — opening turn")
-        # Brief pause so the opener doesn't talk over the callee's own greeting
-        # in the instant they accept the call.
-        await asyncio.sleep(OUTBOUND_OPENING_DELAY_S)
 
     await user_joined_event.wait()
     speech_gate_open = True
+
+    if outbound:
+        # Hold the opener until the callee's first completed utterance (their
+        # "Hello?") or a fallback timeout — so it lands when they are actually
+        # listening, not into dead air right after the line connects. The first
+        # turn is consumed by the opener (filler + slow-brain turn suppressed via
+        # _opening_pending); a later turn is a normal barge-in.
+        try:
+            await asyncio.wait_for(
+                assistant._first_user_turn.wait(),
+                OUTBOUND_OPENING_TRIGGER_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            if user_is_speaking:
+                # Timed out mid-"Hello?" — let them finish before we speak.
+                await assistant._first_user_turn.wait()
+        _log.call_status("outbound_opener_triggered")
 
     try:
         prepared_mode, prepared_payload = await opening_task
@@ -2820,6 +2858,10 @@ async def entrypoint(ctx: agents.JobContext):
     else:
         _log.info("Opening turn suppressed by call opening config")
         await _publish_ready_to_speak()
+
+    # The opener has been dispatched; resume normal turn handling (fast-brain
+    # fillers and slow-brain turns) for any subsequent user speech.
+    assistant._opening_pending = False
 
     if pending_notifications:
         gated_notifications = list(pending_notifications)

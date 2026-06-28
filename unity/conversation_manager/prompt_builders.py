@@ -94,7 +94,10 @@ _OPENING_GREETING_GUARDRAIL = (
     "more specific opening section in the system prompt applies. Use background "
     "notifications for awareness, but do not proactively mention background task "
     "reminders or status updates in the first spoken turn unless the caller has "
-    "already asked about them."
+    "already asked about them. This line may be the very first thing said after "
+    'they answer, OR a direct reply to their "Hello?" / "Who\'s this?" (the '
+    "usual way someone answers) — phrase it so it works naturally either way: do "
+    "not assume silence, and do not assume they already spoke."
 )
 
 _BRIEFED_OPENING_GUARDRAIL = (
@@ -109,7 +112,10 @@ _BRIEFED_OPENING_GUARDRAIL = (
     "return to normal helpful conversation unless they explicitly continue the "
     "joke. The caller can interrupt at any time; if they do, address what they "
     "say and then continue any remaining points from the briefing later only "
-    "if they are still relevant."
+    "if they are still relevant. This opening line may be the very first thing "
+    'said after they answer, OR a direct reply to their "Hello?" / "Who\'s '
+    'this?" (the usual way someone answers) — phrase it so it works naturally '
+    "either way: do not assume silence, and do not assume they already spoke."
 )
 
 

@@ -105,3 +105,17 @@ async def test_inbound_call_does_not_force_an_opener():
 
     # Inbound calls keep their existing behaviour (no forced briefed opener).
     assert captured["extra_metadata"] is None
+
+
+def test_opener_guardrails_handle_reply_to_hello():
+    """The opener is held until the callee speaks, so the drafted line must read
+    naturally both as a standalone opener AND as a reply to their "Hello?"."""
+    from unity.conversation_manager.prompt_builders import (
+        _BRIEFED_OPENING_GUARDRAIL,
+        _OPENING_GREETING_GUARDRAIL,
+    )
+
+    for guardrail in (_OPENING_GREETING_GUARDRAIL, _BRIEFED_OPENING_GUARDRAIL):
+        assert "Hello?" in guardrail
+        flat = " ".join(guardrail.lower().split())
+        assert "do not assume silence" in flat
