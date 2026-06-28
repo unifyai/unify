@@ -215,6 +215,19 @@ def test_resume_text_empty_full_is_empty():
 # ---------------------------------------------------------------------------
 
 
+def test_continuation_prompt_resumes_on_call_answer_and_why_calling():
+    """The prompt must steer toward resuming (not DEFER) when the caller answers
+    with a greeting or asks why you're calling - the most obvious resume cases."""
+    p = fast_brain_buffer._CONTINUATION_PROMPT
+    assert "Default to RESUMING" in p
+    # Call/message-answer greetings and "why are you calling" are explicitly
+    # called out as resume (not defer) cases.
+    assert "Hello?" in p
+    assert "Why are you calling?" in p
+    assert "NOT reasons to defer" in p
+    assert "DEFER" in p  # the sentinel is still documented
+
+
 @pytest.mark.asyncio
 async def test_continuation_returns_lead_in(monkeypatch):
     _patch_client(monkeypatch, raw="Sorry — as I was saying,")
@@ -254,3 +267,49 @@ async def test_continuation_overlong_lead_in_defers(monkeypatch):
 async def test_continuation_llm_error_defers(monkeypatch):
     _patch_client(monkeypatch, raises=True)
     assert await select_continuation("remainder text", "okay") is None
+
+
+# ---------------------------------------------------------------------------
+# Delegated answer - scoped quiz-confirmation exception
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_delegated_answer_adds_scoped_exception_block(monkeypatch):
+    captured: dict = {}
+    _patch_client(monkeypatch, raw="Yes, exactly!", captured=captured)
+
+    note = "The answer is Blade Runner. If they guess, confirm; never reveal early."
+    await select_fast_reply("is it Blade Runner?", delegated_answer=note)
+
+    system_msgs = [m["content"] for m in captured["messages"] if m["role"] == "system"]
+    joined = "\n".join(system_msgs)
+    # The delegated note rides in a scoped system block...
+    assert note in joined
+    # ...with heavy never-reveal-early enforcement (whitespace-insensitive).
+    flat = " ".join(joined.lower().split())
+    assert "EXCEPTION" in joined
+    assert "never" in flat
+    assert "before they have guessed it themselves" in flat
+    assert "worst possible outcome" in flat
+
+
+@pytest.mark.asyncio
+async def test_no_delegated_answer_keeps_prompt_clean(monkeypatch):
+    captured: dict = {}
+    _patch_client(monkeypatch, raw="Got it — on it now.", captured=captured)
+
+    await select_fast_reply("I clicked it")
+
+    system_msgs = [m["content"] for m in captured["messages"] if m["role"] == "system"]
+    joined = "\n".join(system_msgs)
+    # The confirmation exception must not be present without a delegated answer.
+    assert "EXCEPTION" not in joined
+
+
+@pytest.mark.asyncio
+async def test_delegated_answer_prompt_present_in_constant():
+    assert "{note}" in fast_brain_buffer._DELEGATED_ANSWER_NOTE
+    p = fast_brain_buffer._DELEGATED_ANSWER_NOTE
+    assert "confirm" in p.lower()
+    assert "give it away" in p.lower() or "reveal" in p.lower()

@@ -1042,42 +1042,57 @@ class ConversationManagerBrainActionTools:
         to disconnect.
         """
         channel = self._cm.call_manager._call_channel
-
-        if self._cm.call_manager.has_active_google_meet:
-            return await self._leave_google_meet()
-        if self._cm.call_manager.has_active_teams_meet:
-            return await self._leave_teams_meet()
-
-        if not self._cm.in_voice_session or channel not in (
-            "phone_call",
-            "whatsapp_call",
-            "unify_meet",
+        has_meet = (
+            self._cm.call_manager.has_active_google_meet
+            or self._cm.call_manager.has_active_teams_meet
+        )
+        if not has_meet and (
+            not self._cm.in_voice_session
+            or channel
+            not in (
+                "phone_call",
+                "whatsapp_call",
+                "unify_meet",
+            )
         ):
             return {
                 "status": "error",
                 "message": "No active voice session to end.",
             }
 
+        # Defer the actual teardown until any explanatory line this turn has been
+        # spoken, so the session never ends mid-utterance. The orchestration lives
+        # in ``_run_llm`` (after the spoken guidance is published and delivered).
+        self._cm._pending_hang_up = True
+        self._cm._pending_hang_up_teardown = self._perform_hang_up_teardown
+        return {
+            "status": "ok",
+            "message": "Acknowledged — I'll end the call once I've finished speaking.",
+        }
+
+    async def _perform_hang_up_teardown(self) -> dict[str, Any]:
+        """Tear down the active voice session (run after the spoken line lands).
+
+        Internal helper invoked by ``_run_llm`` once any explanatory guidance for
+        the hang-up turn has been delivered; never called directly as a tool.
+        """
+        if self._cm.call_manager.has_active_google_meet:
+            return await self._leave_google_meet()
+        if self._cm.call_manager.has_active_teams_meet:
+            return await self._leave_teams_meet()
+
         await self._cm.call_manager.end_call()
         # Wait for the real resource — a freshly prewarmed idle worker process —
-        # before reporting back, so the brain only learns the call ended once a
-        # new call can actually be placed safely. This deliberately blocks the
-        # tool result for a few seconds rather than letting the brain believe it
-        # is free to dial straight into a worker that has not re-warmed.
+        # so a follow-on dial only proceeds once a new call can be placed safely.
         ready = await self._cm.call_manager.await_ready_for_new_call()
-        if ready:
-            return {
-                "status": "ok",
-                "message": "Call ended; the line is clear and ready for a new call.",
-                "ready_for_new_call": True,
-            }
         return {
             "status": "ok",
             "message": (
-                "Call ended, but the voice line is still being prepared and "
-                "cannot place a new call just yet — wait a moment before dialing."
+                "Call ended; the line is clear and ready for a new call."
+                if ready
+                else "Call ended, but the voice line is still being prepared."
             ),
-            "ready_for_new_call": False,
+            "ready_for_new_call": ready,
         }
 
     async def start_teams_meet_screenshare(self) -> dict[str, Any]:
@@ -1951,6 +1966,7 @@ class ConversationManagerBrainActionTools:
         *,
         message: str,
         should_speak: bool = False,
+        fast_brain_note: str = "",
     ) -> dict[str, Any]:
         """
         Relay information or trigger speech on the Voice Agent during a live call.
@@ -1989,6 +2005,14 @@ class ConversationManagerBrainActionTools:
                 numbered lists, bullets, or outline labels — TTS reads them
                 literally).
             should_speak: When True, speak ``message`` aloud immediately via TTS.
+            fast_brain_note: An authorized fact the Voice Agent (fast brain) may
+                use to answer the caller *instantly*, e.g. a quiz answer so it can
+                confirm a guess without waiting for me. It is NEVER spoken on its
+                own and the fast brain is separately instructed never to reveal it
+                pre-emptively. Pass it alongside (or just before) the moment the
+                caller is expected to respond. A new note replaces the previous
+                one; an empty value leaves any existing note unchanged (it is
+                cleared automatically when the voice channel changes).
         """
         return {"status": "guidance_noted"}
 

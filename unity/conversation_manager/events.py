@@ -873,6 +873,10 @@ class FastBrainNotification(Event):
     source: str = ""
     agent_service_url: str = ""
     llm_log_path: str = ""
+    # An authorized fact (e.g. a quiz answer) the fast brain may use to answer
+    # the caller instantly. Never spoken on its own; the fast brain is separately
+    # instructed never to reveal it pre-emptively.
+    fast_brain_note: str = ""
 
 
 @dataclass

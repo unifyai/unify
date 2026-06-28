@@ -3,7 +3,7 @@ import contextlib
 import json
 import traceback
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from unity.logger import LOGGER
 from unity.common.hierarchical_logger import DEFAULT_ICON
@@ -56,6 +56,10 @@ from unity.conversation_manager.medium_scripts.common import FastBrainLogger
 from unity.spending_limits import check_credit_gate_state
 
 MAX_CONV_MANAGER_MSGS = 50
+# Upper bound a deferred hang-up waits for its explanatory line to be spoken
+# before tearing down anyway (guards a line that never surfaces). Generous so it
+# rarely cuts off a legitimately-playing line.
+_HANG_UP_SPEECH_TIMEOUT_S = 20.0
 RECENT_TOOL_EXECUTIONS_LIMIT = 20
 RECENT_TOOL_PREVIEW_CHARS = 500
 CREDIT_GATE_REPLY_THROTTLE_SECONDS = 300
@@ -300,6 +304,15 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # is not repeated; cleared once the real Outbound utterance lands. Never
         # written to the stored transcript.
         self._inflight_voice_speech: str = ""
+        # Deferred session teardown: the hang_up tool records intent here rather
+        # than ending the call immediately, so _run_llm can wait for the turn's
+        # explanatory line to be spoken before tearing down (no mid-sentence cut).
+        self._pending_hang_up: bool = False
+        self._pending_hang_up_teardown: Callable | None = None
+        # Set when an outbound voice utterance matching the just-published spoken
+        # guidance lands (full line, or a barge-in truncated prefix). Used to gate
+        # the deferred hang-up on speech actually being delivered.
+        self._inflight_speech_delivered: asyncio.Event = asyncio.Event()
         # Call-session id of an in-flight Unify Meet ring awaiting an answer.
         # Cleared when the owner answers (UnifyMeetReceived) or the no-answer
         # timeout fires and falls the conversation back to text.
@@ -1353,9 +1366,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
         message: str,
         should_speak: bool,
         slow_brain_log_path: str = "",
+        fast_brain_note: str = "",
     ) -> None:
         """Publish slow-brain ``guide_voice_agent`` output to the fast brain."""
-        if not message:
+        if not message and not fast_brain_note:
             return
         contact = self.get_active_contact()
         event = FastBrainNotification(
@@ -1364,6 +1378,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             should_speak=should_speak,
             source="slow_brain",
             llm_log_path=slow_brain_log_path,
+            fast_brain_note=fast_brain_note,
         )
         self._session_logger.info(
             "call_notification",
@@ -1378,6 +1393,33 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "app:comms:assistant_notification",
             event_json,
         )
+
+    async def _perform_deferred_hang_up(self, *, awaiting_speech: bool) -> None:
+        """Run a hang-up the ``hang_up`` tool deferred, after speech is delivered.
+
+        When the same turn produced spoken guidance, wait for that line to land
+        (the matching outbound utterance sets ``_inflight_speech_delivered``; a
+        barge-in's truncated prefix counts too) before tearing the session down,
+        so the call never ends mid-utterance. A timeout guards a line that never
+        surfaces. Standalone hang-ups (no spoken line) tear down immediately.
+        """
+        teardown = self._pending_hang_up_teardown
+        self._pending_hang_up = False
+        self._pending_hang_up_teardown = None
+        if teardown is None:
+            return
+        if awaiting_speech:
+            try:
+                await asyncio.wait_for(
+                    self._inflight_speech_delivered.wait(),
+                    timeout=_HANG_UP_SPEECH_TIMEOUT_S,
+                )
+            except asyncio.TimeoutError:
+                self._session_logger.info(
+                    "call_notification",
+                    "Deferred hang-up proceeding without spoken-line ack (timeout)",
+                )
+        await teardown()
 
     async def _run_llm_with_failure_notification(
         self,
@@ -2178,14 +2220,23 @@ class ConversationManager(metaclass=SingletonABCMeta):
         if self.mode.is_voice:
             guidance_message = ""
             should_speak = False
+            fast_brain_note = ""
             for tool_exec in result.tools:
                 if tool_exec.name == "guide_voice_agent":
                     args = tool_exec.args or {}
                     guidance_message = args.get("message", "")
                     should_speak = args.get("should_speak", False)
+                    fast_brain_note = args.get("fast_brain_note", "")
                     break
 
-            if guidance_message:
+            # A pending hang-up (recorded by the hang_up tool this turn) must not
+            # tear down the session until the spoken guidance has been delivered,
+            # otherwise the call ends mid-sentence. Reset the delivered signal
+            # before publishing so we only observe THIS turn's delivery.
+            if self._pending_hang_up and should_speak and guidance_message:
+                self._inflight_speech_delivered.clear()
+
+            if guidance_message or fast_brain_note:
                 pending = getattr(client, "_pending_thinking_log", None)
                 slow_brain_log_path = (
                     pending.last_path or "" if pending is not None else ""
@@ -2194,6 +2245,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     message=guidance_message,
                     should_speak=should_speak,
                     slow_brain_log_path=slow_brain_log_path,
+                    fast_brain_note=fast_brain_note,
                 )
                 # Stash SPEAK guidance for a render-only overlay so the next run
                 # (which may start before the real `[You]` utterance is recorded)
@@ -2202,6 +2254,14 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 # lands so future turns see only what was actually spoken.
                 if should_speak:
                     self._stash_inflight_voice_speech(guidance_message)
+
+            # Perform any deferred hang-up only after the explanatory line has
+            # actually been spoken (or a barge-in truncated it), so the session
+            # never ends mid-utterance.
+            if self._pending_hang_up:
+                await self._perform_deferred_hang_up(
+                    awaiting_speech=bool(should_speak and guidance_message),
+                )
 
         self._session_logger.debug(
             "llm_response",
