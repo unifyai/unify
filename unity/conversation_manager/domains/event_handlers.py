@@ -1226,6 +1226,12 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
         spoken = (event.content or "").strip()
         if inflight and spoken and inflight.startswith(spoken):
             cm._inflight_voice_speech = ""
+            # Signal that the just-published spoken guidance has been delivered
+            # (full line, or a barge-in's truncated prefix) so a deferred hang-up
+            # can safely tear the session down without cutting speech off.
+            delivered = getattr(cm, "_inflight_speech_delivered", None)
+            if delivered is not None:
+                delivered.set()
 
     if role == "user":
         # Link any pending user/webcam screenshot (forwarded from the fast

@@ -1171,8 +1171,12 @@ class TestVoiceUtteranceHandlers:
     @pytest.mark.asyncio
     async def test_outbound_utterance_clears_matching_inflight_overlay(self, mock_cm):
         """When the real spoken utterance lands, the render-only in-flight overlay
-        for that line is cleared (full or truncated-prefix match)."""
+        for that line is cleared (full or truncated-prefix match) and the
+        speech-delivered signal (used to gate a deferred hang-up) is set."""
+        import asyncio
+
         mock_cm._inflight_voice_speech = "The next step is to click Trigger email."
+        mock_cm._inflight_speech_delivered = asyncio.Event()
 
         # A truncated prefix (barge-in) still matches and clears it.
         event = OutboundPhoneUtterance(
@@ -1186,6 +1190,7 @@ class TestVoiceUtteranceHandlers:
             await EventHandler.handle_event(event, mock_cm)
 
         assert mock_cm._inflight_voice_speech == ""
+        assert mock_cm._inflight_speech_delivered.is_set()
 
     @pytest.mark.asyncio
     async def test_outbound_filler_does_not_clear_unrelated_inflight(self, mock_cm):

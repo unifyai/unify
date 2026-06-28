@@ -20,7 +20,6 @@ from livekit.agents import (
     tts,
     stt,
 )
-from livekit.agents.types import NOT_GIVEN
 from livekit.plugins import (
     cartesia,
     deepgram,
@@ -98,10 +97,6 @@ DEPLETED_CREDITS_FAST_BRAIN_RESPONSE = (
     "Your credits are depleted, so I can't continue helping with setup or tasks "
     "until you top up. Please add credits in billing, then I'll pick this back up."
 )
-ELEVENLABS_ONBOARDING_OPENER_SPEED = 0.5
-ELEVENLABS_VOICE_SETTINGS_STABILITY = 0.5
-ELEVENLABS_VOICE_SETTINGS_SIMILARITY_BOOST = 0.75
-
 VIDEO_AVATAR_CHANNELS = frozenset({"unify_meet", "google_meet", "teams_meet"})
 ELEVENLABS_TWIN_PRONUNCIATION_SOURCE = "t-w1n"
 ELEVENLABS_TWIN_PRONUNCIATION_TARGET = "Twin"
@@ -147,38 +142,6 @@ async def _normalize_elevenlabs_twin_pronunciation_stream(
 
     if pending:
         yield pending
-
-
-def _elevenlabs_speed_settings(speed: float):
-    return elevenlabs.VoiceSettings(
-        stability=ELEVENLABS_VOICE_SETTINGS_STABILITY,
-        similarity_boost=ELEVENLABS_VOICE_SETTINGS_SIMILARITY_BOOST,
-        speed=speed,
-    )
-
-
-def _elevenlabs_current_voice_settings(tts_instance: object):
-    return tts_instance._opts.voice_settings
-
-
-def _mark_elevenlabs_tts_connection_non_current(tts_instance: object) -> None:
-    current_connection_attr = "_TTS__current_connection"
-    current_connection = getattr(tts_instance, current_connection_attr)
-    if current_connection is not None:
-        current_connection.mark_non_current()
-        setattr(tts_instance, current_connection_attr, None)
-
-
-def _set_elevenlabs_voice_settings(
-    tts_instance: object,
-    voice_settings: object,
-) -> None:
-    if utils.is_given(voice_settings):
-        tts_instance.update_options(voice_settings=voice_settings)
-        return
-
-    tts_instance._opts.voice_settings = NOT_GIVEN
-    _mark_elevenlabs_tts_connection_non_current(tts_instance)
 
 
 class FastBrainCreditGateMonitor:
@@ -383,6 +346,10 @@ class Assistant(Agent):
         self._pending_continuation: dict | None = None
         self._tts_seq = 0
         self._publish_voice_interrupt: Callable | None = None
+        # An authorized fact (e.g. a quiz answer) the slow brain delegated so the
+        # fast brain can confirm the caller's guess instantly. Never revealed
+        # pre-emptively (enforced in select_fast_reply). Cleared on medium change.
+        self._delegated_answer = ""
 
         super().__init__(instructions=instructions)
 
@@ -511,6 +478,7 @@ class Assistant(Agent):
                 user_text,
                 recent_assistant_text,
                 already_deferred=already_deferred,
+                delegated_answer=self._delegated_answer,
             )
 
             # Re-check: the slow brain may have answered during selection. If so,
@@ -1464,20 +1432,6 @@ async def entrypoint(ctx: agents.JobContext):
     _was_quiescent = True
     _pending_reply_timer: asyncio.TimerHandle | None = None
     _NOTIFY_COALESCE_S = 0.05
-    elevenlabs_tts = tts_instance if voice_provider == "elevenlabs" else None
-    elevenlabs_normal_voice_settings = (
-        _elevenlabs_current_voice_settings(elevenlabs_tts)
-        if elevenlabs_tts is not None
-        else NOT_GIVEN
-    )
-    elevenlabs_opener_speed_active = False
-    elevenlabs_opener_restore_task: asyncio.Task | None = None
-    slow_elevenlabs_onboarding_opener = (
-        elevenlabs_tts is not None
-        and SESSION_DETAILS.is_coordinator
-        and not coordinator_onboarding_deferred
-        and bool(coordinator_onboarding_next_targets)
-    )
 
     def _log_reply_task(task: asyncio.Task) -> None:
         try:
@@ -1488,42 +1442,7 @@ async def entrypoint(ctx: agents.JobContext):
         except Exception as exc:  # noqa: BLE001
             _log.llm_error(str(exc))
 
-    def _restore_elevenlabs_opener_speed(reason: str) -> None:
-        nonlocal elevenlabs_opener_speed_active
-        if elevenlabs_tts is None or not elevenlabs_opener_speed_active:
-            return
-
-        elevenlabs_opener_speed_active = False
-        _set_elevenlabs_voice_settings(
-            elevenlabs_tts,
-            elevenlabs_normal_voice_settings,
-        )
-        _log.info(f"ElevenLabs onboarding opener speed restored: {reason}")
-
-    def _apply_elevenlabs_opener_speed() -> bool:
-        nonlocal elevenlabs_opener_speed_active
-        if not slow_elevenlabs_onboarding_opener:
-            return False
-
-        _set_elevenlabs_voice_settings(
-            elevenlabs_tts,
-            _elevenlabs_speed_settings(ELEVENLABS_ONBOARDING_OPENER_SPEED),
-        )
-        elevenlabs_opener_speed_active = True
-        _log.info(
-            f"ElevenLabs onboarding opener speed set to {ELEVENLABS_ONBOARDING_OPENER_SPEED}",
-        )
-        return True
-
-    async def _restore_elevenlabs_opener_speed_after_playout(speech_handle) -> None:
-        try:
-            await speech_handle.wait_for_playout()
-        finally:
-            _restore_elevenlabs_opener_speed("opening playout ended")
-
     def _say_opening(text: str) -> None:
-        nonlocal elevenlabs_opener_restore_task
-        speed_applied = _apply_elevenlabs_opener_speed()
         speech_handle = session.say(
             text,
             allow_interruptions=True,
@@ -1532,11 +1451,6 @@ async def entrypoint(ctx: agents.JobContext):
         # A briefed/speak opener is live TTS (not pre-recorded), so a barge-in
         # can be resumed by the fast brain just like any slow-brain line.
         _register_interruptible_tts(speech_handle, lambda: text, "opening")
-        if speed_applied:
-            elevenlabs_opener_restore_task = asyncio.create_task(
-                _restore_elevenlabs_opener_speed_after_playout(speech_handle),
-                name="restore_elevenlabs_onboarding_opener_speed",
-            )
 
     def _say_recorded_opening(text: str, recording_source: str):
         _say_meta_queue.append(
@@ -1736,8 +1650,6 @@ async def entrypoint(ctx: agents.JobContext):
         if shutdown_completed:
             return
         shutdown_completed = True
-        if elevenlabs_opener_restore_task is not None:
-            await utils.aio.cancel_and_wait(elevenlabs_opener_restore_task)
         if credit_gate_task is not None:
             await utils.aio.cancel_and_wait(credit_gate_task)
         if mood_classification_task is not None:
@@ -1784,9 +1696,7 @@ async def entrypoint(ctx: agents.JobContext):
         user_state_seq += 1
         state_id = f"usrstate-{user_state_seq:06d}"
         user_is_speaking = ev.new_state == "speaking"
-        if user_is_speaking:
-            _restore_elevenlabs_opener_speed("user started speaking")
-        else:
+        if not user_is_speaking:
             # The user just freed the floor: a queued slow-brain line should play
             # at the next silent moment, not wait for the next agent-state cycle.
             maybe_speak_queued()
@@ -2640,6 +2550,12 @@ async def entrypoint(ctx: agents.JobContext):
         should_speak = payload.get("should_speak", False)
         notification_source = payload.get("source", "")
         llm_log_path = payload.get("llm_log_path", "")
+        # A delegated answer the fast brain may use to confirm the caller's guess
+        # instantly (e.g. a quiz answer). A non-empty value replaces any prior
+        # note; empty leaves it unchanged (cleared on medium change elsewhere).
+        fast_brain_note = payload.get("fast_brain_note", "")
+        if fast_brain_note:
+            assistant._delegated_answer = fast_brain_note
         notification_id = content_trace_id("guid", message or spoken_message)
         triggers_turn = notification_source not in (
             "meet_interaction",

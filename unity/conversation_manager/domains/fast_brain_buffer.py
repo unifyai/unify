@@ -63,6 +63,25 @@ reassure them it's coming, anchored to what they're waiting on ("Bear with me,
 almost there with your {thing}.") or, if they just gave you space, simply thank
 them."""
 
+# Scoped block, present ONLY when the slow brain has delegated an answer. It is
+# the single, deliberate exception to the HARD RULE above.
+_DELEGATED_ANSWER_NOTE = """\
+EXCEPTION — the smarter system has authorized you to confirm ONE specific thing to
+this caller, described here:
+
+{note}
+
+This is the ONLY case where you may give real information, and ONLY like this:
+- React solely to the caller's OWN guess/answer. If they have actually guessed,
+  tell them whether it's right — warm and brief: "Yes, exactly!" / "Spot on!" /
+  "Good guess, but not quite — want another go?".
+- You must NEVER state, spell, hint at, or narrow down the answer before they have
+  guessed it themselves. Giving it away early is the worst possible outcome.
+- If they ask you to "just tell me", say they give up, or ask for a hint, do NOT
+  reveal it — gently keep them guessing or say the smarter system will follow up.
+- Confirm only. Do not explain further, add trivia, or move on to next steps.
+- If they have not actually guessed yet, ignore this entirely and reply as normal."""
+
 
 def _clean(raw: object) -> str:
     """Normalize whitespace and strip wrapping quotes from the model output."""
@@ -85,16 +104,28 @@ about to resume the EXACT words you had left to say (they are appended verbatim
 by the system — you do NOT write them). Your only job is a SHORT, natural lead-in
 that bridges back into them, reacting to whatever the caller just said.
 
-Decide first: did the caller's interjection redirect you, ask something new, or
-make resuming the old line pointless? If so, reply with exactly:
+Default to RESUMING. The words you have left are usually exactly what the caller
+needs, so bridge back into them. Only reply with exactly:
 DEFER
+when continuing would clearly be wrong — the caller changed the subject, declined
+or objected, told you to stop or wait, or asked something the remaining words do
+NOT address.
 
-Otherwise (they just acked, talked over you, or said something minor) reply with
-ONLY a brief lead-in to glide back in, e.g.:
+CRUCIAL — these are NOT reasons to defer; they are the caller inviting you to say
+your piece, so you MUST resume (the words you have left are precisely the answer):
+- They just answered the call/message with a greeting: "Hello?", "Hello, can you
+  hear me?", "Hi", "Hey".
+- They asked what this is / why you're contacting them: "Why are you calling?",
+  "Hello, why are you calling?", "What's this about?", "What did you need?",
+  "What's up?".
+Answering a call and asking "why are you calling?" is the single most obvious case
+where you resume — do not treat it as a new question.
+
+When you resume, reply with ONLY a brief lead-in to glide back in, e.g.:
 - "Sorry — as I was saying,"
 - "Right, let me finish that thought —"
 - "Yeah — so, continuing,"
-- "Mhm — anyway,"
+- "Hey — glad you picked up. So,"
 
 A few words only. Never include the remaining content itself, never answer
 anything, never add new information."""
@@ -168,6 +199,7 @@ async def select_fast_reply(
     user_text: str,
     recent_assistant_text: str = "",
     already_deferred: bool = False,
+    delegated_answer: str = "",
 ) -> str:
     """Return the fast brain's brief, in-the-moment reply for the utterance.
 
@@ -175,7 +207,11 @@ async def select_fast_reply(
     a substantive answer. ``recent_assistant_text`` is the assistant's previous
     spoken line (given as context + an anti-repeat nudge). ``already_deferred``
     marks a repeated deferral in the same wait streak, so the reply reassures
-    rather than starting a fresh lookup.
+    rather than starting a fresh lookup. ``delegated_answer`` is an authorized
+    fact (e.g. a quiz answer) the slow brain handed over so the fast brain may
+    confirm the caller's guess instantly; when present it adds a scoped exception
+    block (with heavy never-reveal-early enforcement) - it is the only path by
+    which the fast brain may give real information.
 
     Fail-safe: returns the default phrase on empty input, an over-long reply
     (model overreaching into a real answer), or any error.
@@ -183,6 +219,14 @@ async def select_fast_reply(
     if not (user_text or "").strip():
         return _DEFAULT_PHRASE
     messages = [{"role": "system", "content": _FAST_REPLY_PROMPT}]
+    note = (delegated_answer or "").strip()
+    if note:
+        messages.append(
+            {
+                "role": "system",
+                "content": _DELEGATED_ANSWER_NOTE.format(note=note),
+            },
+        )
     if already_deferred:
         messages.append({"role": "system", "content": _ALREADY_DEFERRED_NOTE})
     prev = (recent_assistant_text or "").strip()
