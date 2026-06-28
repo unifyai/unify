@@ -867,6 +867,25 @@ class TestSlowBrainGuidanceDeliveryPrompt:
         assert "(unconfirmed)" not in prompt
         assert "NOT proof the user heard it" not in prompt
 
+    def test_voice_prompt_forbids_breaking_the_fourth_wall(self):
+        """The slow brain must never reveal the Voice Agent / filler mechanism to
+        the caller - it presents as one single person."""
+        from unity.conversation_manager.prompt_builders import build_system_prompt
+
+        prompt = build_system_prompt(
+            bio="Test assistant.",
+            contact_id=1,
+            first_name="Alex",
+            surname="Demo",
+            is_voice_call=True,
+        ).flatten()
+
+        assert "Never break the fourth wall" in prompt
+        flat = " ".join(prompt.lower().split())
+        # The caller must never be told a phrase "wasn't me" / came from elsewhere.
+        assert "one single person" in flat
+        assert "never disown" in flat
+
 
 # =============================================================================
 # Test: slow brain should not send text messages during voice calls
