@@ -1097,22 +1097,24 @@ class ConversationManager(metaclass=SingletonABCMeta):
         },
     )
 
-    async def cancel_inflight_slow_brain(self) -> None:
-        """Cancel the slow-brain run started for the current voice turn.
+    async def cancel_slow_brain_run(self, turn_id) -> None:
+        """Cancel exactly the slow-brain run spawned by ``turn_id``.
 
-        Invoked when the fast brain resolves the turn itself
+        Invoked when the fast brain resolves that turn itself
         (``FastBrainContinued`` - resuming an interrupted line or fully answering
-        a small-talk turn): the eagerly-started run would otherwise also answer.
-        Cancels both the in-flight and queued runs; the Debouncer refuses to
-        cancel a run already in tool-commit (i.e. the slow brain already
-        speaking), so a run that somehow finished first is left untouched.
+        a small-talk turn): the eagerly-started run for that turn would otherwise
+        also answer. Targets only that turn's run wherever it sits in the queue
+        (no-op if it was already debounced out), so a prior still-thinking run or
+        an unrelated act/SMS run is never cancelled. A run already in tool commit
+        (speaking) is spared.
         """
-        await self.debouncer._cancel_tasks(pending=True, running=True)
+        await self.debouncer.cancel_run_by_turn(turn_id)
 
     async def interject_or_run(
         self,
         content: str,
         triggering_contact_id: int | None = None,
+        turn_id: int | None = None,
     ):
         """Interject the ask handle or run the LLM"""
         prev_utterance = getattr(self, "_last_inbound_utterance", None)
@@ -1148,6 +1150,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 cancel_running=cancel_running,
                 triggering_contact_id=triggering_contact_id,
                 is_user_origin=True,
+                turn_id=turn_id,
             )
 
             if (
@@ -1637,6 +1640,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         triggering_contact_id: int | None = None,
         is_user_origin: bool = False,
         credit_gate_reply_context: dict[str, Any] | None = None,
+        turn_id: int | None = None,
     ) -> str:
         """Request an LLM run.
 
@@ -1652,6 +1656,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "origin_event_name": event_trace.get("event_name", ""),
             "triggering_contact_id": triggering_contact_id,
             "is_user_origin": is_user_origin,
+            # Carried onto the debouncer task so the fast brain can cancel exactly
+            # this turn's run by id. ``None`` for non-voice / non-user triggers,
+            # which must never be matched by a fast-brain cancel.
+            "turn_id": turn_id,
         }
         if credit_gate_reply_context is not None:
             request_meta["credit_gate_reply_context"] = credit_gate_reply_context

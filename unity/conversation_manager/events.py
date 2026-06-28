@@ -209,6 +209,9 @@ class InboundPhoneUtterance(Event):
 
     contact: dict
     content: str
+    # Per-turn id from the voice agent, used to cancel exactly the slow-brain run
+    # this turn spawns if the fast brain resolves the turn itself.
+    turn_id: int | None = None
 
 
 @dataclass
@@ -219,6 +222,7 @@ class InboundUnifyMeetUtterance(Event):
 
     contact: dict
     content: str
+    turn_id: int | None = None
 
 
 @dataclass
@@ -229,6 +233,7 @@ class InboundWhatsAppCallUtterance(Event):
 
     contact: dict
     content: str
+    turn_id: int | None = None
 
 
 @dataclass
@@ -259,6 +264,9 @@ class FastBrainContinued(Event):
     topic: ClassVar[str | None] = "app:comms:fast_brain_continued"
 
     contact: dict
+    # The user turn the fast brain resolved; the CM cancels exactly that turn's
+    # slow-brain run (wherever it sits in the debouncer queue).
+    turn_id: int | None = None
 
 
 @dataclass
@@ -322,6 +330,7 @@ class InboundGoogleMeetUtterance(Event):
     speaker_label: str | None = None
     participant_names: list[str] | None = None
     diarization_speaker_id: str | None = None
+    turn_id: int | None = None
 
 
 @dataclass
@@ -397,6 +406,7 @@ class InboundTeamsMeetUtterance(Event):
     speaker_label: str | None = None
     participant_names: list[str] | None = None
     diarization_speaker_id: str | None = None
+    turn_id: int | None = None
 
 
 @dataclass

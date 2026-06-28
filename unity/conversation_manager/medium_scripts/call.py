@@ -506,7 +506,7 @@ class Assistant(Agent):
                 # speculatively-started slow-brain run so it cannot re-deliver it.
                 self._continuation_full_text = continuation
                 if self._publish_fast_brain_continued is not None:
-                    await self._publish_fast_brain_continued()
+                    await self._publish_fast_brain_continued(my_turn)
                 yield ChatChunk(
                     id=f"fast-brain-continuation-{monotonic_ms()}",
                     delta=ChoiceDelta(role="assistant", content=continuation),
@@ -549,7 +549,7 @@ class Assistant(Agent):
                 # The fast brain fully answered this turn; cancel the eager
                 # slow-brain run so it does not also answer the same thing.
                 if self._publish_fast_brain_continued is not None:
-                    await self._publish_fast_brain_continued()
+                    await self._publish_fast_brain_continued(my_turn)
                 yield ChatChunk(
                     id=f"fast-brain-smalltalk-{monotonic_ms()}",
                     delta=ChoiceDelta(role="assistant", content=smalltalk),
@@ -2110,6 +2110,9 @@ async def entrypoint(ctx: agents.JobContext):
                 nonlocal _meet_last_speaker_id
                 resolved_contact, speaker_label, dia_sid = _resolve_speaker()
                 _meet_last_speaker_id = None
+                # Stamp the current turn so the slow-brain run it spawns can be
+                # cancelled precisely if the fast brain resolves this turn itself.
+                turn_id = assistant._user_turn_seq
                 if channel == "google_meet":
                     event = InboundGoogleMeetUtterance(
                         contact=resolved_contact,
@@ -2117,6 +2120,7 @@ async def entrypoint(ctx: agents.JobContext):
                         speaker_label=speaker_label,
                         participant_names=_get_meet_participant_names() or None,
                         diarization_speaker_id=dia_sid,
+                        turn_id=turn_id,
                     )
                 elif channel == "teams_meet":
                     event = InboundTeamsMeetUtterance(
@@ -2125,9 +2129,14 @@ async def entrypoint(ctx: agents.JobContext):
                         speaker_label=speaker_label,
                         participant_names=_get_meet_participant_names() or None,
                         diarization_speaker_id=dia_sid,
+                        turn_id=turn_id,
                     )
                 else:
-                    event = user_utterance_event(resolved_contact, content=text)
+                    event = user_utterance_event(
+                        resolved_contact,
+                        content=text,
+                        turn_id=turn_id,
+                    )
                 await event_broker.publish(
                     f"app:comms:{channel}_utterance",
                     event.to_json(),
@@ -2336,18 +2345,19 @@ async def entrypoint(ctx: agents.JobContext):
     # can hand off when it decides not to resume an interrupted line itself.
     assistant._publish_voice_interrupt = _publish_voice_interrupt
 
-    async def _publish_fast_brain_continued() -> None:
-        """Cancel the eagerly-started slow-brain run when the fast brain answers.
+    async def _publish_fast_brain_continued(turn_id: int | None = None) -> None:
+        """Cancel the slow-brain run for ``turn_id`` when the fast brain answers.
 
         The slow brain is triggered the moment the user's utterance lands; if the
-        fast brain then resolves the turn itself - resuming the interrupted line
-        or fully answering a small-talk turn - that run would also answer, so we
-        cancel it. The fast brain (~1s) always beats the slow brain (~8-12s), so
-        the run is still mid-flight and is dropped before producing speech.
+        fast brain then resolves that same turn itself - resuming the interrupted
+        line or fully answering a small-talk turn - its run would also answer, so
+        the CM cancels exactly that turn's run (wherever it sits in the queue).
+        The fast brain (~1s) always beats the slow brain (~8-12s), so the run is
+        still mid-flight and is dropped before producing speech.
         """
         await event_broker.publish(
             FastBrainContinued.topic,
-            FastBrainContinued(contact=contact).to_json(),
+            FastBrainContinued(contact=contact, turn_id=turn_id).to_json(),
         )
 
     assistant._publish_fast_brain_continued = _publish_fast_brain_continued

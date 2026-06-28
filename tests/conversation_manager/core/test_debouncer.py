@@ -169,9 +169,8 @@ class TestDebouncerCancelRunning:
 
     @pytest.mark.asyncio
     async def test_cancel_tasks_running_cancels_inflight_run(self):
-        """``_cancel_tasks(running=True)`` drops the in-flight run - the surface
-        ``ConversationManager.cancel_inflight_slow_brain`` relies on when the fast
-        brain resumes a line itself (CONTINUE)."""
+        """``_cancel_tasks(running=True)`` drops the in-flight run (the low-level
+        primitive; the fast brain uses ``cancel_run_by_turn`` on top of it)."""
         from unity.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer()
@@ -566,3 +565,160 @@ class TestDebouncerUserOriginProtection:
             f"Older user task should have been replaced by newer user task.\n"
             f"  Results: {results}"
         )
+
+
+class TestDebouncerCancelByTurn:
+    """``cancel_run_by_turn`` cancels exactly the run a given turn spawned,
+    wherever it sits, and no-ops otherwise. This is what lets the fast brain
+    drop its own turn's slow-brain run without harming unrelated runs."""
+
+    @staticmethod
+    def _meta(turn_id, **extra):
+        return {"turn_id": turn_id, **extra}
+
+    @pytest.mark.asyncio
+    async def test_cancels_matching_running(self):
+        from unity.conversation_manager.domains.utils import Debouncer
+
+        debouncer = Debouncer()
+        log = []
+        started = asyncio.Event()
+
+        async def run():
+            log.append("started")
+            started.set()
+            try:
+                await asyncio.sleep(5.0)
+                log.append("completed")
+            except asyncio.CancelledError:
+                log.append("cancelled")
+                raise
+
+        await debouncer.submit(run, trace_meta=self._meta(1))
+        await asyncio.wait_for(started.wait(), timeout=2.0)
+
+        assert await debouncer.cancel_run_by_turn(1) is True
+        assert "cancelled" in log and "completed" not in log
+
+    @pytest.mark.asyncio
+    async def test_unknown_turn_is_noop(self):
+        from unity.conversation_manager.domains.utils import Debouncer
+
+        debouncer = Debouncer()
+        log = []
+        started = asyncio.Event()
+
+        async def run():
+            log.append("started")
+            started.set()
+            await asyncio.sleep(0.3)
+            log.append("completed")
+
+        await debouncer.submit(run, trace_meta=self._meta(1))
+        await asyncio.wait_for(started.wait(), timeout=2.0)
+
+        # Different turn id -> nothing cancelled; the run completes.
+        assert await debouncer.cancel_run_by_turn(999) is False
+        await _wait_for_condition(lambda: "completed" in log)
+        assert "completed" in log
+
+    @pytest.mark.asyncio
+    async def test_none_turn_is_noop(self):
+        from unity.conversation_manager.domains.utils import Debouncer
+
+        debouncer = Debouncer()
+        started = asyncio.Event()
+
+        async def run():
+            started.set()
+            await asyncio.sleep(0.3)
+
+        await debouncer.submit(run, trace_meta=self._meta(None))
+        await asyncio.wait_for(started.wait(), timeout=2.0)
+        assert await debouncer.cancel_run_by_turn(None) is False
+
+    @pytest.mark.asyncio
+    async def test_tool_committed_running_is_spared(self):
+        from unity.conversation_manager.domains.utils import Debouncer
+
+        debouncer = Debouncer()
+        log = []
+        started = asyncio.Event()
+
+        async def run():
+            log.append("started")
+            started.set()
+            await asyncio.sleep(0.3)
+            log.append("completed")
+
+        await debouncer.submit(
+            run,
+            trace_meta=self._meta(1, tool_commit_started="true"),
+        )
+        await asyncio.wait_for(started.wait(), timeout=2.0)
+
+        # Already speaking -> spared even though the turn id matches.
+        assert await debouncer.cancel_run_by_turn(1) is False
+        await _wait_for_condition(lambda: "completed" in log)
+        assert "completed" in log
+
+    @pytest.mark.asyncio
+    async def test_cancels_matching_pending_leaving_running(self):
+        from unity.conversation_manager.domains.utils import Debouncer
+
+        debouncer = Debouncer()
+        log = []
+        run1_started = asyncio.Event()
+
+        async def run1():
+            log.append("run1:started")
+            run1_started.set()
+            await asyncio.sleep(0.5)
+            log.append("run1:completed")
+
+        async def run2():
+            log.append("run2:started")
+
+        # run1 (turn 1) running; run2 (turn 2) queued behind it.
+        await debouncer.submit(run1, trace_meta=self._meta(1))
+        await asyncio.wait_for(run1_started.wait(), timeout=2.0)
+        await debouncer.submit(run2, trace_meta=self._meta(2))
+
+        # Cancel the PENDING turn 2 -> run1 keeps going and completes; run2 never runs.
+        assert await debouncer.cancel_run_by_turn(2) is True
+        await _wait_for_condition(lambda: "run1:completed" in log)
+        assert "run1:completed" in log
+        assert "run2:started" not in log
+
+    @pytest.mark.asyncio
+    async def test_cancels_matching_running_promotes_pending(self):
+        from unity.conversation_manager.domains.utils import Debouncer
+
+        debouncer = Debouncer()
+        log = []
+        run1_started = asyncio.Event()
+
+        async def run1():
+            log.append("run1:started")
+            run1_started.set()
+            try:
+                await asyncio.sleep(5.0)
+                log.append("run1:completed")
+            except asyncio.CancelledError:
+                log.append("run1:cancelled")
+                raise
+
+        async def run2():
+            log.append("run2:started")
+
+        # run1 (turn 1) running; run2 (turn 2) queued behind it.
+        await debouncer.submit(run1, trace_meta=self._meta(1))
+        await asyncio.wait_for(run1_started.wait(), timeout=2.0)
+        await debouncer.submit(run2, trace_meta=self._meta(2))
+
+        # Cancel the RUNNING turn 1 -> pending turn 2 auto-promotes and runs.
+        assert await debouncer.cancel_run_by_turn(1) is True
+        await _wait_for_condition(lambda: "run2:started" in log)
+        assert "run1:cancelled" in log
+        assert "run2:started" in log
+        assert "run1:completed" not in log

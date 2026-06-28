@@ -38,6 +38,9 @@ class Debouncer:
         self._name = name
         self._pending_label: str = ""
         self._pending_is_user_origin: bool = False
+        # Trace meta of the queued (pending) run, so it can be matched/cancelled
+        # by turn id while still pending (before it promotes to running).
+        self._pending_trace_meta: dict = {}
         self.was_queued: bool = False
         self.running_task_started_at: float = 0.0
         self.running_task_trace_meta: dict = {}
@@ -134,10 +137,12 @@ class Debouncer:
             self.pending_task = None
             self._pending_label = ""
             self._pending_is_user_origin = False
+            self._pending_trace_meta = {}
 
         self.pending_task = asyncio.create_task(wait_for_running_task())
         self._pending_label = label
         self._pending_is_user_origin = is_user_origin
+        self._pending_trace_meta = trace_meta or {}
 
     async def _cancel_tasks(self, pending=True, running=False):
         if running:
@@ -167,3 +172,69 @@ class Debouncer:
                     await self.pending_task
                 except asyncio.CancelledError:
                     pass
+
+    @staticmethod
+    def _is_tool_committed(meta: dict) -> bool:
+        return (
+            str((meta or {}).get("tool_commit_started", "")).strip().lower() == "true"
+        )
+
+    async def cancel_run_by_turn(self, turn_id) -> bool:
+        """Cancel exactly the run spawned by ``turn_id``, wherever it sits.
+
+        Used when the fast brain resolves a turn itself (continuation / small
+        talk): only that turn's eagerly-started slow-brain run must be dropped,
+        never a prior still-thinking run or an unrelated (act/SMS) run.
+
+        - Pending match -> cancel the pending wrapper; the running task (a
+          different turn) keeps going.
+        - Running match -> cancel it (unless it is already in tool commit, i.e.
+          speaking, in which case it is spared); the pending wrapper then
+          auto-promotes to running.
+        - No match (already debounced out / not ours) -> no-op.
+
+        Returns True iff a task was cancelled. ``turn_id is None`` never matches.
+        """
+        if turn_id is None:
+            return False
+
+        if (
+            self.pending_task is not None
+            and not self.pending_task.done()
+            and self._pending_trace_meta.get("turn_id") == turn_id
+        ):
+            self.pending_task.cancel()
+            try:
+                await self.pending_task
+            except asyncio.CancelledError:
+                pass
+            self.pending_task = None
+            self._pending_label = ""
+            self._pending_is_user_origin = False
+            self._pending_trace_meta = {}
+            if self._name:
+                LOGGER.info(
+                    f"🚦 [{self._name}] cancelled queued run for turn {turn_id}",
+                )
+            return True
+
+        if (
+            self.running_task is not None
+            and not self.running_task.done()
+            and self.running_task_trace_meta.get("turn_id") == turn_id
+        ):
+            if self._is_tool_committed(self.running_task_trace_meta):
+                # Already producing speech; leave it to finish.
+                return False
+            self.running_task.cancel()
+            try:
+                await self.running_task
+            except asyncio.CancelledError:
+                pass
+            if self._name:
+                LOGGER.info(
+                    f"🚦 [{self._name}] cancelled running run for turn {turn_id}",
+                )
+            return True
+
+        return False
