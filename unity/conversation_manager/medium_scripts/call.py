@@ -630,6 +630,11 @@ def _hydrate_session_details_from_metadata(meta: dict) -> None:
 
 _CALL_OPENING_MODES = {"speak", "simulated", "silent", "briefed", "recorded"}
 
+# Spacing between the callee accepting an outbound call and the agent's opener,
+# so the opener never lands on top of the callee's own "hello" in the instant
+# they tap answer.
+OUTBOUND_OPENING_DELAY_S = 0.5
+
 # The walkie-talkie staticky intro is cut into per-sentence audio slices (at
 # silence midpoints, aligned via Whisper word timestamps). They play in order as
 # separate segments; each commits its own transcript to history as it finishes.
@@ -2720,6 +2725,9 @@ async def entrypoint(ctx: agents.JobContext):
         _log.info("Outbound call — waiting for callee to answer…")
         await call_answered_flag.wait()
         _log.call_status("call_answered — opening turn")
+        # Brief pause so the opener doesn't talk over the callee's own greeting
+        # in the instant they accept the call.
+        await asyncio.sleep(OUTBOUND_OPENING_DELAY_S)
 
     await user_joined_event.wait()
     speech_gate_open = True
