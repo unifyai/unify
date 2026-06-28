@@ -80,7 +80,11 @@ from unity.conversation_manager.cm_types.screenshot import (
     generate_screenshot_path,
     write_screenshot_to_disk,
 )
-from unity.conversation_manager.domains.fast_brain_buffer import select_fast_reply
+from unity.conversation_manager.domains.fast_brain_buffer import (
+    compute_resume_text,
+    select_continuation,
+    select_fast_reply,
+)
 
 # Globals initialized lazily or via prewarm to avoid duplicate heavy init
 STT = None
@@ -371,6 +375,14 @@ class Assistant(Agent):
         # The callable enqueues the bridge synchronously (no playout await) so
         # the fast-brain reply generates concurrently and queues behind it.
         self._pending_opening_bridge: Callable[[], None] | None = None
+        # The in-flight TTS say handle (slow-brain speech or a briefed/speak
+        # opener) registered for resumption, and the claimable resume candidate
+        # produced when it is interrupted. Pre-recorded audio is never registered
+        # here, so its hand-crafted tone is never continued by the live voice.
+        self._active_tts: dict | None = None
+        self._pending_continuation: dict | None = None
+        self._tts_seq = 0
+        self._publish_voice_interrupt: Callable | None = None
 
         super().__init__(instructions=instructions)
 
@@ -473,6 +485,22 @@ class Assistant(Agent):
                 if user_text and recent_assistant_text:
                     break
 
+            # If this barge-in cut off a slow-brain line, the fast brain may
+            # resume the unheard remainder immediately (speaking the slow brain's
+            # own verbatim words) instead of waiting a full slow-brain turn for it
+            # to be re-delivered.
+            continuation = await self._claim_interrupted_continuation(user_text)
+            if continuation is not None:
+                if self._slow_brain_responded_turn >= my_turn:
+                    _log.info("Continuation suppressed: slow brain already responded")
+                    return
+                self._buffers_since_slow_reply += 1
+                yield ChatChunk(
+                    id=f"fast-brain-continuation-{monotonic_ms()}",
+                    delta=ChoiceDelta(role="assistant", content=continuation),
+                )
+                return
+
             # Refresh screenshots only on the first reaction (also feeds the slow
             # brain); repeated deferrals don't need it and should stay snappy.
             if not already_deferred:
@@ -498,6 +526,53 @@ class Assistant(Agent):
             )
         finally:
             self.user_turn_generating = False
+
+    async def _claim_interrupted_continuation(self, user_text: str) -> str | None:
+        """Resume an interrupted slow-brain line, or return None to leave it.
+
+        Returns the spoken continuation ("{lead-in} {verbatim remainder}") when
+        the caller barged in benignly, else None (normal buffer / slow brain).
+        Enforces exactly-once delivery: a claim marks the candidate consumed so
+        the VoiceInterrupt handoff is cancelled; a defer publishes VoiceInterrupt
+        itself so the slow brain still re-surfaces the missed content.
+        """
+        if not (user_text or "").strip():
+            return None
+
+        # Barge-in vs user-turn race: if a line was just interrupted but its
+        # remainder hasn't been computed yet, wait briefly for it.
+        active = self._active_tts
+        if (
+            self._pending_continuation is None
+            and active is not None
+            and getattr(active.get("handle"), "interrupted", False)
+        ):
+            for _ in range(6):  # ~300ms
+                await asyncio.sleep(0.05)
+                if self._pending_continuation is not None:
+                    break
+
+        pending = self._pending_continuation
+        if not pending or pending.get("consumed"):
+            return None
+
+        # Claim synchronously so the handoff timer becomes a no-op.
+        pending["consumed"] = True
+        resume_text = (pending.get("resume_text") or "").strip()
+        remainder = (pending.get("remainder") or "").strip()
+        spoken_prefix = (pending.get("spoken_prefix") or "").strip()
+        self._pending_continuation = None
+        self._active_tts = None
+        if not resume_text:
+            return None
+
+        lead_in = await select_continuation(resume_text, user_text)
+        if lead_in is None:
+            # Redirect / new ask: hand the remainder to the slow brain instead.
+            if self._publish_voice_interrupt is not None and remainder:
+                await self._publish_voice_interrupt(spoken_prefix, remainder)
+            return None
+        return f"{lead_in} {resume_text}".strip()
 
     async def stt_node(
         self,
@@ -634,6 +709,11 @@ _CALL_OPENING_MODES = {"speak", "simulated", "silent", "briefed", "recorded"}
 # so the opener never lands on top of the callee's own "hello" in the instant
 # they tap answer.
 OUTBOUND_OPENING_DELAY_S = 0.5
+
+# Grace window after an interrupted TTS line for the fast brain to claim and
+# resume the unheard remainder. If it does not, we fall back to handing the
+# remainder to the slow brain via VoiceInterrupt.
+_CONTINUATION_HANDOFF_S = 0.5
 
 # The walkie-talkie staticky intro is cut into per-sentence audio slices (at
 # silence midpoints, aligned via Whisper word timestamps). They play in order as
@@ -1449,6 +1529,9 @@ async def entrypoint(ctx: agents.JobContext):
             allow_interruptions=True,
             add_to_chat_ctx=True,
         )
+        # A briefed/speak opener is live TTS (not pre-recorded), so a barge-in
+        # can be resumed by the fast brain just like any slow-brain line.
+        _register_interruptible_tts(speech_handle, lambda: text, "opening")
         if speed_applied:
             elevenlabs_opener_restore_task = asyncio.create_task(
                 _restore_elevenlabs_opener_speed_after_playout(speech_handle),
@@ -2179,22 +2262,56 @@ async def entrypoint(ctx: agents.JobContext):
                 texts.append(content)
         return " ".join(texts)
 
-    def _notify_slow_brain_of_interruption(
+    async def _publish_voice_interrupt(spoken: str, remainder: str) -> None:
+        """Hand an unheard remainder to the slow brain to re-surface next turn."""
+        await event_broker.publish(
+            VoiceInterrupt.topic,
+            VoiceInterrupt(
+                contact=contact,
+                spoken_prefix=spoken,
+                unheard_remainder=remainder,
+            ).to_json(),
+        )
+        from unity.logger import LOGGER
+
+        LOGGER.info(
+            "⬥ [FastBrain] Reported unheard remainder to the slow brain.",
+        )
+
+    # Expose to Assistant.llm_node (a class method, outside this closure) so it
+    # can hand off when it decides not to resume an interrupted line itself.
+    assistant._publish_voice_interrupt = _publish_voice_interrupt
+
+    def _register_interruptible_tts(
         handle: object,
         full_text_getter,
         notification_source: str,
     ) -> None:
-        """Tell the slow brain when the caller barges in mid-utterance.
+        """Register an in-flight TTS line so a barge-in can be resumed.
 
         The slow brain owns all substantive speech; when the caller interrupts,
-        only the spoken prefix lands in the transcript, so the slow brain would
-        otherwise believe the prefix was the whole message. We publish a
-        ``VoiceInterrupt`` carrying the unheard remainder so the slow brain knows
-        it was cut off and can re-surface the missed content if it still matters.
-        The fast brain (now a buffer-only selector) is deliberately NOT informed.
+        only the spoken prefix lands in the transcript, so the missed remainder
+        would otherwise be lost. On interruption we stash the remainder as a
+        claimable continuation candidate that the fast brain may resume
+        immediately (via ``llm_node``). If it does not claim it within
+        ``_CONTINUATION_HANDOFF_S``, we fall back to the original behavior:
+        publish a ``VoiceInterrupt`` so the slow brain re-surfaces the content on
+        its next turn. The remainder is therefore delivered exactly once.
+
+        Pre-recorded openings are never passed here, so their hand-crafted tone
+        is never continued by the live voice. Proactive silence-filler is never
+        resumed or reported.
         """
         if notification_source == "proactive_speech":
             return
+
+        assistant._tts_seq += 1
+        seq = assistant._tts_seq
+        assistant._active_tts = {
+            "handle": handle,
+            "source": notification_source,
+            "seq": seq,
+        }
 
         async def _after_playout() -> None:
             try:
@@ -2212,19 +2329,26 @@ async def entrypoint(ctx: agents.JobContext):
                 remainder = full[len(spoken) :].strip()
             if not remainder:
                 return
-            await event_broker.publish(
-                VoiceInterrupt.topic,
-                VoiceInterrupt(
-                    contact=contact,
-                    spoken_prefix=spoken,
-                    unheard_remainder=remainder,
-                ).to_json(),
-            )
-            from unity.logger import LOGGER
+            resume_text = compute_resume_text(full, spoken) or remainder
+            assistant._pending_continuation = {
+                "resume_text": resume_text,
+                "remainder": remainder,
+                "spoken_prefix": spoken,
+                "source": notification_source,
+                "seq": seq,
+                "consumed": False,
+            }
 
-            LOGGER.info(
-                "⬥ [FastBrain] Reported unheard remainder to the slow brain.",
-            )
+            async def _handoff_to_slow_brain() -> None:
+                await asyncio.sleep(_CONTINUATION_HANDOFF_S)
+                pending = assistant._pending_continuation
+                if not pending or pending.get("seq") != seq or pending.get("consumed"):
+                    return
+                assistant._pending_continuation = None
+                assistant._active_tts = None
+                await _publish_voice_interrupt(spoken, remainder)
+
+            asyncio.ensure_future(_handoff_to_slow_brain())
 
         asyncio.ensure_future(_after_playout())
 
@@ -2246,7 +2370,7 @@ async def entrypoint(ctx: agents.JobContext):
             )
             _log.notification_say(text, notification_source=notification_source)
             handle = session.say(text, allow_interruptions=True, add_to_chat_ctx=True)
-            _notify_slow_brain_of_interruption(
+            _register_interruptible_tts(
                 handle,
                 lambda: text,
                 notification_source,
@@ -2288,7 +2412,7 @@ async def entrypoint(ctx: agents.JobContext):
             allow_interruptions=True,
             add_to_chat_ctx=True,
         )
-        _notify_slow_brain_of_interruption(
+        _register_interruptible_tts(
             handle,
             lambda: "".join(parts),
             notification_source,
