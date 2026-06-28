@@ -76,6 +76,15 @@ DISPATCH_ACTIVATION_TIMEOUT_S = 90.0
 # the cap exists so a wedged worker surfaces as a failure rather than hanging.
 NEW_CALL_READINESS_TIMEOUT_S = 30.0
 
+# Fallback briefing for an outbound call that somehow reaches dispatch without a
+# mission context. An agent-initiated call must never open "blind", so even
+# here the agent is told to open with purpose rather than wait in silence.
+_OUTBOUND_OPENER_FALLBACK_CONTEXT = (
+    "You are placing this outbound call. Open by greeting the person warmly, "
+    "saying who you are, and giving the reason you are reaching out, using what "
+    "you already know about this contact and your relationship with them."
+)
+
 
 class LivekitCallManager:
     def __init__(
@@ -497,6 +506,7 @@ class LivekitCallManager:
         outbound: bool = False,
         channel: str = "phone_call",
         room_name: str | None = None,
+        opening_config: dict | None = None,
     ):
         if self.has_active_call:
             if self._clear_stale_dispatch_state():
@@ -527,8 +537,36 @@ class LivekitCallManager:
         room_name = room_name or make_room_name(self.assistant_id, medium)
         self.room_name = room_name
 
+        # An agent-initiated (outbound) call must never open "blind". The mission
+        # context becomes a briefed opener the agent speaks the moment the callee
+        # answers — and is injected as a durable system briefing for the rest of
+        # the call — rather than a reactive fast-brain notification. This is the
+        # single outbound choke point, so every outbound path is covered.
+        if outbound and opening_config is None:
+            briefing = (self.initial_notification or "").strip()
+            opening_config = {
+                "mode": "briefed",
+                "system_context": briefing or _OUTBOUND_OPENER_FALLBACK_CONTEXT,
+                "source": "outbound_call_opening",
+            }
+            # Delivered as the opener (and the in-call system briefing), so don't
+            # also queue it as a separate notification that would race/double it.
+            self.initial_notification = ""
+
+        extra_metadata = {"opening_config": opening_config} if opening_config else None
+        extra_env = (
+            {"opening_config": json.dumps(opening_config)} if opening_config else None
+        )
+
         if self._worker_proc is not None and self._worker_proc.poll() is None:
-            await self._dispatch_job(room_name, channel, contact, boss, outbound)
+            await self._dispatch_job(
+                room_name,
+                channel,
+                contact,
+                boss,
+                outbound,
+                extra_metadata=extra_metadata,
+            )
         else:
             await self._start_call_subprocess(
                 room_name,
@@ -536,6 +574,7 @@ class LivekitCallManager:
                 contact,
                 boss,
                 outbound,
+                extra_env=extra_env,
             )
 
         if self.initial_notification:
