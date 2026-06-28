@@ -872,9 +872,10 @@ class TestSlowBrainGuidanceDeliveryPrompt:
         assert "(unconfirmed)" not in prompt
         assert "NOT proof the user heard it" not in prompt
 
-    def test_voice_prompt_forbids_breaking_the_fourth_wall(self):
-        """The slow brain must never reveal the Voice Agent / filler mechanism to
-        the caller - it presents as one single person."""
+    def test_voice_prompt_keeps_single_identity(self):
+        """The slow brain must present as one person and never disown its words /
+        fragment into separate agents - while still allowed to honestly surface a
+        genuine glitch rather than fabricate an excuse."""
         from unity.conversation_manager.prompt_builders import build_system_prompt
 
         prompt = build_system_prompt(
@@ -885,11 +886,12 @@ class TestSlowBrainGuidanceDeliveryPrompt:
             is_voice_call=True,
         ).flatten()
 
-        assert "Never break the fourth wall" in prompt
         flat = " ".join(prompt.lower().split())
         # The caller must never be told a phrase "wasn't me" / came from elsewhere.
-        assert "one single person" in flat
         assert "never disown" in flat
+        assert "single person" in flat
+        # The relaxed carve-out: honest acknowledgement of a real glitch is allowed.
+        assert "genuinely glitched" in flat
 
     def test_voice_prompt_is_speak_or_wait_only(self):
         """guide_voice_agent is speak-only: the prompt must not offer a NOTIFY /

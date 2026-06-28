@@ -77,12 +77,13 @@ def test_prompt_forbids_bare_canned_phrases():
     assert "on its own" in p.lower()
 
 
-def test_prompt_keeps_the_fourth_wall():
-    """The fast brain must present as one person and never leak that a separate
-    system composes the answer."""
+def test_prompt_keeps_single_identity():
+    """The fast brain must present as one person and never disown its words or
+    leak that a separate system composes the answer."""
     p = fast_brain_buffer._FAST_REPLY_PROMPT
-    assert "FOURTH WALL" in p
-    assert "one single person" in p
+    assert "STAY ONE PERSON" in p
+    assert "single person" in p
+    assert "never disown" in p.lower()
     # The old "a smarter system is composing the real answer" leak is gone.
     assert "smarter system is composing" not in p.lower()
 
