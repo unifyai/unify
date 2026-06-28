@@ -448,6 +448,8 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
             message_content = "<Sending Call...>"
             notif_content = f"Call sent to {sender_name}"
         case UnifyMeetReceived() as e:
+            # The owner answered; cancel any pending no-answer text fallback.
+            cm._pending_meet_ring = None
             await cm.call_manager.start_unify_meet(
                 contact,
                 boss,

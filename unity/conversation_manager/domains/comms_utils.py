@@ -329,6 +329,55 @@ async def send_unify_message(
         return {"success": False, "error": str(e)}
 
 
+async def send_unify_meet_ring(
+    call_session_id: str,
+    reason: str = "",
+    contact_id: int = 1,
+) -> dict:
+    """Ring the owner on Unify Meet (the in-app live call).
+
+    The assistant cannot place the call itself - the owner's browser mints the
+    LiveKit token and joins the room. This publishes a ``unify_meet_incoming``
+    signal on the assistant's Pub/Sub topic so the Console shows a pinned
+    incoming-call window; when the owner clicks Answer, Console runs its normal
+    connect flow (token + ``/unify/meet`` dispatch) which lands as
+    ``UnifyMeetReceived`` here. ``reason`` is the briefing for how I open once
+    answered; Console turns it into a briefed opening config.
+    """
+    agent_id = SESSION_DETAILS.assistant.agent_id
+    event_data = {
+        "call_session_id": call_session_id,
+        "reason": reason,
+        "contact_id": contact_id,
+    }
+
+    message_data = {"thread": "unify_meet_incoming", "event": event_data}
+
+    # Console always reads from the assistant's Pub/Sub topic, even in
+    # LOCAL_COMMS_MODE=local; the local outbox is a best-effort mirror.
+    if _use_local_comms():
+        try:
+            await _publish_local_outbox_async(message_data)
+        except Exception as e:
+            LOGGER.debug(
+                f"{ICONS['comms_outbound']} Local outbox mirror failed (non-fatal): {e}",
+            )
+
+    try:
+        message_id = _publish_to_assistant_topic(
+            agent_id=agent_id,
+            thread="unify_meet_incoming",
+            event=event_data,
+        )
+        LOGGER.debug(
+            f"{ICONS['comms_outbound']} Unify Meet ring published with ID: {message_id}",
+        )
+        return {"success": bool(message_id)}
+    except Exception as e:
+        LOGGER.error(f"{ICONS['comms_outbound']} Error ringing Unify Meet: {e}")
+        return {"success": False, "error": str(e)}
+
+
 def publish_system_error(error_message: str, error_type: str = "unknown") -> None:
     """Publish a system error to the assistant's Pub/Sub topic.
 

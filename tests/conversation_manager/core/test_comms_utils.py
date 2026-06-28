@@ -16,6 +16,7 @@ posting to COMMS_URL when the endpoint lives on the adapters service).
 from __future__ import annotations
 
 import base64
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -589,6 +590,34 @@ class TestLocalCommsBackends:
             mock_publisher.publish.assert_called_once()
             _, publish_kwargs = mock_publisher.publish.call_args
             assert publish_kwargs.get("thread") == "unify_message_outbound"
+
+    @pytest.mark.asyncio
+    async def test_send_unify_meet_ring_publishes_incoming_thread(self):
+        """The Meet ring publishes a ``unify_meet_incoming`` frame carrying the
+        call session id and reason so the Console can show the Answer window."""
+        mock_publisher = MagicMock()
+        mock_publisher.topic_path.return_value = "projects/p/topics/unity-1"
+        mock_future = MagicMock()
+        mock_future.result.return_value = "ring-msg-1"
+        mock_publisher.publish.return_value = mock_future
+
+        with patch(
+            "unity.conversation_manager.domains.comms_utils._get_publisher",
+            return_value=mock_publisher,
+        ):
+            result = await comms_utils.send_unify_meet_ring(
+                call_session_id="meet-ring-abc",
+                reason="Continuing onboarding on the live call.",
+            )
+
+        assert result["success"] is True
+        mock_publisher.publish.assert_called_once()
+        args, publish_kwargs = mock_publisher.publish.call_args
+        assert publish_kwargs.get("thread") == "unify_meet_incoming"
+        published = json.loads(args[1].decode("utf-8"))
+        assert published["thread"] == "unify_meet_incoming"
+        assert published["event"]["call_session_id"] == "meet-ring-abc"
+        assert published["event"]["reason"] == "Continuing onboarding on the live call."
 
     @pytest.mark.asyncio
     async def test_upload_unify_attachment_uses_local_attachment_store(self):

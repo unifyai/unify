@@ -300,6 +300,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # is not repeated; cleared once the real Outbound utterance lands. Never
         # written to the stored transcript.
         self._inflight_voice_speech: str = ""
+        # Call-session id of an in-flight Unify Meet ring awaiting an answer.
+        # Cleared when the owner answers (UnifyMeetReceived) or the no-answer
+        # timeout fires and falls the conversation back to text.
+        self._pending_meet_ring: str | None = None
         self.contact_index = ContactIndex()
         self.notifications_bar = NotificationBar()
         self.integration_sync_coordinator = IntegrationSyncCoordinator()
@@ -1209,6 +1213,70 @@ class ConversationManager(metaclass=SingletonABCMeta):
             label=(trace_meta or {}).get("origin_event_name", ""),
             trace_meta=trace_meta,
             is_user_origin=is_user_origin,
+        )
+
+    # Grace window for the owner to answer a Unify Meet ring before the
+    # conversation falls back to text.
+    _MEET_RING_TIMEOUT_S = 25.0
+
+    async def ring_unify_meet(self, context: str = "") -> dict:
+        """Ring the owner on Unify Meet and await an answer (no-answer -> text).
+
+        Publishes a ``unify_meet_incoming`` signal so the Console shows a pinned
+        incoming-call window with an Answer button. The assistant cannot join the
+        owner's browser for them; when they answer, Console's normal connect flow
+        lands here as ``UnifyMeetReceived``. ``context`` becomes a briefed opener
+        so the answered call opens purposefully. If unanswered within
+        ``_MEET_RING_TIMEOUT_S``, a notification tells the brain to continue over
+        text.
+        """
+        import uuid
+
+        from unity.conversation_manager.domains import comms_utils
+
+        call_session_id = f"meet-ring-{uuid.uuid4().hex[:12]}"
+        reason = (context or "").strip() or (
+            "Continuing our conversation on the live call."
+        )
+        self._pending_meet_ring = call_session_id
+        result = await comms_utils.send_unify_meet_ring(
+            call_session_id=call_session_id,
+            reason=reason,
+        )
+        if not result.get("success"):
+            self._pending_meet_ring = None
+            return {
+                "status": "error",
+                "message": "Could not ring the Unify Meet right now.",
+            }
+        asyncio.ensure_future(self._await_meet_ring_answer(call_session_id))
+        return {
+            "status": "ok",
+            "message": (
+                "Ringing my boss on Unify Meet — a pinged call window with an "
+                "Answer button is now showing for them. I'll join when they answer."
+            ),
+        }
+
+    async def _await_meet_ring_answer(self, call_session_id: str) -> None:
+        """Fall back to text if a Unify Meet ring goes unanswered."""
+        await asyncio.sleep(self._MEET_RING_TIMEOUT_S)
+        if self._pending_meet_ring != call_session_id:
+            return  # answered (or superseded) - nothing to do
+        from unity.common.prompt_helpers import now as prompt_now
+
+        self._pending_meet_ring = None
+        self.notifications_bar.push_notif(
+            "Comms",
+            (
+                "My Unify Meet call went unanswered. Continue with the boss here "
+                "over the current text channel instead - do not keep waiting on "
+                "the call."
+            ),
+            prompt_now(as_string=False),
+        )
+        await self.run_llm(
+            trace_meta={"origin_event_name": "unify_meet_ring_unanswered"},
         )
 
     @staticmethod
