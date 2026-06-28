@@ -57,11 +57,20 @@ def test_prompt_covers_key_patterns():
     p = fast_brain_buffer._FAST_REPLY_PROMPT
     assert "NEVER actually answer" in p
     assert "take your time" in p
-    assert "Thanks." in p
-    assert "Will do." in p
+    # The give-space case is still handled (thank + take the pause).
+    assert "Thanks" in p
     assert "{the thing}" in p  # template placeholder
     # The default fallback is always safe.
     assert _DEFAULT == "One moment."
+
+
+def test_prompt_forbids_bare_canned_phrases():
+    """Every reply must be contextualized - no standalone canned acks/defers."""
+    p = fast_brain_buffer._FAST_REPLY_PROMPT
+    assert "MUST CONTEXTUALIZE" in p
+    # It explicitly tells the model not to reply with a bare phrase on its own.
+    assert "bare" in p.lower()
+    assert "on its own" in p.lower()
 
 
 # ---------------------------------------------------------------------------
