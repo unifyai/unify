@@ -168,6 +168,35 @@ class TestDebouncerCancelRunning:
         )
 
     @pytest.mark.asyncio
+    async def test_cancel_tasks_running_cancels_inflight_run(self):
+        """``_cancel_tasks(running=True)`` drops the in-flight run - the surface
+        ``ConversationManager.cancel_inflight_slow_brain`` relies on when the fast
+        brain resumes a line itself (CONTINUE)."""
+        from unity.conversation_manager.domains.utils import Debouncer
+
+        debouncer = Debouncer()
+        execution_log = []
+        task1_started = asyncio.Event()
+
+        async def task1():
+            execution_log.append("task1:started")
+            task1_started.set()
+            try:
+                await asyncio.sleep(5.0)
+                execution_log.append("task1:completed")
+            except asyncio.CancelledError:
+                execution_log.append("task1:cancelled")
+                raise
+
+        await debouncer.submit(task1)
+        await asyncio.wait_for(task1_started.wait(), timeout=2.0)
+
+        await debouncer._cancel_tasks(pending=True, running=True)
+
+        assert "task1:cancelled" in execution_log
+        assert "task1:completed" not in execution_log
+
+    @pytest.mark.asyncio
     async def test_cancel_running_queues_when_tool_commit_started(self):
         """
         Once a running slow-brain task enters tool commit, replacements wait.

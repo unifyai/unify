@@ -236,6 +236,9 @@ def test_continuation_prompt_is_classifier_resuming_on_greetings():
     assert "Hello?" in p
     assert "Why are you calling?" in p
     assert "NOT reasons to defer" in p
+    # Heavily biased to CONTINUE: DEFER only on an explicit redirect.
+    assert "strong default" in p
+    assert "lean hard toward CONTINUE" in p
 
 
 def test_resume_lead_in_bank_has_variety():

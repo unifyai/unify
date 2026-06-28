@@ -247,6 +247,20 @@ class VoiceInterrupt(Event):
 
 
 @dataclass
+class FastBrainContinued(Event):
+    """The fast brain resumed an interrupted line itself (CONTINUE).
+
+    Signals the CM to cancel the slow-brain run that was eagerly started for this
+    user turn, so the slow brain does not also re-deliver the same content. Emitted
+    only when the fast brain takes ownership of the turn's reply.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:fast_brain_continued"
+
+    contact: dict
+
+
+@dataclass
 class PhoneCallEnded(Event):
     topic: ClassVar[str | None] = "app:comms:phone_call_ended"
     prominent: ClassVar[bool] = True
