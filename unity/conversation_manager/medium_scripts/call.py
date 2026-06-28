@@ -1786,6 +1786,10 @@ async def entrypoint(ctx: agents.JobContext):
         user_is_speaking = ev.new_state == "speaking"
         if user_is_speaking:
             _restore_elevenlabs_opener_speed("user started speaking")
+        else:
+            # The user just freed the floor: a queued slow-brain line should play
+            # at the next silent moment, not wait for the next agent-state cycle.
+            maybe_speak_queued()
         _log.user_state(ev.new_state, state_id=state_id)
         _check_quiescence_transition()
 
@@ -2246,6 +2250,22 @@ async def entrypoint(ctx: agents.JobContext):
             return False
         return True
 
+    def _queued_speech_block_reason() -> str:
+        """Why a queued slow-brain line cannot play yet, or "" if the floor is free.
+
+        Deliberately narrower than ``_is_pipeline_quiescent``: a ready line is held
+        ONLY while someone occupies the floor (the user speaking, or assistant audio
+        actually playing). The agent merely "thinking" (generating a reply) does not
+        block it - filler/answer ordering is handled by the ``_slow_brain_responded_turn``
+        suppression in ``llm_node``, not by withholding the real line.
+        """
+        if user_is_speaking:
+            return "user_speaking"
+        current = session.current_speech
+        if current is not None and not current.done:
+            return "assistant_speaking"
+        return ""
+
     def _spoken_text_from_handle(handle: object) -> str:
         """Concatenate the assistant text actually persisted for a say handle.
 
@@ -2546,15 +2566,19 @@ async def entrypoint(ctx: agents.JobContext):
         session.history.add_message(role="assistant", content=[content])
 
     def maybe_speak_queued() -> None:
-        """Speak the next queued slow-brain response, verbatim, when quiescent.
+        """Speak the next queued slow-brain response, verbatim, when the floor is free.
 
-        Gates on agent_state to avoid racing with the fast brain's buffer phrase.
-        After the user stops speaking, the agent transitions through thinking →
-        speaking → listening. We only speak queued text once the agent has settled
-        back to a quiescent state, guaranteeing the fast brain's filler comes
-        first. The slow brain owns all substantive speech and is spoken verbatim.
+        Releases the line as soon as nobody is occupying the voice floor (the user
+        speaking, or assistant audio playing). It does NOT wait for the agent to
+        leave the "thinking" state, so a ready line is never stalled behind reply
+        generation. Filler/answer ordering is preserved by ``llm_node`` suppressing
+        a filler once the slow brain has responded for the turn.
         """
-        if not speech_gate_open or not _queued_speech or not _is_pipeline_quiescent():
+        if not speech_gate_open or not _queued_speech:
+            return
+        block_reason = _queued_speech_block_reason()
+        if block_reason:
+            _log.info(f"Queued slow-brain speech deferred: {block_reason}")
             return
         (
             text,
@@ -2651,7 +2675,11 @@ async def entrypoint(ctx: agents.JobContext):
                     notification_source=notification_source,
                     llm_log_path=llm_log_path,
                 )
-                if triggers_turn:
+                # Only awareness notifications (should_speak=False) regenerate the
+                # fast brain's filler with new context. Spoken guidance already has
+                # its real content queued; regenerating a filler for it would only
+                # re-enter the "thinking" state and defer that very line.
+                if triggers_turn and not should_speak:
                     _invalidate_current_generation(
                         "notification_during_generation",
                         notification_id,
