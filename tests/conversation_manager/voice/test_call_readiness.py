@@ -113,6 +113,96 @@ def test_not_ready_during_active_session(monkeypatch, ready_path):
     assert cm.is_ready_for_new_call is False
 
 
+def test_idle_pending_rewarm_true_when_alive_idle_no_marker(monkeypatch, ready_path):
+    """Alive worker, fully idle, but no ready marker -> the wedged-pool state the
+    watchdog must recover from."""
+    monkeypatch.setenv("LIVEKIT_URL", "wss://test.livekit.cloud")
+    cm = _build_call_manager()
+    cm._worker_proc = _alive_worker()
+    assert not ready_path.exists()
+    assert cm._is_idle_pending_rewarm() is True
+
+
+def test_idle_pending_rewarm_false_when_marker_present(monkeypatch, ready_path):
+    monkeypatch.setenv("LIVEKIT_URL", "wss://test.livekit.cloud")
+    cm = _build_call_manager()
+    cm._worker_proc = _alive_worker()
+    ready_path.write_text("")
+    assert cm._is_idle_pending_rewarm() is False
+
+
+def test_idle_pending_rewarm_false_when_no_livekit(monkeypatch, ready_path):
+    monkeypatch.delenv("LIVEKIT_URL", raising=False)
+    cm = _build_call_manager()
+    cm._worker_proc = _alive_worker()
+    # Subprocess path needs no warm pool, so there is nothing to recover.
+    assert cm._is_idle_pending_rewarm() is False
+
+
+def test_idle_pending_rewarm_false_during_active_session(monkeypatch, ready_path):
+    """A missing marker during a live session / setup is normal (the idle process
+    became the job), not a wedged pool, so it must NOT trigger a restart."""
+    monkeypatch.setenv("LIVEKIT_URL", "wss://test.livekit.cloud")
+    cm = _build_call_manager()
+    cm._worker_proc = _alive_worker()
+    assert not ready_path.exists()
+
+    cm._active_job = True
+    assert cm._is_idle_pending_rewarm() is False
+    cm._active_job = False
+
+    cm._whatsapp_call_joining = True
+    assert cm._is_idle_pending_rewarm() is False
+    cm._whatsapp_call_joining = False
+
+    cm._meet_session_id = "gmeet-1"
+    assert cm._is_idle_pending_rewarm() is False
+    cm._meet_session_id = None
+
+    # Back to a genuinely idle, unwarmed worker.
+    assert cm._is_idle_pending_rewarm() is True
+
+
+def test_idle_pending_rewarm_false_when_clients_connected(monkeypatch, ready_path):
+    monkeypatch.setenv("LIVEKIT_URL", "wss://test.livekit.cloud")
+    cm = _build_call_manager()
+    cm._worker_proc = _alive_worker()
+    socket_server = MagicMock()
+    socket_server.has_connected_clients = True
+    cm._socket_server = socket_server
+    assert cm._is_idle_pending_rewarm() is False
+
+
+def test_idle_pending_rewarm_false_when_worker_dead(monkeypatch, ready_path):
+    monkeypatch.setenv("LIVEKIT_URL", "wss://test.livekit.cloud")
+    cm = _build_call_manager()
+    dead = MagicMock()
+    dead.poll.return_value = -9
+    cm._worker_proc = dead
+    # A dead worker is handled by the exit branch, not the re-warm branch.
+    assert cm._is_idle_pending_rewarm() is False
+
+
+@pytest.mark.asyncio
+async def test_restart_worker_terminates_and_restarts(monkeypatch):
+    monkeypatch.setenv("LIVEKIT_URL", "wss://test.livekit.cloud")
+    cm = _build_call_manager()
+    proc = _alive_worker()
+    cm._worker_proc = proc
+
+    import unity.conversation_manager.domains.call_manager as cm_mod
+
+    terminated: list = []
+    monkeypatch.setattr(cm_mod, "terminate_process", lambda p, _t: terminated.append(p))
+    restarted: list = []
+    monkeypatch.setattr(cm, "start_persistent_worker", lambda: restarted.append(True))
+
+    await cm._restart_worker()
+
+    assert terminated == [proc]
+    assert restarted == [True]
+
+
 @pytest.mark.asyncio
 async def test_await_ready_returns_immediately_when_ready(monkeypatch, ready_path):
     monkeypatch.setenv("LIVEKIT_URL", "wss://test.livekit.cloud")

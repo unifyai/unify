@@ -76,6 +76,15 @@ DISPATCH_ACTIVATION_TIMEOUT_S = 90.0
 # the cap exists so a wedged worker surfaces as a failure rather than hanging.
 NEW_CALL_READINESS_TIMEOUT_S = 30.0
 
+# How long the worker may stay alive-but-unwarmed while the manager is fully
+# idle before the watchdog force-restarts it to recover. The normal post-job
+# re-warm completes in seconds (LiveKit warms the replacement at dispatch time,
+# not job end), so a stall this long means the idle pool is genuinely wedged —
+# e.g. a prewarmed process was consumed by a dispatch that never became a live
+# job (clearing WORKER_READY) and no replacement ever re-signaled. Without this
+# the call-starting tools stay masked forever (the Meet -> WhatsApp-call hang).
+WORKER_REWARM_STALL_S = 20.0
+
 # Fallback briefing for an outbound call that somehow reaches dispatch without a
 # mission context. An agent-initiated call must never open "blind", so even
 # here the agent is told to open with purpose rather than wait in silence.
@@ -303,10 +312,62 @@ class LivekitCallManager:
 
         self.start_persistent_worker()
 
+    def _is_idle_pending_rewarm(self) -> bool:
+        """Worker is alive and the manager is fully idle, yet no freshly prewarmed
+        idle process is available.
+
+        This is the recoverable "alive but never re-warmed" state: nothing is in
+        progress (no live call/meet, no WhatsApp-call setup, no connected IPC
+        client) so a new call *should* be placeable, but ``WORKER_READY_PATH`` is
+        missing — the idle pool is wedged. Left alone this strands the
+        call-starting tools forever, so the watchdog force-restarts the worker
+        once it has persisted (see ``WORKER_REWARM_STALL_S``).
+        """
+        if not os.environ.get("LIVEKIT_URL"):
+            return False
+        if self._worker_proc is None or self._worker_proc.poll() is not None:
+            return False
+        if (
+            self.has_active_call
+            or self.has_active_meet()
+            or self._whatsapp_call_joining
+        ):
+            return False
+        if (
+            self._socket_server is not None
+            and self._socket_server.has_connected_clients
+        ):
+            return False
+        from unity.conversation_manager.medium_scripts.worker import (
+            WORKER_READY_PATH,
+        )
+
+        return not os.path.exists(WORKER_READY_PATH)
+
+    async def _restart_worker(self) -> None:
+        """Terminate the live worker and start a fresh one to re-warm the pool."""
+        proc = self._worker_proc
+        self._worker_proc = None
+        if proc is not None and proc.poll() is None:
+            try:
+                await asyncio.to_thread(terminate_process, proc, 5)
+            except Exception as exc:
+                LOGGER.warning(
+                    f"{ICONS['ipc']} [LivekitCallManager] Failed to terminate "
+                    f"wedged worker during re-warm: {exc}",
+                )
+        from unity.conversation_manager.medium_scripts.worker import (
+            clear_worker_signal_files,
+        )
+
+        clear_worker_signal_files()
+        self.start_persistent_worker()
+
     async def _worker_watchdog(self) -> None:
-        """Restart the persistent worker if it exits unexpectedly,
-        and emit an INFO log when the warm pool is ready."""
+        """Restart the persistent worker if it exits unexpectedly, recover a
+        wedged idle pool, and emit an INFO log when the warm pool is ready."""
         ready_logged = False
+        unwarmed_since: float | None = None
         while True:
             await asyncio.sleep(2)
             if self._worker_proc is None:
@@ -318,13 +379,30 @@ class LivekitCallManager:
                 )
                 self._worker_proc = None
                 ready_logged = False
+                unwarmed_since = None
                 from unity.conversation_manager.medium_scripts.worker import (
                     clear_worker_signal_files,
                 )
 
                 clear_worker_signal_files()
                 self.start_persistent_worker()
-            elif not ready_logged:
+                continue
+            if self._is_idle_pending_rewarm():
+                now = time.monotonic()
+                if unwarmed_since is None:
+                    unwarmed_since = now
+                elif now - unwarmed_since >= WORKER_REWARM_STALL_S:
+                    LOGGER.warning(
+                        f"{ICONS['ipc']} [LivekitCallManager] Worker alive but idle "
+                        f"pool unwarmed for {WORKER_REWARM_STALL_S:.0f}s; "
+                        "force-restarting to recover call readiness",
+                    )
+                    ready_logged = False
+                    unwarmed_since = None
+                    await self._restart_worker()
+                continue
+            unwarmed_since = None
+            if not ready_logged:
                 from unity.conversation_manager.medium_scripts.worker import (
                     WORKER_READY_PATH,
                 )
