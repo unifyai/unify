@@ -195,11 +195,11 @@ async def test_publish_slow_brain_guidance_speak_mode():
 
     await cm._publish_slow_brain_fast_brain_guidance(
         message=spoken,
-        should_speak=True,
     )
 
     assert len(published) == 1
     notif = published[0]
+    # guide_voice_agent is speak-only: published guidance always speaks.
     assert notif.should_speak is True
     assert notif.message == spoken
 
