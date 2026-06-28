@@ -44,7 +44,9 @@ load_dotenv()
 from unity.conversation_manager.events import *
 from unity.conversation_manager.utils import dispatch_livekit_agent
 from unity.conversation_manager.prompt_builders import (
+    SMALLTALK_DEFER_SENTINEL,
     build_opening_greeting_messages,
+    build_smalltalk_messages,
     build_voice_agent_prompt,
 )
 from unity.conversation_manager.tracing import (
@@ -364,9 +366,12 @@ class Assistant(Agent):
         # carry no substantive content worth re-surfacing.
         self._continuation_full_text: str | None = None
         # Cancels the speculatively-started slow-brain run for this turn the
-        # instant the fast brain resumes a line itself (CONTINUE), so the slow
-        # brain cannot also re-deliver the same content.
+        # instant the fast brain resolves it itself (CONTINUE or SMALLTALK), so
+        # the slow brain cannot also re-deliver / re-answer the same content.
         self._publish_fast_brain_continued: Callable | None = None
+        # Fully answers a pure small-talk turn from persona + recent history, or
+        # returns None to defer to the slow brain. Set in the entrypoint.
+        self._generate_smalltalk_reply: Callable | None = None
 
         super().__init__(instructions=instructions)
 
@@ -513,13 +518,45 @@ class Assistant(Agent):
             if not already_deferred:
                 await self._capture_screenshots_for_llm(chat_ctx)
 
+            # Race the small-talk reply against the lean filler. If this turn is
+            # pure small talk (greeting, biographical, simple self-context,
+            # repeat), the fast brain answers it in full and cancels the eager
+            # slow-brain run; otherwise it defers and the filler covers the gap
+            # while the slow brain composes the real answer. Running both
+            # concurrently keeps DEFER turns at the filler's latency.
             _log.info("Selecting fast reply… (llm_node_start)")
-            phrase = await select_fast_reply(
-                user_text,
-                recent_assistant_text,
-                already_deferred=already_deferred,
-                guidance=self._fast_brain_guidance,
+            smalltalk_task = (
+                asyncio.create_task(self._generate_smalltalk_reply(user_text))
+                if self._generate_smalltalk_reply is not None
+                else None
             )
+            buffer_task = asyncio.create_task(
+                select_fast_reply(
+                    user_text,
+                    recent_assistant_text,
+                    already_deferred=already_deferred,
+                    guidance=self._fast_brain_guidance,
+                ),
+            )
+
+            smalltalk = await smalltalk_task if smalltalk_task is not None else None
+            if smalltalk is not None:
+                buffer_task.cancel()  # the filler is not needed
+                if self._slow_brain_responded_turn >= my_turn:
+                    _log.info("Small talk suppressed: slow brain already responded")
+                    return
+                self._buffers_since_slow_reply += 1
+                # The fast brain fully answered this turn; cancel the eager
+                # slow-brain run so it does not also answer the same thing.
+                if self._publish_fast_brain_continued is not None:
+                    await self._publish_fast_brain_continued()
+                yield ChatChunk(
+                    id=f"fast-brain-smalltalk-{monotonic_ms()}",
+                    delta=ChoiceDelta(role="assistant", content=smalltalk),
+                )
+                return
+
+            phrase = await buffer_task
 
             # Re-check: the slow brain may have answered during selection. If so,
             # drop the now-stale filler so it does not trail the real answer.
@@ -727,6 +764,11 @@ _CALL_OPENING_MODES = {"speak", "simulated", "silent", "briefed", "recorded"}
 # their speech ensures the opener lands when they are actually listening, instead
 # of into dead air right after the line connects.
 OUTBOUND_OPENING_TRIGGER_TIMEOUT_S = 5.0
+
+# Ceiling on a fast-brain small-talk reply. A social / biographical / self-context
+# answer is a sentence or two; anything longer means the model overreached into a
+# substantive answer (the slow brain's job), so we drop it and defer instead.
+_MAX_SMALLTALK_CHARS = 300
 
 # When the assistant ends a Unify Meet, we first tell the Console to leave the
 # room itself (so its WebRTC peer connection and SCTP data channels close
@@ -2295,13 +2337,13 @@ async def entrypoint(ctx: agents.JobContext):
     assistant._publish_voice_interrupt = _publish_voice_interrupt
 
     async def _publish_fast_brain_continued() -> None:
-        """Cancel the eagerly-started slow-brain run when the fast brain resumes.
+        """Cancel the eagerly-started slow-brain run when the fast brain answers.
 
         The slow brain is triggered the moment the user's utterance lands; if the
-        fast brain then resumes the interrupted line itself, that run would
-        re-deliver the same content, so we cancel it. The fast classifier (~1s)
-        always beats the slow brain (~8-12s), so the run is still mid-flight and
-        is dropped before producing speech.
+        fast brain then resolves the turn itself - resuming the interrupted line
+        or fully answering a small-talk turn - that run would also answer, so we
+        cancel it. The fast brain (~1s) always beats the slow brain (~8-12s), so
+        the run is still mid-flight and is dropped before producing speech.
         """
         await event_broker.publish(
             FastBrainContinued.topic,
@@ -2856,6 +2898,44 @@ async def entrypoint(ctx: agents.JobContext):
             authoritative_briefing=authoritative_briefing,
         )
         return await greeting_client.generate(messages=greeting_messages)
+
+    async def _generate_smalltalk_reply(user_text: str) -> str | None:
+        """Fully answer a pure small-talk turn, or return None to defer.
+
+        Pure social / biographical / simple self-context / repeat-last turns are
+        answered directly from the assistant persona plus recent history, so the
+        caller is not told "give me a moment" for a greeting. Anything that needs
+        the user's data, tools, actions, or a real-world lookup yields the
+        ``DEFER`` sentinel -> None, and the slow brain (already running) handles
+        it. Fail-safe to None on an over-long reply (overreach), empty, or error.
+        """
+        from unity.common.llm_client import new_llm_client
+
+        if not (user_text or "").strip():
+            return None
+        try:
+            client = new_llm_client(
+                model=SETTINGS.conversation.FAST_BRAIN_MODEL,
+                origin="fast_brain_smalltalk",
+                reasoning_effort="low",
+            )
+            messages = build_smalltalk_messages(
+                system_prompt=system_prompt,
+                history_messages=_extract_chat_messages(session.history, tail=8),
+                user_text=user_text.strip(),
+            )
+            raw = await client.generate(messages=messages)
+            text = " ".join(str(raw).split()).strip().strip("\"'“”‘’")
+            if not text or text.upper().startswith(SMALLTALK_DEFER_SENTINEL):
+                return None
+            if len(text) > _MAX_SMALLTALK_CHARS:
+                return None
+            return text
+        except Exception as exc:  # never let small-talk selection break the turn
+            _log.info(f"Small-talk selection failed; deferring: {exc}")
+            return None
+
+    assistant._generate_smalltalk_reply = _generate_smalltalk_reply
 
     def _inject_opening_system_context(text: str) -> None:
         """Seed the call with a durable system briefing before the opener.

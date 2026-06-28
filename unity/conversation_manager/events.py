@@ -248,11 +248,12 @@ class VoiceInterrupt(Event):
 
 @dataclass
 class FastBrainContinued(Event):
-    """The fast brain resumed an interrupted line itself (CONTINUE).
+    """The fast brain resolved this turn itself (CONTINUE or SMALLTALK).
 
-    Signals the CM to cancel the slow-brain run that was eagerly started for this
-    user turn, so the slow brain does not also re-deliver the same content. Emitted
-    only when the fast brain takes ownership of the turn's reply.
+    Emitted when the fast brain takes full ownership of the turn's reply - either
+    resuming an interrupted line verbatim (continuation) or fully answering a pure
+    small-talk turn. Signals the CM to cancel the slow-brain run that was eagerly
+    started for this user turn, so the slow brain does not also answer.
     """
 
     topic: ClassVar[str | None] = "app:comms:fast_brain_continued"

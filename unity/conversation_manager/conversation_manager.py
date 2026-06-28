@@ -1100,12 +1100,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
     async def cancel_inflight_slow_brain(self) -> None:
         """Cancel the slow-brain run started for the current voice turn.
 
-        Invoked when the fast brain resumes an interrupted line itself
-        (``FastBrainContinued``): the eagerly-started run would otherwise
-        re-deliver the same content. Cancels both the in-flight and queued runs;
-        the Debouncer refuses to cancel a run already in tool-commit (i.e. the
-        slow brain already speaking), so a run that somehow finished first is left
-        untouched.
+        Invoked when the fast brain resolves the turn itself
+        (``FastBrainContinued`` - resuming an interrupted line or fully answering
+        a small-talk turn): the eagerly-started run would otherwise also answer.
+        Cancels both the in-flight and queued runs; the Debouncer refuses to
+        cancel a run already in tool-commit (i.e. the slow brain already
+        speaking), so a run that somehow finished first is left untouched.
         """
         await self.debouncer._cancel_tasks(pending=True, running=True)
 
