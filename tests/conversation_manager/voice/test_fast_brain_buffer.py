@@ -225,24 +225,42 @@ def test_resume_text_empty_full_is_empty():
 # ---------------------------------------------------------------------------
 
 
-def test_continuation_prompt_resumes_on_call_answer_and_why_calling():
-    """The prompt must steer toward resuming (not DEFER) when the caller answers
-    with a greeting or asks why you're calling - the most obvious resume cases."""
+def test_continuation_prompt_is_classifier_resuming_on_greetings():
+    """The prompt must be a CONTINUE/DEFER classifier that steers toward resuming
+    when the caller answers with a greeting or asks why you're calling."""
     p = fast_brain_buffer._CONTINUATION_PROMPT
-    assert "Default to RESUMING" in p
-    # Call/message-answer greetings and "why are you calling" are explicitly
-    # called out as resume (not defer) cases.
+    assert "CONTINUE" in p
+    assert "DEFER" in p
+    # Call-answer greetings and "why are you calling" are explicit CONTINUE cases.
     assert "Hello?" in p
     assert "Why are you calling?" in p
     assert "NOT reasons to defer" in p
-    assert "DEFER" in p  # the sentinel is still documented
+
+
+def test_resume_lead_in_bank_has_variety():
+    bank = fast_brain_buffer._RESUME_LEAD_INS
+    assert len(bank) >= 5
+    assert len(set(bank)) == len(bank)  # all unique
 
 
 @pytest.mark.asyncio
-async def test_continuation_returns_lead_in(monkeypatch):
-    _patch_client(monkeypatch, raw="Sorry — as I was saying,")
+async def test_continuation_resumes_with_fixed_lead_in(monkeypatch):
+    _patch_client(monkeypatch, raw="CONTINUE")
     out = await select_continuation("the next step is to click Connect Slack.", "okay")
-    assert out == "Sorry — as I was saying,"
+    # The lead-in comes from the fixed bank, NOT from the model.
+    assert out in fast_brain_buffer._RESUME_LEAD_INS
+
+
+@pytest.mark.asyncio
+async def test_continuation_lead_in_never_echoes_resume(monkeypatch):
+    """Regression guard for the duplication bug: the lead-in is always a fixed
+    bridge and never contains the resumed content."""
+    resume = "I hear you, Daniel — you're right. I did know the answer."
+    # Even if the model echoes the resume (the old failure), we ignore its text.
+    _patch_client(monkeypatch, raw=resume)
+    out = await select_continuation(resume, "my name's Daniel")
+    assert out in fast_brain_buffer._RESUME_LEAD_INS
+    assert "I hear you" not in out
 
 
 @pytest.mark.asyncio
@@ -264,13 +282,6 @@ async def test_continuation_empty_inputs_skip_llm(monkeypatch):
 
     assert await select_continuation("", "okay") is None
     assert await select_continuation("some remainder", "   ") is None
-
-
-@pytest.mark.asyncio
-async def test_continuation_overlong_lead_in_defers(monkeypatch):
-    long_lead_in = "x" * (fast_brain_buffer._MAX_LEAD_IN_CHARS + 1)
-    _patch_client(monkeypatch, raw=long_lead_in)
-    assert await select_continuation("remainder text", "okay") is None
 
 
 @pytest.mark.asyncio
