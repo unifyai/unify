@@ -1965,54 +1965,28 @@ class ConversationManagerBrainActionTools:
         self,
         *,
         message: str,
-        should_speak: bool = False,
-        fast_brain_note: str = "",
     ) -> dict[str, Any]:
         """
-        Relay information or trigger speech on the Voice Agent during a live call.
+        Speak a line to the caller during a live call.
 
-        Call this tool **in parallel** with your action tool (``wait``, ``act``,
-        ``send_sms``, etc.). If you have nothing to relay or say, simply omit
-        this tool call entirely (BLOCK).
+        I have exactly two options on each turn: SPEAK or WAIT.
 
-        **On internal calls** (calls with colleagues / system contacts), the
-        Voice Agent already receives system events (action progress, completions,
-        results) as silent context automatically. You do not need to repeat event
-        bodies in ``message`` — use this tool for the **speech decision** when
-        the caller should hear a concise spoken line now.
+        - **SPEAK** — call this tool with ``message`` set to the exact words to
+          say. They are spoken verbatim via TTS. I call it **in parallel** with my
+          action tool (``wait``, ``act``, ``send_sms``, etc.).
+        - **WAIT** — to stay silent, I simply omit this tool and call ``wait``.
 
-        **On external calls** (calls with non-system contacts), the Voice Agent
-        has no visibility into system events. Use ``message`` to relay what it
-        should know and optionally speak.
-
-        **Modes:**
-
-        1. **SPEAK** — ``should_speak=True`` with ``message`` set to the exact
-           spoken line. The same text is injected as silent context and spoken
-           verbatim via TTS.
-
-        2. **NOTIFY** (default) — ``should_speak=False``. Inject ``message`` as
-           silent background context for the Voice Agent's next user-initiated turn.
-
-        3. **BLOCK** — Do not call this tool at all.
+        There is no silent-guidance or delegation option: I either say something
+        now, or I say nothing. The Voice Agent only ever fills the latency gap
+        with a brief filler phrase; everything the caller actually hears is the
+        ``message`` I speak here.
 
         Write ``message`` in the language currently spoken on the call.
 
         Args:
-            message: Text for the Voice Agent. Injected as silent context unless
-                the source is proactive speech. When ``should_speak`` is True,
-                this exact text is also spoken via TTS. Use **spoken prose** (no
-                numbered lists, bullets, or outline labels — TTS reads them
-                literally).
-            should_speak: When True, speak ``message`` aloud immediately via TTS.
-            fast_brain_note: An authorized fact the Voice Agent (fast brain) may
-                use to answer the caller *instantly*, e.g. a quiz answer so it can
-                confirm a guess without waiting for me. It is NEVER spoken on its
-                own and the fast brain is separately instructed never to reveal it
-                pre-emptively. Pass it alongside (or just before) the moment the
-                caller is expected to respond. A new note replaces the previous
-                one; an empty value leaves any existing note unchanged (it is
-                cleared automatically when the voice channel changes).
+            message: The exact words to speak to the caller now, spoken verbatim
+                via TTS. Use **spoken prose** (no numbered lists, bullets, or
+                outline labels — TTS reads them literally).
         """
         return {"status": "guidance_noted"}
 

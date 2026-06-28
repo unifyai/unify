@@ -69,25 +69,6 @@ reassure them it's coming, anchored to what they're waiting on ("Bear with me,
 almost there with your {thing}.") or, if they just gave you space, simply thank
 them."""
 
-# Scoped block, present ONLY when the slow brain has delegated an answer. It is
-# the single, deliberate exception to the HARD RULE above.
-_DELEGATED_ANSWER_NOTE = """\
-EXCEPTION — the smarter system has authorized you to confirm ONE specific thing to
-this caller, described here:
-
-{note}
-
-This is the ONLY case where you may give real information, and ONLY like this:
-- React solely to the caller's OWN guess/answer. If they have actually guessed,
-  tell them whether it's right — warm and brief: "Yes, exactly!" / "Spot on!" /
-  "Good guess, but not quite — want another go?".
-- You must NEVER state, spell, hint at, or narrow down the answer before they have
-  guessed it themselves. Giving it away early is the worst possible outcome.
-- If they ask you to "just tell me", say they give up, or ask for a hint, do NOT
-  reveal it — gently keep them guessing or say the smarter system will follow up.
-- Confirm only. Do not explain further, add trivia, or move on to next steps.
-- If they have not actually guessed yet, ignore this entirely and reply as normal."""
-
 
 def _clean(raw: object) -> str:
     """Normalize whitespace and strip wrapping quotes from the model output."""
@@ -205,7 +186,6 @@ async def select_fast_reply(
     user_text: str,
     recent_assistant_text: str = "",
     already_deferred: bool = False,
-    delegated_answer: str = "",
 ) -> str:
     """Return the fast brain's brief, in-the-moment reply for the utterance.
 
@@ -213,11 +193,7 @@ async def select_fast_reply(
     a substantive answer. ``recent_assistant_text`` is the assistant's previous
     spoken line (given as context + an anti-repeat nudge). ``already_deferred``
     marks a repeated deferral in the same wait streak, so the reply reassures
-    rather than starting a fresh lookup. ``delegated_answer`` is an authorized
-    fact (e.g. a quiz answer) the slow brain handed over so the fast brain may
-    confirm the caller's guess instantly; when present it adds a scoped exception
-    block (with heavy never-reveal-early enforcement) - it is the only path by
-    which the fast brain may give real information.
+    rather than starting a fresh lookup.
 
     Fail-safe: returns the default phrase on empty input, an over-long reply
     (model overreaching into a real answer), or any error.
@@ -225,14 +201,6 @@ async def select_fast_reply(
     if not (user_text or "").strip():
         return _DEFAULT_PHRASE
     messages = [{"role": "system", "content": _FAST_REPLY_PROMPT}]
-    note = (delegated_answer or "").strip()
-    if note:
-        messages.append(
-            {
-                "role": "system",
-                "content": _DELEGATED_ANSWER_NOTE.format(note=note),
-            },
-        )
     if already_deferred:
         messages.append({"role": "system", "content": _ALREADY_DEFERRED_NOTE})
     prev = (recent_assistant_text or "").strip()

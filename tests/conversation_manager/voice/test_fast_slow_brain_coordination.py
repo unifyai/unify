@@ -285,9 +285,13 @@ class TestSlowBrainDecisionBoundaries:
         assert (
             "message" in guide_sig.parameters
         ), "guide_voice_agent() must accept a message parameter"
+        # guide_voice_agent is now speak-only: no silent-guidance / delegation params.
         assert (
-            "should_speak" in guide_sig.parameters
-        ), "guide_voice_agent() must accept a should_speak parameter"
+            "should_speak" not in guide_sig.parameters
+        ), "guide_voice_agent() must be speak-only (no should_speak)"
+        assert (
+            "fast_brain_note" not in guide_sig.parameters
+        ), "guide_voice_agent() must not support delegation (no fast_brain_note)"
 
         # wait() should NOT have call_guidance params (moved to standalone tool)
         wait_sig = inspect.signature(ConversationManagerBrainActionTools.wait)
@@ -630,17 +634,16 @@ class TestRapidUtteranceHandling:
 
 @pytest.mark.asyncio
 class TestFastBrainNotificationSpeakMode:
-    """Verify that guide_voice_agent's should_speak and message
-    parameters propagate correctly through the FastBrainNotification event to the
-    fast brain."""
+    """Verify that guide_voice_agent (now speak-only) propagates the spoken line
+    correctly through the FastBrainNotification event to the fast brain."""
 
-    async def test_should_speak_params_carried_through_to_event(
+    async def test_speak_params_carried_through_to_event(
         self,
         initialized_cm,
     ):
-        """When the slow brain calls guide_voice_agent with should_speak=True
-        and message, the published FastBrainNotification event must carry both
-        fields so the fast brain can speak via TTS."""
+        """When the slow brain calls guide_voice_agent (speak-only), the published
+        FastBrainNotification event must carry the message and should_speak=True
+        so the fast brain speaks via TTS."""
         import json
 
         cm = initialized_cm.cm
@@ -682,11 +685,12 @@ class TestFastBrainNotificationSpeakMode:
                 ConversationManagerBrainActionTools.guide_voice_agent,
             )
             assert (
-                "should_speak" in guide_sig.parameters
-            ), "guide_voice_agent() must accept should_speak"
-            assert (
                 "message" in guide_sig.parameters
             ), "guide_voice_agent() must accept message"
+            # Speak-only: the silent-guidance param is gone.
+            assert (
+                "should_speak" not in guide_sig.parameters
+            ), "guide_voice_agent() must be speak-only"
 
             # Verify published guidance events carry the fields (even if
             # the LLM didn't use them this turn, the schema must support them)
@@ -885,6 +889,24 @@ class TestSlowBrainGuidanceDeliveryPrompt:
         # The caller must never be told a phrase "wasn't me" / came from elsewhere.
         assert "one single person" in flat
         assert "never disown" in flat
+
+    def test_voice_prompt_is_speak_or_wait_only(self):
+        """guide_voice_agent is speak-only: the prompt must not offer a NOTIFY /
+        silent-guidance / delegation mode, and must not reference should_speak."""
+        from unity.conversation_manager.prompt_builders import build_system_prompt
+
+        prompt = build_system_prompt(
+            bio="Test assistant.",
+            contact_id=1,
+            first_name="Alex",
+            surname="Demo",
+            is_voice_call=True,
+        ).flatten()
+
+        assert "should_speak" not in prompt
+        assert "fast_brain_note" not in prompt
+        # No silent NOTIFY mode; the slow brain SPEAKs or WAITs.
+        assert "NOTIFY" not in prompt
 
 
 # =============================================================================

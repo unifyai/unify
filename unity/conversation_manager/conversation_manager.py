@@ -1364,25 +1364,26 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self,
         *,
         message: str,
-        should_speak: bool,
         slow_brain_log_path: str = "",
-        fast_brain_note: str = "",
     ) -> None:
-        """Publish slow-brain ``guide_voice_agent`` output to the fast brain."""
-        if not message and not fast_brain_note:
+        """Publish a slow-brain spoken line (``guide_voice_agent``) to the fast brain.
+
+        ``guide_voice_agent`` is speak-only, so this always publishes a spoken
+        line (``should_speak=True``); there is no silent-guidance path.
+        """
+        if not message:
             return
         contact = self.get_active_contact()
         event = FastBrainNotification(
             contact=contact,
             message=message,
-            should_speak=should_speak,
+            should_speak=True,
             source="slow_brain",
             llm_log_path=slow_brain_log_path,
-            fast_brain_note=fast_brain_note,
         )
         self._session_logger.info(
             "call_notification",
-            f"Guide FastBrain (speak={should_speak}): {message}",
+            f"Guide FastBrain (speak): {message}",
         )
         event_json = event.to_json()
         await self.event_broker.publish(
@@ -2219,48 +2220,42 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # the fast brain subprocess (no dedup gate).
         if self.mode.is_voice:
             guidance_message = ""
-            should_speak = False
-            fast_brain_note = ""
             for tool_exec in result.tools:
                 if tool_exec.name == "guide_voice_agent":
                     args = tool_exec.args or {}
                     guidance_message = args.get("message", "")
-                    should_speak = args.get("should_speak", False)
-                    fast_brain_note = args.get("fast_brain_note", "")
                     break
 
             # A pending hang-up (recorded by the hang_up tool this turn) must not
-            # tear down the session until the spoken guidance has been delivered,
+            # tear down the session until the spoken line has been delivered,
             # otherwise the call ends mid-sentence. Reset the delivered signal
             # before publishing so we only observe THIS turn's delivery.
-            if self._pending_hang_up and should_speak and guidance_message:
+            if self._pending_hang_up and guidance_message:
                 self._inflight_speech_delivered.clear()
 
-            if guidance_message or fast_brain_note:
+            if guidance_message:
                 pending = getattr(client, "_pending_thinking_log", None)
                 slow_brain_log_path = (
                     pending.last_path or "" if pending is not None else ""
                 )
+                # guide_voice_agent is now speak-only: every call is spoken.
                 await self._publish_slow_brain_fast_brain_guidance(
                     message=guidance_message,
-                    should_speak=should_speak,
                     slow_brain_log_path=slow_brain_log_path,
-                    fast_brain_note=fast_brain_note,
                 )
-                # Stash SPEAK guidance for a render-only overlay so the next run
+                # Stash the spoken line for a render-only overlay so the next run
                 # (which may start before the real `[You]` utterance is recorded)
                 # sees what this turn just decided to say, treats it as already
                 # said, and does not repeat it. Cleared once the real utterance
                 # lands so future turns see only what was actually spoken.
-                if should_speak:
-                    self._stash_inflight_voice_speech(guidance_message)
+                self._stash_inflight_voice_speech(guidance_message)
 
-            # Perform any deferred hang-up only after the explanatory line has
-            # actually been spoken (or a barge-in truncated it), so the session
-            # never ends mid-utterance.
+            # Perform any deferred hang-up only after the spoken line has actually
+            # been delivered (or a barge-in truncated it), so the session never
+            # ends mid-utterance.
             if self._pending_hang_up:
                 await self._perform_deferred_hang_up(
-                    awaiting_speech=bool(should_speak and guidance_message),
+                    awaiting_speech=bool(guidance_message),
                 )
 
         self._session_logger.debug(

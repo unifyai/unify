@@ -346,10 +346,6 @@ class Assistant(Agent):
         self._pending_continuation: dict | None = None
         self._tts_seq = 0
         self._publish_voice_interrupt: Callable | None = None
-        # An authorized fact (e.g. a quiz answer) the slow brain delegated so the
-        # fast brain can confirm the caller's guess instantly. Never revealed
-        # pre-emptively (enforced in select_fast_reply). Cleared on medium change.
-        self._delegated_answer = ""
 
         super().__init__(instructions=instructions)
 
@@ -478,7 +474,6 @@ class Assistant(Agent):
                 user_text,
                 recent_assistant_text,
                 already_deferred=already_deferred,
-                delegated_answer=self._delegated_answer,
             )
 
             # Re-check: the slow brain may have answered during selection. If so,
@@ -2550,12 +2545,6 @@ async def entrypoint(ctx: agents.JobContext):
         should_speak = payload.get("should_speak", False)
         notification_source = payload.get("source", "")
         llm_log_path = payload.get("llm_log_path", "")
-        # A delegated answer the fast brain may use to confirm the caller's guess
-        # instantly (e.g. a quiz answer). A non-empty value replaces any prior
-        # note; empty leaves it unchanged (cleared on medium change elsewhere).
-        fast_brain_note = payload.get("fast_brain_note", "")
-        if fast_brain_note:
-            assistant._delegated_answer = fast_brain_note
         notification_id = content_trace_id("guid", message or spoken_message)
         triggers_turn = notification_source not in (
             "meet_interaction",
