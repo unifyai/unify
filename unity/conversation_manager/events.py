@@ -873,6 +873,10 @@ class FastBrainNotification(Event):
     source: str = ""
     agent_service_url: str = ""
     llm_log_path: str = ""
+    # Optional short note (bundled with a spoken line) the fast brain may use to
+    # give a basic direct reply to the caller's next message. Never spoken on its
+    # own; an empty value clears any prior note.
+    fast_brain_guidance: str = ""
 
 
 @dataclass

@@ -1965,21 +1965,24 @@ class ConversationManagerBrainActionTools:
         self,
         *,
         message: str,
+        fast_brain_guidance: str = "",
     ) -> dict[str, Any]:
         """
         Speak a line to the caller during a live call.
 
-        I have exactly two options on each turn: SPEAK or WAIT.
+        On each turn I SPEAK (call this tool with ``message``) or WAIT (omit it
+        and call ``wait``). The Voice Agent otherwise only fills the latency gap
+        with a brief filler; everything the caller actually hears is the
+        ``message`` I speak here. I call this **in parallel** with my action tool
+        (``wait``, ``act``, ``send_sms``, etc.).
 
-        - **SPEAK** — call this tool with ``message`` set to the exact words to
-          say. They are spoken verbatim via TTS. I call it **in parallel** with my
-          action tool (``wait``, ``act``, ``send_sms``, etc.).
-        - **WAIT** — to stay silent, I simply omit this tool and call ``wait``.
-
-        There is no silent-guidance or delegation option: I either say something
-        now, or I say nothing. The Voice Agent only ever fills the latency gap
-        with a brief filler phrase; everything the caller actually hears is the
-        ``message`` I speak here.
+        I may optionally attach ``fast_brain_guidance``: a short note the Voice
+        Agent may use to give a basic, direct reply to the caller's *very next*
+        message (e.g. confirm a fact I have just told it), without waiting for me.
+        It is never spoken on its own, the Voice Agent never volunteers it, and it
+        is ONLY honored when ``message`` is also set — I can never hand over
+        guidance without also speaking. It applies to the next moment only; my
+        next spoken turn replaces or clears it.
 
         Write ``message`` in the language currently spoken on the call.
 
@@ -1987,6 +1990,10 @@ class ConversationManagerBrainActionTools:
             message: The exact words to speak to the caller now, spoken verbatim
                 via TTS. Use **spoken prose** (no numbered lists, bullets, or
                 outline labels — TTS reads them literally).
+            fast_brain_guidance: Optional short note for the Voice Agent to give a
+                basic direct reply to the caller's next message. Never spoken;
+                only honored alongside ``message``. Include any "do not reveal
+                unless…" constraint explicitly if the note is sensitive.
         """
         return {"status": "guidance_noted"}
 
