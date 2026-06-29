@@ -2487,11 +2487,28 @@ class CodeActActor(BaseCodeActActor):
 
             Use this to check progress/state of ongoing ``session.act(...)``
             work when the inspected transcript lacks enough detail (for example,
-            placeholders or terse summaries). This is memory/history introspection,
+            placeholders or terse summaries).             This is memory/history introspection,
             not a fresh page read and not a way to trigger new actions.
             """
             _ = _parent_chat_context
-            return await computer_query(question)
+            # This tool is offered to every ``handle.ask()`` inspection loop
+            # whenever computer primitives exist, but the work being inspected
+            # is often not a browser/computer ``session.act`` (e.g. an SFTP file
+            # sync). In those cases the computer-agent backend may be unreachable
+            # or have nothing to report. A read-only progress probe failing must
+            # not look like an error: degrade to a plain answer so it cannot burn
+            # the inspection loop's failure budget or be mistaken for the
+            # inspected task failing.
+            try:
+                return await computer_query(question)
+            except Exception as exc:
+                return (
+                    "No computer-agent progress is available to inspect "
+                    f"({type(exc).__name__}). There may be no active browser/"
+                    "computer session for this work (for example, a file sync "
+                    "or shell command runs outside the computer agent). This is "
+                    "not a failure of the underlying task."
+                )
 
         return {"ask_computer_progress": ask_computer_progress}
 

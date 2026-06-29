@@ -34,6 +34,34 @@ SFTP_USER = "unity"
 # writebacks. Excluded from reads so the assistant never pulls its own edits.
 EDITS_DIR = ".unity-edits"
 
+# Subtrees never worth mirroring into the local stage: caches, dependency
+# trees, VCS metadata, and trashes bloat a bulk sync and carry no document
+# value. rclone exclude semantics: a leading "/" anchors to the served home
+# root; an unanchored pattern matches that path segment at any depth.
+_NOISE_EXCLUDES: tuple[str, ...] = (
+    f"/{EDITS_DIR}/**",
+    "/.cache/**",
+    "/.npm/**",
+    "/.cargo/**",
+    "/.rustup/**",
+    "/.gradle/**",
+    "/.m2/**",
+    "/.local/share/Trash/**",
+    "node_modules/**",
+    ".git/**",
+    "__pycache__/**",
+    ".venv/**",
+    "venv/**",
+)
+
+
+def _exclude_args() -> list[str]:
+    """Flatten the noise-exclude set into ``--exclude PAT`` rclone args."""
+    args: list[str] = []
+    for pattern in _NOISE_EXCLUDES:
+        args += ["--exclude", pattern]
+    return args
+
 
 def _utc_stamp() -> str:
     """Filesystem-safe UTC timestamp for versioned writeback names."""
@@ -157,8 +185,7 @@ class UserHomeSFTP:
                     "copyto",
                     f"{self.REMOTE_NAME}:/{rel}",
                     str(dest),
-                    "--exclude",
-                    f"/{EDITS_DIR}/**",
+                    *_exclude_args(),
                     "-v",
                 ],
                 operation=f"pull {rel}",
@@ -170,9 +197,14 @@ class UserHomeSFTP:
     async def sync(self, remote_path: str = "") -> list[str]:
         """Recursively mirror a home subtree into the local stage.
 
-        ``remote_path`` is home-relative (``""`` mirrors the whole home).
-        Copies every file under that subtree into ``local_root`` (excluding the
-        writeback edits dir) and returns the absolute local paths now staged.
+        Prefer :meth:`list_dir` + :meth:`pull` to fetch only what's needed; this
+        bulk mirror is for when the whole subtree is genuinely wanted. Caches,
+        dependency trees, VCS metadata and trashes are skipped (see
+        ``_NOISE_EXCLUDES``); progress is logged periodically as it runs.
+
+        ``remote_path`` is home-relative (``""`` mirrors the whole home, which
+        can be large and slow — scope to a subtree like ``"Documents"`` when
+        possible). Returns the absolute local paths now staged.
         """
         rel = _normalize_remote(remote_path)
         dest = self.local_root / rel
@@ -183,11 +215,15 @@ class UserHomeSFTP:
                     "copy",
                     f"{self.REMOTE_NAME}:/{rel}",
                     str(dest),
-                    "--exclude",
-                    f"/{EDITS_DIR}/**",
-                    "-v",
+                    *_exclude_args(),
+                    "--stats",
+                    "15s",
+                    "--stats-one-line",
+                    "--stats-log-level",
+                    "NOTICE",
                 ],
                 operation=f"sync {rel}",
+                stream=True,
             )
             if not ok:
                 raise RuntimeError(
@@ -238,8 +274,14 @@ class UserHomeSFTP:
         *,
         operation: str,
         capture: Optional[list[str]] = None,
+        stream: bool = False,
     ) -> bool:
-        """Run a single rclone command; append stdout to ``capture`` if given."""
+        """Run a single rclone command; append stdout to ``capture`` if given.
+
+        When ``stream`` is set, stderr is drained line-by-line and logged live
+        (so a long ``--stats`` mirror is observable as it runs) rather than
+        buffered until completion.
+        """
         cmd = ["rclone", "--config", self._config_path, *args]
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -247,14 +289,32 @@ class UserHomeSFTP:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await proc.communicate()
         except FileNotFoundError:
             LOGGER.error(f"{ICONS['file_sync']} [UserSFTP] rclone not installed")
             return False
+
+        if stream:
+            stderr_tail: list[str] = []
+            assert proc.stderr is not None
+            async for raw in proc.stderr:
+                line = raw.decode(errors="replace").rstrip()
+                if not line:
+                    continue
+                stderr_tail.append(line)
+                LOGGER.info(
+                    f"{ICONS['file_sync']} [UserSFTP] {operation}: {line}",
+                )
+            stdout = await proc.stdout.read() if proc.stdout else b""
+            await proc.wait()
+            stderr_summary = "\n".join(stderr_tail[-10:])
+        else:
+            stdout, stderr = await proc.communicate()
+            stderr_summary = stderr.decode() if stderr else ""
+
         if proc.returncode != 0:
             LOGGER.error(
                 f"{ICONS['file_sync']} [UserSFTP] {operation} failed: "
-                f"{(stderr.decode() if stderr else '')[:500]}",
+                f"{stderr_summary[:500]}",
             )
             return False
         if capture is not None and stdout:
