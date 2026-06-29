@@ -24,7 +24,7 @@ run("uses explicit UNITY_UNILLM_URL as the proxy base URL", () => {
 
   assert.strictEqual(config.provider, "openai-generic");
   assert.strictEqual(config.options.baseUrl, "https://gateway.example.com/unillm");
-  assert.strictEqual(config.options.model, "deepseek-v4-max@deepseek");
+  assert.strictEqual(config.options.model, "claude-4.6-sonnet@anthropic");
   assert.deepStrictEqual(config.options.headers, {
     Authorization: "Bearer uk-test",
   });
@@ -44,10 +44,10 @@ run("derives the proxy URL from UNITY_GATEWAY_URL", () => {
   );
 });
 
-run("prefers UNIFY_MODEL over the Unity production default", () => {
+run("falls back to vision-capable default when no model override is set", () => {
   assert.strictEqual(
-    resolveAgentServiceModel({ UNIFY_MODEL: "gpt-5@openai" }),
-    "gpt-5@openai",
+    resolveAgentServiceModel({}),
+    "claude-4.6-sonnet@anthropic",
   );
 });
 
