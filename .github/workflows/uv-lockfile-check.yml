@@ -57,11 +57,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-    # Check unity into ./unity so that `../unify` and `../unillm` (the
+    # Check unity into ./unity so that `../unisdk` and `../unillm` (the
     # editable paths declared in unity's pyproject.toml [tool.uv.sources])
     # resolve to the sibling checkouts we make below. Without this, uv
-    # lock --check fails with "Distribution not found at file:///../unify"
-    # because the workspace root has no `unify/` or `unillm/` dirs.
+    # lock --check fails with "Distribution not found at file:///../unisdk"
+    # because the workspace root has no `unisdk/` or `unillm/` dirs.
     - name: Checkout unity
       uses: actions/checkout@v6
       with:
@@ -70,8 +70,8 @@ jobs:
     - name: Checkout unify (sibling editable dep)
       uses: actions/checkout@v6
       with:
-        repository: unifyai/unify
-        path: unify
+        repository: unifyai/unisdk
+        path: unisdk
         # Unity on staging is locked against unify/unillm staging tips; PRs and
         # pushes targeting main must resolve against main siblings so the check
         # matches post-merge behavior on main.
