@@ -1,5 +1,5 @@
 ---
-description: How to navigate and read log files (logs/pytest/, logs/unity/, logs/unillm/, logs/unify/, logs/orchestra/, logs/all/)
+description: How to navigate and read log files (logs/pytest/, logs/unity/, logs/unillm/, logs/unisdk/, logs/orchestra/, logs/all/)
 globs: ["**/*"]
 alwaysApply: true
 ---
@@ -25,7 +25,7 @@ The `logs/` directory is gitignored, which affects tool availability:
 | `logs/pytest/` | Test output logs (datetime-prefixed subdirs per run) |
 | `logs/unity/` | Unity LOGGER output (async tool loop, managers) |
 | `logs/unillm/` | Raw LLM request/response traces |
-| `logs/unify/` | Unify SDK HTTP traces |
+| `logs/unisdk/` | Unify SDK HTTP traces |
 | `logs/orchestra/` | Orchestra session logs with per-request API traces |
 | `logs/all/` | Cross-repo OTEL traces |
 
