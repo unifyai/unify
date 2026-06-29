@@ -308,7 +308,7 @@ def _coordinator_onboarding_notification_text(
         "before mentioning any destination tab, dialog, or settings page. "
         "Stay celebratory but brief — do not re-list every prior step. If a voice "
         "call is active you MUST speak it by calling "
-        'guide_voice_agent(message="...", should_speak=True) — do not send a '
+        'guide_voice_agent(message="...") — do not send a '
         "chat message during a call (it is silent to the caller). Otherwise send a "
         "single chat message."
     )

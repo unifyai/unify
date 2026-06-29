@@ -2379,9 +2379,10 @@ async def entrypoint(ctx: agents.JobContext):
         transcript is resumed automatically. There is no timer: the candidate
         simply waits for that decision, so the fast brain can never lose the race.
 
-        Because continuations are themselves spoken through this same path (see
-        ``_speak_continuation``), interrupting a resumed line re-stashes a fresh
-        candidate, making continuation recursive to arbitrary depth.
+        A fast-brain continuation is itself registered here (the ``speech_created``
+        observer hands its reply handle to this function), so interrupting a
+        resumed line re-stashes a fresh candidate, making continuation recursive
+        to arbitrary depth.
 
         Pre-recorded openings are never passed here, so their hand-crafted tone
         is never continued by the live voice. Proactive silence-filler is never

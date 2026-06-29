@@ -1639,11 +1639,9 @@ class TestFastBrainGuidanceFlow:
         self,
         monkeypatch,
     ):
-        """Guidance with should_speak=False injects into both chat contexts
-        without calling session.say() directly.  The structured notification
-        evaluator (_schedule_notification_eval) handles the speak/wait
-        decision asynchronously — that path is covered by
-        test_structured_notification_reply.py."""
+        """Guidance with should_speak=False injects into both chat contexts as
+        silent awareness context, without calling session.say() directly (only
+        should_speak=True guidance is spoken)."""
         from livekit.agents import llm
         from unity.conversation_manager.medium_scripts import call as call_script
 
