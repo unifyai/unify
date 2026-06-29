@@ -150,9 +150,9 @@ def _make_table_view_request(
 def _get_active_project() -> str:
     """Get the currently active Unify project name."""
     try:
-        import unify
+        import unisdk
 
-        project = unify.active_project()
+        project = unisdk.active_project()
         return project if project else ""
     except Exception:
         return ""
@@ -194,7 +194,7 @@ def generate_table_view(
         project_name = _get_active_project()
         if not project_name:
             return TableViewResult(
-                error="No active Unify project. Set project with unify.activate().",
+                error="No active Unify project. Set project with unisdk.activate().",
                 title=title,
                 context=context,
             )
@@ -307,7 +307,7 @@ def generate_table_views_batch(
         if not project_name:
             return [
                 TableViewResult(
-                    error="No active Unify project. Set project with unify.activate().",
+                    error="No active Unify project. Set project with unisdk.activate().",
                     title=title,
                     context=ctx,
                 )

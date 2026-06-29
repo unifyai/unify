@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
 
-import unify
+import unisdk
 
 from sandboxes.conversation_manager.agent_service_bootstrap import (
     diagnose_agent_service_setup,
@@ -209,7 +209,7 @@ class ConfigurationManager:
             # Real managers require project connectivity. This is a lightweight probe; it
             # will fail early if the backend session is misconfigured.
             try:
-                _ = unify.get_project_commits(self._project_name)
+                _ = unisdk.get_project_commits(self._project_name)
             except Exception as exc:
                 return ValidationResult(
                     ok=False,
@@ -222,7 +222,7 @@ class ConfigurationManager:
     def snapshot_state(self) -> StateSnapshot:
         """Create a project snapshot (commit) for rollback during config switching."""
         created_at = time.time()
-        commit = unify.commit_project(
+        commit = unisdk.commit_project(
             self._project_name,
             commit_message=(
                 "ConversationManager sandbox auto-snapshot "
@@ -242,7 +242,7 @@ class ConfigurationManager:
         """Rollback the project to a prior snapshot (commit hash)."""
         if snapshot.project_name != self._project_name:
             raise ValueError("snapshot project_name does not match current project")
-        unify.rollback_project(self._project_name, snapshot.commit_hash)
+        unisdk.rollback_project(self._project_name, snapshot.commit_hash)
 
     def _validate_agent_service(self, agent_server_url: str) -> bool:
         # Avoid introducing a hard dependency on `requests`; prefer httpx if available.

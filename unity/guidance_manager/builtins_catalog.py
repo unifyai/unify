@@ -25,8 +25,8 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import unify
-from unify.utils.http import RequestError
+import unisdk
+from unisdk.utils.http import RequestError
 
 from ..common.builtins import (
     builtins_project,
@@ -89,7 +89,7 @@ def _ensure_catalog_storage(project: str) -> None:
     and ``function_ids``.
     """
     ensure_builtins_project(project)
-    unify.create_context(
+    unisdk.create_context(
         BUILTINS_GUIDANCE_CONTEXT,
         description="Builtin procedural guidance imported from the Agent Skills ecosystem.",
         unique_keys={"guidance_id": "int"},
@@ -97,12 +97,12 @@ def _ensure_catalog_storage(project: str) -> None:
     )
     # Pre-create the model schema so federated reads (from_fields
     # projections) are well-defined even before the first rows land.
-    unify.create_fields(
+    unisdk.create_fields(
         model_to_fields(Guidance),
         context=BUILTINS_GUIDANCE_CONTEXT,
         project=project,
     )
-    unify.create_context(
+    unisdk.create_context(
         BUILTINS_GUIDANCE_META_CONTEXT,
         description="Seeding state for the builtin guidance catalogue.",
         unique_keys={"meta_id": "int"},
@@ -114,14 +114,14 @@ def _delete_rows_by_ids(project: str, guidance_ids: List[int]) -> None:
     if not guidance_ids:
         return
     ids_expr = ", ".join(str(gid) for gid in sorted(set(guidance_ids)))
-    logs = unify.get_logs(
+    logs = unisdk.get_logs(
         project=project,
         context=BUILTINS_GUIDANCE_CONTEXT,
         filter=f"guidance_id in [{ids_expr}]",
         return_ids_only=True,
     )
     if logs:
-        unify.delete_logs(
+        unisdk.delete_logs(
             project=project,
             context=BUILTINS_GUIDANCE_CONTEXT,
             logs=logs,
@@ -164,7 +164,7 @@ def _insert_entries(project: str, entries: List[Dict[str, str]]) -> None:
         ).model_dump(mode="json")
         for entry in entries
     ]
-    unify.create_logs(
+    unisdk.create_logs(
         project=project,
         context=BUILTINS_GUIDANCE_CONTEXT,
         entries=rows,

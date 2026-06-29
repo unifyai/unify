@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 import time
 
 import pytest
-import unify
+import unisdk
 
 from tests.assertion_helpers import assertion_failed
 from tests.helpers import _handle_project
@@ -33,16 +33,16 @@ def _message(content: str, *, exchange_id: int) -> Message:
 
 def _delete_context_tree(root: str) -> None:
     try:
-        children = list(unify.get_contexts(prefix=f"{root}/").keys())
+        children = list(unisdk.get_contexts(prefix=f"{root}/").keys())
     except Exception:
         children = []
     for context in sorted(children, key=len, reverse=True):
         try:
-            unify.delete_context(context)
+            unisdk.delete_context(context)
         except Exception:
             pass
     try:
-        unify.delete_context(root)
+        unisdk.delete_context(root)
     except Exception:
         pass
 

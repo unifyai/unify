@@ -71,7 +71,7 @@ def touch_assistant_activity(assistant_id: int | str | None) -> bool:
         return False
 
     try:
-        from unify.utils import http
+        from unisdk.utils import http
 
         url = f"{base_url.rstrip('/')}/admin/assistant/{agent_id_int}/touch-activity"
         headers = {"Authorization": f"Bearer {admin_key}"}
@@ -126,7 +126,7 @@ def _post_followup_admin_action(
         return False
 
     try:
-        from unify.utils import http
+        from unisdk.utils import http
 
         url = f"{base_url.rstrip('/')}/admin/assistant/{agent_id_int}/{action_path}"
         headers = {"Authorization": f"Bearer {admin_key}"}

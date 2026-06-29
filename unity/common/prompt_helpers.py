@@ -167,7 +167,7 @@ def _lookup_assistant_timezone() -> _AssistantTimezoneLookup:
                 error_type="",
             )
 
-    import unify as _unify
+    import unisdk as _unify
     from unity.session_details import SESSION_DETAILS
 
     result: str | None = None

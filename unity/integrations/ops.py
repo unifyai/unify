@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-import unify
+import unisdk
 
 
 def _request_failed(helper_name: str, exc: Exception) -> dict[str, Any]:
@@ -31,7 +31,7 @@ def _request_failed(helper_name: str, exc: Exception) -> dict[str, Any]:
 
 def list_connections(**scope: Any) -> Any:
     try:
-        return unify.list_integration_connections(**_clean_scope(scope))
+        return unisdk.list_integration_connections(**_clean_scope(scope))
     except KeyError:
         raise
     except Exception as exc:
@@ -47,7 +47,7 @@ def run_tool(
     **scope: Any,
 ) -> Any:
     try:
-        return unify.run_integration_tool(
+        return unisdk.run_integration_tool(
             tool_id,
             arguments,
             confirmation_token=confirmation_token,
@@ -62,7 +62,7 @@ def run_tool(
 
 def get_tool_policy(connection_id: str, **scope: Any) -> Any:
     try:
-        return unify.get_integration_tool_policy(
+        return unisdk.get_integration_tool_policy(
             connection_id,
             **_clean_scope(scope),
         )
@@ -82,7 +82,7 @@ def patch_tool_policy(
     **scope: Any,
 ) -> Any:
     try:
-        return unify.patch_integration_tool_policy(
+        return unisdk.patch_integration_tool_policy(
             connection_id,
             tool_policies=tool_policies,
             bulk_approval_level=bulk_approval_level,
@@ -107,7 +107,7 @@ def approve_tool_execution(
     **owner_scope: Any,
 ) -> Any:
     try:
-        return unify.approve_integration_tool_execution(
+        return unisdk.approve_integration_tool_execution(
             audit_id,
             scope=scope,
             persist_policy=persist_policy,
@@ -133,7 +133,7 @@ def deny_tool_execution(
     **owner_scope: Any,
 ) -> Any:
     try:
-        return unify.deny_integration_tool_execution(
+        return unisdk.deny_integration_tool_execution(
             audit_id,
             scope=scope,
             persist_policy=persist_policy,
@@ -150,7 +150,7 @@ def deny_tool_execution(
 
 def test_connection(connection_id: str) -> Any:
     try:
-        return unify.test_integration_connection(connection_id)
+        return unisdk.test_integration_connection(connection_id)
     except KeyError:
         raise
     except Exception as exc:

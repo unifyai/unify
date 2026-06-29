@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-import unify
+import unisdk
 
 from unity.secret_manager.secret_manager import SecretManager
 
@@ -97,7 +97,7 @@ def test_filter_and_search_tolerate_null_description(secret_manager_context):
     # Insert a row with description=None directly, bypassing _create_secret
     # which coerces None→"". This reproduces how secrets appear when created
     # through Orchestra/Console without providing a description.
-    unify.log(
+    unisdk.log(
         context=sm._ctx,
         secret_id=0,
         name="SF_USER",
@@ -106,7 +106,7 @@ def test_filter_and_search_tolerate_null_description(secret_manager_context):
         new=True,
         mutable=True,
     )
-    unify.log(
+    unisdk.log(
         context=sm._ctx,
         secret_id=1,
         name="SF_PASS",

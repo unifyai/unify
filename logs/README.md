@@ -105,7 +105,7 @@ All logs are organized under `logs/` with seven main subdirectories:
 | `logs/pytest/` | Test output (stdout/stderr) | One `.txt` per test | Test-only |
 | `logs/unity/` | Unity LOGGER output (async tool loop, managers) | `unity.log` per session | `UNITY_LOG` + `UNITY_LOG_DIR` |
 | `logs/unillm/` | Raw LLM request/response traces | `.txt` files per request | `UNILLM_LOG_DIR` (+ `UNILLM_TERMINAL_LOG` for console) |
-| `logs/unify/` | Unify SDK HTTP traces | JSON files per request | `UNIFY_LOG_DIR` (+ `UNIFY_TERMINAL_LOG` for console) |
+| `logs/unify/` | Unify SDK HTTP traces | JSON files per request | `UNISDK_LOG_DIR` (+ `UNISDK_TERMINAL_LOG` for console) |
 | `logs/orchestra/` | Orchestra API traces | Per-request JSON with OpenTelemetry spans | `ORCHESTRA_LOG_DIR` |
 | `logs/magnitude/` | **Magnitude agent debug** (screenshots, act traces, coordinates) | Per-act bundles with PNGs | `MAGNITUDE_LOG_DIR` + `MAGNITUDE_DEBUG` |
 | `logs/all/` | **Cross-repo OTEL traces** | `{trace_id}.jsonl` per test | `*_OTEL` + `*_OTEL_LOG_DIR` |
@@ -221,8 +221,8 @@ logs/unify/
 The `trace_id` suffix (last 8 chars) enables correlation with pytest `[TRACE] TRACE_ID=...` output and Orchestra traces.
 
 **Environment variables:**
-- `UNIFY_TERMINAL_LOG=true` (default) - Enable terminal (console) output
-- `UNIFY_LOG_DIR=/path/to/logs` - Directory for file-based traces (independent of terminal)
+- `UNISDK_TERMINAL_LOG=true` (default) - Enable terminal (console) output
+- `UNISDK_LOG_DIR=/path/to/logs` - Directory for file-based traces (independent of terminal)
 
 ---
 
@@ -345,13 +345,13 @@ Some test suites use session-scoped fixtures to create shared seed data once, th
 async def contact_scenario(request):
     """Create seeded contacts once per session."""
     ctx = "tests/contact/Scenario"
-    unify.set_context(ctx, relative=False)
+    unisdk.set_context(ctx, relative=False)
 
     # Seed data (idempotent - skips if already exists)
     builder = await ScenarioBuilderContacts.create()
 
     # Commit the initial state for rollback
-    unify.commit_context(ctx, commit_message="Initial seed data")
+    unisdk.commit_context(ctx, commit_message="Initial seed data")
 
     return builder.cm, id_mapping
 
@@ -361,7 +361,7 @@ def contact_manager_scenario(contact_scenario):
     cm, id_map = contact_scenario
 
     # Reset to committed state
-    unify.rollback_context(ctx, commit_hash=initial_commit_hash)
+    unisdk.rollback_context(ctx, commit_hash=initial_commit_hash)
 
     yield cm, id_map
 ```
@@ -385,18 +385,18 @@ Browse to the `UnityTests` project and explore:
 **Via Python:**
 
 ```python
-import unify
+import unisdk
 
-unify.activate("UnityTests")
+unisdk.activate("UnityTests")
 
 # Query Combined context
-logs = unify.get_logs(context="Combined")
+logs = unisdk.get_logs(context="Combined")
 for log in logs:
     print(f"{log['test_fpath']}: {log['duration']:.2f}s")
 
 # Query a specific test's contacts
-unify.set_context("tests/contact_manager/test_basic/test_create/Contacts")
-contacts = unify.get_logs()
+unisdk.set_context("tests/contact_manager/test_basic/test_create/Contacts")
+contacts = unisdk.get_logs()
 ```
 
 ---
@@ -628,16 +628,16 @@ OTEL is enabled automatically by `parallel_run.sh`. To customize:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `UNITY_OTEL` | `true` (via parallel_run.sh) | Enable Unity OTEL tracing |
-| `UNIFY_OTEL` | `true` (via parallel_run.sh) | Enable Unify SDK OTEL tracing |
+| `UNISDK_OTEL` | `true` (via parallel_run.sh) | Enable Unify SDK OTEL tracing |
 | `UNILLM_OTEL` | `true` (via parallel_run.sh) | Enable Unillm OTEL tracing |
 | `UNITY_OTEL_LOG_DIR` | `logs/all/` | Unity span output directory |
-| `UNIFY_OTEL_LOG_DIR` | `logs/all/` | Unify span output directory |
+| `UNISDK_OTEL_LOG_DIR` | `logs/all/` | Unify span output directory |
 | `UNILLM_OTEL_LOG_DIR` | `logs/all/` | Unillm span output directory |
 | `ORCHESTRA_OTEL_LOG_DIR` | `logs/all/` | Orchestra span output directory |
 
 To disable OTEL tracing:
 ```bash
-parallel_run.sh --env UNITY_OTEL=false --env UNIFY_OTEL=false --env UNILLM_OTEL=false tests/
+parallel_run.sh --env UNITY_OTEL=false --env UNISDK_OTEL=false --env UNILLM_OTEL=false tests/
 ```
 
 ---
@@ -813,13 +813,13 @@ Orchestra's instrumentation is particularly detailed, capturing every SQL query 
 ### Querying Trace Data
 
 ```python
-import unify
+import unisdk
 
-unify.activate("UnityTests")
+unisdk.activate("UnityTests")
 
 # Get trace spans for a specific test
 trace_ctx = "tests/contact_manager/test_ask/test_ask_time_check/DefaultUser/DefaultAssistant/Trace"
-logs = unify.get_logs(context=trace_ctx, limit=100)
+logs = unisdk.get_logs(context=trace_ctx, limit=100)
 
 # Filter by service
 unity_spans = [log for log in logs if log.entries.get("service") == "unity"]

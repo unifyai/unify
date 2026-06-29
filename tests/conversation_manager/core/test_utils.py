@@ -1267,7 +1267,7 @@ class TestDispatchLivekitAgentCodeQuality:
     def test_uses_requests_post_not_http_post(self):
         """dispatch_livekit_agent must use requests.post directly, not http.post.
 
-        The http module from unify.utils has retry logic baked in. For this
+        The http module from unisdk.utils has retry logic baked in. For this
         fire-and-forget dispatch, we intentionally want NO retries - the timeout
         is expected and we should move on immediately. Using http.post would
         cause multiple retry attempts with backoff delays, defeating the purpose.

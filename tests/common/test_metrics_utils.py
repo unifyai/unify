@@ -2,20 +2,20 @@ from __future__ import annotations
 
 import uuid
 
-import unify
+import unisdk
 
 from unity.common.metrics_utils import reduce_logs, SUPPORTED_REDUCTION_METRICS
 
 
 def _create_test_context() -> str:
     ctx = f"tests/common/metrics_utils/{uuid.uuid4().hex}"
-    unify.create_context(
+    unisdk.create_context(
         ctx,
         unique_keys={"row_id": "int"},
         auto_counting={"row_id": None},
         description="metrics_utils test context",
     )
-    unify.create_fields(
+    unisdk.create_fields(
         {
             "row_id": {"type": "int"},
             "value": {"type": "float"},
@@ -24,9 +24,9 @@ def _create_test_context() -> str:
         context=ctx,
     )
     # Three simple rows for deterministic aggregates
-    unify.log(context=ctx, new=True, row_id=1, value=1.0, category="a")
-    unify.log(context=ctx, new=True, row_id=2, value=2.0, category="a")
-    unify.log(context=ctx, new=True, row_id=3, value=3.0, category="b")
+    unisdk.log(context=ctx, new=True, row_id=1, value=1.0, category="a")
+    unisdk.log(context=ctx, new=True, row_id=2, value=2.0, category="a")
+    unisdk.log(context=ctx, new=True, row_id=3, value=3.0, category="b")
     return ctx
 
 
@@ -46,7 +46,7 @@ def test_reduce_logs_single_key_and_filter():
         )
         assert mean_gt1 == 2.5
     finally:
-        unify.delete_context(ctx)
+        unisdk.delete_context(ctx)
 
 
 def test_reduce_logs_multi_key_and_group_by():
@@ -77,7 +77,7 @@ def test_reduce_logs_multi_key_and_group_by():
         )
         assert isinstance(grouped_multi, dict)
     finally:
-        unify.delete_context(ctx)
+        unisdk.delete_context(ctx)
 
 
 def test_reduce_logs_rejects_unsupported_metric():
@@ -91,4 +91,4 @@ def test_reduce_logs_rejects_unsupported_metric():
         except ValueError:
             pass
     finally:
-        unify.delete_context(ctx)
+        unisdk.delete_context(ctx)

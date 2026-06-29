@@ -212,7 +212,7 @@ class TestTouchAssistantActivity:
                 "unity.transcript_manager.activity_sync._admin_key",
                 return_value="test-admin-key",
             ),
-            patch.dict("sys.modules", {"unify.utils": MagicMock(http=fake_http)}),
+            patch.dict("sys.modules", {"unisdk.utils": MagicMock(http=fake_http)}),
         ):
             assert touch_assistant_activity(42) is True
 
@@ -240,7 +240,7 @@ class TestTouchAssistantActivity:
                 "unity.transcript_manager.activity_sync._admin_key",
                 return_value="key",
             ),
-            patch.dict("sys.modules", {"unify.utils": MagicMock(http=fake_http)}),
+            patch.dict("sys.modules", {"unisdk.utils": MagicMock(http=fake_http)}),
         ):
             assert touch_assistant_activity(42) is False
 
@@ -260,7 +260,7 @@ class TestTouchAssistantActivity:
                 "unity.transcript_manager.activity_sync._admin_key",
                 return_value="key",
             ),
-            patch.dict("sys.modules", {"unify.utils": MagicMock(http=fake_http)}),
+            patch.dict("sys.modules", {"unisdk.utils": MagicMock(http=fake_http)}),
         ):
             # Should not raise
             assert touch_assistant_activity(42) is False
@@ -300,7 +300,7 @@ class TestFollowupOptOutHelpers:
                 "unity.transcript_manager.activity_sync._admin_key",
                 return_value="test-admin-key",
             ),
-            patch.dict("sys.modules", {"unify.utils": MagicMock(http=http_module)}),
+            patch.dict("sys.modules", {"unisdk.utils": MagicMock(http=http_module)}),
         ):
             assert opt_out_of_inactivity_followups_via_orchestra(42) is True
 
@@ -321,7 +321,7 @@ class TestFollowupOptOutHelpers:
                 "unity.transcript_manager.activity_sync._admin_key",
                 return_value="test-admin-key",
             ),
-            patch.dict("sys.modules", {"unify.utils": MagicMock(http=http_module)}),
+            patch.dict("sys.modules", {"unisdk.utils": MagicMock(http=http_module)}),
         ):
             assert opt_in_to_inactivity_followups_via_orchestra(42) is True
 
@@ -354,7 +354,7 @@ class TestFollowupOptOutHelpers:
                 "unity.transcript_manager.activity_sync._admin_key",
                 return_value="key",
             ),
-            patch.dict("sys.modules", {"unify.utils": MagicMock(http=http_module)}),
+            patch.dict("sys.modules", {"unisdk.utils": MagicMock(http=http_module)}),
         ):
             assert opt_out_of_inactivity_followups_via_orchestra(42) is False
 
@@ -374,7 +374,7 @@ class TestFollowupOptOutHelpers:
                 "unity.transcript_manager.activity_sync._admin_key",
                 return_value="key",
             ),
-            patch.dict("sys.modules", {"unify.utils": MagicMock(http=http_module)}),
+            patch.dict("sys.modules", {"unisdk.utils": MagicMock(http=http_module)}),
         ):
             assert opt_out_of_inactivity_followups_via_orchestra(42) is False
             assert opt_in_to_inactivity_followups_via_orchestra(42) is False

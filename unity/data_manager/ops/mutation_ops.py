@@ -10,8 +10,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-import unify
-from unify.utils.http import RequestError
+import unisdk
+from unisdk.utils.http import RequestError
 
 from unity.common.filter_utils import normalize_filter_expr
 from unity.common.authorship import (
@@ -121,7 +121,7 @@ def update_rows_impl(
     filter_expr = normalize_filter_expr(filter)
 
     # Get matching rows
-    logs = unify.get_logs(context=context, filter=filter_expr)
+    logs = unisdk.get_logs(context=context, filter=filter_expr)
 
     if not logs:
         return 0
@@ -146,7 +146,7 @@ def update_rows_impl(
         # Delete old row
         log_id = log.id if hasattr(log, "id") else None
         if log_id:
-            unify.delete_logs(context=context, logs=[log_id])
+            unisdk.delete_logs(context=context, logs=[log_id])
 
         # Merge updates
         new_entries = {**existing, **cleaned_updates}
@@ -215,7 +215,7 @@ def delete_rows_impl(
     elif filter is not None:
         # Get log IDs using return_ids_only for efficiency
         filter_expr = normalize_filter_expr(filter)
-        result = unify.get_logs(
+        result = unisdk.get_logs(
             context=context,
             filter=filter_expr,
             return_ids_only=True,
@@ -227,7 +227,7 @@ def delete_rows_impl(
         return 0
 
     # Delete the logs
-    unify.delete_logs(
+    unisdk.delete_logs(
         context=context,
         logs=ids_to_delete,
         delete_empty_logs=delete_empty_rows,

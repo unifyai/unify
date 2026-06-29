@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 from datetime import datetime, UTC
-import unify
+import unisdk
 
 from unity.transcript_manager.transcript_manager import TranscriptManager
 from unity.transcript_manager.types.message import Message
@@ -44,7 +44,7 @@ def test_schema_roundtrip():
     tm.join_published()
 
     # 1) Column exists in Transcripts context
-    fields = unify.get_fields(context=tm._transcripts_ctx)
+    fields = unisdk.get_fields(context=tm._transcripts_ctx)
     assert "images" in fields, "images column should exist in Transcripts"
 
     # 2) Round-trip retrieval preserves references
@@ -106,7 +106,7 @@ def test_images_field_schema_enforced():
     tm = TranscriptManager()
 
     # 1) The Transcripts context should expose a nested JSON schema for the images field
-    fields = unify.get_fields(context=tm._transcripts_ctx)
+    fields = unisdk.get_fields(context=tm._transcripts_ctx)
     assert "images" in fields
     dtype = str(fields["images"].get("data_type"))
     # Expect array/list with object items including raw_image_ref + annotation and nested image_id
@@ -127,7 +127,7 @@ def test_images_field_schema_enforced():
             {"raw_image_ref": {"image_id": 101}, "annotation": "blue square"},
         ],
     }
-    _ = unify.log(context=tm._transcripts_ctx, **valid_payload, new=True, mutable=True)
+    _ = unisdk.log(context=tm._transcripts_ctx, **valid_payload, new=True, mutable=True)
 
     # 3) Invalid nested payload – wrong key name for image id → must be rejected
     invalid_payload_bad_key = {
@@ -137,7 +137,7 @@ def test_images_field_schema_enforced():
         ],
     }
     with pytest.raises(Exception):
-        unify.log(
+        unisdk.log(
             context=tm._transcripts_ctx,
             **invalid_payload_bad_key,
             new=True,
@@ -152,7 +152,7 @@ def test_images_field_schema_enforced():
         ],
     }
     with pytest.raises(Exception):
-        unify.log(
+        unisdk.log(
             context=tm._transcripts_ctx,
             **invalid_payload_bad_type,
             new=True,

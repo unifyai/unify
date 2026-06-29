@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
-import unify
+import unisdk
 
 from tests.helpers import _handle_project
 from unity.guidance_manager.builtins_catalog import (
@@ -49,13 +49,13 @@ def builtins_test_project(monkeypatch):
     monkeypatch.setattr(SETTINGS, "UNITY_BUILTINS_PROJECT", name)
     yield name
     try:
-        unify.delete_project(name)
+        unisdk.delete_project(name)
     except Exception:
         pass
 
 
 def _builtin_rows(project: str) -> dict[str, dict]:
-    logs = unify.get_logs(
+    logs = unisdk.get_logs(
         project=project,
         context=BUILTINS_GUIDANCE_CONTEXT,
         from_fields=["guidance_id", "title", "content", "is_builtin"],

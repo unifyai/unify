@@ -203,7 +203,7 @@ _EXECUTION_RULES = textwrap.dedent("""
     for clarification instead of writing misleading ownership fields.
 
     For read-only validation, direct SDK reads such as
-    `unify.get_logs(project="Assistants", context="<user_id>/<assistant_id>/...")`
+    `unisdk.get_logs(project="Assistants", context="<user_id>/<assistant_id>/...")`
     may be used when you know the exact absolute context and have access.
     Avoid direct cross-assistant writes through low-level SDK calls unless a
     documented primitive or user-confirmed administrative workflow explicitly

@@ -172,7 +172,7 @@ class TestUserDetailsFetchResilience:
     async def test_user_details_fetch_failure_uses_fallback(self, resilience_cm):
         cm = resilience_cm
         with patch(
-            "unity.contact_manager.system_contacts.unify.get_user_basic_info",
+            "unity.contact_manager.system_contacts.unisdk.get_user_basic_info",
             side_effect=ConnectionError("Orchestra unreachable"),
         ):
             await _init(cm, "resilience_userinfo")

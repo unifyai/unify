@@ -12,8 +12,8 @@ import functools
 from collections.abc import Callable, Sequence
 from typing import Any, Literal, TypedDict
 
-import unify
-from unify.utils.http import RequestError
+import unisdk
+from unisdk.utils.http import RequestError
 
 from unity.common.colleague_cache import (
     assistant_display_name as resolve_assistant_display_name,
@@ -329,7 +329,7 @@ class _CoordinatorToolCall:
             ],
         )
         try:
-            result = unify.create_assistant(
+            result = unisdk.create_assistant(
                 first_name=first_name,
                 surname=surname,
                 config=assistant_config,
@@ -411,7 +411,7 @@ class _CoordinatorToolCall:
             )
             return error
         try:
-            result = unify.delete_assistant(
+            result = unisdk.delete_assistant(
                 agent_id,
                 api_key=SESSION_DETAILS.unify_key,
             )
@@ -500,7 +500,7 @@ class _CoordinatorToolCall:
             )
             return error
         try:
-            result = unify.update_assistant_config(
+            result = unisdk.update_assistant_config(
                 agent_id,
                 dict(config),
                 api_key=SESSION_DETAILS.unify_key,
@@ -557,7 +557,7 @@ class _CoordinatorToolCall:
 
         list_all_org = resolved_organization_id is not None
         try:
-            assistants = unify.list_assistants(
+            assistants = unisdk.list_assistants(
                 phone=phone,
                 email=email,
                 agent_id=agent_id,
@@ -594,7 +594,7 @@ class _CoordinatorToolCall:
         if _is_tool_error(resolved_organization_id):
             return resolved_organization_id
         try:
-            return unify.list_org_members(
+            return unisdk.list_org_members(
                 resolved_organization_id,
                 api_key=SESSION_DETAILS.unify_key,
             )
@@ -676,7 +676,7 @@ class _CoordinatorToolCall:
             )
             return resolved_organization_id
         try:
-            result = unify.invite_org_member(
+            result = unisdk.invite_org_member(
                 resolved_organization_id,
                 normalized_email,
                 role_name=resolved_role_name,
@@ -796,7 +796,7 @@ class _CoordinatorToolCall:
             )
             return error
         try:
-            result = unify.delegate_to_colleague(
+            result = unisdk.delegate_to_colleague(
                 target_assistant_id,
                 instruction=normalized_instruction,
                 intent=intent,
@@ -868,7 +868,7 @@ class _CoordinatorToolCall:
             ],
         )
         try:
-            result = unify.create_team(
+            result = unisdk.create_team(
                 resolved_organization_id,
                 name=name,
                 description=description,
@@ -949,7 +949,7 @@ class _CoordinatorToolCall:
             )
             return error
         try:
-            result = unify.delete_team(
+            result = unisdk.delete_team(
                 resolved_organization_id,
                 team_id,
                 api_key=SESSION_DETAILS.unify_key,
@@ -1035,7 +1035,7 @@ class _CoordinatorToolCall:
             )
             return error
         try:
-            result = unify.update_team(
+            result = unisdk.update_team(
                 resolved_organization_id,
                 team_id,
                 patch,
@@ -1178,7 +1178,7 @@ class _CoordinatorToolCall:
                 return error
 
         try:
-            result = unify.add_team_member(
+            result = unisdk.add_team_member(
                 resolved_organization_id,
                 team_id,
                 assistant_id=assistant_id,
@@ -1429,7 +1429,7 @@ class _CoordinatorToolCall:
             return invalid
 
         try:
-            result = unify.remove_team_member(
+            result = unisdk.remove_team_member(
                 resolved_organization_id,
                 team_id,
                 assistant_id,
@@ -1479,7 +1479,7 @@ class _CoordinatorToolCall:
         if _is_tool_error(resolved_organization_id):
             return resolved_organization_id
         try:
-            teams = unify.list_teams(
+            teams = unisdk.list_teams(
                 resolved_organization_id,
                 api_key=SESSION_DETAILS.unify_key,
             )
@@ -1520,7 +1520,7 @@ class _CoordinatorToolCall:
         if not reachable:
             return _team_not_found(team_id)
         try:
-            return unify.list_team_members(
+            return unisdk.list_team_members(
                 resolved_organization_id,
                 team_id,
                 api_key=SESSION_DETAILS.unify_key,
@@ -1556,7 +1556,7 @@ class _CoordinatorToolCall:
         if not reachable:
             return _assistant_not_found(assistant_id)
         try:
-            return unify.list_teams_for_assistant(
+            return unisdk.list_teams_for_assistant(
                 assistant_id,
                 api_key=SESSION_DETAILS.unify_key,
             )
@@ -1645,7 +1645,7 @@ class _CoordinatorToolCall:
             organization_id=organization_id,
         )
         try:
-            created = unify.create_assistant(
+            created = unisdk.create_assistant(
                 first_name=assistant_first_name,
                 surname=assistant_surname,
                 config=resolved_assistant_config,
@@ -1711,7 +1711,7 @@ class _CoordinatorToolCall:
             return {"status": "reused", "team": team}
 
         try:
-            created = unify.create_team(
+            created = unisdk.create_team(
                 organization_id,
                 name=team_name,
                 description=team_description,
@@ -1739,7 +1739,7 @@ class _CoordinatorToolCall:
         ):
             return {"status": "already_member"}
         try:
-            unify.add_team_member(
+            unisdk.add_team_member(
                 organization_id,
                 team_id,
                 assistant_id=assistant_id,
@@ -2209,7 +2209,7 @@ class CoordinatorManager(metaclass=SingletonABCMeta):
             return []
 
         try:
-            members = unify.list_org_members(
+            members = unisdk.list_org_members(
                 SESSION_DETAILS.org_id,
                 api_key=SESSION_DETAILS.unify_key,
             )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-import unify
+import unisdk
 
 from tests.coordinator_manager.integration.local_stack_harness import (
     create_organization,
@@ -53,7 +53,7 @@ def _configure_coordinator_session(
     SESSION_DETAILS.is_coordinator = True
     SESSION_DETAILS.unify_key = org_api_key
     SESSION_DETAILS.org_id = org_id
-    unify.BASE_URL = orchestra_url
+    unisdk.BASE_URL = orchestra_url
 
 
 def test_coordinator_team_crud_round_trip_local_stack(require_local_stack):

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-import unify
+import unisdk
 
 from unity.common.tool_outcome import ToolError
 from unity.function_manager.function_manager import VenvPool
@@ -9,7 +9,7 @@ from unity.secret_manager.secret_manager import SecretManager
 
 
 def _rows(context: str) -> list[dict]:
-    return [log.entries for log in unify.get_logs(context=context)]
+    return [log.entries for log in unisdk.get_logs(context=context)]
 
 
 def test_secret_writes_route_to_destination_and_reads_merge_roots(

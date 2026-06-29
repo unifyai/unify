@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional, Tuple, Union, Iterable
 import copy
 import threading
 
-import unify
+import unisdk
 
 KeyInput = Union[str, int, Tuple[Any, ...], Iterable[Any]]
 
@@ -56,7 +56,7 @@ class DataStore:
     ) -> None:
         if not key_fields or not isinstance(key_fields, tuple):
             raise ValueError("key_fields must be a non-empty tuple of field names")
-        self._project: str = project or unify.active_project()
+        self._project: str = project or unisdk.active_project()
         self._context: str = context
         self._key_fields: Tuple[str, ...] = key_fields
         self._lock = threading.RLock()
@@ -75,7 +75,7 @@ class DataStore:
         project: Optional[str] = None,
     ) -> "DataStore":
         """Return (and memoize) a DataStore for (project, context)."""
-        proj = project or unify.active_project()
+        proj = project or unisdk.active_project()
         key = (proj, context)
         if key in cls._REGISTRY:
             return cls._REGISTRY[key]

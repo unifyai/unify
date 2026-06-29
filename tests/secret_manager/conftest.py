@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
-import unify
+import unisdk
 
 from unity.common.context_registry import ContextRegistry
 from unity.session_details import SESSION_DETAILS
@@ -17,12 +17,12 @@ def secret_manager_context(request):
     SESSION_DETAILS.reset()
     # Create a fresh, test-specific context and make it active
     try:
-        unify.set_context(ctx, relative=False)
+        unisdk.set_context(ctx, relative=False)
     except Exception:
         pass
     yield ctx
-    unify.delete_context(ctx)
-    unify.unset_context()
+    unisdk.delete_context(ctx)
+    unisdk.unset_context()
     ContextRegistry.clear()
     SESSION_DETAILS.reset()
 
@@ -48,7 +48,7 @@ def secret_manager_teams():
     yield team_ids
     for team_id in team_ids:
         try:
-            unify.delete_context(f"Teams/{team_id}/Secrets")
+            unisdk.delete_context(f"Teams/{team_id}/Secrets")
         except Exception:
             pass
     SESSION_DETAILS.team_ids = []

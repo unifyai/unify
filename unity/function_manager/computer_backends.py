@@ -10,7 +10,7 @@ from typing import Any
 from typing import Optional, List, Dict
 import logging
 import aiohttp
-from unify.utils import http
+from unisdk.utils import http
 from pydantic import BaseModel, PydanticUserError
 import asyncio
 import websockets

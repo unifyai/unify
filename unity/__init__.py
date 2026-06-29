@@ -30,13 +30,13 @@ except Exception:
 
 from unity.common.context_registry import ContextRegistry
 
-# Attempt to import the external 'unify' SDK. If unavailable, provide a minimal
+# Attempt to import the external 'unisdk' SDK. If unavailable, provide a minimal
 # no-op shim so importing the 'unity' package does not require extra installs.
 try:  # pragma: no cover - simple import guard
-    import unify  # type: ignore
+    import unisdk  # type: ignore
 except Exception:  # ImportError or others
 
-    class _UnifyShim:
+    class _UnisdkShim:
 
         def active_project(self) -> bool:
             return False
@@ -50,7 +50,7 @@ except Exception:  # ImportError or others
         def get_active_context(self) -> dict:
             return {}
 
-    unify = _UnifyShim()  # type: ignore
+    unisdk = _UnisdkShim()  # type: ignore
 
 
 # Logging is configured entirely in unity.logger — import it so that
@@ -90,10 +90,10 @@ def init(
         _SETTINGS.validate_llm_providers()
 
     with startup_timing(LOGGER, "unity.init.active_project"):
-        active_project = unify.active_project()
+        active_project = unisdk.active_project()
     if not active_project:
         with startup_timing(LOGGER, "unity.init.activate", f"project={project_name}"):
-            unify.activate(project_name, overwrite)
+            unisdk.activate(project_name, overwrite)
 
     # Set the Unify context using user_id/assistant_id (e.g., "42/7")
     full_ctx = f"{SESSION_DETAILS.user_context}/{SESSION_DETAILS.assistant_context}"
@@ -101,10 +101,10 @@ def init(
     # Idempotent context setup: tolerate concurrent creation from parallel processes
     with startup_timing(LOGGER, "unity.init.set_context", f"context={full_ctx}"):
         try:
-            unify.set_context(full_ctx)
+            unisdk.set_context(full_ctx)
         except Exception as e:
             if "already exists" in str(e).lower():
-                unify.set_context(full_ctx, skip_create=True)
+                unisdk.set_context(full_ctx, skip_create=True)
             else:
                 raise
 
@@ -181,7 +181,7 @@ def ensure_initialised(
     Otherwise, it calls :pyfunc:`init` to set up project, context, and EventBus.
     """
     try:
-        ctxs = unify.get_active_context()
+        ctxs = unisdk.get_active_context()
         read_ctx = ctxs.get("read") if isinstance(ctxs, dict) else None
         write_ctx = ctxs.get("write") if isinstance(ctxs, dict) else None
     except Exception:

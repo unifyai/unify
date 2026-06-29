@@ -6,7 +6,7 @@ import functools
 import inspect
 import re
 
-import unify
+import unisdk
 
 from ..common.log_utils import log as unity_log
 from ..common.tool_outcome import ToolErrorException, ToolOutcome
@@ -213,7 +213,7 @@ class GuidanceManager(BaseGuidanceManager):
     def _is_builtin_guidance(self, guidance_id: int) -> bool:
         """Return whether an id refers to a row in the builtins catalogue."""
         try:
-            rows = unify.get_logs(
+            rows = unisdk.get_logs(
                 context=BUILTINS_GUIDANCE_CONTEXT,
                 project=builtins_project(),
                 filter=f"guidance_id == {int(guidance_id)}",
@@ -266,7 +266,7 @@ class GuidanceManager(BaseGuidanceManager):
 
     @functools.wraps(BaseGuidanceManager.clear, updated=())
     def clear(self) -> None:
-        unify.delete_context(self._ctx)
+        unisdk.delete_context(self._ctx)
 
         # Reset observed custom fields for this manager instance
         try:
@@ -284,7 +284,7 @@ class GuidanceManager(BaseGuidanceManager):
 
             for _ in range(3):
                 try:
-                    unify.get_fields(context=self._ctx)
+                    unisdk.get_fields(context=self._ctx)
                     break
                 except Exception:
                     _time.sleep(0.05)
@@ -396,7 +396,7 @@ class GuidanceManager(BaseGuidanceManager):
         info: Dict[str, Any] = {"type": str(column_type), "mutable": True}
         if column_description is not None:
             info["description"] = column_description
-        resp = unify.create_fields(fields={column_name: info}, context=self._ctx)
+        resp = unisdk.create_fields(fields={column_name: info}, context=self._ctx)
         try:
             self._known_custom_fields.add(column_name)
         except Exception:
@@ -418,7 +418,7 @@ class GuidanceManager(BaseGuidanceManager):
         """
         if column_name in self._REQUIRED_COLUMNS:
             raise ValueError(f"Cannot delete required column '{column_name}'.")
-        resp = unify.delete_fields(fields=[column_name], context=self._ctx)
+        resp = unisdk.delete_fields(fields=[column_name], context=self._ctx)
         try:
             if column_name in getattr(self, "_known_custom_fields", set()):
                 self._known_custom_fields.discard(column_name)
@@ -742,7 +742,7 @@ class GuidanceManager(BaseGuidanceManager):
         except ToolErrorException as exc:
             return exc.payload  # type: ignore[return-value]
         self._raise_if_builtin(guidance_id, "updated")
-        ids = unify.get_logs(
+        ids = unisdk.get_logs(
             context=context,
             filter=f"guidance_id == {int(guidance_id)}",
             limit=2,
@@ -756,7 +756,7 @@ class GuidanceManager(BaseGuidanceManager):
             raise RuntimeError(
                 f"Multiple rows found with guidance_id {guidance_id}. Data integrity issue.",
             )
-        unify.update_logs(
+        unisdk.update_logs(
             logs=[ids[0]],
             context=context,
             entries=updates,
@@ -803,7 +803,7 @@ class GuidanceManager(BaseGuidanceManager):
         funcs = []
         for context in self._function_contexts_for_read():
             funcs.extend(
-                unify.get_logs(
+                unisdk.get_logs(
                     context=context,
                     filter=filt or "False",
                     exclude_fields=list_private_fields(context),
@@ -864,7 +864,7 @@ class GuidanceManager(BaseGuidanceManager):
         except ToolErrorException as exc:
             return exc.payload  # type: ignore[return-value]
         self._raise_if_builtin(guidance_id, "deleted")
-        ids = unify.get_logs(
+        ids = unisdk.get_logs(
             context=context,
             filter=f"guidance_id == {int(guidance_id)}",
             limit=2,
@@ -878,7 +878,7 @@ class GuidanceManager(BaseGuidanceManager):
             raise RuntimeError(
                 f"Multiple rows found with guidance_id {guidance_id}. Data integrity issue.",
             )
-        unify.delete_logs(context=context, logs=ids[0])
+        unisdk.delete_logs(context=context, logs=ids[0])
         return {"outcome": "guidance deleted", "details": {"guidance_id": guidance_id}}
 
     @functools.wraps(BaseGuidanceManager.search, updated=())

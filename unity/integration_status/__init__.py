@@ -101,11 +101,11 @@ def _read_local_secret_keyset() -> set[str]:
     available or the context can't be read.  Never raises.
     """
     try:
-        import unify
+        import unisdk
         from unity.manager_registry import ManagerRegistry
 
         sm = ManagerRegistry.get_secret_manager()
-        rows = unify.get_logs(context=sm._ctx)
+        rows = unisdk.get_logs(context=sm._ctx)
     except Exception:
         return set()
 
@@ -262,7 +262,7 @@ def schedule_register_available_integrations() -> None:
       has populated ``_base_context``, so manager constructions inside
       the worker can resolve their contexts.
     * Captures the calling thread's Unify active context and re-applies
-      it inside the worker so ``unify.get_logs(...)`` / context-resolving
+      it inside the worker so ``unisdk.get_logs(...)`` / context-resolving
       reads in the registration path see the same project + context the
       main thread does.
 
@@ -271,18 +271,18 @@ def schedule_register_available_integrations() -> None:
     import threading
 
     try:
-        import unify
+        import unisdk
 
-        captured_ctx = unify.get_active_context()
+        captured_ctx = unisdk.get_active_context()
     except Exception:
         captured_ctx = None
 
     def _worker() -> None:
         if captured_ctx is not None:
             try:
-                import unify
+                import unisdk
 
-                unify.set_context(
+                unisdk.set_context(
                     captured_ctx["read"],
                     skip_create=True,
                 )

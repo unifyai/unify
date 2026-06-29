@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List
 
-import unify
-from unify.utils.http import RequestError
+import unisdk
+from unisdk.utils.http import RequestError
 
 _log = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ def _upsert_personal_contact_membership(
         )
         return
 
-    from unify.utils import http
+    from unisdk.utils import http
 
     assistant_id = int(SESSION_DETAILS.assistant.agent_id)
     url = (
@@ -133,7 +133,7 @@ def _resolve_user_details(self) -> Dict[str, Any]:
 
     # In production (SESSION_DETAILS initialized), fetch real user info
     try:
-        data: Any = unify.get_user_basic_info()
+        data: Any = unisdk.get_user_basic_info()
     except Exception:
         _log.warning(
             "Failed to fetch user details from Orchestra, using session details",
@@ -555,7 +555,7 @@ def _fetch_org_members() -> List[Dict[str, Any]]:
         return []
 
     try:
-        from unify.utils import http
+        from unisdk.utils import http
 
         url = f"{base_url}/organizations/members"
         headers = {"Authorization": f"Bearer {api_key}"}
@@ -587,7 +587,7 @@ def provision_org_member_contacts(self) -> None:
     # Get primary user email to skip
     primary_user_email = None
     try:
-        primary_user_rows = unify.get_logs(
+        primary_user_rows = unisdk.get_logs(
             context=self._ctx,
             filter=f"contact_id == {SESSION_DETAILS.boss_contact_id}",
             limit=1,
@@ -615,7 +615,7 @@ def provision_org_member_contacts(self) -> None:
 
         try:
             # Check if contact with this email already exists
-            existing = unify.get_logs(
+            existing = unisdk.get_logs(
                 context=self._ctx,
                 filter=f"email_address == '{email}'",
                 limit=1,

@@ -2428,7 +2428,7 @@ class TestTaskDueEventHandlers:
         # The real scheduler resolves the activation's source task by its
         # log id (the delegate contract this test exercises), so use the
         # actual scheduled instance's log id rather than a fabricated value.
-        # The log id lives on the store row (``unify.Log.id``), not on the
+        # The log id lives on the store row (``unisdk.Log.id``), not on the
         # sanitized ``Task`` returned by ``_filter_tasks``.
         source_task_log_id = None
         for _ctx in scheduler._read_task_contexts():

@@ -48,7 +48,7 @@ from typing import List, Dict, Any
 from dotenv import load_dotenv
 
 load_dotenv()
-import unify
+import unisdk
 
 # ───────── project-local imports ─────────
 ROOT = Path(__file__).resolve().parents[1]
@@ -101,12 +101,12 @@ def _chunk_to_text(messages: List[Dict[str, Any]]) -> str:
 
 
 def _clear_contacts() -> None:
-    unify.delete_context("Contacts")
+    unisdk.delete_context("Contacts")
 
 
 def _clear_knowledge() -> None:
-    for name in unify.get_contexts(prefix="Knowledge").keys():
-        unify.delete_context(name)
+    for name in unisdk.get_contexts(prefix="Knowledge").keys():
+        unisdk.delete_context(name)
 
 
 # ---------------------------------------------------------------------------
@@ -260,11 +260,11 @@ async def _main_async() -> None:
 
     # ─────────────────── project version handling ────────────────────
     if args.project_version != -1:
-        commits = unify.get_project_commits(args.project_name)
+        commits = unisdk.get_project_commits(args.project_name)
         if commits:
             try:
                 target = commits[args.project_version]
-                unify.rollback_project(args.project_name, target["commit_hash"])
+                unisdk.rollback_project(args.project_name, target["commit_hash"])
                 LG.info("[version] Rolled back to commit %s", target["commit_hash"])
             except IndexError:
                 LG.warning(

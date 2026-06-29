@@ -442,7 +442,7 @@ def test_staging_sync_logs_insert_mismatch(monkeypatch, caplog) -> None:
         "unity.function_manager.function_manager.list_private_fields",
         lambda _context: [],
     )
-    monkeypatch.setattr("unify.get_logs", lambda **_kwargs: [])
+    monkeypatch.setattr("unisdk.get_logs", lambda **_kwargs: [])
     fm = _fake_function_manager()
     fm._primitives_ctx = "Functions/Primitives"
     fm._insert_primitives = lambda _rows: None
@@ -707,7 +707,7 @@ def test_function_manager_queries_do_not_call_integration_ops(monkeypatch) -> No
 
     monkeypatch.setattr("unity.integrations.ops.list_connections", fail_ops)
     monkeypatch.setattr(
-        "unify.get_logs",
+        "unisdk.get_logs",
         lambda **kwargs: (
             [SimpleNamespace(entries=primitive_row)]
             if kwargs.get("context") == "Functions/Primitives"
@@ -831,8 +831,8 @@ def test_disconnect_cleanup_deletes_only_metadata_provider_rows(
     def fake_delete_logs(**kwargs):
         deleted.extend(kwargs["logs"])
 
-    monkeypatch.setattr("unify.get_logs", fake_get_logs)
-    monkeypatch.setattr("unify.delete_logs", fake_delete_logs)
+    monkeypatch.setattr("unisdk.get_logs", fake_get_logs)
+    monkeypatch.setattr("unisdk.delete_logs", fake_delete_logs)
     monkeypatch.setattr(fm_module, "list_private_fields", lambda *_args, **_kwargs: [])
     fm = FunctionManager.__new__(FunctionManager)
     fm._primitives_ctx = "Functions/Primitives"

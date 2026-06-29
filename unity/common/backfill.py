@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Union
 
-import unify
+import unisdk
 
 
 def backfill_private_fields(
@@ -93,7 +93,7 @@ def backfill_private_fields(
 
     while True:
         # Fetch logs with entries to check fields client-side
-        logs = unify.get_logs(
+        logs = unisdk.get_logs(
             context=context,
             filter=filter,  # Only apply user's additional filter
             offset=offset,
@@ -130,7 +130,7 @@ def backfill_private_fields(
                 entries["_org_id"] = org_id
 
             # Batch update
-            unify.update_logs(
+            unisdk.update_logs(
                 logs=logs_to_update,
                 context=context,
                 entries=entries,
@@ -181,7 +181,7 @@ def backfill_all_contexts_for_user_assistant(
     """
     if contexts is None:
         prefix = f"{user_context}/{assistant_context}/"
-        all_contexts = unify.get_contexts(prefix=prefix)
+        all_contexts = unisdk.get_contexts(prefix=prefix)
         contexts = list(all_contexts.keys())
 
     results: Dict[str, Dict[str, Any]] = {}
@@ -226,7 +226,7 @@ def backfill_all_contexts_for_assistant(
 ) -> Dict[str, Dict[str, Any]]:
     """Backward-compatible wrapper - discovers contexts by old single-prefix pattern."""
     if contexts is None:
-        all_contexts = unify.get_contexts(prefix=f"{assistant_context}/")
+        all_contexts = unisdk.get_contexts(prefix=f"{assistant_context}/")
         contexts = list(all_contexts.keys())
 
     results: Dict[str, Dict[str, Any]] = {}

@@ -11,7 +11,7 @@ Each test gets a fresh, isolated Unify context that is cleaned up after the test
 from __future__ import annotations
 
 import pytest
-from unify.utils.http import RequestError
+from unisdk.utils.http import RequestError
 
 from unity.data_manager.data_manager import DataManager
 from unity.data_manager.types import TableDescription

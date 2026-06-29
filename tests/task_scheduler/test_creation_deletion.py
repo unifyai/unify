@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from tests.helpers import _handle_project
 import pytest
-import unify
+import unisdk
 
 from unity.common.context_registry import ContextRegistry
 from unity.common.tool_outcome import ToolErrorException
@@ -101,7 +101,7 @@ def test_create_team_task_routes_to_shared_root():
         assert rows[0].assistant_id == SESSION_DETAILS.assistant_context
     finally:
         try:
-            unify.delete_context("Teams/987654/Tasks")
+            unisdk.delete_context("Teams/987654/Tasks")
         except Exception:
             pass
         SESSION_DETAILS.team_ids = []
@@ -155,7 +155,7 @@ def test_clone_recurring_task_instance_uses_space_destination_root():
         assert all(row.destination == f"team:{team_id}" for row in rows)
     finally:
         try:
-            unify.delete_context(f"Teams/{team_id}/Tasks")
+            unisdk.delete_context(f"Teams/{team_id}/Tasks")
         except Exception:
             pass
         SESSION_DETAILS.team_ids = []
@@ -189,7 +189,7 @@ def test_duplicate_task_id_update_requires_destination():
         assert by_destination["team:987657"] == "Shared duplicate updated"
     finally:
         try:
-            unify.delete_context("Teams/987657/Tasks")
+            unisdk.delete_context("Teams/987657/Tasks")
         except Exception:
             pass
         SESSION_DETAILS.team_ids = []

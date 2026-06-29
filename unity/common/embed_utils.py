@@ -7,7 +7,7 @@ import logging
 import os
 import sys
 import tempfile
-import unify
+import unisdk
 import threading
 from contextlib import contextmanager
 
@@ -121,7 +121,7 @@ def list_private_fields(context: str, *, project: str | None = None) -> list[str
     very large, so they should be excluded from payloads returned to clients.
     """
     try:
-        fields = unify.get_fields(context=context, project=project)
+        fields = unisdk.get_fields(context=context, project=project)
         return [name for name in fields.keys() if name.startswith("_")]
     except Exception:
         # If field introspection fails (e.g. offline tests), fall back to none
@@ -155,7 +155,7 @@ def ensure_derived_column(
     # Fast path: if field already exists and we are not doing targeted
     # derived logs creation using from_ids, return without locking or logging
     try:
-        fields = unify.get_fields(context=context, project=project)
+        fields = unisdk.get_fields(context=context, project=project)
         if key in fields and not from_ids:
             return
     except Exception:
@@ -174,7 +174,7 @@ def ensure_derived_column(
             # We intentionally do this to avoid redundant calls to create
             # duplicate embeddings that will get rejected by the backend
             # due to duplication constraint
-            existing = unify.get_fields(context=context, project=project)
+            existing = unisdk.get_fields(context=context, project=project)
             if key in existing and not from_ids:
                 return
 
@@ -190,7 +190,7 @@ def ensure_derived_column(
                         "lg": {"context": referenced_logs_context or context},
                     }
 
-                response = unify.create_derived_logs(
+                response = unisdk.create_derived_logs(
                     context=context,
                     key=key,
                     equation=equation,
@@ -208,7 +208,7 @@ def ensure_derived_column(
                     referenced_logs,
                     response,
                 )
-            except unify.RequestError as e:
+            except unisdk.RequestError as e:
                 body = getattr(e.response, "text", "") or ""
                 logger.debug(
                     "create_derived_logs FAILED context=%s key=%s "
@@ -265,7 +265,7 @@ def ensure_vector_column(
 
     # Early return if the embedding column already exists and
     # we are not doing targetted derived logs creation using from_ids
-    existing = unify.get_fields(context=context, project=project)
+    existing = unisdk.get_fields(context=context, project=project)
     if embed_column in existing and not from_ids:
         return
 

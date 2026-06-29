@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-import unify
+import unisdk
 
 from tests.helpers import _handle_project
 from unity.conversation_manager.cm_types import Medium
@@ -61,7 +61,7 @@ def test_api_message_exchange_medium():
         },
     )
 
-    rows = unify.get_logs(
+    rows = unisdk.get_logs(
         context=tm._exchanges_ctx,
         filter=f"exchange_id == {exchange_id}",
         limit=1,

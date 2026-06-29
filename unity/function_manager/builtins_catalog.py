@@ -17,8 +17,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Tuple
 
-import unify
-from unify.utils.http import RequestError
+import unisdk
+from unisdk.utils.http import RequestError
 
 from ..common.builtins import (
     builtins_project,
@@ -45,13 +45,13 @@ def _ensure_catalog_storage(project: str) -> None:
     manager-owned contexts behave in practice.
     """
     ensure_builtins_project(project)
-    unify.create_context(
+    unisdk.create_context(
         BUILTINS_PRIMITIVES_CONTEXT,
         description="Builtin system action primitives with stable explicit IDs.",
         unique_keys={"function_id": "int"},
         project=project,
     )
-    unify.create_context(
+    unisdk.create_context(
         BUILTINS_META_CONTEXT,
         description="Seeding state for the builtin primitives catalogue.",
         unique_keys={"meta_id": "int"},
@@ -61,7 +61,7 @@ def _ensure_catalog_storage(project: str) -> None:
 
 def _read_existing_rows(project: str) -> List[Any]:
     """Return all stored primitive rows (entries + log id) for reconciliation."""
-    return unify.get_logs(
+    return unisdk.get_logs(
         project=project,
         context=BUILTINS_PRIMITIVES_CONTEXT,
         exclude_fields=list_private_fields(
@@ -116,12 +116,12 @@ def _replace_rows(
         )
     ]
     if stale_ids:
-        unify.delete_logs(
+        unisdk.delete_logs(
             project=project,
             context=BUILTINS_PRIMITIVES_CONTEXT,
             logs=stale_ids,
         )
-    unify.create_logs(
+    unisdk.create_logs(
         project=project,
         context=BUILTINS_PRIMITIVES_CONTEXT,
         entries=entries,

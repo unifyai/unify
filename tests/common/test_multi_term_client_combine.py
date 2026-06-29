@@ -13,7 +13,6 @@ from __future__ import annotations
 import re
 from types import SimpleNamespace
 
-import unify
 
 import unity.common.semantic_search as semantic_search
 from unity.common.semantic_search import (

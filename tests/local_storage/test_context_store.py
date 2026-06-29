@@ -3,8 +3,7 @@ from __future__ import annotations
 import pytest
 import requests
 
-import unify
-from unify.utils.http import RequestError
+from unisdk.utils.http import RequestError
 from unity.common.context_store import TableStore, _create_context_with_retry
 
 
