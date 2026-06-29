@@ -17,13 +17,13 @@ def _reset_ensured_cache():
 
 def test_ensure_creates_and_idempotent(monkeypatch):
     # Arrange: stable project and call counters
-    monkeypatch.setattr(unify, "active_project", lambda: "proj-ctx")
+    monkeypatch.setattr(unisdk, "active_project", lambda: "proj-ctx")
 
     # Simulate 404 so ensure_context proceeds to creation
     def _fail_get(*args, **kwargs):
         raise Exception("Context not found")
 
-    monkeypatch.setattr(unify, "get_context", _fail_get)
+    monkeypatch.setattr(unisdk, "get_context", _fail_get)
 
     calls = {"create_context": 0, "create_fields": 0}
 
@@ -48,8 +48,8 @@ def test_ensure_creates_and_idempotent(monkeypatch):
         assert context == "Test/Contacts"
         assert fields == {"first_name": {"type": "str"}, "surname": {"type": "str"}}
 
-    monkeypatch.setattr(unify, "create_context", _create_context)
-    monkeypatch.setattr(unify, "create_fields", _create_fields)
+    monkeypatch.setattr(unisdk, "create_context", _create_context)
+    monkeypatch.setattr(unisdk, "create_fields", _create_fields)
 
     store = TableStore(
         "Test/Contacts",
@@ -72,7 +72,7 @@ def test_ensure_creates_and_idempotent(monkeypatch):
 
 def test_get_columns_transforms(monkeypatch):
     # Arrange stable project and capture parameters
-    monkeypatch.setattr(unify, "active_project", lambda: "proj-Z")
+    monkeypatch.setattr(unisdk, "active_project", lambda: "proj-Z")
     seen = {"project_name": None, "context": None}
 
     def _get_fields(*, project, context):
@@ -86,7 +86,7 @@ def test_get_columns_transforms(monkeypatch):
             },  # still returned by backend – consumer filters
         }
 
-    monkeypatch.setattr(unify, "get_fields", _get_fields)
+    monkeypatch.setattr(unisdk, "get_fields", _get_fields)
 
     store = TableStore("Org/Contacts")
     cols = store.get_columns()
@@ -102,7 +102,7 @@ def test_ensure_context_treats_400_context_already_exists_as_success(monkeypatch
     response._content = b"A context with this name already exists in the project."
 
     monkeypatch.setattr(
-        unify,
+        unisdk,
         "create_context",
         lambda *_, **__: (_ for _ in ()).throw(
             RequestError("https://api.unify.ai", "POST", response),
