@@ -45,7 +45,7 @@ def ensure_runtime_context(*, strict: bool = False) -> str:
     full_ctx = f"{SESSION_DETAILS.user_context}/{SESSION_DETAILS.assistant_context}"
     context_set = False
     try:
-        import unify as _unify
+        import unisdk as _unify
 
         active_ctx = _unify.get_active_context() or {}
         if active_ctx.get("read") != full_ctx or active_ctx.get("write") != full_ctx:

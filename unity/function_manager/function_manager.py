@@ -35,9 +35,9 @@ from typing import (
     Union,
     TYPE_CHECKING,
 )
-import unify
+import unisdk
 from .shell_pool import ShellPool
-from unify.utils.http import RequestError as _UnifyRequestError
+from unisdk.utils.http import RequestError as _UnifyRequestError
 from ..common.authorship import strip_authoring_assistant_id
 from ..common.log_utils import create_logs as unity_create_logs
 from ..common.embed_utils import ensure_vector_column, list_private_fields
@@ -1917,7 +1917,7 @@ class FunctionManager(BaseFunctionManager):
             if limit is not None:
                 kwargs["limit"] = limit
             try:
-                logs = unify.get_logs(**kwargs)
+                logs = unisdk.get_logs(**kwargs)
             except _UnifyRequestError as e:
                 status = getattr(getattr(e, "response", None), "status_code", None)
                 if status == 404:
@@ -2517,8 +2517,8 @@ class FunctionManager(BaseFunctionManager):
         *,
         function_id: int,
         raise_if_missing: bool = True,
-    ) -> Optional[unify.Log]:
-        logs = unify.get_logs(
+    ) -> Optional[unisdk.Log]:
+        logs = unisdk.get_logs(
             context=self._compositional_ctx,
             filter=f"function_id == {function_id}",
             exclude_fields=list_private_fields(self._compositional_ctx),
@@ -2547,10 +2547,10 @@ class FunctionManager(BaseFunctionManager):
 
     @functools.wraps(BaseFunctionManager.clear, updated=())
     def clear(self) -> None:
-        unify.delete_context(self._compositional_ctx)
-        unify.delete_context(self._primitives_ctx)
-        unify.delete_context(self._venvs_ctx)
-        unify.delete_context(self._meta_ctx)
+        unisdk.delete_context(self._compositional_ctx)
+        unisdk.delete_context(self._primitives_ctx)
+        unisdk.delete_context(self._venvs_ctx)
+        unisdk.delete_context(self._meta_ctx)
 
         # Reset any manager-local counters or caches
         try:
@@ -2576,7 +2576,7 @@ class FunctionManager(BaseFunctionManager):
 
             for _ in range(3):
                 try:
-                    unify.get_fields(context=self._compositional_ctx)
+                    unisdk.get_fields(context=self._compositional_ctx)
                     break
                 except Exception:
                     _time.sleep(0.05)
@@ -2605,7 +2605,7 @@ class FunctionManager(BaseFunctionManager):
         """Read a hash map field from the singleton Functions/Meta row."""
 
         try:
-            logs = unify.get_logs(
+            logs = unisdk.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
@@ -2620,13 +2620,13 @@ class FunctionManager(BaseFunctionManager):
         """Store a hash map field on the singleton Functions/Meta row."""
 
         try:
-            logs = unify.get_logs(
+            logs = unisdk.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
             )
             if logs:
-                unify.update_logs(
+                unisdk.update_logs(
                     logs=[logs[0].id],
                     context=self._meta_ctx,
                     entries={field_name: hashes},
@@ -2748,7 +2748,7 @@ class FunctionManager(BaseFunctionManager):
             for backend_id, app_slug in app_keys
         )
         try:
-            logs = unify.get_logs(
+            logs = unisdk.get_logs(
                 context=self._primitives_ctx,
                 filter=filter_expr,
                 exclude_fields=list_private_fields(self._primitives_ctx),
@@ -2763,7 +2763,7 @@ class FunctionManager(BaseFunctionManager):
             ]
             if not ids_to_delete:
                 return 0
-            unify.delete_logs(
+            unisdk.delete_logs(
                 context=self._primitives_ctx,
                 logs=ids_to_delete,
             )
@@ -2784,7 +2784,7 @@ class FunctionManager(BaseFunctionManager):
             app_slug=app_slug,
         )
         try:
-            rows = unify.get_logs(
+            rows = unisdk.get_logs(
                 context=self._primitives_ctx,
                 filter=filter_expr,
                 exclude_fields=list_private_fields(self._primitives_ctx),
@@ -3241,13 +3241,13 @@ class FunctionManager(BaseFunctionManager):
             if len(ids) == 1
             else f"function_id in [{', '.join(str(function_id) for function_id in ids)}]"
         )
-        logs = unify.get_logs(
+        logs = unisdk.get_logs(
             context=self._primitives_ctx,
             filter=filter_expr,
             exclude_fields=list_private_fields(self._primitives_ctx),
         )
         if logs:
-            unify.delete_logs(
+            unisdk.delete_logs(
                 context=self._primitives_ctx,
                 logs=[log.id for log in logs],
             )
@@ -3288,7 +3288,7 @@ class FunctionManager(BaseFunctionManager):
     def _get_stored_custom_functions_hash(self) -> str:
         """Retrieve the stored custom functions hash from the Meta context."""
         try:
-            logs = unify.get_logs(
+            logs = unisdk.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
@@ -3302,13 +3302,13 @@ class FunctionManager(BaseFunctionManager):
     def _store_custom_functions_hash(self, hash_value: str) -> None:
         """Store the custom functions hash in the Meta context."""
         try:
-            logs = unify.get_logs(
+            logs = unisdk.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
             )
             if logs:
-                unify.update_logs(
+                unisdk.update_logs(
                     context=self._meta_ctx,
                     logs=[logs[0].id],
                     entries={"custom_functions_hash": hash_value},
@@ -3326,7 +3326,7 @@ class FunctionManager(BaseFunctionManager):
 
     def _get_custom_functions_from_db(self) -> Dict[str, Dict[str, Any]]:
         """Get all custom functions from the database (those with custom_hash set)."""
-        logs = unify.get_logs(
+        logs = unisdk.get_logs(
             context=self._compositional_ctx,
             filter="custom_hash != None",
             exclude_fields=list_private_fields(self._compositional_ctx),
@@ -3337,14 +3337,14 @@ class FunctionManager(BaseFunctionManager):
 
     def _delete_custom_function_by_name(self, name: str) -> bool:
         """Delete a custom function by name."""
-        logs = unify.get_logs(
+        logs = unisdk.get_logs(
             context=self._compositional_ctx,
             filter=f"name == '{name}' and custom_hash != None",
             limit=1,
         )
         if not logs:
             return False
-        unify.delete_logs(
+        unisdk.delete_logs(
             context=self._compositional_ctx,
             logs=[logs[0].id],
         )
@@ -3364,7 +3364,7 @@ class FunctionManager(BaseFunctionManager):
         update_data = strip_authoring_assistant_id(
             {k: v for k, v in data.items() if k != "function_id"},
         )
-        unify.update_logs(
+        unisdk.update_logs(
             context=self._compositional_ctx,
             logs=[log.id],
             entries=update_data,
@@ -3389,7 +3389,7 @@ class FunctionManager(BaseFunctionManager):
         elif isinstance(result, dict):
             log_ids = result.get("log_event_ids", [])
             if log_ids:
-                logs = unify.get_logs(
+                logs = unisdk.get_logs(
                     context=self._compositional_ctx,
                     filter=f"id == {log_ids[0]}",
                     limit=1,
@@ -3405,7 +3405,7 @@ class FunctionManager(BaseFunctionManager):
     def _get_stored_custom_venvs_hash(self) -> str:
         """Retrieve the stored custom venvs hash from the Meta context."""
         try:
-            logs = unify.get_logs(
+            logs = unisdk.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
@@ -3419,13 +3419,13 @@ class FunctionManager(BaseFunctionManager):
     def _store_custom_venvs_hash(self, hash_value: str) -> None:
         """Store the custom venvs hash in the Meta context."""
         try:
-            logs = unify.get_logs(
+            logs = unisdk.get_logs(
                 context=self._meta_ctx,
                 filter="meta_id == 1",
                 limit=1,
             )
             if logs:
-                unify.update_logs(
+                unisdk.update_logs(
                     context=self._meta_ctx,
                     logs=[logs[0].id],
                     entries={"custom_venvs_hash": hash_value},
@@ -3442,7 +3442,7 @@ class FunctionManager(BaseFunctionManager):
 
     def _get_custom_venvs_from_db(self) -> Dict[str, Dict[str, Any]]:
         """Get all custom venvs from the database (those with custom_hash set)."""
-        logs = unify.get_logs(
+        logs = unisdk.get_logs(
             context=self._venvs_ctx,
             filter="custom_hash != None",
             exclude_fields=list_private_fields(self._venvs_ctx),
@@ -3453,14 +3453,14 @@ class FunctionManager(BaseFunctionManager):
 
     def _delete_custom_venv_by_name(self, name: str) -> bool:
         """Delete a custom venv by name."""
-        logs = unify.get_logs(
+        logs = unisdk.get_logs(
             context=self._venvs_ctx,
             filter=f"name == '{name}' and custom_hash != None",
             limit=1,
         )
         if not logs:
             return False
-        unify.delete_logs(
+        unisdk.delete_logs(
             context=self._venvs_ctx,
             logs=[logs[0].id],
         )
@@ -3468,7 +3468,7 @@ class FunctionManager(BaseFunctionManager):
 
     def _update_custom_venv(self, venv_id: int, data: Dict[str, Any]) -> None:
         """Update an existing custom venv."""
-        logs = unify.get_logs(
+        logs = unisdk.get_logs(
             context=self._venvs_ctx,
             filter=f"venv_id == {venv_id}",
             limit=1,
@@ -3478,7 +3478,7 @@ class FunctionManager(BaseFunctionManager):
         update_data = strip_authoring_assistant_id(
             {k: v for k, v in data.items() if k != "venv_id"},
         )
-        unify.update_logs(
+        unisdk.update_logs(
             context=self._venvs_ctx,
             logs=[logs[0].id],
             entries=update_data,
@@ -3501,7 +3501,7 @@ class FunctionManager(BaseFunctionManager):
         elif isinstance(result, dict):
             log_ids = result.get("log_event_ids", [])
             if log_ids:
-                logs = unify.get_logs(
+                logs = unisdk.get_logs(
                     context=self._venvs_ctx,
                     filter=f"id == {log_ids[0]}",
                     limit=1,
@@ -3597,14 +3597,14 @@ class FunctionManager(BaseFunctionManager):
                     name_to_id[name] = db_entry["venv_id"]
                 else:
                     # Check for user-added venv with same name
-                    existing = unify.get_logs(
+                    existing = unisdk.get_logs(
                         context=self._venvs_ctx,
                         filter=f"name == '{name}'",
                         limit=1,
                     )
                     if existing:
                         logger.info(f"Overwriting user-added venv with custom: {name}")
-                        unify.delete_logs(
+                        unisdk.delete_logs(
                             context=self._venvs_ctx,
                             logs=[existing[0].id],
                         )
@@ -3737,7 +3737,7 @@ class FunctionManager(BaseFunctionManager):
                 else:
                     # Check if there's a user-added function with same name
                     # (no custom_hash) - if so, we need to delete it first
-                    existing = unify.get_logs(
+                    existing = unisdk.get_logs(
                         context=self._compositional_ctx,
                         filter=f"name == '{name}'",
                         limit=1,
@@ -3746,7 +3746,7 @@ class FunctionManager(BaseFunctionManager):
                         logger.info(
                             f"Overwriting user-added function with custom: {name}",
                         )
-                        unify.delete_logs(
+                        unisdk.delete_logs(
                             context=self._compositional_ctx,
                             logs=[existing[0].id],
                         )
@@ -4073,7 +4073,7 @@ class FunctionManager(BaseFunctionManager):
         # Batch update existing functions
         if log_ids_to_update and entries_to_update:
             try:
-                unify.update_logs(
+                unisdk.update_logs(
                     logs=log_ids_to_update,
                     context=self._compositional_ctx,
                     entries=[
@@ -4244,7 +4244,7 @@ class FunctionManager(BaseFunctionManager):
         # Batch update existing functions
         if log_ids_to_update and entries_to_update:
             try:
-                unify.update_logs(
+                unisdk.update_logs(
                     logs=log_ids_to_update,
                     context=self._compositional_ctx,
                     entries=[
@@ -4302,7 +4302,7 @@ class FunctionManager(BaseFunctionManager):
                 logs = []
                 for context in self._read_compositional_contexts():
                     logs.extend(
-                        unify.get_logs(
+                        unisdk.get_logs(
                             context=context,
                             filter=normalized,
                             limit=1,
@@ -4765,7 +4765,7 @@ class FunctionManager(BaseFunctionManager):
         for context in self._read_compositional_contexts():
             compositional_rows.extend(
                 lg.entries
-                for lg in unify.get_logs(
+                for lg in unisdk.get_logs(
                     context=context,
                     filter=self._scoped_filter(None),
                     exclude_fields=list_private_fields(context),
@@ -4840,7 +4840,7 @@ class FunctionManager(BaseFunctionManager):
         logs = []
         for context in self._read_compositional_contexts():
             logs.extend(
-                unify.get_logs(
+                unisdk.get_logs(
                     context=context,
                     filter=self._scoped_filter(f"name == '{function_name}'"),
                     limit=1,
@@ -4920,7 +4920,7 @@ class FunctionManager(BaseFunctionManager):
             results = {target_name: "deleted"}
         else:
             # Multiple functions - build from all logs
-            all_logs = unify.get_logs(
+            all_logs = unisdk.get_logs(
                 context=self._compositional_ctx,
                 exclude_fields=list_private_fields(self._compositional_ctx),
             )
@@ -4953,7 +4953,7 @@ class FunctionManager(BaseFunctionManager):
         if delete_dependents:
             # Get all logs if not already loaded
             if len(function_ids) == 1:
-                all_logs = unify.get_logs(
+                all_logs = unisdk.get_logs(
                     context=self._compositional_ctx,
                     exclude_fields=list_private_fields(self._compositional_ctx),
                 )
@@ -4988,7 +4988,7 @@ class FunctionManager(BaseFunctionManager):
 
         # Batch delete all functions
         if log_ids_to_delete:
-            unify.delete_logs(
+            unisdk.delete_logs(
                 context=self._compositional_ctx,
                 logs=log_ids_to_delete,
             )
@@ -5027,7 +5027,7 @@ class FunctionManager(BaseFunctionManager):
             if delay:
                 _time.sleep(delay)
             try:
-                logs = unify.get_logs(**kwargs)
+                logs = unisdk.get_logs(**kwargs)
                 rows = [lg.entries for lg in logs]
                 last_exc = None
                 break
@@ -5223,7 +5223,7 @@ class FunctionManager(BaseFunctionManager):
     # ------------------------------------------------------------------ #
 
     def _guidance_context(self) -> str:
-        ctxs = unify.get_active_context()
+        ctxs = unisdk.get_active_context()
         read_ctx = ctxs.get("read")
         return f"{read_ctx}/Guidance" if read_ctx else "Guidance"
 
@@ -5240,7 +5240,7 @@ class FunctionManager(BaseFunctionManager):
         # Fallback: scan Guidance rows that reference this function via function_ids
         gctx = self._guidance_context()
         try:
-            rows = unify.get_logs(
+            rows = unisdk.get_logs(
                 context=gctx,
                 filter=f"{int(function_id)} in function_ids",
                 exclude_fields=list_private_fields(gctx),
@@ -5276,7 +5276,7 @@ class FunctionManager(BaseFunctionManager):
                 gids = gids[:limit]
         cond = " or ".join(f"guidance_id == {int(g)}" for g in gids)
         gctx = self._guidance_context()
-        rows = unify.get_logs(
+        rows = unisdk.get_logs(
             context=gctx,
             filter=cond or "False",
             exclude_fields=list_private_fields(gctx),
@@ -5397,7 +5397,7 @@ class FunctionManager(BaseFunctionManager):
         limit: Optional[int] = None,
         exclude_fields: Optional[List[str]] = None,
         from_fields: Optional[List[str]] = None,
-    ) -> List[unify.Log]:
+    ) -> List[unisdk.Log]:
         """Best-effort venv reads; treat missing contexts as empty."""
         import time as _time
 
@@ -5406,7 +5406,7 @@ class FunctionManager(BaseFunctionManager):
             if delay:
                 _time.sleep(delay)
             try:
-                return unify.get_logs(
+                return unisdk.get_logs(
                     context=self._venvs_ctx,
                     filter=filter,
                     limit=limit,
@@ -5485,7 +5485,7 @@ class FunctionManager(BaseFunctionManager):
                     exclude_fields=list_private_fields(context),
                 )
                 if context == self._venvs_ctx
-                else unify.get_logs(
+                else unisdk.get_logs(
                     context=context,
                     filter=f"venv_id == {venv_id}",
                     limit=1,
@@ -5512,7 +5512,7 @@ class FunctionManager(BaseFunctionManager):
                         from_fields=None,
                     )
                     if context == self._venvs_ctx
-                    else unify.get_logs(
+                    else unisdk.get_logs(
                         context=context,
                         exclude_fields=list_private_fields(context),
                     )
@@ -5539,7 +5539,7 @@ class FunctionManager(BaseFunctionManager):
         )
         if not logs:
             return False
-        unify.delete_logs(
+        unisdk.delete_logs(
             context=self._venvs_ctx,
             logs=[logs[0].id],
         )
@@ -5562,7 +5562,7 @@ class FunctionManager(BaseFunctionManager):
         )
         if not logs:
             return False
-        unify.update_logs(
+        unisdk.update_logs(
             context=self._venvs_ctx,
             logs=[logs[0].id],
             entries={"venv": venv},
@@ -5592,7 +5592,7 @@ class FunctionManager(BaseFunctionManager):
         )
         if log is None:
             return False
-        unify.update_logs(
+        unisdk.update_logs(
             context=self._compositional_ctx,
             logs=[log.id],
             entries={"venv_id": venv_id},
@@ -5633,7 +5633,7 @@ class FunctionManager(BaseFunctionManager):
         from unity.file_manager.settings import get_local_root
 
         # Get current context for isolation
-        ctx = unify.get_active_context()
+        ctx = unisdk.get_active_context()
         ctx_name = ctx.get("read") or ctx.get("write") or "default"
         # Sanitize context name for filesystem use
         safe_ctx = ctx_name.replace("/", "_").replace("\\", "_")

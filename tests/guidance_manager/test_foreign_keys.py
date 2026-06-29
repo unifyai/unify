@@ -17,7 +17,7 @@ Coverage
 
 from __future__ import annotations
 
-import unify
+import unisdk
 from tests.helpers import _handle_project
 from unity.function_manager.function_manager import FunctionManager
 from unity.guidance_manager.guidance_manager import GuidanceManager
@@ -68,7 +68,7 @@ def test_fk_images_valid_reference():
     )
 
     # Verify guidance created with nested image references
-    guidance_list = unify.get_logs(
+    guidance_list = unisdk.get_logs(
         context=gm._ctx,
         from_fields=["guidance_id", "images"],
     )
@@ -109,23 +109,23 @@ def test_fk_images_set_null_on_delete():
     )
 
     # Verify all 3 images
-    guidance_list = unify.get_logs(
+    guidance_list = unisdk.get_logs(
         context=gm._ctx,
         from_fields=["guidance_id", "images"],
     )
     assert len(guidance_list[0].entries["images"]) == 3
 
     # Delete middle image (img2)
-    img2_logs = unify.get_logs(
+    img2_logs = unisdk.get_logs(
         context=im._ctx,
         filter=f"image_id == {img2_id}",
         return_ids_only=True,
     )
     assert img2_logs, "Image not found"
-    unify.delete_logs(context=im._ctx, logs=img2_logs[0])
+    unisdk.delete_logs(context=im._ctx, logs=img2_logs[0])
 
     # Verify SET NULL behavior: img2 replaced with None in-place
-    guidance_after = unify.get_logs(context=gm._ctx, from_fields=["images"])
+    guidance_after = unisdk.get_logs(context=gm._ctx, from_fields=["images"])
     remaining_images = guidance_after[0].entries.get("images", [])
     assert len(remaining_images) == 3  # Still 3 entries, one has None
 
@@ -178,21 +178,21 @@ def test_fk_images_multiple_deletes():
     )
 
     # Verify all 5 images
-    guidance = unify.get_logs(context=gm._ctx, from_fields=["images"])
+    guidance = unisdk.get_logs(context=gm._ctx, from_fields=["images"])
     assert len(guidance[0].entries["images"]) == 5
 
     # Delete first 3 images
     for img_id in image_ids[:3]:
-        img_logs = unify.get_logs(
+        img_logs = unisdk.get_logs(
             context=im._ctx,
             filter=f"image_id == {img_id}",
             return_ids_only=True,
         )
         assert img_logs, f"Image {img_id} not found"
-        unify.delete_logs(context=im._ctx, logs=img_logs[0])
+        unisdk.delete_logs(context=im._ctx, logs=img_logs[0])
 
     # Verify SET NULL behavior: still 5 entries, 3 with None
-    guidance_after = unify.get_logs(context=gm._ctx, from_fields=["images"])
+    guidance_after = unisdk.get_logs(context=gm._ctx, from_fields=["images"])
     remaining_images = guidance_after[0].entries.get("images", [])
     assert len(remaining_images) == 5  # Still 5 entries
 
@@ -234,24 +234,24 @@ def test_fk_images_null_tolerance():
     )
 
     # Get guidance_id
-    guidance_list = unify.get_logs(context=gm._ctx, from_fields=["guidance_id"])
+    guidance_list = unisdk.get_logs(context=gm._ctx, from_fields=["guidance_id"])
     assert len(guidance_list) == 1
     guidance_id = int(guidance_list[0].entries["guidance_id"])
 
     # Delete image (SET NULL will replace image_id with None)
-    img_logs = unify.get_logs(
+    img_logs = unisdk.get_logs(
         context=im._ctx,
         filter=f"image_id == {img_id}",
         return_ids_only=True,
     )
     assert img_logs, "Image not found"
-    unify.delete_logs(context=im._ctx, logs=img_logs[0])
+    unisdk.delete_logs(context=im._ctx, logs=img_logs[0])
 
     # Reinitialize GuidanceManager and verify it doesn't crash
     gm2 = GuidanceManager()
 
     # Verify guidance still exists and can be read
-    guidance_after = unify.get_logs(
+    guidance_after = unisdk.get_logs(
         context=gm2._ctx,
         from_fields=["guidance_id", "images"],
     )
@@ -294,7 +294,7 @@ def test_fk_function_ids_valid_reference():
     fm.add_functions(implementations=[src1, src2])
 
     # Get function IDs
-    funcs = unify.get_logs(context=fm._compositional_ctx, from_fields=["function_id"])
+    funcs = unisdk.get_logs(context=fm._compositional_ctx, from_fields=["function_id"])
     func_ids = sorted([int(f.entries["function_id"]) for f in funcs])
     assert len(func_ids) == 2
 
@@ -306,7 +306,7 @@ def test_fk_function_ids_valid_reference():
     )
 
     # Verify guidance created with function_ids
-    guidance_list = unify.get_logs(
+    guidance_list = unisdk.get_logs(
         context=gm._ctx,
         from_fields=["guidance_id", "function_ids"],
     )
@@ -326,7 +326,7 @@ def test_fk_function_ids_set_null_on_delete():
         fm.add_functions(implementations=src)
 
     # Get function IDs
-    funcs = unify.get_logs(context=fm._compositional_ctx, from_fields=["function_id"])
+    funcs = unisdk.get_logs(context=fm._compositional_ctx, from_fields=["function_id"])
     func_ids = sorted([int(f.entries["function_id"]) for f in funcs])
     assert len(func_ids) == 3
     f1, f2, f3 = func_ids
@@ -339,14 +339,14 @@ def test_fk_function_ids_set_null_on_delete():
     )
 
     # Verify all 3 function_ids
-    guidance = unify.get_logs(context=gm._ctx, from_fields=["function_ids"])
+    guidance = unisdk.get_logs(context=gm._ctx, from_fields=["function_ids"])
     assert sorted(guidance[0].entries["function_ids"]) == [f1, f2, f3]
 
     # Delete middle function (f2)
     fm.delete_function(function_id=f2)
 
     # Verify f2 removed from function_ids array
-    guidance_after = unify.get_logs(context=gm._ctx, from_fields=["function_ids"])
+    guidance_after = unisdk.get_logs(context=gm._ctx, from_fields=["function_ids"])
     remaining_ids = sorted(guidance_after[0].entries.get("function_ids", []))
     assert remaining_ids == [f1, f3]
     assert f2 not in remaining_ids
@@ -365,7 +365,7 @@ def test_fk_function_ids_empty_array():
     )
 
     # Verify guidance was created
-    guidance = unify.get_logs(
+    guidance = unisdk.get_logs(
         context=gm._ctx,
         from_fields=["guidance_id", "function_ids"],
     )
@@ -391,7 +391,7 @@ def test_fk_combined_images_and_functions():
     # Create function
     src = "def demo():\n    return 'demo'\n"
     fm.add_functions(implementations=src)
-    funcs = unify.get_logs(context=fm._compositional_ctx, from_fields=["function_id"])
+    funcs = unisdk.get_logs(context=fm._compositional_ctx, from_fields=["function_id"])
     func_id = int(funcs[0].entries["function_id"])
 
     # Create guidance with both
@@ -405,21 +405,21 @@ def test_fk_combined_images_and_functions():
     )
 
     # Verify both references
-    guidance = unify.get_logs(context=gm._ctx, from_fields=["images", "function_ids"])
+    guidance = unisdk.get_logs(context=gm._ctx, from_fields=["images", "function_ids"])
     assert guidance[0].entries["images"][0]["raw_image_ref"]["image_id"] == img_id
     assert guidance[0].entries["function_ids"] == [func_id]
 
     # Delete image
-    img_logs = unify.get_logs(
+    img_logs = unisdk.get_logs(
         context=im._ctx,
         filter=f"image_id == {img_id}",
         return_ids_only=True,
     )
     assert img_logs, "Image not found"
-    unify.delete_logs(context=im._ctx, logs=img_logs[0])
+    unisdk.delete_logs(context=im._ctx, logs=img_logs[0])
 
     # Verify SET NULL: image_id replaced with None, function_ids intact
-    guidance_after = unify.get_logs(
+    guidance_after = unisdk.get_logs(
         context=gm._ctx,
         from_fields=["images", "function_ids"],
     )
@@ -432,7 +432,7 @@ def test_fk_combined_images_and_functions():
     fm.delete_function(function_id=func_id)
 
     # Verify function_id removed (CASCADE), guidance still exists
-    guidance_final = unify.get_logs(
+    guidance_final = unisdk.get_logs(
         context=gm._ctx,
         from_fields=["guidance_id", "images", "function_ids"],
     )

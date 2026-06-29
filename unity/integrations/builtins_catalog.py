@@ -7,9 +7,9 @@ import json
 import logging
 from typing import Any, Dict, Iterable, List, Optional
 
-import unify
+import unisdk
 
-from unify.utils.http import RequestError
+from unisdk.utils.http import RequestError
 
 from unity.common.builtins import (
     builtins_project,
@@ -57,19 +57,19 @@ def _normalize_app_slug(value: Any) -> str:
 def _ensure_catalog_storage(project: str) -> None:
     logger.info("Ensuring integration catalogue storage project=%s", project)
     ensure_builtins_project(project)
-    unify.create_context(
+    unisdk.create_context(
         BUILTINS_INTEGRATION_APPS_CONTEXT,
         description="Public integration app catalogue.",
         unique_keys={"app_id": "int"},
         project=project,
     )
-    unify.create_context(
+    unisdk.create_context(
         BUILTINS_INTEGRATION_TOOLS_CONTEXT,
         description="Public integration tool catalogue.",
         unique_keys={"function_id": "int"},
         project=project,
     )
-    unify.create_context(
+    unisdk.create_context(
         BUILTINS_INTEGRATION_META_CONTEXT,
         description="Seeding state for the integration catalogue.",
         unique_keys={"meta_id": "int"},
@@ -299,7 +299,7 @@ def _delete_units(project: str, context: str, filters: list[str]) -> None:
     for index, filter_expr in enumerate(filters):
         page = 1
         while True:
-            logs = unify.get_logs(
+            logs = unisdk.get_logs(
                 project=project,
                 context=context,
                 filter=filter_expr,
@@ -319,7 +319,7 @@ def _delete_units(project: str, context: str, filters: list[str]) -> None:
                 page,
                 len(logs),
             )
-            unify.delete_logs(
+            unisdk.delete_logs(
                 project=project,
                 context=context,
                 logs=logs,
@@ -333,7 +333,7 @@ def _delete_function_ids(project: str, function_ids: Iterable[int]) -> None:
         batch = unique_ids[index : index + _DELETE_FILTER_BATCH_SIZE]
         page = 1
         while True:
-            logs = unify.get_logs(
+            logs = unisdk.get_logs(
                 project=project,
                 context=BUILTINS_INTEGRATION_TOOLS_CONTEXT,
                 filter=f"function_id in {json.dumps(batch)}",
@@ -353,7 +353,7 @@ def _delete_function_ids(project: str, function_ids: Iterable[int]) -> None:
                 page,
                 len(logs),
             )
-            unify.delete_logs(
+            unisdk.delete_logs(
                 project=project,
                 context=BUILTINS_INTEGRATION_TOOLS_CONTEXT,
                 logs=logs,
@@ -373,7 +373,7 @@ def _insert_rows(project: str, context: str, rows: List[Dict[str, Any]]) -> None
             total_batches,
             len(batch),
         )
-        unify.create_logs(
+        unisdk.create_logs(
             project=project,
             context=context,
             entries=batch,
@@ -672,7 +672,7 @@ def list_catalog_apps(
             project=project,
         )
         return rows
-    rows = unify.get_logs(
+    rows = unisdk.get_logs(
         project=project,
         context=BUILTINS_INTEGRATION_APPS_CONTEXT,
         limit=limit,
@@ -697,7 +697,7 @@ def list_catalog_tools(
         row_filter = f'({row_filter}) and metadata["integration"]["app_slug"] == {json.dumps(_normalize_app_slug(canonical_app_slug))}'
     if tool_id:
         row_filter = f'({row_filter}) and metadata["integration"]["tool_id"] == {json.dumps(tool_id)}'
-    rows = unify.get_logs(
+    rows = unisdk.get_logs(
         project=project,
         context=BUILTINS_INTEGRATION_TOOLS_CONTEXT,
         filter=row_filter,

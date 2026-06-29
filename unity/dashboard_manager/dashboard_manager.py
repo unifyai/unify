@@ -67,9 +67,9 @@ LAYOUTS_TABLE = "Dashboards/Layouts"
 def _get_active_project() -> str:
     """Get the currently active Unify project name."""
     try:
-        import unify
+        import unisdk
 
-        project = unify.active_project()
+        project = unisdk.active_project()
         return project or ""
     except Exception:
         return ""

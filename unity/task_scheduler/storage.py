@@ -13,9 +13,9 @@ from typing import Any, Dict, Iterable, List, Optional, Union
 from enum import Enum
 from functools import cached_property
 
-import unify
+import unisdk
 
-from unify.utils.http import RequestError as _UnifyRequestError
+from unisdk.utils.http import RequestError as _UnifyRequestError
 from unity.common.authorship import strip_authoring_assistant_id
 from unity.common.log_utils import log as unity_log, create_logs as unity_create_logs
 from pydantic import BaseModel
@@ -38,7 +38,7 @@ class TasksStore:
         project: str | None = None,
     ) -> None:
         self._ctx = context
-        self._project = project or unify.active_project()
+        self._project = project or unisdk.active_project()
 
     # ----------------------------- Context ---------------------------------
     def ensure_context(
@@ -70,7 +70,7 @@ class TasksStore:
         # Ensure all required fields exist (idempotent per-field)
         try:
             existing = (
-                unify.get_fields(
+                unisdk.get_fields(
                     project=self._project,
                     context=self._ctx,
                 )
@@ -81,7 +81,7 @@ class TasksStore:
         missing = {k: v for k, v in fields.items() if k not in existing}
         if missing:
             try:
-                unify.create_fields(
+                unisdk.create_fields(
                     missing,
                     project=self._project,
                     context=self._ctx,
@@ -92,7 +92,7 @@ class TasksStore:
         # read the canonical 'data_type' representation.
         try:
             updated = (
-                unify.get_fields(
+                unisdk.get_fields(
                     project=self._project,
                     context=self._ctx,
                 )
@@ -114,7 +114,7 @@ class TasksStore:
     def fields(self) -> Dict[str, str]:
         try:
             fields = (
-                unify.get_fields(
+                unisdk.get_fields(
                     project=self._project,
                     context=self._ctx,
                 )
@@ -127,12 +127,12 @@ class TasksStore:
         except Exception:
             return {}
 
-    def _safe_get_logs(self, **kwargs) -> List[unify.Log] | List[int]:
+    def _safe_get_logs(self, **kwargs) -> List[unisdk.Log] | List[int]:
         """Get logs, treating missing contexts as empty during fresh/test runs."""
         if "project" not in kwargs:
             kwargs["project"] = self._project
         try:
-            return unify.get_logs(**kwargs)
+            return unisdk.get_logs(**kwargs)
         except _UnifyRequestError as e:
             status = getattr(getattr(e, "response", None), "status_code", None)
             if status == 404:
@@ -147,7 +147,7 @@ class TasksStore:
             raise
 
     def get_metric_count(self, *, key: str) -> int:
-        ret = unify.get_logs_metric(
+        ret = unisdk.get_logs_metric(
             metric="count",
             key=key,
             project=self._project,
@@ -161,7 +161,7 @@ class TasksStore:
 
         When the backend does not return a value (e.g., empty context), 0 is returned.
         """
-        ret = unify.get_logs_metric(
+        ret = unisdk.get_logs_metric(
             metric="max",
             key=key,
             project=self._project,
@@ -178,7 +178,7 @@ class TasksStore:
         return_ids_only: bool = False,
         exclude_fields: Optional[List[str]] = None,
         include_fields: Optional[List[str]] = None,
-    ) -> Union[List[int], List[unify.Log]]:
+    ) -> Union[List[int], List[unisdk.Log]]:
         return self._safe_get_logs(
             context=self._ctx,
             filter=filter,
@@ -194,7 +194,7 @@ class TasksStore:
         *,
         task_ids: Union[int, Iterable[int]],
         return_ids_only: bool = True,
-    ) -> List[Union[int, unify.Log]]:
+    ) -> List[Union[int, unisdk.Log]]:
         singular = isinstance(task_ids, int)
         original_id = task_ids if singular else None
         ids_list = [task_ids] if singular else list(task_ids)
@@ -219,7 +219,7 @@ class TasksStore:
         *,
         task_ids: Union[int, Iterable[int]],
         fields: Optional[List[str]] = None,
-    ) -> List[unify.Log]:
+    ) -> List[unisdk.Log]:
         """
         Fetch a minimal projection of rows for the specified task_ids.
 
@@ -287,7 +287,7 @@ class TasksStore:
     def update(
         self,
         *,
-        logs: Union[int, unify.Log, List[Union[int, unify.Log]]],
+        logs: Union[int, unisdk.Log, List[Union[int, unisdk.Log]]],
         entries: Union[Dict[str, Any], List[Dict[str, Any]]],
     ) -> Dict[str, str]:
         def _strip_nones(value: Any, *, top_level: bool) -> Any:
@@ -323,14 +323,14 @@ class TasksStore:
                 _strip_nones(TasksStore._norm(entries), top_level=True),
             ),
         )
-        return unify.update_logs(
+        return unisdk.update_logs(
             logs=logs,
             context=self._ctx,
             entries=norm_entries,
             overwrite=True,
         )
 
-    def log(self, *, entries: Dict[str, Any], new: bool = True) -> unify.Log:
+    def log(self, *, entries: Dict[str, Any], new: bool = True) -> unisdk.Log:
         norm_entries = TasksStore._with_explicit_task_types(TasksStore._norm(entries))
         # Create with expanded fields so auto-counting applies when ids are omitted
         return unity_log(
@@ -378,7 +378,7 @@ class TasksStore:
                     pass
             return {"log_event_ids": log_ids}
 
-    def get_rows_by_log_ids(self, *, log_ids: List[int]) -> List[unify.Log]:
+    def get_rows_by_log_ids(self, *, log_ids: List[int]) -> List[unisdk.Log]:
         """
         Fetch full log objects by their log-event ids. This avoids filtering by
         field values and allows precise retrieval of freshly-created rows.
@@ -398,7 +398,7 @@ class TasksStore:
         return res
 
     def delete(self, *, logs: Union[int, List[int]]) -> Dict[str, str]:
-        return unify.delete_logs(
+        return unisdk.delete_logs(
             project=self._project,
             context=self._ctx,
             logs=logs,

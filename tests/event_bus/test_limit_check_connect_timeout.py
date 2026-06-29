@@ -1,6 +1,6 @@
 """Tests for shared spend client in spending limit checks.
 
-Verifies that limit checks use a shared ``unify.AsyncSpendClient`` with
+Verifies that limit checks use a shared ``unisdk.AsyncSpendClient`` with
 connection pooling and retries, so that connections are reused across checks.
 """
 
@@ -193,7 +193,7 @@ class TestSharedSpendClient:
 
         with _patch_context():
             with patch.object(sl, "_get_spend_client", return_value=mock_client):
-                with patch("unify.async_admin.AsyncSpendClient") as mock_cls:
+                with patch("unisdk.async_admin.AsyncSpendClient") as mock_cls:
                     await sl.check_spending_limits_callback(
                         LimitCheckRequest(model="gpt-4", endpoint="test"),
                     )

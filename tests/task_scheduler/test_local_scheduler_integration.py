@@ -25,7 +25,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
-import unify
+import unisdk
 
 from tests.helpers import _handle_project
 from unity.session_details import SESSION_DETAILS
@@ -46,7 +46,7 @@ def _local_orchestra_authenticated() -> bool:
     """
 
     try:
-        unify.get_projects()
+        unisdk.get_projects()
         return True
     except Exception:
         return False

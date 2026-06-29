@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, UTC
-import unify
+import unisdk
 
 from unity.transcript_manager.transcript_manager import TranscriptManager
 from unity.transcript_manager.types.exchange import Exchange
@@ -26,7 +26,7 @@ def test_row_created_explicit_id():
     )
     tm.join_published()
 
-    rows = unify.get_logs(
+    rows = unisdk.get_logs(
         context=tm._exchanges_ctx,
         filter=f"exchange_id == {ex_id}",
         limit=1,

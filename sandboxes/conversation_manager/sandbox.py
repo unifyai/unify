@@ -29,7 +29,7 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
-import unify
+import unisdk
 
 from pathlib import Path
 
@@ -87,7 +87,7 @@ def _redirect_voice_worker_output(log_path: Path) -> None:
         py_cmd = [sys.executable, str(Path(script).expanduser().resolve()), *args]
         child_env = {
             **os.environ,
-            "UNIFY_TERMINAL_LOG": "false",
+            "UNISDK_TERMINAL_LOG": "false",
             "UNILLM_TERMINAL_LOG": "false",
         }
         return subprocess.Popen(
@@ -404,11 +404,11 @@ async def _main_async() -> None:
 
     # Optional project version rollback (0-indexed)
     if args.project_version != -1:
-        commits = unify.get_project_commits(args.project_name)
+        commits = unisdk.get_project_commits(args.project_name)
         if commits:
             try:
                 target = commits[args.project_version]
-                unify.rollback_project(args.project_name, target["commit_hash"])
+                unisdk.rollback_project(args.project_name, target["commit_hash"])
                 LG.info("[version] Rolled back to commit %s", target["commit_hash"])
             except IndexError:
                 LG.warning(
@@ -438,7 +438,7 @@ async def _main_async() -> None:
 
     # Keep sandbox logs readable by default. Full traces are still available via --debug.
     if not args.debug:
-        for name in ("unify", "unify_requests", "unillm", "UnifyAsyncLogger"):
+        for name in ("unisdk", "unisdk_requests", "unillm", "UnisdkAsyncLogger"):
             try:
                 logging.getLogger(name).setLevel(logging.WARNING)
             except Exception:

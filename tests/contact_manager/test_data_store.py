@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 import time
-import unify
+import unisdk
 
 from unity.contact_manager.contact_manager import ContactManager
 from unity.common.context_registry import ContextRegistry
@@ -277,7 +277,7 @@ def test_get_info_cache_fallback_reads_accessible_space_roots():
             personal_ds[cid]
     finally:
         try:
-            unify.delete_context(f"Teams/{team_id}/Contacts")
+            unisdk.delete_context(f"Teams/{team_id}/Contacts")
         except Exception:
             pass
         SESSION_DETAILS.team_ids = []

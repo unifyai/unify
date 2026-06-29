@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
-import unify
+import unisdk
 
 from tests.helpers import _handle_project
 from unity.common.context_registry import ContextRegistry
@@ -40,7 +40,7 @@ def _configure_teams() -> tuple[int, int]:
 def _reset_teams(team_ids: tuple[int, int], suffix: str) -> None:
     for team_id in team_ids:
         try:
-            unify.delete_context(f"Teams/{team_id}/Data/{suffix}")
+            unisdk.delete_context(f"Teams/{team_id}/Data/{suffix}")
         except Exception:
             pass
     SESSION_DETAILS.team_ids = []

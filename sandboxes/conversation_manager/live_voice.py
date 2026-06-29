@@ -151,7 +151,7 @@ def _spawn_quiet(log_path: Path):
         py_cmd = [sys.executable, str(Path(script).expanduser().resolve()), *args]
         child_env = {
             **os.environ,
-            "UNIFY_TERMINAL_LOG": "false",
+            "UNISDK_TERMINAL_LOG": "false",
             "UNILLM_TERMINAL_LOG": "false",
         }
         return subprocess.Popen(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-import unify
+import unisdk
 
 from ..common.colleague_cache import (
     CURRENT_ASSISTANT_FALLBACK_LABEL,
@@ -360,7 +360,7 @@ def search_messages(
         all_messages = []
         offset = 0
         while True:
-            batch = unify.get_logs(
+            batch = unisdk.get_logs(
                 context=context,
                 offset=offset,
                 limit=SEARCH_BATCH_SIZE,

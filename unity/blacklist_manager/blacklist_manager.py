@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional, Tuple
 import functools
 
-import unify
+import unisdk
 
 from ..common.log_utils import log as unity_log
 from ..common.data_store import DataStore
@@ -121,7 +121,7 @@ class BlackListManager(BaseBlackListManager):
             context = self._blacklist_context_for_destination(destination)
         except ToolErrorException as exc:
             return exc.payload  # type: ignore[return-value]
-        unify.delete_context(context)
+        unisdk.delete_context(context)
 
         # Force re-provisioning by clearing TableStore ensure memo for this context
         ContextRegistry.forget(self, "BlackList")
@@ -136,7 +136,7 @@ class BlackListManager(BaseBlackListManager):
 
             for _ in range(3):
                 try:
-                    unify.get_fields(context=context)
+                    unisdk.get_fields(context=context)
                     break
                 except Exception:
                     _time.sleep(0.05)
@@ -253,7 +253,7 @@ class BlackListManager(BaseBlackListManager):
             )
 
         # Resolve target log id
-        target_ids = unify.get_logs(
+        target_ids = unisdk.get_logs(
             context=context,
             filter=f"blacklist_id == {int(blacklist_id)}",
             return_ids_only=True,
@@ -268,7 +268,7 @@ class BlackListManager(BaseBlackListManager):
             )
         log_id = target_ids[0]
 
-        unify.update_logs(
+        unisdk.update_logs(
             logs=[log_id],
             context=context,
             entries=updates,
@@ -276,7 +276,7 @@ class BlackListManager(BaseBlackListManager):
         )
 
         # Refresh local cache from backend
-        row = unify.get_logs(
+        row = unisdk.get_logs(
             context=context,
             filter=f"blacklist_id == {int(blacklist_id)}",
             limit=1,
@@ -305,7 +305,7 @@ class BlackListManager(BaseBlackListManager):
         # / "multiple rows" sanity checks; aggregation contexts are queried
         # separately below since they hold independent log ids — see the
         # cascade loop comment).
-        target_ids = unify.get_logs(
+        target_ids = unisdk.get_logs(
             context=context,
             filter=f"blacklist_id == {int(blacklist_id)}",
             limit=2,
@@ -319,13 +319,13 @@ class BlackListManager(BaseBlackListManager):
             raise RuntimeError(
                 f"Multiple blacklist rows found with blacklist_id {blacklist_id}. Data integrity issue.",
             )
-        ids_in_ctx = unify.get_logs(
+        ids_in_ctx = unisdk.get_logs(
             context=context,
             filter=f"blacklist_id == {int(blacklist_id)}",
             return_ids_only=True,
         )
         for log_id in ids_in_ctx:
-            unify.delete_logs(context=context, logs=log_id)
+            unisdk.delete_logs(context=context, logs=log_id)
         try:
             self._data_store_for_context(context).delete(blacklist_id)
         except KeyError:

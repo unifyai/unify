@@ -17,7 +17,7 @@ import pytest
 from unillm import LLMEvent
 from unillm.limit_hooks import LimitCheckRequest, LimitType
 
-from unify.async_admin import SpendRequestError
+from unisdk.async_admin import SpendRequestError
 
 from unity.common.log_utils import AtomicUpsertResult, atomic_upsert
 from unity.events.llm_event_hook import (
@@ -89,7 +89,7 @@ class TestAtomicUpsert:
                 with patch("unity.common.log_utils.SETTINGS") as mock_settings:
                     mock_settings.ORCHESTRA_URL = "https://api.test.com/v0"
 
-                    with patch("unity.common.log_utils.unify") as mock_unify:
+                    with patch("unity.common.log_utils.unisdk") as mock_unify:
                         mock_unify.active_project.return_value = "Assistants"
 
                         result = await atomic_upsert(
@@ -148,7 +148,7 @@ class TestAtomicUpsert:
                 with patch("unity.common.log_utils.SETTINGS") as mock_settings:
                     mock_settings.ORCHESTRA_URL = "https://api.test.com/v0"
 
-                    with patch("unity.common.log_utils.unify") as mock_unify:
+                    with patch("unity.common.log_utils.unisdk") as mock_unify:
                         mock_unify.active_project.return_value = "Assistants"
 
                         await atomic_upsert(
@@ -206,7 +206,7 @@ class TestAtomicUpsert:
                 with patch("unity.common.log_utils.SETTINGS") as mock_settings:
                     mock_settings.ORCHESTRA_URL = "https://api.test.com/v0"
 
-                    with patch("unity.common.log_utils.unify") as mock_unify:
+                    with patch("unity.common.log_utils.unisdk") as mock_unify:
                         mock_unify.active_project.return_value = "Assistants"
 
                         await atomic_upsert(
@@ -253,7 +253,7 @@ class TestAtomicUpsert:
                 with patch("unity.common.log_utils.SETTINGS") as mock_settings:
                     mock_settings.ORCHESTRA_URL = "https://api.test.com/v0"
 
-                    with patch("unity.common.log_utils.unify") as mock_unify:
+                    with patch("unity.common.log_utils.unisdk") as mock_unify:
                         mock_unify.active_project.return_value = "Assistants"
 
                         with pytest.raises(httpx.HTTPStatusError):
@@ -530,7 +530,7 @@ class TestConcurrentSpendUpdates:
                 with patch("unity.common.log_utils.SETTINGS") as mock_settings:
                     mock_settings.ORCHESTRA_URL = "https://api.test.com/v0"
 
-                    with patch("unity.common.log_utils.unify") as mock_unify:
+                    with patch("unity.common.log_utils.unisdk") as mock_unify:
                         mock_unify.active_project.return_value = "Assistants"
 
                         # Launch 5 concurrent upserts

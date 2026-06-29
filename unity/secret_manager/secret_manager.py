@@ -9,7 +9,7 @@ from time import monotonic
 from typing import Any, Callable, Dict, List, Optional, Type
 from pydantic import BaseModel
 
-import unify
+import unisdk
 from unity.common.llm_client import new_llm_client
 from unity.common.log_utils import log as unity_log
 
@@ -229,7 +229,7 @@ class SecretManager(BaseSecretManager):
 
     @functools.wraps(BaseSecretManager.clear, updated=())
     def clear(self) -> None:
-        unify.delete_context(self._ctx)
+        unisdk.delete_context(self._ctx)
 
         # Force re-provisioning even if previously ensured
         self._ctx = ContextRegistry.refresh(self, SECRETS_TABLE)
@@ -243,7 +243,7 @@ class SecretManager(BaseSecretManager):
 
             for _ in range(3):
                 try:
-                    unify.get_fields(context=self._ctx)
+                    unisdk.get_fields(context=self._ctx)
                     break
                 except Exception:
                     _time.sleep(0.05)
@@ -350,7 +350,7 @@ class SecretManager(BaseSecretManager):
             return
 
         try:
-            from unify.utils import http
+            from unisdk.utils import http
 
             resp = http.get(
                 f"{base_url}/admin/assistant",
@@ -380,7 +380,7 @@ class SecretManager(BaseSecretManager):
             if not isinstance(value, str) or not value:
                 continue
             try:
-                existing = unify.get_logs(
+                existing = unisdk.get_logs(
                     context=self._ctx,
                     filter=f"name == {name!r}",
                     limit=1,
@@ -388,7 +388,7 @@ class SecretManager(BaseSecretManager):
                 )
                 description = "System-managed OAuth credential (auto-synced)"
                 if existing:
-                    unify.update_logs(
+                    unisdk.update_logs(
                         logs=[existing[0]],
                         context=self._ctx,
                         entries={"value": value, "description": description},
@@ -421,14 +421,14 @@ class SecretManager(BaseSecretManager):
         # context but are not removed based on the admin assistant payload.
         for stale_name in active_allowlist - secrets_dict.keys():
             try:
-                ids = unify.get_logs(
+                ids = unisdk.get_logs(
                     context=self._ctx,
                     filter=f"name == {stale_name!r}",
                     limit=1,
                     return_ids_only=True,
                 )
                 if ids:
-                    unify.delete_logs(context=self._ctx, logs=ids[0])
+                    unisdk.delete_logs(context=self._ctx, logs=ids[0])
                     self._env_remove(stale_name)
             except Exception:
                 continue
@@ -452,7 +452,7 @@ class SecretManager(BaseSecretManager):
         if not base_url or not admin_key:
             return
 
-        from unify.utils import http
+        from unisdk.utils import http
 
         from unity.workspace_files.policy import get_policy_store
 
@@ -535,7 +535,7 @@ class SecretManager(BaseSecretManager):
 
     def _get_secret_value(self, name: str) -> str | None:
         try:
-            rows = unify.get_logs(
+            rows = unisdk.get_logs(
                 context=self._ctx,
                 filter=f"name == {name!r}",
                 limit=1,
@@ -572,7 +572,7 @@ class SecretManager(BaseSecretManager):
         for code executed via ``os.environ``.
         """
         try:
-            rows = unify.get_logs(context=self._ctx)
+            rows = unisdk.get_logs(context=self._ctx)
         except Exception:
             rows = []
         name_to_value: Dict[str, str] = {}
@@ -708,7 +708,7 @@ class SecretManager(BaseSecretManager):
         value_to_name: Dict[str, str] = {}
         for context in self._read_secret_contexts():
             try:
-                rows = unify.get_logs(
+                rows = unisdk.get_logs(
                     context=context,
                     from_fields=["name", "value"],
                 )
@@ -969,7 +969,7 @@ class SecretManager(BaseSecretManager):
             If the credential is not stored in the resolved vault.
         """
         context = self._secret_context_for_destination(destination)
-        rows = unify.get_logs(
+        rows = unisdk.get_logs(
             context=context,
             filter=f"name == {integration!r}",
             limit=1,
@@ -1198,7 +1198,7 @@ class SecretManager(BaseSecretManager):
         names: set[str] = set()
         for context in self._read_secret_contexts():
             try:
-                rows = unify.get_logs(
+                rows = unisdk.get_logs(
                     context=context,
                     from_fields=["name"],
                 )
@@ -1270,7 +1270,7 @@ class SecretManager(BaseSecretManager):
             return exc.payload
 
         # Enforce uniqueness of name
-        existing = unify.get_logs(
+        existing = unisdk.get_logs(
             context=context,
             filter=f"name == {name!r}",
             limit=1,
@@ -1340,7 +1340,7 @@ class SecretManager(BaseSecretManager):
             return exc.payload
 
         # Find target log id
-        ids = unify.get_logs(
+        ids = unisdk.get_logs(
             context=context,
             filter=f"name == {name!r}",
             limit=2,
@@ -1361,7 +1361,7 @@ class SecretManager(BaseSecretManager):
         if not updates:
             raise ValueError("No updates provided.")
 
-        unify.update_logs(
+        unisdk.update_logs(
             logs=[log_id],
             context=context,
             entries=updates,
@@ -1408,7 +1408,7 @@ class SecretManager(BaseSecretManager):
         except ToolErrorException as exc:
             return exc.payload
 
-        ids = unify.get_logs(
+        ids = unisdk.get_logs(
             context=context,
             filter=f"name == {name!r}",
             limit=2,
@@ -1418,7 +1418,7 @@ class SecretManager(BaseSecretManager):
             raise ValueError(f"No secret found with name '{name}'.")
         if len(ids) > 1:
             raise RuntimeError(f"Multiple secrets found with name '{name}'.")
-        unify.delete_logs(context=context, logs=ids[0])
+        unisdk.delete_logs(context=context, logs=ids[0])
         try:
             if self._is_personal_context(context):
                 self._env_remove(name)

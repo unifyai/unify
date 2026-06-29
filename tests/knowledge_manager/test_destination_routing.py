@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import unify
+import unisdk
 
 from tests.destination_routing_helpers import (
     manager_routing_context as manager_routing_context,  # noqa: F401
@@ -43,8 +43,8 @@ def test_knowledge_writes_route_to_destination_and_reads_merge_roots(
         rows=[{"title": "Only personal root"}],
     )
 
-    personal_rows = unify.get_logs(context=f"{manager._ctx}/Runbooks")
-    shared_rows = unify.get_logs(context=f"Teams/{team_id}/Knowledge/Runbooks")
+    personal_rows = unisdk.get_logs(context=f"{manager._ctx}/Runbooks")
+    shared_rows = unisdk.get_logs(context=f"Teams/{team_id}/Knowledge/Runbooks")
 
     assert [row.entries["audience"] for row in personal_rows] == ["personal"]
     assert [row.entries["audience"] for row in shared_rows] == ["shared"]

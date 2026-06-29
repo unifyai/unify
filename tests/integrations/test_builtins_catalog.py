@@ -72,7 +72,7 @@ def test_seed_builtin_integrations_hash_guards_app_and_tool_units(monkeypatch) -
     }
 
     monkeypatch.setattr(
-        builtins_catalog.unify,
+        builtins_catalog.unisdk,
         "create_project",
         lambda *args, **kwargs: calls.append(("create_project", kwargs)),
     )
@@ -82,7 +82,7 @@ def test_seed_builtin_integrations_hash_guards_app_and_tool_units(monkeypatch) -
         lambda project: calls.append(("ensure_builtins_project", {"project": project})),
     )
     monkeypatch.setattr(
-        builtins_catalog.unify,
+        builtins_catalog.unisdk,
         "create_context",
         lambda *args, **kwargs: calls.append(("create_context", kwargs)),
     )
@@ -107,14 +107,14 @@ def test_seed_builtin_integrations_hash_guards_app_and_tool_units(monkeypatch) -
         seen_filters.add(filter_expr)
         return [17]
 
-    monkeypatch.setattr(builtins_catalog.unify, "get_logs", fake_get_logs)
+    monkeypatch.setattr(builtins_catalog.unisdk, "get_logs", fake_get_logs)
     monkeypatch.setattr(
-        builtins_catalog.unify,
+        builtins_catalog.unisdk,
         "delete_logs",
         lambda **kwargs: deleted.append((kwargs["context"], list(kwargs["logs"]))),
     )
     monkeypatch.setattr(
-        builtins_catalog.unify,
+        builtins_catalog.unisdk,
         "create_logs",
         lambda **kwargs: inserted.append((kwargs["context"], list(kwargs["entries"]))),
     )
@@ -176,7 +176,11 @@ def test_seed_builtin_integrations_preserves_unlisted_app_scope(monkeypatch) -> 
     seen_filters: set[str] = set()
 
     monkeypatch.setattr(builtins_catalog, "ensure_builtins_project", lambda *_: None)
-    monkeypatch.setattr(builtins_catalog.unify, "create_context", lambda *_, **__: None)
+    monkeypatch.setattr(
+        builtins_catalog.unisdk,
+        "create_context",
+        lambda *_, **__: None,
+    )
     monkeypatch.setattr(builtins_catalog, "ensure_vector_column", lambda *_, **__: None)
     monkeypatch.setattr(
         builtins_catalog,
@@ -193,7 +197,7 @@ def test_seed_builtin_integrations_preserves_unlisted_app_scope(monkeypatch) -> 
         "write_seed_hashes",
         lambda *_args, **_kwargs: None,
     )
-    monkeypatch.setattr(builtins_catalog.unify, "create_logs", lambda **_kwargs: None)
+    monkeypatch.setattr(builtins_catalog.unisdk, "create_logs", lambda **_kwargs: None)
 
     def fake_get_logs(**kwargs):
         if kwargs.get("context") == builtins_catalog.BUILTINS_INTEGRATION_META_CONTEXT:
@@ -206,8 +210,8 @@ def test_seed_builtin_integrations_preserves_unlisted_app_scope(monkeypatch) -> 
         seen_filters.add(filter_expr)
         return [17]
 
-    monkeypatch.setattr(builtins_catalog.unify, "get_logs", fake_get_logs)
-    monkeypatch.setattr(builtins_catalog.unify, "delete_logs", lambda **_kwargs: None)
+    monkeypatch.setattr(builtins_catalog.unisdk, "get_logs", fake_get_logs)
+    monkeypatch.setattr(builtins_catalog.unisdk, "delete_logs", lambda **_kwargs: None)
 
     assert builtins_catalog.seed_builtin_integrations(
         apps=[_app("gmail")],
@@ -236,7 +240,11 @@ def test_seed_builtin_integrations_prunes_unlisted_app_scope(monkeypatch) -> Non
     seen_filters: set[str] = set()
 
     monkeypatch.setattr(builtins_catalog, "ensure_builtins_project", lambda *_: None)
-    monkeypatch.setattr(builtins_catalog.unify, "create_context", lambda *_, **__: None)
+    monkeypatch.setattr(
+        builtins_catalog.unisdk,
+        "create_context",
+        lambda *_, **__: None,
+    )
     monkeypatch.setattr(builtins_catalog, "ensure_vector_column", lambda *_, **__: None)
     monkeypatch.setattr(
         builtins_catalog,
@@ -253,7 +261,7 @@ def test_seed_builtin_integrations_prunes_unlisted_app_scope(monkeypatch) -> Non
         "write_seed_hashes",
         lambda *_args, **_kwargs: None,
     )
-    monkeypatch.setattr(builtins_catalog.unify, "create_logs", lambda **_kwargs: None)
+    monkeypatch.setattr(builtins_catalog.unisdk, "create_logs", lambda **_kwargs: None)
 
     def fake_get_logs(**kwargs):
         if kwargs.get("context") == builtins_catalog.BUILTINS_INTEGRATION_META_CONTEXT:
@@ -266,8 +274,8 @@ def test_seed_builtin_integrations_prunes_unlisted_app_scope(monkeypatch) -> Non
         seen_filters.add(filter_expr)
         return [17]
 
-    monkeypatch.setattr(builtins_catalog.unify, "get_logs", fake_get_logs)
-    monkeypatch.setattr(builtins_catalog.unify, "delete_logs", lambda **_kwargs: None)
+    monkeypatch.setattr(builtins_catalog.unisdk, "get_logs", fake_get_logs)
+    monkeypatch.setattr(builtins_catalog.unisdk, "delete_logs", lambda **_kwargs: None)
 
     assert builtins_catalog.seed_builtin_integrations(
         apps=[_app("gmail")],
@@ -299,7 +307,11 @@ def test_seed_builtin_integrations_app_only_prune_preserves_tool_units(
     builtins_catalog._ENSURED_STORAGE_PROJECTS.clear()
     builtins_catalog._ENSURED_EMBEDDING_PROJECTS.clear()
     monkeypatch.setattr(builtins_catalog, "ensure_builtins_project", lambda *_: None)
-    monkeypatch.setattr(builtins_catalog.unify, "create_context", lambda *_, **__: None)
+    monkeypatch.setattr(
+        builtins_catalog.unisdk,
+        "create_context",
+        lambda *_, **__: None,
+    )
     monkeypatch.setattr(builtins_catalog, "ensure_vector_column", lambda *_, **__: None)
     monkeypatch.setattr(
         builtins_catalog,
@@ -332,14 +344,14 @@ def test_seed_builtin_integrations_app_only_prune_preserves_tool_units(
         seen_filters.add(filter_expr)
         return [17]
 
-    monkeypatch.setattr(builtins_catalog.unify, "get_logs", fake_get_logs)
+    monkeypatch.setattr(builtins_catalog.unisdk, "get_logs", fake_get_logs)
     monkeypatch.setattr(
-        builtins_catalog.unify,
+        builtins_catalog.unisdk,
         "delete_logs",
         lambda **kwargs: deleted.append((kwargs["context"], list(kwargs["logs"]))),
     )
     monkeypatch.setattr(
-        builtins_catalog.unify,
+        builtins_catalog.unisdk,
         "create_logs",
         lambda **kwargs: inserted.append((kwargs["context"], list(kwargs["entries"]))),
     )
@@ -763,7 +775,11 @@ def test_seed_builtin_integrations_dedupes_and_deletes_tools_by_function_id(
     seen_filters: set[str] = set()
 
     monkeypatch.setattr(builtins_catalog, "ensure_builtins_project", lambda *_: None)
-    monkeypatch.setattr(builtins_catalog.unify, "create_context", lambda *_, **__: None)
+    monkeypatch.setattr(
+        builtins_catalog.unisdk,
+        "create_context",
+        lambda *_, **__: None,
+    )
     monkeypatch.setattr(builtins_catalog, "ensure_vector_column", lambda *_, **__: None)
     monkeypatch.setattr(
         builtins_catalog,
@@ -792,14 +808,14 @@ def test_seed_builtin_integrations_dedupes_and_deletes_tools_by_function_id(
         seen_filters.add(filter_expr)
         return [17]
 
-    monkeypatch.setattr(builtins_catalog.unify, "get_logs", fake_get_logs)
+    monkeypatch.setattr(builtins_catalog.unisdk, "get_logs", fake_get_logs)
     monkeypatch.setattr(
-        builtins_catalog.unify,
+        builtins_catalog.unisdk,
         "delete_logs",
         lambda **kwargs: deleted.append((kwargs["context"], list(kwargs["logs"]))),
     )
     monkeypatch.setattr(
-        builtins_catalog.unify,
+        builtins_catalog.unisdk,
         "create_logs",
         lambda **kwargs: inserted.append((kwargs["context"], list(kwargs["entries"]))),
     )

@@ -228,7 +228,7 @@ def _dumps(
     context: dict | None = None,
 ) -> Any:
     # prevents circular import
-    from unify import Log
+    from unisdk import Log
 
     base = False
     if idx is None:

@@ -12,7 +12,7 @@ import json
 import pytest
 import datetime as dt
 
-import unify
+import unisdk
 
 from unity.events.event_bus import EventBus, Event
 from unity.events.types.manager_method import ManagerMethodPayload
@@ -45,8 +45,8 @@ async def test_global_context_stores_payload_json():
 
     # Query the global context directly to inspect raw schema
     global_ctx = bus._global_ctx
-    logs = unify.get_logs(
-        project=unify.active_project(),
+    logs = unisdk.get_logs(
+        project=unisdk.active_project(),
         context=global_ctx,
         filter=f"event_id == '{event.event_id}'",
     )
@@ -88,8 +88,8 @@ async def test_specific_context_spreads_payload():
 
     # Query the type-specific context directly
     specific_ctx = bus._specific_ctxs["ManagerMethod"]
-    logs = unify.get_logs(
-        project=unify.active_project(),
+    logs = unisdk.get_logs(
+        project=unisdk.active_project(),
         context=specific_ctx,
         filter=f"event_id == '{event.event_id}'",
     )

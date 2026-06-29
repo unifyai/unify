@@ -1138,13 +1138,13 @@ def configure_sandbox_logging(
         _fh.setFormatter(_fmt)
 
         # Exclude HTTP-level SDK noise from the main log file.
-        # The unify/unillm loggers emit verbose request/response dumps at
+        # The unisdk/unillm loggers emit verbose request/response dumps at
         # DEBUG level that drown out the conversation-level flow.
         _SDK_NOISE_PREFIXES = (
-            "unify_requests",
-            "unify",
+            "unisdk_requests",
+            "unisdk",
             "unillm",
-            "UnifyAsyncLogger",
+            "UnisdkAsyncLogger",
         )
 
         class _LazyHTTPExcludeFilter(_logging.Filter):
@@ -1201,7 +1201,7 @@ def configure_sandbox_logging(
     else:
         # Restrict to only Unify Request logs by default
         _HTTP_PREFIXES = [
-            "unify_requests",  # Unify SDK dedicated request logger
+            "unisdk_requests",  # Unify SDK dedicated request logger
         ]
 
     # Optional TCP broadcast for external terminals (main logs)
@@ -2654,7 +2654,7 @@ class TranscriptGenerator:
                     )
                     from pydantic import BaseModel
                     from unity.events.event_bus import Event
-                    import unify
+                    import unisdk
 
                     event_obj = None
                     if medium == "sms_message":
@@ -2683,8 +2683,8 @@ class TranscriptGenerator:
                             if isinstance(ev_dict.payload, BaseModel)
                             else Event._to_python(ev_dict.payload)
                         )
-                        unify.create_logs(
-                            project=unify.active_project(),
+                        unisdk.create_logs(
+                            project=unisdk.active_project(),
                             context="Assistant/Events/Comms",
                             params={},
                             entries={
@@ -2807,7 +2807,7 @@ def _seed_session_details_for_sandbox() -> None:
     # User UUID from Orchestra — sets user_context component so contexts land
     # under ``{user_uuid}/{agent_id}/...`` matching what the Console expects.
     try:
-        import unify as _unify
+        import unisdk as _unify
 
         info = _unify.get_user_basic_info()
         user_id = info.get("user_id") or ""
@@ -2833,7 +2833,7 @@ def activate_project(project_name: str, overwrite: bool = False) -> None:
     def _maybe_autostart_local_orchestra() -> None:
         """Best-effort local Orchestra autostart for sandbox runs.
 
-        Sandboxes call `unify.activate()` during startup, which requires a reachable
+        Sandboxes call `unisdk.activate()` during startup, which requires a reachable
         Unify API backend. In tests, `tests/parallel_run.sh` auto-starts local
         Orchestra when `ORCHESTRA_URL` targets localhost. Sandbox entrypoints are
         typically run directly, so we replicate that behavior here (sandbox-only).

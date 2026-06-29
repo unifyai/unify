@@ -6,7 +6,7 @@ import base64
 from pathlib import Path
 from typing import Any, Protocol
 
-import unify
+import unisdk
 
 
 class _BytesReader(Protocol):
@@ -51,7 +51,7 @@ def to_image_content_block(
     elif image.startswith("http://") or image.startswith("https://"):
         url = image
     elif image.startswith("gs://"):
-        url = unify.get_signed_url(image, expiration_minutes=60)
+        url = unisdk.get_signed_url(image, expiration_minutes=60)
     else:
         if adapter is not None:
             image_bytes = adapter.open_bytes(image)

@@ -318,8 +318,8 @@ class TestUnityToUnifyHierarchy:
 
         exporter = reset_otel["exporter"]
 
-        # Simulate unify's HTTP span
-        unify_tracer = trace.get_tracer("unify")
+        # Simulate unisdk's HTTP span
+        unify_tracer = trace.get_tracer("unisdk")
 
         with logger.unity_span("ContactManager.update") as unity_span:
             unity_ctx = unity_span.get_span_context()
@@ -360,7 +360,7 @@ class TestFullStackHierarchy:
         exporter = reset_otel["exporter"]
 
         unillm_tracer = trace.get_tracer("unillm")
-        unify_tracer = trace.get_tracer("unify")
+        unify_tracer = trace.get_tracer("unisdk")
 
         # Unity -> Unillm -> Unify
         with logger.unity_span("Actor.act") as unity_span:
@@ -398,7 +398,7 @@ class TestFullStackHierarchy:
 
         exporter = reset_otel["exporter"]
 
-        unify_tracer = trace.get_tracer("unify")
+        unify_tracer = trace.get_tracer("unisdk")
 
         with logger.unity_span("ContactManager.ask") as unity_span:
             # Two HTTP calls (e.g., list then get)
@@ -476,7 +476,7 @@ class TestCrossPackageIntegration:
 
         # Tracers from other packages will also use the same provider
         unillm_tracer = trace.get_tracer("unillm")
-        unify_tracer = trace.get_tracer("unify")
+        unify_tracer = trace.get_tracer("unisdk")
 
         # All tracers should be non-None
         assert unillm_tracer is not None
@@ -492,7 +492,7 @@ class TestCrossPackageIntegration:
 
         exporter = reset_otel["exporter"]
         unillm_tracer = trace.get_tracer("unillm")
-        unify_tracer = trace.get_tracer("unify")
+        unify_tracer = trace.get_tracer("unisdk")
 
         with logger.unity_span("Actor.act", method="ask") as unity_span:
             unity_span.set_attribute("unity.query", "find contacts")
@@ -771,7 +771,7 @@ class TestFileSpanExporterIntegration:
         provider.add_span_processor(SimpleSpanProcessor(file_exporter))
 
         unillm_tracer = trace.get_tracer("unillm")
-        unify_tracer = trace.get_tracer("unify")
+        unify_tracer = trace.get_tracer("unisdk")
 
         with logger.unity_span("Actor.act"):
             with unillm_tracer.start_as_current_span("LLM gpt-4"):

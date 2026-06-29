@@ -4,7 +4,7 @@ restricted to Pydantic payload types declared in *events/types/*.
 
 from __future__ import annotations
 
-import unify
+import unisdk
 import json
 import asyncio
 import datetime as dt
@@ -315,7 +315,7 @@ class Subscription(BaseModel):
 
 
 class EventBus:
-    _LOGGER = unify.AsyncLoggerManager(name="EventBus", num_consumers=16)
+    _LOGGER = unisdk.AsyncLoggerManager(name="EventBus", num_consumers=16)
 
     # Class-level flag to control event publishing. Initialized from SETTINGS on
     # first EventBus instantiation. Can be overridden (e.g., tests use markers).
@@ -397,7 +397,7 @@ class EventBus:
         self._default_window = 50
 
         # ── Unify setup ────────────────────────────────────────────────
-        active_ctx = unify.get_active_context()
+        active_ctx = unisdk.get_active_context()
         base_ctx = active_ctx["write"]
         if not base_ctx:
             # Ensure the global assistant/context is selected before we derive our sub-context
@@ -407,22 +407,22 @@ class EventBus:
                 )  # local to avoid cycles
 
                 _ensure_initialised()
-                active_ctx = unify.get_active_context()
+                active_ctx = unisdk.get_active_context()
                 base_ctx = active_ctx["write"]
             except Exception:
                 # If ensure fails (e.g. offline tests), proceed; downstream will fall back safely
                 pass
         self._global_ctx = f"{base_ctx}/Events" if base_ctx else "Events"
-        unify.create_context(self._global_ctx)
+        unisdk.create_context(self._global_ctx)
 
         # Persisted subscription metadata lives here
         self._callbacks_ctx = f"{self._global_ctx}/_callbacks"
-        unify.create_context(
+        unisdk.create_context(
             self._callbacks_ctx,
             unique_keys={"row_id": "int"},
             auto_counting={"row_id": None},
         )
-        ctxs = unify.get_contexts(prefix=f"{self._global_ctx}/")
+        ctxs = unisdk.get_contexts(prefix=f"{self._global_ctx}/")
         self._window_sizes: Dict[str, int] = {
             ctx.split("/")[-1]: self._default_window for ctx in ctxs
         }
@@ -519,13 +519,13 @@ class EventBus:
                 continue
 
             # Create context
-            unify.create_context(ctx_name)
+            unisdk.create_context(ctx_name)
 
             # Create fields from Pydantic model + common event fields
             try:
                 payload_fields = model_to_fields(payload_model)
                 all_fields = {**self._COMMON_EVENT_FIELDS, **payload_fields}
-                unify.create_fields(all_fields, context=ctx_name)
+                unisdk.create_fields(all_fields, context=ctx_name)
             except Exception:
                 # Fields may already exist or context may have issues; proceed
                 pass
@@ -552,7 +552,7 @@ class EventBus:
         return self._prefill_done.is_set()
 
     @classmethod
-    def _get_logger(cls) -> unify.AsyncLoggerManager:
+    def _get_logger(cls) -> unisdk.AsyncLoggerManager:
         return cls._LOGGER
 
     # ------------------------------------------------------------------
@@ -609,7 +609,7 @@ class EventBus:
         async def _prefill_deque(etype: str, context: str, window_size: int):
             """Fetch recent events into the in-memory deque."""
             raw_logs = await asyncio.to_thread(
-                unify.get_logs,
+                unisdk.get_logs,
                 context=context,
                 limit=window_size,
                 sorting={"timestamp": "descending"},
@@ -626,7 +626,7 @@ class EventBus:
         async def _seed_row_id(etype: str, context: str):
             """Fetch only the latest row_id so the counter stays monotonic."""
             raw_logs = await asyncio.to_thread(
-                unify.get_logs,
+                unisdk.get_logs,
                 context=context,
                 limit=1,
                 sorting={"row_id": "descending"},
@@ -666,7 +666,7 @@ class EventBus:
         """Async wrapper around the former blocking `_load_subscriptions`."""
         try:
             rows = await asyncio.to_thread(
-                unify.get_logs,
+                unisdk.get_logs,
                 context=self._callbacks_ctx,
                 sorting={"row_id": "ascending"},
             )
@@ -794,7 +794,7 @@ class EventBus:
     # ------------------------------------------------------------------
     def _load_subscriptions(self) -> None:
         """Synchronously rebuild the in-memory subscription map."""
-        rows = unify.get_logs(
+        rows = unisdk.get_logs(
             context=self._callbacks_ctx,
             sorting={"row_id": "ascending"},
         )
@@ -1067,7 +1067,7 @@ class EventBus:
     def flush(self) -> None:
         """Batch-upload all buffered event writes, grouped by context.
 
-        Uses ``unify.create_logs`` (single HTTP POST per context) rather
+        Uses ``unisdk.create_logs`` (single HTTP POST per context) rather
         than N individual ``log_create`` calls.  Aggregation mirrors are
         attached in bulk after each batch completes.
 
@@ -1081,7 +1081,7 @@ class EventBus:
         snapshot = self._pending_writes
         self._pending_writes = []
 
-        project = unify.active_project()
+        project = unisdk.active_project()
 
         batches: dict[str, list[dict]] = defaultdict(list)
         for entries, context in snapshot:
@@ -1096,7 +1096,7 @@ class EventBus:
 
         for context, entries_list in batches.items():
             try:
-                unify.create_logs(
+                unisdk.create_logs(
                     project=project,
                     context=context,
                     entries=entries_list,
@@ -1243,7 +1243,7 @@ class EventBus:
                     full_filter += f" and ({filter})"
 
                 logs = await asyncio.to_thread(
-                    unify.get_logs,
+                    unisdk.get_logs,
                     context=self._global_ctx,
                     filter=full_filter,
                     sorting={"timestamp": "descending"},
@@ -1262,13 +1262,13 @@ class EventBus:
         # 3b. Per-type backend fetches – concurrently (as before) --------------
         async def _fetch_one(etype: str, want: int) -> tuple[str, list[Event]]:
             """
-            Run the blocking ``unify.get_logs`` call in a worker thread and
+            Run the blocking ``unisdk.get_logs`` call in a worker thread and
             re-wrap the raw log rows as :class:`Event` objects.
             """
             full_filter = f'type == "{etype}"' + (f" and ({filter})" if filter else "")
 
             logs = await asyncio.to_thread(
-                unify.get_logs,
+                unisdk.get_logs,
                 context=self._global_ctx,
                 filter=full_filter,
                 sorting={"timestamp": "descending"},
@@ -1523,7 +1523,7 @@ class EventBus:
         #    …/Events/<TYPE>, …/Events/_callbacks child) instead of enumerating
         #    and deleting each individually.
         if delete_contexts:
-            unify.delete_context(self._global_ctx, delete_children=True)
+            unisdk.delete_context(self._global_ctx, delete_children=True)
 
         # 4. Re-initialise this *same* instance
         self._get_logger().clear_queue()
@@ -1684,7 +1684,7 @@ class EventBus:
         *event_type* that matches *filter* (or ``(-1, None)`` if none exist).
         """
         recent_logs = await asyncio.to_thread(
-            unify.get_logs,
+            unisdk.get_logs,
             context=self._specific_ctxs[event_type],
             sorting={"row_id": "descending"},
             limit=100,

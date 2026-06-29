@@ -3,7 +3,7 @@ from __future__ import annotations
 import tempfile
 import pathlib
 
-import unify
+import unisdk
 
 from unity.settings import SETTINGS
 from unity.secret_manager.secret_manager import SecretManager
@@ -109,7 +109,7 @@ def test_externally_added_secret_synced_on_ask(monkeypatch, secret_manager_conte
         # Simulate an external write — the Console UI writes directly to
         # Orchestra, bypassing SecretManager entirely.  This is the gap:
         # .env has no idea this secret exists.
-        unify.log(
+        unisdk.log(
             context=sm._ctx,
             name="external_key",
             value="val-external",

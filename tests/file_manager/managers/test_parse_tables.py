@@ -84,9 +84,9 @@ async def test_csv_per_table_context(file_manager, tmp_path: Path):
     assert item.status == "success"
 
     # Verify `/Content/` contains sheet + table catalog rows (RAG navigation surface)
-    import unify
+    import unisdk
 
-    content_rows = unify.get_logs(context=item.content_ref.context, limit=50)
+    content_rows = unisdk.get_logs(context=item.content_ref.context, limit=50)
     assert content_rows, "Expected at least one /Content/ row"
     entries = [r.entries for r in content_rows]
     sheet_rows = [e for e in entries if e.get("content_type") == "sheet"]
@@ -100,8 +100,8 @@ async def test_csv_per_table_context(file_manager, tmp_path: Path):
     assert table_rows[0].get("summary") == "stub table summary"
 
     # Verify a per-table context exists
-    ctxs = unify.get_contexts()
-    # unify.get_contexts() returns a list of dicts with 'name' field
+    ctxs = unisdk.get_contexts()
+    # unisdk.get_contexts() returns a list of dicts with 'name' field
     ctx_names = (
         [ctx.get("name", "") for ctx in ctxs]
         if isinstance(ctxs, list)
@@ -114,7 +114,7 @@ async def test_csv_per_table_context(file_manager, tmp_path: Path):
 
     # Optionally, fetch a few rows from one table context
     sample_ctx = table_ctx_candidates[0]
-    rows = unify.get_logs(context=sample_ctx, limit=10)
+    rows = unisdk.get_logs(context=sample_ctx, limit=10)
     # Should have header-derived columns
     assert rows, "No rows found"
     assert set(["Name", "Age", "City"]).issubset(
@@ -211,9 +211,9 @@ async def test_xlsx_multi_tab_per_table_context(file_manager, tmp_path: Path):
     #   .../Files/Local/<storage_id>/Tables/<SheetName>
     # retail_data.xlsx  -> Local/0/Tables/{Stores,Sales,Inventory,Returns}
     # workforce_data.xlsx -> Local/1/Tables/{Employees,Attendance,Salaries}
-    import unify
+    import unisdk
 
-    ctxs = unify.get_contexts()
+    ctxs = unisdk.get_contexts()
     ctx_names = (
         [ctx.get("name", "") for ctx in ctxs]
         if isinstance(ctxs, list)

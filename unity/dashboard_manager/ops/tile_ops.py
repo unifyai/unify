@@ -11,7 +11,7 @@ import re
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, List, Optional, Sequence, Union
 
-import unify
+import unisdk
 
 from unity.common.context_registry import ContextRegistry
 from unity.common.join_utils import rewrite_join_paths
@@ -92,7 +92,7 @@ def resolve_binding_contexts(
     """Resolve all context paths in *bindings* to fully qualified form.
 
     Fetches all contexts scoped to the requested root via
-    ``unify.get_contexts(prefix=base)`` and resolves each binding's context
+    ``unisdk.get_contexts(prefix=base)`` and resolves each binding's context
     path(s) through :func:`_match_context`. For join bindings, table
     references embedded in ``join_expr`` and ``select`` keys are rewritten
     to match the resolved table names.
@@ -102,12 +102,12 @@ def resolve_binding_contexts(
     """
     base = base_context or ContextRegistry._base_context
     if not base:
-        active = unify.get_active_context()
+        active = unisdk.get_active_context()
         base = (active or {}).get("read", "")
     if not base:
         return bindings
 
-    known = set(unify.get_contexts(prefix=base).keys())
+    known = set(unisdk.get_contexts(prefix=base).keys())
     if not known:
         return bindings
 

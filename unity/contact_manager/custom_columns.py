@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Optional
 
-import unify
+import unisdk
 
 from ..knowledge_manager.types import ColumnType
 
@@ -29,7 +29,10 @@ def create_custom_column(
     if column_description is not None:
         column_info["description"] = column_description
 
-    response = unify.create_fields(fields={column_name: column_info}, context=self._ctx)
+    response = unisdk.create_fields(
+        fields={column_name: column_info},
+        context=self._ctx,
+    )
 
     # Best-effort hygiene for DataStore rows after schema changes is done by callers/tests
     try:
@@ -46,7 +49,7 @@ def delete_custom_column(self, *, column_name: str) -> Dict[str, str]:
     if column_name in self._REQUIRED_COLUMNS:
         raise ValueError(f"Cannot delete required column '{column_name}'.")
 
-    response = unify.delete_fields(fields=[column_name], context=self._ctx)
+    response = unisdk.delete_fields(fields=[column_name], context=self._ctx)
 
     # Update local view of known custom columns on success & scrub DataStore
     try:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 
-import unify
 from unity.common.data_store import DataStore
 
 
