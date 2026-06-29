@@ -141,11 +141,25 @@ async def send_verification_message(request: VerificationRequest):
             from_number = _normalize_whatsapp_number(
                 request.from_number or DEFAULT_WHATSAPP_VERIFICATION_FROM_NUMBER,
             )
-            twilio_client.messages.create(
+            message = twilio_client.messages.create(
                 content_sid="HX66a14c4ec2f4e8a9d1d14ac2fa439a29",
                 content_variables=json.dumps({"1": code}),
                 to=f"whatsapp:{identifier}",
                 from_=f"whatsapp:{from_number}",
+            )
+            # Twilio returns 201/queued here even when the message later fails to
+            # deliver (closed 24h window, unapproved template/sender, etc.). Log
+            # the SID + sender so a "code never arrived" report can be resolved
+            # against the Twilio message logs without guessing which number sent
+            # it (default verification sender vs an overriding coordinator number).
+            logger.info(
+                "WhatsApp verification queued: sid=%s status=%s error_code=%s "
+                "from=%s to=%s",
+                getattr(message, "sid", None),
+                getattr(message, "status", None),
+                getattr(message, "error_code", None),
+                from_number,
+                identifier,
             )
         except Exception as exc:
             logger.error("WhatsApp verification send failed: %s", exc)
@@ -155,14 +169,21 @@ async def send_verification_message(request: VerificationRequest):
             )
 
     elif platform == "phone":
-        message = f"Your Unify verification code is: {code}"
+        message_body = f"Your Unify verification code is: {code}"
         try:
             twilio_client = build_twilio_client(credentials)
             messaging_sid = _get_messaging_service_sid(credentials)
-            twilio_client.messages.create(
+            message = twilio_client.messages.create(
                 to=identifier,
                 messaging_service_sid=messaging_sid,
-                body=message,
+                body=message_body,
+            )
+            logger.info(
+                "Phone verification queued: sid=%s status=%s error_code=%s to=%s",
+                getattr(message, "sid", None),
+                getattr(message, "status", None),
+                getattr(message, "error_code", None),
+                identifier,
             )
         except Exception as exc:
             logger.error("Phone verification send failed: %s", exc)
