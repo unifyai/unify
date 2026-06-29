@@ -48,6 +48,20 @@ def test_secrets_adds_tier3():
         assert p in pats
 
 
+def test_windows_patterns_in_copies_not_in_browse():
+    browse = _patterns(_build_excludes(noise=False, secrets=False))
+    copy = _patterns(_build_excludes(noise=True, secrets=True))
+
+    # Windows profile noise is skipped on pull/sync ...
+    for p in ("/AppData/Local/**", "/NTUSER.DAT*", "/Cookies/**"):
+        assert p in copy
+        assert p not in browse
+
+    # ... and Windows credential stores never leave the machine.
+    assert "/AppData/Roaming/gcloud/**" in copy
+    assert "/AppData/Roaming/gcloud/**" not in browse
+
+
 def test_sync_args_exclude_noise_secrets_and_carry_stats():
     client = object.__new__(UserHomeSFTP)
     args = client._sync_args(PurePosixPath("Documents"), Path("/tmp/stage"))
