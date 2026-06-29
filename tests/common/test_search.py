@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import pytest
-import unify
+import unisdk
 
 from tests.helpers import _handle_project
 from unity.common.context_store import TableStore
@@ -27,7 +27,7 @@ async def test_concurrent_semantic_search(capfd):
 
     # Build a per-test context under the active write context
     try:
-        ctxs = unify.get_active_context()
+        ctxs = unisdk.get_active_context()
         base_ctx = ctxs.get("write") if isinstance(ctxs, dict) else None
     except Exception:
         base_ctx = None
@@ -48,21 +48,21 @@ async def test_concurrent_semantic_search(capfd):
     store.ensure_context()
 
     # Seed a few rows to take the semantic path on the 'bio' column
-    unify.log(
+    unisdk.log(
         context=ctx,
         first_name="Alice",
         bio="Enjoys email threads and detailed reports",
         new=True,
         mutable=True,
     )
-    unify.log(
+    unisdk.log(
         context=ctx,
         first_name="Bob",
         bio="Prefers short text messages, hates long emails",
         new=True,
         mutable=True,
     )
-    unify.log(
+    unisdk.log(
         context=ctx,
         first_name="Carol",
         bio="Commutes by train; likes concise updates over email",

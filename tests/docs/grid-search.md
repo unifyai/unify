@@ -161,10 +161,10 @@ Dry run - commands that would be executed:
 After a grid search, query the `Combined` context to compare results:
 
 ```python
-import unify
+import unisdk
 
-unify.activate("UnityTests")
-logs = unify.get_logs(context="Combined")
+unisdk.activate("UnityTests")
+logs = unisdk.get_logs(context="Combined")
 
 # Filter by tags (contains the exact --env values from the grid search)
 for log in logs:

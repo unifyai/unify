@@ -2,7 +2,7 @@ import time
 import random
 import pytest
 from datetime import datetime, UTC
-import unify
+import unisdk
 
 from unity.transcript_manager.types.message import Message
 from unity.conversation_manager.cm_types import VALID_MEDIA
@@ -323,7 +323,7 @@ def test_clear():
     tm.clear()
 
     # After clear: context should exist again and exchange_id present
-    fields_exchanges = unify.get_fields(context=tm._exchanges_ctx)
+    fields_exchanges = unisdk.get_fields(context=tm._exchanges_ctx)
     assert "exchange_id" in fields_exchanges
 
     # Prior messages should be gone

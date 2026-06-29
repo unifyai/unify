@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 from datetime import datetime, timezone
 import asyncio
-import unify
+import unisdk
 
 import pytest
 
@@ -175,13 +175,13 @@ def test_get_images_for_pending_prefers_cache_no_backend(monkeypatch):
     )
 
     calls = {"count": 0}
-    orig_get_logs = unify.get_logs
+    orig_get_logs = unisdk.get_logs
 
     def _wrapped_get_logs(*args, **kwargs):
         calls["count"] += 1
         return orig_get_logs(*args, **kwargs)
 
-    monkeypatch.setattr(unify, "get_logs", _wrapped_get_logs)
+    monkeypatch.setattr(unisdk, "get_logs", _wrapped_get_logs)
 
     handles = im.get_images([h1.image_id, h2.image_id])
     assert [h.image_id for h in handles] == [h1.image_id, h2.image_id]

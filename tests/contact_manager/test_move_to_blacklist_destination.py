@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 import time
 
-import unify
+import unisdk
 
 from tests.helpers import _handle_project
 from unity.common.context_registry import ContextRegistry
@@ -34,7 +34,7 @@ def _reset_space(team_id: int) -> None:
         f"Teams/{team_id}/BlackList",
     ):
         try:
-            unify.delete_context(context)
+            unisdk.delete_context(context)
         except Exception:
             pass
     SESSION_DETAILS.team_ids = []
@@ -66,14 +66,14 @@ def test_move_to_blacklist_preserves_shared_team_destination():
 
         contact_rows = []
         for _ in range(10):
-            contact_rows = unify.get_logs(
+            contact_rows = unisdk.get_logs(
                 context=f"Teams/{team_id}/Contacts",
                 filter=f"contact_id == {contact_id}",
             )
             if not contact_rows:
                 break
             time.sleep(0.2)
-        blacklist_rows = unify.get_logs(
+        blacklist_rows = unisdk.get_logs(
             context=f"Teams/{team_id}/BlackList",
             filter=f"contact_detail == '{email}'",
         )

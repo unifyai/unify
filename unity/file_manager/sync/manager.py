@@ -229,7 +229,7 @@ class SyncManager:
 
         for attempt in range(1, max_retries + 1):
             try:
-                from unify.utils import http
+                from unisdk.utils import http
 
                 LOGGER.debug(
                     f"{ICONS['file_sync']} [FileSync] Fetching SSH key (attempt {attempt}/{max_retries})...",

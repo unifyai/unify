@@ -6,7 +6,7 @@ from datetime import datetime, UTC
 from unity.transcript_manager.transcript_manager import TranscriptManager
 from unity.transcript_manager.types.message import Message
 from tests.helpers import _handle_project
-import unify
+import unisdk
 
 
 @_handle_project
@@ -69,7 +69,7 @@ def test_creates_exchange_returns_id():
     assert isinstance(tm_msg_id, int)
 
     # Exchanges row should exist (metadata default to dict) and medium set
-    rows_e = unify.get_logs(
+    rows_e = unisdk.get_logs(
         context=tm._exchanges_ctx,
         filter=f"exchange_id == {exid}",
         limit=1,
@@ -79,7 +79,7 @@ def test_creates_exchange_returns_id():
     assert rows_e[0].entries.get("medium") == "sms_message"
 
     # Transcript message should exist for this exchange
-    rows_m = unify.get_logs(
+    rows_m = unisdk.get_logs(
         context=tm._transcripts_ctx,
         filter=f"exchange_id == {exid}",
         limit=1,
@@ -106,7 +106,7 @@ def test_sets_initial_metadata():
     )
     assert isinstance(exid, int) and exid >= 0
 
-    rows_e = unify.get_logs(
+    rows_e = unisdk.get_logs(
         context=tm._exchanges_ctx,
         filter=f"exchange_id == {exid}",
         limit=1,

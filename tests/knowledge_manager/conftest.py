@@ -5,7 +5,7 @@ import pytest_asyncio
 from typing import List, Dict, Tuple, Any
 import os
 
-import unify
+import unisdk
 from unity.knowledge_manager.knowledge_manager import KnowledgeManager
 from unity.manager_registry import ManagerRegistry
 from unity.common.context_registry import ContextRegistry
@@ -111,7 +111,7 @@ class ScenarioBuilderKnowledge:
             (knowledge_data,) for knowledge_data in _KNOWLEDGE_DATA
         ]
 
-        results = unify.map(
+        results = unisdk.map(
             search_and_map_knowledge,
             knowledge_data_tuples,
             mode="asyncio",
@@ -171,8 +171,8 @@ async def knowledge_scenario(
     os.environ["TQDM_DISABLE"] = "1"
 
     ctx = "tests/knowledge/Scenario"
-    unify.set_context(ctx, relative=False)
-    existing_contexts = unify.get_contexts(prefix=ctx)
+    unisdk.set_context(ctx, relative=False)
+    existing_contexts = unisdk.get_contexts(prefix=ctx)
     overwrite_scenarios = request.config.getoption("--overwrite-scenarios")
 
     # If --overwrite-scenarios is set, delete and recreate scenarios
@@ -184,12 +184,12 @@ async def knowledge_scenario(
     if not reuse_scenario:
         # delete all contexts to freshly create the new scenario
         def recreate_contexts(ctx):
-            unify.delete_context(ctx)
-            unify.create_context(ctx)
+            unisdk.delete_context(ctx)
+            unisdk.create_context(ctx)
 
         existing_ctx_names = list(existing_contexts.keys())
         if existing_ctx_names:
-            unify.map(
+            unisdk.map(
                 recreate_contexts,
                 existing_ctx_names,
                 mode="asyncio",
@@ -198,9 +198,9 @@ async def knowledge_scenario(
     if reuse_scenario and not SCENARIO_COMMIT_HASHES:
 
         def get_context_commits_and_rollback(ctx):
-            history = unify.get_context_commits(ctx)
+            history = unisdk.get_context_commits(ctx)
             if history:
-                unify.rollback_context(
+                unisdk.rollback_context(
                     name=ctx,
                     commit_hash=history[0]["commit_hash"],
                 )
@@ -208,7 +208,7 @@ async def knowledge_scenario(
 
         existing_ctx_names = list(existing_contexts.keys())
         if existing_ctx_names:
-            unify.map(
+            unisdk.map(
                 get_context_commits_and_rollback,
                 existing_ctx_names,
                 mode="asyncio",
@@ -216,7 +216,7 @@ async def knowledge_scenario(
 
     # --- One-time setup (per session) ---
     builder = ScenarioBuilderKnowledge()
-    existing_contexts = unify.get_contexts(
+    existing_contexts = unisdk.get_contexts(
         prefix=ctx,
     )  # fetch newly created contexts by builder
 
@@ -225,7 +225,7 @@ async def knowledge_scenario(
         await builder.create()
 
         def commit_context_and_store(ctx):
-            commit_info = unify.commit_context(
+            commit_info = unisdk.commit_context(
                 name=ctx,
                 commit_message="Initial seed data for knowledge manager tests",
             )
@@ -233,13 +233,13 @@ async def knowledge_scenario(
 
         existing_ctx_names = list(existing_contexts.keys())
         if existing_ctx_names:
-            unify.map(
+            unisdk.map(
                 commit_context_and_store,
                 existing_ctx_names,
                 mode="asyncio",
             )
 
-    unify.unset_context()
+    unisdk.unset_context()
     return builder.km, _KNOWLEDGE_IDS
 
 
@@ -274,7 +274,7 @@ def knowledge_manager_scenario(knowledge_scenario):
     km, knowledge_map = knowledge_scenario
 
     def rollback_context(ctx):
-        unify.rollback_context(
+        unisdk.rollback_context(
             name=ctx,
             commit_hash=SCENARIO_COMMIT_HASHES[ctx],
         )
@@ -283,7 +283,7 @@ def knowledge_manager_scenario(knowledge_scenario):
         restore_scenario_context("tests/knowledge/Scenario")
         ctx_names = list(SCENARIO_COMMIT_HASHES.keys())
         if ctx_names:
-            unify.map(rollback_context, ctx_names, mode="asyncio")
+            unisdk.map(rollback_context, ctx_names, mode="asyncio")
 
         restore_scenario_context("tests/knowledge/Scenario")
         yield km, knowledge_map

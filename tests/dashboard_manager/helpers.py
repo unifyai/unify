@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-import unify
+import unisdk
 
 from unity.dashboard_manager.dashboard_manager import DashboardManager
 from unity.manager_registry import ManagerRegistry
@@ -18,7 +18,7 @@ def fresh_dashboard_manager() -> DashboardManager:
 
 def context_rows(context: str) -> list[dict]:
     """Return raw row entries for a Unify context."""
-    return [log.entries for log in unify.get_logs(context=context)]
+    return [log.entries for log in unisdk.get_logs(context=context)]
 
 
 def context_titles(context: str) -> set[str]:
@@ -28,12 +28,12 @@ def context_titles(context: str) -> set[str]:
 
 def create_context_if_missing(context: str) -> None:
     """Create a Unify context, ignoring the already-exists case."""
-    unify.create_context(context)
+    unisdk.create_context(context)
 
 
 def active_read_root() -> str:
     """Return the current project's active read root."""
-    return unify.get_active_context()["read"]
+    return unisdk.get_active_context()["read"]
 
 
 def serialized_binding_context(tile) -> str:

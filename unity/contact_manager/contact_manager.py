@@ -12,7 +12,7 @@ from ..common.embed_utils import ensure_vector_column
 from ..common.tool_outcome import ToolErrorException, ToolOutcome
 from ..common.tool_spec import read_only, manager_tool, ToolSpec
 
-import unify
+import unisdk
 from .types.contact import Contact
 from .base import BaseContactManager
 from ..common.context_registry import ContextRegistry, TableContext
@@ -264,7 +264,7 @@ class ContactManager(BaseContactManager):
             )
             return
 
-        from unify.utils import http
+        from unisdk.utils import http
 
         target_scope, target_team_id = self._membership_target_for_destination(
             destination,
@@ -510,7 +510,7 @@ class ContactManager(BaseContactManager):
 
     @functools.wraps(BaseContactManager.clear, updated=())
     def clear(self) -> None:
-        unify.delete_context(self._ctx)
+        unisdk.delete_context(self._ctx)
 
         # Clear local cache and custom-field state so subsequent reads/writes
         # operate against a clean slate
@@ -532,7 +532,7 @@ class ContactManager(BaseContactManager):
 
             for _ in range(3):
                 try:
-                    unify.get_fields(context=self._ctx)
+                    unisdk.get_fields(context=self._ctx)
                     break
                 except Exception:
                     _time.sleep(0.05)
@@ -615,7 +615,7 @@ class ContactManager(BaseContactManager):
                     filt = f"contact_id == {misses[0]}"
                 else:
                     filt = f"contact_id in [{', '.join(str(x) for x in misses)}]"
-                rows = unify.get_logs(
+                rows = unisdk.get_logs(
                     context=context,
                     filter=filt,
                     limit=len(misses),
@@ -715,7 +715,7 @@ class ContactManager(BaseContactManager):
             grouping level, or a list such as ``[\"should_respond\", \"contact_id\"]``
             to group hierarchically in that order. When provided, the result
             becomes a nested mapping keyed by group values, mirroring
-            :func:`unify.get_logs_metric` behaviour.
+            :func:`unisdk.get_logs_metric` behaviour.
 
         Returns
         -------
@@ -827,7 +827,7 @@ class ContactManager(BaseContactManager):
             from_fields.extend(sorted(self._known_custom_fields))
 
         def fetcher(spec, row_filter, _sorting, fetch_limit):
-            logs = unify.get_logs(
+            logs = unisdk.get_logs(
                 context=spec.context,
                 filter=row_filter,
                 offset=0,
@@ -1338,7 +1338,7 @@ class ContactManager(BaseContactManager):
         store = self._data_store_for_context(context)
 
         # Fetch the contact row (public fields only)
-        rows = unify.get_logs(
+        rows = unisdk.get_logs(
             context=context,
             filter=f"contact_id == {int(contact_id)}",
             limit=1,
@@ -1396,7 +1396,7 @@ class ContactManager(BaseContactManager):
 
         # Best-effort de-duplication per (medium, contact_detail)
         for detail, med in detail_media:
-            existing = unify.get_logs(
+            existing = unisdk.get_logs(
                 context=blacklist_context,
                 filter=f"medium == '{med.value}' and contact_detail == '{detail}'",
                 limit=1,
@@ -1531,7 +1531,7 @@ class ContactManager(BaseContactManager):
 
         self_contact_id = int(SESSION_DETAILS.self_contact_id)
         boss_contact_id = int(SESSION_DETAILS.boss_contact_id)
-        existing_logs = unify.get_logs(
+        existing_logs = unisdk.get_logs(
             context=self._ctx,
             filter=f"contact_id == {self_contact_id} or contact_id == {boss_contact_id}",
             limit=2,

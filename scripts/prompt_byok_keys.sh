@@ -382,7 +382,7 @@ ensure_sdk_logging_defaults() {
   # Suppress SDK request/response terminal spam — these are frozen at Python
   # import time from the .env file, which load_dotenv reads before SDK modules
   # are imported. File-based traces (logs/unillm/) are still written normally.
-  upsert_env "UNIFY_TERMINAL_LOG" "false"
+  upsert_env "UNISDK_TERMINAL_LOG" "false"
   upsert_env "UNILLM_TERMINAL_LOG" "false"
 }
 

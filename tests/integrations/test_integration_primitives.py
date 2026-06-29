@@ -125,7 +125,7 @@ def patch_ops_from_client(monkeypatch, client: FakeIntegrationClient) -> None:
 
 
 def stub_materialized_tool(monkeypatch, *, name: str, tool_id: str) -> None:
-    monkeypatch.setattr("unify.get_active_context", lambda: {"read": "user-1/42"})
+    monkeypatch.setattr("unisdk.get_active_context", lambda: {"read": "user-1/42"})
 
     def fake_get_logs(**kwargs):
         if kwargs.get("filter") == (
@@ -146,11 +146,11 @@ def stub_materialized_tool(monkeypatch, *, name: str, tool_id: str) -> None:
             ]
         return []
 
-    monkeypatch.setattr("unify.get_logs", fake_get_logs)
+    monkeypatch.setattr("unisdk.get_logs", fake_get_logs)
 
 
 def stub_materialized_app(monkeypatch, *, app_slug: str, names: list[str]) -> None:
-    monkeypatch.setattr("unify.get_active_context", lambda: {"read": "user-1/42"})
+    monkeypatch.setattr("unisdk.get_active_context", lambda: {"read": "user-1/42"})
 
     def fake_get_logs(**kwargs):
         if kwargs.get("filter") == (
@@ -176,11 +176,11 @@ def stub_materialized_app(monkeypatch, *, app_slug: str, names: list[str]) -> No
             ]
         return []
 
-    monkeypatch.setattr("unify.get_logs", fake_get_logs)
+    monkeypatch.setattr("unisdk.get_logs", fake_get_logs)
 
 
 def stub_native_app(monkeypatch, *, app_slug: str, function_names: list[str]) -> None:
-    monkeypatch.setattr("unify.get_active_context", lambda: {"read": "user-1/42"})
+    monkeypatch.setattr("unisdk.get_active_context", lambda: {"read": "user-1/42"})
 
     def fake_get_logs(**kwargs):
         filter_text = kwargs.get("filter")
@@ -215,7 +215,7 @@ def stub_native_app(monkeypatch, *, app_slug: str, function_names: list[str]) ->
                 ]
         return []
 
-    monkeypatch.setattr("unify.get_logs", fake_get_logs)
+    monkeypatch.setattr("unisdk.get_logs", fake_get_logs)
 
 
 def test_ops_functions_delegate_to_unify_integration_helpers(monkeypatch) -> None:
@@ -229,37 +229,37 @@ def test_ops_functions_delegate_to_unify_integration_helpers(monkeypatch) -> Non
         return _fake
 
     monkeypatch.setattr(
-        "unity.integrations.ops.unify.list_integration_connections",
+        "unity.integrations.ops.unisdk.list_integration_connections",
         helper("list_connections"),
         raising=False,
     )
     monkeypatch.setattr(
-        "unity.integrations.ops.unify.run_integration_tool",
+        "unity.integrations.ops.unisdk.run_integration_tool",
         helper("run_tool"),
         raising=False,
     )
     monkeypatch.setattr(
-        "unity.integrations.ops.unify.get_integration_tool_policy",
+        "unity.integrations.ops.unisdk.get_integration_tool_policy",
         helper("get_tool_policy"),
         raising=False,
     )
     monkeypatch.setattr(
-        "unity.integrations.ops.unify.patch_integration_tool_policy",
+        "unity.integrations.ops.unisdk.patch_integration_tool_policy",
         helper("patch_tool_policy"),
         raising=False,
     )
     monkeypatch.setattr(
-        "unity.integrations.ops.unify.approve_integration_tool_execution",
+        "unity.integrations.ops.unisdk.approve_integration_tool_execution",
         helper("approve_tool_execution"),
         raising=False,
     )
     monkeypatch.setattr(
-        "unity.integrations.ops.unify.deny_integration_tool_execution",
+        "unity.integrations.ops.unisdk.deny_integration_tool_execution",
         helper("deny_tool_execution"),
         raising=False,
     )
     monkeypatch.setattr(
-        "unity.integrations.ops.unify.test_integration_connection",
+        "unity.integrations.ops.unisdk.test_integration_connection",
         helper("test_connection"),
         raising=False,
     )
@@ -379,7 +379,7 @@ def test_ops_functions_re_raise_unify_keyerror_like_unify_logging(monkeypatch) -
         raise KeyError("UNIFY_KEY is missing. Please make sure it is set correctly!")
 
     monkeypatch.setattr(
-        "unity.integrations.ops.unify.list_integration_connections",
+        "unity.integrations.ops.unisdk.list_integration_connections",
         raise_missing_key,
         raising=False,
     )
@@ -1002,8 +1002,8 @@ async def test_namespace_execution_uses_function_manager_provider_row(
         "unity.manager_registry.ManagerRegistry.get_function_manager",
         lambda: FakeFunctionManager(),
     )
-    monkeypatch.setattr("unify.get_active_context", lambda: {})
-    monkeypatch.setattr("unify.get_logs", lambda **_kwargs: [])
+    monkeypatch.setattr("unisdk.get_active_context", lambda: {})
+    monkeypatch.setattr("unisdk.get_logs", lambda **_kwargs: [])
 
     primitives = IntegrationPrimitives(owner_scope={"assistant_id": 42})
     callable_tool = primitives.gmail.fetch_emails

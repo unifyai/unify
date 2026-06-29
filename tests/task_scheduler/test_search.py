@@ -1,5 +1,5 @@
 import pytest
-import unify
+import unisdk
 
 from unity.task_scheduler.task_scheduler import TaskScheduler
 from tests.helpers import _handle_project
@@ -34,7 +34,7 @@ def test_search_tasks_single_reference_basic():
     assert results[0].name == "Send quick status text"
 
     # Ensure vector column was created for the referenced source
-    cols = unify.get_fields(context=ts._ctx)
+    cols = unisdk.get_fields(context=ts._ctx)
     assert "_description_emb" in cols
 
 
@@ -67,7 +67,7 @@ def test_search_tasks_multi_columns_json_and_vec_created():
     assert results[0].name == "Set up quick texting"
 
     # Ensure vector columns were created for each referenced source
-    cols = unify.get_fields(context=ts._ctx)
+    cols = unisdk.get_fields(context=ts._ctx)
     assert "_description_emb" in cols
     assert "_name_emb" in cols
 
@@ -100,7 +100,7 @@ def test_search_tasks_all_columns_default_derivation():
     assert results[0].name == "Configure email notifications"
 
     # Ensure a derived embedding column exists for the composite expression
-    cols = unify.get_fields(context=ts._ctx)
+    cols = unisdk.get_fields(context=ts._ctx)
     assert any(k.startswith("_expr_") and k.endswith("_emb") for k in cols.keys())
 
 
@@ -147,7 +147,7 @@ def test_search_tasks_mean_of_cosine_ranking():
     )
 
     # Ensure columns and vectors were created
-    cols = unify.get_fields(context=ts._ctx)
+    cols = unisdk.get_fields(context=ts._ctx)
     assert "response_policy" in cols
     assert "_response_policy_emb" in cols
     assert "_description_emb" in cols

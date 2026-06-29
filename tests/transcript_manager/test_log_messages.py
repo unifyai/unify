@@ -74,9 +74,9 @@ def test_missing_id_raises_error():
 def test_async_mode_uses_async_logger(monkeypatch):
     """
     With synchronous=False, log_messages should use the async logger
-    (AsyncLoggerManager.log_create) rather than blocking unify.log.
+    (AsyncLoggerManager.log_create) rather than blocking unisdk.log.
     """
-    import unify
+    import unisdk
 
     tm = TranscriptManager()
 
@@ -84,7 +84,7 @@ def test_async_mode_uses_async_logger(monkeypatch):
     sync_transcript_calls = []
     async_log_create_calls = []
 
-    original_unify_log = unify.log
+    original_unify_log = unisdk.log
     original_log_create = TranscriptManager._LOGGER.log_create
 
     def mock_unify_log(*args, **kwargs):
@@ -98,7 +98,7 @@ def test_async_mode_uses_async_logger(monkeypatch):
         async_log_create_calls.append((args, kwargs))
         return original_log_create(*args, **kwargs)
 
-    monkeypatch.setattr(unify, "log", mock_unify_log)
+    monkeypatch.setattr(unisdk, "log", mock_unify_log)
     monkeypatch.setattr(TranscriptManager._LOGGER, "log_create", mock_log_create)
 
     message = {
@@ -117,12 +117,12 @@ def test_async_mode_uses_async_logger(monkeypatch):
     tm.log_messages(message, synchronous=False)
 
     # With synchronous=False, the async logger (log_create) should be used,
-    # NOT the blocking unify.log for Transcripts
+    # NOT the blocking unisdk.log for Transcripts
     assert (
         len(async_log_create_calls) > 0
     ), "synchronous=False should use AsyncLoggerManager.log_create, but it wasn't called"
     assert len(sync_transcript_calls) == 0, (
-        f"synchronous=False should NOT call unify.log for Transcripts persistence, "
+        f"synchronous=False should NOT call unisdk.log for Transcripts persistence, "
         f"but it was called {len(sync_transcript_calls)} time(s)"
     )
 

@@ -174,9 +174,9 @@ jobs:
         pyproject = Path("pyproject.toml")
         text = pyproject.read_text()
         replacements = {
-            'unify = { git = "https://github.com/unifyai/unisdk.git", branch = "staging" }': 'unify = { path = "./unisdk", editable = true }',
+            'unisdk = { git = "https://github.com/unifyai/unisdk.git", branch = "staging" }': 'unisdk = { path = "./unisdk", editable = true }',
             'unillm = { git = "https://github.com/unifyai/unillm.git", branch = "staging" }': 'unillm = { path = "./unillm", editable = true }',
-            'unify = { path = "../unisdk", editable = true }': 'unify = { path = "./unisdk", editable = true }',
+            'unisdk = { path = "../unisdk", editable = true }': 'unisdk = { path = "./unisdk", editable = true }',
             'unillm = { path = "../unillm", editable = true }': 'unillm = { path = "./unillm", editable = true }',
         }
         for old, new in replacements.items():
@@ -186,8 +186,8 @@ jobs:
         unillm_pyproject = Path("unillm/pyproject.toml")
         text = unillm_pyproject.read_text()
         text = text.replace(
-            'unify = { git = "https://github.com/unifyai/unisdk.git", branch = "staging" }',
-            'unify = { path = "../unisdk", editable = true }',
+            'unisdk = { git = "https://github.com/unifyai/unisdk.git", branch = "staging" }',
+            'unisdk = { path = "../unisdk", editable = true }',
         )
         unillm_pyproject.write_text(text)
         PY

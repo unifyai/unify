@@ -223,7 +223,7 @@ class TestSyncManagerSSHKeyRetrieval:
                 "unity.settings.SETTINGS",
             ) as mock_settings,
             patch(
-                "unify.utils.http.get",
+                "unisdk.utils.http.get",
                 return_value=mock_response,
             ) as mock_get,
         ):
@@ -263,7 +263,7 @@ class TestSyncManagerSSHKeyRetrieval:
                 "unity.settings.SETTINGS",
             ) as mock_settings,
             patch(
-                "unify.utils.http.get",
+                "unisdk.utils.http.get",
                 return_value=mock_response,
             ),
         ):

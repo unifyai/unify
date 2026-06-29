@@ -6,7 +6,7 @@ These are called by DataManager methods and should not be used directly.
 
 Architecture Note:
     Currently uses Console API (POST {ORCHESTRA_URL}/logs/plot).
-    This is the integration path until an equivalent path exists through unify.
+    This is the integration path until an equivalent path exists through unisdk.
 """
 
 from __future__ import annotations
@@ -172,9 +172,9 @@ def _get_active_project() -> str:
     Get the currently active Unify project name.
     """
     try:
-        import unify
+        import unisdk
 
-        project = unify.active_project()
+        project = unisdk.active_project()
         return project if project else ""
     except Exception:
         return ""
@@ -227,7 +227,7 @@ def generate_plot(
         project_name = _get_active_project()
         if not project_name:
             return PlotResult(
-                error="No active Unify project. Set project with unify.activate().",
+                error="No active Unify project. Set project with unisdk.activate().",
                 title=config.title,
                 context=context,
             )
@@ -357,7 +357,7 @@ def generate_plots_batch(
             base_title = config.title or f"{config.plot_type} chart"
             return [
                 PlotResult(
-                    error="No active Unify project. Set project with unify.activate().",
+                    error="No active Unify project. Set project with unisdk.activate().",
                     title=base_title,
                     context=ctx,
                 )

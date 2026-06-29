@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
-import unify
+import unisdk
 
 from tests.destination_routing_helpers import (
     RoutingScenario,
@@ -44,14 +44,14 @@ async def test_team_function_routes_to_the_matching_shared_team(llm_config):
         assert_tool_destination(messages, "add_functions", scenario.patch_destination)
         assert [
             row
-            for row in unify.get_logs(
+            for row in unisdk.get_logs(
                 context=f"Teams/{scenario.patch_team_id}/Functions/Compositional",
                 filter=f"name == '{function_name}'",
                 limit=10,
             )
         ]
         assert (
-            unify.get_logs(
+            unisdk.get_logs(
                 context=manager._compositional_ctx,
                 filter=f"name == '{function_name}'",
                 limit=10,

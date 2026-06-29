@@ -5,7 +5,7 @@ import functools
 import threading
 from typing import List, Dict, Optional, Type, Union, Any, Callable, Literal
 
-import unify
+import unisdk
 from pydantic import BaseModel
 from ..common.authorship import stamp_authoring_assistant_id
 from ..common.colleague_cache import ColleagueNameCache
@@ -79,7 +79,7 @@ class TranscriptManager(BaseTranscriptManager):
     # ──────────────────────────────────────────────────────────────────────
     #  Class-level constants / configuration
     # ──────────────────────────────────────────────────────────────────────
-    _LOGGER = unify.AsyncLoggerManager(name="TranscriptManager", num_consumers=16)
+    _LOGGER = unisdk.AsyncLoggerManager(name="TranscriptManager", num_consumers=16)
 
     # Vector embedding column names
     _MSG_EMB = "_content_emb"
@@ -639,7 +639,7 @@ class TranscriptManager(BaseTranscriptManager):
                     if key not in {"explicit_types", "infer_untyped_fields"}
                 }
                 future = self._get_logger().log_create(
-                    project=unify.active_project(),
+                    project=unisdk.active_project(),
                     context={"name": transcripts_context},
                     entries=entries_with_private,
                 )
@@ -754,7 +754,7 @@ class TranscriptManager(BaseTranscriptManager):
         if exchange_id is None:
             return None
         try:
-            rows = unify.get_logs(
+            rows = unisdk.get_logs(
                 context=state["context"],
                 filter=f"exchange_id == {int(exchange_id)}",
                 limit=20,
@@ -975,7 +975,7 @@ class TranscriptManager(BaseTranscriptManager):
             or a list such as ``[\"medium\", \"sender_id\"]`` to group
             hierarchically in that order. When provided, the result becomes a
             nested mapping keyed by group values, mirroring
-            :func:`unify.get_logs_metric`.
+            :func:`unisdk.get_logs_metric`.
 
         Returns
         -------
@@ -1074,13 +1074,13 @@ class TranscriptManager(BaseTranscriptManager):
 
         # ── 1.  Bulk update all *sender_id* occurrences ────────────────────
         for context in self._read_transcript_contexts():
-            sender_log_ids = unify.get_logs(
+            sender_log_ids = unisdk.get_logs(
                 context=context,
                 filter=f"sender_id is not None and sender_id == {original_contact_id}",
                 return_ids_only=True,
             )
             if sender_log_ids:
-                unify.update_logs(
+                unisdk.update_logs(
                     logs=sender_log_ids,
                     context=context,
                     entries={"sender_id": new_contact_id},
@@ -1089,7 +1089,7 @@ class TranscriptManager(BaseTranscriptManager):
                 total_updates += len(sender_log_ids)
 
             # ── 2.  Update all *receiver_ids* lists containing the old id ──────
-            receiver_logs = unify.get_logs(
+            receiver_logs = unisdk.get_logs(
                 context=context,
                 filter=f"{original_contact_id} in receiver_ids",
                 return_ids_only=False,
@@ -1113,7 +1113,7 @@ class TranscriptManager(BaseTranscriptManager):
 
                 # Only write when the list actually changed
                 if deduped_rids != rids:
-                    unify.update_logs(
+                    unisdk.update_logs(
                         logs=lg.id if hasattr(lg, "id") else lg,
                         context=context,
                         entries={"receiver_ids": deduped_rids},
@@ -1142,13 +1142,13 @@ class TranscriptManager(BaseTranscriptManager):
             context = self._transcripts_context_for_destination(destination)
         except ToolErrorException as exc:
             return exc.payload  # type: ignore[return-value]
-        log_ids = unify.get_logs(
+        log_ids = unisdk.get_logs(
             context=context,
             filter=f"message_id == {message_id}",
             return_ids_only=True,
         )
         if log_ids:
-            unify.update_logs(
+            unisdk.update_logs(
                 logs=log_ids,
                 context=context,
                 entries={"images": images},
@@ -1380,7 +1380,7 @@ class TranscriptManager(BaseTranscriptManager):
             contexts = [self._exchanges_context_for_destination(destination)]
         rows = []
         for context in contexts:
-            rows = unify.get_logs(
+            rows = unisdk.get_logs(
                 context=context,
                 filter=f"exchange_id == {int(exchange_id)}",
                 limit=1,
@@ -1415,13 +1415,13 @@ class TranscriptManager(BaseTranscriptManager):
         except ToolErrorException as exc:
             return exc.payload  # type: ignore[return-value]
         # Try update first
-        row_ids = unify.get_logs(
+        row_ids = unisdk.get_logs(
             context=context,
             filter=f"exchange_id == {int(exchange_id)}",
             return_ids_only=True,
         )
         if row_ids:
-            unify.update_logs(
+            unisdk.update_logs(
                 logs=row_ids,
                 context=context,
                 entries={"metadata": dict(metadata or {})},
@@ -1455,7 +1455,7 @@ class TranscriptManager(BaseTranscriptManager):
         fetch_limit = (offset + limit) if limit is not None else 1000
         for context in self._read_exchange_contexts():
             logs.extend(
-                unify.get_logs(
+                unisdk.get_logs(
                     context=context,
                     filter=normalized,
                     offset=0,
@@ -1631,7 +1631,7 @@ class TranscriptManager(BaseTranscriptManager):
         source_context = self._context_for_root(source_root, table_name)
         target_context = self._context_for_root(target_root, table_name)
 
-        rows = unify.get_logs(
+        rows = unisdk.get_logs(
             context=source_context,
             filter=f"{id_field} == {int(row_id)}",
             limit=2,
@@ -1650,7 +1650,7 @@ class TranscriptManager(BaseTranscriptManager):
             payload = record.to_post_json()
         else:
             payload = record.model_dump(mode="json")
-        target_ids = unify.get_logs(
+        target_ids = unisdk.get_logs(
             context=target_context,
             filter=f"{id_field} == {int(row_id)}",
             return_ids_only=True,
@@ -1661,7 +1661,7 @@ class TranscriptManager(BaseTranscriptManager):
                 f"Multiple {table_name} rows found with {id_field}={int(row_id)} in {target_context}.",
             )
         if target_ids:
-            unify.update_logs(
+            unisdk.update_logs(
                 context=target_context,
                 logs=[target_ids[0]],
                 entries=payload,
@@ -1675,7 +1675,7 @@ class TranscriptManager(BaseTranscriptManager):
                 mutable=True,
             )
 
-        unify.delete_logs(context=source_context, logs=rows[0].id)
+        unisdk.delete_logs(context=source_context, logs=rows[0].id)
         return {
             "outcome": f"{table_name} row moved",
             "details": {
@@ -1741,7 +1741,7 @@ class TranscriptManager(BaseTranscriptManager):
 
     # Misc small utilities (kept last)
     @classmethod
-    def _get_logger(cls) -> unify.AsyncLoggerManager:
+    def _get_logger(cls) -> unisdk.AsyncLoggerManager:
         return cls._LOGGER
 
     @staticmethod

@@ -398,7 +398,7 @@ class UserHomeSFTP:
         admin/runtime-only ``user_desktop_filesync_keys`` map so the key never
         reaches the pod env via ``user_desktops``.
         """
-        from unify.utils import http
+        from unisdk.utils import http
 
         from unity.session_details import SESSION_DETAILS
         from unity.settings import SETTINGS

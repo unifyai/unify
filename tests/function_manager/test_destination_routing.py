@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-import unify
+import unisdk
 
 from tests.destination_routing_helpers import (
     manager_routing_context as manager_routing_context,  # noqa: F401
@@ -30,8 +30,8 @@ def test_function_writes_route_to_destination_and_reads_merge_roots(
         destination=f"team:{team_id}",
     )
 
-    personal_rows = unify.get_logs(context=manager._compositional_ctx)
-    shared_rows = unify.get_logs(
+    personal_rows = unisdk.get_logs(context=manager._compositional_ctx)
+    shared_rows = unisdk.get_logs(
         context=f"Teams/{team_id}/Functions/Compositional",
     )
 
@@ -101,11 +101,11 @@ def test_sync_custom_venvs_routes_each_destination_independently(
     )
     personal_ids = manager.sync_custom_venvs(source_venvs=source_venvs)
 
-    personal_rows = unify.get_logs(
+    personal_rows = unisdk.get_logs(
         context=manager._venvs_ctx,
         filter=f"name == '{venv_name}'",
     )
-    shared_rows = unify.get_logs(
+    shared_rows = unisdk.get_logs(
         context=f"Teams/{team_id}/Functions/VirtualEnvs",
         filter=f"name == '{venv_name}'",
     )
@@ -128,7 +128,7 @@ def test_sync_custom_venvs_routes_each_destination_independently(
         source_venvs=source_venvs,
         destination=f"team:{team_id}",
     )
-    refreshed_shared_rows = unify.get_logs(
+    refreshed_shared_rows = unisdk.get_logs(
         context=f"Teams/{team_id}/Functions/VirtualEnvs",
         filter=f"name == '{venv_name}'",
     )
@@ -167,11 +167,11 @@ def test_sync_custom_functions_routes_each_destination_independently(
     )
     assert manager.sync_custom_functions(source_functions=source_functions) is True
 
-    personal_rows = unify.get_logs(
+    personal_rows = unisdk.get_logs(
         context=manager._compositional_ctx,
         filter=f"name == '{function_name}'",
     )
-    shared_rows = unify.get_logs(
+    shared_rows = unisdk.get_logs(
         context=f"Teams/{team_id}/Functions/Compositional",
         filter=f"name == '{function_name}'",
     )
@@ -195,7 +195,7 @@ def test_sync_custom_functions_routes_each_destination_independently(
         )
         is True
     )
-    refreshed_shared_rows = unify.get_logs(
+    refreshed_shared_rows = unisdk.get_logs(
         context=f"Teams/{team_id}/Functions/Compositional",
         filter=f"name == '{function_name}'",
     )

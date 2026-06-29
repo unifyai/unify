@@ -220,7 +220,7 @@ def test_default_filter_fetcher_combines_context_and_caller_filters(monkeypatch)
         calls.append(kwargs)
         return [Row({"name": "row"})]
 
-    monkeypatch.setattr("unity.common.federated_search.unify.get_logs", fake_get_logs)
+    monkeypatch.setattr("unity.common.federated_search.unisdk.get_logs", fake_get_logs)
 
     rows = default_filter_fetcher(
         FederatedSearchContext(
@@ -259,7 +259,7 @@ def test_default_filter_fetcher_fetches_all_rows_when_missing_first(monkeypatch)
         calls.append(kwargs)
         return [Row({"name": f"row-{kwargs['offset']}"})]
 
-    monkeypatch.setattr("unity.common.federated_search.unify.get_logs", fake_get_logs)
+    monkeypatch.setattr("unity.common.federated_search.unisdk.get_logs", fake_get_logs)
 
     rows = default_filter_fetcher(
         FederatedSearchContext("ctx", "source"),

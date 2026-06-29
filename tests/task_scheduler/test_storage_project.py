@@ -11,7 +11,7 @@ def test_tasks_store_get_rows_passes_explicit_project_override(monkeypatch):
         captured.update(kwargs)
         return []
 
-    monkeypatch.setattr("unity.task_scheduler.storage.unify.get_logs", _fake_get_logs)
+    monkeypatch.setattr("unity.task_scheduler.storage.unisdk.get_logs", _fake_get_logs)
 
     store = TasksStore("Tasks/Activations", project=TASK_MACHINE_STATE_PROJECT)
     rows = store.get_rows(limit=5)
@@ -28,9 +28,9 @@ def test_tasks_store_defaults_to_active_project(monkeypatch):
         captured.update(kwargs)
         return []
 
-    monkeypatch.setattr("unity.task_scheduler.storage.unify.get_logs", _fake_get_logs)
+    monkeypatch.setattr("unity.task_scheduler.storage.unisdk.get_logs", _fake_get_logs)
     monkeypatch.setattr(
-        "unity.task_scheduler.storage.unify.active_project",
+        "unity.task_scheduler.storage.unisdk.active_project",
         lambda: "Assistants",
     )
 

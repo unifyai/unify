@@ -217,7 +217,7 @@ def test_get_context_with_empty_contextvar_raises():
     then turned into "user/68/Data//FileRecords/Local" (double slash, 404).
     """
     from unittest.mock import patch
-    from unify.logs import CONTEXT_READ, CONTEXT_WRITE
+    from unisdk.logs import CONTEXT_READ, CONTEXT_WRITE
     from unity.file_manager.managers.file_manager import FileManager
 
     ContextRegistry.clear()
@@ -239,7 +239,7 @@ def test_get_context_uses_stashed_base_after_clear():
     polluted ContextVar.
     """
     from unittest.mock import patch
-    from unify.logs import CONTEXT_READ, CONTEXT_WRITE
+    from unisdk.logs import CONTEXT_READ, CONTEXT_WRITE
     from unity.file_manager.managers.file_manager import FileManager
 
     ContextRegistry.clear()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-import unify
+import unisdk
 from pydantic import ValidationError
 
 from ..common.authorship import strip_authoring_assistant_id
@@ -58,7 +58,7 @@ def _maybe_sync_timezone_to_backend(
 
     if row is None:
         try:
-            rows = unify.get_logs(
+            rows = unisdk.get_logs(
                 context=context_name,
                 filter=f"contact_id == {contact_id}",
                 limit=1,
@@ -109,7 +109,7 @@ def _maybe_sync_bio_to_backend(
 
     if row is None:
         try:
-            rows = unify.get_logs(
+            rows = unisdk.get_logs(
                 context=context_name,
                 filter=f"contact_id == {contact_id}",
                 limit=1,
@@ -312,7 +312,7 @@ def update_contact(
         return ToolOutcome(output="No effective changes after normalization.")
 
     if _log_id is None:
-        target_ids = unify.get_logs(
+        target_ids = unisdk.get_logs(
             context=context_name,
             filter=f"contact_id == {contact_id}",
             return_ids_only=True,
@@ -329,14 +329,14 @@ def update_contact(
     else:
         log_to_update_id = _log_id
 
-    unify.update_logs(
+    unisdk.update_logs(
         logs=[log_to_update_id],
         context=context_name,
         entries=updates_dict,
         overwrite=True,
     )
     try:
-        rows = unify.get_logs(
+        rows = unisdk.get_logs(
             context=context_name,
             filter=f"contact_id == {contact_id}",
             limit=1,
@@ -398,7 +398,7 @@ def delete_contact(
 
     if _log_id is None:
         # Fetch with is_system to check for org member protection
-        rows = unify.get_logs(
+        rows = unisdk.get_logs(
             context=context_name,
             filter=f"contact_id == {contact_id}",
             limit=2,
@@ -426,7 +426,7 @@ def delete_contact(
             raise RuntimeError("Cannot delete assistant self or boss system contacts.")
         resolved_id = _log_id
 
-    unify.delete_logs(context=context_name, logs=resolved_id)
+    unisdk.delete_logs(context=context_name, logs=resolved_id)
     try:
         store.delete(contact_id)
     except Exception:
@@ -453,7 +453,7 @@ def merge_contacts(
         )
     overrides = overrides or {}
 
-    rows = unify.get_logs(
+    rows = unisdk.get_logs(
         context=context_name,
         filter=f"contact_id in [{contact_id_1}, {contact_id_2}]",
         limit=2,
@@ -537,14 +537,14 @@ def merge_contacts(
 
     # Rewrite transcripts BEFORE deleting the merged contact to avoid FK SET NULL
     try:
-        ctxs = unify.get_active_context()
+        ctxs = unisdk.get_active_context()
         read_ctx = ctxs.get("read")
     except Exception:
         read_ctx = None
     transcripts_ctx = f"{read_ctx}/Transcripts" if read_ctx else "Transcripts"
 
     try:
-        referenced = unify.get_logs(
+        referenced = unisdk.get_logs(
             context=transcripts_ctx,
             filter=f"(sender_id == {delete_id}) or ({delete_id} in receiver_ids)",
             limit=1,

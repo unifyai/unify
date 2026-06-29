@@ -2,7 +2,7 @@ from typing import Any, Dict, Iterable, List, Union, Tuple
 import json
 import time
 import logging
-import unify
+import unisdk
 from .embed_utils import list_private_fields
 
 
@@ -172,15 +172,15 @@ def maybe_group_rows(
 
 
 def iter_unique_values_via_groups(context: str, column: str) -> List[Any]:
-    """Return a list of unique values for `column` using unify.get_groups.
+    """Return a list of unique values for `column` using unisdk.get_groups.
 
     Accept diverse backend return shapes (dict or list)."""
     try:
-        groups = unify.get_groups(context=context, key=column)
+        groups = unisdk.get_groups(context=context, key=column)
     except Exception:
         # Fallback: try alternate param name
         try:
-            groups = unify.get_groups(context=context, field=column)
+            groups = unisdk.get_groups(context=context, field=column)
         except Exception:
             groups = None
     vals: List[Any] = []
@@ -208,7 +208,7 @@ def read_all_rows(context: str, *, limit: int = 1000) -> List[Dict[str, Any]]:
     _t0 = time.perf_counter()
     while True:
         try:
-            batch = unify.get_logs(
+            batch = unisdk.get_logs(
                 context=context,
                 offset=offset,
                 limit=limit,

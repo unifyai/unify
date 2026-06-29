@@ -6,10 +6,10 @@ Tests for the fast brain rolling context window and history hydration.
 
 Covers:
 - trim_fast_brain_context(): system prompt preservation, rolling window
-- hydrate_fast_brain_history(): backend query via unify.get_logs, event filtering, rendering
+- hydrate_fast_brain_history(): backend query via unisdk.get_logs, event filtering, rendering
 - _render_history_event(): per-event-type rendering and participant filtering
 
-All tests are symbolic — unify.get_logs is mocked to return synthetic log rows.
+All tests are symbolic — unisdk.get_logs is mocked to return synthetic log rows.
 """
 
 import json
@@ -74,7 +74,7 @@ ASSISTANT_NAME = "Alex"
 
 
 def _make_log_rows(cm_events):
-    """Convert CM events to unify.Log-shaped rows in descending order (newest first)."""
+    """Convert CM events to unisdk.Log-shaped rows in descending order (newest first)."""
     rows = []
     for ev in cm_events:
         payload = ev.to_dict()["payload"]
@@ -382,7 +382,7 @@ class TestRenderHistoryEvent:
 # hydrate_fast_brain_history — integration with backend mock
 # =============================================================================
 
-MOCK_GET_LOGS = "unify.get_logs"
+MOCK_GET_LOGS = "unisdk.get_logs"
 MOCK_SESSION = "unity.conversation_manager.medium_scripts.common.SESSION_DETAILS"
 
 
@@ -521,7 +521,7 @@ class TestHydrateFastBrainHistory:
 
     @pytest.mark.asyncio
     async def test_limit_passed_to_backend(self):
-        """The limit parameter is forwarded to unify.get_logs."""
+        """The limit parameter is forwarded to unisdk.get_logs."""
         with patch(MOCK_GET_LOGS, return_value=[]) as mock_get_logs:
             await hydrate_fast_brain_history({2}, False, ASSISTANT_NAME, limit=25)
 
@@ -617,7 +617,7 @@ class TestHydrateFastBrainHistory:
         an uninitialized proxy.  Before the direct-backend change, this
         function called EVENT_BUS.search() which raised RuntimeError, causing
         every call to return [].  Now it queries the backend directly via
-        unify.get_logs(), so history is available from the first turn.
+        unisdk.get_logs(), so history is available from the first turn.
         """
         events = [
             SMSReceived(contact=ALICE, content="Recent SMS", timestamp=BASE_TIME),

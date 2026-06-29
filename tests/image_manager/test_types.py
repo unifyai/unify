@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-import unify
+import unisdk
 from datetime import datetime, UTC
 from pydantic import BaseModel, Field
 from unity.common.context_store import TableStore
@@ -151,7 +151,7 @@ def test_backend_schema_raw_ref_field_enforced():
 
     # Provision context with nested schema for RawImageRef
     try:
-        ctxs = unify.get_active_context()
+        ctxs = unisdk.get_active_context()
         base_ctx = ctxs.get("write") if isinstance(ctxs, dict) else None
     except Exception:
         base_ctx = None
@@ -165,17 +165,17 @@ def test_backend_schema_raw_ref_field_enforced():
     )
     store.ensure_context()
 
-    fields = unify.get_fields(context=ctx)
+    fields = unisdk.get_fields(context=ctx)
     assert "ref" in fields and "image_id" in str(fields["ref"].get("data_type"))
 
     # Valid payload
     valid = {"ref": {"image_id": 123}}
-    _ = unify.log(context=ctx, **valid, new=True, mutable=True)
+    _ = unisdk.log(context=ctx, **valid, new=True, mutable=True)
 
     # Invalid: wrong nested key
     invalid = {"ref": {"image_idx": 123}}
     with pytest.raises(Exception):
-        unify.log(context=ctx, **invalid, new=True, mutable=True)
+        unisdk.log(context=ctx, **invalid, new=True, mutable=True)
 
 
 @_handle_project
@@ -184,7 +184,7 @@ def test_backend_schema_annotated_ref_field_enforced():
         ref: AnnotatedImageRef
 
     try:
-        ctxs = unify.get_active_context()
+        ctxs = unisdk.get_active_context()
         base_ctx = ctxs.get("write") if isinstance(ctxs, dict) else None
     except Exception:
         base_ctx = None
@@ -200,23 +200,23 @@ def test_backend_schema_annotated_ref_field_enforced():
     )
     store.ensure_context()
 
-    fields = unify.get_fields(context=ctx)
+    fields = unisdk.get_fields(context=ctx)
     dtype = str(fields["ref"].get("data_type"))
     assert "raw_image_ref" in dtype and "annotation" in dtype and "image_id" in dtype
 
     # Valid
     valid = {"ref": {"raw_image_ref": {"image_id": 5}, "annotation": "note"}}
-    _ = unify.log(context=ctx, **valid, new=True, mutable=True)
+    _ = unisdk.log(context=ctx, **valid, new=True, mutable=True)
 
     # Invalid key
     bad_key = {"ref": {"raw_image_ref": {"image_idx": 5}, "annotation": "note"}}
     with pytest.raises(Exception):
-        unify.log(context=ctx, **bad_key, new=True, mutable=True)
+        unisdk.log(context=ctx, **bad_key, new=True, mutable=True)
 
     # Invalid type
     bad_type = {"ref": {"raw_image_ref": {"image_id": 6}, "annotation": 123}}
     with pytest.raises(Exception):
-        unify.log(context=ctx, **bad_type, new=True, mutable=True)
+        unisdk.log(context=ctx, **bad_type, new=True, mutable=True)
 
 
 @_handle_project
@@ -225,7 +225,7 @@ def test_backend_schema_refs_field_enforced():
         refs: ImageRefs
 
     try:
-        ctxs = unify.get_active_context()
+        ctxs = unisdk.get_active_context()
         base_ctx = ctxs.get("write") if isinstance(ctxs, dict) else None
     except Exception:
         base_ctx = None
@@ -239,7 +239,7 @@ def test_backend_schema_refs_field_enforced():
     )
     store.ensure_context()
 
-    fields = unify.get_fields(context=ctx)
+    fields = unisdk.get_fields(context=ctx)
     dtype = str(fields["refs"].get("data_type"))
     assert "raw_image_ref" in dtype and "annotation" in dtype and "image_id" in dtype
 
@@ -250,12 +250,12 @@ def test_backend_schema_refs_field_enforced():
             {"raw_image_ref": {"image_id": 2}, "annotation": "a"},
         ],
     }
-    _ = unify.log(context=ctx, **valid, new=True, mutable=True)
+    _ = unisdk.log(context=ctx, **valid, new=True, mutable=True)
 
     # Invalid element structure
     bad = {"refs": [{"raw_image_ref": {"image_idx": 3}, "annotation": "x"}]}
     with pytest.raises(Exception):
-        unify.log(context=ctx, **bad, new=True, mutable=True)
+        unisdk.log(context=ctx, **bad, new=True, mutable=True)
 
 
 @_handle_project
@@ -264,7 +264,7 @@ def test_backend_schema_raw_refs_field_enforced():
         refs: RawImageRefs
 
     try:
-        ctxs = unify.get_active_context()
+        ctxs = unisdk.get_active_context()
         base_ctx = ctxs.get("write") if isinstance(ctxs, dict) else None
     except Exception:
         base_ctx = None
@@ -278,18 +278,18 @@ def test_backend_schema_raw_refs_field_enforced():
     )
     store.ensure_context()
 
-    fields = unify.get_fields(context=ctx)
+    fields = unisdk.get_fields(context=ctx)
     dtype = str(fields["refs"].get("data_type"))
     assert "image_id" in dtype and "raw_image_ref" not in dtype  # raw-only entries
 
     # Valid raw-only list
     valid = {"refs": [{"image_id": 10}, {"image_id": 11}]}
-    _ = unify.log(context=ctx, **valid, new=True, mutable=True)
+    _ = unisdk.log(context=ctx, **valid, new=True, mutable=True)
 
     # Invalid: annotated entry inside raw-only list
     bad = {"refs": [{"raw_image_ref": {"image_id": 12}, "annotation": "x"}]}
     with pytest.raises(Exception):
-        unify.log(context=ctx, **bad, new=True, mutable=True)
+        unisdk.log(context=ctx, **bad, new=True, mutable=True)
 
 
 @_handle_project
@@ -298,7 +298,7 @@ def test_backend_schema_annotated_refs_field_enforced():
         refs: AnnotatedImageRefs
 
     try:
-        ctxs = unify.get_active_context()
+        ctxs = unisdk.get_active_context()
         base_ctx = ctxs.get("write") if isinstance(ctxs, dict) else None
     except Exception:
         base_ctx = None
@@ -316,18 +316,18 @@ def test_backend_schema_annotated_refs_field_enforced():
     )
     store.ensure_context()
 
-    fields = unify.get_fields(context=ctx)
+    fields = unisdk.get_fields(context=ctx)
     dtype = str(fields["refs"].get("data_type"))
     assert "raw_image_ref" in dtype and "annotation" in dtype and "image_id" in dtype
 
     # Valid annotated list
     valid = {"refs": [{"raw_image_ref": {"image_id": 20}, "annotation": "z"}]}
-    _ = unify.log(context=ctx, **valid, new=True, mutable=True)
+    _ = unisdk.log(context=ctx, **valid, new=True, mutable=True)
 
     # Invalid element type for annotation
     bad = {"refs": [{"raw_image_ref": {"image_id": 21}, "annotation": 7}]}
     with pytest.raises(Exception):
-        unify.log(context=ctx, **bad, new=True, mutable=True)
+        unisdk.log(context=ctx, **bad, new=True, mutable=True)
 
 
 @_handle_project
@@ -336,7 +336,7 @@ def test_backend_schema_image_field_enforced():
         entry: Image
 
     try:
-        ctxs = unify.get_active_context()
+        ctxs = unisdk.get_active_context()
         base_ctx = ctxs.get("write") if isinstance(ctxs, dict) else None
     except Exception:
         base_ctx = None
@@ -350,7 +350,7 @@ def test_backend_schema_image_field_enforced():
     )
     store.ensure_context()
 
-    fields = unify.get_fields(context=ctx)
+    fields = unisdk.get_fields(context=ctx)
     dtype = str(fields["entry"].get("data_type"))
     assert "timestamp" in dtype and "data" in dtype
 
@@ -363,7 +363,7 @@ def test_backend_schema_image_field_enforced():
             "data": png_b64,
         },
     }
-    _ = unify.log(context=ctx, **valid, new=True, mutable=True)
+    _ = unisdk.log(context=ctx, **valid, new=True, mutable=True)
 
     # Invalid: missing required key 'data'
     bad_missing = {
@@ -373,4 +373,4 @@ def test_backend_schema_image_field_enforced():
         },
     }
     with pytest.raises(Exception):
-        unify.log(context=ctx, **bad_missing, new=True, mutable=True)
+        unisdk.log(context=ctx, **bad_missing, new=True, mutable=True)

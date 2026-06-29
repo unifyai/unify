@@ -5,7 +5,7 @@ Covers:
 - ``_derive_target_name``: separator-aware target name construction
 - ``_run_post_ingest_rules``: config-driven rule execution with mocks
 - ``run_ingest`` post_ingest integration
-- Field description passthrough: widened ``fields`` type flows through to ``unify.create_fields``
+- Field description passthrough: widened ``fields`` type flows through to ``unisdk.create_fields``
 """
 
 from __future__ import annotations
@@ -355,9 +355,9 @@ class TestRunIngestPostIngestIntegration:
 
 class TestFieldsDescriptionPassthrough:
 
-    @patch("unity.data_manager.ops.table_ops.unify")
+    @patch("unity.data_manager.ops.table_ops.unisdk")
     def test_rich_fields_payload_reaches_create_fields(self, mock_unify):
-        """Verify that fields with descriptions pass through to unify.create_fields."""
+        """Verify that fields with descriptions pass through to unisdk.create_fields."""
         from unity.data_manager.ops.table_ops import create_table_impl
 
         rich_fields = {
@@ -382,7 +382,7 @@ class TestFieldsDescriptionPassthrough:
             context="test/ctx",
         )
 
-    @patch("unity.data_manager.ops.table_ops.unify")
+    @patch("unity.data_manager.ops.table_ops.unisdk")
     def test_simple_fields_still_work(self, mock_unify):
         """Backward compatibility: plain {name: type_str} still works."""
         from unity.data_manager.ops.table_ops import create_table_impl
@@ -396,7 +396,7 @@ class TestFieldsDescriptionPassthrough:
             context="test/ctx",
         )
 
-    @patch("unity.data_manager.ops.table_ops.unify")
+    @patch("unity.data_manager.ops.table_ops.unisdk")
     def test_none_fields_skips_create_fields(self, mock_unify):
         """When fields is None, create_fields should not be called."""
         from unity.data_manager.ops.table_ops import create_table_impl

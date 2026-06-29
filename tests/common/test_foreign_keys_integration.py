@@ -17,7 +17,7 @@ Phase 4: Integration testing across all managers with FK relationships
 from __future__ import annotations
 
 import pytest
-import unify
+import unisdk
 from datetime import datetime
 from tests.helpers import _handle_project
 from unity.contact_manager.contact_manager import ContactManager
@@ -56,7 +56,10 @@ def test_delete_contact_transcripts_fk():
         phone_number="3333333333",
     )
 
-    contacts = unify.get_logs(context=cm._ctx, from_fields=["contact_id", "first_name"])
+    contacts = unisdk.get_logs(
+        context=cm._ctx,
+        from_fields=["contact_id", "first_name"],
+    )
     contact_map = {
         c.entries["first_name"]: int(c.entries["contact_id"]) for c in contacts
     }
@@ -95,7 +98,7 @@ def test_delete_contact_transcripts_fk():
     )
 
     # Verify 3 messages
-    messages = unify.get_logs(
+    messages = unisdk.get_logs(
         context=tm._transcripts_ctx,
         from_fields=["message_id", "sender_id", "receiver_ids"],
     )
@@ -107,7 +110,7 @@ def test_delete_contact_transcripts_fk():
     # Verify all 3 messages still exist (SET NULL on sender_id preserves messages)
     # Alice's message survives with null sender_id
     # Bob's and Carol's messages survive with Alice replaced by None in receiver_ids (in-place)
-    messages_after = unify.get_logs(
+    messages_after = unisdk.get_logs(
         context=tm._transcripts_ctx,
         from_fields=["message_id", "sender_id", "receiver_ids", "content"],
     )
@@ -187,7 +190,10 @@ def test_delete_image_nullifies_refs():
         email_address="bob@test.com",
         phone_number="2222222222",
     )
-    contacts = unify.get_logs(context=cm._ctx, from_fields=["contact_id", "first_name"])
+    contacts = unisdk.get_logs(
+        context=cm._ctx,
+        from_fields=["contact_id", "first_name"],
+    )
     alice_id = next(
         int(c.entries["contact_id"])
         for c in contacts
@@ -237,33 +243,36 @@ def test_delete_image_nullifies_refs():
     )
 
     # Verify image in both
-    messages = unify.get_logs(context=tm._transcripts_ctx, from_fields=["images"])
+    messages = unisdk.get_logs(context=tm._transcripts_ctx, from_fields=["images"])
     assert (
         messages[0].entries["images"][0]["raw_image_ref"]["image_id"] == shared_img_id
     )
 
-    guidance = unify.get_logs(context=gm._ctx, from_fields=["images"])
+    guidance = unisdk.get_logs(context=gm._ctx, from_fields=["images"])
     assert (
         guidance[0].entries["images"][0]["raw_image_ref"]["image_id"] == shared_img_id
     )
 
     # Delete the shared image
-    img_logs = unify.get_logs(
+    img_logs = unisdk.get_logs(
         context=im._ctx,
         filter=f"image_id == {shared_img_id}",
         return_ids_only=True,
     )
     assert img_logs, "Image not found"
-    unify.delete_logs(context=im._ctx, logs=img_logs[0])
+    unisdk.delete_logs(context=im._ctx, logs=img_logs[0])
 
     # Verify image_id replaced with None in both transcript and guidance (in-place SET NULL)
-    messages_after = unify.get_logs(context=tm._transcripts_ctx, from_fields=["images"])
+    messages_after = unisdk.get_logs(
+        context=tm._transcripts_ctx,
+        from_fields=["images"],
+    )
     msg_images = messages_after[0].entries.get("images", [])
     assert len(msg_images) == 1  # Array length unchanged
     assert msg_images[0]["raw_image_ref"]["image_id"] is None  # image_id set to None
     assert msg_images[0]["annotation"] == "Screenshot"  # Annotation preserved
 
-    guidance_after = unify.get_logs(context=gm._ctx, from_fields=["images"])
+    guidance_after = unisdk.get_logs(context=gm._ctx, from_fields=["images"])
     guid_images = guidance_after[0].entries.get("images", [])
     assert len(guid_images) == 1  # Array length unchanged
     assert guid_images[0]["raw_image_ref"]["image_id"] is None  # image_id set to None
@@ -295,7 +304,7 @@ def test_function_guidance_bidirectional_cascade():
     gm.add_guidance(title="Setup Guide", content="Setup instructions")
     gm.add_guidance(title="Usage Guide", content="Usage instructions")
 
-    guidance_list = unify.get_logs(
+    guidance_list = unisdk.get_logs(
         context=gm._ctx,
         from_fields=["guidance_id", "title"],
     )
@@ -306,7 +315,7 @@ def test_function_guidance_bidirectional_cascade():
     fm.add_functions(implementations=src)
 
     # Get function ID
-    func_logs = unify.get_logs(
+    func_logs = unisdk.get_logs(
         context=fm._compositional_ctx,
         filter="name == 'setup_system'",
         return_ids_only=True,
@@ -314,7 +323,7 @@ def test_function_guidance_bidirectional_cascade():
     assert func_logs, "Function not created"
 
     # Update function to reference both guidance entries
-    unify.update_logs(
+    unisdk.update_logs(
         context=fm._compositional_ctx,
         logs=func_logs[0],
         entries={"guidance_ids": [g_map["Setup Guide"], g_map["Usage Guide"]]},
@@ -322,20 +331,20 @@ def test_function_guidance_bidirectional_cascade():
     )
 
     # Get function ID
-    funcs = unify.get_logs(
+    funcs = unisdk.get_logs(
         context=fm._compositional_ctx,
         from_fields=["function_id", "guidance_ids"],
     )
     func_id = int(funcs[0].entries["function_id"])
 
-    # Update guidance entries to reference the function (using unify.update_logs)
+    # Update guidance entries to reference the function (using unisdk.update_logs)
     for title in ["Setup Guide", "Usage Guide"]:
-        guid_logs = unify.get_logs(
+        guid_logs = unisdk.get_logs(
             context=gm._ctx,
             filter=f"title == '{title}'",
             return_ids_only=True,
         )
-        unify.update_logs(
+        unisdk.update_logs(
             context=gm._ctx,
             logs=guid_logs[0],
             entries={"function_ids": [func_id]},
@@ -344,7 +353,7 @@ def test_function_guidance_bidirectional_cascade():
 
     # Verify bidirectional linkage
     # Function → Guidance
-    func_data = unify.get_logs(
+    func_data = unisdk.get_logs(
         context=fm._compositional_ctx,
         filter=f"function_id == {func_id}",
         from_fields=["guidance_ids"],
@@ -354,7 +363,7 @@ def test_function_guidance_bidirectional_cascade():
     )
 
     # Guidance → Function
-    guidance_after = unify.get_logs(
+    guidance_after = unisdk.get_logs(
         context=gm._ctx,
         from_fields=["guidance_id", "function_ids"],
     )
@@ -365,7 +374,7 @@ def test_function_guidance_bidirectional_cascade():
     gm.delete_guidance(guidance_id=g_map["Setup Guide"])
 
     # Verify removed from function's guidance_ids array (CASCADE behavior)
-    func_after = unify.get_logs(
+    func_after = unisdk.get_logs(
         context=fm._compositional_ctx,
         filter=f"function_id == {func_id}",
         from_fields=["guidance_ids"],
@@ -378,7 +387,7 @@ def test_function_guidance_bidirectional_cascade():
     fm.delete_function(function_id=func_id)
 
     # Verify removed from guidance's function_ids array (CASCADE behavior)
-    usage_guidance = unify.get_logs(
+    usage_guidance = unisdk.get_logs(
         context=gm._ctx,
         filter=f"guidance_id == {g_map['Usage Guide']}",
         from_fields=["function_ids"],
@@ -418,7 +427,7 @@ def test_delete_function_cascades_tasks_guidance():
     src = "def worker():\n    return 'work'\n"
     fm.add_functions(implementations=src)
 
-    funcs = unify.get_logs(context=fm._compositional_ctx, from_fields=["function_id"])
+    funcs = unisdk.get_logs(context=fm._compositional_ctx, from_fields=["function_id"])
     func_id = int(funcs[0].entries["function_id"])
 
     # Create task using this function
@@ -437,21 +446,21 @@ def test_delete_function_cascades_tasks_guidance():
     )
 
     # Verify references
-    task = unify.get_logs(
+    task = unisdk.get_logs(
         context=ts._ctx,
         filter=f"task_id == {task_id}",
         from_fields=["entrypoint"],
     )
     assert task[0].entries["entrypoint"] == func_id
 
-    guidance = unify.get_logs(context=gm._ctx, from_fields=["function_ids"])
+    guidance = unisdk.get_logs(context=gm._ctx, from_fields=["function_ids"])
     assert func_id in guidance[0].entries["function_ids"]
 
     # Delete the function
     fm.delete_function(function_id=func_id)
 
     # Verify task survives with null entrypoint (SET NULL behavior)
-    task_after = unify.get_logs(
+    task_after = unisdk.get_logs(
         context=ts._ctx,
         filter=f"task_id == {task_id}",
         from_fields=["task_id", "entrypoint"],
@@ -460,7 +469,7 @@ def test_delete_function_cascades_tasks_guidance():
     assert task_after[0].entries.get("entrypoint") is None  # SET NULL
 
     # Verify function_id removed from guidance array (CASCADE behavior)
-    guidance_after = unify.get_logs(context=gm._ctx, from_fields=["function_ids"])
+    guidance_after = unisdk.get_logs(context=gm._ctx, from_fields=["function_ids"])
     assert func_id not in guidance_after[0].entries.get(
         "function_ids",
         [],
@@ -521,7 +530,10 @@ def test_complex_fk_workflow():
         email_address="bob@test.com",
         phone_number="2222222222",
     )
-    contacts = unify.get_logs(context=cm._ctx, from_fields=["contact_id", "first_name"])
+    contacts = unisdk.get_logs(
+        context=cm._ctx,
+        from_fields=["contact_id", "first_name"],
+    )
     alice_id = next(
         int(c.entries["contact_id"])
         for c in contacts
@@ -554,7 +566,7 @@ def test_complex_fk_workflow():
     # Step 3: Create function
     src = "def process():\n    return 'processed'\n"
     fm.add_functions(implementations=src)
-    funcs = unify.get_logs(context=fm._compositional_ctx, from_fields=["function_id"])
+    funcs = unisdk.get_logs(context=fm._compositional_ctx, from_fields=["function_id"])
     func_id = int(funcs[0].entries["function_id"])
 
     # Step 4: Create guidance with images and function reference
@@ -564,7 +576,7 @@ def test_complex_fk_workflow():
         images=[{"raw_image_ref": {"image_id": img1_id}, "annotation": "Setup"}],
         function_ids=[func_id],
     )
-    guidance_list = unify.get_logs(context=gm._ctx, from_fields=["guidance_id"])
+    guidance_list = unisdk.get_logs(context=gm._ctx, from_fields=["guidance_id"])
     guidance_id = int(guidance_list[0].entries["guidance_id"])
 
     # Step 5: Create task with function entrypoint
@@ -590,7 +602,7 @@ def test_complex_fk_workflow():
     )
 
     # Verify all relationships established
-    messages = unify.get_logs(
+    messages = unisdk.get_logs(
         context=tm._transcripts_ctx,
         from_fields=["sender_id", "receiver_ids", "images"],
     )
@@ -600,15 +612,15 @@ def test_complex_fk_workflow():
     assert messages[0].entries["images"][0]["raw_image_ref"]["image_id"] == img2_id
 
     # Step 7: Delete img1 (used in guidance) - SET NULL behavior
-    img1_logs = unify.get_logs(
+    img1_logs = unisdk.get_logs(
         context=im._ctx,
         filter=f"image_id == {img1_id}",
         return_ids_only=True,
     )
     assert img1_logs, "Image not found"
-    unify.delete_logs(context=im._ctx, logs=img1_logs[0])
+    unisdk.delete_logs(context=im._ctx, logs=img1_logs[0])
 
-    guidance_check = unify.get_logs(
+    guidance_check = unisdk.get_logs(
         context=gm._ctx,
         filter=f"guidance_id == {guidance_id}",
         from_fields=["images"],
@@ -623,7 +635,7 @@ def test_complex_fk_workflow():
     fm.delete_function(function_id=func_id)
 
     # Task: SET NULL behavior (entrypoint becomes null)
-    task_check = unify.get_logs(
+    task_check = unisdk.get_logs(
         context=ts._ctx,
         filter=f"task_id == {task_id}",
         from_fields=[
@@ -634,7 +646,7 @@ def test_complex_fk_workflow():
     assert task_check[0].entries.get("entrypoint") is None  # SET NULL
 
     # Guidance: CASCADE behavior (function_id removed from array)
-    guidance_check2 = unify.get_logs(
+    guidance_check2 = unisdk.get_logs(
         context=gm._ctx,
         filter=f"guidance_id == {guidance_id}",
         from_fields=["function_ids"],
@@ -647,7 +659,7 @@ def test_complex_fk_workflow():
     # Step 9: Delete Alice - SET NULL behavior (message survives with null sender)
     cm._delete_contact(contact_id=alice_id)
 
-    messages_check = unify.get_logs(
+    messages_check = unisdk.get_logs(
         context=tm._transcripts_ctx,
         from_fields=["message_id", "sender_id", "receiver_ids"],
     )
@@ -684,7 +696,7 @@ def test_bulk_delete_preserves_fk_integrity():
             phone_number=f"{i:010d}",
         )
 
-    contacts = unify.get_logs(
+    contacts = unisdk.get_logs(
         context=cm._ctx,
         filter="contact_id > 1",
         from_fields=["contact_id"],
@@ -706,7 +718,7 @@ def test_bulk_delete_preserves_fk_integrity():
             )
 
     # Should have 5*5 = 25 messages
-    messages = unify.get_logs(context=tm._transcripts_ctx, from_fields=["message_id"])
+    messages = unisdk.get_logs(context=tm._transcripts_ctx, from_fields=["message_id"])
     assert len(messages) == 25
 
     # Bulk delete first 5 contacts (senders)
@@ -714,7 +726,7 @@ def test_bulk_delete_preserves_fk_integrity():
         cm._delete_contact(contact_id=cid)
 
     # All messages should survive with SET NULL on sender_id
-    messages_after = unify.get_logs(
+    messages_after = unisdk.get_logs(
         context=tm._transcripts_ctx,
         from_fields=["message_id", "sender_id", "receiver_ids"],
     )
@@ -754,21 +766,21 @@ def test_circular_fk_deletion_safety():
     # Create function
     src = "def circular():\n    return 'loop'\n"
     fm.add_functions(implementations=src)
-    funcs = unify.get_logs(context=fm._compositional_ctx, from_fields=["function_id"])
+    funcs = unisdk.get_logs(context=fm._compositional_ctx, from_fields=["function_id"])
     func_id = int(funcs[0].entries["function_id"])
 
     # Create guidance referencing function
     gm.add_guidance(title="Circular Guide", content="Guide", function_ids=[func_id])
-    guidance_list = unify.get_logs(context=gm._ctx, from_fields=["guidance_id"])
+    guidance_list = unisdk.get_logs(context=gm._ctx, from_fields=["guidance_id"])
     guidance_id = int(guidance_list[0].entries["guidance_id"])
 
     # Update function to reference guidance (circular reference)
-    func_logs = unify.get_logs(
+    func_logs = unisdk.get_logs(
         context=fm._compositional_ctx,
         filter=f"function_id == {func_id}",
         return_ids_only=True,
     )
-    unify.update_logs(
+    unisdk.update_logs(
         context=fm._compositional_ctx,
         logs=func_logs[0],
         entries={"guidance_ids": [guidance_id]},
@@ -776,14 +788,14 @@ def test_circular_fk_deletion_safety():
     )
 
     # Verify circular reference exists
-    func_data = unify.get_logs(
+    func_data = unisdk.get_logs(
         context=fm._compositional_ctx,
         filter=f"function_id == {func_id}",
         from_fields=["guidance_ids"],
     )
     assert guidance_id in func_data[0].entries["guidance_ids"]
 
-    guidance_data = unify.get_logs(
+    guidance_data = unisdk.get_logs(
         context=gm._ctx,
         filter=f"guidance_id == {guidance_id}",
         from_fields=["function_ids"],
@@ -794,7 +806,7 @@ def test_circular_fk_deletion_safety():
     fm.delete_function(function_id=func_id)
 
     # Verify guidance survives with function_id removed (CASCADE behavior)
-    guidance_after = unify.get_logs(
+    guidance_after = unisdk.get_logs(
         context=gm._ctx,
         filter=f"guidance_id == {guidance_id}",
         from_fields=["function_ids"],
@@ -829,7 +841,10 @@ def test_delete_exchange_cascades_messages():
         email_address="bob@test.com",
         phone_number="2222222222",
     )
-    contacts = unify.get_logs(context=cm._ctx, from_fields=["contact_id", "first_name"])
+    contacts = unisdk.get_logs(
+        context=cm._ctx,
+        from_fields=["contact_id", "first_name"],
+    )
     alice_id = next(
         int(c.entries["contact_id"])
         for c in contacts
@@ -875,7 +890,7 @@ def test_delete_exchange_cascades_messages():
         )
 
     # Verify 5 messages in exchange
-    messages_in_exchange = unify.get_logs(
+    messages_in_exchange = unisdk.get_logs(
         context=tm._transcripts_ctx,
         filter=f"exchange_id == {exchange_id}",
         from_fields=["message_id"],
@@ -883,16 +898,16 @@ def test_delete_exchange_cascades_messages():
     assert len(messages_in_exchange) == 5
 
     # Delete the exchange (CASCADE should delete all messages)
-    exchange_logs = unify.get_logs(
+    exchange_logs = unisdk.get_logs(
         context=tm._exchanges_ctx,
         filter=f"exchange_id == {exchange_id}",
         return_ids_only=True,
     )
     assert exchange_logs, "Exchange not found"
-    unify.delete_logs(context=tm._exchanges_ctx, logs=exchange_logs[0])
+    unisdk.delete_logs(context=tm._exchanges_ctx, logs=exchange_logs[0])
 
     # Verify all messages deleted (CASCADE behavior)
-    messages_after = unify.get_logs(
+    messages_after = unisdk.get_logs(
         context=tm._transcripts_ctx,
         from_fields=["message_id"],
     )

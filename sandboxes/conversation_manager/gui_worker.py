@@ -778,7 +778,7 @@ async def _run_worker(*, ui_to_worker, worker_to_ui, config: dict) -> None:
         pass
 
     # Suppress SDK HTTP noise
-    for _noisy in ("unify", "unify_requests", "unillm", "UnifyAsyncLogger"):
+    for _noisy in ("unisdk", "unisdk_requests", "unillm", "UnisdkAsyncLogger"):
         try:
             logging.getLogger(_noisy).setLevel(logging.WARNING)
         except Exception:

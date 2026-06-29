@@ -609,13 +609,13 @@ class TestResolveBindingContexts:
     """Tests for resolve_binding_contexts with mocked unify API."""
 
     def _patch(self):
-        """Return a context manager that patches ContextRegistry and unify."""
+        """Return a context manager that patches ContextRegistry and unisdk."""
         patches = {}
         patches["registry"] = patch(
             "unity.dashboard_manager.ops.tile_ops.ContextRegistry",
         )
         patches["unify"] = patch(
-            "unity.dashboard_manager.ops.tile_ops.unify",
+            "unity.dashboard_manager.ops.tile_ops.unisdk",
         )
         return patches
 
@@ -625,7 +625,7 @@ class TestResolveBindingContexts:
                 "unity.dashboard_manager.ops.tile_ops.ContextRegistry",
             ) as mock_reg,
             patch(
-                "unity.dashboard_manager.ops.tile_ops.unify",
+                "unity.dashboard_manager.ops.tile_ops.unisdk",
             ) as mock_unify,
         ):
             mock_reg._base_context = BASE
@@ -649,7 +649,7 @@ class TestResolveBindingContexts:
                 "unity.dashboard_manager.ops.tile_ops.ContextRegistry",
             ) as mock_reg,
             patch(
-                "unity.dashboard_manager.ops.tile_ops.unify",
+                "unity.dashboard_manager.ops.tile_ops.unisdk",
             ) as mock_unify,
         ):
             mock_reg._base_context = BASE
@@ -667,7 +667,7 @@ class TestResolveBindingContexts:
                 "unity.dashboard_manager.ops.tile_ops.ContextRegistry",
             ) as mock_reg,
             patch(
-                "unity.dashboard_manager.ops.tile_ops.unify",
+                "unity.dashboard_manager.ops.tile_ops.unisdk",
             ) as mock_unify,
         ):
             mock_reg._base_context = BASE
@@ -686,7 +686,7 @@ class TestResolveBindingContexts:
                 "unity.dashboard_manager.ops.tile_ops.ContextRegistry",
             ) as mock_reg,
             patch(
-                "unity.dashboard_manager.ops.tile_ops.unify",
+                "unity.dashboard_manager.ops.tile_ops.unisdk",
             ) as mock_unify,
         ):
             mock_reg._base_context = BASE
@@ -726,7 +726,7 @@ class TestResolveBindingContexts:
                 "unity.dashboard_manager.ops.tile_ops.ContextRegistry",
             ) as mock_reg,
             patch(
-                "unity.dashboard_manager.ops.tile_ops.unify",
+                "unity.dashboard_manager.ops.tile_ops.unisdk",
             ) as mock_unify,
         ):
             mock_reg._base_context = BASE
@@ -762,7 +762,7 @@ class TestResolveBindingContexts:
                 "unity.dashboard_manager.ops.tile_ops.ContextRegistry",
             ) as mock_reg,
             patch(
-                "unity.dashboard_manager.ops.tile_ops.unify",
+                "unity.dashboard_manager.ops.tile_ops.unisdk",
             ) as mock_unify,
         ):
             mock_reg._base_context = None
@@ -779,7 +779,7 @@ class TestResolveBindingContexts:
                 "unity.dashboard_manager.ops.tile_ops.ContextRegistry",
             ) as mock_reg,
             patch(
-                "unity.dashboard_manager.ops.tile_ops.unify",
+                "unity.dashboard_manager.ops.tile_ops.unisdk",
             ) as mock_unify,
         ):
             mock_reg._base_context = BASE
@@ -796,7 +796,7 @@ class TestResolveBindingContexts:
                 "unity.dashboard_manager.ops.tile_ops.ContextRegistry",
             ) as mock_reg,
             patch(
-                "unity.dashboard_manager.ops.tile_ops.unify",
+                "unity.dashboard_manager.ops.tile_ops.unisdk",
             ) as mock_unify,
         ):
             mock_reg._base_context = BASE
@@ -814,7 +814,7 @@ class TestResolveBindingContexts:
                 "unity.dashboard_manager.ops.tile_ops.ContextRegistry",
             ) as mock_reg,
             patch(
-                "unity.dashboard_manager.ops.tile_ops.unify",
+                "unity.dashboard_manager.ops.tile_ops.unisdk",
             ) as mock_unify,
         ):
             mock_reg._base_context = BASE

@@ -1,7 +1,7 @@
 import json
 
 import pytest
-import unify
+import unisdk
 
 from unity.function_manager.function_manager import FunctionManager
 from tests.helpers import _handle_project
@@ -56,7 +56,7 @@ def send_plain_text_email(recipient: str, subject: str, body: str):
 
 def _get_embedding(fm: FunctionManager, name: str):
     """Fetch the raw _embedding_text_emb for a function by name."""
-    logs = unify.get_logs(
+    logs = unisdk.get_logs(
         context=fm._compositional_ctx,
         filter=f"name == {json.dumps(name)}",
         limit=1,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Union
 
-import unify
+import unisdk
 
 from ..common.context_store import TableStore
 from ..common.model_to_fields import model_to_fields
@@ -87,7 +87,7 @@ def get_contact_info(
             filt = f"contact_id == {misses[0]}"
         else:
             filt = f"contact_id in [{', '.join(str(x) for x in misses)}]"
-        rows = unify.get_logs(
+        rows = unisdk.get_logs(
             context=self._ctx,
             filter=filt,
             limit=len(misses),
@@ -110,7 +110,7 @@ def get_contact_info(
 
 def num_contacts(self) -> int:
     """Return total number of contacts in the context."""
-    ret = unify.get_logs_metric(
+    ret = unisdk.get_logs_metric(
         metric="count",
         key="contact_id",
         context=self._ctx,

@@ -473,14 +473,14 @@ class IntegrationPrimitives:
     def _native_manifest_row_for_app(self, app_slug: str) -> dict[str, Any] | None:
         normalized = _normalize_app_slug(app_slug)
         try:
-            import unify
+            import unisdk
 
-            active = unify.get_active_context() or {}
+            active = unisdk.get_active_context() or {}
             root = active.get("read") or active.get("write") or ""
             context = (
                 f"{root}/Integrations/Manifests" if root else "Integrations/Manifests"
             )
-            rows = unify.get_logs(
+            rows = unisdk.get_logs(
                 context=context,
                 filter=f'slug == "{normalized}"',
                 limit=1,
@@ -503,14 +503,14 @@ class IntegrationPrimitives:
         if not function_names:
             return []
         try:
-            import unify
+            import unisdk
 
-            active = unify.get_active_context() or {}
+            active = unisdk.get_active_context() or {}
             root = active.get("read") or active.get("write") or ""
             context = f"{root}/Functions/Primitives" if root else "Functions/Primitives"
             rows: list[dict[str, Any]] = []
             for name in function_names[:100]:
-                matched = unify.get_logs(
+                matched = unisdk.get_logs(
                     context=context,
                     filter=f'name == "{name}"',
                     limit=1,
@@ -523,15 +523,15 @@ class IntegrationPrimitives:
     def _materialized_tool_rows_for_app(self, app_slug: str) -> list[dict[str, Any]]:
         normalized = _normalize_app_slug(app_slug)
         try:
-            import unify
+            import unisdk
 
-            active = unify.get_active_context() or {}
+            active = unisdk.get_active_context() or {}
             root = active.get("read") or active.get("write") or ""
             contexts = (
                 [f"{root}/Functions/Primitives"] if root else ["Functions/Primitives"]
             )
             for context in contexts:
-                rows = unify.get_logs(
+                rows = unisdk.get_logs(
                     context=context,
                     filter=(
                         'metadata["source"] == "provider_backed" '
@@ -1170,15 +1170,15 @@ class IntegrationPrimitives:
         except Exception:
             pass
         try:
-            import unify
+            import unisdk
 
-            active = unify.get_active_context() or {}
+            active = unisdk.get_active_context() or {}
             root = active.get("read") or active.get("write") or ""
             contexts = (
                 [f"{root}/Functions/Primitives"] if root else ["Functions/Primitives"]
             )
             for context in contexts:
-                rows = unify.get_logs(
+                rows = unisdk.get_logs(
                     context=context,
                     filter=(
                         f"name == {json.dumps(name)} "

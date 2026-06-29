@@ -1,5 +1,5 @@
 """
-Wrappers around unify.log/create_logs with:
+Wrappers around unisdk.log/create_logs with:
 1. _user injection (user ID, matches user_context path component)
 2. _user_id injection (user ID from SESSION_DETAILS)
 3. _assistant injection (assistant ID, matches assistant_context path component)
@@ -10,14 +10,14 @@ Wrappers around unify.log/create_logs with:
 
 Usage
 -----
-Replace direct unify.log/create_logs calls with these wrappers:
+Replace direct unisdk.log/create_logs calls with these wrappers:
 
     from unity.common.log_utils import log, create_logs
 
-    # Instead of: unify.log(context=ctx, **entries)
+    # Instead of: unisdk.log(context=ctx, **entries)
     log(context=ctx, **entries)
 
-    # Instead of: unify.create_logs(context=ctx, entries=entries_list)
+    # Instead of: unisdk.create_logs(context=ctx, entries=entries_list)
     create_logs(context=ctx, entries=entries_list)
 
 The wrappers automatically inject _user, _user_id, _assistant, _assistant_id,
@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import httpx
-import unify
+import unisdk
 
 from unity.common.authorship import (
     AUTHORING_ASSISTANT_ID_FIELD,
@@ -129,9 +129,9 @@ def log(
     project: Optional[str] = None,
     stamp_authoring: bool = False,
     **entries: Any,
-) -> unify.Log:
+) -> unisdk.Log:
     """
-    Wrapper around unify.log with private field injection.
+    Wrapper around unisdk.log with private field injection.
 
     Parameters
     ----------
@@ -146,13 +146,13 @@ def log(
 
     Returns
     -------
-    unify.Log
+    unisdk.Log
         The created log object
     """
     if stamp_authoring:
         entries[AUTHORING_ASSISTANT_ID_FIELD] = current_authoring_assistant_id()
     entries = _inject_private_fields(entries)
-    return unify.log(
+    return unisdk.log(
         project=project,
         context=context,
         new=new,
@@ -170,7 +170,7 @@ def create_logs(
     **kwargs: Any,
 ) -> Any:
     """
-    Wrapper around unify.create_logs with private field injection.
+    Wrapper around unisdk.create_logs with private field injection.
 
     Parameters
     ----------
@@ -179,12 +179,12 @@ def create_logs(
     entries : List[Dict[str, Any]]
         List of entry dicts to create
     **kwargs
-        Additional arguments passed to unify.create_logs (e.g., batched=True)
+        Additional arguments passed to unisdk.create_logs (e.g., batched=True)
 
     Returns
     -------
-    Dict[str, Any] | List[unify.Log]
-        Response from unify.create_logs. Returns a dict with log_event_ids normally,
+    Dict[str, Any] | List[unisdk.Log]
+        Response from unisdk.create_logs. Returns a dict with log_event_ids normally,
         or a list of Log objects when batched=True.
     """
     authoring_assistant_id = (
@@ -203,7 +203,7 @@ def create_logs(
         )
         for entry in entries
     ]
-    return unify.create_logs(
+    return unisdk.create_logs(
         project=project,
         context=context,
         entries=entries,
@@ -277,7 +277,7 @@ async def atomic_upsert(
         If the API request fails
     """
     if project is None:
-        project = unify.active_project()
+        project = unisdk.active_project()
 
     # Inject private fields into initial_data
     if initial_data is None:
@@ -336,7 +336,7 @@ def atomic_upsert_sync(
     See atomic_upsert() for full documentation.
     """
     if project is None:
-        project = unify.active_project()
+        project = unisdk.active_project()
 
     # Inject private fields into initial_data
     if initial_data is None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, Optional, Set
 
-import unify
+import unisdk
 
 from ..common.federated_search import FederatedSearchContext, federated_count
 from ..common.log_utils import log as unity_log
@@ -59,8 +59,8 @@ def num_messages(self) -> int:
 
 def clear(self) -> None:
     """Delete both contexts and re-provision storage."""
-    unify.delete_context(self._transcripts_ctx)
-    unify.delete_context(self._exchanges_ctx)
+    unisdk.delete_context(self._transcripts_ctx)
+    unisdk.delete_context(self._exchanges_ctx)
 
     # No local cache to reset
 
@@ -77,7 +77,7 @@ def clear(self) -> None:
 
         for _ in range(3):
             try:
-                unify.get_fields(context=self._transcripts_ctx)
+                unisdk.get_fields(context=self._transcripts_ctx)
                 break
             except Exception:
                 _time.sleep(0.05)
@@ -89,7 +89,7 @@ def clear(self) -> None:
 
         for _ in range(3):
             try:
-                unify.get_fields(context=self._exchanges_ctx)
+                unisdk.get_fields(context=self._exchanges_ctx)
                 break
             except Exception:
                 _time.sleep(0.05)
@@ -112,7 +112,7 @@ def ensure_exchanges_records(
         ids_expr = ", ".join(str(i) for i in sorted(exchange_ids))
         existing: set[int] = set()
         try:
-            rows = unify.get_logs(
+            rows = unisdk.get_logs(
                 context=exchanges_context,
                 filter=f"exchange_id in [{ids_expr}]",
                 from_fields=["exchange_id"],

@@ -11,7 +11,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-import unify
+import unisdk
 
 from tests.conversation_manager.core.test_coordinator_product_literacy_eval import (
     _PRIMARY_LLM_CONFIG,
@@ -88,7 +88,7 @@ def _reset_runtime() -> None:
     ManagerRegistry.clear()
     ContextRegistry.clear()
     try:
-        unify.unset_context()
+        unisdk.unset_context()
     except Exception:
         pass
 
@@ -107,7 +107,7 @@ def _organization_api_key(api_key: str) -> Iterator[None]:
 
 
 def _shared_guidance_rows(*, org_api_key: str, team_id: int, sentinel: str) -> list:
-    logs = unify.get_logs(
+    logs = unisdk.get_logs(
         project=_ASSISTANTS_PROJECT_NAME,
         context=f"Teams/{team_id}/Guidance",
         api_key=org_api_key,
@@ -139,16 +139,16 @@ def _configure_coordinator_session(
     SESSION_DETAILS.user.surname = coordinator.get("surname") or ""
     SESSION_DETAILS.team_ids = [summary.team_id for summary in team_summaries]
     SESSION_DETAILS.team_summaries = team_summaries
-    unify.BASE_URL = orchestra_url
+    unisdk.BASE_URL = orchestra_url
 
 
 def _activate_coordinator_context(*, org_api_key: str, coordinator: dict) -> None:
-    unify.activate(
+    unisdk.activate(
         _ASSISTANTS_PROJECT_NAME,
         overwrite=False,
         api_key=org_api_key,
     )
-    unify.set_context(
+    unisdk.set_context(
         f"{coordinator['user_id']}/{_assistant_id(coordinator)}",
         relative=False,
     )
@@ -193,7 +193,7 @@ async def test_shared_team_guidance_reaches_member_coordinators_local_stack(
     """Owner coordinator LLM-writes team guidance that member coordinators can read."""
 
     urls = require_local_stack
-    unify.BASE_URL = urls.orchestra_url
+    unisdk.BASE_URL = urls.orchestra_url
 
     suffix = uuid.uuid4().hex[:8]
     org = create_organization(

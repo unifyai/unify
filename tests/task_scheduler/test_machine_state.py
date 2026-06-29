@@ -141,7 +141,7 @@ def test_get_task_activation_queries_for_null_personal_destination(monkeypatch):
         captured.update(kwargs)
         return []
 
-    monkeypatch.setattr("unity.task_scheduler.storage.unify.get_logs", _fake_get_logs)
+    monkeypatch.setattr("unity.task_scheduler.storage.unisdk.get_logs", _fake_get_logs)
     monkeypatch.setattr(machine_state.SESSION_DETAILS.user, "id", "user-1")
     monkeypatch.setattr(machine_state.SESSION_DETAILS.assistant, "agent_id", 2069)
 
@@ -188,7 +188,7 @@ def test_get_task_activation_queries_assistants_machine_state_project(monkeypatc
         captured.update(kwargs)
         return [_FakeRow()]
 
-    monkeypatch.setattr("unity.task_scheduler.storage.unify.get_logs", _fake_get_logs)
+    monkeypatch.setattr("unity.task_scheduler.storage.unisdk.get_logs", _fake_get_logs)
     monkeypatch.setattr(machine_state.SESSION_DETAILS.user, "id", "user-1")
     monkeypatch.setattr(machine_state.SESSION_DETAILS.assistant, "agent_id", 42)
 

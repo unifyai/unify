@@ -20,7 +20,7 @@ from typing import (
     overload,
 )
 
-import unify
+import unisdk
 import unillm
 from pydantic import BaseModel
 
@@ -631,7 +631,7 @@ class TaskScheduler(BaseTaskScheduler):
     def clear(self) -> None:
         """Delete the current Tasks context and recreate local state."""
 
-        unify.delete_context(self._ctx)
+        unisdk.delete_context(self._ctx)
         self._num_tasks_cached = None
         self._active_task_root_context = None
 
@@ -659,7 +659,12 @@ class TaskScheduler(BaseTaskScheduler):
                 id_map[int(task_id)] = int(lg.id)
         return id_map
 
-    def _get_log_by_task_instance(self, *, task_id: int, instance_id: int) -> unify.Log:
+    def _get_log_by_task_instance(
+        self,
+        *,
+        task_id: int,
+        instance_id: int,
+    ) -> unisdk.Log:
         """Return the physical task row for one logical task instance."""
 
         task = self._get_task_or_raise(task_id)
@@ -770,7 +775,7 @@ class TaskScheduler(BaseTaskScheduler):
         ):
             return False
 
-        active_rows: list[tuple[str, unify.Log]] = []
+        active_rows: list[tuple[str, unisdk.Log]] = []
         for context_name in self._read_task_contexts():
             store = self._store_for_task_context(context_name)
             rows = store.get_rows(
@@ -783,7 +788,7 @@ class TaskScheduler(BaseTaskScheduler):
         if not active_rows:
             return True
 
-        stale_rows: list[tuple[str, unify.Log]] = []
+        stale_rows: list[tuple[str, unisdk.Log]] = []
         for context_name, row in active_rows:
             if int(row.id) == int(provenance.source_task_log_id):
                 return False
@@ -1291,7 +1296,7 @@ class TaskScheduler(BaseTaskScheduler):
         *,
         task_ids: Union[int, List[int]],
         return_ids_only: Literal[False],
-    ) -> List[unify.Log]: ...
+    ) -> List[unisdk.Log]: ...
 
     def _get_logs_by_task_ids(
         self,
@@ -1302,7 +1307,7 @@ class TaskScheduler(BaseTaskScheduler):
         """Fetch log objects or ids for one or many logical task ids."""
 
         task_id_list = task_ids if isinstance(task_ids, list) else [task_ids]
-        matches: list[unify.Log] = []
+        matches: list[unisdk.Log] = []
         for context_name in self._read_task_contexts():
             store = self._store_for_task_context(context_name)
             rows = store.get_logs_by_task_ids(
@@ -1983,7 +1988,7 @@ class TaskScheduler(BaseTaskScheduler):
     def _write_log_entries(
         self,
         *,
-        logs: Union[int, unify.Log, List[Union[int, unify.Log]]],
+        logs: Union[int, unisdk.Log, List[Union[int, unisdk.Log]]],
         entries: Union[Dict[str, Any], List[Dict[str, Any]]],
     ) -> Dict[str, str]:
         """Centralize task-row writes through the current store."""

@@ -402,7 +402,7 @@ class TestBuildBrainSpecCoordinatorPrompt:
         SESSION_DETAILS.unify_key = "owner-key"
 
         with patch(
-            "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+            "unity.coordinator_manager.coordinator_manager.unisdk.list_assistants",
         ) as list_assistants:
             spec = build_brain_spec(_make_cm(), _make_snapshot())
 
@@ -419,11 +419,11 @@ class TestBuildBrainSpecCoordinatorPrompt:
 
         with (
             patch(
-                "unity.coordinator_manager.coordinator_manager.unify.list_org_members",
+                "unity.coordinator_manager.coordinator_manager.unisdk.list_org_members",
                 return_value=[{"first_name": "Dana", "surname": "Owner"}],
             ) as list_org_members,
             patch(
-                "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+                "unity.coordinator_manager.coordinator_manager.unisdk.list_assistants",
             ) as list_assistants,
         ):
             spec = build_brain_spec(_make_cm(), _make_snapshot())
@@ -447,7 +447,7 @@ class TestBuildBrainSpecCoordinatorPrompt:
         SESSION_DETAILS.assistant.is_coordinator = False
 
         with patch(
-            "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+            "unity.coordinator_manager.coordinator_manager.unisdk.list_assistants",
             return_value=[],
         ) as list_assistants:
             spec = build_brain_spec(_make_cm(), _make_snapshot())
@@ -465,10 +465,10 @@ class TestBuildBrainSpecCoordinatorPrompt:
 
         with (
             patch(
-                "unity.coordinator_manager.coordinator_manager.unify.list_org_members",
+                "unity.coordinator_manager.coordinator_manager.unisdk.list_org_members",
             ) as list_org_members,
             patch(
-                "unity.coordinator_manager.coordinator_manager.unify.list_assistants",
+                "unity.coordinator_manager.coordinator_manager.unisdk.list_assistants",
             ) as list_assistants,
         ):
             spec = build_brain_spec(_make_cm(), _make_snapshot())
