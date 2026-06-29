@@ -125,7 +125,7 @@ def test_get_images_prefers_cache_and_falls_back_backend(monkeypatch):
         calls["count"] += 1
         return orig_get_logs(*args, **kwargs)
 
-    monkeypatch.setattr(unify, "get_logs", _wrapped_get_logs)
+    monkeypatch.setattr(unisdk, "get_logs", _wrapped_get_logs)
     _ = im.get_images([ids[0]])
     assert calls["count"] == 0
 
@@ -175,7 +175,7 @@ def test_image_handle_raw_caches_gcs_download(monkeypatch):
         ret["image_id"] = eid
         return _FakeLog(ret)
 
-    monkeypatch.setattr(unify, "log", _fake_unify_log)
+    monkeypatch.setattr(unisdk, "log", _fake_unify_log)
 
     [img_id] = im.add_images(
         [
@@ -194,7 +194,7 @@ def test_image_handle_raw_caches_gcs_download(monkeypatch):
         download_count["count"] += 1
         return b"IMG_BYTES"
 
-    monkeypatch.setattr(unify, "download_object", _fake_download_object)
+    monkeypatch.setattr(unisdk, "download_object", _fake_download_object)
 
     # First raw() must download and then cache base64 in DataStore
     h1 = im.get_images([img_id])[0]

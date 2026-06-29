@@ -98,7 +98,7 @@ def test_async_mode_uses_async_logger(monkeypatch):
         async_log_create_calls.append((args, kwargs))
         return original_log_create(*args, **kwargs)
 
-    monkeypatch.setattr(unify, "log", mock_unify_log)
+    monkeypatch.setattr(unisdk, "log", mock_unify_log)
     monkeypatch.setattr(TranscriptManager._LOGGER, "log_create", mock_log_create)
 
     message = {
