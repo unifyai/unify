@@ -40,7 +40,7 @@ class ConversationSettings(BaseSettings):
         SPEECH_URGENCY_PREEMPT_ENABLED: Enable the concurrent fast-brain urgency
             evaluator for voice mode. When a user speaks while the slow brain is
             mid-run, a sidecar LLM call classifies the utterance as urgent
-            (preempt) or not (let the queue proceed). Default False.
+            (preempt) or not (let the queue proceed). Default True.
         INGRESS_TRANSPORT: Selector for the inbound transport
             (``unity.gateway.IngressTransport`` implementation) that
             CommsManager consumes. ``""`` (default) and ``"legacy"`` both
