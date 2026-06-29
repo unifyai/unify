@@ -45,6 +45,7 @@ from unity.conversation_manager.events import *
 from unity.conversation_manager.utils import dispatch_livekit_agent
 from unity.conversation_manager.prompt_builders import (
     SMALLTALK_DEFER_SENTINEL,
+    SMALLTALK_SILENCE_SENTINEL,
     build_opening_greeting_messages,
     build_smalltalk_messages,
     build_voice_agent_prompt,
@@ -540,6 +541,14 @@ class Assistant(Agent):
             )
 
             smalltalk = await smalltalk_task if smalltalk_task is not None else None
+            if smalltalk is _SMALLTALK_STAY_SILENT:
+                # A bare acknowledgement ("okay") needs no reply: say nothing and
+                # cancel this turn's slow-brain run so neither brain speaks.
+                buffer_task.cancel()
+                _log.info("Small talk: staying silent on bare acknowledgement")
+                if self._publish_fast_brain_continued is not None:
+                    await self._publish_fast_brain_continued(my_turn)
+                return
             if smalltalk is not None:
                 buffer_task.cancel()  # the filler is not needed
                 if self._slow_brain_responded_turn >= my_turn:
@@ -769,6 +778,11 @@ OUTBOUND_OPENING_TRIGGER_TIMEOUT_S = 5.0
 # answer is a sentence or two; anything longer means the model overreached into a
 # substantive answer (the slow brain's job), so we drop it and defer instead.
 _MAX_SMALLTALK_CHARS = 300
+
+# Distinct small-talk outcome: a bare acknowledgement ("okay") needs no reply at
+# all. The fast brain stays silent AND cancels the slow-brain run, so neither
+# brain speaks. Identity-checked, so it can never collide with a real reply.
+_SMALLTALK_STAY_SILENT = object()
 
 # When the assistant ends a Unify Meet, we first tell the Console to leave the
 # room itself (so its WebRTC peer connection and SCTP data channels close
@@ -2910,15 +2924,17 @@ async def entrypoint(ctx: agents.JobContext):
         )
         return await greeting_client.generate(messages=greeting_messages)
 
-    async def _generate_smalltalk_reply(user_text: str) -> str | None:
-        """Fully answer a pure small-talk turn, or return None to defer.
+    async def _generate_smalltalk_reply(user_text: str):
+        """Resolve a pure small-talk turn, or return None to defer.
 
-        Pure social / biographical / simple self-context / repeat-last turns are
-        answered directly from the assistant persona plus recent history, so the
-        caller is not told "give me a moment" for a greeting. Anything that needs
-        the user's data, tools, actions, or a real-world lookup yields the
-        ``DEFER`` sentinel -> None, and the slow brain (already running) handles
-        it. Fail-safe to None on an over-long reply (overreach), empty, or error.
+        Returns one of:
+        - a reply string: a social / biographical / self-context / repeat answer
+          to speak (the fast brain owns the turn);
+        - ``_SMALLTALK_STAY_SILENT``: a bare acknowledgement that needs no reply;
+        - ``None``: defer to the slow brain (anything substantive, or any action
+          / status question, or any error / overreach).
+
+        Drawn from the assistant persona plus recent history. Fail-safe to None.
         """
         from unity.common.llm_client import new_llm_client
 
@@ -2937,8 +2953,11 @@ async def entrypoint(ctx: agents.JobContext):
             )
             raw = await client.generate(messages=messages)
             text = " ".join(str(raw).split()).strip().strip("\"'“”‘’")
-            if not text or text.upper().startswith(SMALLTALK_DEFER_SENTINEL):
+            upper = text.upper()
+            if not text or upper.startswith(SMALLTALK_DEFER_SENTINEL):
                 return None
+            if upper.startswith(SMALLTALK_SILENCE_SENTINEL):
+                return _SMALLTALK_STAY_SILENT
             if len(text) > _MAX_SMALLTALK_CHARS:
                 return None
             return text

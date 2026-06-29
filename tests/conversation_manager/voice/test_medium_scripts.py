@@ -3226,6 +3226,39 @@ class TestFastBrainSmalltalk:
         # Slow brain must NOT be cancelled - it produces the real answer.
         a._publish_fast_brain_continued.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_bare_acknowledgement_stays_silent(
+        self,
+        boss_contact,
+        monkeypatch,
+    ):
+        """A bare ack ('okay') -> say nothing AND cancel the slow brain, so
+        neither brain speaks (no parroting, no filler)."""
+        from unittest.mock import AsyncMock
+
+        from livekit.agents import llm
+
+        from unity.conversation_manager.medium_scripts import call as call_mod
+
+        a = self._assistant(boss_contact)
+        a.call_received = True
+        a._capture_screenshots_for_llm = AsyncMock()
+        a._generate_smalltalk_reply = AsyncMock(
+            return_value=call_mod._SMALLTALK_STAY_SILENT,
+        )
+        a._publish_fast_brain_continued = AsyncMock()
+
+        async def _filler(*args, **kwargs):
+            return "One moment."
+
+        monkeypatch.setattr(call_mod, "select_fast_reply", _filler)
+
+        chunks = [chunk async for chunk in a.llm_node(llm.ChatContext(), [], None)]
+
+        # Nothing spoken (no parrot, no filler), but the slow brain is cancelled.
+        assert chunks == []
+        a._publish_fast_brain_continued.assert_awaited_once_with(a._user_turn_seq)
+
 
 # =============================================================================
 # Outbound opener: held until the callee's first utterance (or fallback)
