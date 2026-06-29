@@ -140,8 +140,11 @@ is a clear, explicit reason not to.
   continuing to speak. If unsure, CONTINUE.
 - DEFER — ONLY when continuing would plainly be wrong because the caller
   EXPLICITLY: changed the subject to something else, declined/objected, told you
-  to stop or wait, or asked a specific question the remaining words clearly do
-  not answer.
+  to stop or wait, asked a specific question the remaining words clearly do not
+  answer, OR indicated they have ALREADY done (or are already doing) the very
+  thing your remaining words instruct ("I already clicked it", "just did that",
+  "I already replied", "I've got it") — re-delivering a completed instruction is
+  wrong, so DEFER.
 
 It is fine if a genuine redirect later needs its own turn — the caller keeps
 talking anyway. The costly mistake is failing to resume content that was right

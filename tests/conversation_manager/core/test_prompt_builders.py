@@ -936,3 +936,29 @@ class TestSmalltalkMessages:
         assert "tool" in low
         assert "mixed" in low
         assert "when unsure" in low
+
+    def test_smalltalk_guardrail_stays_silent_on_bare_acks(self):
+        from unity.conversation_manager.prompt_builders import (
+            SMALLTALK_SILENCE_SENTINEL,
+            _SMALLTALK_GUARDRAIL,
+        )
+
+        assert SMALLTALK_SILENCE_SENTINEL == "SILENCE"
+        g = _SMALLTALK_GUARDRAIL
+        assert "SILENCE" in g
+        low = g.lower()
+        # Bare acknowledgements -> silence, never echoed back.
+        assert "acknowledgement" in low
+        assert "never echo" in low
+        # The carve-out: an 'okay' that authorises an action is NOT silence.
+        assert "authorises an action" in low or "authorizes an action" in low
+
+    def test_smalltalk_guardrail_defers_action_and_status_questions(self):
+        from unity.conversation_manager.prompt_builders import _SMALLTALK_GUARDRAIL
+
+        low = _SMALLTALK_GUARDRAIL.lower()
+        # The fast brain must never promise/report on an action it controls.
+        assert "hang up" in low
+        assert "are you calling me" in low
+        assert "did you send it yet" in low
+        assert "never promise, claim, or report" in low

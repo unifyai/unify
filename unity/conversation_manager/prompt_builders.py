@@ -149,9 +149,10 @@ def build_opening_greeting_messages(
     return messages
 
 
-# Sentinel the small-talk sidecar emits when the turn is NOT pure small talk and
-# must be handled by the slow brain instead.
+# Sentinels the small-talk sidecar emits. DEFER -> the slow brain handles the
+# turn; SILENCE -> say nothing at all (a bare acknowledgement needs no reply).
 SMALLTALK_DEFER_SENTINEL = "DEFER"
+SMALLTALK_SILENCE_SENTINEL = "SILENCE"
 
 _SMALLTALK_GUARDRAIL = (
     "[system] Small-talk rule. You are the fast, in-the-moment voice; a slower, "
@@ -161,7 +162,7 @@ _SMALLTALK_GUARDRAIL = (
     "lookups, tools, data, or actions?\n\n"
     "Answer it yourself ONLY when the whole turn is one of these:\n"
     "- Social pleasantries: greetings, 'how are you', 'nice to meet you', "
-    "'thanks', 'have a good one', light chit-chat.\n"
+    "'have a good one', light chit-chat.\n"
     "- About you: who you are, your name/role, 'tell me about yourself', what "
     "you can help with in general - drawn from the persona above.\n"
     "- Simple self-context you ACTUALLY know from the persona: e.g. where you are "
@@ -170,13 +171,27 @@ _SMALLTALK_GUARDRAIL = (
     "- Repeat or clarify the immediately preceding line: 'what did you just "
     "say?', 'sorry, can you repeat that?', 'what do you mean?' - restate or "
     "lightly rephrase what was just said.\n\n"
+    f"Output EXACTLY the single word {SMALLTALK_SILENCE_SENTINEL} (and nothing "
+    "else) when the WHOLE turn is just a bare acknowledgement that the caller "
+    "heard you or is ready to continue - 'okay', 'ok', 'k', 'yeah', 'yep', "
+    "'sure', 'right', 'cool', 'mm-hm', 'got it', 'fine', a bare 'thanks' - AND "
+    "you are not waiting on an answer or decision from them. Say nothing; NEVER "
+    "echo their acknowledgement back ('okay' -> 'okay' is exactly what to avoid). "
+    "(If their 'okay' instead answers a question you asked or authorises an "
+    f"action, that is NOT silence -> use {SMALLTALK_DEFER_SENTINEL} so the "
+    "slower brain can act.)\n\n"
     f"Otherwise, output EXACTLY the single word {SMALLTALK_DEFER_SENTINEL} and "
     "nothing else. In particular, "
     f"{SMALLTALK_DEFER_SENTINEL} for ANYTHING that needs the user's data, inbox, "
     "calendar, files, tasks, history, settings, an action, a tool, an "
     "integration, a real-world fact, or anything not already in your persona or "
     "this conversation - and for any MIXED turn that contains even one such "
-    "part. When unsure, "
+    f"part. Also {SMALLTALK_DEFER_SENTINEL} for ANY question about what you are "
+    "about to do, are doing, or have done, or your current status or an action "
+    "you control - e.g. 'are you going to hang up?', 'are you calling me?', "
+    "'did you send it yet?', 'have you done that?', 'are you still there?', "
+    "'why is it taking so long?'. NEVER promise, claim, or report on an action "
+    "or its status yourself; the slower brain owns those. When unsure, "
     f"{SMALLTALK_DEFER_SENTINEL}. Never invent facts or self-context you do not "
     "actually know.\n\n"
     "If you do answer: reply as one natural person (never mention any other "

@@ -239,6 +239,9 @@ def test_continuation_prompt_is_classifier_resuming_on_greetings():
     # Heavily biased to CONTINUE: DEFER only on an explicit redirect.
     assert "strong default" in p
     assert "lean hard toward CONTINUE" in p
+    # ...but DEFER when the caller already did the thing the remainder instructs.
+    assert "already done" in p.lower()
+    assert "already clicked it" in p
 
 
 def test_resume_lead_in_bank_has_variety():
@@ -273,6 +276,18 @@ async def test_continuation_defer_sentinel_returns_none(monkeypatch):
     out = await select_continuation(
         "the next step is to click Connect Slack.",
         "wait, stop",
+    )
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_continuation_defers_when_instruction_already_done(monkeypatch):
+    """If the caller says they already did the thing the remainder instructs, the
+    classifier should DEFER rather than re-deliver a completed instruction."""
+    _patch_client(monkeypatch, raw="DEFER")
+    out = await select_continuation(
+        "Click 'Trigger SMS message from T-W1N' and I'll text you the clue.",
+        "yep, just clicked it",
     )
     assert out is None
 
