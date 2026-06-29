@@ -734,6 +734,10 @@ class _UserDesktopFilesNamespace:
         ``path`` is relative to the user's home.  The file is staged at
         ``~/Unity/Remote/<user_id>/<path>`` (a read-only mirror of their home)
         and that absolute local path is returned, ready to read or parse.
+        Noise (caches, dependency trees, VCS metadata) and credential dirs
+        (``.ssh``, ``.gnupg``, ``.aws``, …) are skipped, so pulling a directory
+        won't drag in its dependencies or secrets; ``list`` still shows the
+        full tree.
         """
         target_uid, client = await self._client(user_id)
         local_path = await client.pull(path)
@@ -750,10 +754,11 @@ class _UserDesktopFilesNamespace:
 
         ``path`` is relative to the user's home. Scope it to a subtree (e.g.
         ``"Documents"``); ``""`` mirrors the entire home, which can be very
-        large and slow (caches and dependency trees are skipped, but it is
-        still a heavy operation — confirm the user really wants everything).
-        Every staged file lands under ``~/Unity/Remote/<user_id>/`` (a read-only
-        mirror of their home); the list of absolute local paths is returned.
+        large and slow (caches, dependency trees and credential dirs like
+        ``.ssh``/``.gnupg``/``.aws`` are skipped, but it is still a heavy
+        operation — confirm the user really wants everything). Every staged
+        file lands under ``~/Unity/Remote/<user_id>/`` (a read-only mirror of
+        their home); the list of absolute local paths is returned.
         """
         target_uid, client = await self._client(user_id)
         staged = await client.sync(path)
