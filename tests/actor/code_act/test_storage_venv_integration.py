@@ -181,6 +181,10 @@ class _MinimalGuidanceManager:
         """Filter guidance entries."""
         return []
 
+    def get_guidance(self, *, guidance_id: int):
+        """Fetch one guidance entry by id."""
+        return {"details": {"guidance_id": guidance_id}}
+
     def add_guidance(self, *, title, content, function_ids=None):
         """Add a guidance entry."""
         return {"details": {"guidance_id": 1}}

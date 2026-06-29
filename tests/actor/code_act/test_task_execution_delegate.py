@@ -87,6 +87,7 @@ def _storage_actor_stub():
     guidance_manager = SimpleNamespace(
         search=_tool_stub,
         filter=_tool_stub,
+        get_guidance=_tool_stub,
         add_guidance=_tool_stub,
         update_guidance=_tool_stub,
         delete_guidance=_tool_stub,
