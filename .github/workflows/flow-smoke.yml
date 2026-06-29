@@ -79,7 +79,12 @@ jobs:
       ORCHESTRA_GCP_ASSISTANT_CALL_RECORDINGS_BUCKET_NAME: ${{ vars.GCP_BUCKET_RECORDINGS }}
       TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
       UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
-      PYTHONPATH: ${{ github.workspace }}/unillm:${{ github.workspace }}/unify
+      # The Builtins project is reserved (admin-key-only) in Orchestra. The
+      # fresh CI-local Orchestra (host uvicorn, inherits this env) adopts this
+      # as its admin key, and the test Builtins seed uses the same value so it
+      # can create/converge the reserved project. Local-only throwaway key.
+      ORCHESTRA_ADMIN_KEY: local-admin-key
+      PYTHONPATH: ${{ github.workspace }}/unillm:${{ github.workspace }}/unisdk
     steps:
     - uses: actions/checkout@v4
       with:
@@ -105,9 +110,9 @@ jobs:
     - name: Clone unify repo
       uses: actions/checkout@v4
       with:
-        repository: unifyai/unify
+        repository: unifyai/unisdk
         ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
-        path: unify
+        path: unisdk
         token: ${{ secrets.CLONE_TOKEN }}
         fetch-depth: 1
 
@@ -155,7 +160,7 @@ jobs:
         path: |
           ~/.cache/uv
           .venv
-        key: uv-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'unillm/pyproject.toml', 'unify/pyproject.toml') }}
+        key: uv-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'unillm/pyproject.toml', 'unisdk/pyproject.toml') }}
         restore-keys: |
           uv-${{ runner.os }}-
 
@@ -169,9 +174,9 @@ jobs:
         pyproject = Path("pyproject.toml")
         text = pyproject.read_text()
         replacements = {
-            'unify = { git = "https://github.com/unifyai/unify.git", branch = "staging" }': 'unify = { path = "./unify", editable = true }',
+            'unify = { git = "https://github.com/unifyai/unisdk.git", branch = "staging" }': 'unify = { path = "./unisdk", editable = true }',
             'unillm = { git = "https://github.com/unifyai/unillm.git", branch = "staging" }': 'unillm = { path = "./unillm", editable = true }',
-            'unify = { path = "../unify", editable = true }': 'unify = { path = "./unify", editable = true }',
+            'unify = { path = "../unisdk", editable = true }': 'unify = { path = "./unisdk", editable = true }',
             'unillm = { path = "../unillm", editable = true }': 'unillm = { path = "./unillm", editable = true }',
         }
         for old, new in replacements.items():
@@ -181,8 +186,8 @@ jobs:
         unillm_pyproject = Path("unillm/pyproject.toml")
         text = unillm_pyproject.read_text()
         text = text.replace(
-            'unify = { git = "https://github.com/unifyai/unify.git", branch = "staging" }',
-            'unify = { path = "../unify", editable = true }',
+            'unify = { git = "https://github.com/unifyai/unisdk.git", branch = "staging" }',
+            'unify = { path = "../unisdk", editable = true }',
         )
         unillm_pyproject.write_text(text)
         PY

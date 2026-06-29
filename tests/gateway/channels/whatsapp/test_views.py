@@ -122,6 +122,38 @@ def test_send_closed_window_returns_template_delivered_body(client: TestClient):
     assert create_kwargs["content_sid"]
 
 
+def test_window_endpoint_reports_open(client: TestClient):
+    with patch(
+        "unity.gateway.channels.whatsapp.views._resolve_route",
+        new=AsyncMock(
+            return_value={"pool_number": "+15550000001", "window_open": True},
+        ),
+    ):
+        response = client.get(
+            "/whatsapp/window",
+            params={"to": "+4915237826557", "assistant_id": 110},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"window_open": True}
+
+
+def test_window_endpoint_reports_closed(client: TestClient):
+    with patch(
+        "unity.gateway.channels.whatsapp.views._resolve_route",
+        new=AsyncMock(
+            return_value={"pool_number": "+15550000001", "window_open": False},
+        ),
+    ):
+        response = client.get(
+            "/whatsapp/window",
+            params={"to": "+4915237826557", "assistant_id": 110},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"window_open": False}
+
+
 def test_send_open_window_returns_freeform_delivered_body(client: TestClient):
     twilio_client = MagicMock()
     twilio_client.messages.create.return_value = MagicMock(sid="SM_freeform")
@@ -190,6 +222,7 @@ def test_auth_router_exposes_expected_paths() -> None:
         ("/notify", ["POST"]),
         ("/send", ["POST"]),
         ("/send-call", ["POST"]),
+        ("/window", ["GET"]),
     ]
 
 
@@ -197,7 +230,9 @@ def test_unauth_router_exposes_expected_paths() -> None:
     paths = sorted(
         (r.path, sorted(r.methods)) for r in unauth_router.routes  # type: ignore[attr-defined]
     )
-    assert paths == [("/status", ["POST"])]
+    assert paths == [
+        ("/status", ["POST"]),
+    ]
 
 
 def test_routers_importable_from_package_root() -> None:
@@ -319,7 +354,11 @@ class TestSend:
             )
 
         assert resp.status_code == 200
-        assert resp.json() == {"success": True, "method": "freeform"}
+        assert resp.json() == {
+            "success": True,
+            "method": "freeform",
+            "delivered_body": "hello from test",
+        }
         kwargs = twilio_client.messages.create.call_args.kwargs
         assert kwargs["to"] == "whatsapp:+15555550000"
         assert kwargs["from_"] == "whatsapp:+15555550111"
@@ -362,7 +401,11 @@ class TestSend:
             )
 
         assert resp.status_code == 200
-        assert resp.json() == {"success": True, "method": "template"}
+        assert resp.json() == {
+            "success": True,
+            "method": "template",
+            "delivered_body": render_greeting_template_text("Alice", "Unity"),
+        }
         kwargs = twilio_client.messages.create.call_args.kwargs
         assert kwargs["content_sid"] == GREETING_TEMPLATE_SID
         assert "body" not in kwargs
@@ -504,8 +547,14 @@ class TestSendCall:
             "provider_call_sid"
         ] == ("CA_user")
         twiml = twilio_client.calls.create.call_args_list[1].kwargs["twiml"]
-        assert "ring-tone" not in twiml
-        assert "/whatsapp/conference-wait" in twiml
+        # Conference hold audio is a publicly reachable Twilio-hosted asset so
+        # it never depends on a self-host-local route Twilio cannot fetch.
+        assert "ring-tone" in twiml
+        assert "/whatsapp/conference-wait" not in twiml
+        # Hosted mode: the answered-status callback points at the public adapters.
+        assert twilio_client.calls.create.call_args_list[1].kwargs[
+            "status_callback"
+        ] == ("https://adapters.example.com/twilio/whatsapp-call-status")
 
     def test_invite_template_when_not_permitted(
         self,

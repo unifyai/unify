@@ -75,10 +75,9 @@ def _require_env(name: str) -> str:
     if not val:
         raise RuntimeError(
             f"{name} is not set. "
-            "Voice calls and Unify Meet require a LiveKit server. "
-            "Run `unity voice` to start a local LiveKit server, or set "
-            "LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET in your .env "
-            "to use LiveKit Cloud (https://cloud.livekit.io).",
+            "Voice calls and Unify Meet require LiveKit Cloud. "
+            "Set LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET in your .env "
+            "(https://cloud.livekit.io).",
         )
     return val
 

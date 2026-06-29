@@ -4,18 +4,16 @@ export interface LlmConfigEnv {
   UNITY_COMMS_URL?: string;
   UNITY_GATEWAY_URL?: string;
   UNITY_AGENT_SERVICE_LLM_MODEL?: string;
-  UNIFY_MODEL?: string;
   UNIFY_KEY?: string;
 }
 
-/** Matches ``ProductionSettings.UNIFY_MODEL`` in ``unity/settings.py``. */
-const DEFAULT_UNIFY_MODEL = 'deepseek-v4-max@deepseek';
+/** Vision-capable default; computer use requires image support. */
+const DEFAULT_AGENT_SERVICE_MODEL = 'claude-4.6-sonnet@anthropic';
 
 export function resolveAgentServiceModel(env: LlmConfigEnv = process.env): string {
   return (
     env.UNITY_AGENT_SERVICE_LLM_MODEL?.trim() ||
-    env.UNIFY_MODEL?.trim() ||
-    DEFAULT_UNIFY_MODEL
+    DEFAULT_AGENT_SERVICE_MODEL
   );
 }
 

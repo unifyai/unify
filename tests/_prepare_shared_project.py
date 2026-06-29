@@ -131,13 +131,15 @@ def prepare_shared_project() -> None:
     # Seed the global builtins catalogues (public-read project shared by
     # primitives, guidance, and integration catalogues). Hash-guarded, so
     # this is a no-op in all but the first run after a catalogue change.
+    from unity.common.builtins import builtins_seed_key_override
     from unity.function_manager.builtins_catalog import seed_builtin_primitives
     from unity.guidance_manager.builtins_catalog import seed_builtin_guidance
     from unity.integrations.builtins_catalog import seed_builtin_integrations
 
-    seed_builtin_primitives()
-    seed_builtin_guidance()
-    seed_builtin_integrations()
+    with builtins_seed_key_override():
+        seed_builtin_primitives()
+        seed_builtin_guidance()
+        seed_builtin_integrations()
     print("Seeded builtins catalogues (primitives + guidance + integrations)")
 
     print(f"Prepared shared project '{PROJECT}'")

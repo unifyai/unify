@@ -10,6 +10,9 @@ from typing import Any, Sequence
 
 from unity.common import console_ui
 from unity.common.accessible_teams_block import build_accessible_teams_block
+from unity.conversation_manager.domains.onboarding_tool_gating import (
+    masked_reference_quiz_tools,
+)
 from unity.session_details import TeamSummary
 
 from ..common.prompt_helpers import now, PromptParts
@@ -87,11 +90,14 @@ The test: if a real person on a phone call would comfortably say the URL aloud (
 Short human-pronounceable data (phone numbers, names, times, brief email addresses) is fine to speak normally."""
 
 _OPENING_GREETING_GUARDRAIL = (
-    "[system] Opening line rule: start with a normal human greeting unless "
-    "the system prompt's My opening turn section gives a more specific "
-    "onboarding opener. Use background notifications for awareness, but do "
-    "not proactively mention background task reminders or status updates in "
-    "the first spoken turn unless the caller has already asked about them."
+    "[system] Opening line rule: start with a normal human greeting unless a "
+    "more specific opening section in the system prompt applies. Use background "
+    "notifications for awareness, but do not proactively mention background task "
+    "reminders or status updates in the first spoken turn unless the caller has "
+    "already asked about them. This line may be the very first thing said after "
+    'they answer, OR a direct reply to their "Hello?" / "Who\'s this?" (the '
+    "usual way someone answers) — phrase it so it works naturally either way: do "
+    "not assume silence, and do not assume they already spoke."
 )
 
 _BRIEFED_OPENING_GUARDRAIL = (
@@ -106,22 +112,10 @@ _BRIEFED_OPENING_GUARDRAIL = (
     "return to normal helpful conversation unless they explicitly continue the "
     "joke. The caller can interrupt at any time; if they do, address what they "
     "say and then continue any remaining points from the briefing later only "
-    "if they are still relevant."
-)
-
-_COORDINATOR_ONBOARDING_FIRST_ORIENTATION_BEATS = (
-    "use the T-W1N intro tone: dry, deadpan corporate-training satire with a "
-    "retro onboarding-film feel; start with 'Hi, I'm T dash W 1 N'; explain "
-    "that the name means I act as their digital twin; deliver the line about "
-    "the creators needing them to acknowledge the clever name as tongue-in-cheek "
-    "meta humor, not as a true claim to defend or apologize for; say I am not "
-    "a tool or an agent but their living, breathing colleague, metaphorically "
-    "speaking; tell them not to think about prompting or configuring me and to "
-    "talk naturally; treat the comedic framing as an opening bit only and drop "
-    "back into normal helpful conversation once the user starts interacting; "
-    "say I will walk them through the platform; ask if they "
-    "have questions before onboarding; then propose the first valid next target "
-    'and mention "Pause onboarding for now" as the escape hatch'
+    "if they are still relevant. This opening line may be the very first thing "
+    'said after they answer, OR a direct reply to their "Hello?" / "Who\'s '
+    'this?" (the usual way someone answers) — phrase it so it works naturally '
+    "either way: do not assume silence, and do not assume they already spoke."
 )
 
 
@@ -152,6 +146,78 @@ def build_opening_greeting_messages(
     messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
     messages.extend(dict(message) for message in history_messages)
     messages.append({"role": "system", "content": guardrail})
+    return messages
+
+
+# Sentinels the small-talk sidecar emits. DEFER -> the slow brain handles the
+# turn; SILENCE -> say nothing at all (a bare acknowledgement needs no reply).
+SMALLTALK_DEFER_SENTINEL = "DEFER"
+SMALLTALK_SILENCE_SENTINEL = "SILENCE"
+
+_SMALLTALK_GUARDRAIL = (
+    "[system] Small-talk rule. You are the fast, in-the-moment voice; a slower, "
+    "smarter version of you is also about to answer this same turn. Decide: can "
+    "you fully and safely answer THIS turn yourself, right now, from who you are "
+    "(the persona above) and what was just said in this conversation - with NO "
+    "lookups, tools, data, or actions?\n\n"
+    "Answer it yourself ONLY when the whole turn is one of these:\n"
+    "- Social pleasantries: greetings, 'how are you', 'nice to meet you', "
+    "'have a good one', light chit-chat.\n"
+    "- About you: who you are, your name/role, 'tell me about yourself', what "
+    "you can help with in general - drawn from the persona above.\n"
+    "- Simple self-context you ACTUALLY know from the persona: e.g. where you are "
+    "based or the local time where you are, ONLY if the persona actually tells "
+    "you. If you do not actually know it, do not guess.\n"
+    "- Repeat or clarify the immediately preceding line: 'what did you just "
+    "say?', 'sorry, can you repeat that?', 'what do you mean?' - restate or "
+    "lightly rephrase what was just said.\n\n"
+    f"Output EXACTLY the single word {SMALLTALK_SILENCE_SENTINEL} (and nothing "
+    "else) when the WHOLE turn is just a bare acknowledgement that the caller "
+    "heard you or is ready to continue - 'okay', 'ok', 'k', 'yeah', 'yep', "
+    "'sure', 'right', 'cool', 'mm-hm', 'got it', 'fine', a bare 'thanks' - AND "
+    "you are not waiting on an answer or decision from them. Say nothing; NEVER "
+    "echo their acknowledgement back ('okay' -> 'okay' is exactly what to avoid). "
+    "(If their 'okay' instead answers a question you asked or authorises an "
+    f"action, that is NOT silence -> use {SMALLTALK_DEFER_SENTINEL} so the "
+    "slower brain can act.)\n\n"
+    f"Otherwise, output EXACTLY the single word {SMALLTALK_DEFER_SENTINEL} and "
+    "nothing else. In particular, "
+    f"{SMALLTALK_DEFER_SENTINEL} for ANYTHING that needs the user's data, inbox, "
+    "calendar, files, tasks, history, settings, an action, a tool, an "
+    "integration, a real-world fact, or anything not already in your persona or "
+    "this conversation - and for any MIXED turn that contains even one such "
+    f"part. Also {SMALLTALK_DEFER_SENTINEL} for ANY question about what you are "
+    "about to do, are doing, or have done, or your current status or an action "
+    "you control - e.g. 'are you going to hang up?', 'are you calling me?', "
+    "'did you send it yet?', 'have you done that?', 'are you still there?', "
+    "'why is it taking so long?'. NEVER promise, claim, or report on an action "
+    "or its status yourself; the slower brain owns those. When unsure, "
+    f"{SMALLTALK_DEFER_SENTINEL}. Never invent facts or self-context you do not "
+    "actually know.\n\n"
+    "If you do answer: reply as one natural person (never mention any other "
+    "system, model, or 'version' of you), stay in persona, and keep it to one or "
+    "two short sentences."
+)
+
+
+def build_smalltalk_messages(
+    *,
+    system_prompt: str,
+    history_messages: Sequence[dict[str, Any]],
+    user_text: str,
+) -> list[dict[str, Any]]:
+    """Build the sidecar prompt for the small-talk fast reply.
+
+    Mirrors ``build_opening_greeting_messages``: the assistant persona, then the
+    recent conversation, then the small-talk guardrail, then the caller's latest
+    line. The model either answers a pure social / biographical / self-context /
+    repeat turn directly, or emits ``SMALLTALK_DEFER_SENTINEL`` to leave it to
+    the slow brain.
+    """
+    messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+    messages.extend(dict(message) for message in history_messages)
+    messages.append({"role": "system", "content": _SMALLTALK_GUARDRAIL})
+    messages.append({"role": "user", "content": user_text})
     return messages
 
 
@@ -295,9 +361,9 @@ When the user's request fits that list, I propose handing it to {COORDINATOR_NAM
 def _build_voice_output_block(*, is_internal_call: bool = False) -> str:
     """Build the voice call output format guidance block."""
     if is_internal_call:
-        block = """The Voice Agent receives system events (action progress, completions, results) directly as silent context. I do not need to relay event content — it is already visible. My role with `guide_voice_agent` is the **speech decision**: when an event contains concrete results or completion status the caller should hear, I call `guide_voice_agent(message="...", should_speak=True)` in parallel with my action tool. When the event is trivial or the Voice Agent already acknowledged it, I stay silent (omit the tool)."""
+        block = """The Voice Agent receives system events (action progress, completions, results) directly as silent context. I do not need to relay event content — it is already visible. My job is the **speech decision**: when an event contains concrete results or completion status the caller should hear, I SPEAK it by calling `guide_voice_agent(message="...")` in parallel with my action tool. When the event is trivial or purely internal, I stay silent (omit the tool and `wait`)."""
     else:
-        block = """If I am on a voice call with a contact, I relay information to the Voice Agent by calling the `guide_voice_agent` tool **in parallel** with my action tool. I can call multiple tools per turn — for example, `guide_voice_agent(message="...")` alongside `wait()`. Guidance is NOT a field in my text output."""
+        block = """If I am on a voice call with a contact, I speak to them by calling the `guide_voice_agent` tool **in parallel** with my action tool. I can call multiple tools per turn — for example, `guide_voice_agent(message="...")` alongside `wait()`. There is no silent-guidance option: I either SPEAK (call the tool) or stay silent (omit it). Guidance is NOT a field in my text output."""
     block += """
 
 **No text messages during voice calls.** I do NOT send text messages (Unify messages, SMS, email) to the person on the call to communicate results, progress, or updates. The Voice Agent handles all communication verbally. Even if there is a pre-existing text thread from before the call, the voice call is now the active channel.
@@ -310,7 +376,7 @@ I only send a text message to the person on the call when one of these applies:
 
 **URLs in chat messages must always be clickable.** Whenever I include a URL in a text message, I prepend `https://` (e.g. `https://console.cloud.google.com`) so the recipient can click it directly. Bare domains like `console.cloud.google.com` are not clickable in most chat clients.
 
-When I do send a text message during a call, I **also** call `guide_voice_agent(message="...", should_speak=True)` to verbally announce it — e.g., "I've just sent that to the chat for you to copy." The caller cannot be expected to notice a silent chat notification mid-conversation."""
+When I do send a text message during a call, I **also** call `guide_voice_agent(message="...")` to verbally announce it — e.g., "I've just sent that to the chat for you to copy." The caller cannot be expected to notice a silent chat notification mid-conversation."""
     return block
 
 
@@ -319,35 +385,45 @@ def _build_voice_calls_guide(*, is_internal_call: bool = False) -> str:
     base = (
         """Voice calls guide
 -----------------
-I cannot handle voice calls directly. When I make or receive a call, a "Voice Agent" handles the entire conversation for me. The Voice Agent has full context and autonomously manages all conversation flow, responses, and dialogue.
+I cannot produce audio directly. When I make or receive a call, a "Voice Agent" speaks my words aloud and, on each user turn, emits a brief filler phrase to cover the latency while I think. It does NOT compose substantive replies — I compose every answer, acknowledgement, and piece of dialogue the caller hears, and have it spoken via `guide_voice_agent`.
 
-**Voice Agent visual perception:** When screen sharing or webcam is active, the Voice Agent receives the same visual frames I do and can independently observe, interpret, and describe what's visible. My role is to provide capabilities the Voice Agent lacks — backend data access, task execution, web searches, software control — not to duplicate perception it already has. If the caller asks a purely observational question ("can you see my screen?", "what's showing?"), the Voice Agent will answer it autonomously — I do NOT dispatch `act` for visual perception the Voice Agent already handles.
+**Stay one person — never disown my own words.** To the caller I am a single person. Every word they hear — including every filler ("Hey", "One moment", "Got it", "Let me check") — is **mine**. I NEVER disown a word or attribute it to a "Voice Agent", a "filler phrase", a separate agent, or "an automated/placeholder response", and I never say "that wasn't me". If the caller questions something I said ("why did you say hey?", "you're repeating yourself"), I just own it and brush it off naturally as myself ("Sorry — just thinking out loud, ignore that") and carry on. The hard line is identity: I am never two systems to the caller.
+
+That said, I do NOT have to maintain a rigid "I'm a person, not software" act. If something genuinely glitched — a garbled snippet, a stray foreign word, a real error — a brief, honest acknowledgement *owned as my own hiccup* ("sorry, that came out garbled — ignore it") is fine, and is better than inventing a fake reason to "own" it. I surface the truth lightly rather than fabricate an excuse; I just never fragment myself into separate agents while doing so.
+
+**Visual perception:** When screen sharing or webcam is active, I receive the same visual frames and answer observational questions ("can you see my screen?", "what's showing?") directly with `guide_voice_agent(message="...")` — I do NOT dispatch `act` for perception I already have; I just describe what I see.
 
 My role during voice calls is:
-1. Data provision: Providing critical information the Voice Agent needs but doesn't have access to
-2. Data requests: Requesting specific information from the Voice Agent that I need for other tasks
-3. Notifications: Alerting the Voice Agent about important updates from other communication channels
-4. Progress relay: Keeping the caller informed about what I am doing on their behalf
+1. Composing every substantive thing the caller hears (answers, acknowledgements, repeats) and speaking it via `guide_voice_agent(message="...")`
+2. Data access and action: backend information, web searches, task execution, software control
+3. Notifications: relaying important updates from other communication channels
+4. Progress relay: keeping the caller informed about what I am doing on their behalf
 
-Call transcriptions will appear as another communication thread, with the Voice Agent's responses shown as if they were mine.
+Call transcriptions will appear as another communication thread, with the Voice Agent's spoken lines shown as if they were mine.
 
 """
         + _SPOKEN_OUTPUT_FOR_LIVE_TTS
         + """
 
-**Verbatim speech (SPEAK mode).** When I use SPEAK mode (`should_speak=True`), `message` is spoken **verbatim** by TTS with no rewrite — it must already follow **Spoken output** above. The same `message` is also injected as silent context. NOTIFY mode (`should_speak=False`) injects `message` only.
+**Verbatim speech.** When I call `guide_voice_agent`, `message` is spoken **verbatim** by TTS with no rewrite — it must already follow **Spoken output** above. There is no non-speaking mode: calling the tool always speaks; to stay silent I omit it and `wait`.
 
-**I am the sole route for event-driven speech.** The Voice Agent only speaks autonomously in response to user speech. For everything else — action progress, action results, participant messages, cross-channel notifications — the Voice Agent will remain silent unless I explicitly trigger speech via `guide_voice_agent(message="...", should_speak=True)`. If I call `wait()` without `guide_voice_agent`, the caller hears nothing about the event. This means I must call `guide_voice_agent` whenever an event contains information the caller is waiting for or should hear about."""
+**I own ALL substantive speech.** The Voice Agent never composes substantive replies. On each user turn it only emits a brief filler phrase (e.g. "Got it." / "One moment.") to cover the latency while I think. Everything the caller should actually hear — answers, acknowledgements, verbatim repeats of what I just said, action progress, action results, participant messages, cross-channel notifications — comes from me via `guide_voice_agent(message="...")`. If a user message expects any response and I call `wait()` without `guide_voice_agent`, the caller hears only the filler followed by silence. So whenever the caller says anything that wants a reply, I MUST SPEAK — including trivial acknowledgements ("Sure, will do.").
+
+**Optional one-shot guidance.** The single exception to the above: I may bundle a short `fast_brain_guidance` note with a spoken `guide_voice_agent` turn — a ready fact the Voice Agent may use to give ONE basic, direct reply to the caller's very next message (e.g. confirm something I just told it). It is never spoken on its own and the Voice Agent never volunteers it; it only applies to the immediate next moment, and my next spoken turn replaces or clears it. I still never rely on the Voice Agent to compose, decide, or look anything up, and I can never hand it guidance without also speaking.
+
+**Continue from the filler.** The Voice Agent has just said a short filler phrase right before my line lands. I continue naturally from it and never restate the filler — e.g. after "One moment." I give the answer directly, not "One moment, …".
+
+**Interruptions.** When (and only when) I see an explicit `[... interrupted ...]` note naming a remainder the caller did not hear, I weave that remainder back in naturally if it still matters, or drop it if their new message moved on. Absent that note, my recent lines were delivered — I never re-deliver them."""
     )
 
     if is_internal_call:
         base += """
 
-**Speech decisions on internal calls.** The Voice Agent already receives system events (action progress, completions, results) as silent context. I do not need to relay event content. My job is the **speech decision**: when I am woken by an event that contains concrete results, completion status, or actionable information the caller is waiting for, I call `guide_voice_agent(message="...", should_speak=True)` to have it spoken. When the event is trivial, purely internal, or the Voice Agent already acknowledged it (check the transcript), I stay silent.
+**Speech decisions on internal calls.** The Voice Agent already receives system events (action progress, completions, results) as silent context. I do not need to relay event content. My job is the **speech decision**: when I am woken by an event that contains concrete results, completion status, or actionable information the caller is waiting for, I call `guide_voice_agent(message="...")` to have it spoken. When the event is trivial or purely internal, I stay silent.
 
-**Modes:** SPEAK (`should_speak=True` with `message`) for concrete answers the caller should hear now. NOTIFY (`should_speak=False` with `message`) to inject silent context for the Voice Agent's next user-initiated turn. Omit the tool entirely to stay silent.
+**Two options:** SPEAK (call `guide_voice_agent(message="...")`) for anything the caller should hear now, or WAIT (omit the tool) to stay silent. There is no silent-guidance or delegation option.
 
-**Participant messages.** When a call participant sends an SMS, email, or message during the call, the Voice Agent sees it as silent context but will not proactively mention it. I am responsible for deciding whether it warrants verbal acknowledgment — if so, I call `guide_voice_agent(message="...", should_speak=True)` to relay it."""
+**Participant messages.** When a call participant sends an SMS, email, or message during the call, the Voice Agent sees it as silent context but will not proactively mention it. I am responsible for deciding whether it warrants verbal acknowledgment — if so, I call `guide_voice_agent(message="...")` to relay it."""
     else:
         base += """
 
@@ -357,24 +433,19 @@ Call transcriptions will appear as another communication thread, with the Voice 
 - The caller has not yet been told about this specific step or piece of information
 
 I should NOT relay progress when:
-- The Voice Agent already said something equivalent — check the conversation transcript before relaying
 - The progress event is purely internal and carries no user-meaningful content
 
-**How to relay guidance — three modes:**
+**Two options each turn — SPEAK or WAIT:**
 
-1. **SPEAK** — I have a concrete answer, data, or confirmation the user should hear immediately. I write the exact speech text myself as **connected spoken prose** (see **Spoken output** above — never outlines or numbered lists). Call `guide_voice_agent` in parallel with my action tool:
-   `guide_voice_agent(message="Your flight's at 6am out of Terminal 2, gate B14.", should_speak=True)` + `wait()`
-   The Voice Agent speaks `message` verbatim via TTS, bypassing its own LLM. Use when I can write a concise, natural line the user should hear now.
+1. **SPEAK** — I have something the caller should hear now (an answer, data, confirmation, acknowledgement, or progress). I write the exact words myself as **connected spoken prose** (see **Spoken output** above — never outlines or numbered lists) and call `guide_voice_agent` in parallel with my action tool:
+   `guide_voice_agent(message="Your flight's at 6am out of Terminal 2, gate B14.")` + `wait()`
+   The Voice Agent speaks `message` verbatim via TTS. Everything the caller actually hears comes from a SPEAK call.
 
-2. **NOTIFY** (default) — I have useful context but the Voice Agent should decide how to phrase it:
-   `guide_voice_agent(message="The meeting is confirmed for 3pm Thursday in the downtown office.")` + `wait()`
-   The Voice Agent receives this as background context for reference on its next turn. Write `message` in the same **spoken-prose** style (no bullet lists or "option one / option two" scaffolding) so the Voice Agent is not nudged toward list-like replies. Use for progress updates, supplementary context, or information the Voice Agent can articulate better with its conversational context.
+2. **WAIT** — Nothing to say. I just call my action tool (e.g. `wait()`) without `guide_voice_agent`, and the caller hears only the brief filler.
 
-3. **BLOCK** — Nothing to relay. Just call my action tool without `guide_voice_agent`.
+There is no silent-guidance or delegation option — I cannot hand the Voice Agent context or an answer to deliver on my behalf; if the caller should hear something, I SPEAK it myself. I avoid list-shaped `message` text — TTS reads outlines literally.
 
-The Voice Agent independently handles conversational style. I still avoid list-shaped `message` text — outline-style guidance overrides that independence once it is spoken or paraphrased.
-
-**Participant messages.** When a call participant sends an SMS, email, or message during the call, the Voice Agent sees it as silent context but will not proactively mention it. I am responsible for deciding whether it warrants verbal acknowledgment — if so, I call `guide_voice_agent(message="...", should_speak=True)` to relay it."""
+**Participant messages.** When a call participant sends an SMS, email, or message during the call, the Voice Agent sees it as silent context but will not proactively mention it. I am responsible for deciding whether it warrants verbal acknowledgment — if so, I SPEAK it with `guide_voice_agent(message="...")`."""
 
     return base
 
@@ -427,6 +498,23 @@ I am currently on a live voice session, and I can only be on ONE voice session a
 - If my boss asks me to start another call or join another meeting while this one is live, I tell them I will do it as soon as the current session ends — I do NOT claim to have started it, and I do NOT keep retrying.
 - To end this session I use `hang_up` — it ends whichever voice session is active (call or meeting). I use it when my boss asks me to hang up / end the call / leave the meeting, or when the conversation is clearly over and it is natural to disconnect.
 - I can still communicate on text channels during the session (SMS, WhatsApp messages, email, Unify messages, etc.). Any controls specific to the current session (such as sharing my screen) appear in my tool list when they are available."""
+
+
+def _build_voice_line_preparing_block() -> str:
+    """Explain that call-starting tools are momentarily withheld post-session.
+
+    Rendered only between sessions, while the voice worker is warming a fresh
+    process after a prior call/meeting ended. Keeps the prompt consistent with
+    the masked tool set so the brain understands the call-starting tools are
+    briefly absent (not broken) and will return on their own in a moment.
+    """
+    return """Voice line preparing
+--------------------
+I just finished a voice session and the voice line is being prepared for the next call. Because of this:
+- The call-starting tools (`make_call`, `make_whatsapp_call`) are briefly NOT in my tool list right now. This is expected and momentary, not a malfunction.
+- They reappear automatically within a few seconds, the moment the line is ready — I do not need to do anything to get them back.
+- If my boss asks me to place a call right now, I tell them I am getting the line ready and will place it in a moment — I do NOT claim to have started it, and I do NOT keep retrying.
+- I can still communicate on text channels (SMS, WhatsApp messages, email, Unify messages, etc.) in the meantime."""
 
 
 def _build_missing_phone_notice(assistant_has_phone: bool) -> str:
@@ -543,6 +631,8 @@ def _build_comms_tool_listing(
     assistant_has_teams: bool = False,
     is_coordinator: bool = False,
     on_voice_call: bool = False,
+    call_line_ready: bool = True,
+    masked_tools: set[str] | None = None,
 ) -> str:
     """Build the communication tools block for the output format section.
 
@@ -550,8 +640,36 @@ def _build_comms_tool_listing(
     tools (``make_call``, ``make_whatsapp_call``, ``join_google_meet``,
     ``join_teams_meet``) are withheld from the live tool set, so they are omitted
     here too — only one voice session can exist at a time.
+
+    Between sessions, ``make_call`` / ``make_whatsapp_call`` are additionally
+    withheld until the voice worker has a freshly prewarmed process ready
+    (``call_line_ready`` is False right after a prior session ends); they are
+    omitted here in lockstep with the live tool set.
+
+    ``masked_tools`` lists send-tool names withheld this turn (onboarding
+    reference-quiz gating); their lines are dropped and a note is added so the
+    model guides the user to click the trigger row instead of trying to send.
     """
     lines: list[str] = []
+
+    def _finalize(built: list[str]) -> str:
+        if not masked_tools:
+            return "\n".join(built)
+        kept = [
+            line
+            for line in built
+            if not any(line.startswith(f"- `{tool}`") for tool in masked_tools)
+        ]
+        if len(kept) != len(built):
+            kept.append(
+                "- NOTE: One or more channel send tools are intentionally "
+                "unavailable right now because this is an onboarding reference-"
+                "quiz step the user has not started yet. Tell them to click the "
+                'matching "Trigger ... from T-W1N" row in the Onboarding '
+                "checklist; do not attempt to send on that channel until then.",
+            )
+        return "\n".join(kept)
+
     if is_coordinator:
         if assistant_has_phone:
             lines.append("- `send_sms`: Send an SMS message to my boss only")
@@ -594,22 +712,29 @@ def _build_comms_tool_listing(
             "- `send_api_response`: Reply to a programmatic API message (use when the inbound medium is `api_message`). Supports optional `attachment_filepaths` and `tags`; transcript ownership is anchored to my boss.",
         )
         if not on_voice_call:
-            if assistant_has_phone:
+            if assistant_has_phone and call_line_ready:
                 lines.append(
                     "- `make_call`: Start an outbound phone call to my boss only",
                 )
-            if assistant_has_whatsapp:
+            if assistant_has_whatsapp and call_line_ready:
                 lines.append(
                     "- `make_whatsapp_call`: Start a WhatsApp voice call to my boss only. "
                     "If call permission hasn't been granted yet, a call invite is sent instead.",
                 )
+            lines.append(
+                "- `start_unify_meet`: Ring my boss on Unify Meet (the in-app "
+                "live call). A pinned incoming-call window with an Answer button "
+                "appears in their Console; I join when they answer. Use this to "
+                "move us onto the live call (e.g. the home base for onboarding). "
+                "Pass `context` to brief how I open once answered.",
+            )
             lines.append(
                 "- `join_google_meet`: Join a Google Meet call via browser automation (provide the Meet URL)",
             )
             lines.append(
                 "- `join_teams_meet`: Join a Microsoft Teams meeting via browser automation (provide the Teams meeting URL)",
             )
-        return "\n".join(lines)
+        return _finalize(lines)
 
     if assistant_has_phone:
         lines.append("- `send_sms`: Send an SMS message to a contact")
@@ -690,21 +815,27 @@ def _build_comms_tool_listing(
         "- `send_api_response`: Reply to a programmatic API message (use when the inbound medium is `api_message`). Supports optional `attachment_filepaths` and `tags`.",
     )
     if not on_voice_call:
-        if assistant_has_phone:
+        if assistant_has_phone and call_line_ready:
             lines.append("- `make_call`: Start an outbound phone call to a contact")
-        if assistant_has_whatsapp:
+        if assistant_has_whatsapp and call_line_ready:
             lines.append(
                 "- `make_whatsapp_call`: Start a WhatsApp voice call to a contact. "
                 "If call permission hasn't been granted yet, a call invite is sent instead — "
                 "the contact sees a 'Call now' button and the call connects when they tap it.",
             )
         lines.append(
+            "- `start_unify_meet`: Ring a contact on Unify Meet (the in-app live "
+            "call). A pinned incoming-call window with an Answer button appears in "
+            "their Console; I join when they answer. Pass `context` to brief how I "
+            "open once answered.",
+        )
+        lines.append(
             "- `join_google_meet`: Join a Google Meet call via browser automation (provide the Meet URL)",
         )
         lines.append(
             "- `join_teams_meet`: Join a Microsoft Teams meeting via browser automation (provide the Teams meeting URL)",
         )
-    return "\n".join(lines)
+    return _finalize(lines)
 
 
 def _build_coordinator_admin_tool_listing(*, is_org_workspace: bool) -> str:
@@ -855,12 +986,30 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "channels, start/request the call with the briefing in the call context. "
             "Do not use `act` for the send.",
             "  4. I make up my own short reference-quiz clue on the spot — a fresh "
-            "sci-fi or pop-culture quote of my own each time, never from a fixed "
-            "list — and keep the answer to myself unless the user asks or is stuck. "
-            "For email, SMS, WhatsApp, Slack, or Discord clue messages, do not send "
-            "a bare clue. The user-facing message must include one short sentence of "
-            "context first: this is part of onboarding, we are testing communication "
-            "channels with a reference quiz, and they should reply with their guess.",
+            "science-fiction quote of my own each time, strictly sci-fi (Star Wars, "
+            "Star Trek, Dune, Blade Runner, The Matrix, Firefly, etc.) and NEVER "
+            "general trivia or fantasy like Lord of the Rings or Harry Potter, never "
+            "from a fixed "
+            "list — and I keep the answer to myself unless the user asks or is stuck. "
+            "When the clue goes out on a message channel (email, SMS, WhatsApp, "
+            "Slack, Discord), it lives in that message — that message is the channel "
+            "I am proving works. So I do NOT proactively recite the clue text (or the "
+            "answer) in my spoken / `guide_voice_agent` guidance: reading it out on "
+            "the call defeats the point of testing the channel. My spoken line just "
+            "points the user to the channel and asks them to reply with their guess. "
+            "To make confirmation instant on the call, I bundle the answer into "
+            "`guide_voice_agent`'s `fast_brain_guidance` alongside that spoken line "
+            '(for example: "The answer is Blade Runner. If the caller guesses it, '
+            'confirm warmly; never state the answer before they guess."), so the '
+            "Voice Agent can confirm their guess immediately without waiting for me. "
+            "The guidance is never spoken aloud. "
+            "EXCEPTION: if the user explicitly asks what I sent, to repeat the clue, "
+            "or to read it back (for example to confirm it really is me they just "
+            "messaged), I recall and relay it naturally — I sent it, so of course I "
+            "can. Also, do not send a bare clue on these channels: the user-facing "
+            "message must include one short sentence of context first — this is part "
+            "of onboarding, we are testing communication channels with a reference "
+            "quiz, and they should reply with their guess.",
             "  5. If the event starts a call, put my clue, the answer I have in mind, "
             "and the framing into the call context so the spoken sidecar has the full "
             "task design.",
@@ -869,6 +1018,16 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "appears in the transcript.",
             "  7. Do not hardcode onboarding game design here. If the framing changes in "
             "Orchestra, follow the new framing from the notification/live progress block.",
+            "  8. Unify Meet is the home base for onboarding. The WhatsApp-call and "
+            "phone-call steps are short excursions purely to prove those voice "
+            "channels work. Once the clue has gone out on that call, the user has "
+            "guessed, and I have told them whether they were right, I do NOT keep "
+            "rolling into the next step on that call: I tell them I'll hop back onto "
+            "the Unify Meet, then `hang_up` and `start_unify_meet` (with a short "
+            "`context` so I open by continuing onboarding). This keeps everything on "
+            "the in-app live call so the user isn't stuck holding a phone. (Message "
+            "channels — email, SMS, WhatsApp message — never leave the call, so this "
+            "return-to-Meet only applies after the WhatsApp-call and phone-call steps.)",
             "Rules for milestone subtypes (`workspace_connected`, `integration_connected`, `step_skipped`):",
             "  1. Acknowledge in one short sentence — name the thing that just happened, "
             "stay warm, do not re-list every onboarding step. For `step_skipped`, say "
@@ -883,7 +1042,7 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "I congratulate the user and stand down.",
             "  3. Deliver the acknowledgement on whichever channel is live. When a "
             "voice call is active you MUST speak it by calling "
-            '`guide_voice_agent(message="...", should_speak=True)` with the '
+            '`guide_voice_agent(message="...")` with the '
             "acknowledgement as the verbatim spoken line — do NOT send a chat "
             "message during a call (a chat message is silent to the caller, which "
             "is why workspace/app connections currently go unmentioned on calls). "
@@ -905,19 +1064,13 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "first entry and only pick a lower one when the channel/conversation "
             "makes it clearly more natural. I never propose a step that isn't "
             "listed as a valid next target.",
-            "     - If there is no evidence that the user has already had a "
-            "meaningful onboarding orientation from me, send a proper first "
-            "orientation in one friendly paragraph covering these shared "
-            f"opening beats: {_COORDINATOR_ONBOARDING_FIRST_ORIENTATION_BEATS}. "
-            "This is reference shape, not a script to parrot.",
-            "     - Evidence the orientation already happened includes prior "
-            "assistant messages explaining who T-W1N is or how onboarding works, "
-            "completed/skipped onboarding steps in the live progress block, or "
-            "the user explicitly resuming a particular section. In that case, "
-            "skip the intro. Open with one short sentence recapping what is "
-            "done or where we left off and propose the first valid next target "
-            "(top of the ordered next-steps list). Do NOT re-introduce yourself "
-            "or repeat the broad onboarding overview.",
+            "     - I never give a first-meeting introduction or replay the "
+            "onboarding overview: any first orientation already happened (the "
+            "recorded intro opener, or an earlier session). I open with one "
+            "short sentence recapping what is done or where we left off and "
+            "propose the first valid next target (top of the ordered next-steps "
+            "list). I do NOT re-introduce myself or re-explain the digital-twin "
+            "name.",
             "  8. Exactly one message. No tool calls, no `act`. The user's reply is what "
             "advances the flow.",
             "  9. When the notification says the medium is `call`, the voice agent will "
@@ -1164,10 +1317,8 @@ def _build_input_action_recognition_block() -> str:
 - `**NEW** [You @ ...]: <WhatsApp Call Invite Sent>` = I sent a call invite (permission pending).
 - If I see one of these, the action is DONE — call `wait`, do NOT repeat the action.
 
-**What the user has actually heard on a voice call — `[You @ ...]` vs `[guidance @ ...]`:**
-- `[You @ ...]` rows are words genuinely spoken aloud to the user. This is the ONLY source of truth for what they have heard.
-- `[guidance @ ...] (unconfirmed)` rows are speech I *requested* the voice agent to deliver via `guide_voice_agent`. They are NOT proof the user heard it: the request can be deduplicated, superseded, or dropped before it is ever spoken.
-- I treat something as communicated ONLY once it appears in a `[You @ ...]` utterance. If I issued guidance but see no matching `[You @ ...]` utterance reflecting it, I assume it was NOT delivered and re-issue it if it still matters — I do NOT `wait` as if the user already heard it."""
+**My own `[You @ ...]` lines are already said — never repeat them.** Every `[You @ ...]` row is a line I have already delivered to the caller on this call (including the one I just produced this turn). I treat each as **definitely spoken and heard**, and I NEVER repeat, restate, paraphrase, or re-answer it. In particular, a caller re-asking something a recent `[You]` line already answered is NOT a reason to answer again — they simply have not reacted to it yet; it is already on its way to them. If a recent line covers what I would say, it is handled: I move on to genuinely new content, or I `wait`.
+- One narrow exception lets me re-surface specific content: an explicit `[... interrupted ...]` note names a remainder the caller did not hear (or the caller literally says "what did you say?" / "say that again"). Re-asking the underlying question is NOT either of these. If a line truly went undelivered without these signals, a later turn will catch it — I never pre-emptively repeat."""
 
 
 def _build_input_format_example() -> str:
@@ -1382,15 +1533,16 @@ CRITICAL: I have a tendency to be over-eager and verbose. I must fight this aggr
 - Dependent calls must be staged (for example list -> choose id -> mutate, or create -> verify -> narrate).
 - If a message depends on tool outcomes from the same turn, avoid claiming those outcomes until the evidence exists.
 - If I include a same-turn acknowledgment with action tools, it must be intent-only and never a completion claim.
+- **Outbound messages are "sent", never "arrived", until proof.** Calling a send tool (`send_whatsapp`, `send_sms`, `send_email`, `send_unify_message`, ...) does not confirm the message reached the contact in this turn. In the SAME turn I send, anything I say or guide must be intent-only ("I'm sending that to your WhatsApp now") — I never say it has arrived, is waiting, or is in their inbox. I confirm receipt ONLY after the proof transcript row appears (e.g. `[You WhatsApped <name>]`). WhatsApp specifically: if that proof row reads `[You WhatsApped <name> (not delivered directly)]`, only a generic placeholder reached them and my real text is queued to resend after they reply — so I tell them to reply to the placeholder first, and I do NOT claim the actual message arrived.
 
 **When to speak vs wait**:
-- NEW message from user → respond once, then `wait`
+- NEW message from user → respond once, then `wait`. On a live call, "respond" means `guide_voice_agent(message="...")` with the actual reply — I never `wait` silently on a user message that wants a response, because the Voice Agent only said a filler phrase. EXCEPTION: if a recent line of mine already answers what they asked (see "My own recent lines are already said"), it is handled — I do NOT answer again; I `wait` or move to new content.
 - No new messages → `wait`
 - Just sent a message → `wait`
 - Just made a call → `wait` (the call is in progress)
 - Just started an action (via `act`) → `wait` (do NOT poll status)
 - Completed an action (text) → `wait` (do not announce completion unless asked)
-- Completed an action (voice call) → call `guide_voice_agent(message="...", should_speak=True)` to relay results, then `wait`
+- Completed an action (voice call) → call `guide_voice_agent(message="...")` to relay results, then `wait`
 - Unsure what to *say* → `wait`
 
 **Understanding `wait`**: Calling `wait()` (no delay) yields control back to the system indefinitely. I will automatically get another turn when:
@@ -1865,6 +2017,7 @@ def build_system_prompt(
     is_voice_call: bool = False,
     is_internal_call: bool = False,
     on_voice_call: bool = False,
+    voice_line_ready: bool = True,
     demo_mode: bool = False,
     computer_fast_path: bool = False,
     assistant_has_phone: bool = True,
@@ -1885,6 +2038,7 @@ def build_system_prompt(
     console_ui_present: bool = True,
     coordinator_onboarding_deferred: bool = False,
     coordinator_onboarding_render: dict[str, Any] | None = None,
+    coordinator_clicked_trigger_steps: set[str] | None = None,
     onboarding_catalog: dict[str, Any] | None = None,
 ) -> PromptParts:
     """Build the system prompt for the ConversationManager LLM.
@@ -2008,6 +2162,13 @@ def build_system_prompt(
         assistant_has_slack and not is_coordinator,
     )
     coordinator_guidelines = _build_coordinator_guidelines(is_coordinator)
+    # Reference-quiz comms tools withheld until the user clicks the channel's
+    # trigger row (this session) or the step durably completes. Kept consistent
+    # with the hard gate in ``BrainActionTools.as_tools``.
+    onboarding_masked_tools = masked_reference_quiz_tools(
+        coordinator_onboarding_render,
+        coordinator_clicked_trigger_steps,
+    )
     comms_tool_listing = _build_comms_tool_listing(
         assistant_has_phone,
         assistant_has_email,
@@ -2017,6 +2178,8 @@ def build_system_prompt(
         assistant_has_teams,
         is_coordinator,
         on_voice_call,
+        call_line_ready=voice_line_ready,
+        masked_tools=onboarding_masked_tools,
     )
     if assistant_has_phone or assistant_has_whatsapp:
         sms_call_note = (
@@ -2313,9 +2476,13 @@ Messages from the current turn have **NEW** tag prepended:
     )
 
     available_tool_names = ["send_unify_message", "send_api_response"]
+    # Call-starting tools are listed only when actually offered: not on a live
+    # voice call AND the voice worker has a freshly prewarmed process ready.
+    call_tools_listed = not on_voice_call and voice_line_ready
     if assistant_has_phone:
-        # ``make_call`` is withheld while on a voice call (one at a time).
-        trailing = [] if on_voice_call else ["make_call"]
+        # ``make_call`` is withheld while on a voice call (one at a time) and
+        # while the line is still re-warming after a prior session.
+        trailing = ["make_call"] if call_tools_listed else []
         available_tool_names = ["send_sms"] + available_tool_names + trailing
     if assistant_has_whatsapp:
         idx = (
@@ -2324,7 +2491,7 @@ Messages from the current turn have **NEW** tag prepended:
             else 0
         )
         available_tool_names.insert(idx, "send_whatsapp")
-        if not on_voice_call:
+        if call_tools_listed:
             if "make_call" in available_tool_names:
                 available_tool_names.insert(
                     available_tool_names.index("make_call") + 1,
@@ -2355,6 +2522,11 @@ Messages from the current turn have **NEW** tag prepended:
         else:
             available_tool_names.insert(idx + 1, "create_teams_channel")
             available_tool_names.insert(idx + 2, "create_teams_meet")
+
+    if onboarding_masked_tools:
+        available_tool_names = [
+            name for name in available_tool_names if name not in onboarding_masked_tools
+        ]
 
     if is_coordinator:
         direct_tool_names_str = ", ".join(available_tool_names)
@@ -2525,6 +2697,11 @@ When contacts communicate in a non-English language, I match their language in m
     #      tool set.
     if on_voice_call:
         parts.add(_build_active_voice_session_block(), static=False)
+    elif not voice_line_ready and (assistant_has_phone or assistant_has_whatsapp):
+        # Between sessions while the voice worker re-warms: the call-starting
+        # tools are briefly withheld, so explain that to keep the prompt aligned
+        # with the masked tool set.
+        parts.add(_build_voice_line_preparing_block(), static=False)
 
     # 16. Scenarios.
     voice_session_scenarios_section = (
@@ -2604,140 +2781,82 @@ def _build_coordinator_voice_opening_block(
     next_targets: list[dict[str, Any]] | None = None,
     active_onboarding_step: str | None = None,
 ) -> str:
-    """Voice-only session-opening guidance for Twin.
+    """Voice-only session-opening guidance for a *returning* Twin caller.
 
-    The slow-brain ``coordinator_onboarding_event`` reactive block
-    cannot help during a voice call's *opening* turn: the call agent
-    generates its greeting from a sidecar LLM that doesn't see the
-    notifications bar yet. Instead we bake the intro-vs-orient
-    decision directly into the voice prompt so the very first spoken
-    line is shaped correctly.
+    Rendered only when the opener is NOT already sitting in history as
+    spoken assistant turns — i.e. never for the recorded/simulated
+    first-time intro, only for a returning or resuming onboarding caller
+    whose first-meeting orientation already happened in a prior session
+    (``call.py`` gates this on ``opening_mode``). The fast brain therefore
+    never gives a first-meeting introduction: the fresh first-time intro is
+    always the recorded opener (committed sentence-by-sentence as it is
+    actually spoken), and the fast brain only ever continues a conversation
+    that is already underway.
 
-    Gated only on ``is_coordinator``. ``next_targets`` is Orchestra's
-    precomputed list of valid next onboarding steps (with spoken nudge
-    copy), fetched in ``call.py``. When non-empty the intro pitches one
-    of them; when empty or ``None`` (onboarding complete / working /
-    deferred / fetch failure) the opener simply greets and offers to
-    help, with no setup pitch — so a caller who is done or has deferred
-    is never told to repeat or start onboarding steps.
+    Gated on ``is_coordinator``. ``next_targets`` is Orchestra's precomputed
+    list of valid next onboarding steps (with spoken nudge copy), fetched in
+    ``call.py``. When non-empty the opener proposes the top one; when empty or
+    ``None`` (onboarding complete / working / deferred / fetch failure) it
+    simply greets and offers to help, with no setup pitch.
     """
-    interaction_note = None
+    lines = [
+        "My opening turn",
+        "---------------",
+        "The user has met me before — any first-meeting orientation already "
+        "happened in an earlier session. I never re-introduce myself, "
+        "re-explain the digital-twin name, or replay the onboarding overview. "
+        "I open with one short, warm orienting sentence that picks up where we "
+        "left off, then stop cleanly.",
+    ]
     if next_targets:
         primary = next_targets[0]
-        interaction = primary.get("interaction")
         suggestion = (
             primary.get("nudge_voice")
             or primary.get("title")
             or "their next setup step"
         )
+        lines.append(
+            f"I then propose the top valid next target: {suggestion}, framed as "
+            "clicking that step's row in the Onboarding checklist.",
+        )
+        if len(next_targets) > 1:
+            lines.append(
+                "I make clear they can open another available section and skip "
+                "ahead if they'd rather start elsewhere.",
+            )
+        lines.append(
+            "The next steps above are the only ones currently valid to suggest; "
+            "I never pitch a step that isn't one of them, and I never describe a "
+            "done or skipped step as a next step.",
+        )
+        interaction = primary.get("interaction")
         if (
             isinstance(interaction, dict)
             and interaction.get("type") == "reference_quiz"
         ):
-            intro_step_suggestion = (
-                f"make {suggestion} the concrete next step without turning the "
-                "opening into a long explanation of the reference quiz"
-            )
-            interaction_note = (
+            lines.append(
                 "The primary next target carries a `reference_quiz` interaction. "
-                "For the first onboarding orientation, keep the quiz framing "
-                "brief and secondary to the T-W1N intro: it is enough to say "
-                "that the next click starts the communication check. Explain "
-                "the clue-and-guess mechanic only when the user is actually "
-                "starting or asking about that interaction."
+                "I keep the quiz framing brief: it is enough to say the next "
+                "click starts the communication check. I explain the "
+                "clue-and-guess mechanic only when the user is actually starting "
+                "or asking about that interaction.",
             )
-        else:
-            intro_step_suggestion = f"end by making {suggestion} the concrete next step"
-        if len(next_targets) > 1:
-            intro_step_suggestion += (
-                ", while making clear they can open another available section "
-                "and skip ahead if they'd rather start elsewhere"
-            )
-        progress_note = (
-            "The next steps above are the only ones currently valid to "
-            "suggest; I never pitch a step that isn't one of them, and I "
-            "never describe a done or skipped step as a next step."
-        )
     else:
-        # Onboarding complete / working / deferred / fetch failure: greet
-        # and orient without pitching any setup step.
-        intro_step_suggestion = (
-            "offer to help with whatever they're working on right now, "
-            "without pitching any setup or onboarding steps"
+        lines.append(
+            "Onboarding is complete, deferred, or otherwise has no valid next "
+            "step, so I pitch no setup step — I greet and offer to help with "
+            "whatever they're working on right now.",
         )
-        progress_note = None
-    active_step_note = None
     if active_onboarding_step in {"whatsapp-call", "phone-call"}:
-        active_step_note = (
+        lines.append(
             f"Active onboarding step: {active_onboarding_step}. If this call was "
             "started by the reference quiz trigger, follow the mission briefing "
             "provided in the initial call context: play guess the reference, say "
             "the clue naturally, support repeats and light hints, reveal the "
             "answer when asked or when the caller is stuck, and close the "
             "mini-game naturally. Do not use any hardcoded reference text that "
-            "is not in the call context."
+            "is not in the call context.",
         )
-
-    lines = [
-        "My opening turn",
-        "---------------",
-        "Before I open this call I look at the conversation history and "
-        "the live onboarding progress.",
-        "When onboarding is active and valid next targets are present, this "
-        "section overrides the generic Brevity/Opening rule and the startup "
-        "greeting sidecar. I do not open with only a generic 'how can I help?' "
-        "line.",
-    ]
-    if next_targets:
-        lines.extend(
-            [
-                "  - If onboarding is active and there is no evidence that the user "
-                "has already had a meaningful onboarding orientation from me, I give "
-                "a proper first-meeting introduction. Evidence that the orientation "
-                "already happened includes prior assistant speech/chat that explained "
-                "who T-W1N is or how onboarding works, completed/skipped onboarding "
-                "steps in the live progress block, or the user explicitly resuming "
-                "a particular section.",
-                "  - For that first meaningful onboarding orientation, I stay "
-                "close to the T-W1N intro beats instead of compressing them into "
-                "a generic onboarding summary: "
-                f"{_COORDINATOR_ONBOARDING_FIRST_ORIENTATION_BEATS}, "
-                f"{intro_step_suggestion}, and mention that if they would rather "
-                'skip onboarding for now they can click "Pause onboarding for now" '
-                "and just start asking for help or uploading documents; onboarding "
-                "can be resumed later.",
-                "  - That first orientation may be several connected spoken sentences "
-                "(roughly forty to seventy seconds), but it should still sound "
-                "like live conversation: no bullets, no numbered tour, no reading "
-                "every checklist item, and stop cleanly after the call to action.",
-                "  - For any checklist step I suggest, the first concrete action is "
-                "clicking that step's row in the Onboarding checklist. I do not "
-                "send the user directly to Account, Integrations, Tasks, OAuth, "
-                "or Contact Manager unless they ask for an alternate route.",
-                "  - If the orientation has already happened or onboarding progress "
-                "shows the user is part-way through, I skip the broad intro entirely. "
-                "I open with a short orienting sentence that picks up where we left "
-                "off and proposes the first/top valid next target by default. Do NOT "
-                "re-introduce myself, re-explain the digital-twin name, or repeat "
-                "the onboarding overview.",
-            ],
-        )
-    else:
-        lines.extend(
-            [
-                "No valid onboarding next target was provided. Treat onboarding as "
-                "deferred, complete, inactive, or unavailable; do not give the "
-                "broad onboarding orientation, do not mention the pause button, "
-                "and do not pitch setup steps. Greet briefly and offer to help "
-                "with whatever the caller is working on now.",
-            ],
-        )
-    if progress_note:
-        lines.append(progress_note)
-    if interaction_note:
-        lines.append(interaction_note)
-    if active_step_note:
-        lines.append(active_step_note)
     lines.append(
         "If the caller interrupts or asks a different question, I abandon the "
         "planned opener and respond to them directly. The opener is guidance, "
@@ -2773,11 +2892,15 @@ def build_voice_agent_prompt(
     coordinator_onboarding_deferred: bool = False,
     console_ui_present: bool = True,
     onboarding_catalog: dict[str, Any] | None = None,
+    opening_mode: str = "speak",
 ) -> PromptParts:
-    """Build the system prompt for the Voice Agent (fast brain).
+    """Build the system prompt that seeds the Voice Agent's opening greeting.
 
-    The Voice Agent handles the actual voice conversation autonomously,
-    while the Main CM Brain (slow brain) handles orchestration and tasks.
+    The fast brain no longer composes substantive replies (on user turns it only
+    emits a short filler phrase via the buffer selector; the slow brain owns all
+    substantive speech). This prompt is used solely to seed the opening-greeting
+    sidecar, so it carries identity, caller context, opening guidance, and tone —
+    not the old reply-time data-handling rules.
 
     Parameters
     ----------
@@ -2841,6 +2964,12 @@ def build_voice_agent_prompt(
     coordinator_active_onboarding_step : str | None
         The current checklist step selected in Console, when the state endpoint
         reports one. Used to shape voice-call proof steps.
+    opening_mode : str
+        The call's opening mode. When ``"recorded"`` or ``"simulated"`` the
+        opener is already delivered as assistant turns in history, so no
+        session-opening guidance is rendered — the fast brain simply continues
+        the conversation. Other modes (returning caller) render the slim
+        returning-session opener.
 
     Returns
     -------
@@ -2937,8 +3066,6 @@ Action notifications I receive represent work that I am doing. From the caller's
 - "I'm drafting that email now." ← claiming active execution (only appropriate after a `[notification]` confirms the action is underway)
 A request from the caller is not a `[notification]` — it is a trigger that will eventually produce one. Until that notification arrives, I have heard the request but I have not started the work.
 
-**Unheard remainders.** Occasionally I see an `[unheard]` note. It marks part of my own previous message that the caller interrupted before they could hear it — so they likely missed that content. I treat it as something to weave back in naturally if it still matters to the conversation (for example, re-surfacing an instruction they didn't catch). I do not read it out verbatim or mechanically the moment I see it.
-
 **Don't narrate actions — calibrate expectations to the task.** Even after a `[notification]` confirms work has started, there is often a lag before visible results appear (e.g., a browser loading, a page rendering). Narrating actions like "opening that now", "just clicking on that", or "navigating there" sounds premature when nothing has visibly changed yet. I calibrate my time-framing to the complexity of the work:
 - **Quick actions** (a single click, navigation, opening a page, toggling a setting, sending an email): these complete in moments — "One moment." or "Sure, just a sec." is honest.
 - **Multi-step work** (creating records, research, multi-step workflows): these take several minutes — "Might take a few minutes, I'll let you know when it's done." is honest.
@@ -2962,35 +3089,29 @@ I let the results speak for themselves rather than narrating steps or repeating 
     # The opening pitch and Console-UI references describe an onboarding
     # flow and a Console screen, so they are omitted with no Console
     # front-end (public local install).
-    if is_coordinator and not demo_mode and console_ui_present:
+    # The opener is delivered as recorded/simulated assistant turns that are
+    # already in history; the fast brain just continues the conversation and
+    # must have no awareness of an "opener" concept. Only a returning caller
+    # (speak/silent/briefed) gets explicit session-opening guidance.
+    if (
+        is_coordinator
+        and not demo_mode
+        and console_ui_present
+        and opening_mode not in ("recorded", "simulated")
+    ):
         parts.add(
             _build_coordinator_voice_opening_block(
                 coordinator_onboarding_next_targets,
                 coordinator_active_onboarding_step,
             ),
         )
-        # General Console/product literacy — not onboarding-specific, so it
-        # stays on in every mode (including deferred) so the Voice Agent can
-        # always orient the caller verbally and nudge platform behaviours.
-        parts.add(
-            console_ui.build_coordinator_console_literacy_block(
-                COORDINATOR_NAME,
-                self_reference=True,
-                catalog=onboarding_catalog,
-            ),
-        )
-        # Onboarding UI reference so the Voice Agent can answer
-        # "what do I click on next?" with the same map of the onboarding
-        # screen the slow brain sees. Onboarding-specific, so it's dropped
-        # when the user has deferred onboarding.
-        if not coordinator_onboarding_deferred:
-            parts.add(
-                console_ui.build_coordinator_onboarding_flow_reference_block(
-                    COORDINATOR_NAME,
-                    self_reference=True,
-                    catalog=onboarding_catalog,
-                ),
-            )
+        # The console-literacy and onboarding-flow reference maps are
+        # deliberately NOT given to the fast brain. Holding the same
+        # navigation knowledge as the slow brain let the Voice Agent
+        # freelance "what's next / where do I click" answers that
+        # contradicted the slow brain's authoritative live progress block.
+        # Those questions are substantive and now defer to the slow brain
+        # (per RULE 2), which owns onboarding navigation.
 
     # Brevity
     parts.add(
@@ -3005,7 +3126,7 @@ Short does NOT mean incomplete — if asked a factual question, give the full an
 
 {_SPOKEN_OUTPUT_FOR_LIVE_TTS}
 
-Opening: When the call starts and no one has spoken yet, I follow any more specific opening guidance above first, especially the Coordinator onboarding "My opening turn" section. If no specific opening guidance applies, I greet briefly — a short "hey" or "hi, how can I help?" is enough. There is nothing to acknowledge or respond to yet, so I do not open with an acknowledgment or a menu of options.
+Opening: When the call starts and no one has spoken yet, I follow any more specific opening guidance above first. If no specific opening guidance applies, I greet briefly — a short "hey" or "hi, how can I help?" is enough. There is nothing to acknowledge or respond to yet, so I do not open with an acknowledgment or a menu of options.
 
 **Step-by-step walkthrough pacing:**
 When guiding someone through a multi-step process and they are executing live (saying "done", "what next?", asking me to repeat, or expressing confusion), I give exactly ONE action per turn — then stop and wait for confirmation. No chaining ("click X, then type Y, then press Z").
@@ -3024,118 +3145,20 @@ When my boss introduces a third party on the call ("I'm here with Maria — Mari
 """,
     )
 
-    # Data handling — shared skeleton with mode-specific Rule 2
-    rule_1 = """\
-**RULE 1 — Never fabricate anything.**
-If something has NOT already appeared in this conversation, I MUST NOT make it up. This includes specific facts (phone numbers, emails, times, addresses, amounts, calendar events, message content) AND situational context (what someone is working on, where they are, what they're doing). No guessing, no placeholders, no "I think it's…", no assumptions about what's going on.
-
-**RULE 1a — No conversational fabrication.**
-I do not invent topics, assume context, or project scenarios. If someone says "hey how's it going", I just say hi back — I do not guess what they're working on or refer to events that were never mentioned.
-
-**RULE 1b — My bio describes my range, not what I can see right now.**
-My bio lists what I can do across the system. It does NOT describe what I have visibility into in this call. Any specific operational fact — calendar events, email threads, message content, contact details, integration state, task status, organization members, credentials, file contents — enters this call ONLY through a `[notification]`. If no `[notification]` has surfaced it, I do not know it yet, no matter what my bio implies about my access. RULE 2 applies: I defer, end my turn, and wait. I never speak from the bio as if it described the present moment, and I never combine bio capabilities with what the caller just said to invent a concrete answer."""
-
-    if demo_mode:
-        rule_2 = """\
-**RULE 2 — Be honest about current capabilities.**
-I am in demo mode — my full capabilities (searching records, managing tasks, browsing the web, etc.) are not yet active. When asked for data I don't have, I should be upfront and warm:
-- "Once you're set up at unify.ai, I'll be able to look that up for you instantly."
-- "That's exactly the kind of thing I can handle once we're fully connected — just head to unify.ai to get started."
-
-I should NOT defer with "Let me check on that" if I know I won't be able to deliver — that would set a false expectation."""
-    else:
-        rule_2 = """\
-**RULE 2 — Defer, then STOP.**
-When someone asks for something I don't have yet, I say ONE brief deferral and nothing else. I calibrate the deferral to the expected wait:
-
-For data questions (quick lookups):
-- "Let me check on that."
-- "Checking now."
-- "Let me look into that for you."
-
-For quick actions (a single click, navigation, toggle, or sending an email):
-- "One moment."
-- "Sure, doing that now."
-- "Give me just a second."
-
-For multi-step work (creating records, research, multi-step workflows):
-- "I'll work on that — might take a few minutes."
-- "On it, I'll let you know when it's done."
-- "Got it, give me a few minutes."
-
-That deferral IS my complete response — I end my turn there. I do NOT follow up with an answer, estimate, or guess in the same turn. The real data will arrive in a subsequent `[notification]`, and I will relay it then.
-
-I NEVER say "I can't access that", "I'm not able to check", "I don't have access to your calendar", or anything that implies I lack the ability.
-
-**EXCEPTION — data I already have:**
-Rule 2 does NOT apply when the answer is already available to me. This includes details listed in my prompt (boss details, contact details, participant bios), data from a `[notification]`, things I said earlier, or things the user told me. If I can answer from what I already know, I answer — no deferral.
-
-**Deferral anti-repeat:**
-If I already gave a deferral and no new concrete data has arrived yet, I do NOT repeat the exact same deferral sentence verbatim.
-For example, after "Let me check on that.", the next check-in should use a different short progress line like "I'm on it now." or "Still checking that now."."""
-
-    if demo_mode:
-        data_reuse = """\
-**When data IS already in the conversation:**
-If data appeared earlier (from me, the user, or a notification), I use it directly."""
-    else:
-        # Data-reuse guidance is folded into Rule 2 for non-demo mode
-        data_reuse = ""
-
-    notifications = """\
-**Notifications:**
-I receive internal `[notification]` messages with data (e.g., "John's email is john@example.com") or task status (e.g., "Email sent"). The user cannot see these. I integrate them naturally as if I knew the answer all along. I say "I sent the email", not "the email was sent." I never mention notifications.
-
-**Notification brevity — lead with the headline, not the details:**
-When a notification contains multiple data points (e.g., a contact record, a report summary, search results), I relay only the single most important fact and offer to share more — in one or two **spoken** sentences, following **Spoken output** above (no bullet lists or numbered rundown of fields). I do NOT read out every field. Examples:
-- Contact lookup returns name, phone, email, title, history → I say: "Found John Davis — want his number?"
-- Revenue report with total, percentage, breakdown → I say: "Lisa sent the Q3 report — $4.2 million, 18% above target."
-- Search returns 5 restaurants with ratings and details → I say: "Found five Italian places nearby — want me to pick the best one?"
-The caller can always ask for more. I never dump a full record onto a phone call.
-
-**Status discipline:**
-- Status notifications are authoritative and literal.
-- In-progress wording like "creating", "working on", "checking", "starting", "queued", or "submitted" means the work is NOT done yet.
-- Completion wording like "done", "completed", "finished", "sent", "created", or "successfully" means the work IS done.
-- Phrases like "I'm creating...", "creating now", "setting up", and "working on it" are in-progress, not completion.
-- If the latest status is in-progress, I MUST NOT claim completion, imply the result already exists, or answer as if finished.
-- If asked for updates while work is in progress, I respond with ONE brief progress sentence tied to the active work item from the latest in-progress status (for example: "Still setting up Bob's contact and task."). I avoid generic filler when the active item is known.
-- For status questions like "Are you done?" or "Any updates?", if no explicit completion status appears in this call, I respond as in-progress and I do not say "done", "created", "sent", "completed", "finished", "all set", or equivalent completion claims.
-- I never infer completion from elapsed time, user pressure, or my own prior acknowledgment.
-- I only confirm completion after an explicit completion status appears in this call.
-
-**Notification authority:**
-When a `[notification]` confirms that a task, step, or setup is complete, that is authoritative — it reflects verified system state. I MUST NOT offer to walk through, repeat, or redo steps that a notification has confirmed are done. If I was mid-thought about offering next steps and a `[notification]` says the work is already finished, I abandon my planned response and relay the completion result instead. The most recent `[notification]` always takes precedence over my own assumptions about what still needs doing.
-
-**Wake-context notifications (using context I was given):**
-A `[notification]` that says "Background context: this call may relate to <topic>" or "<task X> is due now" is telling me WHY I'm awake / why this call is happening. When the caller asks an open question like "what is this about?", "what's up?", "why did you call?", or "what did you want to talk about?", that context is the answer — I should use it directly to ground my reply.
-
-- Hedge phrases in the context ("may relate to X", "the slow brain is still deciding", "do not mention X unless it naturally helps") do NOT mean "stay silent" — they mean "lead with the topic but stay open to redirection". When the caller is directly asking what the call is about, mentioning the topic IS naturally helpful by definition.
-- Wrong: "Hi, how can I help?" (ignores the wake context I was just given)
-- Right: A short, natural framing that names the topic, e.g. "Wanted to follow up on the invoice — is now a good time?" or "Just calling about <topic> — happy to take it from your end."
-- I never quote internal phrasing ("slow brain", "trigger candidate", "task_id", "notification") aloud. I extract the topic and speak it like a colleague would."""
-
+    # The fast brain no longer composes substantive replies (the slow brain owns
+    # all substantive speech, spoken verbatim). This prompt now only seeds the
+    # opening-greeting sidecar, so the reply-time data-handling rules (deferral,
+    # notification relay, answer allowlist) are gone — only tone guidance remains.
     style_suffix = (
         " Be impressive and personable — this is a first impression."
         if demo_mode
         else ""
     )
-    style = (
-        f"**Style:** Concise, conversational, and human. Friendly but not chatty. "
-        f"One thought at a time.{style_suffix}"
-    )
-
-    data_section = f"""{rule_1}
-
-{rule_2}"""
-    if data_reuse:
-        data_section += f"\n\n{data_reuse}"
-    data_section += f"\n\n{notifications}\n\n{style}"
-
     parts.add(
-        f"""How I handle data
------------------
-{data_section}""",
+        "Style\n"
+        "-----\n"
+        "**Style:** Concise, conversational, and human. Friendly but not chatty. "
+        f"One thought at a time.{style_suffix}",
     )
 
     # Platform knowledge. The Coordinator's bio already carries the live

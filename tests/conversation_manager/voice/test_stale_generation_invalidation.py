@@ -108,10 +108,12 @@ class TestOutboundEventPrefixConvention:
 
 
 class TestNotificationTriggersTurnClassification:
-    """The invalidation trigger in ``on_notification`` uses ``triggers_turn``
-    to decide whether a notification should invalidate in-flight generation.
-    ``triggers_turn`` must be True for silent context injections and False
-    for speak-mode notifications and meet_interaction events.
+    """``on_notification`` invalidates in-flight generation only for awareness
+    notifications: the condition is ``triggers_turn and not should_speak``.
+    ``triggers_turn`` classifies the source (False for meet_interaction /
+    proactive_speech); the ``not should_speak`` gate ensures spoken guidance,
+    whose real content is already queued, never regenerates a filler (which would
+    re-enter the "thinking" state and defer that very line).
     """
 
     @staticmethod
@@ -122,40 +124,52 @@ class TestNotificationTriggersTurnClassification:
     ) -> bool:
         return notification_source not in ("meet_interaction", "proactive_speech")
 
-    def test_silent_slow_brain_notification_triggers(self):
-        assert self._triggers_turn(
+    @classmethod
+    def _invalidates_generation(
+        cls,
+        should_speak: bool,
+        message: str,
+        notification_source: str,
+    ) -> bool:
+        return (
+            cls._triggers_turn(should_speak, message, notification_source)
+            and not should_speak
+        )
+
+    def test_silent_slow_brain_notification_invalidates(self):
+        """Awareness (should_speak=False) slow-brain notifications regenerate the
+        filler with the new context."""
+        assert self._invalidates_generation(
             should_speak=False,
             message="",
             notification_source="slow_brain",
         )
 
-    def test_speak_mode_notification_triggers(self):
-        """should_speak notifications now also invalidate the fast brain's
-        in-flight generation so it regenerates with the new context."""
+    def test_speak_mode_notification_does_not_invalidate(self):
+        """Spoken guidance no longer invalidates generation: the real content is
+        queued and regenerating a filler would only defer it."""
         assert self._triggers_turn(
             should_speak=True,
             message="I've sent those scopes in the chat.",
             notification_source="slow_brain",
         )
+        assert not self._invalidates_generation(
+            should_speak=True,
+            message="I've sent those scopes in the chat.",
+            notification_source="slow_brain",
+        )
 
-    def test_meet_interaction_does_not_trigger(self):
-        assert not self._triggers_turn(
+    def test_meet_interaction_does_not_invalidate(self):
+        assert not self._invalidates_generation(
             should_speak=False,
             message="",
             notification_source="meet_interaction",
         )
 
-    def test_notify_mode_with_message_only_triggers(self):
-        assert self._triggers_turn(
-            should_speak=True,
-            message="",
-            notification_source="slow_brain",
-        )
-
-    def test_proactive_speech_does_not_trigger(self):
+    def test_proactive_speech_does_not_invalidate(self):
         """Proactive speech is fire-and-forget filler — it should never
         invalidate in-flight fast brain generation."""
-        assert not self._triggers_turn(
+        assert not self._invalidates_generation(
             should_speak=False,
             message="",
             notification_source="proactive_speech",
@@ -192,3 +206,77 @@ class TestInvalidationWiringExists:
 
     def test_participant_comms_handler_calls_invalidation(self, call_source):
         assert "outbound_action_during_generation" in call_source
+
+    def test_spoken_guidance_does_not_invalidate(self, call_source):
+        """The invalidation call site is gated on ``not should_speak``."""
+        assert "triggers_turn and not should_speak" in call_source
+
+
+# ===========================================================================
+# Test: queued slow-brain speech releases on a free floor (not on "thinking")
+# ===========================================================================
+
+
+class TestQueuedSpeechFloorGate:
+    """A queued slow-brain line is held ONLY while the floor is occupied (the
+    user speaking, or assistant audio in flight) - never merely because the agent
+    is "thinking". This mirrors ``_queued_speech_block_reason`` in call.py.
+    """
+
+    @staticmethod
+    def _block_reason(user_is_speaking: bool, assistant_speech_in_flight: bool) -> str:
+        if user_is_speaking:
+            return "user_speaking"
+        if assistant_speech_in_flight:
+            return "assistant_speaking"
+        return ""
+
+    def test_free_floor_releases(self):
+        assert self._block_reason(False, False) == ""
+
+    def test_user_speaking_blocks(self):
+        assert self._block_reason(True, False) == "user_speaking"
+
+    def test_assistant_speaking_blocks(self):
+        assert self._block_reason(False, True) == "assistant_speaking"
+
+    def test_thinking_alone_does_not_block(self):
+        """The agent generating a reply (no audio, no user speech) must not hold
+        a ready line - the historic ~13s stall."""
+        assert self._block_reason(False, False) == ""
+
+
+class TestQueuedSpeechGateWiring:
+    """Structural checks that the queued-speech drain uses the floor-free gate and
+    is re-checked when the user frees the floor."""
+
+    @pytest.fixture(scope="class")
+    def call_source(self):
+        from pathlib import Path
+
+        return Path(
+            "unity/conversation_manager/medium_scripts/call.py",
+        ).read_text()
+
+    def test_floor_free_predicate_defined(self, call_source):
+        assert "_queued_speech_block_reason" in call_source
+
+    def test_drain_does_not_gate_on_full_quiescence(self, call_source):
+        """maybe_speak_queued must use the floor-free reason, not the stricter
+        _is_pipeline_quiescent (which blocks on agent_state thinking)."""
+        drain = call_source.split("def maybe_speak_queued")[1].split("def ")[0]
+        assert "_queued_speech_block_reason" in drain
+        assert "_is_pipeline_quiescent" not in drain
+
+    def test_user_stop_rechecks_queue(self, call_source):
+        """Leaving the 'speaking' state re-checks the queue so a ready line plays
+        at the next silent moment, not the next agent-state cycle."""
+        handler = call_source.split("def _on_user_state_changed")[1].split(
+            "@session.on",
+        )[0]
+        assert "maybe_speak_queued()" in handler
+
+    def test_proactive_speech_still_uses_full_quiescence(self, call_source):
+        """Proactive speech is intentionally unchanged - still gated on full
+        pipeline quiescence."""
+        assert "_is_pipeline_quiescent" in call_source

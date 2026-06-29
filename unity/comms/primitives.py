@@ -211,6 +211,26 @@ class CommsPrimitives:
             await asyncio.sleep(_VOICE_SESSION_CLEAR_POLL_SECONDS)
         return True
 
+    async def _await_ready_for_new_call(self) -> bool:
+        """Await until the voice worker can host a brand-new call.
+
+        Delegates to the call manager, which awaits the real resource — a
+        freshly prewarmed idle worker process plus a drained prior session —
+        with no fixed sleep. Belt-and-suspenders for the (rare) race where the
+        tool was exposed at turn start but the resource was consumed before the
+        handler ran. Returns True when a new call is safe, False on timeout.
+        """
+        if self._cm is None:
+            return True
+        await_ready = getattr(
+            self._cm.call_manager,
+            "await_ready_for_new_call",
+            None,
+        )
+        if not callable(await_ready):
+            return await self._wait_for_voice_session_to_clear()
+        return await await_ready()
+
     def _onboarding_event_kwargs(self, medium: Medium) -> dict[str, str]:
         if self._cm is None:
             return {}
@@ -822,6 +842,21 @@ class CommsPrimitives:
         body, a live assistant session can queue the original message for resend
         after the contact replies. Headless offline task runs cannot queue that
         follow-up, so they only report that a notification was sent.
+
+        Delivery is NOT confirmed in the turn I call this tool. The send is
+        handed off, not proven: WhatsApp either delivers the verbatim
+        ``content`` (free-form, when the 24-hour window is open) or, when the
+        window is closed, delivers only a generic template placeholder and the
+        real body is queued to resend after the contact next replies. Which one
+        happened is known only afterwards, when it surfaces as a
+        ``[You WhatsApped <name>]`` transcript row (delivered verbatim) or a
+        ``[You WhatsApped <name> (not delivered directly)]`` row (placeholder
+        only — the body did NOT arrive). Therefore, in the same turn I call this
+        tool, I say only that I am *sending* the message — never that it has
+        arrived, is waiting, or is in their inbox. I confirm receipt only after
+        the proof row appears; if it is marked ``(not delivered directly)`` I
+        tell the contact a placeholder went out and they must reply to it before
+        I can deliver the real content (clue, etc.).
 
         Parameters
         ----------
@@ -3818,15 +3853,14 @@ class CommsPrimitives:
         contact_id = _coerce_contact_id(contact_id)
         offline_reservation = None
 
-        if self._cm is not None and (
-            self._cm.call_manager.has_active_call
-            or self._cm.call_manager.has_active_google_meet
-            or self._cm.call_manager.has_active_teams_meet
-            or self._cm.call_manager._whatsapp_call_joining
-        ):
+        if self._cm is not None and not await self._await_ready_for_new_call():
             return {
-                "status": "error",
-                "message": "A call or meeting is already active.",
+                "status": "retry_later_active_voice_session",
+                "message": (
+                    "The voice line isn't ready for a new call yet — a previous "
+                    "session is still closing or the line is re-warming. Retry "
+                    "shortly."
+                ),
             }
 
         contact = self._get_contact(contact_id=contact_id)
@@ -4017,15 +4051,13 @@ class CommsPrimitives:
 
         contact_id = _coerce_contact_id(contact_id)
         offline_reservation = None
-        if (
-            self._voice_session_active()
-            and not await self._wait_for_voice_session_to_clear()
-        ):
+        if not await self._await_ready_for_new_call():
             return {
                 "status": "retry_later_active_voice_session",
                 "message": (
-                    "The previous call or meeting is still closing. Retry shortly "
-                    "after the voice session clears."
+                    "The voice line isn't ready for a new call yet — a previous "
+                    "session is still closing or the line is re-warming. Retry "
+                    "shortly after it clears."
                 ),
             }
 

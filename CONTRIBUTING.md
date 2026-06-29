@@ -98,7 +98,7 @@ For PRs that touch a specific subsystem, the table below is a rough guide to who
 | `unity/secret_manager/` | @djl11 (high-blast-radius — see CODEOWNERS) |
 | `unity/gateway/`, `unity/comms/` | @djl11 |
 | `agent-service/` (TypeScript browser-use service) | @juliagsy, @YushaArif99 |
-| `scripts/install.sh`, `scripts/local.sh`, `scripts/voice.sh` | @djl11 |
+| `scripts/install.sh`, `scripts/local.sh` | @djl11 |
 | `tests/conftest.py`, `tests/parallel_run.sh` | @djl11, @CatB1t |
 
 ## Questions?

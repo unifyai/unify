@@ -3,7 +3,7 @@ import contextlib
 import json
 import traceback
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from unity.logger import LOGGER
 from unity.common.hierarchical_logger import DEFAULT_ICON
@@ -56,6 +56,10 @@ from unity.conversation_manager.medium_scripts.common import FastBrainLogger
 from unity.spending_limits import check_credit_gate_state
 
 MAX_CONV_MANAGER_MSGS = 50
+# Upper bound a deferred hang-up waits for its explanatory line to be spoken
+# before tearing down anyway (guards a line that never surfaces). Generous so it
+# rarely cuts off a legitimately-playing line.
+_HANG_UP_SPEECH_TIMEOUT_S = 20.0
 RECENT_TOOL_EXECUTIONS_LIMIT = 20
 RECENT_TOOL_PREVIEW_CHARS = 500
 CREDIT_GATE_REPLY_THROTTLE_SECONDS = 300
@@ -237,6 +241,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # the slow brain reads a standing progress block instead of
         # deriving "what's next". None outside active onboarding.
         self.coordinator_onboarding_render: dict[str, Any] | None = None
+        # Trigger-step ids the user clicked in THIS session (ephemeral by
+        # design): unlocks the matching reference-quiz comms tool until the
+        # send durably completes the step. Lost on restart on purpose — the
+        # row stays re-clickable, so a tool can never be permanently masked.
+        self._onboarding_clicked_trigger_steps: set[str] = set()
         # Static, deployment-gated onboarding catalog (phases + steps + copy),
         # fetched once from Orchestra's canonical source of truth and reused for
         # every prompt build so console_ui never re-declares onboarding copy.
@@ -277,6 +286,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         # call manager - pass event_broker for socket IPC with voice agent subprocess
         self.call_manager = LivekitCallManager(self.get_call_config(), event_broker)
+        self.call_manager.set_config_provider(self.get_call_config)
         self.call_manager.on_screenshot = self._buffer_screenshot
         self.call_manager.on_fast_brain_generating = self._on_fast_brain_generating
         self.call_manager.on_pipeline_quiescent = self._on_pipeline_quiescent
@@ -289,6 +299,24 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # such that you can never modify state while the LLM is running (so actions do not break)
         self.mode: Mode = Mode.TEXT
         self.chat_history = []
+        # Line this turn just decided to speak, not yet confirmed spoken. Injected
+        # render-only into the next run's prompt (as a transient [You] row) so it
+        # is not repeated; cleared once the real Outbound utterance lands. Never
+        # written to the stored transcript.
+        self._inflight_voice_speech: str = ""
+        # Deferred session teardown: the hang_up tool records intent here rather
+        # than ending the call immediately, so _run_llm can wait for the turn's
+        # explanatory line to be spoken before tearing down (no mid-sentence cut).
+        self._pending_hang_up: bool = False
+        self._pending_hang_up_teardown: Callable | None = None
+        # Set when an outbound voice utterance matching the just-published spoken
+        # guidance lands (full line, or a barge-in truncated prefix). Used to gate
+        # the deferred hang-up on speech actually being delivered.
+        self._inflight_speech_delivered: asyncio.Event = asyncio.Event()
+        # Call-session id of an in-flight Unify Meet ring awaiting an answer.
+        # Cleared when the owner answers (UnifyMeetReceived) or the no-answer
+        # timeout fires and falls the conversation back to text.
+        self._pending_meet_ring: str | None = None
         self.contact_index = ContactIndex()
         self.notifications_bar = NotificationBar()
         self.integration_sync_coordinator = IntegrationSyncCoordinator()
@@ -375,6 +403,16 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self._pending_whatsapp_resend_onboarding_metadata: dict[int, dict[str, str]] = (
             {}
         )
+
+        # Best-effort estimate of whether each contact's 24-hour WhatsApp
+        # free-form window is currently open, so the brain's send_whatsapp
+        # docstring can warn it up front when an out-of-window send will only
+        # deliver a generic template placeholder (not the verbatim body).
+        # Maps contact_id → bool (absent = unknown). Seeded best-effort at
+        # startup (Orchestra owns the authoritative window) and refreshed from
+        # observed traffic: an inbound opens it, a templated outbound proves it
+        # was closed, a free-form outbound proves it was open.
+        self._whatsapp_window_open: dict[int, bool] = {}
 
         # Outbound WhatsApp call contexts stashed while awaiting call permission.
         # When the contact grants permission (taps "Call now"), the context is
@@ -858,6 +896,36 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 f"Error buffering screenshot: {e}",
             )
 
+    def _active_voice_medium(self) -> Medium:
+        """The Medium for the currently-active voice thread."""
+        if self.call_manager.has_active_google_meet:
+            return Medium.GOOGLE_MEET
+        if self.call_manager.has_active_teams_meet:
+            return Medium.TEAMS_MEET
+        if self.mode == Mode.MEET:
+            return Medium.UNIFY_MEET
+        if self.call_manager._call_channel == "whatsapp_call":
+            return Medium.WHATSAPP_CALL
+        return Medium.PHONE_CALL
+
+    def _stash_inflight_voice_speech(self, message: str) -> None:
+        """Stash the line this turn just decided to speak, for a render-only overlay.
+
+        This is the slow brain's in-flight-speech overlay. The next run may start
+        before the real spoken ``[You]`` utterance is recorded; without seeing
+        this line it would re-derive "was that actually spoken?" and repeat it.
+        So we stash it here and inject it into the NEXT render as a transient
+        ``[You @ ...]`` row (see ``_run_llm``) - indistinguishable from confirmed
+        speech for that one call, so the model treats it as already said.
+
+        Crucially this is NEVER written to the stored transcript: it is a
+        one-shot, render-only mutation. Once the real utterance lands (the
+        ``Outbound*Utterance`` event), this stash is cleared so future turns see
+        only what was *actually* spoken (e.g. the truncated prefix after a
+        barge-in, with the ``VoiceInterrupt`` note carrying the remainder).
+        """
+        self._inflight_voice_speech = (message or "").strip()
+
     def get_recent_voice_transcript(
         self,
         contact: dict | None = None,
@@ -888,16 +956,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         if not conv_state:
             return conversation_turns, last_message_timestamp
 
-        if self.call_manager.has_active_google_meet:
-            voice_medium = Medium.GOOGLE_MEET
-        elif self.call_manager.has_active_teams_meet:
-            voice_medium = Medium.TEAMS_MEET
-        elif self.mode == Mode.MEET:
-            voice_medium = Medium.UNIFY_MEET
-        elif self.call_manager._call_channel == "whatsapp_call":
-            voice_medium = Medium.WHATSAPP_CALL
-        else:
-            voice_medium = Medium.PHONE_CALL
+        voice_medium = self._active_voice_medium()
         voice_thread = self.contact_index.get_messages_for_contact(
             contact_id,
             voice_medium,
@@ -1038,10 +1097,24 @@ class ConversationManager(metaclass=SingletonABCMeta):
         },
     )
 
+    async def cancel_slow_brain_run(self, turn_id) -> None:
+        """Cancel exactly the slow-brain run spawned by ``turn_id``.
+
+        Invoked when the fast brain resolves that turn itself
+        (``FastBrainContinued`` - resuming an interrupted line or fully answering
+        a small-talk turn): the eagerly-started run for that turn would otherwise
+        also answer. Targets only that turn's run wherever it sits in the queue
+        (no-op if it was already debounced out), so a prior still-thinking run or
+        an unrelated act/SMS run is never cancelled. A run already in tool commit
+        (speaking) is spared.
+        """
+        await self.debouncer.cancel_run_by_turn(turn_id)
+
     async def interject_or_run(
         self,
         content: str,
         triggering_contact_id: int | None = None,
+        turn_id: int | None = None,
     ):
         """Interject the ask handle or run the LLM"""
         prev_utterance = getattr(self, "_last_inbound_utterance", None)
@@ -1077,6 +1150,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 cancel_running=cancel_running,
                 triggering_contact_id=triggering_contact_id,
                 is_user_origin=True,
+                turn_id=turn_id,
             )
 
             if (
@@ -1169,6 +1243,70 @@ class ConversationManager(metaclass=SingletonABCMeta):
             is_user_origin=is_user_origin,
         )
 
+    # Grace window for the owner to answer a Unify Meet ring before the
+    # conversation falls back to text.
+    _MEET_RING_TIMEOUT_S = 25.0
+
+    async def ring_unify_meet(self, context: str = "") -> dict:
+        """Ring the owner on Unify Meet and await an answer (no-answer -> text).
+
+        Publishes a ``unify_meet_incoming`` signal so the Console shows a pinned
+        incoming-call window with an Answer button. The assistant cannot join the
+        owner's browser for them; when they answer, Console's normal connect flow
+        lands here as ``UnifyMeetReceived``. ``context`` becomes a briefed opener
+        so the answered call opens purposefully. If unanswered within
+        ``_MEET_RING_TIMEOUT_S``, a notification tells the brain to continue over
+        text.
+        """
+        import uuid
+
+        from unity.conversation_manager.domains import comms_utils
+
+        call_session_id = f"meet-ring-{uuid.uuid4().hex[:12]}"
+        reason = (context or "").strip() or (
+            "Continuing our conversation on the live call."
+        )
+        self._pending_meet_ring = call_session_id
+        result = await comms_utils.send_unify_meet_ring(
+            call_session_id=call_session_id,
+            reason=reason,
+        )
+        if not result.get("success"):
+            self._pending_meet_ring = None
+            return {
+                "status": "error",
+                "message": "Could not ring the Unify Meet right now.",
+            }
+        asyncio.ensure_future(self._await_meet_ring_answer(call_session_id))
+        return {
+            "status": "ok",
+            "message": (
+                "Ringing my boss on Unify Meet — a pinged call window with an "
+                "Answer button is now showing for them. I'll join when they answer."
+            ),
+        }
+
+    async def _await_meet_ring_answer(self, call_session_id: str) -> None:
+        """Fall back to text if a Unify Meet ring goes unanswered."""
+        await asyncio.sleep(self._MEET_RING_TIMEOUT_S)
+        if self._pending_meet_ring != call_session_id:
+            return  # answered (or superseded) - nothing to do
+        from unity.common.prompt_helpers import now as prompt_now
+
+        self._pending_meet_ring = None
+        self.notifications_bar.push_notif(
+            "Comms",
+            (
+                "My Unify Meet call went unanswered. Continue with the boss here "
+                "over the current text channel instead - do not keep waiting on "
+                "the call."
+            ),
+            prompt_now(as_string=False),
+        )
+        await self.run_llm(
+            trace_meta={"origin_event_name": "unify_meet_ring_unanswered"},
+        )
+
     @staticmethod
     def _is_transient_llm_error(exc: BaseException) -> bool:
         """True if ``exc`` is a provider-side transient error after unillm retries.
@@ -1241,25 +1379,31 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self,
         *,
         message: str,
-        should_speak: bool,
         slow_brain_log_path: str = "",
-        decided_after_ts: datetime | None = None,
+        fast_brain_guidance: str = "",
     ) -> None:
-        """Publish slow-brain ``guide_voice_agent`` output to the fast brain."""
+        """Publish a slow-brain spoken line (``guide_voice_agent``) to the fast brain.
+
+        ``guide_voice_agent`` is speak-only, so this always publishes a spoken
+        line (``should_speak=True``); there is no silent-guidance path.
+        ``fast_brain_guidance`` rides bundled with the spoken line (a short note
+        the fast brain may use for a basic direct reply to the next message); it
+        is always sent so an empty value clears any stale note.
+        """
         if not message:
             return
         contact = self.get_active_contact()
         event = FastBrainNotification(
             contact=contact,
             message=message,
-            should_speak=should_speak,
+            should_speak=True,
             source="slow_brain",
             llm_log_path=slow_brain_log_path,
-            decided_after_ts=decided_after_ts.isoformat() if decided_after_ts else "",
+            fast_brain_guidance=fast_brain_guidance,
         )
         self._session_logger.info(
             "call_notification",
-            f"Guide FastBrain (speak={should_speak}): {message}",
+            f"Guide FastBrain (speak): {message}",
         )
         event_json = event.to_json()
         await self.event_broker.publish(
@@ -1270,6 +1414,33 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "app:comms:assistant_notification",
             event_json,
         )
+
+    async def _perform_deferred_hang_up(self, *, awaiting_speech: bool) -> None:
+        """Run a hang-up the ``hang_up`` tool deferred, after speech is delivered.
+
+        When the same turn produced spoken guidance, wait for that line to land
+        (the matching outbound utterance sets ``_inflight_speech_delivered``; a
+        barge-in's truncated prefix counts too) before tearing the session down,
+        so the call never ends mid-utterance. A timeout guards a line that never
+        surfaces. Standalone hang-ups (no spoken line) tear down immediately.
+        """
+        teardown = self._pending_hang_up_teardown
+        self._pending_hang_up = False
+        self._pending_hang_up_teardown = None
+        if teardown is None:
+            return
+        if awaiting_speech:
+            try:
+                await asyncio.wait_for(
+                    self._inflight_speech_delivered.wait(),
+                    timeout=_HANG_UP_SPEECH_TIMEOUT_S,
+                )
+            except asyncio.TimeoutError:
+                self._session_logger.info(
+                    "call_notification",
+                    "Deferred hang-up proceeding without spoken-line ack (timeout)",
+                )
+        await teardown()
 
     async def _run_llm_with_failure_notification(
         self,
@@ -1469,6 +1640,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         triggering_contact_id: int | None = None,
         is_user_origin: bool = False,
         credit_gate_reply_context: dict[str, Any] | None = None,
+        turn_id: int | None = None,
     ) -> str:
         """Request an LLM run.
 
@@ -1484,6 +1656,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "origin_event_name": event_trace.get("event_name", ""),
             "triggering_contact_id": triggering_contact_id,
             "is_user_origin": is_user_origin,
+            # Carried onto the debouncer task so the fast brain can cancel exactly
+            # this turn's run by id. ``None`` for non-voice / non-user triggers,
+            # which must never be matched by a fast-brain cancel.
+            "turn_id": turn_id,
         }
         if credit_gate_reply_context is not None:
             request_meta["credit_gate_reply_context"] = credit_gate_reply_context
@@ -1626,12 +1802,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         trace_meta = trace_meta or {}
 
-        # Snapshot the latest voice-utterance timestamp this run's context is
-        # built from. Stamped onto any guide_voice_agent guidance so the fast
-        # brain can skip the dedup gate when no newer voice activity has occurred
-        # (no race is possible, so the gate would be redundant).
-        _, context_voice_ts = self.get_recent_voice_transcript()
-
         # Resolve per-turn org member attribution (only meaningful in org
         # context, where a cost can be attributed to a specific member).
         attributed_user_id = None
@@ -1763,26 +1933,54 @@ class ConversationManager(metaclass=SingletonABCMeta):
             self.assistant_screen_share_active,
         )
 
+        # Render-only overlay: inject the line we just decided to speak (not yet
+        # confirmed spoken) as a transient `[You]` row so this render treats it as
+        # already said and never repeats it, then remove it immediately. It is
+        # never persisted, so future turns see only the actually-spoken transcript.
+        _inflight_entry = None
+        if self._inflight_voice_speech and self.mode.is_voice:
+            _inflight_contact = self.get_active_contact()
+            if _inflight_contact:
+                _inflight_entry = self.contact_index.build_message(
+                    contact_id=_inflight_contact.get("contact_id"),
+                    sender_name="You",
+                    thread_name=self._active_voice_medium(),
+                    message_content=self._inflight_voice_speech,
+                    role="assistant",
+                )
+                self.contact_index.global_thread.append(_inflight_entry)
+
         _t0 = _rl_time.perf_counter()
-        snapshot_state = self.prompt_renderer.render_state(
-            self.contact_index,
-            self.notifications_bar,
-            self.in_flight_actions,
-            self.completed_actions,
-            self.last_snapshot,
-            recent_tool_executions=self._recent_tool_executions,
-            assistant_screen_share_active=self.assistant_screen_share_active,
-            user_screen_share_active=self.user_screen_share_active,
-            user_webcam_active=self.user_webcam_active,
-            user_remote_control_active=self.user_remote_control_active,
-            google_meet_active=self.call_manager.has_active_google_meet,
-            teams_meet_active=self.call_manager.has_active_teams_meet,
-            active_web_sessions=web_sessions,
-            managers_initialized=self.initialized,
-            vm_ready=self.vm_ready,
-            file_sync_complete=self.file_sync_complete,
-            has_desktop=SESSION_DETAILS.assistant.has_managed_desktop,
-        )
+        try:
+            snapshot_state = self.prompt_renderer.render_state(
+                self.contact_index,
+                self.notifications_bar,
+                self.in_flight_actions,
+                self.completed_actions,
+                self.last_snapshot,
+                recent_tool_executions=self._recent_tool_executions,
+                assistant_screen_share_active=self.assistant_screen_share_active,
+                user_screen_share_active=self.user_screen_share_active,
+                user_webcam_active=self.user_webcam_active,
+                user_remote_control_active=self.user_remote_control_active,
+                google_meet_active=self.call_manager.has_active_google_meet,
+                teams_meet_active=self.call_manager.has_active_teams_meet,
+                active_web_sessions=web_sessions,
+                managers_initialized=self.initialized,
+                vm_ready=self.vm_ready,
+                file_sync_complete=self.file_sync_complete,
+                has_desktop=SESSION_DETAILS.assistant.has_managed_desktop,
+            )
+        finally:
+            # render_state is synchronous, so the transient row is always the
+            # last entry here; remove it so it never persists.
+            if _inflight_entry is not None:
+                gt = self.contact_index.global_thread
+                if gt and gt[-1] is _inflight_entry:
+                    gt.pop()
+                else:
+                    with contextlib.suppress(ValueError):
+                        gt.remove(_inflight_entry)
         _render_ms = (_rl_time.perf_counter() - _t0) * 1000
 
         # Mirror the Coordinator's onboarding state (defer switch + the
@@ -1898,6 +2096,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
         client = new_llm_client(
             SETTINGS.UNIFY_MODEL,
             origin="ConversationManager",
+            # Slow brain stays at "high"; the system default is "max" (used by
+            # the CodeActActor). On deepseek-v4 "max" buys marginal gains on the
+            # hardest tasks at extra latency, which the live conversation loop
+            # cannot afford.
+            reasoning_effort="high",
         )
         _new_client_ms = (_rl_time.perf_counter() - _client_step_t0) * 1000
         _client_step_t0 = _rl_time.perf_counter()
@@ -2035,30 +2238,55 @@ class ConversationManager(metaclass=SingletonABCMeta):
         if structured is not None:
             thoughts = getattr(structured, "thoughts", "")
 
-        # Handle guide_voice_agent tool calls for voice modes.
-        # The slow brain decides BLOCK (omit the tool), NOTIFY (default),
-        # or SPEAK (should_speak=True + message) by calling guide_voice_agent
-        # in parallel with its action tool. Dedup runs in the fast brain subprocess.
+        # Handle guide_voice_agent tool calls for voice modes. The slow brain
+        # either SPEAKs (guide_voice_agent with a message, spoken verbatim by the
+        # fast brain subprocess) or WAITs (omits the tool). It may bundle an
+        # optional fast_brain_guidance note alongside a spoken message — never on
+        # its own — which the fast brain may use for a basic direct reply to the
+        # caller's next message.
         if self.mode.is_voice:
             guidance_message = ""
-            should_speak = False
+            fast_brain_guidance = ""
             for tool_exec in result.tools:
                 if tool_exec.name == "guide_voice_agent":
                     args = tool_exec.args or {}
                     guidance_message = args.get("message", "")
-                    should_speak = args.get("should_speak", False)
+                    fast_brain_guidance = args.get("fast_brain_guidance", "")
                     break
+
+            # A pending hang-up (recorded by the hang_up tool this turn) must not
+            # tear down the session until the spoken line has been delivered,
+            # otherwise the call ends mid-sentence. Reset the delivered signal
+            # before publishing so we only observe THIS turn's delivery.
+            if self._pending_hang_up and guidance_message:
+                self._inflight_speech_delivered.clear()
 
             if guidance_message:
                 pending = getattr(client, "_pending_thinking_log", None)
                 slow_brain_log_path = (
                     pending.last_path or "" if pending is not None else ""
                 )
+                # guide_voice_agent is speak-only: every call is spoken. Guidance
+                # rides bundled with the spoken line (never alone); a spoken turn
+                # without guidance clears any stale note on the fast brain.
                 await self._publish_slow_brain_fast_brain_guidance(
                     message=guidance_message,
-                    should_speak=should_speak,
                     slow_brain_log_path=slow_brain_log_path,
-                    decided_after_ts=context_voice_ts,
+                    fast_brain_guidance=fast_brain_guidance,
+                )
+                # Stash the spoken line for a render-only overlay so the next run
+                # (which may start before the real `[You]` utterance is recorded)
+                # sees what this turn just decided to say, treats it as already
+                # said, and does not repeat it. Cleared once the real utterance
+                # lands so future turns see only what was actually spoken.
+                self._stash_inflight_voice_speech(guidance_message)
+
+            # Perform any deferred hang-up only after the spoken line has actually
+            # been delivered (or a barge-in truncated it), so the session never
+            # ends mid-utterance.
+            if self._pending_hang_up:
+                await self._perform_deferred_hang_up(
+                    awaiting_speech=bool(guidance_message),
                 )
 
         self._session_logger.debug(
@@ -2349,8 +2577,13 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.user_number = payload["user_number"]
         self.user_email = payload["user_email"]
         self.user_whatsapp_number = payload.get("user_whatsapp_number", "")
-        self.voice_provider = payload["voice_provider"]
-        self.voice_id = payload["voice_id"]
+        # Only adopt voice from the payload when it carries a real value. A
+        # sparse AssistantUpdateEvent (voice omitted / coerced None -> "") must
+        # not wipe the assistant's current voice back to the provider default.
+        if payload.get("voice_provider"):
+            self.voice_provider = payload["voice_provider"]
+        if payload.get("voice_id"):
+            self.voice_id = payload["voice_id"]
         self.binding_id = payload.get("binding_id", "")
         self.desktop_mode = payload.get("desktop_mode", "ubuntu")
         self.user_desktops = payload.get("user_desktops") or []
@@ -2418,13 +2651,22 @@ class ConversationManager(metaclass=SingletonABCMeta):
         }
 
     def get_call_config(self) -> CallConfig:
+        # Resolve the voice from the live runtime source rather than a frozen
+        # snapshot: the CM's own fields take precedence, but fall back to
+        # SESSION_DETAILS.voice (populated from the OS env at boot in self-host,
+        # where no StartupEvent ever arrives). Without this fallback an empty
+        # CM voice field silently sends the provider default to the call agent.
+        voice_provider = (
+            self.voice_provider or SESSION_DETAILS.voice.provider or "cartesia"
+        )
+        voice_id = self.voice_id or SESSION_DETAILS.voice.id or ""
         return CallConfig(
             assistant_id=self.assistant_id,
             user_id=self.user_id,
             assistant_bio=self.assistant_about,
             assistant_number=self.assistant_number,
-            voice_provider=self.voice_provider,
-            voice_id=self.voice_id,
+            voice_provider=voice_provider,
+            voice_id=voice_id,
             assistant_name=f"{self.assistant_first_name} {self.assistant_surname}".strip(),
             job_name=self.job_name,
             is_coordinator=SESSION_DETAILS.is_coordinator,
@@ -2512,6 +2754,24 @@ class ConversationManager(metaclass=SingletonABCMeta):
         if isinstance(render, dict):
             self.coordinator_onboarding_render = render
 
+    @property
+    def onboarding_clicked_trigger_steps(self) -> set[str]:
+        """Trigger-step ids clicked in this session (reference-quiz gating)."""
+        return self._onboarding_clicked_trigger_steps
+
+    def record_onboarding_trigger_clicked(self, step_id: str) -> None:
+        """Mark a reference-quiz trigger row as clicked this session.
+
+        Unlocks the matching comms send tool until the send durably completes
+        the step. No-op for blank ids.
+        """
+        if isinstance(step_id, str) and step_id.strip():
+            self._onboarding_clicked_trigger_steps.add(step_id.strip())
+
+    def clear_onboarding_clicked_trigger_steps(self) -> None:
+        """Forget this session's clicked trigger rows (e.g. on onboarding reset)."""
+        self._onboarding_clicked_trigger_steps.clear()
+
     def set_pending_onboarding_outbound(
         self,
         details: dict[str, Any],
@@ -2555,6 +2815,53 @@ class ConversationManager(metaclass=SingletonABCMeta):
         ):
             return
         self._pending_onboarding_outbound = None
+
+    def note_whatsapp_window_open(self, contact_id: int | None, is_open: bool) -> None:
+        """Record the latest known WhatsApp free-form window state for a contact."""
+        if contact_id is None:
+            return
+        self._whatsapp_window_open[int(contact_id)] = bool(is_open)
+
+    def whatsapp_window_state(self, contact_id: int | None) -> bool | None:
+        """Return True/False for the contact's WhatsApp window, or None if unknown.
+
+        A pending template resend is authoritative proof the window is closed
+        (the last send fell back to a placeholder and no reply has reopened it).
+        Otherwise fall back to the last observed/seeded state.
+        """
+        if contact_id is None:
+            return None
+        cid = int(contact_id)
+        if cid in self._pending_whatsapp_resends:
+            return False
+        return self._whatsapp_window_open.get(cid)
+
+    async def seed_whatsapp_window(self, contact_id: int) -> None:
+        """Best-effort: ask the gateway whether a contact's window is open.
+
+        Used at startup so the brain knows up front whether a first send will
+        deliver verbatim or only a placeholder. Failures are swallowed — the
+        state simply stays unknown and the send_whatsapp docstring falls back to
+        its window-agnostic guidance.
+        """
+        contact = self._get_contact_safe(contact_id)
+        whatsapp_number = (contact or {}).get("whatsapp_number")
+        if not whatsapp_number:
+            return
+        try:
+            from unity.conversation_manager.domains import comms_utils
+
+            is_open = await comms_utils.get_whatsapp_window(whatsapp_number)
+        except Exception:
+            is_open = None
+        if is_open is not None:
+            self.note_whatsapp_window_open(contact_id, is_open)
+
+    def _get_contact_safe(self, contact_id: int) -> dict | None:
+        try:
+            return self.contact_index.get_contact(contact_id)
+        except Exception:
+            return None
 
     def stash_pending_whatsapp_resend_onboarding_metadata(
         self,

@@ -162,9 +162,20 @@ async def _boot_entrypoint(monkeypatch):
             self._chat_ctx = llm.ChatContext()
             self.call_received = True
             self.user_turn_generating = False
+            self._user_turn_seq = 0
+            self._slow_brain_responded_turn = -1
+            self._buffers_since_slow_reply = 0
+            self._pending_opening_bridge = None
+            self._active_tts = None
+            self._pending_continuation = None
+            self._tts_seq = 0
+            self._publish_voice_interrupt = None
 
         def set_call_received(self):
             self.call_received = True
+
+        def set_credit_gate_state_provider(self, provider):
+            pass
 
     async def _noop_async(*args, **kwargs):
         return None
@@ -182,7 +193,16 @@ async def _boot_entrypoint(monkeypatch):
             contact_json=json.dumps(contact),
             boss_json=json.dumps(boss),
         ),
-        assistant=SimpleNamespace(about="Assistant bio", name="Ava"),
+        assistant=SimpleNamespace(
+            about="Assistant bio",
+            name="Ava",
+            first_name="Ava",
+            surname="Assistant",
+            agent_id="agent-1",
+            is_coordinator=False,
+            user_desktop_for=lambda _uid: None,
+        ),
+        user=SimpleNamespace(id="owner-1"),
         unify_key="",
         is_coordinator=False,
         org_id=None,
@@ -335,8 +355,8 @@ class TestProactiveSpeechDiscard:
         arriving afterwards is discarded — it must never queue behind other speech."""
         session, notify, set_agent, set_user = await _boot_entrypoint(monkeypatch)
 
-        # Queue an actor notification while agent is thinking (so it waits).
-        session.agent_state = "thinking"
+        # Occupy the floor (assistant speaking) so the actor notification waits.
+        session.current_speech = SimpleNamespace(done=False)
         notify(_actor_payload())
         assert len(session.say_calls) == 0
 
@@ -345,7 +365,8 @@ class TestProactiveSpeechDiscard:
         notify(_proactive_payload())
         assert len(session.say_calls) == 0
 
-        # When agent settles, only the actor notification plays.
+        # When the floor frees, only the actor notification plays.
+        session.current_speech = SimpleNamespace(done=True)
         set_agent("listening")
         await asyncio.sleep(0)
         assert len(session.say_calls) == 1
@@ -384,17 +405,18 @@ class TestProactiveSpeechDiscard:
         )
 
     async def test_regular_notification_still_queues_normally(self, monkeypatch):
-        """Non-proactive (actor) notifications must still queue and play
-        after the pipeline settles — the proactive discard logic must not
+        """Non-proactive (actor) notifications must still queue while the floor is
+        occupied and play once it frees — the proactive discard logic must not
         affect them."""
         session, notify, set_agent, set_user = await _boot_entrypoint(monkeypatch)
 
-        # Agent is thinking — actor notification arrives and is queued.
-        session.agent_state = "thinking"
+        # Floor occupied (assistant speaking) — actor notification waits.
+        session.current_speech = SimpleNamespace(done=False)
         notify(_actor_payload())
         assert len(session.say_calls) == 0
 
-        # Agent settles — queued actor notification plays.
+        # Floor frees — queued actor notification plays.
+        session.current_speech = SimpleNamespace(done=True)
         set_agent("listening")
         await asyncio.sleep(0)
         assert len(session.say_calls) == 1
@@ -436,8 +458,11 @@ def _speak_payload(message: str) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_speak_guidance_applies_with_message_field(monkeypatch):
-    """SPEAK injects message into context and queues the same text for TTS."""
+async def test_speak_guidance_speaks_the_message(monkeypatch):
+    """SPEAK guidance is spoken verbatim via TTS. The spoken text reaches the
+    transcript through the real ``say(add_to_chat_ctx=True)`` path (not modeled by
+    the fake session); a separate ``[notification]`` injection is reserved for
+    awareness (should_speak=False) notifications and must NOT happen here."""
     session, notify, set_agent, set_user = await _boot_entrypoint(monkeypatch)
 
     spoken = "I found it: spot gold is about 4,486 US dollars per troy ounce."
@@ -460,6 +485,7 @@ async def test_speak_guidance_applies_with_message_field(monkeypatch):
         if "[notification]" in text:
             notification_lines.append(text)
 
-    assert any(
-        spoken in line for line in notification_lines
-    ), "SPEAK guidance must inject message into fast-brain context"
+    assert not notification_lines, (
+        "SPEAK guidance must not inject a [notification] context line - that is "
+        "only for awareness (should_speak=False) notifications."
+    )

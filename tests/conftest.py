@@ -518,16 +518,20 @@ def pytest_sessionstart(session):
     #  cross-process lock serialises the rare cold-start race between
     #  parallel sessions.
     # ------------------------------------------------------------------
-    from unity.common.builtins import builtins_project
+    from unity.common.builtins import (
+        builtins_project,
+        builtins_seed_key_override,
+    )
     from unity.common.embed_utils import _cross_process_column_lock
     from unity.function_manager.builtins_catalog import seed_builtin_primitives
     from unity.guidance_manager.builtins_catalog import seed_builtin_guidance
     from unity.integrations.builtins_catalog import seed_builtin_integrations
 
     with _cross_process_column_lock(builtins_project(), "builtins_seed"):
-        seed_builtin_primitives()
-        seed_builtin_guidance()
-        seed_builtin_integrations()
+        with builtins_seed_key_override():
+            seed_builtin_primitives()
+            seed_builtin_guidance()
+            seed_builtin_integrations()
 
     # ------------------------------------------------------------------
     #  Configure EventBus publishing (disabled by default in tests)

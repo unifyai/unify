@@ -67,7 +67,7 @@ CLI flag: `--show-trace` auto-prints the trace after each CodeAct turn (REPL onl
 
 `meet` creates a LiveKit room, spawns the production voice agent subprocess, opens the local Agents Playground in your browser, and runs the full fast-brain + slow-brain loop. Speak through the browser mic; type `end_meet` when done.
 
-Requires `LIVEKIT_*`, `DEEPGRAM_API_KEY`, and a TTS key (`CARTESIA_API_KEY` or `ELEVEN_API_KEY`). The installer wizard prompts for these; LiveKit auto-starts locally on subsequent sandbox launches when configured.
+Requires `LIVEKIT_*` (a LiveKit Cloud project — `LIVEKIT_URL`/`LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET`), `DEEPGRAM_API_KEY`, and a TTS key (`CARTESIA_API_KEY` or `ELEVEN_API_KEY`). LiveKit is always the configured Cloud project; only the Agents Playground UI runs locally (it auto-starts on subsequent sandbox launches).
 
 ## Computer use
 

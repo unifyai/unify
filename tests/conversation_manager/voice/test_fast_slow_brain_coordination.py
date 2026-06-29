@@ -285,9 +285,14 @@ class TestSlowBrainDecisionBoundaries:
         assert (
             "message" in guide_sig.parameters
         ), "guide_voice_agent() must accept a message parameter"
+        # Speak-only: no silent-guidance mode, but it may bundle a one-shot
+        # fast_brain_guidance note alongside the spoken message.
         assert (
-            "should_speak" in guide_sig.parameters
-        ), "guide_voice_agent() must accept a should_speak parameter"
+            "should_speak" not in guide_sig.parameters
+        ), "guide_voice_agent() must be speak-only (no should_speak)"
+        assert (
+            "fast_brain_guidance" in guide_sig.parameters
+        ), "guide_voice_agent() must accept bundled fast_brain_guidance"
 
         # wait() should NOT have call_guidance params (moved to standalone tool)
         wait_sig = inspect.signature(ConversationManagerBrainActionTools.wait)
@@ -630,17 +635,16 @@ class TestRapidUtteranceHandling:
 
 @pytest.mark.asyncio
 class TestFastBrainNotificationSpeakMode:
-    """Verify that guide_voice_agent's should_speak and message
-    parameters propagate correctly through the FastBrainNotification event to the
-    fast brain."""
+    """Verify that guide_voice_agent (now speak-only) propagates the spoken line
+    correctly through the FastBrainNotification event to the fast brain."""
 
-    async def test_should_speak_params_carried_through_to_event(
+    async def test_speak_params_carried_through_to_event(
         self,
         initialized_cm,
     ):
-        """When the slow brain calls guide_voice_agent with should_speak=True
-        and message, the published FastBrainNotification event must carry both
-        fields so the fast brain can speak via TTS."""
+        """When the slow brain calls guide_voice_agent (speak-only), the published
+        FastBrainNotification event must carry the message and should_speak=True
+        so the fast brain speaks via TTS."""
         import json
 
         cm = initialized_cm.cm
@@ -682,11 +686,12 @@ class TestFastBrainNotificationSpeakMode:
                 ConversationManagerBrainActionTools.guide_voice_agent,
             )
             assert (
-                "should_speak" in guide_sig.parameters
-            ), "guide_voice_agent() must accept should_speak"
-            assert (
                 "message" in guide_sig.parameters
             ), "guide_voice_agent() must accept message"
+            # Speak-only: the silent-guidance param is gone.
+            assert (
+                "should_speak" not in guide_sig.parameters
+            ), "guide_voice_agent() must be speak-only"
 
             # Verify published guidance events carry the fields (even if
             # the LLM didn't use them this turn, the schema must support them)
@@ -835,16 +840,17 @@ class TestSlowBrainTextAcknowledgmentPrompt:
 
 
 class TestSlowBrainGuidanceDeliveryPrompt:
-    """Verify the slow brain prompt distinguishes confirmed-spoken `[You @ ...]`
-    utterances from unconfirmed `[guidance @ ...]` intent.
+    """The slow brain prompt instructs it to treat its own recent lines (both
+    `[You @ ...]` and `[guidance @ ...]`) as already spoken, and never to repeat
+    or re-answer them — even when the caller re-asks before reacting.
 
-    Regression: the slow brain treated its own `guide_voice_agent` guidance as if
-    the user had heard it (it reasoned "already confirmed" and called `wait`),
-    even when the speech was suppressed/dropped before being spoken. The prompt
-    must instruct it that only `[You @ ...]` rows prove delivery.
+    This is the fix for the slow brain duplicating its own in-flight guidance:
+    rather than reasoning about whether the caller "heard" it (which it kept
+    getting wrong), it treats a recent line as definitely delivered. Genuine
+    omissions are caught later via an explicit interruption note.
     """
 
-    def test_prompt_marks_guidance_as_unconfirmed(self):
+    def test_prompt_treats_recent_spoken_lines_as_already_said(self):
         from unity.conversation_manager.prompt_builders import build_system_prompt
 
         prompt = build_system_prompt(
@@ -855,12 +861,60 @@ class TestSlowBrainGuidanceDeliveryPrompt:
             is_voice_call=True,
         ).flatten()
 
-        # Guidance rows are explicitly marked as not-yet-delivered.
-        assert "(unconfirmed)" in prompt
-        # Spoken utterances are the single source of truth for what was heard.
-        assert "source of truth for what they have heard" in prompt
-        # The model is told not to wait as if guidance was already heard.
-        assert "NOT proof the user heard it" in prompt
+        # The rule keys off `[You @ ...]` rows (which now include the render-only
+        # in-flight overlay), not a distinct guidance marker.
+        assert "[You @ ...]" in prompt
+        assert "definitely spoken" in prompt
+        assert "never repeat" in prompt.lower()
+        # Re-asking is explicitly not a reason to answer again.
+        assert "re-asking" in prompt.lower()
+        # The legacy "unconfirmed / not proof" framing is gone.
+        assert "(unconfirmed)" not in prompt
+        assert "NOT proof the user heard it" not in prompt
+
+    def test_voice_prompt_keeps_single_identity(self):
+        """The slow brain must present as one person and never disown its words /
+        fragment into separate agents - while still allowed to honestly surface a
+        genuine glitch rather than fabricate an excuse."""
+        from unity.conversation_manager.prompt_builders import build_system_prompt
+
+        prompt = build_system_prompt(
+            bio="Test assistant.",
+            contact_id=1,
+            first_name="Alex",
+            surname="Demo",
+            is_voice_call=True,
+        ).flatten()
+
+        flat = " ".join(prompt.lower().split())
+        # The caller must never be told a phrase "wasn't me" / came from elsewhere.
+        assert "never disown" in flat
+        assert "single person" in flat
+        # The relaxed carve-out: honest acknowledgement of a real glitch is allowed.
+        assert "genuinely glitched" in flat
+
+    def test_voice_prompt_is_speak_or_wait_only(self):
+        """guide_voice_agent is speak-only: the prompt must not offer a NOTIFY /
+        silent-guidance / delegation mode, and must not reference should_speak."""
+        from unity.conversation_manager.prompt_builders import build_system_prompt
+
+        prompt = build_system_prompt(
+            bio="Test assistant.",
+            contact_id=1,
+            first_name="Alex",
+            surname="Demo",
+            is_voice_call=True,
+        ).flatten()
+
+        assert "should_speak" not in prompt
+        assert "fast_brain_note" not in prompt
+        # No silent NOTIFY mode; the slow brain SPEAKs or WAITs.
+        assert "NOTIFY" not in prompt
+        # The general bundled-guidance capability IS described (general, no quiz).
+        assert "fast_brain_guidance" in prompt
+        # No onboarding/quiz concepts may leak into the general voice prompt.
+        assert "clue" not in prompt
+        assert "quiz" not in prompt
 
 
 # =============================================================================
@@ -1080,18 +1134,18 @@ class TestSlowBrainSpeaksViaGuideVoiceAgent:
 
 
 # =============================================================================
-# Test: speech deduplication gate suppresses redundant slow brain speech
+# Test: slow brain speech is published verbatim (no dedup gate)
 # =============================================================================
 
 
 @pytest.mark.eval
 @pytest.mark.asyncio
-class TestSpeechDedupGateInSpeechFlow:
+class TestSlowBrainSpeechPassthroughInSpeechFlow:
     """Verify the slow brain passes should_speak through unmodified.
 
-    Dedup is now a fast-brain-only concern (runs at speak time inside
-    ``maybe_speak_queued`` → ``_dedup_and_speak``).  The slow brain publishes
-    the LLM's original should_speak value without server-side suppression.
+    The slow brain owns all substantive speech and its output is spoken verbatim
+    by the fast brain; there is no speech-dedup gate that could suppress or edit
+    it. The slow brain publishes the LLM's original should_speak value.
     """
 
     @_handle_project
@@ -1103,10 +1157,10 @@ class TestSpeechDedupGateInSpeechFlow:
         the slow brain publishes should_speak as the LLM produced it.
 
         Flow:
-        1. Action completes → fast brain gets silent notification, speaks it.
-        2. User asks about the result → fast brain answers from context.
-        3. Slow brain wakes, decides to speak the same result.
-        4. Published event preserves should_speak=True (no server-side dedup).
+        1. Action completes → silent notification injected into context.
+        2. User asks about the result → fast brain emits a filler phrase; the
+           slow brain composes and speaks the answer.
+        3. Published event preserves should_speak=True (spoken verbatim).
         """
         cm = initialized_cm
 
@@ -1166,7 +1220,7 @@ class TestSpeechDedupGateInSpeechFlow:
                 if payload.get("source") == "slow_brain" and payload.get("message"):
                     assert payload.get("should_speak") is True, (
                         "The slow brain should pass should_speak=True through "
-                        "unmodified; dedup is now a fast-brain concern.\n"
+                        "unmodified; speech is spoken verbatim.\n"
                         f"Payload: {payload}\n"
                         f"Tool calls: {cm.all_tool_calls}"
                     )

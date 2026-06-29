@@ -249,12 +249,16 @@ class TestEventHandlerRegistry:
 
     def test_unregistered_event_returns_sleep(self):
         """Verify that unregistered events return a no-op coroutine."""
-        # VoiceInterrupt is a real event class that has no registered handler
-        from unity.conversation_manager.events import VoiceInterrupt
+        import uuid
 
-        # VoiceInterrupt should not have a handler registered
-        result = EventHandler._registry.get(VoiceInterrupt)
-        assert result is None, "VoiceInterrupt should not have a handler"
+        # A freshly-created event class has no registered handler.
+        unregistered_cls = type(
+            f"_UnregisteredEvent_{uuid.uuid4().hex[:8]}",
+            (Event,),
+            {},
+        )
+        result = EventHandler._registry.get(unregistered_cls)
+        assert result is None, "A fresh event class should have no handler"
 
     def test_register_decorator_single_event(self):
         """Verify @EventHandler.register works for single event class."""
@@ -1135,6 +1139,7 @@ class TestVoiceUtteranceHandlers:
         event = InboundPhoneUtterance(
             contact={"contact_id": 2},
             content="What's the weather?",
+            turn_id=3,
         )
 
         with patch(
@@ -1146,6 +1151,7 @@ class TestVoiceUtteranceHandlers:
         mock_cm.interject_or_run.assert_called_once_with(
             "What's the weather?",
             triggering_contact_id=2,
+            turn_id=3,
         )
 
     @pytest.mark.asyncio
@@ -1165,6 +1171,46 @@ class TestVoiceUtteranceHandlers:
         mock_cm.schedule_proactive_speech.assert_called()
 
     @pytest.mark.asyncio
+    async def test_outbound_utterance_clears_matching_inflight_overlay(self, mock_cm):
+        """When the real spoken utterance lands, the render-only in-flight overlay
+        for that line is cleared (full or truncated-prefix match) and the
+        speech-delivered signal (used to gate a deferred hang-up) is set."""
+        import asyncio
+
+        mock_cm._inflight_voice_speech = "The next step is to click Trigger email."
+        mock_cm._inflight_speech_delivered = asyncio.Event()
+
+        # A truncated prefix (barge-in) still matches and clears it.
+        event = OutboundPhoneUtterance(
+            contact={"contact_id": 2},
+            content="The next step is to click",
+        )
+        with patch(
+            "unity.conversation_manager.domains.event_handlers.managers_utils",
+        ) as mock_utils:
+            mock_utils.queue_operation = AsyncMock()
+            await EventHandler.handle_event(event, mock_cm)
+
+        assert mock_cm._inflight_voice_speech == ""
+        assert mock_cm._inflight_speech_delivered.is_set()
+
+    @pytest.mark.asyncio
+    async def test_outbound_filler_does_not_clear_unrelated_inflight(self, mock_cm):
+        """A short buffer filler that is not this line must not clear the overlay."""
+        mock_cm._inflight_voice_speech = "The next step is to click Trigger email."
+
+        event = OutboundPhoneUtterance(content="One moment.", contact={"contact_id": 2})
+        with patch(
+            "unity.conversation_manager.domains.event_handlers.managers_utils",
+        ) as mock_utils:
+            mock_utils.queue_operation = AsyncMock()
+            await EventHandler.handle_event(event, mock_cm)
+
+        assert (
+            mock_cm._inflight_voice_speech == "The next step is to click Trigger email."
+        )
+
+    @pytest.mark.asyncio
     async def test_call_guidance_updates_contact_index(self, mock_cm):
         """FastBrainNotification adds guidance message to voice thread."""
         event = FastBrainNotification(
@@ -1177,6 +1223,50 @@ class TestVoiceUtteranceHandlers:
         msgs = mock_cm.contact_index.get_messages_for_contact(2, Medium.PHONE_CALL)
         assert len(msgs) == 1
         # Guidance messages have role="guidance"
+
+    @pytest.mark.asyncio
+    async def test_voice_interrupt_records_unheard_remainder(self, mock_cm):
+        """VoiceInterrupt records a guidance note naming the unheard remainder so
+        the slow brain knows it was cut off."""
+        from unity.conversation_manager.events import VoiceInterrupt
+
+        event = VoiceInterrupt(
+            contact={"contact_id": 2},
+            spoken_prefix="I've sent the clue to your",
+            unheard_remainder="email — reply with your guess.",
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        msgs = mock_cm.contact_index.get_messages_for_contact(2, Medium.PHONE_CALL)
+        assert len(msgs) == 1
+        # Recorded as an internal GuidanceMessage (no role; content carries the note).
+        assert "email — reply with your guess." in msgs[0].content
+        assert "interrupted" in msgs[0].content.lower()
+
+    @pytest.mark.asyncio
+    async def test_voice_interrupt_without_remainder_is_noop(self, mock_cm):
+        """A VoiceInterrupt with no unheard remainder records nothing."""
+        from unity.conversation_manager.events import VoiceInterrupt
+
+        event = VoiceInterrupt(contact={"contact_id": 2})
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        msgs = mock_cm.contact_index.get_messages_for_contact(2, Medium.PHONE_CALL)
+        assert len(msgs) == 0
+
+    @pytest.mark.asyncio
+    async def test_fast_brain_continued_cancels_run_for_its_turn(self, mock_cm):
+        """The fast brain resolving a turn cancels exactly that turn's run."""
+        from unity.conversation_manager.events import FastBrainContinued
+
+        mock_cm.cancel_slow_brain_run = AsyncMock()
+        event = FastBrainContinued(contact={"contact_id": 2}, turn_id=7)
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.cancel_slow_brain_run.assert_awaited_once_with(7)
 
     @pytest.mark.asyncio
     async def test_assistant_turn_injection_updates_history_without_user_turn(

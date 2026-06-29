@@ -34,6 +34,88 @@ SFTP_USER = "unity"
 # writebacks. Excluded from reads so the assistant never pulls its own edits.
 EDITS_DIR = ".unity-edits"
 
+# Exclude patterns are tiered by the operation's intent. rclone exclude
+# semantics: a leading "/" anchors to the served home root; an unanchored
+# pattern matches that path segment at any depth.
+#
+# Tier 1 (always): our own versioned writebacks — never read back.
+# Tier 2 (noise): caches, dependency trees, VCS metadata, trashes — no document
+#   value and bloat any copy. Applied to pull + sync, never to list.
+# Tier 3 (secrets): credential/secret dirs — not copied off the user's machine.
+#   Applied to pull + sync, never to list.
+# list stays truthful (tier 1 only) so the real tree is visible; pull and sync
+# skip tiers 2 + 3 so copies stay lean and never exfiltrate credentials.
+_ALWAYS_EXCLUDES: tuple[str, ...] = (f"/{EDITS_DIR}/**",)
+
+_NOISE_EXCLUDES: tuple[str, ...] = (
+    # POSIX (Linux/macOS) home noise.
+    "/.cache/**",
+    "/.npm/**",
+    "/.cargo/**",
+    "/.rustup/**",
+    "/.gradle/**",
+    "/.m2/**",
+    "/.local/share/Trash/**",
+    "/Library/Caches/**",
+    "/.Trash/**",
+    # Windows profile noise (served root is %USERPROFILE%; rclone uses
+    # forward slashes). AppData/Local holds caches, temp, and reparse-point
+    # junctions that loop rclone; NTUSER.DAT* are locked registry hives.
+    "/AppData/Local/**",
+    "/AppData/LocalLow/**",
+    "/NTUSER.DAT*",
+    "/ntuser.dat*",
+    "/ntuser.ini",
+    "/Cookies/**",
+    "*.lnk",
+    # Any-depth project/tooling noise (POSIX + Windows).
+    "node_modules/**",
+    ".git/**",
+    "__pycache__/**",
+    ".venv/**",
+    "venv/**",
+    ".tox/**",
+    ".mypy_cache/**",
+    ".pytest_cache/**",
+    ".next/**",
+    ".idea/**",
+    ".DS_Store",
+    "Thumbs.db",
+)
+
+_SECRET_EXCLUDES: tuple[str, ...] = (
+    # Credential/secret dirs at the home root, on every OS. .ssh/.aws/.gnupg
+    # sit at the profile root on Windows too (e.g. C:\Users\x\.ssh).
+    "/.ssh/**",
+    "/.gnupg/**",
+    "/.aws/**",
+    "/.kube/**",
+    "/.config/gcloud/**",
+    "/.docker/**",
+    "/.netrc",
+    "/.git-credentials",
+    # Windows credential stores under %APPDATA% (AppData/Roaming).
+    "/AppData/Roaming/gcloud/**",
+    "/AppData/Roaming/Microsoft/Credentials/**",
+)
+
+
+def _build_excludes(*, noise: bool, secrets: bool) -> list[str]:
+    """Flatten the requested exclude tiers into ``--exclude PAT`` rclone args.
+
+    Tier 1 (the writeback dir) is always included; ``noise`` adds tier 2 and
+    ``secrets`` adds tier 3.
+    """
+    patterns: list[str] = list(_ALWAYS_EXCLUDES)
+    if noise:
+        patterns += _NOISE_EXCLUDES
+    if secrets:
+        patterns += _SECRET_EXCLUDES
+    args: list[str] = []
+    for pattern in patterns:
+        args += ["--exclude", pattern]
+    return args
+
 
 def _utc_stamp() -> str:
     """Filesystem-safe UTC timestamp for versioned writeback names."""
@@ -128,7 +210,13 @@ class UserHomeSFTP:
 
     # ── operations ───────────────────────────────────────────────────────
     async def list_dir(self, remote_path: str = "") -> list[str]:
-        """List entries under a home-relative directory (excludes edits dir)."""
+        """List entries under a home-relative directory.
+
+        Browsing stays truthful: only the writeback dir is hidden, so caches,
+        dependency trees and credential dirs are all still visible here. The
+        leaner exclude set (noise + secrets) applies when content is actually
+        copied via :meth:`pull` / :meth:`sync`.
+        """
         rel = _normalize_remote(remote_path)
         async with self._op_lock:
             out: list[str] = []
@@ -136,8 +224,7 @@ class UserHomeSFTP:
                 [
                     "lsf",
                     f"{self.REMOTE_NAME}:/{rel}",
-                    "--exclude",
-                    f"/{EDITS_DIR}/**",
+                    *_build_excludes(noise=False, secrets=False),
                 ],
                 operation=f"list {rel}",
                 capture=out,
@@ -147,7 +234,13 @@ class UserHomeSFTP:
             return [line for line in "".join(out).splitlines() if line]
 
     async def pull(self, remote_path: str) -> str:
-        """Copy a home file/dir into the local stage; return its local path."""
+        """Copy a home file/dir into the local stage; return its local path.
+
+        Noise (caches, deps, VCS metadata) and credential dirs (``.ssh``,
+        ``.gnupg``, ``.aws``, …) are skipped, so pulling a directory won't drag
+        in its dependency trees or secrets. Use :meth:`list_dir` to see the
+        full tree first.
+        """
         rel = _normalize_remote(remote_path)
         dest = self.local_root / rel
         async with self._op_lock:
@@ -157,8 +250,7 @@ class UserHomeSFTP:
                     "copyto",
                     f"{self.REMOTE_NAME}:/{rel}",
                     str(dest),
-                    "--exclude",
-                    f"/{EDITS_DIR}/**",
+                    *_build_excludes(noise=True, secrets=True),
                     "-v",
                 ],
                 operation=f"pull {rel}",
@@ -167,27 +259,41 @@ class UserHomeSFTP:
                 raise RuntimeError(f"Failed to pull {rel} from {self._user_id}'s home")
             return str(dest)
 
+    def _sync_args(self, rel: PurePosixPath, dest: Path) -> list[str]:
+        """Build the rclone ``copy`` args for a bulk sync (testable, pure)."""
+        return [
+            "copy",
+            f"{self.REMOTE_NAME}:/{rel}",
+            str(dest),
+            *_build_excludes(noise=True, secrets=True),
+            "--stats",
+            "15s",
+            "--stats-one-line",
+            "--stats-log-level",
+            "NOTICE",
+        ]
+
     async def sync(self, remote_path: str = "") -> list[str]:
         """Recursively mirror a home subtree into the local stage.
 
-        ``remote_path`` is home-relative (``""`` mirrors the whole home).
-        Copies every file under that subtree into ``local_root`` (excluding the
-        writeback edits dir) and returns the absolute local paths now staged.
+        Prefer :meth:`list_dir` + :meth:`pull` to fetch only what's needed; this
+        bulk mirror is for when the whole subtree is genuinely wanted. Caches,
+        dependency trees, VCS metadata and trashes are skipped, and credential
+        dirs (``.ssh``, ``.gnupg``, ``.aws``, …) are never copied off the
+        machine; progress is logged periodically as it runs.
+
+        ``remote_path`` is home-relative (``""`` mirrors the whole home, which
+        can be large and slow — scope to a subtree like ``"Documents"`` when
+        possible). Returns the absolute local paths now staged.
         """
         rel = _normalize_remote(remote_path)
         dest = self.local_root / rel
         async with self._op_lock:
             dest.mkdir(parents=True, exist_ok=True)
             ok = await self._run(
-                [
-                    "copy",
-                    f"{self.REMOTE_NAME}:/{rel}",
-                    str(dest),
-                    "--exclude",
-                    f"/{EDITS_DIR}/**",
-                    "-v",
-                ],
+                self._sync_args(rel, dest),
                 operation=f"sync {rel}",
+                stream=True,
             )
             if not ok:
                 raise RuntimeError(
@@ -238,8 +344,14 @@ class UserHomeSFTP:
         *,
         operation: str,
         capture: Optional[list[str]] = None,
+        stream: bool = False,
     ) -> bool:
-        """Run a single rclone command; append stdout to ``capture`` if given."""
+        """Run a single rclone command; append stdout to ``capture`` if given.
+
+        When ``stream`` is set, stderr is drained line-by-line and logged live
+        (so a long ``--stats`` mirror is observable as it runs) rather than
+        buffered until completion.
+        """
         cmd = ["rclone", "--config", self._config_path, *args]
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -247,14 +359,32 @@ class UserHomeSFTP:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await proc.communicate()
         except FileNotFoundError:
             LOGGER.error(f"{ICONS['file_sync']} [UserSFTP] rclone not installed")
             return False
+
+        if stream:
+            stderr_tail: list[str] = []
+            assert proc.stderr is not None
+            async for raw in proc.stderr:
+                line = raw.decode(errors="replace").rstrip()
+                if not line:
+                    continue
+                stderr_tail.append(line)
+                LOGGER.info(
+                    f"{ICONS['file_sync']} [UserSFTP] {operation}: {line}",
+                )
+            stdout = await proc.stdout.read() if proc.stdout else b""
+            await proc.wait()
+            stderr_summary = "\n".join(stderr_tail[-10:])
+        else:
+            stdout, stderr = await proc.communicate()
+            stderr_summary = stderr.decode() if stderr else ""
+
         if proc.returncode != 0:
             LOGGER.error(
                 f"{ICONS['file_sync']} [UserSFTP] {operation} failed: "
-                f"{(stderr.decode() if stderr else '')[:500]}",
+                f"{stderr_summary[:500]}",
             )
             return False
         if capture is not None and stdout:

@@ -28,6 +28,9 @@ from unity.comms import CommsPrimitives
 from unity.session_details import SESSION_DETAILS
 
 from unity.conversation_manager.domains import managers_utils
+from unity.conversation_manager.domains.onboarding_tool_gating import (
+    masked_reference_quiz_tools,
+)
 from unity.conversation_manager.event_broker import get_event_broker
 from unity.conversation_manager.events import (
     ActorHandleStarted,
@@ -309,6 +312,18 @@ class ConversationManagerBrainActionTools:
         to WhatsApp anyone else. If my boss asks me to draft or send a
         WhatsApp message on their behalf, route that work through ``act``
         instead.
+
+        Delivery is NOT confirmed in the turn I call this tool. If the
+        24-hour WhatsApp window is closed, my boss receives only a generic
+        template placeholder (not my verbatim text), and the real body is
+        queued to resend after they reply. I will not know which happened until
+        it surfaces as a ``[You WhatsApped <name>]`` row (delivered) or a
+        ``[You WhatsApped <name> (not delivered directly)]`` row (placeholder
+        only). So in the same turn I send, I say only that I am *sending* it —
+        never that it arrived, is waiting, or is in their inbox — and I confirm
+        receipt only once that proof row appears. If it is
+        ``(not delivered directly)``, I tell them a placeholder went out and
+        they must reply to it before I can deliver the real content.
 
         Parameters
         ----------
@@ -978,6 +993,42 @@ class ConversationManagerBrainActionTools:
         await self._event_broker.publish(event.topic, event.to_json())
         return {"status": "ok", "message": "Leaving Teams meeting"}
 
+    async def start_unify_meet(self, context: str = "") -> dict[str, Any]:
+        """Ring my boss on Unify Meet (the in-app live call) and ask them to answer.
+
+        Unify Meet is the in-app live call inside the Console - the canonical
+        place to talk face to face (no phone credits, nothing to hold). Use this
+        to move the conversation onto that call, e.g. to continue onboarding on
+        the live call after verifying another channel.
+
+        I cannot join my boss's browser for them: this rings them, and a pinned
+        incoming-call window with an Answer button appears in their Console. When
+        they answer, the call connects and I join automatically. If they do not
+        answer shortly, I will be told to continue with them over text instead.
+
+        Only one voice session can be active at a time, so if I am currently on a
+        phone or WhatsApp call I must ``hang_up`` first, then ring the Meet.
+
+        Args:
+            context: A short briefing for how I should open the call once it is
+                answered (why I'm calling / what we're continuing), spoken as a
+                purposeful greeting. Same guidance principles as make_call's
+                context parameter.
+        """
+        if (
+            self._cm.call_manager.has_active_call
+            or self._cm.call_manager.has_active_google_meet
+            or self._cm.call_manager.has_active_teams_meet
+        ):
+            return {
+                "status": "error",
+                "message": (
+                    "A call or meeting is already active. Hang up first, then "
+                    "ring the Unify Meet."
+                ),
+            }
+        return await self._cm.ring_unify_meet(context=context)
+
     async def hang_up(self) -> dict[str, Any]:
         """End the current call or meeting, whatever kind it is.
 
@@ -991,24 +1042,58 @@ class ConversationManagerBrainActionTools:
         to disconnect.
         """
         channel = self._cm.call_manager._call_channel
-
-        if self._cm.call_manager.has_active_google_meet:
-            return await self._leave_google_meet()
-        if self._cm.call_manager.has_active_teams_meet:
-            return await self._leave_teams_meet()
-
-        if not self._cm.in_voice_session or channel not in (
-            "phone_call",
-            "whatsapp_call",
-            "unify_meet",
+        has_meet = (
+            self._cm.call_manager.has_active_google_meet
+            or self._cm.call_manager.has_active_teams_meet
+        )
+        if not has_meet and (
+            not self._cm.in_voice_session
+            or channel
+            not in (
+                "phone_call",
+                "whatsapp_call",
+                "unify_meet",
+            )
         ):
             return {
                 "status": "error",
                 "message": "No active voice session to end.",
             }
 
+        # Defer the actual teardown until any explanatory line this turn has been
+        # spoken, so the session never ends mid-utterance. The orchestration lives
+        # in ``_run_llm`` (after the spoken guidance is published and delivered).
+        self._cm._pending_hang_up = True
+        self._cm._pending_hang_up_teardown = self._perform_hang_up_teardown
+        return {
+            "status": "ok",
+            "message": "Acknowledged — I'll end the call once I've finished speaking.",
+        }
+
+    async def _perform_hang_up_teardown(self) -> dict[str, Any]:
+        """Tear down the active voice session (run after the spoken line lands).
+
+        Internal helper invoked by ``_run_llm`` once any explanatory guidance for
+        the hang-up turn has been delivered; never called directly as a tool.
+        """
+        if self._cm.call_manager.has_active_google_meet:
+            return await self._leave_google_meet()
+        if self._cm.call_manager.has_active_teams_meet:
+            return await self._leave_teams_meet()
+
         await self._cm.call_manager.end_call()
-        return {"status": "ok", "message": "Ending the call."}
+        # Wait for the real resource — a freshly prewarmed idle worker process —
+        # so a follow-on dial only proceeds once a new call can be placed safely.
+        ready = await self._cm.call_manager.await_ready_for_new_call()
+        return {
+            "status": "ok",
+            "message": (
+                "Call ended; the line is clear and ready for a new call."
+                if ready
+                else "Call ended, but the voice line is still being prepared."
+            ),
+            "ready_for_new_call": ready,
+        }
 
     async def start_teams_meet_screenshare(self) -> dict[str, Any]:
         """Share the assistant's desktop screen in the active Teams meeting.
@@ -1880,47 +1965,125 @@ class ConversationManagerBrainActionTools:
         self,
         *,
         message: str,
-        should_speak: bool = False,
+        fast_brain_guidance: str = "",
     ) -> dict[str, Any]:
         """
-        Relay information or trigger speech on the Voice Agent during a live call.
+        Speak a line to the caller during a live call.
 
-        Call this tool **in parallel** with your action tool (``wait``, ``act``,
-        ``send_sms``, etc.). If you have nothing to relay or say, simply omit
-        this tool call entirely (BLOCK).
+        On each turn I SPEAK (call this tool with ``message``) or WAIT (omit it
+        and call ``wait``). The Voice Agent otherwise only fills the latency gap
+        with a brief filler; everything the caller actually hears is the
+        ``message`` I speak here. I call this **in parallel** with my action tool
+        (``wait``, ``act``, ``send_sms``, etc.).
 
-        **On internal calls** (calls with colleagues / system contacts), the
-        Voice Agent already receives system events (action progress, completions,
-        results) as silent context automatically. You do not need to repeat event
-        bodies in ``message`` — use this tool for the **speech decision** when
-        the caller should hear a concise spoken line now.
-
-        **On external calls** (calls with non-system contacts), the Voice Agent
-        has no visibility into system events. Use ``message`` to relay what it
-        should know and optionally speak.
-
-        **Modes:**
-
-        1. **SPEAK** — ``should_speak=True`` with ``message`` set to the exact
-           spoken line. The same text is injected as silent context and spoken
-           verbatim via TTS.
-
-        2. **NOTIFY** (default) — ``should_speak=False``. Inject ``message`` as
-           silent background context for the Voice Agent's next user-initiated turn.
-
-        3. **BLOCK** — Do not call this tool at all.
+        I may optionally attach ``fast_brain_guidance``: a short note the Voice
+        Agent may use to give a basic, direct reply to the caller's *very next*
+        message (e.g. confirm a fact I have just told it), without waiting for me.
+        It is never spoken on its own, the Voice Agent never volunteers it, and it
+        is ONLY honored when ``message`` is also set — I can never hand over
+        guidance without also speaking. It applies to the next moment only; my
+        next spoken turn replaces or clears it.
 
         Write ``message`` in the language currently spoken on the call.
 
         Args:
-            message: Text for the Voice Agent. Injected as silent context unless
-                the source is proactive speech. When ``should_speak`` is True,
-                this exact text is also spoken via TTS. Use **spoken prose** (no
-                numbered lists, bullets, or outline labels — TTS reads them
-                literally).
-            should_speak: When True, speak ``message`` aloud immediately via TTS.
+            message: The exact words to speak to the caller now, spoken verbatim
+                via TTS. Use **spoken prose** (no numbered lists, bullets, or
+                outline labels — TTS reads them literally).
+            fast_brain_guidance: Optional short note for the Voice Agent to give a
+                basic direct reply to the caller's next message. Never spoken;
+                only honored alongside ``message``. Include any "do not reveal
+                unless…" constraint explicitly if the note is sensitive.
         """
         return {"status": "guidance_noted"}
+
+    def _whatsapp_contact_label(self, contact_id: int) -> str:
+        """Human-friendly name for a contact in the window-status appendix."""
+        contact = None
+        try:
+            contact = self._cm.contact_index.get_contact(contact_id)
+        except Exception:
+            contact = None
+        first = (contact or {}).get("first_name") if contact else None
+        if first:
+            return first
+        if SESSION_DETAILS.is_coordinator and contact_id == self._boss_contact_id():
+            return "my boss"
+        return f"contact {contact_id}"
+
+    def _whatsapp_window_doc_suffix(self) -> str:
+        """Window-status appendix for the ``send_whatsapp`` tool docstring.
+
+        Lists, by name, every contact whose 24-hour WhatsApp free-form window is
+        currently known to be CLOSED (a send delivers only a placeholder) or OPEN
+        (delivered verbatim). Returns ``""`` when nothing is known so the
+        window-agnostic docstring guidance stands on its own.
+        """
+        cm = self._cm
+        relevant: set[int] = set()
+        if SESSION_DETAILS.is_coordinator:
+            relevant.add(self._boss_contact_id())
+        relevant.update(cm._pending_whatsapp_resends.keys())
+        relevant.update(cm._whatsapp_window_open.keys())
+
+        closed: list[str] = []
+        open_: list[str] = []
+        for cid in relevant:
+            state = cm.whatsapp_window_state(cid)
+            if state is None:
+                continue
+            (open_ if state else closed).append(self._whatsapp_contact_label(cid))
+
+        if not closed and not open_:
+            return ""
+
+        lines = [
+            "",
+            "Current WhatsApp free-form window (decides whether a send arrives "
+            "verbatim or only as a placeholder):",
+        ]
+        if closed:
+            lines.append(
+                "- CLOSED for: "
+                + ", ".join(sorted(closed))
+                + ". A send now delivers only a generic placeholder; my real "
+                "text is queued to resend after they reply. I tell them to reply "
+                "to the placeholder first and I do NOT claim the actual "
+                "message/clue arrived.",
+            )
+        if open_:
+            lines.append(
+                "- OPEN for: "
+                + ", ".join(sorted(open_))
+                + ". A send now is delivered verbatim.",
+            )
+        return "\n".join(lines)
+
+    def _with_whatsapp_window_doc(
+        self,
+        base: "Callable[..., Any]",
+    ) -> "Callable[..., Any]":
+        """Return ``base`` with the live window status appended to its docstring.
+
+        Rebuilt per turn (``as_tools`` runs each turn), so the status reflects
+        the latest known window state. Returns ``base`` unchanged when nothing is
+        known, to avoid an empty appendix.
+        """
+        suffix = self._whatsapp_window_doc_suffix()
+        if not suffix:
+            return base
+
+        @wraps(base)
+        async def _send_whatsapp_window_aware(**kwargs: Any) -> Any:
+            return await base(**kwargs)
+
+        # Pin the schema signature to the bound method's (which already excludes
+        # ``self``); without this, ``inspect.signature`` would unwrap past the
+        # bound method to the underlying primitive and re-expose ``self``.
+        _send_whatsapp_window_aware.__signature__ = inspect.signature(base)
+        base_doc = inspect.getdoc(base) or ""
+        _send_whatsapp_window_aware.__doc__ = f"{base_doc}\n{suffix}"
+        return _send_whatsapp_window_aware
 
     def as_tools(self) -> dict[str, "Callable[..., Any]"]:
         """Return the static tools dict for start_async_tool_loop."""
@@ -1941,9 +2104,21 @@ class ConversationManagerBrainActionTools:
             "wait": self.wait,
         }
         call_or_meet_in_progress = self._cm.in_voice_session
+        # Call-starting tools that dispatch the LiveKit voice worker are exposed
+        # only when a new call can actually be placed: no live session AND the
+        # worker has a freshly prewarmed idle process ready. This prevents the
+        # brain from dialing into a worker that has not re-warmed after a prior
+        # session (the Meet -> WhatsApp-call handoff race).
+        ready_to_start_call = (
+            not call_or_meet_in_progress and self._cm.call_manager.is_ready_for_new_call
+        )
         if not call_or_meet_in_progress:
             tools["join_google_meet"] = self.join_google_meet
             tools["join_teams_meet"] = self.join_teams_meet
+            # Ringing the in-app Meet only signals the Console (the owner answers
+            # in-browser), so unlike telephony call-start it needs no prewarmed
+            # worker; expose it whenever no other voice session is live.
+            tools["start_unify_meet"] = self.start_unify_meet
         else:
             # One voice session at a time; a single tool ends whichever is live
             # (phone, WhatsApp, Unify Meet, Google Meet, or Teams).
@@ -1972,15 +2147,16 @@ class ConversationManagerBrainActionTools:
             tools["send_sms"] = (
                 self.send_sms_to_boss if is_coordinator else self.send_sms
             )
-            if not call_or_meet_in_progress:
+            if ready_to_start_call:
                 tools["make_call"] = (
                     self.make_call_to_boss if is_coordinator else self.make_call
                 )
         if self._cm.assistant_whatsapp_number:
-            tools["send_whatsapp"] = (
+            base_send_whatsapp = (
                 self.send_whatsapp_to_boss if is_coordinator else self.send_whatsapp
             )
-            if not call_or_meet_in_progress:
+            tools["send_whatsapp"] = self._with_whatsapp_window_doc(base_send_whatsapp)
+            if ready_to_start_call:
                 tools["make_whatsapp_call"] = (
                     self.make_whatsapp_call_to_boss
                     if is_coordinator
@@ -2028,6 +2204,14 @@ class ConversationManagerBrainActionTools:
             tools["ask_about_contacts"] = self.ask_about_contacts
             tools["update_contacts"] = self.update_contacts
             tools["query_past_transcripts"] = self.query_past_transcripts
+        # During onboarding, withhold a reference-quiz channel's send tool until
+        # the user clicks its trigger row (this session) or the step durably
+        # completes — so T-W1N cannot send an untagged clue proactively.
+        for name in masked_reference_quiz_tools(
+            self._cm.coordinator_onboarding_render,
+            self._cm.onboarding_clicked_trigger_steps,
+        ):
+            tools.pop(name, None)
         return tools
 
     def build_action_steering_tools(self) -> dict[str, "Callable[..., Any]"]:

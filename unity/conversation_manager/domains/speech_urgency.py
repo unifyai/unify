@@ -101,6 +101,10 @@ class SpeechUrgencyEvaluator:
             client = new_llm_client(
                 self._model,
                 origin="FastBrain.speech_urgency",
+                # Fast-path helper on an OpenAI model: keep the prior "high"
+                # effort rather than inheriting the "max" system default (which
+                # only the deepseek thinking models accept).
+                reasoning_effort="high",
             )
             client.set_response_format(SpeechUrgency)
             if previous_utterance:

@@ -71,7 +71,7 @@ jobs:
       ORCHESTRA_GCP_ASSISTANT_CALL_RECORDINGS_BUCKET_NAME: ${{ vars.GCP_BUCKET_RECORDINGS }}
       TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
       UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
-      PYTHONPATH: ${{ github.workspace }}/unillm:${{ github.workspace }}/unify
+      PYTHONPATH: ${{ github.workspace }}/unillm:${{ github.workspace }}/unisdk
     steps:
     - uses: actions/checkout@v4
       with:
@@ -123,9 +123,9 @@ jobs:
     - name: Clone unify repo
       uses: actions/checkout@v4
       with:
-        repository: unifyai/unify
+        repository: unifyai/unisdk
         ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
-        path: unify
+        path: unisdk
         token: ${{ secrets.CLONE_TOKEN }}
         fetch-depth: 1
 
@@ -165,7 +165,7 @@ jobs:
 
     - name: Configure local package paths
       run: |
-        sed -i 's|path = "../unify"|path = "./unify"|g' pyproject.toml
+        sed -i 's|path = "../unisdk"|path = "./unisdk"|g' pyproject.toml
         sed -i 's|path = "../unillm"|path = "./unillm"|g' pyproject.toml
 
     - name: Sync dependencies with uv

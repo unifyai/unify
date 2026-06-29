@@ -6,10 +6,10 @@ one platform-wide copy of every manager's static primitive rows and the
 builtin guidance library imported from the Agent Skills ecosystem, plus the
 vector columns required for read-only ranked search.
 
-Run with the API key of the account that should OWN the catalogue (the
-platform admin account on hosted deployments; the shared key on self-host):
+Run with the Orchestra admin key as ``UNIFY_KEY``. Orchestra treats that key as
+the system Builtins writer for this reserved platform catalogue:
 
-    UNIFY_KEY=<admin-key> ORCHESTRA_URL=<api-url> \
+    UNIFY_KEY=<orchestra-admin-key> ORCHESTRA_URL=<api-url> \
         .venv/bin/python scripts/seed_builtins_catalog.py
 
 The run is idempotent and hash-guarded (per manager for primitives, per
@@ -20,7 +20,7 @@ from the same manifest used to configure Orchestra provider backends. Select
 exactly one executor; the script never falls back to another executor after
 failure:
 
-    UNIFY_KEY=<admin-key> ORCHESTRA_ADMIN_KEY=<admin-key> ORCHESTRA_URL=<api-url> \
+    UNIFY_KEY=<orchestra-admin-key> ORCHESTRA_ADMIN_KEY=<orchestra-admin-key> ORCHESTRA_URL=<api-url> \
         UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR=direct_worker \
         .venv/bin/python scripts/seed_builtins_catalog.py \
         --integration-bootstrap-manifest <path-to-integration-bootstrap.toml>

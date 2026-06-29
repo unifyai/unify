@@ -34,6 +34,10 @@ class _StubGuidanceManager:
     def filter(self, filter=None, offset=0, limit=100):
         return []
 
+    def get_guidance(self, *, guidance_id: int):
+        """Fetch one guidance entry by id."""
+        return {"details": {"guidance_id": guidance_id}}
+
     def add_guidance(self, *, title, content, function_ids=None):
         return {"details": {"guidance_id": 1}}
 

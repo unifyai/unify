@@ -2195,6 +2195,14 @@ async def init_conv_manager(
 
             os.environ["UNITY_CM_INITIALIZED"] = "1"
 
+            # Best-effort: learn whether the boss's WhatsApp free-form window is
+            # already open so the brain's send_whatsapp docstring can warn up
+            # front when a first send would only deliver a template placeholder.
+            # Fire-and-forget so it never blocks or fails startup.
+            boss_contact_id = SESSION_DETAILS.boss_contact_id
+            if boss_contact_id is not None:
+                asyncio.create_task(cm.seed_whatsapp_window(int(boss_contact_id)))
+
             # Start the in-process activation scheduler (local installs only).
             # In hosted mode this resolves to ``NoopMaterializer`` and is a
             # no-op; in local mode it starts the asyncio supervisor that

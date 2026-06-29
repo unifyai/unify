@@ -262,6 +262,37 @@ def test_annotation_schema_conversion(t, checker):
 
 
 # --------------------------------------------------------------------------- #
+#  annotation_to_schema – Annotated[..., "description"] support              #
+# --------------------------------------------------------------------------- #
+def test_annotated_string_metadata_becomes_property_description():
+    """A string in Annotated metadata surfaces as the property ``description``,
+    including when nested inside Optional/list, while plain annotations and
+    non-string metadata stay bare."""
+    from typing import Annotated, Optional
+
+    described = llmh.annotation_to_schema(Annotated[str, "why you are calling"])
+    assert described["type"] == "string"
+    assert described["description"] == "why you are calling"
+
+    # Description is preserved through Optional[...] unwrapping.
+    optional = llmh.annotation_to_schema(Optional[Annotated[str, "opt rationale"]])
+    assert optional["type"] == "string"
+    assert optional["description"] == "opt rationale"
+
+    # And attaches to the item schema inside a list.
+    listed = llmh.annotation_to_schema(list[Annotated[str, "item rationale"]])
+    assert listed["type"] == "array"
+    assert listed["items"]["description"] == "item rationale"
+
+    # Non-string metadata is ignored (no description leaks in).
+    non_str = llmh.annotation_to_schema(Annotated[str, 42])
+    assert non_str == {"type": "string"}
+
+    # Plain annotations remain unchanged.
+    assert llmh.annotation_to_schema(str) == {"type": "string"}
+
+
+# --------------------------------------------------------------------------- #
 #  method_to_schema – enum round-trip                                         #
 # --------------------------------------------------------------------------- #
 def _demo_func(a: str, col: ColumnType):
@@ -335,6 +366,36 @@ def test_method_to_schema_preserves_wrapped_execute_code_signature():
     assert "thought" in required
     assert "language" in required
     assert "Execute arbitrary code in a specified language and state mode." in desc
+
+
+@pytest.mark.asyncio
+async def test_real_execute_code_schema_keeps_thought_required_and_described():
+    """The production ``execute_code`` tool advertises ``thought`` as required
+    with a property-level description, and is marked soft-required so a model
+    omission is backfilled rather than crashing the loop.
+
+    Mirrors the loop's schema and dispatch paths, which both resolve the
+    registered ``ToolSpec`` to its underlying callable (``spec.fn``).
+    """
+    from unity.actor.code_act_actor import CodeActActor
+    from unity.common.tool_spec import LLM_SOFT_REQUIRED_DEFAULTS_ATTR
+
+    actor = CodeActActor()
+    try:
+        spec = actor.get_tools("act")["execute_code"]
+        fn = spec.fn if isinstance(spec, ToolSpec) else spec
+        schema = llmh.method_to_schema(fn, "execute_code")
+        params = schema["function"]["parameters"]
+
+        assert "thought" in params["required"]
+        assert params["properties"]["thought"]["type"] == "string"
+        assert params["properties"]["thought"]["description"].strip()
+
+        # The runtime safety net: declared soft-required with an empty default.
+        soft_required = getattr(fn, LLM_SOFT_REQUIRED_DEFAULTS_ATTR, None)
+        assert soft_required == {"thought": ""}
+    finally:
+        await actor.close()
 
 
 # --------------------------------------------------------------------------- #

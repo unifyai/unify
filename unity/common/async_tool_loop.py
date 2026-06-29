@@ -558,13 +558,31 @@ class AsyncToolLoopHandle(SteerableToolHandle):
         finally:
             _PENDING_LOOP_SUFFIX.reset(_suffix_token)
 
+        # A read-only inspection (``ask``) must never surface as the inspected
+        # work failing. The inspection sub-loop runs with a tiny failure budget
+        # (``max_consecutive_failures=1``), so a single flaky introspection tool
+        # — e.g. ``ask_computer_progress`` hitting an unreachable backend — would
+        # otherwise raise ``RuntimeError`` out of ``result()`` and be mistaken
+        # for the parent task crashing. Degrade to a diagnostic answer instead.
+        def _inspection_failed_answer(exc: Exception) -> str:
+            return (
+                "I couldn't determine the progress right now — the read-only "
+                f"inspection step itself failed ({type(exc).__name__}: {exc}). "
+                "This does NOT mean the underlying task failed; it may still be "
+                "running. Do not treat this as a task failure or stop the task on "
+                "account of it — just try checking again shortly."
+            )
+
         # Monkey-patch result() to record the assistant answer when available
         # AND publish the outgoing ManagerMethod boundary event.
         if not _return_reasoning_steps:
             _orig_result = helper_handle.result
 
             async def _rec_result():  # type: ignore[return-type]
-                ans = await _orig_result()
+                try:
+                    ans = await _orig_result()
+                except Exception as exc:
+                    ans = _inspection_failed_answer(exc)
                 self._append_user_visible_assistant(ans)
                 await _pub_mm(
                     _ask_call_id,
@@ -595,8 +613,13 @@ class AsyncToolLoopHandle(SteerableToolHandle):
                 pass
             return helper_handle
 
+        _orig_result_rs = helper_handle.result
+
         async def _wrap():
-            answer = await helper_handle.result()
+            try:
+                answer = await _orig_result_rs()
+            except Exception as exc:
+                answer = _inspection_failed_answer(exc)
             self._append_user_visible_assistant(answer)
             await _pub_mm(
                 _ask_call_id,
