@@ -189,6 +189,29 @@ class _StubFunctionManager:
     def _get_primitive_data_by_name(self, *, name: str):
         return None
 
+    def add_functions(
+        self,
+        *,
+        implementations,
+        language: str = "python",
+        preconditions=None,
+        verify=None,
+        overwrite: bool = False,
+        raise_on_error: bool = True,
+        venv_id=None,
+    ):
+        """Add or update functions in batch."""
+        return {}
+
+    def delete_function(
+        self,
+        *,
+        function_id,
+        delete_dependents: bool = True,
+    ):
+        """Delete a function by id."""
+        return {}
+
     # The constructor probes these; stubs avoid AttributeError.
     search_functions = None
     filter_functions = None
