@@ -8,7 +8,7 @@ from typing import Dict, Any, List, Tuple
 
 import pytest
 import pytest_asyncio
-import unify
+import unisdk
 
 from unity.task_scheduler.task_scheduler import TaskScheduler
 from unity.manager_registry import ManagerRegistry
@@ -69,9 +69,9 @@ def _rebuild_commit_hashes(
     commit_hashes: Dict[str, Any],
 ) -> None:
     """Rebuild commit hashes from existing context commits."""
-    existing_contexts = unify.get_contexts(prefix=ctx_prefix)
+    existing_contexts = unisdk.get_contexts(prefix=ctx_prefix)
     for ctx_name in existing_contexts.keys():
-        history = unify.get_context_commits(ctx_name)
+        history = unisdk.get_context_commits(ctx_name)
         if history:
             commit_hashes[ctx_name] = history[0]["commit_hash"]
 
@@ -81,9 +81,9 @@ def _commit_contexts_for_rollback(
     commit_hashes: Dict[str, Any],
 ) -> None:
     """Commit all contexts under prefix and store hashes for rollback."""
-    existing_contexts = unify.get_contexts(prefix=ctx_prefix)
+    existing_contexts = unisdk.get_contexts(prefix=ctx_prefix)
     for ctx_name in existing_contexts.keys():
-        commit_info = unify.commit_context(
+        commit_info = unisdk.commit_context(
             name=ctx_name,
             commit_message="Initial seed data for task scheduler tests",
         )
@@ -110,13 +110,13 @@ def _setup_scenario(
 
     # If --overwrite-scenarios is set, delete existing contexts first
     if overwrite_scenarios:
-        existing_contexts = unify.get_contexts(prefix=ctx)
+        existing_contexts = unisdk.get_contexts(prefix=ctx)
         for ctx_name in existing_contexts.keys():
-            unify.delete_context(ctx_name)
+            unisdk.delete_context(ctx_name)
 
     # Set context before any operations
-    unify.create_context(ctx)  # exist_ok=True by default
-    unify.set_context(ctx, relative=False)
+    unisdk.create_context(ctx)  # exist_ok=True by default
+    unisdk.set_context(ctx, relative=False)
 
     # Create scheduler
     ts = TaskScheduler()
@@ -135,7 +135,7 @@ def _setup_scenario(
             task_ids = _seed_tasks(ts)
             _commit_contexts_for_rollback(ctx, commit_hashes)
 
-    unify.unset_context()
+    unisdk.unset_context()
     return ts, task_ids
 
 
@@ -175,7 +175,7 @@ def task_scheduler_read_scenario(task_read_scenario):
     ts, task_ids = task_read_scenario
 
     def rollback_context(ctx):
-        unify.rollback_context(
+        unisdk.rollback_context(
             name=ctx,
             commit_hash=_READ_SCENARIO_COMMIT_HASHES[ctx],
         )
@@ -184,7 +184,7 @@ def task_scheduler_read_scenario(task_read_scenario):
     restore_scenario_context("tests/task_scheduler/ReadScenario")
     ctx_names = list(_READ_SCENARIO_COMMIT_HASHES.keys())
     if ctx_names:
-        unify.map(rollback_context, ctx_names, mode="asyncio")
+        unisdk.map(rollback_context, ctx_names, mode="asyncio")
 
     restore_scenario_context("tests/task_scheduler/ReadScenario")
     yield ts, task_ids
@@ -230,7 +230,7 @@ def task_scheduler_mutation_scenario(task_mutation_scenario):
     ts, task_ids = task_mutation_scenario
 
     def rollback_context(ctx):
-        unify.rollback_context(
+        unisdk.rollback_context(
             name=ctx,
             commit_hash=_MUTATION_SCENARIO_COMMIT_HASHES[ctx],
         )
@@ -241,7 +241,7 @@ def task_scheduler_mutation_scenario(task_mutation_scenario):
         # from rolling back while this test is running
         ctx_names = list(_MUTATION_SCENARIO_COMMIT_HASHES.keys())
         if ctx_names:
-            unify.map(rollback_context, ctx_names, mode="asyncio")
+            unisdk.map(rollback_context, ctx_names, mode="asyncio")
 
         restore_scenario_context("tests/task_scheduler/MutationScenario")
         yield ts, task_ids

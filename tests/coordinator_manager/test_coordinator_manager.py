@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 import requests
-from unify.utils.http import RequestError
+from unisdk.utils.http import RequestError
 
 from unity.coordinator_manager.coordinator_manager import CoordinatorManager
 from unity.manager_registry import ManagerRegistry
@@ -29,7 +29,7 @@ class TestCoordinatorManager:
         manager = CoordinatorManager()
 
         with patch(
-            "unity.coordinator_manager.coordinator_manager.unify.list_org_members",
+            "unity.coordinator_manager.coordinator_manager.unisdk.list_org_members",
         ) as list_members:
             assert manager.get_org_members() == []
 
@@ -42,7 +42,7 @@ class TestCoordinatorManager:
         manager = CoordinatorManager()
 
         with patch(
-            "unity.coordinator_manager.coordinator_manager.unify.list_org_members",
+            "unity.coordinator_manager.coordinator_manager.unisdk.list_org_members",
             return_value=[{"email": "dana@acme.com"}],
         ) as list_members:
             assert manager.get_org_members() == [{"email": "dana@acme.com"}]
@@ -63,7 +63,7 @@ class TestCoordinatorManager:
         response.status_code = 500
         response._content = b"temporary"
         with patch(
-            "unity.coordinator_manager.coordinator_manager.unify.list_org_members",
+            "unity.coordinator_manager.coordinator_manager.unisdk.list_org_members",
             side_effect=[
                 RequestError("https://api.unify.ai", "GET", response),
                 [{"email": "dana@acme.com"}],
@@ -81,7 +81,7 @@ class TestCoordinatorManager:
         manager = CoordinatorManager()
 
         with patch(
-            "unity.coordinator_manager.coordinator_manager.unify.list_org_members",
+            "unity.coordinator_manager.coordinator_manager.unisdk.list_org_members",
             side_effect=[
                 [{"email": "owner@acme.com"}],
                 [{"email": "admin@beta.com"}],

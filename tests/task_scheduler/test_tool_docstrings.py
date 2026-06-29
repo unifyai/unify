@@ -60,14 +60,14 @@ def _build_tools_schema_in_subprocess(method: str, test_context: str) -> str:
         f"""
 		import os, sys, json
 		sys.path.insert(0, os.getcwd())
-		import unify
+		import unisdk
 		# Activate the test project before setting context
 		project_name = os.environ.get("UNITY_TEST_PROJECT_NAME", "UnityTests")
-		unify.activate(project_name, overwrite=False)
+		unisdk.activate(project_name, overwrite=False)
 		# Set test-specific context before creating TaskScheduler to avoid races
 		test_ctx = os.environ.get("_TEST_CONTEXT")
 		if test_ctx:
-			unify.set_context(test_ctx, relative=False)
+			unisdk.set_context(test_ctx, relative=False)
 		from unity.common.llm_helpers import method_to_schema
 		def _unwrap_callable(tool):
 			return getattr(tool, "fn", tool)

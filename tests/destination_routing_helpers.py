@@ -9,9 +9,9 @@ from collections.abc import Iterable
 from typing import Any
 
 import pytest
-import unify
+import unisdk
 from pydantic import BaseModel, Field
-from unify.utils.http import RequestError
+from unisdk.utils.http import RequestError
 
 from tests.async_tool_loop.conftest import LLM_CONFIGS
 from unity.blacklist_manager.base import BaseBlackListManager
@@ -64,7 +64,7 @@ def manager_routing_context(request):
     team_id = 20_000_000 + uuid.uuid4().int % 1_000_000_000
     ContextRegistry.clear()
     SESSION_DETAILS.reset()
-    unify.set_context(context, relative=False)
+    unisdk.set_context(context, relative=False)
     SESSION_DETAILS.team_ids = [team_id]
     SESSION_DETAILS.team_summaries = [
         {
@@ -76,7 +76,7 @@ def manager_routing_context(request):
     yield context, team_id
     for root in (context, f"Teams/{team_id}"):
         delete_context_tree(root)
-    unify.unset_context()
+    unisdk.unset_context()
     SESSION_DETAILS.reset()
     ContextRegistry.clear()
 
@@ -120,7 +120,7 @@ class RoutingScenario:
     def setup(self) -> None:
         ContextRegistry.clear()
         SESSION_DETAILS.reset()
-        unify.set_context(self.context, relative=False)
+        unisdk.set_context(self.context, relative=False)
         SESSION_DETAILS.team_ids = [self.patch_team_id, self.research_team_id]
         SESSION_DETAILS.team_summaries = self.team_summaries
 
@@ -131,7 +131,7 @@ class RoutingScenario:
             f"Teams/{self.research_team_id}",
         ):
             delete_context_tree(root)
-        unify.unset_context()
+        unisdk.unset_context()
         SESSION_DETAILS.reset()
         ContextRegistry.clear()
 
@@ -200,16 +200,16 @@ def delete_context_tree(root: str) -> None:
     """Delete a context and all currently listed descendants."""
 
     try:
-        children = list(unify.get_contexts(prefix=f"{root}/").keys())
+        children = list(unisdk.get_contexts(prefix=f"{root}/").keys())
     except Exception:
         children = []
     for context in sorted(children, key=len, reverse=True):
         try:
-            unify.delete_context(context)
+            unisdk.delete_context(context)
         except Exception:
             pass
     try:
-        unify.delete_context(root)
+        unisdk.delete_context(root)
     except Exception:
         pass
 
@@ -218,7 +218,7 @@ def rows_containing(context: str, sentinel: str) -> list[dict[str, Any]]:
     """Return rows containing a sentinel, treating missing contexts as empty."""
 
     try:
-        logs = unify.get_logs(context=context, limit=100)
+        logs = unisdk.get_logs(context=context, limit=100)
     except RequestError as exc:
         if "context" in str(exc).lower() and "not found" in str(exc).lower():
             return []

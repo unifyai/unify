@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import unify
+import unisdk
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING
 
@@ -132,7 +132,7 @@ def tables_overview(
     tables: Dict[str, Dict[str, Any]] = {}
     for table_name, full_path in table_contexts.items():
         try:
-            meta = unify.get_context(full_path)
+            meta = unisdk.get_context(full_path)
         except Exception:
             meta = {}
         desc = meta.get("description") if isinstance(meta, dict) else None
@@ -146,7 +146,7 @@ def tables_overview(
         and getattr(knowledge_manager, "_contacts_ctx", None) is not None
     ):
         try:
-            contacts_info = unify.get_context(knowledge_manager._contacts_ctx)
+            contacts_info = unisdk.get_context(knowledge_manager._contacts_ctx)
             if isinstance(contacts_info, dict):
                 desc = contacts_info.get("description")
                 if desc == "":

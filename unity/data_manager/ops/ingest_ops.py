@@ -30,7 +30,7 @@ import time
 import uuid
 from typing import Any, Callable, Dict, List, Literal, Optional, TYPE_CHECKING
 
-import unify as _unify
+import unisdk as _unify
 
 from unity.common.embed_utils import (
     ensure_derived_column as _ensure_derived_column,

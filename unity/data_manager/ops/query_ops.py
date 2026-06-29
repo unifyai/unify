@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Union
 
-import unify
+import unisdk
 
 from unity.common.filter_utils import normalize_filter_expr
 from unity.common.search_utils import table_search_top_k
@@ -96,7 +96,7 @@ def filter_impl(
     if order_by:
         sorting = {order_by: "descending" if descending else "ascending"}
 
-    logs = unify.get_logs(
+    logs = unisdk.get_logs(
         context=context,
         filter=filter_expr,
         from_fields=from_fields,

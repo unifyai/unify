@@ -18,9 +18,9 @@ from contextlib import contextmanager
 from typing import Dict, Iterator
 from urllib.parse import quote
 
-import unify
-from unify.utils import http
-from unify.utils.helpers import _create_request_header, _validate_api_key
+import unisdk
+from unisdk.utils import http
+from unisdk.utils.helpers import _create_request_header, _validate_api_key
 
 
 def builtins_project() -> str:
@@ -32,11 +32,11 @@ def builtins_project() -> str:
 
 def ensure_builtins_project(project: str) -> None:
     """Create and converge the public-read Builtins project."""
-    unify.create_project(project, exist_ok=True, is_public_read=True)
+    unisdk.create_project(project, exist_ok=True, is_public_read=True)
     api_key = _validate_api_key(None)
     headers = _create_request_header(api_key)
     http.patch(
-        f"{unify.BASE_URL}/project/{quote(project, safe='')}",
+        f"{unisdk.BASE_URL}/project/{quote(project, safe='')}",
         headers=headers,
         json={"is_public_read": True},
     )
@@ -73,7 +73,7 @@ def builtins_seed_key_override() -> Iterator[None]:
 
 def read_seed_hashes(project: str, *, meta_context: str, key: str) -> Dict[str, str]:
     """Read a catalogue's per-unit content-hash map from its meta row."""
-    logs = unify.get_logs(
+    logs = unisdk.get_logs(
         project=project,
         context=meta_context,
         filter="meta_id == 1",
@@ -92,19 +92,19 @@ def write_seed_hashes(
     key: str,
 ) -> None:
     """Replace a catalogue's per-unit content-hash map in its meta row."""
-    logs = unify.get_logs(
+    logs = unisdk.get_logs(
         project=project,
         context=meta_context,
         filter="meta_id == 1",
         limit=1,
     )
     if logs:
-        unify.delete_logs(
+        unisdk.delete_logs(
             project=project,
             context=meta_context,
             logs=[logs[0].id],
         )
-    unify.create_logs(
+    unisdk.create_logs(
         project=project,
         context=meta_context,
         entries=[{"meta_id": 1, key: hashes}],

@@ -13,7 +13,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Dict, List, Optional, Union
 
-import unify
+import unisdk
 
 from .filter_utils import normalize_filter_expr
 from .search_utils import table_search_top_k
@@ -70,7 +70,7 @@ def create_join(
     """
     Create a joined context from two source contexts.
 
-    This is the core join operation that calls `unify.join_logs()` with the
+    This is the core join operation that calls `unisdk.join_logs()` with the
     pair_of_args pattern.
 
     Parameters
@@ -99,7 +99,7 @@ def create_join(
     str
         The destination context path.
     """
-    unify.join_logs(
+    unisdk.join_logs(
         pair_of_args=(
             {
                 "context": left_context,
@@ -321,7 +321,7 @@ def filter_join(
         excl = list_private_fields(dest_context)
         rows = [
             lg.entries
-            for lg in unify.get_logs(
+            for lg in unisdk.get_logs(
                 context=dest_context,
                 filter=result_where,
                 offset=result_offset,
@@ -333,7 +333,7 @@ def filter_join(
     finally:
         if cleanup:
             try:
-                unify.delete_context(dest_context)
+                unisdk.delete_context(dest_context)
             except Exception:
                 pass
 
@@ -421,7 +421,7 @@ def search_join(
     finally:
         if cleanup:
             try:
-                unify.delete_context(dest_context)
+                unisdk.delete_context(dest_context)
             except Exception:
                 pass
 
@@ -578,7 +578,7 @@ def filter_multi_join(
         excl = list_private_fields(previous_table)
         rows = [
             lg.entries
-            for lg in unify.get_logs(
+            for lg in unisdk.get_logs(
                 context=previous_table,
                 filter=result_where,
                 offset=result_offset,
@@ -591,7 +591,7 @@ def filter_multi_join(
         if cleanup:
             for ctx in tmp_tables:
                 try:
-                    unify.delete_context(ctx)
+                    unisdk.delete_context(ctx)
                 except Exception:
                     pass
 
@@ -750,6 +750,6 @@ def search_multi_join(
         if cleanup:
             for ctx in tmp_tables:
                 try:
-                    unify.delete_context(ctx)
+                    unisdk.delete_context(ctx)
                 except Exception:
                     pass

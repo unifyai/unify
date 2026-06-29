@@ -4,7 +4,7 @@ import time
 from datetime import UTC, datetime
 
 import pytest
-import unify
+import unisdk
 
 from tests.helpers import _handle_project
 from unity.common.colleague_cache import ColleagueNameCache
@@ -29,16 +29,16 @@ def _message_payload(content: str, *, exchange_id: int) -> dict:
 
 def _delete_context_tree(root: str) -> None:
     try:
-        children = list(unify.get_contexts(prefix=f"{root}/").keys())
+        children = list(unisdk.get_contexts(prefix=f"{root}/").keys())
     except Exception:
         children = []
     for context in sorted(children, key=len, reverse=True):
         try:
-            unify.delete_context(context)
+            unisdk.delete_context(context)
         except Exception:
             pass
     try:
-        unify.delete_context(root)
+        unisdk.delete_context(root)
     except Exception:
         pass
 
@@ -96,7 +96,7 @@ def test_shared_authoring_attribution_enriches_messages_and_reuses_cache(monkeyp
             ]
 
         monkeypatch.setattr(
-            "unity.common.colleague_cache.unify.list_assistants",
+            "unity.common.colleague_cache.unisdk.list_assistants",
             fake_list_assistants,
         )
 
@@ -150,7 +150,7 @@ def test_colleague_name_cache_invalidates_when_org_scope_changes(monkeypatch):
         return [{"agent_id": 999, "first_name": "Rafi", "surname": "Ops"}]
 
     monkeypatch.setattr(
-        "unity.common.colleague_cache.unify.list_assistants",
+        "unity.common.colleague_cache.unisdk.list_assistants",
         fake_list_assistants,
     )
 
@@ -173,7 +173,7 @@ def test_colleague_name_cache_caches_error_fallback(monkeypatch):
         raise RuntimeError("temporary transport error")
 
     monkeypatch.setattr(
-        "unity.common.colleague_cache.unify.list_assistants",
+        "unity.common.colleague_cache.unisdk.list_assistants",
         failing_list_assistants,
     )
 
@@ -202,7 +202,7 @@ def test_shared_authoring_attribution_uses_former_colleague_fallback(monkeypatch
         SESSION_DETAILS.assistant.agent_id = 321
 
         monkeypatch.setattr(
-            "unity.common.colleague_cache.unify.list_assistants",
+            "unity.common.colleague_cache.unisdk.list_assistants",
             lambda **_: [],
         )
 

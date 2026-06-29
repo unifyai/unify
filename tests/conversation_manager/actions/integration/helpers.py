@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, TypeVar
 
-import unify
+import unisdk
 
 from tests.conversation_manager.cm_helpers import filter_events_by_type
 from unity.conversation_manager.events import (
@@ -672,7 +672,7 @@ def verify_transcript_logged(
         "receiver_ids",
         "exchange_id",
     ]
-    logs = unify.get_logs(
+    logs = unisdk.get_logs(
         context=ctx,
         limit=limit,
         sorting={"timestamp": "descending"},

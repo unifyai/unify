@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import unify
+import unisdk
 from tests.helpers import _handle_project
 from unity.common.backfill import (
     backfill_assistant_field,
@@ -21,16 +21,16 @@ def test_backfill_assistant_field():
     ctx = "TestAssistant/TestBackfill"
 
     # Create context with required fields
-    unify.delete_context(ctx)
-    unify.create_context(ctx)
-    unify.create_fields({"name": "str", "_assistant": "str"}, context=ctx)
+    unisdk.delete_context(ctx)
+    unisdk.create_context(ctx)
+    unisdk.create_fields({"name": "str", "_assistant": "str"}, context=ctx)
 
     # Create logs without _assistant
     for i in range(5):
-        unify.log(context=ctx, name=f"item_{i}", new=True)
+        unisdk.log(context=ctx, name=f"item_{i}", new=True)
 
     # Verify they don't have _assistant (client-side check)
-    logs = unify.get_logs(context=ctx)
+    logs = unisdk.get_logs(context=ctx)
     assert (
         _count_logs_missing_assistant(logs) == 5
     ), f"Expected 5 logs without _assistant, got {_count_logs_missing_assistant(logs)}"
@@ -41,13 +41,13 @@ def test_backfill_assistant_field():
     assert result["context"] == ctx
 
     # Verify all now have _assistant (client-side check)
-    logs_after = unify.get_logs(context=ctx)
+    logs_after = unisdk.get_logs(context=ctx)
     assert (
         _count_logs_missing_assistant(logs_after) == 0
     ), "All logs should now have _assistant"
 
     # Verify correct value was set
-    logs_with = unify.get_logs(context=ctx, filter="_assistant == 'TestAssistant'")
+    logs_with = unisdk.get_logs(context=ctx, filter="_assistant == 'TestAssistant'")
     assert len(logs_with) == 5, f"Expected 5 logs with _assistant, got {len(logs_with)}"
 
 
@@ -57,9 +57,9 @@ def test_backfill_assistant_field_empty_context():
     ctx = "TestAssistant/TestBackfillEmpty"
 
     # Create empty context
-    unify.delete_context(ctx)
-    unify.create_context(ctx)
-    unify.create_fields({"name": "str", "_assistant": "str"}, context=ctx)
+    unisdk.delete_context(ctx)
+    unisdk.create_context(ctx)
+    unisdk.create_fields({"name": "str", "_assistant": "str"}, context=ctx)
 
     # Run backfill on empty context
     result = backfill_assistant_field(ctx, "TestAssistant")
@@ -72,18 +72,18 @@ def test_backfill_assistant_field_with_filter():
     """Backfill should respect additional filter."""
     ctx = "TestAssistant/TestBackfillFilter"
 
-    unify.delete_context(ctx)
-    unify.create_context(ctx)
-    unify.create_fields(
+    unisdk.delete_context(ctx)
+    unisdk.create_context(ctx)
+    unisdk.create_fields(
         {"name": "str", "category": "str", "_assistant": "str"},
         context=ctx,
     )
 
     # Create logs with different categories
     for i in range(3):
-        unify.log(context=ctx, name=f"item_a_{i}", category="A", new=True)
+        unisdk.log(context=ctx, name=f"item_a_{i}", category="A", new=True)
     for i in range(2):
-        unify.log(context=ctx, name=f"item_b_{i}", category="B", new=True)
+        unisdk.log(context=ctx, name=f"item_b_{i}", category="B", new=True)
 
     # Backfill only category A
     result = backfill_assistant_field(
@@ -94,14 +94,14 @@ def test_backfill_assistant_field_with_filter():
     assert result["total_updated"] == 3
 
     # Verify category A has _assistant
-    logs_a = unify.get_logs(
+    logs_a = unisdk.get_logs(
         context=ctx,
         filter="category == 'A' and _assistant == 'TestAssistant'",
     )
     assert len(logs_a) == 3
 
     # Verify category B does not have _assistant (client-side check)
-    logs_b = unify.get_logs(context=ctx, filter="category == 'B'")
+    logs_b = unisdk.get_logs(context=ctx, filter="category == 'B'")
     assert (
         _count_logs_missing_assistant(logs_b) == 2
     ), "Category B logs should not have _assistant"
@@ -117,15 +117,15 @@ def test_backfill_all_contexts_for_assistant():
     ctx2 = f"{assistant}/ContextTwo"
 
     for ctx in [ctx1, ctx2]:
-        unify.delete_context(ctx)
-        unify.create_context(ctx)
-        unify.create_fields({"name": "str", "_assistant": "str"}, context=ctx)
+        unisdk.delete_context(ctx)
+        unisdk.create_context(ctx)
+        unisdk.create_fields({"name": "str", "_assistant": "str"}, context=ctx)
 
     # Create logs in each context
     for i in range(3):
-        unify.log(context=ctx1, name=f"ctx1_item_{i}", new=True)
+        unisdk.log(context=ctx1, name=f"ctx1_item_{i}", new=True)
     for i in range(2):
-        unify.log(context=ctx2, name=f"ctx2_item_{i}", new=True)
+        unisdk.log(context=ctx2, name=f"ctx2_item_{i}", new=True)
 
     # Backfill all contexts
     results = backfill_all_contexts_for_assistant(assistant)
@@ -141,12 +141,12 @@ def test_backfill_idempotent():
     """Running backfill twice should not update already-backfilled logs."""
     ctx = "TestAssistant/TestBackfillIdempotent"
 
-    unify.delete_context(ctx)
-    unify.create_context(ctx)
-    unify.create_fields({"name": "str", "_assistant": "str"}, context=ctx)
+    unisdk.delete_context(ctx)
+    unisdk.create_context(ctx)
+    unisdk.create_fields({"name": "str", "_assistant": "str"}, context=ctx)
 
     for i in range(3):
-        unify.log(context=ctx, name=f"item_{i}", new=True)
+        unisdk.log(context=ctx, name=f"item_{i}", new=True)
 
     # First backfill
     result1 = backfill_assistant_field(ctx, "TestAssistant")

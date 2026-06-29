@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import pytest
 import time
-import unify
+import unisdk
 from typing import Dict, Any
-from unify.utils.http import RequestError
+from unisdk.utils.http import RequestError
 
 from unity.contact_manager.contact_manager import ContactManager
 from unity.contact_manager.types.contact import Contact
@@ -54,7 +54,7 @@ def _programmatic_contact_check(
 
 def _contacts_with_email(context: str, email: str) -> list:
     try:
-        return unify.get_logs(
+        return unisdk.get_logs(
             context=context,
             filter=f"email_address == '{email}'",
             limit=10,
@@ -81,7 +81,7 @@ def _configure_contact_routing_space(team_id: int) -> None:
 
 def _reset_contact_routing_space(team_id: int) -> None:
     try:
-        unify.delete_context(f"Teams/{team_id}/Contacts")
+        unisdk.delete_context(f"Teams/{team_id}/Contacts")
     except Exception:
         pass
     SESSION_DETAILS.team_ids = []

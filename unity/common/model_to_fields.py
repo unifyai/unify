@@ -74,7 +74,7 @@ def _schema_to_column_type(prop: dict[str, Any]) -> str:
 def model_to_fields(model: type[BaseModel]) -> dict[str, dict[str, Any]]:
     """
     Translate a Pydantic model class into the structure expected by
-    `unify.create_fields`.
+    `unisdk.create_fields`.
 
     Uses Pydantic's JSON Schema with $ref dereferencing via jsonref.
     Nested object schemas are serialized as JSON strings for Orchestra.
@@ -87,7 +87,7 @@ def model_to_fields(model: type[BaseModel]) -> dict[str, dict[str, Any]]:
     Examples
     --------
     >>> fields_dict = model_to_fields(Contact)
-    >>> unify.create_fields(fields_dict, context=ctx)
+    >>> unisdk.create_fields(fields_dict, context=ctx)
     """
     # Get Pydantic's JSON Schema and dereference all $refs
     schema = model.model_json_schema()

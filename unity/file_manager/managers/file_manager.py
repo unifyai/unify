@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, List, Optional, Union, TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
 
-import unify
+import unisdk
 
 from unity.common.tool_spec import manager_tool, read_only, ToolSpec
 from unity.file_manager.base import BaseFileManager
@@ -2227,7 +2227,7 @@ class FileManager(BaseFileManager):
             from unity.common.context_store import TableStore as _TS  # local import
 
             try:
-                _TS._ENSURED.discard((unify.active_project(), self._ctx))
+                _TS._ENSURED.discard((unisdk.active_project(), self._ctx))
             except Exception:
                 pass
         except Exception:

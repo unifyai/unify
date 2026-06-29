@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import pytest
-import unify
+import unisdk
 
 from tests.helpers import _handle_project
 from unity.common.pipeline.instrumentation import PipelineInstrumentation
@@ -162,7 +162,7 @@ def test_embed_off_no_columns(file_manager, tmp_path: Path):
     )
     assert file_id is not None, f"File record not found for {file_path}"
     ctx = fm._ctx_for_file_content(str(file_id))
-    fields = unify.get_fields(context=ctx)
+    fields = unisdk.get_fields(context=ctx)
     assert "_summary_emb" not in fields
 
 
@@ -259,7 +259,7 @@ def test_embed_after_creates_columns(file_manager, tmp_path: Path):
     )
     assert file_id is not None, f"File record not found for {file_path}"
     ctx = fm._ctx_for_file_content(str(file_id))
-    fields = unify.get_fields(context=ctx)
+    fields = unisdk.get_fields(context=ctx)
     assert "_summary_emb" in fields
 
 
@@ -366,7 +366,7 @@ def test_embed_along_content(file_manager, tmp_path: Path):
     )
     assert file_id is not None, f"File record not found for {file_path}"
     ctx = fm._ctx_for_file_content(str(file_id))
-    fields = unify.get_fields(context=ctx)
+    fields = unisdk.get_fields(context=ctx)
     assert "_summary_emb" in fields
 
 

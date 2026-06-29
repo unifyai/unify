@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Union, Optional
 
-import unify
+import unisdk
 
 from .filter_utils import normalize_filter_expr
 
@@ -51,7 +51,7 @@ def reduce_logs(
     """
     Compute one or more reduction metrics over a Unify context.
 
-    This is a thin convenience wrapper around :func:`unify.get_logs_metric`
+    This is a thin convenience wrapper around :func:`unisdk.get_logs_metric`
     that enforces a common contract for manager-level ``reduce`` tools.
 
     Parameters
@@ -69,7 +69,7 @@ def reduce_logs(
         returns a ``{key -> value}`` mapping.
     filter : str | dict[str, str] | None, default None
         Optional filter expression(s) to restrict which rows contribute to the
-        metric. Mirrors the behaviour of :func:`unify.get_logs_metric`:
+        metric. Mirrors the behaviour of :func:`unisdk.get_logs_metric`:
 
         * When a string, the same expression is applied for all keys.
         * When a dict, each key maps to its own filter expression.
@@ -86,7 +86,7 @@ def reduce_logs(
     Returns
     -------
     Any
-        The metric value(s) produced by :func:`unify.get_logs_metric`:
+        The metric value(s) produced by :func:`unisdk.get_logs_metric`:
 
         * Single key, no grouping  → scalar (float/int/str/bool).
         * Multiple keys, no grouping → ``dict[key -> scalar]``.
@@ -106,7 +106,7 @@ def reduce_logs(
 
     normalized_filter = _normalize_filter(filter)
 
-    return unify.get_logs_metric(
+    return unisdk.get_logs_metric(
         metric=metric_norm,
         key=keys,
         filter=normalized_filter,

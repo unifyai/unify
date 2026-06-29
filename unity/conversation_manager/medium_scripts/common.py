@@ -1529,12 +1529,12 @@ async def hydrate_fast_brain_history(
 ) -> list[str]:
     """Load recent Comms events from the backend and render them for the fast brain.
 
-    Queries Orchestra directly via ``unify.get_logs()`` rather than going
+    Queries Orchestra directly via ``unisdk.get_logs()`` rather than going
     through the EventBus proxy, which is not initialised in the voice agent
     subprocess.  Returns a chronologically ordered list of rendered strings
     suitable for injecting as historical context before the current call begins.
     """
-    import unify
+    import unisdk
 
     context = (
         f"{SESSION_DETAILS.user_context}/" f"{SESSION_DETAILS.assistant_context}/Events"
@@ -1542,7 +1542,7 @@ async def hydrate_fast_brain_history(
 
     try:
         logs = await asyncio.to_thread(
-            unify.get_logs,
+            unisdk.get_logs,
             context=context,
             filter='type == "Comms"',
             sorting={"timestamp": "descending"},

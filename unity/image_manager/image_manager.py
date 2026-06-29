@@ -14,7 +14,7 @@ from ..common.llm_client import new_vision_llm_client
 from ..common.authorship import stamp_authoring_assistant_id
 from ..common.log_utils import log as unity_log, create_logs as unity_create_logs
 from ..common.context_dump import make_messages_safe_for_context_dump
-import unify
+import unisdk
 
 
 from ..common.model_to_fields import model_to_fields
@@ -305,7 +305,7 @@ class ImageHandle:
         """
         Return the decoded image bytes.
 
-        If the data is a GCS URL, it downloads the content via unify.download_object().
+        If the data is a GCS URL, it downloads the content via unisdk.download_object().
         Otherwise, it assumes the data is a base64 string and decodes it.
         """
         # Prefer locally cached base64 data from the DataStore to avoid re-downloading
@@ -317,7 +317,7 @@ class ImageHandle:
         except Exception:
             data_str = self._image.data
 
-        # Convert HTTPS GCS URLs to gs:// format for unify.download_object
+        # Convert HTTPS GCS URLs to gs:// format for unisdk.download_object
         gcs_uri = None
         if data_str.startswith("gs://"):
             gcs_uri = data_str
@@ -330,7 +330,7 @@ class ImageHandle:
 
         if gcs_uri:
             try:
-                content = unify.download_object(gcs_uri)
+                content = unisdk.download_object(gcs_uri)
                 # Cache the downloaded bytes as base64 in the DataStore to prevent future downloads
                 try:
                     import base64 as _b64
@@ -833,7 +833,7 @@ class ImageManager(BaseImageManager):
                 if not remaining:
                     break
                 id_list = ", ".join(str(int(i)) for i in remaining)
-                logs = unify.get_logs(
+                logs = unisdk.get_logs(
                     context=context,
                     filter=f"image_id in [{id_list}]",
                     limit=len(remaining),
@@ -1247,7 +1247,7 @@ class ImageManager(BaseImageManager):
                 if not handled:
                     log_ids = resp.get("log_event_ids") or resp.get("log_ids")
                     if isinstance(log_ids, list) and log_ids:
-                        fetched = unify.get_logs(
+                        fetched = unisdk.get_logs(
                             context=context,
                             from_ids=log_ids,
                             return_ids_only=False,
@@ -1392,7 +1392,7 @@ class ImageManager(BaseImageManager):
                 # No per-log explicit_types needed; field is strongly typed in schema
             if not entries:
                 continue
-            ids = unify.get_logs(
+            ids = unisdk.get_logs(
                 context=context,
                 filter=f"image_id == {image_id}",
                 limit=2,
@@ -1404,7 +1404,7 @@ class ImageManager(BaseImageManager):
                 raise RuntimeError(
                     f"Multiple rows found with image_id {image_id}. Data integrity issue.",
                 )
-            unify.update_logs(
+            unisdk.update_logs(
                 logs=[ids[0]],
                 context=context,
                 entries=entries,
@@ -1412,7 +1412,7 @@ class ImageManager(BaseImageManager):
             )
             # Refresh from backend and write-through to DataStore (preserve temp id)
             try:
-                rows = unify.get_logs(
+                rows = unisdk.get_logs(
                     context=context,
                     filter=f"image_id == {image_id}",
                     limit=1,
@@ -1479,7 +1479,7 @@ class ImageManager(BaseImageManager):
     # ------------------------------ Maintenance ---------------------------
     @functools.wraps(BaseImageManager.clear, updated=())
     def clear(self) -> None:
-        unify.delete_context(self._ctx)
+        unisdk.delete_context(self._ctx)
 
         # Ensure the schema exists again via shared provisioning helper
         ContextRegistry.refresh(self, IMAGES_TABLE)
@@ -1496,7 +1496,7 @@ class ImageManager(BaseImageManager):
 
             for _ in range(3):
                 try:
-                    unify.get_fields(context=self._ctx)
+                    unisdk.get_fields(context=self._ctx)
                     break
                 except Exception:
                     _time.sleep(0.05)
@@ -1524,7 +1524,7 @@ class ImageManager(BaseImageManager):
 
         source_context = self._context_for_root(source_root)
         target_context = self._context_for_root(target_root)
-        rows = unify.get_logs(
+        rows = unisdk.get_logs(
             context=source_context,
             filter=f"image_id == {int(image_id)}",
             limit=2,
@@ -1539,7 +1539,7 @@ class ImageManager(BaseImageManager):
             )
 
         payload = Image(**rows[0].entries).to_post_json()
-        target_ids = unify.get_logs(
+        target_ids = unisdk.get_logs(
             context=target_context,
             filter=f"image_id == {int(image_id)}",
             limit=2,
@@ -1550,7 +1550,7 @@ class ImageManager(BaseImageManager):
                 f"Multiple Images rows found with image_id={int(image_id)} in {target_context}.",
             )
         if target_ids:
-            unify.update_logs(
+            unisdk.update_logs(
                 context=target_context,
                 logs=[target_ids[0]],
                 entries=payload,
@@ -1564,7 +1564,7 @@ class ImageManager(BaseImageManager):
                 mutable=False,
             )
 
-        unify.delete_logs(context=source_context, logs=rows[0].id)
+        unisdk.delete_logs(context=source_context, logs=rows[0].id)
         try:
             self._data_store_for_context(target_context).put(payload)
             self._data_store_for_context(source_context).delete(int(image_id))

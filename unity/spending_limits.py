@@ -14,9 +14,9 @@ Limit hierarchy:
 
 All checks run in parallel for minimal latency impact.
 
-Uses ``unify.AsyncSpendClient`` (aiohttp-backed) for connection pooling,
+Uses ``unisdk.AsyncSpendClient`` (aiohttp-backed) for connection pooling,
 automatic retries, and exponential backoff — matching the reliability
-characteristics of the sync ``unify.utils.http`` session.
+characteristics of the sync ``unisdk.utils.http`` session.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
-from unify.async_admin import AsyncSpendClient, SpendRequestError
+from unisdk.async_admin import AsyncSpendClient, SpendRequestError
 
 if TYPE_CHECKING:
     from unillm.limit_hooks import LimitCheckRequest, LimitCheckResponse

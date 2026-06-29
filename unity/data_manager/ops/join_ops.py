@@ -14,7 +14,7 @@ import logging
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Union
 
-import unify
+import unisdk
 
 from unity.common.filter_utils import normalize_filter_expr
 from unity.common.search_utils import table_search_top_k
@@ -80,7 +80,7 @@ def join_tables_impl(
         dest_table,
     )
 
-    unify.join_logs(
+    unisdk.join_logs(
         pair_of_args=(
             {
                 "context": left_table,
@@ -213,7 +213,7 @@ def filter_join_impl(
         tables[1],
     )
 
-    result = unify.join_query(
+    result = unisdk.join_query(
         pair_of_args=(
             {
                 "context": tables[0],
@@ -304,7 +304,7 @@ def reduce_join_impl(
                 f"Missing: {', '.join(sorted(missing))}",
             )
 
-    return unify.join_query(
+    return unisdk.join_query(
         pair_of_args=(
             {
                 "context": tables[0],
@@ -407,7 +407,7 @@ def search_join_impl(
         return rows
     finally:
         try:
-            unify.delete_context(dest_context)
+            unisdk.delete_context(dest_context)
         except Exception:
             pass
 
@@ -556,7 +556,7 @@ def filter_multi_join_impl(
     try:
         rows: List[Dict[str, Any]] = [
             lg.entries
-            for lg in unify.get_logs(
+            for lg in unisdk.get_logs(
                 context=previous_ctx,
                 filter=result_where,
                 offset=result_offset,
@@ -569,7 +569,7 @@ def filter_multi_join_impl(
         # Clean up temporary contexts
         for ctx in tmp_contexts:
             try:
-                unify.delete_context(ctx)
+                unisdk.delete_context(ctx)
             except Exception:
                 pass
 
@@ -699,6 +699,6 @@ def search_multi_join_impl(
         # Clean up temporary contexts
         for ctx in tmp_contexts:
             try:
-                unify.delete_context(ctx)
+                unisdk.delete_context(ctx)
             except Exception:
                 pass

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-import unify
+import unisdk
 import functools
 from typing import Any, Dict, List, Optional, Type, Union, TYPE_CHECKING
 from pydantic import BaseModel
@@ -320,7 +320,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         """
         Decide whether to seed a synthetic first tool call `show_all` that dumps
         some or all tables, and if so return the seeded transcript. Otherwise None.
-        Uses `unify.get_groups`-based unique value enumeration for token estimation.
+        Uses `unisdk.get_groups`-based unique value enumeration for token estimation.
         """
         try:
             if not (self._full_table_dump or self._per_table_dumps):
@@ -988,7 +988,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         """
         # One server-side subtree delete (root + every descendant) instead of
         # enumerating each child and deleting it individually.
-        unify.delete_context(self._ctx, delete_children=True)
+        unisdk.delete_context(self._ctx, delete_children=True)
 
         # Re-provision any required/linked storage
 
@@ -1316,7 +1316,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         Notes
         -----
         Implemented by attaching the matching logs to the destination context
-        via ``unify.add_logs_to_context``.
+        via ``unisdk.add_logs_to_context``.
         """
         try:
             return _op_copy_column(
@@ -1518,7 +1518,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         Returns
         -------
         dict[str, str]
-            Backend response from ``unify.update_logs``.
+            Backend response from ``unisdk.update_logs``.
         """
         try:
             res = _op_update_rows(
@@ -1653,7 +1653,7 @@ class KnowledgeManager(BaseKnowledgeManager):
     #                     try:
     #                         # Count records to be deleted using IDs-only
     #                         target_ctx = self._ctx_for_table(table)
-    #                         ids_to_delete = unify.get_logs(
+    #                         ids_to_delete = unisdk.get_logs(
     #                             context=target_ctx,
     #                             filter=filter_expr,
     #                             return_ids_only=True,
@@ -1850,7 +1850,7 @@ class KnowledgeManager(BaseKnowledgeManager):
         list[dict[str, Any]]
                 Up to ``k`` rows sorted by ascending semantic distance (best match first).
                 If similarity search yields fewer than ``k`` rows and there are more rows
-                overall, the remainder is backfilled from ``unify.get_logs(limit=k)`` in
+                overall, the remainder is backfilled from ``unisdk.get_logs(limit=k)`` in
                 returned order, skipping duplicates based on each table's unique id.
         """
         return _srch_search(
@@ -1921,7 +1921,7 @@ class KnowledgeManager(BaseKnowledgeManager):
             Up to `k` rows from the joined result, sorted by best semantic
             match first. If the similarity search yields fewer than `k` rows and
             there are more rows overall in the joined context, the remainder is
-            backfilled from `unify.get_logs(limit=k)` in returned order, skipping
+            backfilled from `unisdk.get_logs(limit=k)` in returned order, skipping
             duplicates based on the joined table's unique id.
         """
         return _srch_search_join(
@@ -1982,7 +1982,7 @@ class KnowledgeManager(BaseKnowledgeManager):
             Up to `k` rows from the final joined result, best semantic match
             first. If the similarity search yields fewer than `k` rows and
             there are more rows overall in the final joined context, the
-            remainder is backfilled from `unify.get_logs(limit=k)` in returned
+            remainder is backfilled from `unisdk.get_logs(limit=k)` in returned
             order, skipping duplicates based on the final context's unique id.
         """
 
@@ -2074,7 +2074,7 @@ class KnowledgeManager(BaseKnowledgeManager):
             grouping level, or a list such as ``[\"category\", \"row_id\"]`` to
             group hierarchically in that order. When provided, the result
             becomes a nested mapping keyed by group values, mirroring
-            :func:`unify.get_logs_metric` behaviour.
+            :func:`unisdk.get_logs_metric` behaviour.
 
         Returns
         -------

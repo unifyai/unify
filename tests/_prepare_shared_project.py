@@ -66,10 +66,10 @@ def _orchestra_reachable() -> bool:
 def prepare_shared_project() -> None:
     """Prepare the shared UnityTests project and Combined context."""
     try:
-        import unify
+        import unisdk
     except ImportError:
         print(
-            "Error: 'unify' package not found. Ensure the virtualenv is active.",
+            "Error: 'unisdk' package not found. Ensure the virtualenv is active.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -86,24 +86,24 @@ def prepare_shared_project() -> None:
 
     # 1. Activate/create project (idempotent - does not overwrite if exists)
     try:
-        unify.activate(PROJECT, overwrite=False)
+        unisdk.activate(PROJECT, overwrite=False)
     except Exception as e:
         # Tolerate activation failures (e.g., project already active in another process)
         print(f"Note: Project activation returned: {e}", file=sys.stderr)
 
-    unify.set_user_logging(False)
+    unisdk.set_user_logging(False)
 
     # 2. Ensure Combined context with fields (idempotent). Wrapped because the
     # project-activate above may have raced with another worker / partial
     # connectivity, leaving us in a state where create_context still fails.
     try:
-        unify.create_context("Combined")
+        unisdk.create_context("Combined")
     except Exception as e:
         print(f"Note: create_context('Combined') returned: {e}", file=sys.stderr)
 
     # Ensure fields exist (idempotent - create_fields tolerates existing fields)
     try:
-        unify.create_fields(
+        unisdk.create_fields(
             context="Combined",
             fields={
                 "test_fpath": {"type": "str", "mutable": True},

@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-import unify
-from unify.utils.http import RequestError
+import unisdk
+from unisdk.utils.http import RequestError
 
 from unity.session_details import SESSION_DETAILS
 
@@ -87,7 +87,7 @@ class ColleagueNameCache:
             return self.missing_label
 
         try:
-            assistants = unify.list_assistants(
+            assistants = unisdk.list_assistants(
                 agent_id=assistant_id,
                 list_all_org=SESSION_DETAILS.org_id is not None,
                 api_key=SESSION_DETAILS.unify_key,

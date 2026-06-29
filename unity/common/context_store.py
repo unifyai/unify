@@ -4,8 +4,8 @@ import logging
 import time
 from typing import Any, Dict, Optional
 
-import unify
-from unify.utils.http import RequestError as _UnifyRequestError
+import unisdk
+from unisdk.utils.http import RequestError as _UnifyRequestError
 
 from unity.common.authorship import fields_with_authoring, is_shared_authored_context
 
@@ -45,7 +45,7 @@ def _create_context_with_retry(
     owner_id: Optional[int] = None,
     project: Optional[str] = None,
 ) -> None:
-    """Call ``unify.create_context`` with retry on transient failures.
+    """Call ``unisdk.create_context`` with retry on transient failures.
 
     Retries up to ``_CREATE_CONTEXT_MAX_ATTEMPTS`` times with exponential
     backoff for transient HTTP errors (5xx, 429, network).  Non-transient
@@ -59,7 +59,7 @@ def _create_context_with_retry(
     last_exc: Optional[Exception] = None
     for attempt in range(_CREATE_CONTEXT_MAX_ATTEMPTS):
         try:
-            unify.create_context(
+            unisdk.create_context(
                 name,
                 unique_keys=unique_keys,
                 auto_counting=auto_counting,
@@ -120,7 +120,7 @@ class TableStore:
         foreign_keys: Optional[list[Dict[str, Any]]] = None,
     ) -> None:
         self._ctx = context
-        self._project = unify.active_project()
+        self._project = unisdk.active_project()
         self._unique_keys = dict(unique_keys or {})
         self._auto_counting = dict(auto_counting or {})
         self._description = description or ""
@@ -154,7 +154,7 @@ class TableStore:
 
         if self._fields:
             try:
-                unify.create_fields(self._fields, context=self._ctx)
+                unisdk.create_fields(self._fields, context=self._ctx)
             except Exception:
                 pass
 
@@ -191,7 +191,7 @@ class TableStore:
 
         # First attempt
         try:
-            data = unify.get_fields(project=self._project, context=self._ctx)
+            data = unisdk.get_fields(project=self._project, context=self._ctx)
             return _normalize_fields(data)
         except _UnifyRequestError as e:
             # 404: context missing (race / test teardown / eventual consistency).
@@ -206,7 +206,7 @@ class TableStore:
             if delay:
                 _time.sleep(delay)
             try:
-                data = unify.get_fields(project=self._project, context=self._ctx)
+                data = unisdk.get_fields(project=self._project, context=self._ctx)
                 return _normalize_fields(data)
             except _UnifyRequestError as e:
                 status = getattr(getattr(e, "response", None), "status_code", None)

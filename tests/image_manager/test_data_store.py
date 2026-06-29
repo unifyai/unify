@@ -4,7 +4,7 @@ import base64
 from datetime import datetime, timezone
 from typing import Any
 
-import unify
+import unisdk
 from unity.image_manager.image_manager import ImageManager
 from unity.common.data_store import DataStore
 from tests.helpers import _handle_project
@@ -119,13 +119,13 @@ def test_get_images_prefers_cache_and_falls_back_backend(monkeypatch):
 
     # 1) Cache-hit path: both ids present in DataStore → zero backend reads
     calls = {"count": 0}
-    orig_get_logs = unify.get_logs
+    orig_get_logs = unisdk.get_logs
 
     def _wrapped_get_logs(*args: Any, **kwargs: Any):
         calls["count"] += 1
         return orig_get_logs(*args, **kwargs)
 
-    monkeypatch.setattr(unify, "get_logs", _wrapped_get_logs)
+    monkeypatch.setattr(unisdk, "get_logs", _wrapped_get_logs)
     _ = im.get_images([ids[0]])
     assert calls["count"] == 0
 
@@ -154,7 +154,7 @@ def test_image_handle_raw_caches_gcs_download(monkeypatch):
     ds = DataStore.for_context(im._ctx, key_fields=("image_id",))
 
     # Seed a row that points to GCS so ImageHandle.raw() downloads once
-    # Avoid a real POST with a GCS URL by faking unify.log
+    # Avoid a real POST with a GCS URL by faking unisdk.log
     class _FakeLog:
         def __init__(self, entries: dict):
             self.entries = entries
@@ -175,7 +175,7 @@ def test_image_handle_raw_caches_gcs_download(monkeypatch):
         ret["image_id"] = eid
         return _FakeLog(ret)
 
-    monkeypatch.setattr(unify, "log", _fake_unify_log)
+    monkeypatch.setattr(unisdk, "log", _fake_unify_log)
 
     [img_id] = im.add_images(
         [
@@ -187,14 +187,14 @@ def test_image_handle_raw_caches_gcs_download(monkeypatch):
         ],
     )
 
-    # Mock unify.download_object to count downloads
+    # Mock unisdk.download_object to count downloads
     download_count = {"count": 0}
 
     def _fake_download_object(gcs_uri, *, api_key=None):
         download_count["count"] += 1
         return b"IMG_BYTES"
 
-    monkeypatch.setattr(unify, "download_object", _fake_download_object)
+    monkeypatch.setattr(unisdk, "download_object", _fake_download_object)
 
     # First raw() must download and then cache base64 in DataStore
     h1 = im.get_images([img_id])[0]

@@ -11,7 +11,7 @@ from typing import List, Dict, Any, Tuple
 import pytest
 import pytest_asyncio
 import os
-import unify
+import unisdk
 
 from unity.contact_manager.contact_manager import ContactManager
 from unity.transcript_manager.transcript_manager import TranscriptManager
@@ -69,7 +69,7 @@ def _ensure_embeddings_exist(context: str) -> bool:
     Returns True if any embeddings were created (scenario needs recommit).
     """
     try:
-        fields = unify.get_fields(context=context)
+        fields = unisdk.get_fields(context=context)
     except Exception:
         return False
 
@@ -429,12 +429,12 @@ class ScenarioBuilder:
 
 def _commit_contexts_for_rollback(ctx_prefix: str) -> None:
     """Commit all contexts under prefix for rollback support."""
-    created_contexts = unify.get_contexts(prefix=ctx_prefix)
+    created_contexts = unisdk.get_contexts(prefix=ctx_prefix)
     created_context_names = list(created_contexts.keys())
 
     def commit_context_and_store(ctx_name):
         try:
-            commit_info = unify.commit_context(
+            commit_info = unisdk.commit_context(
                 name=ctx_name,
                 commit_message="Initial seed data for tests",
             )
@@ -443,15 +443,15 @@ def _commit_contexts_for_rollback(ctx_prefix: str) -> None:
             pass  # May already be committed
 
     if created_context_names:
-        unify.map(commit_context_and_store, created_context_names, mode="asyncio")
+        unisdk.map(commit_context_and_store, created_context_names, mode="asyncio")
 
 
 def _rebuild_commit_hashes(ctx_prefix: str) -> None:
     """Rebuild commit hashes from existing contexts for rollback support."""
-    existing_contexts = unify.get_contexts(prefix=ctx_prefix)
+    existing_contexts = unisdk.get_contexts(prefix=ctx_prefix)
     for ctx_name in existing_contexts.keys():
         try:
-            history = unify.get_context_commits(ctx_name)
+            history = unisdk.get_context_commits(ctx_name)
             if history:
                 SCENARIO_COMMIT_HASHES[ctx_name] = history[0]["commit_hash"]
         except Exception:
@@ -479,18 +479,18 @@ def _setup_tm_scenario(
 
     # If --overwrite-scenarios is set, delete existing contexts first
     if overwrite_scenarios:
-        existing_contexts = unify.get_contexts(prefix=ctx)
+        existing_contexts = unisdk.get_contexts(prefix=ctx)
         existing_context_names = list(existing_contexts.keys())
         if existing_context_names:
-            unify.map(
-                lambda c: unify.delete_context(c),
+            unisdk.map(
+                lambda c: unisdk.delete_context(c),
                 existing_context_names,
                 mode="asyncio",
             )
 
     # Set context before any operations (create first like ContactManager does)
-    unify.create_context(ctx)  # exist_ok=True by default
-    unify.set_context(ctx, relative=False)
+    unisdk.create_context(ctx)  # exist_ok=True by default
+    unisdk.set_context(ctx, relative=False)
 
     # Create managers
     cm = ContactManager()
@@ -525,7 +525,7 @@ def _setup_tm_scenario(
             _commit_contexts_for_rollback(ctx)
 
     # Unset context after setup, like ContactManager does
-    unify.unset_context()
+    unisdk.unset_context()
 
     return tm, dict(_ID_BY_NAME)
 
@@ -560,7 +560,7 @@ def tm_manager_scenario(tm_scenario):
     tm, _ID_BY_NAME = tm_scenario
 
     def rollback_context(ctx):
-        unify.rollback_context(
+        unisdk.rollback_context(
             name=ctx,
             commit_hash=SCENARIO_COMMIT_HASHES[ctx],
         )
@@ -573,7 +573,7 @@ def tm_manager_scenario(tm_scenario):
         # from rolling back while this test is running
         scenario_names = list(SCENARIO_COMMIT_HASHES.keys())
         if scenario_names:
-            unify.map(rollback_context, scenario_names, mode="asyncio")
+            unisdk.map(rollback_context, scenario_names, mode="asyncio")
 
         restore_scenario_context("tests/transcript_manager/Scenario")
         yield tm, _ID_BY_NAME

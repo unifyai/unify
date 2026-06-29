@@ -3,7 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-import unify
+import unisdk
 
 from ..common.authorship import strip_authoring_assistant_id
 from ..common.embed_utils import ensure_vector_column
@@ -120,8 +120,8 @@ def update_rows(
     log_ids = [lid for (lid, _) in matched]
     entries = [entry for (_, entry) in matched]
 
-    # Use unify.update_logs for now (needs DataManager.update_rows enhancement)
-    res = unify.update_logs(
+    # Use unisdk.update_logs for now (needs DataManager.update_rows enhancement)
+    res = unisdk.update_logs(
         logs=log_ids,
         context=ctx,
         entries=entries,
@@ -448,10 +448,10 @@ def copy_column(
     log_ids = [r.get("id") or r.get("_id") for r in rows if r.get("id") or r.get("_id")]
 
     if log_ids:
-        unify.add_logs_to_context(
+        unisdk.add_logs_to_context(
             log_ids,
             context=dest_ctx,
-            project=unify.active_project(),
+            project=unisdk.active_project(),
         )
 
     return {

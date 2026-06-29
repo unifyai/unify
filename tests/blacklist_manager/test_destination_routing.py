@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
-import unify
+import unisdk
 
 from tests.helpers import _handle_project
 from unity.blacklist_manager.blacklist_manager import BlackListManager
@@ -37,7 +37,7 @@ def _configure_teams() -> tuple[int, int]:
 def _reset_teams(team_ids: tuple[int, int]) -> None:
     for team_id in team_ids:
         try:
-            unify.delete_context(f"Teams/{team_id}/BlackList")
+            unisdk.delete_context(f"Teams/{team_id}/BlackList")
         except Exception:
             pass
     SESSION_DETAILS.team_ids = []
@@ -77,7 +77,7 @@ def test_blacklist_writes_route_to_destination_and_reads_merge_roots():
         assert destinations_by_detail[personal_detail] == "personal"
         assert destinations_by_detail[shared_detail] == f"team:{team_ids[0]}"
 
-        shared_rows = unify.get_logs(
+        shared_rows = unisdk.get_logs(
             context=f"Teams/{team_ids[0]}/BlackList",
             filter=f"contact_detail == '{shared_detail}'",
         )

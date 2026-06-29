@@ -2,9 +2,9 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, Final, List, Optional, Type, Union
 
-import unify
+import unisdk
 from pydantic import BaseModel
-from unify import create_fields
+from unisdk import create_fields
 
 from unity.common.authorship import SHARED_SCOPED_TABLES, fields_with_authoring
 from unity.common.context_store import _create_context_with_retry
@@ -40,7 +40,7 @@ class ContextRegistry:
 
     @staticmethod
     def _get_active_context() -> str:
-        active_context = unify.get_active_context()
+        active_context = unisdk.get_active_context()
         assert (
             active_context["read"] == active_context["write"]
         ), "Read and write contexts must be the same"

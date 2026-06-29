@@ -46,7 +46,7 @@ def test_assistant_timezone_lookup_caches_within_ttl(monkeypatch):
 
     monkeypatch.setattr(module, "_contacts_context", lambda: "User/Assistant/Contacts")
     monkeypatch.setattr(module.time, "monotonic", lambda: 1000.0)
-    monkeypatch.setattr("unify.get_logs", fake_get_logs)
+    monkeypatch.setattr("unisdk.get_logs", fake_get_logs)
 
     assert module.get_assistant_timezone() == "Asia/Karachi"
     assert module.get_assistant_timezone() == "Asia/Karachi"
@@ -66,7 +66,7 @@ def test_assistant_timezone_lookup_refreshes_after_ttl(monkeypatch):
 
     monkeypatch.setattr(module, "_contacts_context", lambda: "User/Assistant/Contacts")
     monkeypatch.setattr(module.time, "monotonic", lambda: monotonic_now["value"])
-    monkeypatch.setattr("unify.get_logs", fake_get_logs)
+    monkeypatch.setattr("unisdk.get_logs", fake_get_logs)
 
     assert module.get_assistant_timezone() == "Asia/Karachi"
     monotonic_now["value"] += 299
@@ -93,7 +93,7 @@ def test_now_recomputes_current_time_while_reusing_cached_timezone(monkeypatch):
     monkeypatch.setattr(module, "_contacts_context", lambda: "User/Assistant/Contacts")
     monkeypatch.setattr(module.time, "monotonic", lambda: 1000.0)
     monkeypatch.setattr(module, "_utc_now", lambda: next(current_times))
-    monkeypatch.setattr("unify.get_logs", fake_get_logs)
+    monkeypatch.setattr("unisdk.get_logs", fake_get_logs)
 
     first = module.now(as_string=False)
     second = module.now(as_string=False)
@@ -118,7 +118,7 @@ def test_now_falls_back_to_utc_when_timezone_lookup_fails(monkeypatch):
         "_utc_now",
         lambda: datetime(2026, 5, 7, 8, 0, 0, tzinfo=timezone.utc),
     )
-    monkeypatch.setattr("unify.get_logs", fake_get_logs)
+    monkeypatch.setattr("unisdk.get_logs", fake_get_logs)
 
     assert module.get_assistant_timezone() is None
     assert module.now() == "Thursday, May 07, 2026 at 08:00 AM UTC"
@@ -137,7 +137,7 @@ def test_failed_assistant_timezone_lookup_does_not_poison_cache(monkeypatch):
 
     monkeypatch.setattr(module, "_contacts_context", lambda: "User/Assistant/Contacts")
     monkeypatch.setattr(module.time, "monotonic", lambda: 1000.0)
-    monkeypatch.setattr("unify.get_logs", fake_get_logs)
+    monkeypatch.setattr("unisdk.get_logs", fake_get_logs)
 
     assert module.get_assistant_timezone() is None
     assert module.get_assistant_timezone() == "Asia/Karachi"
@@ -156,7 +156,7 @@ def test_missing_assistant_timezone_row_does_not_poison_cache(monkeypatch):
 
     monkeypatch.setattr(module, "_contacts_context", lambda: "User/Assistant/Contacts")
     monkeypatch.setattr(module.time, "monotonic", lambda: 1000.0)
-    monkeypatch.setattr("unify.get_logs", fake_get_logs)
+    monkeypatch.setattr("unisdk.get_logs", fake_get_logs)
 
     assert module.get_assistant_timezone() is None
     assert module.get_assistant_timezone() == "Asia/Karachi"

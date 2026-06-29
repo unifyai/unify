@@ -4,15 +4,15 @@ from dotenv import load_dotenv
 load_dotenv()
 import os
 import requests
-import unify
+import unisdk
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--overwrite", type=bool, default=False)
     args = parser.parse_args()
-    unify.activate("Debug")
+    unisdk.activate("Debug")
     if args.overwrite:
-        unify.create_context("startup_events")
+        unisdk.create_context("startup_events")
     users = [
         "7bea302d-2518-48ac-b21d-61a0c53c5d0f",
         # "clxlmko0900539b72enccyi1o",

@@ -30,7 +30,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
-import unify
+import unisdk
 
 from unity.common.context_registry import ContextRegistry
 from unity.manager_registry import ManagerRegistry
@@ -122,7 +122,7 @@ def _resolve_coordinator() -> dict[str, Any] | None:
     hardcoded id.
     """
 
-    for assistant in unify.list_assistants():
+    for assistant in unisdk.list_assistants():
         if assistant.get("is_coordinator") and assistant.get("agent_id") is not None:
             return assistant
     return None
@@ -152,16 +152,16 @@ def coordinator_task_env():
     user_id = str(coordinator["user_id"])
     base_context = f"{user_id}/{agent_id}"
 
-    prev_project = unify.active_project()
-    prev_ctx = unify.get_active_context()
+    prev_project = unisdk.active_project()
+    prev_ctx = unisdk.get_active_context()
     prev_user_id = SESSION_DETAILS.user.id
     prev_agent_id = SESSION_DETAILS.assistant.agent_id
     prev_base_context = ContextRegistry._base_context
 
     SESSION_DETAILS.user.id = user_id
     SESSION_DETAILS.assistant.agent_id = agent_id
-    unify.activate(TASK_MACHINE_STATE_PROJECT)
-    unify.set_context(base_context, relative=False, skip_create=False)
+    unisdk.activate(TASK_MACHINE_STATE_PROJECT)
+    unisdk.set_context(base_context, relative=False, skip_create=False)
     ContextRegistry.clear()
     ContextRegistry.set_base_context(base_context)
     # Drop any cached singleton built under a previous flow test's context so
@@ -184,21 +184,21 @@ def coordinator_task_env():
             ContextRegistry.set_base_context(prev_base_context)
         ManagerRegistry.clear()
         if prev_project:
-            unify.activate(prev_project)
+            unisdk.activate(prev_project)
         prev_read = (prev_ctx or {}).get("read") or ""
         prev_write = (prev_ctx or {}).get("write") or ""
         if prev_read or prev_write:
             # Restore read/write independently so a prior context whose read and
             # write halves differ is not silently collapsed to one value.
-            unify.set_context(
+            unisdk.set_context(
                 prev_write,
                 mode="write",
                 relative=False,
                 skip_create=True,
             )
-            unify.set_context(prev_read, mode="read", relative=False, skip_create=True)
+            unisdk.set_context(prev_read, mode="read", relative=False, skip_create=True)
         else:
-            unify.unset_context()
+            unisdk.unset_context()
 
 
 async def _wait_for_activation(

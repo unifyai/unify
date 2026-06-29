@@ -58,7 +58,7 @@ class TableSchema(BaseModel):
     # This is inconsistent with `create_context` which expects a dict.
     #
     # Failing example: Actor calls `primitives.data.describe_table("Data/Test/...")` which
-    # internally calls `unify.get_context()`. The response has `unique_keys: []` (empty list)
+    # internally calls `unisdk.get_context()`. The response has `unique_keys: []` (empty list)
     # which fails Pydantic validation expecting `dict[str, str] | None`.
     #
     # Workaround: Convert list to None until backend is updated to return dict format.

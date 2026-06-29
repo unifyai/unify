@@ -42,7 +42,7 @@ dependencies = [
     "azure-identity>=1.14.0",
     "msgraph-sdk>=1.0.0",
     "uvicorn[standard]>=0.24.0",
-    "unify",
+    "unisdk",
     "unillm",
     # Virtual devices and remote browser setup
     "websockify>=0.13.0",
@@ -108,6 +108,6 @@ include = ["unity", "unity.*"]
 "unity.assets.audio" = ["*.mp3"]
 
 [tool.uv.sources]
-unify = { path = "../unisdk", editable = true }
+unisdk = { path = "../unisdk", editable = true }
 unillm = { path = "../unillm", editable = true }
 en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }

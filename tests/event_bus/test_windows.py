@@ -42,10 +42,10 @@ async def test_cache_only_skips_backend():
         await bus.publish(evt, blocking=True)
 
     # Use a spy to track get_logs calls
-    original_get_logs = __import__("unify").get_logs
+    original_get_logs = __import__("unisdk").get_logs
     spy = MagicMock(side_effect=original_get_logs)
 
-    with patch("unify.get_logs", spy):
+    with patch("unisdk.get_logs", spy):
         # Search for fewer events than cache holds
         results = await bus.search(filter="type == 'Message'", limit=3)
 

@@ -28,7 +28,7 @@ import hashlib
 
 import httpx
 import pytest
-import unify
+import unisdk
 from pytest_metadata.plugin import metadata_key
 
 from datetime import datetime, timezone
@@ -124,12 +124,12 @@ def _set_unify_context_for_test(item: pytest.Item) -> None:
         skip_ctx_create = ctx in PRECREATED_CONTEXTS
     else:
         try:
-            unify.delete_context(ctx)
+            unisdk.delete_context(ctx)
         except Exception:
             pass
 
     try:
-        unify.set_context(ctx, relative=False, skip_create=skip_ctx_create)
+        unisdk.set_context(ctx, relative=False, skip_create=skip_ctx_create)
     except Exception:
         pass  # Project may not exist yet; tests that need it will fail on their own
 
@@ -159,12 +159,12 @@ def _unset_unify_context_for_test(item: pytest.Item) -> None:
     try:
         if ctx and SETTINGS.UNIFY_DELETE_CONTEXT_ON_EXIT:
             try:
-                unify.delete_context(ctx)
+                unisdk.delete_context(ctx)
             except Exception:
                 pass
     finally:
         try:
-            unify.unset_context()
+            unisdk.unset_context()
         except Exception:
             pass
 
@@ -174,7 +174,7 @@ def pytest_report_header(config):
     return [
         f"orchestra_url={os.environ.get('ORCHESTRA_URL')}",
         f"unity_comms_url={os.environ.get('UNITY_COMMS_URL')}",
-        f"unify_project={unify.active_project()}",
+        f"unify_project={unisdk.active_project()}",
         f"UNILLM_CACHE={os.environ.get('UNILLM_CACHE', 'not set')}",
     ] + settings_str
 
@@ -474,7 +474,7 @@ def pytest_sessionstart(session):
         and not SETTINGS.UNIFY_SKIP_SESSION_SETUP
     ):
         try:
-            unify.delete_project(project_name)
+            unisdk.delete_project(project_name)
         except Exception:
             pass  # Project may not exist yet
 
@@ -490,14 +490,14 @@ def pytest_sessionstart(session):
     if SETTINGS.UNIFY_SKIP_SESSION_SETUP:
         # Project and shared contexts already prepared externally (e.g., by
         # ._prepare_shared_project.sh). Just activate without overwrite.
-        unify.activate(project_name, overwrite=False)
-        unify.set_user_logging(False)
+        unisdk.activate(project_name, overwrite=False)
+        unisdk.set_user_logging(False)
     else:
-        unify.activate(
+        unisdk.activate(
             project_name,
             overwrite=SETTINGS.UNIFY_OVERWRITE_PROJECT,
         )
-        unify.set_user_logging(False)
+        unisdk.set_user_logging(False)
 
     # ------------------------------------------------------------------
     #  Ensure the unity runtime is fully initialised for the test suite
@@ -559,9 +559,9 @@ def pytest_sessionstart(session):
         # Combined context already prepared externally; skip creation
         pass
     else:
-        unify.create_context("Combined")
+        unisdk.create_context("Combined")
         try:
-            unify.create_fields(
+            unisdk.create_fields(
                 context="Combined",
                 fields={
                     "test_fpath": {"type": "str", "mutable": True},
@@ -602,7 +602,7 @@ def pytest_sessionfinish(session, exitstatus):
         pass
 
     if SETTINGS.UNIFY_TESTS_DELETE_PROJ_ON_EXIT:
-        unify.delete_project(unify.active_project())
+        unisdk.delete_project(unisdk.active_project())
 
 
 def pytest_unconfigure(config):
@@ -765,7 +765,7 @@ def pytest_runtest_setup(item):
 def _normalize_pytest_nodeid(nodeid):
     """
     Try to normalize the pytest nodeid to an alphanumeric string that is
-    accepted for unify.Context path. If not possible, return None.
+    accepted for unisdk.Context path. If not possible, return None.
     Will fallback to invocation count if empty.
     """
     bracket_match = re.search(r"\[([^\]]+)\]", nodeid)
@@ -932,7 +932,7 @@ def pytest_collection_finish(session):
         # TODO: Should delete contexts before creating them
         # But this is mostly fine now for CI purpose, as we create
         # a fresh project anyway
-        unify.create_contexts(list(contexts))
+        unisdk.create_contexts(list(contexts))
         PRECREATED_CONTEXTS.update(contexts)
 
 

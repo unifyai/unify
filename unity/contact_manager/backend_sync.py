@@ -48,7 +48,7 @@ def sync_user_timezone(assistant_id: int, target_email: str, timezone: str) -> b
         return False
 
     try:
-        from unify.utils import http
+        from unisdk.utils import http
 
         url = f"{base_url}/admin/assistant/update-user"
         headers = {"Authorization": f"Bearer {admin_key}"}
@@ -81,7 +81,7 @@ def sync_user_bio(assistant_id: int, target_email: str, bio: str) -> bool:
         return False
 
     try:
-        from unify.utils import http
+        from unisdk.utils import http
 
         url = f"{base_url}/admin/assistant/update-user"
         headers = {"Authorization": f"Bearer {admin_key}"}
@@ -119,7 +119,7 @@ def sync_assistant_timezone(assistant_id: int, timezone: str) -> bool:
         return False
 
     try:
-        from unify.utils import http
+        from unisdk.utils import http
 
         url = f"{base_url}/admin/assistant/{int(assistant_id)}"
         headers = {"Authorization": f"Bearer {admin_key}"}
@@ -151,7 +151,7 @@ def sync_assistant_about(assistant_id: int, about: str) -> bool:
         return False
 
     try:
-        from unify.utils import http
+        from unisdk.utils import http
 
         url = f"{base_url}/admin/assistant/{int(assistant_id)}"
         headers = {"Authorization": f"Bearer {admin_key}"}
@@ -186,7 +186,7 @@ def sync_assistant_job_title(assistant_id: int, job_title: str) -> bool:
         normalized = None
 
     try:
-        from unify.utils import http
+        from unisdk.utils import http
 
         url = f"{base_url}/admin/assistant/{int(assistant_id)}"
         headers = {"Authorization": f"Bearer {admin_key}"}

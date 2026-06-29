@@ -2,21 +2,20 @@ from __future__ import annotations
 
 import pytest
 
-import unify
 from unity.common.data_store import DataStore
 
 
 @pytest.fixture(autouse=True)
 def _stable_project_and_clean_registry(monkeypatch):
     # Ensure a stable project id per test and clear singleton registry
-    monkeypatch.setattr(unify, "active_project", lambda: "proj-test")
+    monkeypatch.setattr(unisdk, "active_project", lambda: "proj-test")
     DataStore._REGISTRY.clear()
     yield
     DataStore._REGISTRY.clear()
 
 
 def test_singleton_per_project_context(monkeypatch):
-    monkeypatch.setattr(unify, "active_project", lambda: "P1")
+    monkeypatch.setattr(unisdk, "active_project", lambda: "P1")
 
     a = DataStore.for_context("Ctx/A", key_fields=("id",))
     b = DataStore.for_context("Ctx/A", key_fields=("id",))
