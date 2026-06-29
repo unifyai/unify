@@ -48,6 +48,7 @@ EDITS_DIR = ".unity-edits"
 _ALWAYS_EXCLUDES: tuple[str, ...] = (f"/{EDITS_DIR}/**",)
 
 _NOISE_EXCLUDES: tuple[str, ...] = (
+    # POSIX (Linux/macOS) home noise.
     "/.cache/**",
     "/.npm/**",
     "/.cargo/**",
@@ -57,6 +58,17 @@ _NOISE_EXCLUDES: tuple[str, ...] = (
     "/.local/share/Trash/**",
     "/Library/Caches/**",
     "/.Trash/**",
+    # Windows profile noise (served root is %USERPROFILE%; rclone uses
+    # forward slashes). AppData/Local holds caches, temp, and reparse-point
+    # junctions that loop rclone; NTUSER.DAT* are locked registry hives.
+    "/AppData/Local/**",
+    "/AppData/LocalLow/**",
+    "/NTUSER.DAT*",
+    "/ntuser.dat*",
+    "/ntuser.ini",
+    "/Cookies/**",
+    "*.lnk",
+    # Any-depth project/tooling noise (POSIX + Windows).
     "node_modules/**",
     ".git/**",
     "__pycache__/**",
@@ -68,9 +80,12 @@ _NOISE_EXCLUDES: tuple[str, ...] = (
     ".next/**",
     ".idea/**",
     ".DS_Store",
+    "Thumbs.db",
 )
 
 _SECRET_EXCLUDES: tuple[str, ...] = (
+    # Credential/secret dirs at the home root, on every OS. .ssh/.aws/.gnupg
+    # sit at the profile root on Windows too (e.g. C:\Users\x\.ssh).
     "/.ssh/**",
     "/.gnupg/**",
     "/.aws/**",
@@ -79,6 +94,9 @@ _SECRET_EXCLUDES: tuple[str, ...] = (
     "/.docker/**",
     "/.netrc",
     "/.git-credentials",
+    # Windows credential stores under %APPDATA% (AppData/Roaming).
+    "/AppData/Roaming/gcloud/**",
+    "/AppData/Roaming/Microsoft/Credentials/**",
 )
 
 
