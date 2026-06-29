@@ -79,6 +79,11 @@ jobs:
       ORCHESTRA_GCP_ASSISTANT_CALL_RECORDINGS_BUCKET_NAME: ${{ vars.GCP_BUCKET_RECORDINGS }}
       TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
       UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
+      # The Builtins project is reserved (admin-key-only) in Orchestra. The
+      # fresh CI-local Orchestra (host uvicorn, inherits this env) adopts this
+      # as its admin key, and the test Builtins seed uses the same value so it
+      # can create/converge the reserved project. Local-only throwaway key.
+      ORCHESTRA_ADMIN_KEY: local-admin-key
       PYTHONPATH: ${{ github.workspace }}/unillm:${{ github.workspace }}/unisdk
     steps:
     - uses: actions/checkout@v4
