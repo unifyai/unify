@@ -105,7 +105,7 @@ All logs are organized under `logs/` with seven main subdirectories:
 | `logs/pytest/` | Test output (stdout/stderr) | One `.txt` per test | Test-only |
 | `logs/unity/` | Unity LOGGER output (async tool loop, managers) | `unity.log` per session | `UNITY_LOG` + `UNITY_LOG_DIR` |
 | `logs/unillm/` | Raw LLM request/response traces | `.txt` files per request | `UNILLM_LOG_DIR` (+ `UNILLM_TERMINAL_LOG` for console) |
-| `logs/unify/` | Unify SDK HTTP traces | JSON files per request | `UNISDK_LOG_DIR` (+ `UNISDK_TERMINAL_LOG` for console) |
+| `logs/unisdk/` | Unify SDK HTTP traces | JSON files per request | `UNISDK_LOG_DIR` (+ `UNISDK_TERMINAL_LOG` for console) |
 | `logs/orchestra/` | Orchestra API traces | Per-request JSON with OpenTelemetry spans | `ORCHESTRA_LOG_DIR` |
 | `logs/magnitude/` | **Magnitude agent debug** (screenshots, act traces, coordinates) | Per-act bundles with PNGs | `MAGNITUDE_LOG_DIR` + `MAGNITUDE_DEBUG` |
 | `logs/all/` | **Cross-repo OTEL traces** | `{trace_id}.jsonl` per test | `*_OTEL` + `*_OTEL_LOG_DIR` |
@@ -203,12 +203,12 @@ logs/unity/
 
 ---
 
-## Unify Logs (`logs/unify/`)
+## Unify Logs (`logs/unisdk/`)
 
 Unify SDK HTTP traces capture all requests to the Orchestra API with OpenTelemetry trace correlation.
 
 ```
-logs/unify/
+logs/unisdk/
 ├── 2025-12-05T09-15-22_unity_dev_ttys042/
 │   ├── 14-26-27.611_POST_project-UnityTests-contexts_210ms_200_no-trace.json
 │   ├── 14-26-46.175_GET_logs_331ms_200_f124f0d3.json   # trace_id suffix!
@@ -661,7 +661,7 @@ logs/pytest/         →  [TRACE] TRACE_ID=...7be454fc test=test_ask
     ↓ (same session)
 logs/unity/          →  ➡️ [ContactManager.ask(ca3e)] Request: ...
     ↓ (same trace_id)
-logs/unify/          →  14-26-46.175_GET_logs_331ms_200_7be454fc.json
+logs/unisdk/          →  14-26-46.175_GET_logs_331ms_200_7be454fc.json
     ↓ (same trace_id)
 logs/orchestra/      →  2025-12-30T18-46-55.980_GET_projects_43ms_7be454fc.json
 ```
@@ -685,7 +685,7 @@ grep "TRACE_ID=" logs/pytest/2025-12-30T18-30-00_unity_dev_ttys042/contact_manag
 The last 8 characters of the trace_id appear in the filename:
 ```bash
 # trace_id=099b207f89222185695d25977be454fc → search for *7be454fc*
-ls logs/unify/2025-12-30T18-30-00_unity_dev_ttys042/*7be454fc*
+ls logs/unisdk/2025-12-30T18-30-00_unity_dev_ttys042/*7be454fc*
 ```
 
 **Step 3: Find matching Orchestra trace files**
@@ -698,7 +698,7 @@ ls logs/orchestra/2025-12-30T18-27-43/requests/*7be454fc*
 
 ```bash
 # Unify SDK request/response
-cat logs/unify/2025-12-30T18-30-00_unity_dev_ttys042/*7be454fc*.json | jq .
+cat logs/unisdk/2025-12-30T18-30-00_unity_dev_ttys042/*7be454fc*.json | jq .
 
 # Orchestra server-side trace
 cat logs/orchestra/2025-12-30T18-27-43/requests/*7be454fc*.json | jq .
@@ -715,7 +715,7 @@ grep TRACE_ID logs/pytest/2025-12-30T18-30-00_unity_dev/contact_manager-test_ask
 cat logs/unity/2025-12-30T18-30-00_unity_dev/unity.log | grep "ContactManager"
 
 # 3. Find Unify SDK HTTP calls with matching trace
-ls logs/unify/2025-12-30T18-30-00_unity_dev/*7be454fc*
+ls logs/unisdk/2025-12-30T18-30-00_unity_dev/*7be454fc*
 
 # 4. Find Orchestra server traces
 ls logs/orchestra/*/requests/*7be454fc*
