@@ -176,11 +176,6 @@ class FastBrainLogger:
             f"Speaking notification: {text}{extra}",
         )
 
-    def dedup_suppressed(self, text: str, reasoning: str) -> None:
-        LOGGER.info(
-            f"{DEFAULT_ICON} [{self._label}] Suppressed duplicated speech: {reasoning}",
-        )
-
     # ── proactive speech helpers ─────────────────────────────────────────
 
     def proactive_waiting_for_quiescence(self) -> None:
@@ -1192,6 +1187,58 @@ def _event_contact_id(event: Event) -> int | None:
     return None
 
 
+def _neutral_onboarding_outbound(
+    event: Event,
+    name: str,
+    *,
+    history: bool = False,
+) -> str | None:
+    """Content-free fast-brain render for onboarding-trigger outbounds.
+
+    Onboarding-trigger outbound messages (notably reference-quiz clues) carry
+    ``onboarding_trigger_step_id``. Their body is delivered to the user in
+    full, but it must never be echoed into the fast brain — doing so let the
+    Voice Agent read out or solve clue content. Returns a summary with the
+    body omitted, or None when the event is not an onboarding-trigger
+    outbound. The ``(not delivered directly)`` template marker is preserved.
+    """
+    if not isinstance(
+        event,
+        (
+            SMSSent,
+            WhatsAppSent,
+            EmailSent,
+            UnifyMessageSent,
+            DiscordMessageSent,
+            DiscordChannelMessageSent,
+        ),
+    ):
+        return None
+    trigger = getattr(event, "onboarding_trigger_step_id", None)
+    if not (isinstance(trigger, str) and trigger):
+        return None
+
+    if isinstance(event, SMSSent):
+        label = f"SMS to {name}" if history else f"You texted {name}"
+    elif isinstance(event, WhatsAppSent):
+        label = f"WhatsApp to {name}" if history else f"You WhatsApped {name}"
+    elif isinstance(event, EmailSent):
+        label = f"Email to {name}" if history else f"You emailed {name}"
+    elif isinstance(event, UnifyMessageSent):
+        label = f"Message to {name}" if history else f"You messaged {name}"
+    else:
+        label = f"Discord to {name}" if history else f"You Discord messaged {name}"
+
+    not_delivered = (
+        " (not delivered directly)" if getattr(event, "via_template", False) else ""
+    )
+    return (
+        f"[{label}{not_delivered}] (onboarding message sent — content withheld; "
+        "confirm it's sent and point them to the channel, do not reveal or "
+        "discuss its contents)"
+    )
+
+
 def render_participant_comms(event_json: str, participant_ids: set[int]) -> str | None:
     """Render a comms event involving a call participant as a tagged message.
 
@@ -1227,6 +1274,15 @@ def render_participant_comms(event_json: str, participant_ids: set[int]) -> str 
         return f"[Discord from {name}] {event.content}"
 
     # Outbound
+    # Onboarding-trigger outbounds (e.g. reference-quiz clues) deliver their
+    # full body to the user, but the fast brain only needs to know the
+    # message went out — never its content. Echoing the verbatim body let the
+    # Voice Agent read out or solve clue content. Neutralize the body for the
+    # fast brain's view; the slow brain still owns the actual content.
+    neutral = _neutral_onboarding_outbound(event, name)
+    if neutral is not None:
+        return neutral
+
     if isinstance(event, SMSSent):
         return f"[You texted {name}] {event.content}"
     if isinstance(event, WhatsAppSent):
@@ -1330,6 +1386,14 @@ def _render_history_event(
     """
     cid = _event_contact_id(event)
     name = _contact_name(getattr(event, "contact", {}) or {})
+
+    # Onboarding-trigger outbounds (e.g. reference-quiz clues) must not be
+    # read back verbatim from history either — neutralize the body so a
+    # resumed call cannot surface clue content if the user asks about it.
+    if cid is not None and cid in participant_ids:
+        neutral = _neutral_onboarding_outbound(event, name, history=True)
+        if neutral is not None:
+            return neutral
 
     # -- Utterances (transcript lines) --
     if isinstance(

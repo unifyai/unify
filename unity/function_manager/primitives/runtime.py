@@ -707,13 +707,16 @@ class _UserDesktopFilesNamespace:
         return target_uid, client
 
     async def list(self, path: str = "", user_id: str | None = None) -> list[str]:
-        """List entries under a home-relative directory on the user's machine.
+        """Browse a home-relative directory on the user's machine (no copy).
+
+        This is the cheap, mounting-like way to explore their files: it reads
+        only directory metadata over SFTP and copies nothing. Start here, then
+        ``pull`` the specific entries whose contents you actually need.
 
         ``path`` is relative to the user's home (``""`` lists the home root).
-        Returns names (directories carry a trailing ``/``).  Pair with
-        ``pull`` to bring a single entry into the local mirror under
-        ``~/Unity/Remote/<user_id>/``, or ``sync`` to mirror a whole subtree at
-        once; do not shell out to copy them.
+        Returns names (directories carry a trailing ``/``). Pair with ``pull``
+        to bring a single entry into the local mirror under
+        ``~/Unity/Remote/<user_id>/``; do not shell out to copy them.
         """
         target_uid, client = await self._client(user_id)
         entries = await client.list_dir(path)
@@ -721,14 +724,20 @@ class _UserDesktopFilesNamespace:
         return entries
 
     async def pull(self, path: str, user_id: str | None = None) -> str:
-        """Fetch a file from the user's home into the local staging mirror.
+        """Fetch one file from the user's home into the local staging mirror.
 
-        This is the supported way to access or "sync" a user's desktop file —
-        do **not** copy it in by hand with shell ``cp``/``scp``/``rclone``.
+        This is the default, on-demand way to access a user's desktop file:
+        ``list`` to find it, then ``pull`` it when you need its contents or want
+        to edit it. Do **not** copy it in by hand with shell
+        ``cp``/``scp``/``rclone``.
 
         ``path`` is relative to the user's home.  The file is staged at
         ``~/Unity/Remote/<user_id>/<path>`` (a read-only mirror of their home)
         and that absolute local path is returned, ready to read or parse.
+        Noise (caches, dependency trees, VCS metadata) and credential dirs
+        (``.ssh``, ``.gnupg``, ``.aws``, …) are skipped, so pulling a directory
+        won't drag in its dependencies or secrets; ``list`` still shows the
+        full tree.
         """
         target_uid, client = await self._client(user_id)
         local_path = await client.pull(path)
@@ -736,15 +745,20 @@ class _UserDesktopFilesNamespace:
         return local_path
 
     async def sync(self, path: str = "", user_id: str | None = None) -> list[str]:
-        """Recursively pull a user's home subtree into the local mirror.
+        """Bulk-mirror a whole home subtree into the local mirror at once.
 
-        This is the canonical way to "sync" a user's filesystem — do **not**
-        shell out (``find``/``cat``/``tar``/``rclone``) to copy their files.
+        Reach for this only when you genuinely need *every* file under a
+        subtree; otherwise prefer ``list`` + ``pull``, which fetch just what's
+        needed and are far faster. Do **not** shell out
+        (``find``/``cat``/``tar``/``rclone``) to copy their files.
 
-        ``path`` is relative to the user's home (``""`` syncs the whole home).
-        Every file under it is staged under ``~/Unity/Remote/<user_id>/`` (a
-        read-only mirror of their home), and the list of absolute local paths
-        now staged is returned, ready to read or parse.
+        ``path`` is relative to the user's home. Scope it to a subtree (e.g.
+        ``"Documents"``); ``""`` mirrors the entire home, which can be very
+        large and slow (caches, dependency trees and credential dirs like
+        ``.ssh``/``.gnupg``/``.aws`` are skipped, but it is still a heavy
+        operation — confirm the user really wants everything). Every staged
+        file lands under ``~/Unity/Remote/<user_id>/`` (a read-only mirror of
+        their home); the list of absolute local paths is returned.
         """
         target_uid, client = await self._client(user_id)
         staged = await client.sync(path)

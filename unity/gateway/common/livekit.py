@@ -44,6 +44,7 @@ from livekit.api import (
     SIPDispatchRuleInfo,
 )
 from livekit.protocol.sip import (
+    DeleteSIPDispatchRuleRequest,
     ListSIPDispatchRuleRequest,
     ListSIPInboundTrunkRequest,
     SIPDispatchRule,
@@ -162,7 +163,9 @@ async def ensure_phone_dispatch_rule(
             ):
                 return
             await livekit_api.sip.delete_sip_dispatch_rule(
-                rule.sip_dispatch_rule_id,
+                DeleteSIPDispatchRuleRequest(
+                    sip_dispatch_rule_id=rule.sip_dispatch_rule_id,
+                ),
             )
 
         await livekit_api.sip.create_sip_dispatch_rule(
@@ -263,7 +266,9 @@ async def delete_sip_dispatch_rule(
         return
     livekit_api = get_livekit_api(credentials)
     try:
-        await livekit_api.sip.delete_sip_dispatch_rule(dispatch_rule_id)
+        await livekit_api.sip.delete_sip_dispatch_rule(
+            DeleteSIPDispatchRuleRequest(sip_dispatch_rule_id=dispatch_rule_id),
+        )
         _log.info("deleted dispatch rule %s", dispatch_rule_id)
     except Exception as exc:
         _log.warning("failed to delete dispatch rule %s: %s", dispatch_rule_id, exc)

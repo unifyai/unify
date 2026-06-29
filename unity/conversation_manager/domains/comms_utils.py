@@ -244,6 +244,33 @@ async def send_whatsapp_message(
             return await response.json()
 
 
+async def get_whatsapp_window(to_number: str) -> bool | None:
+    """Best-effort read of a contact's WhatsApp free-form window state.
+
+    Returns ``True``/``False`` when the gateway answers, or ``None`` on any
+    failure (the caller then treats the window as unknown and lets the
+    window-agnostic guidance stand).
+    """
+    agent_id = SESSION_DETAILS.assistant.agent_id
+    if agent_id is None or not to_number:
+        return None
+    try:
+        timeout = aiohttp.ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(
+                f"{_gateway_comms_base_url()}/whatsapp/window",
+                headers=headers,
+                params={"to": to_number, "assistant_id": agent_id},
+            ) as response:
+                response.raise_for_status()
+                data = await response.json()
+                value = data.get("window_open")
+                return bool(value) if value is not None else None
+    except Exception as e:
+        LOGGER.debug(f"WhatsApp window check failed: {e}")
+        return None
+
+
 async def send_unify_message(
     content: str,
     contact_id: int = 1,
@@ -299,6 +326,55 @@ async def send_unify_message(
         return {"success": bool(message_id)}
     except Exception as e:
         LOGGER.error(f"{ICONS['comms_outbound']} Error sending unify message: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def send_unify_meet_ring(
+    call_session_id: str,
+    reason: str = "",
+    contact_id: int = 1,
+) -> dict:
+    """Ring the owner on Unify Meet (the in-app live call).
+
+    The assistant cannot place the call itself - the owner's browser mints the
+    LiveKit token and joins the room. This publishes a ``unify_meet_incoming``
+    signal on the assistant's Pub/Sub topic so the Console shows a pinned
+    incoming-call window; when the owner clicks Answer, Console runs its normal
+    connect flow (token + ``/unify/meet`` dispatch) which lands as
+    ``UnifyMeetReceived`` here. ``reason`` is the briefing for how I open once
+    answered; Console turns it into a briefed opening config.
+    """
+    agent_id = SESSION_DETAILS.assistant.agent_id
+    event_data = {
+        "call_session_id": call_session_id,
+        "reason": reason,
+        "contact_id": contact_id,
+    }
+
+    message_data = {"thread": "unify_meet_incoming", "event": event_data}
+
+    # Console always reads from the assistant's Pub/Sub topic, even in
+    # LOCAL_COMMS_MODE=local; the local outbox is a best-effort mirror.
+    if _use_local_comms():
+        try:
+            await _publish_local_outbox_async(message_data)
+        except Exception as e:
+            LOGGER.debug(
+                f"{ICONS['comms_outbound']} Local outbox mirror failed (non-fatal): {e}",
+            )
+
+    try:
+        message_id = _publish_to_assistant_topic(
+            agent_id=agent_id,
+            thread="unify_meet_incoming",
+            event=event_data,
+        )
+        LOGGER.debug(
+            f"{ICONS['comms_outbound']} Unify Meet ring published with ID: {message_id}",
+        )
+        return {"success": bool(message_id)}
+    except Exception as e:
+        LOGGER.error(f"{ICONS['comms_outbound']} Error ringing Unify Meet: {e}")
         return {"success": False, "error": str(e)}
 
 

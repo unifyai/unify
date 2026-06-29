@@ -97,7 +97,7 @@ ensure_prereqs() {
 # ----------------------------------------------------------------------------
 # Clone (or update) the unity checkout. unify / unillm are cloned separately as
 # editable sibling checkouts (see clone_or_update_sibling): unity's
-# pyproject.toml references them via local relative paths (../unify, ../unillm),
+# pyproject.toml references them via local relative paths (../unisdk, ../unillm),
 # so they must sit alongside the unity checkout under $UNITY_HOME.
 # ----------------------------------------------------------------------------
 clone_or_update_unity() {
@@ -116,7 +116,7 @@ clone_or_update_unity() {
 }
 
 # ----------------------------------------------------------------------------
-# Clone (or update) a first-party SDK (unify / unillm) as a sibling of the unity
+# Clone (or update) a first-party SDK (unisdk / unillm) as a sibling of the unity
 # checkout. unity (and unillm) resolve these via editable relative paths, so
 # they live at $UNITY_HOME/<name> == ../<name> relative to the unity repo. Falls
 # back to the main branch when the requested branch is absent in the SDK repo.
@@ -348,17 +348,13 @@ case "\${1:-}" in
     doctor)
         exec bash "\$UNITY_REPO/scripts/local.sh" gateway-doctor
         ;;
-    voice)
-        shift || true
-        exec bash "\$UNITY_REPO/scripts/voice.sh" "\$@"
-        ;;
     setup|reconfigure)
         exec bash "\$UNITY_REPO/scripts/install.sh" --reconfigure
         ;;
     update|pull)
         echo "Updating unity checkout..."
         git -C "\$UNITY_REPO" pull --rebase || true
-        for sib in unify unillm; do
+        for sib in unisdk unillm; do
             if [ -d "\$UNITY_HOME/\$sib/.git" ]; then
                 echo "Updating \$sib checkout..."
                 git -C "\$UNITY_HOME/\$sib" pull --rebase || true
@@ -385,7 +381,6 @@ unity stop             Stop the local runtime
 unity status           Show runtime status
 unity logs             Follow the runtime log
 unity doctor           Gateway/config checks
-unity voice [...]      Local LiveKit setup for --live-voice
 unity setup            Re-run the key/credential wizard
 unity update           Update the checkout and re-sync deps
 USAGE
@@ -444,7 +439,7 @@ main() {
     echo -e "${BOLD}Unity installer${NC} (branch: $BRANCH)"
     ensure_prereqs
     clone_or_update_unity
-    clone_or_update_sibling unify
+    clone_or_update_sibling unisdk
     clone_or_update_sibling unillm
     clone_or_update_magnitude
     uv_sync

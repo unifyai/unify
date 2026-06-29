@@ -448,6 +448,8 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
             message_content = "<Sending Call...>"
             notif_content = f"Call sent to {sender_name}"
         case UnifyMeetReceived() as e:
+            # The owner answered; cancel any pending no-answer text fallback.
+            cm._pending_meet_ring = None
             await cm.call_manager.start_unify_meet(
                 contact,
                 boss,
@@ -1216,6 +1218,21 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
     # Reset proactive speech on any utterance (user or assistant).
     await cm.schedule_proactive_speech()
 
+    if role == "assistant":
+        # The real spoken utterance has now landed (verbatim, or a truncated
+        # prefix after a barge-in). Clear the render-only in-flight overlay for
+        # this line so future turns rely on the actually-spoken transcript only.
+        inflight = (getattr(cm, "_inflight_voice_speech", "") or "").strip()
+        spoken = (event.content or "").strip()
+        if inflight and spoken and inflight.startswith(spoken):
+            cm._inflight_voice_speech = ""
+            # Signal that the just-published spoken guidance has been delivered
+            # (full line, or a barge-in's truncated prefix) so a deferred hang-up
+            # can safely tear the session down without cutting speech off.
+            delivered = getattr(cm, "_inflight_speech_delivered", None)
+            if delivered is not None:
+                delivered.set()
+
     if role == "user":
         # Link any pending user/webcam screenshot (forwarded from the fast
         # brain via IPC) to this message by stamping it with the message_id.
@@ -1231,6 +1248,7 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
         await cm.interject_or_run(
             event.content,
             triggering_contact_id=contact_id,
+            turn_id=getattr(event, "turn_id", None),
         )
 
 
@@ -1308,6 +1326,61 @@ async def _(
 
     if event.should_speak:
         await cm.schedule_proactive_speech()
+
+
+@EventHandler.register(VoiceInterrupt)
+async def _(
+    event: VoiceInterrupt,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    """Record that the caller interrupted before hearing the full message.
+
+    Only the spoken prefix makes it into the transcript, so without this the slow
+    brain would treat the prefix as the complete message it delivered. We append
+    a guidance note naming the unheard remainder so the slow brain knows it was
+    cut off and can re-surface the missed content if it still matters.
+    """
+    remainder = (event.unheard_remainder or "").strip()
+    if not remainder:
+        return
+    contact_id = event.contact.get("contact_id") if event.contact else None
+    contact = (
+        cm.contact_index.get_contact(contact_id=contact_id) if contact_id else None
+    )
+    if contact is None:
+        contact = event.contact or {}
+    sender_name = _get_sender_name(contact)
+
+    note = (
+        "[The caller interrupted you mid-sentence and did NOT hear the rest of "
+        f'your last message: "{remainder}". Weave it back in naturally if it '
+        "still matters; otherwise move on with what they just said.]"
+    )
+    cm.contact_index.push_message(
+        contact_id=contact_id,
+        sender_name=sender_name,
+        thread_name=_active_voice_thread_medium(cm),
+        message_content=note,
+        role="guidance",
+    )
+
+
+@EventHandler.register(FastBrainContinued)
+async def _(
+    event: FastBrainContinued,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    """Cancel the slow-brain run for the turn the fast brain answered.
+
+    The fast brain resolved this turn itself (resumed the interrupted line or
+    answered small talk), so the slow-brain run that turn spawned must not also
+    answer it. Targets exactly that turn's run (no-op if already gone).
+    """
+    await cm.cancel_slow_brain_run(event.turn_id)
 
 
 @EventHandler.register(ProactiveSpeechControl)
@@ -1798,6 +1871,9 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             medium = Medium.WHATSAPP_MESSAGE
             message_content = whatsapp_sent_history_content(event)
             attachments = event.attachments
+            # A verbatim free-form send proves the window was open; a template
+            # fallback proves it was closed.
+            cm.note_whatsapp_window_open(contact_id, not event.via_template)
             notif_content = (
                 f"WhatsApp template fallback sent to {sender_name}; original pending resend"
                 if event.via_template
@@ -1816,6 +1892,8 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             notif_content = f"WhatsApp received from {sender_name}"
             role = "user"
             event_trace = getattr(cm, "_current_event_trace", None) or {}
+            # An inbound reply (re)opens the 24-hour free-form window.
+            cm.note_whatsapp_window_open(contact_id, True)
             cm._session_logger.info(
                 "whatsapp_received",
                 f"WhatsApp from {sender_name}: {event.content}",

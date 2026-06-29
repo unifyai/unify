@@ -75,12 +75,13 @@ Get your `UNIFY_KEY` and `ASSISTANT_ID` from [console.unify.ai](https://console.
 
 ## Voice — talking to your assistant in the browser
 
-Real voice calls run the production fast-brain (interruption-handling, telephony-aware) locally with sub-second latency. `unity voice setup` boots a local LiveKit dev server — nothing extra to install — and you bring your own speech keys.
+Real voice calls run the production fast-brain (interruption-handling, telephony-aware) locally with sub-second latency. Voice uses LiveKit Cloud for browser Meet, SIP calls, and Unity voice workers, so set `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` alongside your speech keys. The all-repo source stack managed by `unity-deploy/selfhost` loads those LiveKit Cloud credentials from its self-host state directory.
 
 Add a speech-to-text and a text-to-speech key (both have free tiers; pick **one** TTS provider). The install wizard prompts for these; to add them later, edit `~/.unity/unity/.env` and run `unity setup`.
 
 | Variable | Purpose | Where to get it |
 |---|---|---|
+| `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Browser voice media | [cloud.livekit.io](https://cloud.livekit.io) |
 | `DEEPGRAM_API_KEY` | Speech-to-text | [console.deepgram.com](https://console.deepgram.com) — free tier |
 | `CARTESIA_API_KEY` *or* `ELEVEN_API_KEY` | Text-to-speech (pick one) | [play.cartesia.ai](https://play.cartesia.ai) or [elevenlabs.io](https://elevenlabs.io) — free credits |
 
@@ -114,7 +115,6 @@ unity stop               Stop the local runtime
 unity status             Show runtime status
 unity logs               Follow the runtime log
 unity doctor             Gateway/config checks
-unity voice [...]        Local LiveKit setup for --live-voice
 unity setup              Re-run the key/credential wizard
 unity update             Update the checkout and re-sync deps
 ```

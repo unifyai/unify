@@ -13,7 +13,9 @@ and idempotent.
 
 from __future__ import annotations
 
-from typing import Dict
+import os
+from contextlib import contextmanager
+from typing import Dict, Iterator
 from urllib.parse import quote
 
 import unify
@@ -38,6 +40,35 @@ def ensure_builtins_project(project: str) -> None:
         headers=headers,
         json={"is_public_read": True},
     )
+
+
+@contextmanager
+def builtins_seed_key_override() -> Iterator[None]:
+    """Run a Builtins seed/convergence under the Orchestra admin key.
+
+    The Builtins project is reserved: Orchestra only authorises the admin key to
+    create or write it (normal users get a read-only public copy). Production
+    seeding already runs the whole process with ``UNIFY_KEY`` set to the admin
+    key, so this is a no-op there. Test/CI processes run with a *user*
+    ``UNIFY_KEY``; when ``ORCHESTRA_ADMIN_KEY`` is configured, swap it in for the
+    duration of the seed so the reserved-project writes are authorised, then
+    restore the original key.
+    """
+    from unity.settings import SETTINGS
+
+    admin_key = SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()
+    current = os.environ.get("UNIFY_KEY")
+    if not admin_key or admin_key == current:
+        yield
+        return
+    os.environ["UNIFY_KEY"] = admin_key
+    try:
+        yield
+    finally:
+        if current is None:
+            os.environ.pop("UNIFY_KEY", None)
+        else:
+            os.environ["UNIFY_KEY"] = current
 
 
 def read_seed_hashes(project: str, *, meta_context: str, key: str) -> Dict[str, str]:

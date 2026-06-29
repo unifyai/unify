@@ -209,6 +209,9 @@ class InboundPhoneUtterance(Event):
 
     contact: dict
     content: str
+    # Per-turn id from the voice agent, used to cancel exactly the slow-brain run
+    # this turn spawns if the fast brain resolves the turn itself.
+    turn_id: int | None = None
 
 
 @dataclass
@@ -219,6 +222,7 @@ class InboundUnifyMeetUtterance(Event):
 
     contact: dict
     content: str
+    turn_id: int | None = None
 
 
 @dataclass
@@ -229,15 +233,40 @@ class InboundWhatsAppCallUtterance(Event):
 
     contact: dict
     content: str
+    turn_id: int | None = None
 
 
 @dataclass
 class VoiceInterrupt(Event):
-    """User interrupted the assistant during a voice call."""
+    """The caller barged in before the assistant finished its spoken line.
+
+    Carries the part of the assistant's message that was NOT heard so the slow
+    brain knows it was cut off and can decide whether to re-deliver it.
+    """
 
     topic: ClassVar[str | None] = "app:comms:voice_interrupt"
 
     contact: dict
+    spoken_prefix: str = ""
+    unheard_remainder: str = ""
+
+
+@dataclass
+class FastBrainContinued(Event):
+    """The fast brain resolved this turn itself (CONTINUE or SMALLTALK).
+
+    Emitted when the fast brain takes full ownership of the turn's reply - either
+    resuming an interrupted line verbatim (continuation) or fully answering a pure
+    small-talk turn. Signals the CM to cancel the slow-brain run that was eagerly
+    started for this user turn, so the slow brain does not also answer.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:fast_brain_continued"
+
+    contact: dict
+    # The user turn the fast brain resolved; the CM cancels exactly that turn's
+    # slow-brain run (wherever it sits in the debouncer queue).
+    turn_id: int | None = None
 
 
 @dataclass
@@ -301,6 +330,7 @@ class InboundGoogleMeetUtterance(Event):
     speaker_label: str | None = None
     participant_names: list[str] | None = None
     diarization_speaker_id: str | None = None
+    turn_id: int | None = None
 
 
 @dataclass
@@ -376,6 +406,7 @@ class InboundTeamsMeetUtterance(Event):
     speaker_label: str | None = None
     participant_names: list[str] | None = None
     diarization_speaker_id: str | None = None
+    turn_id: int | None = None
 
 
 @dataclass
@@ -867,11 +898,10 @@ class FastBrainNotification(Event):
     source: str = ""
     agent_service_url: str = ""
     llm_log_path: str = ""
-    # ISO-8601 UTC timestamp of the latest voice utterance the slow brain saw
-    # when it decided this guidance. The fast brain skips the dedup gate when no
-    # newer voice activity has occurred (the gate would be provably redundant).
-    # Empty for non-guidance notifications, which always run the gate.
-    decided_after_ts: str = ""
+    # Optional short note (bundled with a spoken line) the fast brain may use to
+    # give a basic direct reply to the caller's next message. Never spoken on its
+    # own; an empty value clears any prior note.
+    fast_brain_guidance: str = ""
 
 
 @dataclass

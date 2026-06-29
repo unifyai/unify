@@ -49,6 +49,20 @@ def clear_worker_signal_files() -> None:
             pass
 
 
+def mark_worker_busy() -> None:
+    """Clear the idle-ready marker when a prewarmed process is consumed by a job.
+
+    The marker is re-created by ``_prewarm_and_signal`` once the worker has
+    warmed a replacement idle process, so ``WORKER_READY_PATH`` existing means
+    "a fresh idle process is available to accept a new call right now" rather
+    than the looser "a process was warmed at some point".
+    """
+    try:
+        os.remove(WORKER_READY_PATH)
+    except FileNotFoundError:
+        pass
+
+
 def _touch_registered_file() -> None:
     try:
         with open(WORKER_REGISTERED_PATH, "w", encoding="utf-8") as f:

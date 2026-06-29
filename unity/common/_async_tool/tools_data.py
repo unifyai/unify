@@ -19,6 +19,7 @@ from .tools_utils import ToolCallMetadata, create_tool_call_message
 from .messages import (
     insert_tool_message_after_assistant,
     _normalise_kwargs_for_bound_method,
+    apply_llm_soft_required_defaults,
 )
 from ..tool_spec import normalise_tools
 from ..llm_helpers import method_to_schema
@@ -609,6 +610,12 @@ class ToolsData:
         }
         allowed_call_args = _normalise_kwargs_for_bound_method(fn, call_args)
         merged_kwargs = {**allowed_call_args, **filtered_extras}
+
+        # Backfill advisory args advertised as required but safe to default at
+        # runtime (e.g. execute_code's `thought`). Keeps the schema's strong
+        # `required` signal while preventing a model omission from raising
+        # TypeError mid-trajectory.
+        merged_kwargs = apply_llm_soft_required_defaults(fn, merged_kwargs)
 
         # Legacy arg-scoped image normalization removed; inner tools should accept ImageRefs explicitly.
 

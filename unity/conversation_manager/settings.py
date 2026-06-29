@@ -22,8 +22,9 @@ class ConversationSettings(BaseSettings):
         PROACTIVE_SPEECH_MODEL: LLM model that decides when and what to say to
             break a silence. Decoupled from the fast brain: this path is not
             latency-critical (it sits behind a debounce and a chosen delay), so
-            it runs on a stronger model to reliably honour the no-repeat
-            constraint. Override via UNITY_CONVERSATION_PROACTIVE_SPEECH_MODEL.
+            it runs on the deepseek slow-brain model at "high" reasoning effort
+            to reliably honour the no-repeat constraint. Override via
+            UNITY_CONVERSATION_PROACTIVE_SPEECH_MODEL.
         FAST_BRAIN_CONTEXT_WINDOW: Maximum number of conversation items
             (utterances, notifications, etc.) the fast brain keeps in its
             rolling context window. Also used as the limit when hydrating
@@ -39,12 +40,7 @@ class ConversationSettings(BaseSettings):
         SPEECH_URGENCY_PREEMPT_ENABLED: Enable the concurrent fast-brain urgency
             evaluator for voice mode. When a user speaks while the slow brain is
             mid-run, a sidecar LLM call classifies the utterance as urgent
-            (preempt) or not (let the queue proceed). Default False.
-        SPEECH_DEDUP_ENABLED: Enable pre-speak deduplication gate in the fast
-            brain subprocess during voice calls. Before playing queued slow brain
-            speech, a lightweight LLM check compares the proposed speech against
-            recent fast brain utterances and suppresses it when the information
-            has already been communicated. Default True.
+            (preempt) or not (let the queue proceed). Default True.
         INGRESS_TRANSPORT: Selector for the inbound transport
             (``unity.gateway.IngressTransport`` implementation) that
             CommsManager consumes. ``""`` (default) and ``"legacy"`` both
@@ -62,7 +58,7 @@ class ConversationSettings(BaseSettings):
     """
 
     FAST_BRAIN_MODEL: str = "gpt-5.4-mini@openai"
-    PROACTIVE_SPEECH_MODEL: str = "gpt-5.5@openai"
+    PROACTIVE_SPEECH_MODEL: str = "deepseek-v4-max@deepseek"
     FAST_BRAIN_CONTEXT_WINDOW: int = 50
     FAST_BRAIN_MOOD_CLASSIFICATION_ENABLED: bool = False
     FAST_BRAIN_MOOD_CLASSIFICATION_MODEL: str = "gpt-5.5-mini@openai"
@@ -73,7 +69,6 @@ class ConversationSettings(BaseSettings):
     CONTACT_ID: str = "1"
     BLACKLIST_CHECKS_ENABLED: bool = False
     SPEECH_URGENCY_PREEMPT_ENABLED: bool = True
-    SPEECH_DEDUP_ENABLED: bool = True
     ASSISTANT_SESSION_GROUP: str = "infra.unify.ai"
     ASSISTANT_SESSION_VERSION: str = "v1alpha1"
     ASSISTANT_SESSION_PLURAL: str = "assistantsessions"

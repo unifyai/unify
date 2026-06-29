@@ -526,25 +526,6 @@ class TestCoordinatorVoicePrompt:
         assert "T-W1N\n----" in prompt
         assert "About me\n--------" not in prompt
 
-    def test_coordinator_voice_onboarding_opener_carries_deadpan_intro(self):
-        prompt = _build_voice(
-            is_coordinator=True,
-            coordinator_onboarding_next_targets=[
-                {
-                    "id": "email-reference",
-                    "title": "Trigger email from T-W1N",
-                    "nudge_voice": "clicking the 'Trigger email from T-W1N' row",
-                    "channel": "email",
-                },
-            ],
-        )
-
-        assert "Hi, I'm T dash W 1 N" in prompt
-        assert "deadpan corporate-training satire" in prompt
-        assert "tongue-in-cheek meta humor" in prompt
-        assert "opening bit only" in prompt
-        assert "not to think about prompting or configuring me" in prompt
-
     def test_coordinator_voice_prompt_excludes_slow_brain_literacy(self):
         prompt = _build_voice(is_coordinator=True)
 
@@ -557,24 +538,23 @@ class TestCoordinatorVoicePrompt:
         assert "`delete_team`" not in prompt
         assert "`remove_team_member`" not in prompt
 
-    def test_coordinator_voice_prompt_includes_console_literacy(self):
+    def test_coordinator_voice_prompt_excludes_navigation_maps(self):
         prompt = _build_voice(is_coordinator=True)
 
+        # The identity block remains on the fast brain.
         assert "My identity" in prompt
         assert "I am T-W1N, Dana Owner's personal, private assistant" in prompt
         assert "T-W1N is Dana Owner's personal, private assistant" not in prompt
-        assert "My Console literacy" in prompt
-        assert "Left sidebar — selection drives everything" in prompt
-        assert "Shared workspaces (Teams in the left sidebar)" in prompt
-        assert "Console account & org administration" in prompt
-        assert "Two ways to accomplish org tasks" in prompt
-        assert "Invite org member (both paths)" in prompt
-        assert "mention **both in the same reply**" in prompt
-        assert "Unify internal operator tools only" in prompt
-        assert "My onboarding flow (UI reference)" in prompt
-        # Step titles now live in the render-driven progress block, not the
-        # catalog flow reference; the block must still speak first-person.
-        assert "Give T-W1N access to your workspace" not in prompt
+        # The console-literacy and onboarding-flow maps are deliberately NOT
+        # given to the fast brain: holding the same navigation knowledge as
+        # the slow brain let the Voice Agent freelance contradictory
+        # "what's next / where do I click" answers. Those questions now defer
+        # to the slow brain (RULE 2), which owns onboarding navigation.
+        assert "My Console literacy" not in prompt
+        assert "Left sidebar — selection drives everything" not in prompt
+        assert "Console account & org administration" not in prompt
+        assert "Two ways to accomplish org tasks" not in prompt
+        assert "My onboarding flow (UI reference)" not in prompt
         assert "Console knowledge\n-----------------" not in prompt
 
 
@@ -679,32 +659,10 @@ class TestCommunicationGuidelinesAdapt:
 class TestExternalAppIntegration:
     """The prompt includes guidance for external app integration via credentials + SDK."""
 
-    def test_onboarding_has_app_integration_qa(self):
-        prompt = _build()
-        assert "Can you help me manage my apps and online services?" in prompt
-        assert "secure **Integrations** tab on the console" in prompt
-        assert "pick the app from the gallery and authorize it" in prompt
-        assert "service's Python SDK" in prompt
-
     def test_act_capabilities_has_external_apps_bullet(self):
         prompt = _build()
         assert "**External apps & services**" in prompt
         assert "stored credentials and the service's Python SDK" in prompt
-
-    def test_onboarding_qa_present_in_demo_mode(self):
-        prompt = _build(demo_mode=True)
-        assert "Can you help me manage my apps and online services?" in prompt
-
-    def test_org_assistant_onboarding_allows_direct_setup_with_shared_handoff(self):
-        prompt = _build()
-
-        assert "I can walk through app setup and day-to-day usage directly" in prompt
-        assert (
-            "If a credential must be shared across the team or org (rather than "
-            "scoped to just me), T-W1N is the right person to place it"
-        ) in prompt
-        assert "T-W1N owns that setup" not in prompt
-        assert "I cannot forward it automatically" not in prompt
 
     def test_act_capabilities_absent_in_demo_mode(self):
         prompt = _build(demo_mode=True)
@@ -847,14 +805,6 @@ class TestConsoleKnowledge:
         prompt = _build(demo_mode=True)
         assert "Console knowledge" not in prompt
 
-    def test_coordinator_uses_console_literacy_not_base_block(self):
-        prompt = _build(is_coordinator=True)
-        assert "My Console literacy" in prompt
-        assert "hover over my name in the left sidebar → ⋮ → **Secrets**" not in prompt
-        assert "Memory → Guidance" in prompt
-        assert "Secrets (on the Integrations tab)" in prompt
-        assert "Shared workspaces (Teams in the left sidebar)" in prompt
-
 
 # ---------------------------------------------------------------------------
 # Tests – demo mode adapts
@@ -933,454 +883,82 @@ class TestConsoleUIGate:
         assert "Platform knowledge" not in prompt
 
 
-_ONBOARDING_RENDER: dict = {
-    "active_step_id": "email-reply",
-    "phases": [
-        {
-            "id": "communication",
-            "phase": "Communication",
-            "title": "Communication",
-            "framing": "Try out the channels.",
-        },
-        {
-            "id": "workspace",
-            "phase": "Workspace",
-            "title": "Workspace",
-        },
-    ],
-    "steps": [
-        {
-            "id": "email-reference",
-            "title": "Trigger email from T-W1N",
-            "phase": "Communication",
-            "status": "done",
-            "can_skip": False,
-        },
-        {
-            "id": "email-reply",
-            "title": "Reply to email",
-            "phase": "Communication",
-            "status": "available",
-            "can_skip": True,
-            "description": "Reply to the clue email with your best guess.",
-            "estimated_time": "1 min",
-            "chips_chat": [{"id": "c1", "label": "Show me the clue again"}],
-        },
-        {
-            "id": "workspace",
-            "title": "Give me access to your workspace",
-            "phase": "Workspace",
-            "status": "locked",
-            "can_skip": False,
-            "description": "Connect Google Workspace or Microsoft 365.",
-            "estimated_time": "2 min",
-        },
-    ],
-    "next_targets": [
-        {
-            "id": "email-reply",
-            "title": "Reply to email",
-            "nudge_chat": "Prompt them to reply with their guess to the email clue.",
-            "nudge_voice": "replying with their guess for the email clue",
-            "channel": "email",
-        },
-    ],
-}
-
-# A render whose in-flight step is NOT itself a fresh next target, used to
-# exercise the active-step depth detail branch.
-_ONBOARDING_RENDER_ACTIVE: dict = {
-    "active_step_id": "whatsapp-call",
-    "phases": [
-        {"id": "communication", "phase": "Communication", "title": "Communication"},
-    ],
-    "steps": [
-        {
-            "id": "whatsapp-call",
-            "title": "Guess on a WhatsApp call",
-            "phase": "Communication",
-            "status": "available",
-            "can_skip": True,
-            "description": "Take the WhatsApp voice clue and guess out loud.",
-            "estimated_time": "3 min",
-        },
-        {
-            "id": "email-reply",
-            "title": "Reply to email",
-            "phase": "Communication",
-            "status": "available",
-            "can_skip": True,
-        },
-    ],
-    "next_targets": [
-        {
-            "id": "email-reply",
-            "title": "Reply to email",
-            "nudge_chat": "Prompt them to reply with their guess to the email clue.",
-            "nudge_voice": "replying with their guess for the email clue",
-            "channel": "email",
-        },
-    ],
-}
-
-_ONBOARDING_RENDER_TRIGGER: dict = {
-    "active_step_id": None,
-    "phases": [
-        {"id": "communication", "phase": "Communication", "title": "Communication"},
-    ],
-    "steps": [
-        {
-            "id": "email-reference",
-            "title": "Trigger email from T-W1N",
-            "phase": "Communication",
-            "kind": "trigger",
-            "status": "available",
-            "can_skip": True,
-            "description": "T-W1N sends a reference-quiz question over email.",
-            "estimated_time": "10 sec",
-        },
-        {
-            "id": "email-reply",
-            "title": "Reply to email",
-            "phase": "Communication",
-            "kind": "reply",
-            "status": "locked",
-            "can_skip": True,
-        },
-    ],
-    "next_targets": [
-        {
-            "id": "email-reference",
-            "title": "Trigger email from T-W1N",
-            "nudge_chat": "Send the email clue once the user is ready.",
-            "nudge_voice": "sending the email clue",
-            "channel": "email",
-            "interaction": {"type": "reference_quiz"},
-        },
-    ],
-}
-
-_ONBOARDING_RENDER_SETUP: dict = {
-    "active_step_id": None,
-    "phases": [
-        {"id": "communication", "phase": "Communication", "title": "Communication"},
-    ],
-    "steps": [
-        {
-            "id": "whatsapp-number",
-            "title": "Add your WhatsApp number",
-            "phase": "Communication",
-            "kind": "setup",
-            "status": "available",
-            "can_skip": True,
-            "description": "Add the WhatsApp number T-W1N should use.",
-            "estimated_time": "30 sec",
-            "flow_note": (
-                "Clicking the 'Add your WhatsApp number' row opens Account -> "
-                "Contact info so the user can add or verify the WhatsApp number."
-            ),
-        },
-    ],
-    "next_targets": [
-        {
-            "id": "whatsapp-number",
-            "title": "Add your WhatsApp number",
-            "nudge_chat": (
-                "Have them click the 'Add your WhatsApp number' row in the "
-                "Onboarding checklist; it opens Account -> Contact info."
-            ),
-            "nudge_voice": (
-                "clicking the 'Add your WhatsApp number' row in the Onboarding checklist"
-            ),
-            "channel": "whatsapp",
-        },
-    ],
-}
-
-
-class TestCoordinatorOnboardingDeferGate:
-    """The global "do onboarding later" switch drops onboarding-specific
-    scaffolding (reactive narration, the checklist/flow map, and the live
-    progress block) but keeps general Console literacy on so the
-    Coordinator can still orient the user and nudge platform behaviours."""
-
-    def test_deferred_drops_onboarding_blocks_but_keeps_console_literacy(self):
-        prompt = _build(
-            is_coordinator=True,
-            coordinator_onboarding_deferred=True,
-            coordinator_onboarding_render=_ONBOARDING_RENDER,
-        )
-        # General platform literacy stays on in every mode.
-        assert "My Console literacy" in prompt
-        # Onboarding-specific scaffolding is suppressed.
-        assert "My onboarding narration" not in prompt
-        assert "My onboarding flow (UI reference)" not in prompt
-        assert "My onboarding progress (live)" not in prompt
-
-    def test_not_deferred_keeps_all_coordinator_blocks(self):
-        prompt = _build(
-            is_coordinator=True,
-            coordinator_onboarding_render=_ONBOARDING_RENDER,
-        )
-        assert "My Console literacy" in prompt
-        assert "My onboarding narration" in prompt
-        assert "My onboarding flow (UI reference)" in prompt
-
-    # Body sentence unique to the standing progress block. The block title
-    # also appears by name inside the narration block (which points the
-    # brain at it), so assertions key off this body line instead.
-    _PROGRESS_BLOCK_MARKER = "always-current picture of the user's onboarding"
-
-    def test_progress_block_renders_next_targets_with_nudge_copy(self):
-        prompt = _build(
-            is_coordinator=True,
-            coordinator_onboarding_render=_ONBOARDING_RENDER,
-        )
-        assert self._PROGRESS_BLOCK_MARKER in prompt
-        # The standing block names the valid next target + its nudge copy
-        # so the brain reads "what's next" rather than deriving it.
-        assert "Reply to email" in prompt
-        assert "Prompt them to reply with their guess to the email clue." in prompt
-
-    def test_progress_block_absent_without_render(self):
-        prompt = _build(is_coordinator=True)
-        assert self._PROGRESS_BLOCK_MARKER not in prompt
-
-    def test_progress_block_breadth_lists_every_step_with_status(self):
-        # Breadth overview: the whole checklist, grouped by section, one line
-        # per step with its live status marker.
-        prompt = _build(
-            is_coordinator=True,
-            coordinator_onboarding_render=_ONBOARDING_RENDER,
-        )
-        assert "Full checklist (every step, with its live status):" in prompt
-        assert "Communication:" in prompt
-        assert "Workspace:" in prompt
-        assert "[done] Trigger email from T-W1N" in prompt
-        assert "[available] Reply to email" in prompt
-        assert "[locked] Give me access to your workspace" in prompt
-
-    def test_progress_block_depth_only_for_frontier(self):
-        # Rich detail (description / time) appears for the startable next
-        # target, but NOT for a locked step that the user cannot start yet.
-        prompt = _build(
-            is_coordinator=True,
-            coordinator_onboarding_render=_ONBOARDING_RENDER,
-        )
-        # email-reply is a next target -> its description is surfaced.
-        assert "Reply to the clue email with your best guess." in prompt
-        assert "Show me the clue again" in prompt
-        # workspace is locked -> its description must NOT be injected.
-        assert "Connect Google Workspace or Microsoft 365." not in prompt
-
-    def test_progress_block_next_targets_priority_ordered_default(self):
-        # The block tells the brain the list is ordered and the first is the
-        # default for an open "what should I do now?".
-        prompt = _build(
-            is_coordinator=True,
-            coordinator_onboarding_render=_ONBOARDING_RENDER,
-        )
-        assert "priority-ordered" in prompt
-        assert "1. Reply to email" in prompt
-
-    def test_progress_block_weights_current_trigger_action(self):
-        prompt = _build(
-            is_coordinator=True,
-            coordinator_onboarding_render=_ONBOARDING_RENDER_TRIGGER,
-        )
-        assert "Current default onboarding action: Trigger email from T-W1N" in prompt
-        assert "a recommendation first" in prompt
-        assert "is not permission to send a message" in prompt
-        assert "the same directive if they happen together" in prompt
-        assert (
-            "the click is just a poll and I confirm rather than send a duplicate"
-            in prompt
-        )
-        assert "must not call it complete early" in prompt
-
-    def test_progress_block_routes_setup_steps_through_checklist_rows(self):
-        prompt = _build(
-            is_coordinator=True,
-            coordinator_onboarding_render=_ONBOARDING_RENDER_SETUP,
-        )
-        assert "Current default onboarding action: Add your WhatsApp number" in prompt
-        assert "click that step's row in the Onboarding checklist" in prompt
-        assert (
-            "How they advance it: Clicking the 'Add your WhatsApp number' row" in prompt
-        )
-        assert (
-            "How I nudge it: Have them click the 'Add your WhatsApp number' row"
-            in prompt
-        )
-        assert "I do not skip straight to Account" in prompt
-
-    def test_progress_block_surfaces_active_step_detail(self):
-        # An in-flight step that is not itself a fresh next target still gets
-        # its detail surfaced so the brain can guide it.
-        prompt = _build(
-            is_coordinator=True,
-            coordinator_onboarding_render=_ONBOARDING_RENDER_ACTIVE,
-        )
-        assert (
-            "In-flight step the user is on right now: Guess on a WhatsApp call."
-            in prompt
-        )
-        assert "Take the WhatsApp voice clue and guess out loud." in prompt
-
-    def test_voice_deferred_keeps_literacy_drops_flow_reference(self):
-        prompt = _build_voice(is_coordinator=True, coordinator_onboarding_deferred=True)
-        assert "My Console literacy" in prompt
-        assert "My onboarding flow (UI reference)" not in prompt
-
-    def test_voice_opener_pitches_server_next_target(self):
-        prompt = _build_voice(
-            is_coordinator=True,
-            coordinator_onboarding_next_targets=[
-                {
-                    "id": "apps",
-                    "title": "Connect me with your apps",
-                    "nudge_chat": "Click the row to open Integrations.",
-                    "nudge_voice": (
-                        "clicking the 'Connect me with your apps' row in the Onboarding checklist"
-                    ),
-                    "channel": None,
-                },
-            ],
-        )
-        assert (
-            "clicking the 'Connect me with your apps' row in the Onboarding checklist"
-            in prompt
-        )
-        assert "I do not send the user directly to Account" in prompt
-
-    def test_voice_opener_keeps_reference_quiz_secondary_to_intro(self):
-        prompt = _build_voice(
-            is_coordinator=True,
-            coordinator_onboarding_next_targets=[
-                {
-                    "id": "email-reference",
-                    "title": "Trigger email from T-W1N",
-                    "nudge_voice": "starting the communication-channel reference quiz",
-                    "channel": "email",
-                    "interaction": {"type": "reference_quiz"},
-                },
-            ],
-        )
-        assert "overrides the generic Brevity/Opening rule" in prompt
-        assert "how can I help" in prompt
-        assert "reference quiz" in prompt
-        assert "secondary to the T-W1N intro" in prompt
-        assert "Explain the clue-and-guess mechanic only when" in prompt
-
-
 # ---------------------------------------------------------------------------
-# Tests – onboarding flow reference is driven by the fetched catalog
+# Tests - small-talk sidecar prompt
 # ---------------------------------------------------------------------------
 
 
-def _catalog_step(step_id: str, title: str, phase: str) -> dict:
-    return {
-        "id": step_id,
-        "title": title,
-        "phase": phase,
-        "kind": "connect",
-        "channel": None,
-        "can_skip": True,
-        "description": "",
-        "estimated_time": "",
-        "chips_chat": [],
-        "chips_call": [],
-    }
+class TestSmalltalkMessages:
+    """The small-talk sidecar lets the fast brain fully answer pure social /
+    biographical / self-context / repeat turns, and DEFERs everything else."""
 
+    def test_build_smalltalk_messages_structure(self):
+        from unity.conversation_manager.prompt_builders import build_smalltalk_messages
 
-# A local-mode catalog: every phase present (mirrors the shape Orchestra's
-# ``/assistant/onboarding/catalog`` returns on a self-host / dev deployment).
-_CATALOG_LOCAL: dict = {
-    "phases": [
-        {
-            "id": "communication",
-            "phase": "Communication",
-            "title": "Communication",
-            "description": "Try communication channels.",
-        },
-        {
-            "id": "workspace",
-            "phase": "Workspace",
-            "title": "Workspace",
-            "description": "Give access to the workspace.",
-        },
-        {
-            "id": "integrations",
-            "phase": "Integrations",
-            "title": "Integrations",
-            "description": "Connect apps.",
-        },
-        {
-            "id": "tasks",
-            "phase": "Tasks",
-            "title": "Tasks",
-            "description": "Schedule work.",
-        },
-        {
-            "id": "my-computer",
-            "phase": "My Computer",
-            "title": "My Computer",
-            "description": "Ask me to operate from my computer.",
-        },
-    ],
-    "steps": [
-        _catalog_step("email-reference", "Trigger email from T-W1N", "Communication"),
-        _catalog_step("workspace", "Give me access to your workspace", "Workspace"),
-        _catalog_step("apps", "Connect me with your apps", "Integrations"),
-        _catalog_step("schedule", "Schedule a task for later", "Tasks"),
-        _catalog_step("my-computer-coming-soon", "[Coming soon]", "My Computer"),
-    ],
-}
+        history = [
+            {"role": "assistant", "content": "Hi there!"},
+            {"role": "user", "content": "what did you just say?"},
+        ]
+        msgs = build_smalltalk_messages(
+            system_prompt="PERSONA",
+            history_messages=history,
+            user_text="what did you just say?",
+        )
+        # Persona first, guardrail near the end, caller's latest line last.
+        assert msgs[0] == {"role": "system", "content": "PERSONA"}
+        assert msgs[-1] == {"role": "user", "content": "what did you just say?"}
+        assert msgs[-2]["role"] == "system"
+        # History is preserved between persona and guardrail.
+        assert {"role": "assistant", "content": "Hi there!"} in msgs
 
-# A hosted catalog: Orchestra returns the same phase structure as local mode.
-_CATALOG_HOSTED: dict = {
-    "phases": _CATALOG_LOCAL["phases"],
-    "steps": _CATALOG_LOCAL["steps"],
-}
+    def test_smalltalk_guardrail_allows_social_bio_selfcontext_repeat(self):
+        from unity.conversation_manager.prompt_builders import _SMALLTALK_GUARDRAIL
 
+        g = _SMALLTALK_GUARDRAIL.lower()
+        assert "tell me about yourself" in g
+        assert "repeat" in g
+        # Self-context is allowed but only when actually known.
+        assert "local time" in g or "where you are" in g
+        assert "do not guess" in g or "do not actually know" in g
 
-class TestOnboardingCatalogDrivesFlowReference:
-    """The flow-reference block is now a fixed-size UI-literacy block: it
-    sources only the phase legend from the fetched catalog and never
-    enumerates per-step rows (the step list, statuses, and "what's next" live
-    in the render-driven progress block instead)."""
+    def test_smalltalk_guardrail_defers_substantive_and_mixed(self):
+        from unity.conversation_manager.prompt_builders import (
+            SMALLTALK_DEFER_SENTINEL,
+            _SMALLTALK_GUARDRAIL,
+        )
 
-    def test_local_catalog_renders_phase_legend(self):
-        prompt = _build(is_coordinator=True, onboarding_catalog=_CATALOG_LOCAL)
-        assert "My onboarding flow (UI reference)" in prompt
-        assert "Communication" in prompt
-        assert "My Computer" in prompt
+        assert SMALLTALK_DEFER_SENTINEL == "DEFER"
+        g = _SMALLTALK_GUARDRAIL
+        assert "DEFER" in g
+        low = g.lower()
+        # Data / tools / actions and mixed turns must defer.
+        assert "calendar" in low and "inbox" in low
+        assert "tool" in low
+        assert "mixed" in low
+        assert "when unsure" in low
 
-    def test_hosted_catalog_renders_phase_legend(self):
-        prompt = _build(is_coordinator=True, onboarding_catalog=_CATALOG_HOSTED)
-        assert "My onboarding flow (UI reference)" in prompt
-        assert "Communication" in prompt
-        assert "My Computer" in prompt
+    def test_smalltalk_guardrail_stays_silent_on_bare_acks(self):
+        from unity.conversation_manager.prompt_builders import (
+            SMALLTALK_SILENCE_SENTINEL,
+            _SMALLTALK_GUARDRAIL,
+        )
 
-    def test_flow_reference_does_not_enumerate_steps(self):
-        # The slimmed block must not list per-step rows like
-        # "**...** (`workspace`)." — that breadth now lives in the live
-        # progress block driven by the render.
-        prompt = _build(is_coordinator=True, onboarding_catalog=_CATALOG_LOCAL)
-        assert "(`workspace`)" not in prompt
-        assert "(`email-reference`)" not in prompt
-        assert "Give me access to your workspace" not in prompt
+        assert SMALLTALK_SILENCE_SENTINEL == "SILENCE"
+        g = _SMALLTALK_GUARDRAIL
+        assert "SILENCE" in g
+        low = g.lower()
+        # Bare acknowledgements -> silence, never echoed back.
+        assert "acknowledgement" in low
+        assert "never echo" in low
+        # The carve-out: an 'okay' that authorises an action is NOT silence.
+        assert "authorises an action" in low or "authorizes an action" in low
 
-    def test_literacy_local_omits_removed_work_tour_hooks(self):
-        prompt = _build(is_coordinator=True, onboarding_catalog=_CATALOG_LOCAL)
-        assert "Onboarding phase 7 (My Computer) — tour hooks" not in prompt
+    def test_smalltalk_guardrail_defers_action_and_status_questions(self):
+        from unity.conversation_manager.prompt_builders import _SMALLTALK_GUARDRAIL
 
-    def test_literacy_hosted_omits_removed_work_tour_hooks(self):
-        prompt = _build(is_coordinator=True, onboarding_catalog=_CATALOG_HOSTED)
-        assert "Onboarding phase 7 (My Computer) — tour hooks" not in prompt
-
-    def test_voice_flow_reference_uses_catalog(self):
-        prompt = _build_voice(is_coordinator=True, onboarding_catalog=_CATALOG_HOSTED)
-        assert "My onboarding flow (UI reference)" in prompt
-        assert "My Computer" in prompt
-        assert "Workspace" in prompt
+        low = _SMALLTALK_GUARDRAIL.lower()
+        # The fast brain must never promise/report on an action it controls.
+        assert "hang up" in low
+        assert "are you calling me" in low
+        assert "did you send it yet" in low
+        assert "never promise, claim, or report" in low

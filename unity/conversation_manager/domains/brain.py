@@ -268,6 +268,7 @@ def build_brain_spec(
         is_voice_call=cm.mode.is_voice,
         is_internal_call=is_internal_call,
         on_voice_call=cm.in_voice_session,
+        voice_line_ready=cm.call_manager.is_ready_for_new_call,
         demo_mode=SETTINGS.DEMO_MODE,
         computer_fast_path=cm.computer_fast_path_eligible,
         assistant_has_phone=bool(cm.assistant_number),
@@ -292,6 +293,7 @@ def build_brain_spec(
         console_ui_present=SETTINGS.UNITY_CONSOLE_UI,
         coordinator_onboarding_deferred=cm.coordinator_onboarding_deferred,
         coordinator_onboarding_render=cm.coordinator_onboarding_render,
+        coordinator_clicked_trigger_steps=cm.onboarding_clicked_trigger_steps,
         onboarding_catalog=cm.onboarding_catalog,
     )
     _system_prompt_ms = _mark_step()

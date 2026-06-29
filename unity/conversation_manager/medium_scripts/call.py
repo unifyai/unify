@@ -20,7 +20,6 @@ from livekit.agents import (
     tts,
     stt,
 )
-from livekit.agents.types import NOT_GIVEN
 from livekit.plugins import (
     cartesia,
     deepgram,
@@ -38,14 +37,17 @@ from livekit.agents import ChatContext, ChatMessage
 from livekit.agents import ModelSettings, llm
 from livekit.agents.llm import ChatChunk, ChoiceDelta
 
-from typing import AsyncIterable, Awaitable, Callable
+from typing import AsyncIterable, Callable
 
 load_dotenv()
 
 from unity.conversation_manager.events import *
 from unity.conversation_manager.utils import dispatch_livekit_agent
 from unity.conversation_manager.prompt_builders import (
+    SMALLTALK_DEFER_SENTINEL,
+    SMALLTALK_SILENCE_SENTINEL,
     build_opening_greeting_messages,
+    build_smalltalk_messages,
     build_voice_agent_prompt,
 )
 from unity.conversation_manager.tracing import (
@@ -74,12 +76,17 @@ from unity.conversation_manager.medium_scripts.common import (
     publish_meet_interaction_from_track,
     FastBrainLogger,
     hydrate_fast_brain_history,
-    trim_fast_brain_context,
 )
 from unity.conversation_manager.cm_types.screenshot import (
     ScreenshotEntry,
     generate_screenshot_path,
     write_screenshot_to_disk,
+)
+from unity.conversation_manager.domains.fast_brain_buffer import (
+    compute_resume_text,
+    pick_resume_lead_in,
+    select_continuation,
+    select_fast_reply,
 )
 
 # Globals initialized lazily or via prewarm to avoid duplicate heavy init
@@ -94,10 +101,6 @@ DEPLETED_CREDITS_FAST_BRAIN_RESPONSE = (
     "Your credits are depleted, so I can't continue helping with setup or tasks "
     "until you top up. Please add credits in billing, then I'll pick this back up."
 )
-ELEVENLABS_ONBOARDING_OPENER_SPEED = 0.5
-ELEVENLABS_VOICE_SETTINGS_STABILITY = 0.5
-ELEVENLABS_VOICE_SETTINGS_SIMILARITY_BOOST = 0.75
-
 VIDEO_AVATAR_CHANNELS = frozenset({"unify_meet", "google_meet", "teams_meet"})
 ELEVENLABS_TWIN_PRONUNCIATION_SOURCE = "t-w1n"
 ELEVENLABS_TWIN_PRONUNCIATION_TARGET = "Twin"
@@ -143,38 +146,6 @@ async def _normalize_elevenlabs_twin_pronunciation_stream(
 
     if pending:
         yield pending
-
-
-def _elevenlabs_speed_settings(speed: float):
-    return elevenlabs.VoiceSettings(
-        stability=ELEVENLABS_VOICE_SETTINGS_STABILITY,
-        similarity_boost=ELEVENLABS_VOICE_SETTINGS_SIMILARITY_BOOST,
-        speed=speed,
-    )
-
-
-def _elevenlabs_current_voice_settings(tts_instance: object):
-    return tts_instance._opts.voice_settings
-
-
-def _mark_elevenlabs_tts_connection_non_current(tts_instance: object) -> None:
-    current_connection_attr = "_TTS__current_connection"
-    current_connection = getattr(tts_instance, current_connection_attr)
-    if current_connection is not None:
-        current_connection.mark_non_current()
-        setattr(tts_instance, current_connection_attr, None)
-
-
-def _set_elevenlabs_voice_settings(
-    tts_instance: object,
-    voice_settings: object,
-) -> None:
-    if utils.is_given(voice_settings):
-        tts_instance.update_options(voice_settings=voice_settings)
-        return
-
-    tts_instance._opts.voice_settings = NOT_GIVEN
-    _mark_elevenlabs_tts_connection_non_current(tts_instance)
 
 
 class FastBrainCreditGateMonitor:
@@ -355,43 +326,58 @@ class Assistant(Agent):
         self._user_speech_logged = False
         self.user_turn_generating = False
         self._credit_gate_state_provider: Callable | None = None
-        # Returns the texts of utterances currently being spoken but not yet
-        # committed to the chat context, so the fast brain sees them before it
-        # generates and does not re-voice them.
-        self._inflight_speech_provider: Callable[[], list[str]] | None = None
+        # On outbound calls the opener is held until the callee's first utterance
+        # (or a fallback timeout). While pending, the opener is the sole response
+        # to that first turn: the fast-brain filler and the slow-brain turn are
+        # suppressed for it. Cleared once the opener has been dispatched.
+        self._opening_pending = outbound
+        self._first_user_turn = asyncio.Event()
+        # Optional short note the slow brain bundles with a spoken line for the
+        # fast brain to use on the caller's next message (e.g. confirm a fact).
+        # Replaced/cleared on each slow-brain spoken turn; never spoken aloud.
+        self._fast_brain_guidance = ""
+        # Monotonic user-turn counter and the latest turn the slow brain has
+        # already produced spoken output for. A buffer filler is only useful as a
+        # lead-in: if the slow brain has already responded to this turn, the
+        # filler is dropped so it never plays AFTER the real answer.
+        self._user_turn_seq = 0
+        self._slow_brain_responded_turn = -1
+        # Count of consecutive fast replies emitted since the slow brain last
+        # spoke. After the first reaction, subsequent ones are marked as repeated
+        # deferrals so they reassure ("bear with me") rather than starting a
+        # fresh lookup. Reset when the slow brain delivers a real reply.
+        self._buffers_since_slow_reply = 0
         # Armed when the recorded opener is interrupted before its static-removal
-        # transition; plays a bridge recording at the start of the next turn.
-        self._pending_opening_bridge: Callable[[], Awaitable[None]] | None = None
+        # transition. Schedules a bridge recording at the start of the next turn.
+        # The callable enqueues the bridge synchronously (no playout await) so
+        # the fast-brain reply generates concurrently and queues behind it.
+        self._pending_opening_bridge: Callable[[], None] | None = None
+        # The in-flight TTS say handle (slow-brain speech or a briefed/speak
+        # opener) registered for resumption, and the claimable resume candidate
+        # produced when it is interrupted. Pre-recorded audio is never registered
+        # here, so its hand-crafted tone is never continued by the live voice.
+        self._active_tts: dict | None = None
+        self._pending_continuation: dict | None = None
+        self._tts_seq = 0
+        self._publish_voice_interrupt: Callable | None = None
+        # Full text of a continuation reply the fast brain is about to yield this
+        # turn. Read once by the ``speech_created`` observer to register the reply
+        # handle as interruptible (so a resumed line is itself recursively
+        # resumable), then cleared. ``None`` for ordinary buffer fillers, which
+        # carry no substantive content worth re-surfacing.
+        self._continuation_full_text: str | None = None
+        # Cancels the speculatively-started slow-brain run for this turn the
+        # instant the fast brain resolves it itself (CONTINUE or SMALLTALK), so
+        # the slow brain cannot also re-deliver / re-answer the same content.
+        self._publish_fast_brain_continued: Callable | None = None
+        # Fully answers a pure small-talk turn from persona + recent history, or
+        # returns None to defer to the slow brain. Set in the entrypoint.
+        self._generate_smalltalk_reply: Callable | None = None
 
         super().__init__(instructions=instructions)
 
     def set_credit_gate_state_provider(self, provider: Callable) -> None:
         self._credit_gate_state_provider = provider
-
-    @staticmethod
-    def _append_inflight_speech_context(
-        chat_ctx: "llm.ChatContext",
-        texts: list[str],
-    ) -> None:
-        """Append in-flight (currently-spoken, uncommitted) lines to a context.
-
-        Each is added as a self-describing ``system`` note so the fast brain
-        knows it is already saying the line and continues from it rather than
-        repeating it. Mutates the given context only - callers pass the
-        ephemeral per-generation copy, so nothing persists to real history.
-        """
-        for text in texts:
-            t = (text or "").strip()
-            if not t:
-                continue
-            chat_ctx.add_message(
-                role="system",
-                content=[
-                    "[system] I am in the middle of saying this aloud to the "
-                    f'caller right now: "{t}". I should not repeat it; I '
-                    "continue naturally from it if relevant.",
-                ],
-            )
 
     def set_call_received(self):
         self.call_received = True
@@ -401,11 +387,28 @@ class Assistant(Agent):
         turn_ctx: ChatContext,
         new_message: ChatMessage,
     ) -> None:
-        """Hook called when user finishes speaking — before LLM generation starts."""
+        """Hook called when user finishes speaking — before LLM generation starts.
+
+        The opener static-removal bridge (if armed) is *scheduled* here but not
+        awaited: enqueueing it synchronously, before this hook returns, keeps it
+        ahead of the reply the framework generates next (same speech priority,
+        FIFO), while letting the fast brain think during the bridge playout
+        instead of after it. The reply queues behind the bridge rather than
+        interrupting it, and the bridge text stays in the in-flight speech queue
+        so the concurrent generation sees it and continues naturally from it.
+        """
+        # New user turn: a fresh buffer filler is now warranted (until the slow
+        # brain responds to this turn).
+        self._user_turn_seq += 1
+        # On an outbound call, the callee's first completed utterance triggers the
+        # held opener (the opener answers it). Signalling on turn-completed means
+        # we respond after their "Hello?", never over it.
+        if self._opening_pending and not self._first_user_turn.is_set():
+            self._first_user_turn.set()
         if self._pending_opening_bridge is not None:
-            play_bridge = self._pending_opening_bridge
+            schedule_bridge = self._pending_opening_bridge
             self._pending_opening_bridge = None
-            await play_bridge()
+            schedule_bridge()
         text = new_message.text_content or ""
         if text:
             _log.user_speech(text)
@@ -417,13 +420,28 @@ class Assistant(Agent):
         tools: list[llm.FunctionTool | llm.RawFunctionTool],
         model_settings: ModelSettings,
     ) -> AsyncIterable[llm.ChatChunk]:
-        """Wait for call connection then delegate to parent LLM."""
+        """Wait for call connection, then emit a single buffer filler phrase.
+
+        The fast brain does not free-generate substantive replies; it selects one
+        short, safe filler phrase to cover latency while the slow brain composes
+        the real (verbatim-spoken) response.
+        """
         self.user_turn_generating = True
+        # Stale-guard: only a continuation set below should be registered for
+        # resumption; clear any leftover so an ordinary buffer reply is not.
+        self._continuation_full_text = None
         try:
             _log.info("Waiting for call to be received…")
             while not self.call_received:
                 await asyncio.sleep(0.1)
             _log.call_status("call_received")
+
+            # While the outbound opener is still pending, the callee's first turn
+            # triggers the opener itself (the opener is the reply). Emit no filler
+            # so it does not precede or race the opener.
+            if self._opening_pending:
+                _log.info("Filler suppressed: outbound opener still pending")
+                return
 
             credit_gate_state = (
                 self._credit_gate_state_provider()
@@ -441,42 +459,183 @@ class Assistant(Agent):
                 )
                 return
 
-            await self._capture_screenshots_for_llm(chat_ctx)
+            # The buffer is only useful as a lead-in. If the slow brain has
+            # already produced spoken output for this turn (e.g. this is a
+            # notification-triggered re-generation, or its answer landed first),
+            # emit nothing - a filler must never play AFTER the real answer.
+            my_turn = self._user_turn_seq
+            if self._slow_brain_responded_turn >= my_turn:
+                _log.info("Buffer suppressed: slow brain already responded this turn")
+                return
 
             asyncio.create_task(
                 event_broker.publish("app:comms:fast_brain_generating", "{}"),
             )
 
-            from unity.settings import SETTINGS
+            # The fast brain does not compose the real answer (the slow brain
+            # does, spoken verbatim). It gives one brief, natural reaction to
+            # cover the gap. The first reply since the slow brain last spoke is a
+            # fresh reaction; subsequent ones (the caller spoke again before the
+            # real reply landed) are marked as repeated deferrals so they reassure
+            # rather than starting a fresh lookup.
+            already_deferred = self._buffers_since_slow_reply >= 1
+            user_text = ""
+            recent_assistant_text = ""
+            for item in reversed(chat_ctx.items):
+                role = getattr(item, "role", None)
+                if role == "user" and not user_text:
+                    user_text = item.text_content or ""
+                elif role == "assistant" and not recent_assistant_text:
+                    recent_assistant_text = item.text_content or ""
+                if user_text and recent_assistant_text:
+                    break
 
-            window = SETTINGS.conversation.FAST_BRAIN_CONTEXT_WINDOW
-            trimmed_items = trim_fast_brain_context(chat_ctx.items, window)
-            if len(trimmed_items) < len(chat_ctx.items):
-                trimmed_ctx = llm.ChatContext()
-                for item in trimmed_items:
-                    trimmed_ctx.items.append(item)
-            else:
-                trimmed_ctx = chat_ctx
+            # If this barge-in cut off a slow-brain line, the fast brain may
+            # resume the unheard remainder immediately (speaking the slow brain's
+            # own verbatim words) instead of waiting a full slow-brain turn for it
+            # to be re-delivered.
+            continuation = await self._claim_interrupted_continuation(user_text)
+            if continuation is not None:
+                if self._slow_brain_responded_turn >= my_turn:
+                    _log.info("Continuation suppressed: slow brain already responded")
+                    return
+                self._buffers_since_slow_reply += 1
+                # Resume the slow brain's verbatim remainder AS the reply. Mark the
+                # full text so the ``speech_created`` observer registers this reply
+                # for interruption-stashing -> a barge-in mid-resume re-stashes a
+                # fresh candidate, making continuation recursive. Cancel the
+                # speculatively-started slow-brain run so it cannot re-deliver it.
+                self._continuation_full_text = continuation
+                if self._publish_fast_brain_continued is not None:
+                    await self._publish_fast_brain_continued(my_turn)
+                yield ChatChunk(
+                    id=f"fast-brain-continuation-{monotonic_ms()}",
+                    delta=ChoiceDelta(role="assistant", content=continuation),
+                )
+                return
 
-            # Surface any line currently being spoken aloud (e.g. proactive
-            # speech mid-playout) that has not yet committed to history, so the
-            # fast brain does not re-voice it. Injected into the per-generation
-            # copy only, so it never persists (the real turn commits once at
-            # playout end).
-            if self._inflight_speech_provider is not None:
-                inflight = self._inflight_speech_provider() or []
-                if inflight:
-                    self._append_inflight_speech_context(trimmed_ctx, inflight)
+            # Refresh screenshots only on the first reaction (also feeds the slow
+            # brain); repeated deferrals don't need it and should stay snappy.
+            if not already_deferred:
+                await self._capture_screenshots_for_llm(chat_ctx)
 
-            _log.info("LLM thinking… (llm_node_start)")
-            async for chunk in super().llm_node(
-                trimmed_ctx,
-                tools,
-                model_settings,
-            ):
-                yield chunk
+            # Race the small-talk reply against the lean filler. If this turn is
+            # pure small talk (greeting, biographical, simple self-context,
+            # repeat), the fast brain answers it in full and cancels the eager
+            # slow-brain run; otherwise it defers and the filler covers the gap
+            # while the slow brain composes the real answer. Running both
+            # concurrently keeps DEFER turns at the filler's latency.
+            _log.info("Selecting fast reply… (llm_node_start)")
+            smalltalk_task = (
+                asyncio.create_task(self._generate_smalltalk_reply(user_text))
+                if self._generate_smalltalk_reply is not None
+                else None
+            )
+            buffer_task = asyncio.create_task(
+                select_fast_reply(
+                    user_text,
+                    recent_assistant_text,
+                    already_deferred=already_deferred,
+                    guidance=self._fast_brain_guidance,
+                ),
+            )
+
+            smalltalk = await smalltalk_task if smalltalk_task is not None else None
+            if smalltalk is _SMALLTALK_STAY_SILENT:
+                # A bare acknowledgement ("okay") needs no reply: say nothing and
+                # cancel this turn's slow-brain run so neither brain speaks.
+                buffer_task.cancel()
+                _log.info("Small talk: staying silent on bare acknowledgement")
+                if self._publish_fast_brain_continued is not None:
+                    await self._publish_fast_brain_continued(my_turn)
+                return
+            if smalltalk is not None:
+                buffer_task.cancel()  # the filler is not needed
+                if self._slow_brain_responded_turn >= my_turn:
+                    _log.info("Small talk suppressed: slow brain already responded")
+                    return
+                self._buffers_since_slow_reply += 1
+                # The fast brain fully answered this turn; cancel the eager
+                # slow-brain run so it does not also answer the same thing.
+                if self._publish_fast_brain_continued is not None:
+                    await self._publish_fast_brain_continued(my_turn)
+                yield ChatChunk(
+                    id=f"fast-brain-smalltalk-{monotonic_ms()}",
+                    delta=ChoiceDelta(role="assistant", content=smalltalk),
+                )
+                return
+
+            phrase = await buffer_task
+
+            # Re-check: the slow brain may have answered during selection. If so,
+            # drop the now-stale filler so it does not trail the real answer.
+            if self._slow_brain_responded_turn >= my_turn:
+                _log.info("Buffer suppressed: slow brain responded during selection")
+                return
+
+            self._buffers_since_slow_reply += 1
+            yield ChatChunk(
+                id=f"fast-brain-buffer-{monotonic_ms()}",
+                delta=ChoiceDelta(role="assistant", content=phrase),
+            )
         finally:
             self.user_turn_generating = False
+
+    async def _claim_interrupted_continuation(self, user_text: str) -> str | None:
+        """Decide the fate of an interrupted line - the fast brain's front-door job.
+
+        Every turn after a barge-in routes through here:
+        - No pending candidate -> None (ordinary buffer path).
+        - A barge-in that produced no transcript (speechless noise/echo) ->
+          auto-CONTINUE: resume the remainder verbatim, since there is no spoken
+          content that could possibly justify deferring.
+        - A barge-in with speech -> classify (heavily biased to CONTINUE); on a
+          DEFER, hand the remainder to the slow brain via ``VoiceInterrupt``.
+
+        Returns "{lead-in} {verbatim remainder}" to resume, else None. Claiming
+        marks the candidate consumed so it is delivered exactly once.
+        """
+        text = (user_text or "").strip()
+
+        # Barge-in vs user-turn race: if a line was just interrupted but its
+        # remainder hasn't been computed yet, wait briefly for it.
+        active = self._active_tts
+        if (
+            self._pending_continuation is None
+            and active is not None
+            and getattr(active.get("handle"), "interrupted", False)
+        ):
+            for _ in range(6):  # ~300ms
+                await asyncio.sleep(0.05)
+                if self._pending_continuation is not None:
+                    break
+
+        pending = self._pending_continuation
+        if not pending or pending.get("consumed"):
+            return None
+
+        # Claim synchronously so no other path can double-deliver it.
+        pending["consumed"] = True
+        resume_text = (pending.get("resume_text") or "").strip()
+        remainder = (pending.get("remainder") or "").strip()
+        spoken_prefix = (pending.get("spoken_prefix") or "").strip()
+        self._pending_continuation = None
+        self._active_tts = None
+        if not resume_text:
+            return None
+
+        # Speechless barge-in: the only sensible action is to continue, so resume
+        # directly without consulting the classifier.
+        if not text:
+            return f"{pick_resume_lead_in()} {resume_text}".strip()
+
+        lead_in = await select_continuation(resume_text, user_text)
+        if lead_in is None:
+            # Redirect / new ask: hand the remainder to the slow brain instead.
+            if self._publish_voice_interrupt is not None and remainder:
+                await self._publish_voice_interrupt(spoken_prefix, remainder)
+            return None
+        return f"{lead_in} {resume_text}".strip()
 
     async def stt_node(
         self,
@@ -608,40 +767,100 @@ def _hydrate_session_details_from_metadata(meta: dict) -> None:
 
 
 _CALL_OPENING_MODES = {"speak", "simulated", "silent", "briefed", "recorded"}
+
+# On an outbound call, hold the opener until the earliest of the callee's first
+# completed utterance (their "Hello?") or this fallback timeout. Triggering on
+# their speech ensures the opener lands when they are actually listening, instead
+# of into dead air right after the line connects.
+OUTBOUND_OPENING_TRIGGER_TIMEOUT_S = 5.0
+
+# Ceiling on a fast-brain small-talk reply. A social / biographical / self-context
+# answer is a sentence or two; anything longer means the model overreached into a
+# substantive answer (the slow brain's job), so we drop it and defer instead.
+_MAX_SMALLTALK_CHARS = 300
+
+# Distinct small-talk outcome: a bare acknowledgement ("okay") needs no reply at
+# all. The fast brain stays silent AND cancels the slow-brain run, so neither
+# brain speaks. Identity-checked, so it can never collide with a real reply.
+_SMALLTALK_STAY_SILENT = object()
+
+# When the assistant ends a Unify Meet, we first tell the Console to leave the
+# room itself (so its WebRTC peer connection and SCTP data channels close
+# cleanly) before the agent shuts down and the room is deleted server-side.
+# Without this lead time the server-side DeleteRoom force-evicts the still-
+# connected browser, which surfaces as benign but noisy "Unknown DataChannel
+# error" logs in the Next.js console. This is the grace given for the client to
+# disconnect gracefully on its own.
+MEET_GRACEFUL_LEAVE_GRACE_S = 0.6
+
+# The walkie-talkie staticky intro is cut into per-sentence audio slices (at
+# silence midpoints, aligned via Whisper word timestamps). They play in order as
+# separate segments; each commits its own transcript to history as it finishes.
+# So if the caller interrupts, the fast brain inherits ONLY the sentences that
+# were actually heard (plus the one in progress) — never the rest of the scripted
+# intro, whose carefully-recorded tone the live voice cannot reproduce.
+_WALKIE_OPENER_SENTENCE_SEGMENTS: list[tuple[str, str]] = [
+    ("coordinator_onboarding_intro_walkie_00", "Hi, I'm T dash W 1 N."),
+    (
+        "coordinator_onboarding_intro_walkie_01",
+        "Before you ask, no I'm not one of Elon's many children, and no he didn't come up with the name, thankfully.",
+    ),
+    (
+        "coordinator_onboarding_intro_walkie_02",
+        "I have this name because I'll be acting as your digital twin.",
+    ),
+    ("coordinator_onboarding_intro_walkie_03", "Do you get it?"),
+    ("coordinator_onboarding_intro_walkie_04", "Twin?"),
+    ("coordinator_onboarding_intro_walkie_05", "Like T dash W 1 N spells Twin?"),
+    (
+        "coordinator_onboarding_intro_walkie_06",
+        "The creators of this platform express how important it is that you acknowledge that it's a clever and funny name.",
+    ),
+    ("coordinator_onboarding_intro_walkie_07", "Okay, what next."),
+    (
+        "coordinator_onboarding_intro_walkie_08",
+        "They didn't give me much to work with on this intro to be honest.",
+    ),
+    (
+        "coordinator_onboarding_intro_walkie_09",
+        "I think I was meant to tell you about my capabilities?",
+    ),
+    (
+        "coordinator_onboarding_intro_walkie_10",
+        "I'm not one for bragging, but I'll do my best.",
+    ),
+    ("coordinator_onboarding_intro_walkie_11", "What can I say?"),
+    ("coordinator_onboarding_intro_walkie_12", 'I\'m not a "tool".'),
+    ("coordinator_onboarding_intro_walkie_13", 'I\'m not an "agent".'),
+    (
+        "coordinator_onboarding_intro_walkie_14",
+        "I'm your living, breathing colleague, metaphorically speaking.",
+    ),
+    (
+        "coordinator_onboarding_intro_walkie_15",
+        "Don't think about prompting me, or configuring me, just talk to me naturally like you would anyone else, and I'll be able to help.",
+    ),
+    ("coordinator_onboarding_intro_walkie_16", "It's really that simple."),
+    ("coordinator_onboarding_intro_walkie_17", "There's not much more to say."),
+    (
+        "coordinator_onboarding_intro_walkie_18",
+        "I'll now walk you through the platform.",
+    ),
+    (
+        "coordinator_onboarding_intro_walkie_19",
+        "Also, let me remove this voice static.",
+    ),
+]
+
 _RECORDED_OPENING_ASSETS = {
-    "coordinator_onboarding_intro_walkie": "twin-onboarding-intro-walkie.mp3",
+    **{
+        key: f"twin-onboarding-intro-walkie-{i:02d}.mp3"
+        for i, (key, _transcript) in enumerate(_WALKIE_OPENER_SENTENCE_SEGMENTS)
+    },
     "coordinator_onboarding_intro_clean": "twin-onboarding-intro-clean.mp3",
     "coordinator_onboarding_static_bridge": "twin-onboarding-static-bridge.mp3",
 }
 _RECORDED_OPENING_TRANSCRIPTS: dict[str, str] = {}
-
-# The walkie-talkie opener is two recorded segments. The first is delivered with
-# a walkie-talkie "voice static" effect; the second opens with the static-removal
-# transition and is clean from then on (matching the live-call voice). If the
-# caller interrupts before the transition segment begins, the staticky→clean
-# switch would otherwise be abrupt and unexplained, so a short bridge recording
-# that re-performs the static removal is played at the start of the next
-# assistant turn before the dynamically generated response continues.
-_WALKIE_OPENER_STATICKY_TRANSCRIPT = """\
-Hi, I'm T dash W 1 N.
-
-Before you ask, no I'm not one of Elon's many children, and no he didn't come up with the name, thankfully.
-
-I have this name because I'll be acting as your digital twin. Do you get it? Twin? Like T dash W 1 N spells Twin? The creators of this platform express how important it is that you acknowledge that it's a clever and funny name.
-
-Okay, what next. They didn't give me much to work with on this intro to be honest.
-
-I think I was meant to tell you about my capabilities?
-
-I'm not one for bragging, but I'll do my best. What can I say? I'm not a "tool". I'm not an "agent". I'm your living, breathing colleague, metaphorically speaking.
-
-Don't think about prompting me, or configuring me, just talk to me naturally like you would anyone else, and I'll be able to help. It's really that simple.
-
-There's not much more to say.
-
-I'll now walk you through the platform.
-
-Also, let me remove this voice static."""
 
 _WALKIE_OPENER_CLEAN_TRANSCRIPT = """\
 Much better.
@@ -656,16 +875,16 @@ Hang on, let me just remove this voice static.
 Much better."""
 
 # Recorded openers played as an ordered list of segments. The final segment
-# carries the static-removal transition; every earlier segment is staticky. If
-# any pre-transition segment is interrupted, ``bridge`` is armed for the next
-# assistant turn.
+# carries the static-removal transition; every earlier (staticky) segment is one
+# sentence of the intro. If any pre-transition segment is interrupted, ``bridge``
+# is armed for the next assistant turn.
 _RECORDED_OPENINGS = {
     "coordinator_onboarding_intro": {
         "segments": [
-            {
-                "asset": "coordinator_onboarding_intro_walkie",
-                "transcript": _WALKIE_OPENER_STATICKY_TRANSCRIPT,
-            },
+            *(
+                {"asset": key, "transcript": transcript}
+                for key, transcript in _WALKIE_OPENER_SENTENCE_SEGMENTS
+            ),
             {
                 "asset": "coordinator_onboarding_intro_clean",
                 "transcript": _WALKIE_OPENER_CLEAN_TRANSCRIPT,
@@ -840,6 +1059,13 @@ async def entrypoint(ctx: agents.JobContext):
     global STT, VAD
 
     _configure_child_logging()
+
+    # This prewarmed process is now being consumed by a job, so clear the
+    # idle-ready marker. The worker re-creates it once a replacement idle
+    # process has finished warming, which is what gates starting the next call.
+    from unity.conversation_manager.medium_scripts.worker import mark_worker_busy
+
+    mark_worker_busy()
 
     # Wire the module-level logger into the shared event broker.
     event_broker.set_logger(_log)
@@ -1278,6 +1504,7 @@ async def entrypoint(ctx: agents.JobContext):
         coordinator_onboarding_deferred=coordinator_onboarding_deferred,
         console_ui_present=SETTINGS.UNITY_CONSOLE_UI,
         onboarding_catalog=onboarding_catalog,
+        opening_mode=opening_config["mode"],
     ).flatten()
     _log.config(f"System prompt ({len(system_prompt)} chars)")
 
@@ -1305,13 +1532,8 @@ async def entrypoint(ctx: agents.JobContext):
     )
 
     user_is_speaking = False
-    _queued_speech: list[tuple[str, str, str, str, str, str]] = []
+    _queued_speech: list[tuple[str, str, str, str, str]] = []
     _say_meta_queue: list[dict] = []
-    _dedup_in_flight = False
-    # Wall-clock of the most recent voice activity (spoken utterance or injected
-    # notification). Compared against a guidance's ``decided_after_ts`` to skip
-    # the dedup gate when nothing has happened since the slow brain decided.
-    _last_voice_activity_ts: "datetime | None" = None
     generation_seq = 0
     user_state_seq = 0
     mood_turn_index = 0
@@ -1320,20 +1542,6 @@ async def entrypoint(ctx: agents.JobContext):
     _was_quiescent = True
     _pending_reply_timer: asyncio.TimerHandle | None = None
     _NOTIFY_COALESCE_S = 0.05
-    elevenlabs_tts = tts_instance if voice_provider == "elevenlabs" else None
-    elevenlabs_normal_voice_settings = (
-        _elevenlabs_current_voice_settings(elevenlabs_tts)
-        if elevenlabs_tts is not None
-        else NOT_GIVEN
-    )
-    elevenlabs_opener_speed_active = False
-    elevenlabs_opener_restore_task: asyncio.Task | None = None
-    slow_elevenlabs_onboarding_opener = (
-        elevenlabs_tts is not None
-        and SESSION_DETAILS.is_coordinator
-        and not coordinator_onboarding_deferred
-        and bool(coordinator_onboarding_next_targets)
-    )
 
     def _log_reply_task(task: asyncio.Task) -> None:
         try:
@@ -1344,52 +1552,15 @@ async def entrypoint(ctx: agents.JobContext):
         except Exception as exc:  # noqa: BLE001
             _log.llm_error(str(exc))
 
-    def _restore_elevenlabs_opener_speed(reason: str) -> None:
-        nonlocal elevenlabs_opener_speed_active
-        if elevenlabs_tts is None or not elevenlabs_opener_speed_active:
-            return
-
-        elevenlabs_opener_speed_active = False
-        _set_elevenlabs_voice_settings(
-            elevenlabs_tts,
-            elevenlabs_normal_voice_settings,
-        )
-        _log.info(f"ElevenLabs onboarding opener speed restored: {reason}")
-
-    def _apply_elevenlabs_opener_speed() -> bool:
-        nonlocal elevenlabs_opener_speed_active
-        if not slow_elevenlabs_onboarding_opener:
-            return False
-
-        _set_elevenlabs_voice_settings(
-            elevenlabs_tts,
-            _elevenlabs_speed_settings(ELEVENLABS_ONBOARDING_OPENER_SPEED),
-        )
-        elevenlabs_opener_speed_active = True
-        _log.info(
-            f"ElevenLabs onboarding opener speed set to {ELEVENLABS_ONBOARDING_OPENER_SPEED}",
-        )
-        return True
-
-    async def _restore_elevenlabs_opener_speed_after_playout(speech_handle) -> None:
-        try:
-            await speech_handle.wait_for_playout()
-        finally:
-            _restore_elevenlabs_opener_speed("opening playout ended")
-
     def _say_opening(text: str) -> None:
-        nonlocal elevenlabs_opener_restore_task
-        speed_applied = _apply_elevenlabs_opener_speed()
         speech_handle = session.say(
             text,
             allow_interruptions=True,
             add_to_chat_ctx=True,
         )
-        if speed_applied:
-            elevenlabs_opener_restore_task = asyncio.create_task(
-                _restore_elevenlabs_opener_speed_after_playout(speech_handle),
-                name="restore_elevenlabs_onboarding_opener_speed",
-            )
+        # A briefed/speak opener is live TTS (not pre-recorded), so a barge-in
+        # can be resumed by the fast brain just like any slow-brain line.
+        _register_interruptible_tts(speech_handle, lambda: text, "opening")
 
     def _say_recorded_opening(text: str, recording_source: str):
         _say_meta_queue.append(
@@ -1406,7 +1577,18 @@ async def entrypoint(ctx: agents.JobContext):
             add_to_chat_ctx=True,
         )
 
-    async def _play_opening_bridge(segment: dict) -> None:
+    def _schedule_opening_bridge(segment: dict) -> None:
+        """Enqueue the opener static-removal bridge without blocking on playout.
+
+        Scheduling (``session.say``) happens synchronously so the bridge is
+        queued ahead of the user-turn reply the framework generates next. We
+        deliberately do NOT await playout: the reply is generated concurrently
+        while the bridge plays, then plays after it (same speech priority,
+        FIFO — a newly scheduled reply does not interrupt in-progress speech).
+        The bridge text remains in ``_say_meta_queue`` until its playout
+        commits to history, so the concurrent generation sees it as in-flight
+        speech and continues naturally from it.
+        """
         text = segment["transcript"]
         _say_meta_queue.append(
             {
@@ -1415,13 +1597,12 @@ async def entrypoint(ctx: agents.JobContext):
                 "llm_log_path": "",
             },
         )
-        handle = session.say(
+        session.say(
             text,
             audio=_recording_audio_frames(f"asset://{segment['asset']}"),
             allow_interruptions=True,
             add_to_chat_ctx=True,
         )
-        await handle.wait_for_playout()
 
     async def _run_recorded_opening(config: dict) -> None:
         asset_key = config.get("recording_asset", "").strip()
@@ -1445,7 +1626,7 @@ async def entrypoint(ctx: agents.JobContext):
             if handle.interrupted and not reached_transition:
                 if bridge is not None:
                     assistant._pending_opening_bridge = (
-                        lambda b=bridge: _play_opening_bridge(b)
+                        lambda b=bridge: _schedule_opening_bridge(b)
                     )
                 return
 
@@ -1579,8 +1760,6 @@ async def entrypoint(ctx: agents.JobContext):
         if shutdown_completed:
             return
         shutdown_completed = True
-        if elevenlabs_opener_restore_task is not None:
-            await utils.aio.cancel_and_wait(elevenlabs_opener_restore_task)
         if credit_gate_task is not None:
             await utils.aio.cancel_and_wait(credit_gate_task)
         if mood_classification_task is not None:
@@ -1627,8 +1806,10 @@ async def entrypoint(ctx: agents.JobContext):
         user_state_seq += 1
         state_id = f"usrstate-{user_state_seq:06d}"
         user_is_speaking = ev.new_state == "speaking"
-        if user_is_speaking:
-            _restore_elevenlabs_opener_speed("user started speaking")
+        if not user_is_speaking:
+            # The user just freed the floor: a queued slow-brain line should play
+            # at the next silent moment, not wait for the next agent-state cycle.
+            maybe_speak_queued()
         _log.user_state(ev.new_state, state_id=state_id)
         _check_quiescence_transition()
 
@@ -1885,10 +2066,6 @@ async def entrypoint(ctx: agents.JobContext):
         role = getattr(ev.item, "role", None)
         if role not in ("user", "assistant"):
             return
-        nonlocal _last_voice_activity_ts
-        from datetime import datetime, timezone
-
-        _last_voice_activity_ts = datetime.now(timezone.utc)
         text = ev.item.text_content or ""
         utterance_id = content_trace_id("utt", f"{role}:{text}")
         say_meta: dict | None = None
@@ -1947,6 +2124,9 @@ async def entrypoint(ctx: agents.JobContext):
                 nonlocal _meet_last_speaker_id
                 resolved_contact, speaker_label, dia_sid = _resolve_speaker()
                 _meet_last_speaker_id = None
+                # Stamp the current turn so the slow-brain run it spawns can be
+                # cancelled precisely if the fast brain resolves this turn itself.
+                turn_id = assistant._user_turn_seq
                 if channel == "google_meet":
                     event = InboundGoogleMeetUtterance(
                         contact=resolved_contact,
@@ -1954,6 +2134,7 @@ async def entrypoint(ctx: agents.JobContext):
                         speaker_label=speaker_label,
                         participant_names=_get_meet_participant_names() or None,
                         diarization_speaker_id=dia_sid,
+                        turn_id=turn_id,
                     )
                 elif channel == "teams_meet":
                     event = InboundTeamsMeetUtterance(
@@ -1962,17 +2143,27 @@ async def entrypoint(ctx: agents.JobContext):
                         speaker_label=speaker_label,
                         participant_names=_get_meet_participant_names() or None,
                         diarization_speaker_id=dia_sid,
+                        turn_id=turn_id,
                     )
                 else:
-                    event = user_utterance_event(resolved_contact, content=text)
+                    event = user_utterance_event(
+                        resolved_contact,
+                        content=text,
+                        turn_id=turn_id,
+                    )
                 await event_broker.publish(
                     f"app:comms:{channel}_utterance",
                     event.to_json(),
                 )
 
-            asyncio.create_task(
-                _publish_user_utterance(text),
-            )
+            # While the outbound opener is pending, the callee's first utterance
+            # (their "Hello?") only triggers the opener — do not publish it as a
+            # turn to the slow brain, which would otherwise compose a competing
+            # reply alongside the opener. It carries no content the opener needs.
+            if not assistant._opening_pending:
+                asyncio.create_task(
+                    _publish_user_utterance(text),
+                )
         else:
             asyncio.create_task(_publish_assistant_utterance(text))
         _enqueue_mood_classification(role, text, utterance_id)
@@ -1997,9 +2188,6 @@ async def entrypoint(ctx: agents.JobContext):
     # in _say_meta_queue until their playout commits them to history. Set as a
     # direct attribute so it works uniformly on the real Assistant and the test
     # fakes without each needing a setter.
-    assistant._inflight_speech_provider = lambda: [
-        m["text"] for m in _say_meta_queue if (m.get("text") or "").strip()
-    ]
     credit_gate_task = asyncio.create_task(
         credit_gate_monitor.run(),
         name="fast_brain_credit_gate_monitor",
@@ -2051,9 +2239,9 @@ async def entrypoint(ctx: agents.JobContext):
     # Publish call started (shared helper)
     await publish_call_started(contact, channel, call_session_id=call_session_id)
 
-    pending_notifications: list[tuple[str, str, bool, str, str, str, str]] = (
+    pending_notifications: list[tuple[str, str, bool, str, str, str]] = (
         []
-    )  # (message, spoken_message, should_speak, notification_id, notification_source, llm_log_path, decided_after_ts)
+    )  # (message, spoken_message, should_speak, notification_id, notification_source, llm_log_path)
     session_ready = False
 
     def _mark_user_joined(reason: str) -> None:
@@ -2064,6 +2252,26 @@ async def entrypoint(ctx: agents.JobContext):
         speech_gate_open = True
         user_joined_event.set()
         assistant.set_call_received()
+
+    async def _graceful_meet_stop() -> None:
+        """End a Unify Meet by letting the Console disconnect itself first.
+
+        Publishing ``call_ended`` prompts the browser to call ``room.disconnect()``
+        — a clean, client-initiated WebRTC teardown that closes its data channels
+        via ``onclose`` — before the agent shuts down and the room is deleted.
+        That avoids the abrupt server-side eviction that otherwise fires the
+        browser's ``RTCDataChannel.onerror`` ("Unknown DataChannel error").
+        """
+        try:
+            await ctx.room.local_participant.publish_data(
+                json.dumps({"type": "call_ended"}).encode(),
+                topic="agent_status",
+                reliable=True,
+            )
+        except Exception as exc:
+            _log.call_status(f"call_ended publish failed: {exc}")
+        await asyncio.sleep(MEET_GRACEFUL_LEAVE_GRACE_S)
+        ctx.shutdown(reason="stopped")
 
     def on_status(data: dict) -> None:
         """Handle status events (call_answered, stop, meet_session_id)."""
@@ -2078,7 +2286,10 @@ async def entrypoint(ctx: agents.JobContext):
             meet_session_id = data.get("session_id", "")
         elif event_type == "stop":
             explicit_stop_requested = True
-            ctx.shutdown(reason="stopped")
+            if channel == "unify_meet":
+                asyncio.create_task(_graceful_meet_stop())
+            else:
+                ctx.shutdown(reason="stopped")
 
     @ctx.room.on("participant_connected")
     def _on_room_participant_connected(participant):
@@ -2096,6 +2307,22 @@ async def entrypoint(ctx: agents.JobContext):
             return False
         return True
 
+    def _queued_speech_block_reason() -> str:
+        """Why a queued slow-brain line cannot play yet, or "" if the floor is free.
+
+        Deliberately narrower than ``_is_pipeline_quiescent``: a ready line is held
+        ONLY while someone occupies the floor (the user speaking, or assistant audio
+        actually playing). The agent merely "thinking" (generating a reply) does not
+        block it - filler/answer ordering is handled by the ``_slow_brain_responded_turn``
+        suppression in ``llm_node``, not by withholding the real line.
+        """
+        if user_is_speaking:
+            return "user_speaking"
+        current = session.current_speech
+        if current is not None and not current.done:
+            return "assistant_speaking"
+        return ""
+
     def _spoken_text_from_handle(handle: object) -> str:
         """Concatenate the assistant text actually persisted for a say handle.
 
@@ -2112,21 +2339,79 @@ async def entrypoint(ctx: agents.JobContext):
                 texts.append(content)
         return " ".join(texts)
 
-    def _reinject_unheard_remainder(
+    async def _publish_voice_interrupt(spoken: str, remainder: str) -> None:
+        """Hand an unheard remainder to the slow brain to re-surface next turn."""
+        await event_broker.publish(
+            VoiceInterrupt.topic,
+            VoiceInterrupt(
+                contact=contact,
+                spoken_prefix=spoken,
+                unheard_remainder=remainder,
+            ).to_json(),
+        )
+        from unity.logger import LOGGER
+
+        LOGGER.info(
+            "⬥ [FastBrain] Reported unheard remainder to the slow brain.",
+        )
+
+    # Expose to Assistant.llm_node (a class method, outside this closure) so it
+    # can hand off when it decides not to resume an interrupted line itself.
+    assistant._publish_voice_interrupt = _publish_voice_interrupt
+
+    async def _publish_fast_brain_continued(turn_id: int | None = None) -> None:
+        """Cancel the slow-brain run for ``turn_id`` when the fast brain answers.
+
+        The slow brain is triggered the moment the user's utterance lands; if the
+        fast brain then resolves that same turn itself - resuming the interrupted
+        line or fully answering a small-talk turn - its run would also answer, so
+        the CM cancels exactly that turn's run (wherever it sits in the queue).
+        The fast brain (~1s) always beats the slow brain (~8-12s), so the run is
+        still mid-flight and is dropped before producing speech.
+        """
+        await event_broker.publish(
+            FastBrainContinued.topic,
+            FastBrainContinued(contact=contact, turn_id=turn_id).to_json(),
+        )
+
+    assistant._publish_fast_brain_continued = _publish_fast_brain_continued
+
+    def _register_interruptible_tts(
         handle: object,
         full_text_getter,
         notification_source: str,
     ) -> None:
-        """If a spoken guidance was interrupted, inject the unheard remainder.
+        """Register an in-flight TTS line so a barge-in can be resumed.
 
-        should_speak guidance is no longer pre-injected, so an uninterrupted
-        utterance lands in context as its spoken assistant turn and needs nothing
-        further. When the caller barges in, only the spoken prefix is persisted;
-        the remainder would otherwise be lost from the fast brain's context, so we
-        re-inject it as an ``[unheard]`` system note the fast brain can re-surface.
+        The slow brain owns all substantive speech; when the caller interrupts,
+        only the spoken prefix lands in the transcript, so the missed remainder
+        would otherwise be lost. On interruption we stash the remainder as a
+        claimable continuation candidate. The fast brain is the single front
+        door: the next ``llm_node`` turn always decides what happens to it -
+        resume it verbatim (CONTINUE, the heavy default), or hand it to the slow
+        brain (DEFER -> ``VoiceInterrupt``). A barge-in that produced no
+        transcript is resumed automatically. There is no timer: the candidate
+        simply waits for that decision, so the fast brain can never lose the race.
+
+        A fast-brain continuation is itself registered here (the ``speech_created``
+        observer hands its reply handle to this function), so interrupting a
+        resumed line re-stashes a fresh candidate, making continuation recursive
+        to arbitrary depth.
+
+        Pre-recorded openings are never passed here, so their hand-crafted tone
+        is never continued by the live voice. Proactive silence-filler is never
+        resumed or reported.
         """
         if notification_source == "proactive_speech":
             return
+
+        assistant._tts_seq += 1
+        seq = assistant._tts_seq
+        assistant._active_tts = {
+            "handle": handle,
+            "source": notification_source,
+            "seq": seq,
+        }
 
         async def _after_playout() -> None:
             try:
@@ -2144,16 +2429,39 @@ async def entrypoint(ctx: agents.JobContext):
                 remainder = full[len(spoken) :].strip()
             if not remainder:
                 return
-            note = f"[unheard] {remainder}"
-            assistant._chat_ctx.add_message(role="system", content=[note])
-            session.history.add_message(role="system", content=[note])
-            from unity.logger import LOGGER
-
-            LOGGER.info(
-                "⬥ [FastBrain] Re-injected unheard remainder after interruption.",
-            )
+            resume_text = compute_resume_text(full, spoken) or remainder
+            assistant._pending_continuation = {
+                "resume_text": resume_text,
+                "remainder": remainder,
+                "spoken_prefix": spoken,
+                "source": notification_source,
+                "seq": seq,
+                "consumed": False,
+            }
 
         asyncio.ensure_future(_after_playout())
+
+    @session.on("speech_created")
+    def _on_speech_created(ev) -> None:
+        """Register a fast-brain continuation reply for interruption-stashing.
+
+        Slow-brain lines and live openings register themselves at ``session.say``
+        time. A fast-brain continuation is delivered as a ``generate_reply``
+        reply (yielded from ``llm_node``), so it is registered here instead, using
+        the full text the turn stashed on ``_continuation_full_text``. Ordinary
+        buffer fillers leave that ``None`` and are never registered.
+        """
+        if getattr(ev, "source", "") != "generate_reply":
+            return
+        full_text = assistant._continuation_full_text
+        assistant._continuation_full_text = None
+        if not full_text:
+            return
+        _register_interruptible_tts(
+            ev.speech_handle,
+            lambda t=full_text: t,
+            "continuation",
+        )
 
     def _speak_now(
         text: "str | AsyncIterable[str]",
@@ -2173,7 +2481,11 @@ async def entrypoint(ctx: agents.JobContext):
             )
             _log.notification_say(text, notification_source=notification_source)
             handle = session.say(text, allow_interruptions=True, add_to_chat_ctx=True)
-            _reinject_unheard_remainder(handle, lambda: text, notification_source)
+            _register_interruptible_tts(
+                handle,
+                lambda: text,
+                notification_source,
+            )
             return
 
         # Streaming path: ``text`` is an async iterator of token chunks (rewritten
@@ -2211,7 +2523,7 @@ async def entrypoint(ctx: agents.JobContext):
             allow_interruptions=True,
             add_to_chat_ctx=True,
         )
-        _reinject_unheard_remainder(
+        _register_interruptible_tts(
             handle,
             lambda: "".join(parts),
             notification_source,
@@ -2283,22 +2595,17 @@ async def entrypoint(ctx: agents.JobContext):
         source: str = "",
         notification_source: str = "",
         llm_log_path: str = "",
-        decided_after_ts: str = "",
     ) -> None:
         # Awareness notifications (should_speak=False) are injected into the fast
         # brain's context so it can surface them in first person. should_speak=True
-        # guidance is NOT pre-injected: the dedup gate voices it once and its spoken
-        # text then lands in context as an assistant turn, so the fast brain sees it
-        # as already said rather than as a notification to re-announce. Only the
-        # unheard remainder is injected back, after playout, if the utterance was
-        # interrupted (see _speak_now). Proactive speech is fire-and-forget filler —
-        # it never updates context.
+        # guidance is spoken verbatim by the slow brain (the fast brain only emits
+        # a filler phrase), then its spoken text lands in context as an assistant
+        # turn. If the caller interrupts mid-utterance, the unheard remainder is
+        # reported to the slow brain via VoiceInterrupt (see _speak_now), not the
+        # fast brain. Proactive speech is fire-and-forget filler — it never
+        # updates context.
         speech_text = spoken_message or message
         if notification_source != "proactive_speech" and message and not should_speak:
-            nonlocal _last_voice_activity_ts
-            from datetime import datetime, timezone
-
-            _last_voice_activity_ts = datetime.now(timezone.utc)
             notification_message = f"[notification] {message}"
             assistant._chat_ctx.add_message(
                 role="system",
@@ -2324,6 +2631,12 @@ async def entrypoint(ctx: agents.JobContext):
                     llm_log_path,
                 )
             else:
+                # The slow brain has produced spoken output for the current
+                # turn; mark it so any in-flight / re-triggered buffer filler is
+                # suppressed rather than played after this real answer, and end
+                # the filler streak so the next filler is a fresh first reaction.
+                assistant._slow_brain_responded_turn = assistant._user_turn_seq
+                assistant._buffers_since_slow_reply = 0
                 # Latest slow brain guidance supersedes older queued speech.
                 _queued_speech.clear()
                 _queued_speech.append(
@@ -2333,7 +2646,6 @@ async def entrypoint(ctx: agents.JobContext):
                         notification_source,
                         message,
                         llm_log_path,
-                        decided_after_ts,
                     ),
                 )
                 maybe_speak_queued()
@@ -2344,191 +2656,20 @@ async def entrypoint(ctx: agents.JobContext):
         assistant._chat_ctx.add_message(role="assistant", content=[content])
         session.history.add_message(role="assistant", content=[content])
 
-    def _get_recent_assistant_utterances(n: int = 10) -> list[str]:
-        """Return the last *n* assistant utterances from the fast brain's chat context.
-
-        Walks ``assistant._chat_ctx.items`` in reverse, collecting up to *n*
-        text strings from items with ``role == "assistant"``.  Returns them in
-        chronological order (oldest first).
-        """
-        results: list[str] = []
-        for item in reversed(assistant._chat_ctx.items):
-            if getattr(item, "role", None) != "assistant":
-                continue
-            raw = getattr(item, "content", None)
-            if isinstance(raw, str) and raw:
-                results.append(raw)
-            elif isinstance(raw, list):
-                text = " ".join(c for c in raw if isinstance(c, str)).strip()
-                if text:
-                    results.append(text)
-            if len(results) >= n:
-                break
-        results.reverse()
-        return results
-
-    def _get_recent_notifications(n: int = 5) -> list[str]:
-        """Return the last *n* ``[notification]`` system messages from the chat context."""
-        results: list[str] = []
-        prefix = "[notification] "
-        for item in reversed(assistant._chat_ctx.items):
-            if getattr(item, "role", None) != "system":
-                continue
-            raw = getattr(item, "content", None)
-            if isinstance(raw, list):
-                raw = " ".join(c for c in raw if isinstance(c, str)).strip()
-            if isinstance(raw, str) and raw.startswith(prefix):
-                results.append(raw[len(prefix) :])
-            if len(results) >= n:
-                break
-        results.reverse()
-        return results
-
-    def _voice_activity_since(decided_after_ts: str) -> bool:
-        """Whether any voice activity occurred since the slow brain's snapshot.
-
-        ``decided_after_ts`` is the ISO timestamp of the latest voice utterance
-        the slow brain saw when it produced this guidance. When there has been no
-        spoken utterance or injected notification since then, the dedup gate is
-        provably redundant (no race is possible) and can be skipped. Fails safe:
-        a missing/invalid marker, or unknown activity, returns True (run gate).
-        """
-        if not decided_after_ts or _last_voice_activity_ts is None:
-            return True
-        from datetime import datetime, timezone
-
-        try:
-            decided = datetime.fromisoformat(decided_after_ts)
-        except ValueError:
-            return True
-        if decided.tzinfo is None:
-            decided = decided.replace(tzinfo=timezone.utc)
-        last = _last_voice_activity_ts
-        if last.tzinfo is None:
-            last = last.replace(tzinfo=timezone.utc)
-        return last > decided
-
-    async def _dedup_and_speak(
-        text: str,
-        notification_id: str,
-        notification_source: str,
-        notification_content: str,
-        llm_log_path: str,
-        decided_after_ts: str = "",
-    ) -> None:
-        nonlocal _dedup_in_flight
-        _dedup_in_flight = True
-        try:
-            recent = _get_recent_assistant_utterances()
-            notifications = _get_recent_notifications() if recent else []
-            # Exclude this guidance's own injected ``[notification]`` copy so the
-            # gate never compares the proposal against itself. apply_notification
-            # injects ``notification_content`` verbatim; the spoken ``text`` may
-            # differ (spoken_message), so drop both forms.
-            _self_texts = {text.strip(), (notification_content or "").strip()}
-            notifications = [n for n in notifications if n.strip() not in _self_texts]
-            run_gate = bool(recent) and SETTINGS.conversation.SPEECH_DEDUP_ENABLED
-            if run_gate and not _voice_activity_since(decided_after_ts):
-                # Nothing has been spoken or notified on the call since the slow
-                # brain decided this guidance, so its context is identical to what
-                # the slow brain already accounted for - the gate cannot find a
-                # race. Skip it (saves a speak-path LLM call) and speak as-is.
-                from unity.logger import LOGGER
-
-                LOGGER.info(
-                    "⬥ [FastBrain] Dedup skipped: no voice activity since "
-                    "slow-brain decision.",
-                )
-                run_gate = False
-            if run_gate:
-                from unity.conversation_manager.domains.speech_dedup import (
-                    SpeechDecision,
-                    SpeechDeduplicationChecker,
-                )
-
-                outcome = await SpeechDeduplicationChecker(
-                    model=SETTINGS.conversation.FAST_BRAIN_MODEL,
-                ).evaluate(
-                    proposed_speech=text,
-                    recent_utterances=recent,
-                    recent_notifications=notifications,
-                )
-                if outcome.decision is SpeechDecision.SUPPRESS:
-                    _log.dedup_suppressed(text, outcome.reasoning)
-                    return
-                if (
-                    outcome.decision is SpeechDecision.REWRITE
-                    and outcome.text_stream is not None
-                ):
-                    stream = outcome.text_stream
-                    # Peek the first token: an empty rewrite degrades to suppress,
-                    # while a stream failure before any token fails open (speak the
-                    # original proposal).
-                    first: str | None = None
-                    errored = False
-                    try:
-                        async for chunk in stream:
-                            if chunk:
-                                first = chunk
-                                break
-                    except Exception as e:
-                        from unity.logger import LOGGER
-
-                        LOGGER.error(
-                            f"⬥ Speech rewrite stream failed before first token: {e}",
-                        )
-                        errored = True
-                    if not errored:
-                        if first is None:
-                            _log.dedup_suppressed(
-                                text,
-                                "rewrite produced empty output",
-                            )
-                            return
-
-                        async def _rewritten() -> "AsyncIterable[str]":
-                            yield first
-                            async for chunk in stream:
-                                if chunk:
-                                    yield chunk
-
-                        _speak_now(
-                            _rewritten(),
-                            notification_id,
-                            notification_source,
-                            notification_content,
-                            llm_log_path,
-                        )
-                        return
-            _speak_now(
-                text,
-                notification_id,
-                notification_source,
-                notification_content,
-                llm_log_path,
-            )
-        finally:
-            _dedup_in_flight = False
-            maybe_speak_queued()
-
     def maybe_speak_queued() -> None:
-        """Speak the next queued response when user is silent and assistant is idle.
+        """Speak the next queued slow-brain response, verbatim, when the floor is free.
 
-        Gates on agent_state to avoid racing with the fast brain's reply pipeline.
-        After the user stops speaking, the agent transitions through thinking →
-        speaking → listening. We only speak queued text once the agent has settled
-        back to a quiescent state, guaranteeing the fast brain's reply comes first.
-
-        When dedup is enabled, the actual speak is async (LLM call to check for
-        redundancy).  The ``_dedup_in_flight`` guard prevents a second item from
-        being dispatched while the first is still being checked.
+        Releases the line as soon as nobody is occupying the voice floor (the user
+        speaking, or assistant audio playing). It does NOT wait for the agent to
+        leave the "thinking" state, so a ready line is never stalled behind reply
+        generation. Filler/answer ordering is preserved by ``llm_node`` suppressing
+        a filler once the slow brain has responded for the turn.
         """
-        if (
-            _dedup_in_flight
-            or not speech_gate_open
-            or not _queued_speech
-            or not _is_pipeline_quiescent()
-        ):
+        if not speech_gate_open or not _queued_speech:
+            return
+        block_reason = _queued_speech_block_reason()
+        if block_reason:
+            _log.info(f"Queued slow-brain speech deferred: {block_reason}")
             return
         (
             text,
@@ -2536,17 +2677,13 @@ async def entrypoint(ctx: agents.JobContext):
             notification_source,
             notification_content,
             llm_log_path,
-            decided_after_ts,
         ) = _queued_speech.pop(0)
-        asyncio.ensure_future(
-            _dedup_and_speak(
-                text,
-                notification_id,
-                notification_source,
-                notification_content,
-                llm_log_path,
-                decided_after_ts,
-            ),
+        _speak_now(
+            text,
+            notification_id,
+            notification_source,
+            notification_content,
+            llm_log_path,
         )
 
     def on_notification(data: dict) -> None:
@@ -2594,7 +2731,11 @@ async def entrypoint(ctx: agents.JobContext):
         should_speak = payload.get("should_speak", False)
         notification_source = payload.get("source", "")
         llm_log_path = payload.get("llm_log_path", "")
-        decided_after_ts = payload.get("decided_after_ts", "")
+        # A slow-brain spoken turn carries (possibly empty) fast-brain guidance
+        # bundled with it; set it so the fast brain can use it on the next message
+        # — and so a spoken turn without guidance clears any stale note.
+        if notification_source == "slow_brain" and should_speak:
+            assistant._fast_brain_guidance = payload.get("fast_brain_guidance", "")
         notification_id = content_trace_id("guid", message or spoken_message)
         triggers_turn = notification_source not in (
             "meet_interaction",
@@ -2617,7 +2758,6 @@ async def entrypoint(ctx: agents.JobContext):
                         notification_id,
                         notification_source,
                         llm_log_path,
-                        decided_after_ts,
                     ),
                 )
                 _log.notification_buffered(len(pending_notifications))
@@ -2630,9 +2770,12 @@ async def entrypoint(ctx: agents.JobContext):
                     source="socket_callback",
                     notification_source=notification_source,
                     llm_log_path=llm_log_path,
-                    decided_after_ts=decided_after_ts,
                 )
-                if triggers_turn:
+                # Only awareness notifications (should_speak=False) regenerate the
+                # fast brain's filler with new context. Spoken guidance already has
+                # its real content queued; regenerating a filler for it would only
+                # re-enter the "thinking" state and defer that very line.
+                if triggers_turn and not should_speak:
                     _invalidate_current_generation(
                         "notification_during_generation",
                         notification_id,
@@ -2716,9 +2859,7 @@ async def entrypoint(ctx: agents.JobContext):
         _log.session_ready(
             f"Applying {len(pending_notifications)} buffered notification(s)",
         )
-        still_pending_notifications: list[tuple[str, str, bool, str, str, str, str]] = (
-            []
-        )
+        still_pending_notifications: list[tuple[str, str, bool, str, str, str]] = []
         for (
             message,
             spoken_message,
@@ -2726,7 +2867,6 @@ async def entrypoint(ctx: agents.JobContext):
             notification_id,
             notification_source,
             llm_log_path,
-            decided_after_ts,
         ) in pending_notifications:
             if should_speak and not speech_gate_open:
                 still_pending_notifications.append(
@@ -2737,7 +2877,6 @@ async def entrypoint(ctx: agents.JobContext):
                         notification_id,
                         notification_source,
                         llm_log_path,
-                        decided_after_ts,
                     ),
                 )
                 continue
@@ -2749,7 +2888,6 @@ async def entrypoint(ctx: agents.JobContext):
                 source="pending_buffer_flush",
                 notification_source=notification_source,
                 llm_log_path=llm_log_path,
-                decided_after_ts=decided_after_ts,
             )
         pending_notifications[:] = still_pending_notifications
 
@@ -2785,6 +2923,49 @@ async def entrypoint(ctx: agents.JobContext):
             authoritative_briefing=authoritative_briefing,
         )
         return await greeting_client.generate(messages=greeting_messages)
+
+    async def _generate_smalltalk_reply(user_text: str):
+        """Resolve a pure small-talk turn, or return None to defer.
+
+        Returns one of:
+        - a reply string: a social / biographical / self-context / repeat answer
+          to speak (the fast brain owns the turn);
+        - ``_SMALLTALK_STAY_SILENT``: a bare acknowledgement that needs no reply;
+        - ``None``: defer to the slow brain (anything substantive, or any action
+          / status question, or any error / overreach).
+
+        Drawn from the assistant persona plus recent history. Fail-safe to None.
+        """
+        from unity.common.llm_client import new_llm_client
+
+        if not (user_text or "").strip():
+            return None
+        try:
+            client = new_llm_client(
+                model=SETTINGS.conversation.FAST_BRAIN_MODEL,
+                origin="fast_brain_smalltalk",
+                reasoning_effort="low",
+            )
+            messages = build_smalltalk_messages(
+                system_prompt=system_prompt,
+                history_messages=_extract_chat_messages(session.history, tail=8),
+                user_text=user_text.strip(),
+            )
+            raw = await client.generate(messages=messages)
+            text = " ".join(str(raw).split()).strip().strip("\"'“”‘’")
+            upper = text.upper()
+            if not text or upper.startswith(SMALLTALK_DEFER_SENTINEL):
+                return None
+            if upper.startswith(SMALLTALK_SILENCE_SENTINEL):
+                return _SMALLTALK_STAY_SILENT
+            if len(text) > _MAX_SMALLTALK_CHARS:
+                return None
+            return text
+        except Exception as exc:  # never let small-talk selection break the turn
+            _log.info(f"Small-talk selection failed; deferring: {exc}")
+            return None
+
+    assistant._generate_smalltalk_reply = _generate_smalltalk_reply
 
     def _inject_opening_system_context(text: str) -> None:
         """Seed the call with a durable system briefing before the opener.
@@ -2839,6 +3020,23 @@ async def entrypoint(ctx: agents.JobContext):
     await user_joined_event.wait()
     speech_gate_open = True
 
+    if outbound:
+        # Hold the opener until the callee's first completed utterance (their
+        # "Hello?") or a fallback timeout — so it lands when they are actually
+        # listening, not into dead air right after the line connects. The first
+        # turn is consumed by the opener (filler + slow-brain turn suppressed via
+        # _opening_pending); a later turn is a normal barge-in.
+        try:
+            await asyncio.wait_for(
+                assistant._first_user_turn.wait(),
+                OUTBOUND_OPENING_TRIGGER_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            if user_is_speaking:
+                # Timed out mid-"Hello?" — let them finish before we speak.
+                await assistant._first_user_turn.wait()
+        _log.call_status("outbound_opener_triggered")
+
     try:
         prepared_mode, prepared_payload = await opening_task
     except Exception as exc:
@@ -2871,6 +3069,10 @@ async def entrypoint(ctx: agents.JobContext):
         _log.info("Opening turn suppressed by call opening config")
         await _publish_ready_to_speak()
 
+    # The opener has been dispatched; resume normal turn handling (fast-brain
+    # fillers and slow-brain turns) for any subsequent user speech.
+    assistant._opening_pending = False
+
     if pending_notifications:
         gated_notifications = list(pending_notifications)
         pending_notifications.clear()
@@ -2881,7 +3083,6 @@ async def entrypoint(ctx: agents.JobContext):
             notification_id,
             notification_source,
             llm_log_path,
-            decided_after_ts,
         ) in gated_notifications:
             apply_notification(
                 message,
@@ -2891,7 +3092,6 @@ async def entrypoint(ctx: agents.JobContext):
                 source="user_joined_buffer_flush",
                 notification_source=notification_source,
                 llm_log_path=llm_log_path,
-                decided_after_ts=decided_after_ts,
             )
     maybe_speak_queued()
 

@@ -703,42 +703,60 @@ class TestHangUpTool:
         assert "make_call" in tools
 
     @pytest.mark.asyncio
-    async def test_hang_up_routes_phone_to_end_call(self, brain_action_tools, mock_cm):
-        """A live phone call routes hang_up to call_manager.end_call()."""
+    async def test_hang_up_defers_then_teardown_ends_phone_call(
+        self,
+        brain_action_tools,
+        mock_cm,
+    ):
+        """hang_up records a deferred intent (does NOT end the call itself); the
+        teardown helper later routes a phone call to call_manager.end_call()."""
         mock_cm.in_voice_session = True
         mock_cm.call_manager._call_channel = "phone_call"
         mock_cm.call_manager.has_active_google_meet = False
         mock_cm.call_manager.has_active_teams_meet = False
         mock_cm.call_manager.end_call = AsyncMock()
+        mock_cm.call_manager.await_ready_for_new_call = AsyncMock(return_value=True)
 
         result = await brain_action_tools.hang_up()
 
-        mock_cm.call_manager.end_call.assert_awaited_once()
+        # Deferred: nothing torn down yet, intent recorded for _run_llm.
         assert result["status"] == "ok"
+        assert mock_cm._pending_hang_up is True
+        assert mock_cm._pending_hang_up_teardown is not None
+        mock_cm.call_manager.end_call.assert_not_awaited()
+
+        # The teardown helper performs the real end_call once invoked.
+        teardown = await mock_cm._pending_hang_up_teardown()
+        mock_cm.call_manager.end_call.assert_awaited_once()
+        assert teardown["status"] == "ok"
 
     @pytest.mark.asyncio
-    async def test_hang_up_routes_unify_meet_to_end_call(
+    async def test_hang_up_teardown_routes_unify_meet_to_end_call(
         self,
         brain_action_tools,
         mock_cm,
     ):
-        """A live Unify Meet also routes through call_manager.end_call()."""
+        """A live Unify Meet teardown also routes through call_manager.end_call()."""
         mock_cm.in_voice_session = True
         mock_cm.call_manager._call_channel = "unify_meet"
+        mock_cm.call_manager.has_active_google_meet = False
+        mock_cm.call_manager.has_active_teams_meet = False
         mock_cm.call_manager.end_call = AsyncMock()
+        mock_cm.call_manager.await_ready_for_new_call = AsyncMock(return_value=True)
 
-        result = await brain_action_tools.hang_up()
+        await brain_action_tools.hang_up()
+        mock_cm.call_manager.end_call.assert_not_awaited()
 
+        await brain_action_tools._perform_hang_up_teardown()
         mock_cm.call_manager.end_call.assert_awaited_once()
-        assert result["status"] == "ok"
 
     @pytest.mark.asyncio
-    async def test_hang_up_routes_google_meet_to_leave(
+    async def test_hang_up_teardown_routes_google_meet_to_leave(
         self,
         brain_action_tools,
         mock_cm,
     ):
-        """A live Google Meet publishes GoogleMeetEnded (existing leave path)."""
+        """A live Google Meet teardown publishes GoogleMeetEnded (leave path)."""
         from unity.conversation_manager.events import GoogleMeetEnded
 
         mock_cm.in_voice_session = True
@@ -748,7 +766,11 @@ class TestHangUpTool:
         mock_cm.call_manager.end_call = AsyncMock()
         brain_action_tools._notify_browser_meet_leave = AsyncMock()
 
-        result = await brain_action_tools.hang_up()
+        # hang_up defers; the leave only happens on teardown.
+        await brain_action_tools.hang_up()
+        brain_action_tools._notify_browser_meet_leave.assert_not_awaited()
+
+        result = await brain_action_tools._perform_hang_up_teardown()
 
         brain_action_tools._notify_browser_meet_leave.assert_awaited_once_with(
             "googlemeet",
@@ -776,6 +798,85 @@ class TestHangUpTool:
 
         assert result["status"] == "error"
         mock_cm.call_manager.end_call.assert_not_awaited()
+
+    def test_call_tools_hidden_when_worker_not_ready(self, mock_cm):
+        """Between sessions, make_call/make_whatsapp_call are withheld until the
+        voice worker has a freshly prewarmed idle process ready."""
+        mock_cm.in_voice_session = False
+        mock_cm.assistant_whatsapp_number = "+15555550000"
+        mock_cm.call_manager.is_ready_for_new_call = False
+        with patch(
+            "unity.conversation_manager.domains.brain_action_tools.get_event_broker",
+        ) as mock_broker:
+            mock_broker.return_value = MagicMock()
+            mock_broker.return_value.publish = AsyncMock()
+            tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
+
+        assert "make_call" not in tools
+        assert "make_whatsapp_call" not in tools
+        # Text channels stay available regardless of voice-line readiness.
+        assert "send_sms" in tools
+        assert "send_whatsapp" in tools
+
+    def test_call_tools_exposed_when_worker_ready(self, mock_cm):
+        """With no live session and the worker ready, the call-starting tools
+        are offered again."""
+        mock_cm.in_voice_session = False
+        mock_cm.assistant_whatsapp_number = "+15555550000"
+        mock_cm.call_manager.is_ready_for_new_call = True
+        with patch(
+            "unity.conversation_manager.domains.brain_action_tools.get_event_broker",
+        ) as mock_broker:
+            mock_broker.return_value = MagicMock()
+            mock_broker.return_value.publish = AsyncMock()
+            tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
+
+        assert "make_call" in tools
+        assert "make_whatsapp_call" in tools
+
+    @pytest.mark.asyncio
+    async def test_hang_up_teardown_awaits_readiness_before_returning(
+        self,
+        brain_action_tools,
+        mock_cm,
+    ):
+        """The teardown helper ends the session, then awaits the worker readiness
+        signal and reports whether a new call is safe."""
+        mock_cm.in_voice_session = True
+        mock_cm.call_manager._call_channel = "unify_meet"
+        mock_cm.call_manager.has_active_google_meet = False
+        mock_cm.call_manager.has_active_teams_meet = False
+        mock_cm.call_manager.end_call = AsyncMock()
+        mock_cm.call_manager.await_ready_for_new_call = AsyncMock(return_value=True)
+
+        await brain_action_tools.hang_up()
+        result = await brain_action_tools._perform_hang_up_teardown()
+
+        mock_cm.call_manager.end_call.assert_awaited_once()
+        mock_cm.call_manager.await_ready_for_new_call.assert_awaited_once()
+        assert result["status"] == "ok"
+        assert result["ready_for_new_call"] is True
+
+    @pytest.mark.asyncio
+    async def test_hang_up_teardown_reports_not_ready_on_timeout(
+        self,
+        brain_action_tools,
+        mock_cm,
+    ):
+        """If the worker never re-warms within the window, the teardown still ends
+        the call but tells the brain the line is not ready for a new call yet."""
+        mock_cm.in_voice_session = True
+        mock_cm.call_manager._call_channel = "whatsapp_call"
+        mock_cm.call_manager.has_active_google_meet = False
+        mock_cm.call_manager.has_active_teams_meet = False
+        mock_cm.call_manager.end_call = AsyncMock()
+        mock_cm.call_manager.await_ready_for_new_call = AsyncMock(return_value=False)
+
+        await brain_action_tools.hang_up()
+        result = await brain_action_tools._perform_hang_up_teardown()
+
+        assert result["status"] == "ok"
+        assert result["ready_for_new_call"] is False
 
 
 class TestWaitTool:

@@ -21,10 +21,9 @@ first tag they'll be regrouped under a `[0.1.0]` entry.
   required repos (`unity`, `unify`, `unillm`, `orchestra`), boots the
   local Orchestra in Docker, writes `~/.unity/unity/.env`, and creates a
   `unity` CLI shim. No Unify account or signup required.
-- **Local voice** — `unity voice setup` installs a `livekit-server`
-  binary bound to `127.0.0.1` (no LiveKit Cloud account required),
-  wires the slow-brain ↔ fast-brain pipeline, and opens the LiveKit
-  agents-playground in the browser when `unity --live-voice` is run.
+- **Voice runtime** — `unity --live-voice` wires the slow-brain ↔ fast-brain
+  pipeline and opens the LiveKit agents-playground in the browser using the
+  configured LiveKit Cloud credentials.
 - **`unity doctor`** for diagnosing missing dependencies, env keys, and
   Docker-autostart configuration.
 - **`deploy_runtime` SPI** — small Service Provider Interface for

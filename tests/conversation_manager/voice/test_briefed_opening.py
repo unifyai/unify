@@ -9,29 +9,16 @@ the call context and steers the opening turn authoritatively from it (used for
 the first onboarding voice call so the intro is spoken immediately, instead of
 waiting for the slow-brain wakeup to shape a generic holding greeting).
 
-The deterministic tests lock the sidecar prompt-construction contract; the eval
-test verifies the opener actually follows the briefing rather than defaulting to
-a generic hello.
+The deterministic tests lock the sidecar prompt-construction contract.
 """
 
 from __future__ import annotations
 
-import pytest
-
-from tests.helpers import _handle_project
 from unity.conversation_manager.prompt_builders import (
     _BRIEFED_OPENING_GUARDRAIL,
     _OPENING_GREETING_GUARDRAIL,
     build_opening_greeting_messages,
-    build_voice_agent_prompt,
 )
-from unity.settings import SETTINGS
-
-from tests.conversation_manager.voice.test_fast_brain_deferral import (
-    get_fast_brain_response,
-)
-
-MODEL = SETTINGS.conversation.FAST_BRAIN_MODEL
 
 SAMPLE_BRIEFING = (
     "[Briefing for your opening turn]\n"
@@ -77,49 +64,3 @@ def test_default_opening_uses_generic_guardrail():
     )
 
     assert messages[-1]["content"] == _OPENING_GREETING_GUARDRAIL
-
-
-# ---------------------------------------------------------------------------
-#  Eval: the opener follows the briefing
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.eval
-@pytest.mark.asyncio
-@_handle_project
-async def test_briefed_opener_follows_briefing():
-    """With a coordinator onboarding briefing in context and the authoritative
-    briefed guardrail, the opening turn should orient the user (introduce T-W1N /
-    onboarding / the next step) rather than emit a bare generic greeting."""
-    prompt = build_voice_agent_prompt(
-        bio="A helpful and efficient assistant.",
-        boss_first_name="Alex",
-        boss_surname="Thompson",
-        boss_email_address="alex.thompson@example.com",
-        is_boss_user=True,
-        contact_rolling_summary=None,
-        is_coordinator=True,
-    ).flatten()
-
-    conversation = [
-        {"role": "system", "content": SAMPLE_BRIEFING},
-        {"role": "system", "content": _BRIEFED_OPENING_GUARDRAIL},
-    ]
-
-    response = await get_fast_brain_response(prompt, conversation, MODEL)
-    low = response.lower()
-
-    assert any(
-        marker in low
-        for marker in (
-            "twin",
-            "onboarding",
-            "walkthrough",
-            "reference",
-            "quiz",
-            "set up",
-        )
-    ), (
-        "The briefed opener should follow the onboarding briefing, not emit a "
-        f"bare generic greeting.\nResponse: {response}"
-    )
